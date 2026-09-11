@@ -174,6 +174,42 @@ async function main() {
     ],
   });
 
+  await prisma.pricingPlan.deleteMany();
+  await prisma.pricingPlan.createMany({
+    data: [
+      {
+        name: "Free",
+        priceInPaise: 0,
+        period: "forever",
+        description: "Try the platform with one full mock test per exam.",
+        features: [
+          "1 free mock test per exam",
+          "AI explanation on every question",
+          "Basic performance summary",
+        ],
+        isPopular: false,
+        order: 0,
+        ctaLabel: "Start Free",
+      },
+      {
+        name: "Full Access",
+        priceInPaise: 49900,
+        period: "one-time",
+        description: "Unlock every mock test, previous year paper and subject-wise set for one exam.",
+        features: [
+          "All mock tests for the exam",
+          "All previous year papers",
+          "Subject-wise practice sets",
+          "AI explanation on every question",
+          "Full performance analytics & weak-topic detection",
+        ],
+        isPopular: true,
+        order: 1,
+        ctaLabel: "Get Full Access",
+      },
+    ],
+  });
+
   console.log("Seed complete.");
 }
 
