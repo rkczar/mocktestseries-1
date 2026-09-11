@@ -1,0 +1,81 @@
+name: Deploy to production
+
+# Only a push to main ever triggers a deploy. The VPS-side deploy.sh independently re-derives
+# and re-verifies the target from origin/main itself (it never trusts anything from this event),
+# so even a misconfigured trigger could not cause it to deploy the wrong ref.
+on:
+  push:
+    branches:
+      - main
+
+# Serialize deploys instead of racing them if multiple commits land in quick succession. Queued,
+# not cancelled, so every push still gets deployed in order; deploy.sh's own scratch-port guard
+# is a second line of defense against two deploys running at once.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy main to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # No checkout step: this job never needs repository content on the runner. The VPS pulls
+      # and builds the code itself, from its own trusted clone of origin/main.
+      - name: Configure SSH (key + pinned host key, never logged)
+        env:
+          DEPLOY_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ssh"
+          chmod 700 "$RUNNER_TEMP/ssh"
+
+          # Written via an env var, never interpolated directly into the script body, so the key
+          # material can't affect shell parsing/quoting and is never echoed anywhere.
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/ssh/deploy_key"
+          chmod 600 "$RUNNER_TEMP/ssh/deploy_key"
+
+          # Pinned VPS host key (public by definition — safe to commit). Host-key checking stays
+          # strict; this is what lets it succeed without ever disabling verification.
+          cat > "$RUNNER_TEMP/ssh/known_hosts" <<'EOF'
+          200.234.42.227 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPn6AgCJfLU5tk9zKpeXNaRfgPJgDT8crxeab/2UMC6h
+          EOF
+          chmod 600 "$RUNNER_TEMP/ssh/known_hosts"
+
+      - name: Run production deployment
+        id: deploy
+        run: |
+          ssh -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o BatchMode=yes \
+              -o ConnectTimeout=15 \
+              -i "$RUNNER_TEMP/ssh/deploy_key" \
+              root@200.234.42.227 \
+              "/var/www/mocktestseries/deploy.sh"
+          # The command above is fixed and carries no dynamic/untrusted input from this workflow
+          # or event payload — nothing here is ever built from branch names, commit messages, PR
+          # titles, or any other attacker-influenceable field.
+          #
+          # It's also only ever advisory: the VPS's authorized_keys entry for this key carries a
+          # forced command="/var/www/mocktestseries/deploy.sh" restriction, so the server ignores
+          # whatever command a client sends and always runs exactly that script — this key cannot
+          # be used for arbitrary shell access even if the line above were altered.
+
+      - name: Deployment result
+        if: always()
+        run: |
+          if [ "${{ steps.deploy.outcome }}" = "success" ]; then
+            echo "Deployment succeeded. deploy.sh's own pre- and post-cutover health checks passed; PM2 was reloaded with zero downtime."
+          else
+            echo "Deployment FAILED. See the 'Run production deployment' step log above."
+            echo "deploy.sh aborts before touching the live app on a pre-cutover failure, and automatically rolls back to the previous release on a post-cutover failure — the site should not be down because of this."
+          fi
+
+      - name: Clean up SSH material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ssh"
