@@ -13,8 +13,10 @@ export default async function AdminLoginPage() {
   if (session) redirect("/admin/dashboard");
 
   return (
-    <AuthCard title="Admin sign in" description="Restricted access. Admin accounts only.">
-      <LoginForm />
-    </AuthCard>
+    <main>
+      <AuthCard title="Admin sign in" description="Restricted access. Admin accounts only.">
+        <LoginForm />
+      </AuthCard>
+    </main>
   );
 }

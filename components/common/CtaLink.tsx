@@ -6,8 +6,8 @@ import { cn } from "@/lib/utils";
 const variantClasses = {
   primary: "bg-primary text-primary-foreground hover:bg-primary-hover",
   secondary: "bg-surface border border-border-strong text-primary hover:bg-accent",
-  accent: "bg-brand-accent text-white hover:bg-brand-accent-hover",
-  ghost: "border border-panel-border text-white hover:bg-primary-hover",
+  accent: "bg-brand-accent text-brand-accent-foreground hover:bg-brand-accent-hover",
+  ghost: "border border-panel-border text-primary-foreground hover:bg-primary-hover",
 } as const;
 
 // Radius is a CSS var (--radius-button) so it inherits the admin-configured value from

@@ -11,7 +11,7 @@ export function Logo({ size = "md" }: { size?: "sm" | "md" }) {
   return (
     <Link href="/" className="flex flex-none items-center gap-2.5">
       <span className={cn("flex flex-none items-center justify-center bg-primary", box)}>
-        <ClipboardCheck className={cn("text-white", icon)} strokeWidth={2.2} />
+        <ClipboardCheck className={cn("text-primary-foreground", icon)} strokeWidth={2.2} />
       </span>
       <span className={cn("font-display font-bold tracking-[-.01em] whitespace-nowrap text-primary", text)}>
         MockTestSeries<span className="text-brand-accent">.in</span>

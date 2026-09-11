@@ -1,26 +1,13 @@
-import type { AnnouncementDTO, CtaButtonDTO } from "@/lib/content/types";
+import type { AnnouncementDTO } from "@/lib/content/types";
 
 import { AnnouncementBar } from "./AnnouncementBar";
 import { Logo } from "./Logo";
 import { MobileNav } from "./MobileNav";
+import { ModeToggle } from "./ModeToggle";
 import { NavLink } from "./NavLink";
 import { NAV_ITEMS } from "./nav-items";
 
-const FALLBACK_REGISTER_CTA: CtaButtonDTO = {
-  label: "Start Free",
-  href: "/student/register",
-  variant: "primary",
-};
-
-export function SiteHeader({
-  announcement,
-  headerPrimaryCta,
-}: {
-  announcement: AnnouncementDTO | null;
-  headerPrimaryCta?: CtaButtonDTO;
-}) {
-  const registerCta = headerPrimaryCta ?? FALLBACK_REGISTER_CTA;
-
+export function SiteHeader({ announcement }: { announcement: AnnouncementDTO | null }) {
   return (
     <>
       <AnnouncementBar announcement={announcement} />
@@ -41,13 +28,8 @@ export function SiteHeader({
             >
               Login
             </a>
-            <a
-              href={registerCta.href}
-              className="inline-flex rounded-[9px] bg-primary px-[18px] py-[11px] text-[14.5px] font-bold whitespace-nowrap text-primary-foreground transition-colors duration-150 hover:bg-primary-hover"
-            >
-              {registerCta.label}
-            </a>
-            <MobileNav registerCta={registerCta} />
+            <ModeToggle />
+            <MobileNav />
           </div>
         </div>
       </header>

@@ -19,7 +19,7 @@ export function FinalCtaSection({
       <div className="mx-auto max-w-[1200px] px-6">
         <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] items-center gap-x-12 gap-y-8 rounded-[20px] bg-primary p-[clamp(32px,5vw,56px)]">
           <div className="min-w-0">
-            <h2 className="font-display text-[clamp(27px,3.2vw,40px)] leading-[1.12] font-bold tracking-[-.015em] text-white text-balance">
+            <h2 className="font-display text-[clamp(27px,3.2vw,40px)] leading-[1.12] font-bold tracking-[-.015em] text-primary-foreground text-balance">
               {heading}
             </h2>
             <p className="mt-3.5 max-w-[46ch] text-[16.5px] leading-relaxed text-panel-foreground">

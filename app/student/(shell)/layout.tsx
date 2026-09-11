@@ -1,5 +1,5 @@
 import { PublicShell } from "@/components/layout/PublicShell";
 
-export default function PublicLayout({ children }: { children: React.ReactNode }) {
+export default function StudentShellLayout({ children }: { children: React.ReactNode }) {
   return <PublicShell>{children}</PublicShell>;
 }

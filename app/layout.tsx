@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Source_Serif_4, Manrope, IBM_Plex_Mono, Playfair_Display, Lora, Inter, Work_Sans } from "next/font/google";
 
 import { appearanceCssVars, getAppearance } from "@/lib/appearance";
+import { ModeProvider } from "@/components/layout/ModeProvider";
 
 import "./globals.css";
 
@@ -52,13 +53,19 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   const appearance = await getAppearance();
 
   return (
-    <html lang="en" className={`${FONT_VARIABLES} h-full antialiased`}>
+    <html lang="en" className={`${FONT_VARIABLES} h-full antialiased`} suppressHydrationWarning>
       <head>
         {/* Admin-configured brand colors/fonts/button radius — see /admin/appearance and
             lib/appearance.ts. Overrides the :root defaults in globals.css. */}
         <style dangerouslySetInnerHTML={{ __html: appearanceCssVars(appearance) }} />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {/* Mounted app-wide so next-themes' persistence + no-flash boot script are available
+            everywhere, but its `data-theme` attribute only repaints elements inside
+            [data-public-scope] (see globals.css) — Admin and the Test Player render outside
+            that scope and are unaffected regardless of the current public mode. */}
+        <ModeProvider>{children}</ModeProvider>
+      </body>
     </html>
   );
 }

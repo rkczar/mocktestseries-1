@@ -12,11 +12,10 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import type { CtaButtonDTO } from "@/lib/content/types";
 
 import { NAV_ITEMS } from "./nav-items";
 
-export function MobileNav({ registerCta }: { registerCta: CtaButtonDTO }) {
+export function MobileNav() {
   return (
     <Sheet>
       <SheetTrigger
@@ -57,17 +56,6 @@ export function MobileNav({ registerCta }: { registerCta: CtaButtonDTO }) {
             }
           >
             Login
-          </SheetClose>
-          <SheetClose
-            nativeButton={false}
-            render={
-              <Link
-                href={registerCta.href}
-                className="rounded-[9px] bg-primary px-4 py-2.5 text-center text-[14.5px] font-bold text-primary-foreground hover:bg-primary-hover"
-              />
-            }
-          >
-            {registerCta.label}
           </SheetClose>
         </div>
       </SheetContent>

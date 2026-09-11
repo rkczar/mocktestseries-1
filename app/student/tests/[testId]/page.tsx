@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { Container } from "@/components/common/Container";
+import { PublicShell } from "@/components/layout/PublicShell";
 import { StartTestButton } from "@/components/student/StartTestButton";
 import { requireStudent } from "@/lib/auth/requireStudent";
 import { prisma } from "@/lib/db";
@@ -52,6 +53,7 @@ export default async function TestIntroPage({ params }: { params: Promise<{ test
   const questionCount = test.questions.length;
 
   return (
+    <PublicShell>
     <Container className="py-[clamp(28px,4vw,48px)]">
       <nav className="flex flex-wrap items-center gap-2 text-[13px] text-text-faint">
         <Link href="/" className="hover:text-primary">
@@ -148,5 +150,6 @@ export default async function TestIntroPage({ params }: { params: Promise<{ test
         </section>
       ) : null}
     </Container>
+    </PublicShell>
   );
 }

@@ -36,8 +36,8 @@ export function AiUspSection() {
                 {chip.label}
               </li>
             ))}
-            <li className="flex items-center gap-2.5 rounded-[10px] border border-primary bg-primary px-3.5 py-3.5 text-[14.5px] font-bold text-white">
-              <Sparkles className="size-[17px] flex-none text-white" strokeWidth={2} />
+            <li className="flex items-center gap-2.5 rounded-[10px] border border-primary bg-primary px-3.5 py-3.5 text-[14.5px] font-bold text-primary-foreground">
+              <Sparkles className="size-[17px] flex-none text-primary-foreground" strokeWidth={2} />
               Ask AI
             </li>
           </ul>

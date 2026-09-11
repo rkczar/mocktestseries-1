@@ -71,6 +71,7 @@
   --color-brand-accent-tint: var(--brand-accent-tint);
   --color-brand-accent-border: var(--brand-accent-border);
   --color-brand-accent-text: var(--brand-accent-text);
+  --color-brand-accent-foreground: var(--brand-accent-foreground);
   --color-panel-foreground: var(--panel-foreground);
   --color-panel-border: var(--panel-border);
   --color-panel-faint: var(--panel-faint);
@@ -112,6 +113,10 @@
   /* WCAG AA text variant (4.5:1 on white/background) — use for accent-colored copy instead of
      --brand-accent, which is tuned for large/decorative use and fails as small text. */
   --brand-accent-text: #a85400;
+  /* Paired foreground for content placed directly on a --brand-accent fill (buttons, chips) —
+     kept separate from --brand-accent-text, which is tuned for accent-colored copy on a plain
+     background instead. */
+  --brand-accent-foreground: #ffffff;
   --panel-foreground: #d7e5f1;
   --panel-border: #4a7ba5;
   --panel-faint: #a9c4da;
@@ -152,6 +157,104 @@
   --sidebar-accent-foreground: #0f4c81;
   --sidebar-border: #e3eaf2;
   --sidebar-ring: #0f4c81;
+}
+
+/* --------------------------------------------------------------------------------------------
+   Public three-mode appearance system (Day / Night / Eye Saver).
+
+   The active mode lives as `data-theme` on <html>, set by next-themes (see
+   components/layout/ModeProvider.tsx) so its persistence and no-flash-on-load behaviour reuse
+   next-themes' existing mechanism rather than a bespoke one. But <html> is shared by every route
+   in the app, including /admin and the Test Player — so the color overrides below are additionally
+   gated behind `[data-public-scope]`, an attribute only PublicShell renders (public marketing
+   pages + student account pages). Admin and the Test Player never render that attribute, so a
+   mode chosen while browsing the public site cannot repaint them even though `data-theme` is
+   still technically set on <html> while those pages are open.
+
+   Day mode needs no block here — it's simply the :root defaults above. Only semantic/structural
+   tokens are overridden; --success/--error keep their meaning (correct/incorrect, etc.) in every
+   mode since they encode state, not decoration.
+   ------------------------------------------------------------------------------------------- */
+html[data-theme="night"] [data-public-scope] {
+  --background: #0b1420;
+  --surface: #111d2c;
+  --primary-tint: #16283c;
+  --primary-border: #2c4359;
+  --border-strong: #2c4359;
+  --border-subtle: #1a2837;
+  --text: #e6edf5;
+  --text-heading: #f5f9fc;
+  --text-muted: #b7c4d3;
+  --text-faint: #93a3b5;
+  --text-placeholder: #8494a7;
+  --brand-accent: #f59e42;
+  --brand-accent-hover: #ffb35c;
+  --brand-accent-tint: #2a2013;
+  --brand-accent-border: #4a3418;
+  --brand-accent-text: #ffb35c;
+  --brand-accent-foreground: #1a1305;
+  --panel-foreground: #d7e5f1;
+  --panel-border: #5a86ab;
+  --panel-faint: #9fbcd6;
+  --panel-accent: #ffcb85;
+
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: #4a93d6;
+  --primary-foreground: #ffffff;
+  --primary-hover: #6ba8e0;
+  --secondary: var(--primary-tint);
+  --secondary-foreground: #cfe0f2;
+  --muted: var(--primary-tint);
+  --muted-foreground: var(--text-muted);
+  --accent: #16283c;
+  --accent-foreground: var(--text-heading);
+  --border: #223347;
+  --input: #223347;
+  --ring: #4a93d6;
+}
+
+html[data-theme="eyesaver"] [data-public-scope] {
+  --background: #000000;
+  --surface: #000000;
+  --primary-tint: #141414;
+  --primary-border: #ffffff;
+  --border-strong: #ffffff;
+  --border-subtle: #4d4d4d;
+  --text: #ffffff;
+  --text-heading: #ffffff;
+  --text-muted: #e6e6e6;
+  --text-faint: #cccccc;
+  --text-placeholder: #bfbfbf;
+  --brand-accent: #ffffff;
+  --brand-accent-hover: #cccccc;
+  --brand-accent-tint: #141414;
+  --brand-accent-border: #ffffff;
+  --brand-accent-text: #ffffff;
+  --brand-accent-foreground: #000000;
+  --panel-foreground: #000000;
+  --panel-border: #000000;
+  --panel-faint: #333333;
+  --panel-accent: #000000;
+
+  --card: #000000;
+  --card-foreground: #ffffff;
+  --popover: #000000;
+  --popover-foreground: #ffffff;
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --primary-hover: #cccccc;
+  --secondary: #141414;
+  --secondary-foreground: #ffffff;
+  --muted: #141414;
+  --muted-foreground: #e6e6e6;
+  --accent: #141414;
+  --accent-foreground: #ffffff;
+  --border: #ffffff;
+  --input: #141414;
+  --ring: #ffffff;
 }
 
 @layer base {
