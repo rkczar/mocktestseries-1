@@ -3,6 +3,7 @@ node_modules/
 .next/
 out/
 dist/
+*.tsbuildinfo
 
 # Env
 .env

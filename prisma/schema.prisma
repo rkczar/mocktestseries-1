@@ -226,6 +226,7 @@ model ImportBatch {
   importedCount    Int        @default(0)
   replacedCount    Int        @default(0)
   addedAnywayCount Int        @default(0)
+  skippedCount     Int        @default(0)
   invalidCount     Int        @default(0)
   createdById      String?
   createdBy        AdminUser? @relation(fields: [createdById], references: [id], onDelete: SetNull)
