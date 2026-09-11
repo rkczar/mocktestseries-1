@@ -1,6 +1,25 @@
+import { randomBytes } from "node:crypto";
+
 import { PrismaClient } from "@prisma/client";
+import { hash } from "@node-rs/argon2";
 
 const prisma = new PrismaClient();
+
+async function seedSuperAdmin() {
+  const email = process.env.SEED_ADMIN_EMAIL ?? "admin@mocktestseries.in";
+  const existing = await prisma.adminUser.findUnique({ where: { email } });
+  if (existing) return;
+
+  const password = process.env.SEED_ADMIN_PASSWORD ?? randomBytes(9).toString("base64url");
+  const passwordHash = await hash(password);
+  await prisma.adminUser.create({
+    data: { email, name: "Super Admin", passwordHash, role: "SUPER_ADMIN" },
+  });
+
+  console.log("\nSeeded SUPER_ADMIN account — log in at /admin/login, then rotate this password:");
+  console.log(`  email:    ${email}`);
+  console.log(`  password: ${password}\n`);
+}
 
 async function main() {
   await prisma.homepageContent.deleteMany();
@@ -209,6 +228,8 @@ async function main() {
       },
     ],
   });
+
+  await seedSuperAdmin();
 
   console.log("Seed complete.");
 }
