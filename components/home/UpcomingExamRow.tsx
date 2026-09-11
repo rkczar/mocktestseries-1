@@ -22,7 +22,7 @@ export function UpcomingExamRow({ exam }: { exam: UpcomingExamDTO }) {
   return (
     <li className="flex flex-wrap items-center gap-x-4.5 gap-y-3 rounded-xl border border-border bg-background px-4.5 py-4">
       <span className="flex size-14 flex-none flex-col items-center justify-center rounded-[10px] border border-primary-border bg-surface">
-        <span className="font-mono text-[10px] font-semibold tracking-[.08em] text-brand-accent uppercase">
+        <span className="font-mono text-[10px] font-semibold tracking-[.08em] text-brand-accent-text uppercase">
           {tile.top}
         </span>
         <span className="text-[19px] leading-[1.1] font-extrabold text-text-heading">

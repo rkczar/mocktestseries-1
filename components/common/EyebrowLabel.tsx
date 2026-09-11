@@ -10,7 +10,7 @@ export function EyebrowLabel({
   return (
     <p
       className={cn(
-        "font-mono text-[11.5px] font-semibold tracking-[.1em] text-brand-accent uppercase",
+        "font-mono text-[11.5px] font-semibold tracking-[.1em] text-brand-accent-text uppercase",
         className,
       )}
     >

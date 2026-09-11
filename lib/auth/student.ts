@@ -12,6 +12,10 @@ const {
   signOut: studentSignOut,
 } = NextAuth({
   basePath: "/api/auth/student",
+  // Required in production: without it, Auth.js rejects every request with "UntrustedHost"
+  // unless AUTH_URL is set to the exact deployed origin. Safe here since the app isn't proxying
+  // arbitrary untrusted upstream Host headers — Nginx/PM2 own that boundary in production.
+  trustHost: true,
   providers: [
     Credentials({
       credentials: { email: {}, password: {} },

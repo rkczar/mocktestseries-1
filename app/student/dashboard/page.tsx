@@ -47,30 +47,32 @@ export default async function StudentDashboardPage() {
         </Container>
       </header>
 
-      <Container className="py-[clamp(28px,4vw,48px)]">
-        <h1 className="font-display text-[clamp(26px,3vw,34px)] font-bold text-text-heading">
-          Welcome, {student.name}
-        </h1>
-        <p className="mt-2 max-w-[60ch] text-[15.5px] leading-relaxed text-text-muted">
-          Your dashboard is ready. Take a mock test from the{" "}
-          <Link href="/exams" className="font-bold text-primary">
-            Exams
-          </Link>{" "}
-          page to see your results and analysis here.
-        </p>
+      <main>
+        <Container className="py-[clamp(28px,4vw,48px)]">
+          <h1 className="font-display text-[clamp(26px,3vw,34px)] font-bold text-text-heading">
+            Welcome, {student.name}
+          </h1>
+          <p className="mt-2 max-w-[60ch] text-[15.5px] leading-relaxed text-text-muted">
+            Your dashboard is ready. Take a mock test from the{" "}
+            <Link href="/exams" className="font-bold text-primary">
+              Exams
+            </Link>{" "}
+            page to see your results and analysis here.
+          </p>
 
-        <div className="mt-8 grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-5">
-          {SHELL_CARDS.map((card) => (
-            <div key={card.title} className="rounded-[14px] border border-border bg-surface p-5.5">
-              <span className="flex size-10 items-center justify-center rounded-[11px] border border-primary-border bg-primary-tint">
-                <card.icon className="size-5 text-primary" strokeWidth={1.9} />
-              </span>
-              <h2 className="mt-4 text-[17px] font-extrabold text-text-heading">{card.title}</h2>
-              <p className="mt-1.5 text-sm leading-relaxed text-text-muted">{card.body}</p>
-            </div>
-          ))}
-        </div>
-      </Container>
+          <div className="mt-8 grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-5">
+            {SHELL_CARDS.map((card) => (
+              <div key={card.title} className="rounded-[14px] border border-border bg-surface p-5.5">
+                <span className="flex size-10 items-center justify-center rounded-[11px] border border-primary-border bg-primary-tint">
+                  <card.icon className="size-5 text-primary" strokeWidth={1.9} />
+                </span>
+                <h2 className="mt-4 text-[17px] font-extrabold text-text-heading">{card.title}</h2>
+                <p className="mt-1.5 text-sm leading-relaxed text-text-muted">{card.body}</p>
+              </div>
+            ))}
+          </div>
+        </Container>
+      </main>
     </div>
   );
 }

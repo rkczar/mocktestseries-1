@@ -38,7 +38,7 @@ export function HowItWorksSection() {
                   : "border-t-2 border-primary-border pt-4.5"
               }
             >
-              <p className="font-mono text-[13px] font-semibold tracking-[.06em] text-brand-accent">
+              <p className="font-mono text-[13px] font-semibold tracking-[.06em] text-brand-accent-text">
                 {step.number}
               </p>
               <h3 className="mt-2.5 text-lg font-extrabold text-text-heading">{step.title}</h3>

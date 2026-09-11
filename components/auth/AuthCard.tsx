@@ -12,7 +12,7 @@ export function AuthCard({
   footer?: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-full items-center justify-center bg-background px-6 py-16">
+    <main className="flex min-h-full items-center justify-center bg-background px-6 py-16">
       <div className="w-full max-w-[420px]">
         <div className="mb-7 flex justify-center">
           <Logo />
@@ -24,6 +24,6 @@ export function AuthCard({
         </div>
         {footer ? <p className="mt-5 text-center text-sm text-text-muted">{footer}</p> : null}
       </div>
-    </div>
+    </main>
   );
 }

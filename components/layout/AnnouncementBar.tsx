@@ -9,7 +9,7 @@ export function AnnouncementBar({ announcement }: { announcement: AnnouncementDT
     <div className="bg-primary-hover px-0 py-2.5 text-[13px] leading-snug text-[#E8F0F8]">
       <div className="mx-auto flex max-w-[1200px] flex-wrap items-center justify-center gap-x-4.5 gap-y-2 px-6 text-center">
         {announcement.tag ? (
-          <span className="font-mono text-[11px] font-semibold tracking-[.08em] text-brand-accent uppercase">
+          <span className="font-mono text-[11px] font-semibold tracking-[.08em] text-panel-accent uppercase">
             {announcement.tag}
           </span>
         ) : null}

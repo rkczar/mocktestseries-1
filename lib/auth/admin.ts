@@ -12,6 +12,8 @@ const {
   signOut: adminSignOut,
 } = NextAuth({
   basePath: "/api/auth/admin",
+  // See lib/auth/student.ts for why this is needed in production.
+  trustHost: true,
   providers: [
     Credentials({
       credentials: { email: {}, password: {} },

@@ -74,6 +74,7 @@
   --color-panel-foreground: var(--panel-foreground);
   --color-panel-border: var(--panel-border);
   --color-panel-faint: var(--panel-faint);
+  --color-panel-accent: var(--panel-accent);
 }
 
 :root {
@@ -94,8 +95,9 @@
   --text: #212529;
   --text-heading: #0f2b45;
   --text-muted: #41505e;
-  --text-faint: #7a8899;
-  --text-placeholder: #9aa7b4;
+  /* WCAG AA (4.5:1) against both --surface and --background */
+  --text-faint: #5d6c7b;
+  --text-placeholder: #64727f;
   --success: #2e7d32;
   --success-tint: #eef7ee;
   --success-border: #cfe3d0;
@@ -107,10 +109,15 @@
   --brand-accent-hover: #dc6f00;
   --brand-accent-tint: #fff6ec;
   --brand-accent-border: #f8ddbe;
-  --brand-accent-text: #b25e00;
+  /* WCAG AA text variant (4.5:1 on white/background) — use for accent-colored copy instead of
+     --brand-accent, which is tuned for large/decorative use and fails as small text. */
+  --brand-accent-text: #a85400;
   --panel-foreground: #d7e5f1;
   --panel-border: #4a7ba5;
   --panel-faint: #a9c4da;
+  /* Accent variant for text on dark/navy surfaces (e.g. the announcement bar) — --brand-accent
+     itself only just clears 4.5:1 there, and --brand-accent-text fails outright (too dark). */
+  --panel-accent: #f9a94a;
 
   /* shadcn/ui semantic tokens mapped onto the brand palette */
   --background: #f6f9fc;
