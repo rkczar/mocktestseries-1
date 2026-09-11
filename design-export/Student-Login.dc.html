@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,h3,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  input,button{font-family:inherit}
+  input:focus{outline:2px solid var(--frontend-primary,#0F4C81);outline-offset:1px}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <header style="background:var(--frontend-surface,#FFFFFF);border-bottom:1px solid var(--frontend-border,#E3EAF2)">
+    <div style="max-width:1200px;margin:0 auto;padding:12px 24px;min-height:72px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 20px">
+      <a href="Homepage.dc.html" style="display:flex;align-items:center;gap:10px;flex:none">
+        <span style="width:34px;height:34px;border-radius:9px;background:var(--frontend-primary,#0F4C81);display:flex;align-items:center;justify-content:center;flex:none">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        </span>
+        <span style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:20px;font-weight:700;letter-spacing:-.01em;color:var(--frontend-primary,#0F4C81);white-space:nowrap">MockTestSeries<span style="color:var(--frontend-accent-text,#A85400)">.in</span></span>
+      </a>
+      <a href="RUHS-Medical-Officer.dc.html" style="margin-left:auto;display:inline-flex;align-items:center;gap:7px;font-size:14.5px;font-weight:600;color:var(--frontend-muted,#41505E);white-space:nowrap" style-hover="color:var(--frontend-primary,#0F4C81)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"></path><path d="M11 5l-7 7 7 7"></path></svg>
+        Back to exam page
+      </a>
+    </div>
+  </header>
+
+  <main style="flex:1 1 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:clamp(28px,4vw,56px);align-items:center;max-width:1200px;width:100%;margin:0 auto;padding:clamp(32px,5vw,64px) 24px">
+
+    <div style="min-width:0;max-width:520px">
+      <dc-import name="GlobalBackButton" fallback-href="Homepage.dc.html" fallback-label="Home" current-file="Student-Login.dc.html" hint-size="140px,32px"></dc-import>
+      <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">Student login</p>
+      <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(30px,3.6vw,42px);line-height:1.1;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:10px;text-wrap:balance">Login to attempt this paper</h1>
+      <p style="font-size:16px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:14px;text-wrap:pretty">Your attempts, scores and weak-topic analysis are saved to your account, so you can retake any paper and compare.</p>
+
+      <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:18px;margin-top:24px">
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Continuing to</p>
+        <p style="font-size:16px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:8px">RUHS Medical Officer 2024 — Previous Year Paper</p>
+        <ul style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+          <li style="font-size:12.5px;font-weight:600;color:var(--frontend-muted,#41505E);background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:7px;padding:5px 10px">100 Q · 2 hrs</li>
+          <li style="font-size:12.5px;font-weight:600;color:var(--frontend-muted,#41505E);background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:7px;padding:5px 10px">Offline OMR pattern</li>
+          <li style="font-size:12.5px;font-weight:600;color:var(--frontend-success-text,#1E5620);background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);border-radius:7px;padding:5px 10px">Free</li>
+        </ul>
+      </div>
+
+      <div style="background:var(--frontend-warning-tint,#FFF6EC);border:1px solid var(--frontend-warning-border,#F8DDBE);border-radius:12px;padding:15px 16px;margin-top:16px">
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-warning,#B25E00)">Demo credentials</p>
+        <p style="font-size:14px;line-height:1.55;color:var(--frontend-warning-text,#5B4526);margin-top:8px">Username <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-weight:600;color:var(--frontend-text,#212529)">student</span> · Password <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-weight:600;color:var(--frontend-text,#212529)">Student@123</span></p>
+        <p style="font-size:12.5px;line-height:1.5;color:var(--frontend-warning-text,#8A6A3C);margin-top:6px">Temporary — to be replaced by OTP / email verification API.</p>
+      </div>
+    </div>
+
+    <div style="min-width:0;justify-self:center;width:100%;max-width:440px">
+      <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-tint-border,#DCE7F2);border-radius:16px;padding:clamp(24px,3vw,32px);box-shadow:0 14px 40px -26px rgba(15,76,129,.4)">
+        <h2 style="font-size:22px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Student Login</h2>
+        <p style="font-size:14px;color:var(--frontend-faint,#7A8899);margin-top:6px">{{ modeSubtitle }}</p>
+
+        <div style="display:flex;gap:8px;margin-top:16px;background:var(--frontend-background,#F6F9FC);border-radius:10px;padding:4px">
+          <button type="button" onClick="{{ pickPasswordMode }}" style="{{ passwordTabStyle }}">Password</button>
+          <button type="button" onClick="{{ pickOtpMode }}" style="{{ otpTabStyle }}">Mobile OTP</button>
+        </div>
+
+        <sc-if value="{{ isPasswordMode }}" hint-placeholder-val="{{ true }}">
+        <form onSubmit="{{ submit }}" style="display:flex;flex-direction:column;gap:16px;margin-top:22px">
+          <label style="display:flex;flex-direction:column;gap:7px">
+            <span style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">Username</span>
+            <input type="text" value="{{ username }}" onChange="{{ onUser }}" placeholder="student" autoComplete="username" style="width:100%;padding:13px 14px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:15px;color:var(--frontend-text,#212529)"></input>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:7px">
+            <span style="display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;justify-content:space-between">
+              <span style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">Password</span>
+              <a href="#" style="font-size:13px;font-weight:600">Forgot password?</a>
+            </span>
+            <input type="{{ pwType }}" value="{{ password }}" onChange="{{ onPass }}" placeholder="••••••••" autoComplete="current-password" style="width:100%;padding:13px 14px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:15px;color:var(--frontend-text,#212529)"></input>
+            <button type="button" onClick="{{ togglePw }}" style="align-self:flex-start;padding:0;border:0;background:none;font-size:12.5px;font-weight:600;color:var(--frontend-primary,#0F4C81)">{{ pwToggleLabel }}</button>
+          </label>
+
+          <sc-if value="{{ error }}" hint-placeholder-val="{{ false }}">
+            <p style="display:flex;align-items:flex-start;gap:9px;background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:9px;padding:12px 13px;font-size:13.5px;line-height:1.5;color:var(--frontend-error-text,#8A2020)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C62828" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4.5"></path><path d="M12 16h.01"></path></svg>
+              {{ error }}
+            </p>
+          </sc-if>
+
+          <sc-if value="{{ success }}" hint-placeholder-val="{{ false }}">
+            <p style="display:flex;align-items:center;gap:9px;background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);border-radius:9px;padding:12px 13px;font-size:13.5px;font-weight:600;line-height:1.5;color:var(--frontend-success-text,#1E5620)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M4 12.5l5 5L20 6.5"></path></svg>
+              Logged in — opening your dashboard…
+            </p>
+          </sc-if>
+
+          <label style="display:flex;align-items:center;gap:9px;font-size:14px;color:var(--frontend-muted,#41505E)">
+            <input type="checkbox" checked="{{ remember }}" onChange="{{ onRemember }}" style="width:17px;height:17px;accent-color:var(--frontend-primary,#0F4C81)"></input>
+            Keep me logged in
+          </label>
+
+          <button type="submit" style="display:flex;align-items:center;justify-content:center;padding:15px 20px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:16px;font-weight:700" style-hover="background:var(--frontend-primary-hover,#0B3A63)">Login &amp; start paper</button>
+        </form>
+        </sc-if>
+
+        <sc-if value="{{ isOtpMode }}" hint-placeholder-val="{{ false }}">
+          <sc-if value="{{ otpStagePhone }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:16px;margin-top:22px">
+              <label style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">Mobile number</span>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="padding:13px 12px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:15px;color:var(--frontend-muted,#41505E);font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace)">+91</span>
+                  <input type="tel" value="{{ phone }}" onChange="{{ onPhone }}" placeholder="98765 43210" maxlength="10" style="flex:1;width:100%;padding:13px 14px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:15px;color:var(--frontend-text,#212529)"></input>
+                </div>
+              </label>
+              <sc-if value="{{ otpError }}" hint-placeholder-val="{{ false }}">
+                <p style="display:flex;align-items:flex-start;gap:9px;background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:9px;padding:12px 13px;font-size:13.5px;line-height:1.5;color:var(--frontend-error-text,#8A2020)">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C62828" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4.5"></path><path d="M12 16h.01"></path></svg>
+                  {{ otpError }}
+                </p>
+              </sc-if>
+              <button type="button" onClick="{{ sendOtp }}" disabled="{{ sendDisabled }}" style="{{ sendBtnStyle }}">{{ sendBtnLabel }}</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{ otpStageCode }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:16px;margin-top:22px">
+              <p style="font-size:14px;color:var(--frontend-muted,#41505E)">OTP sent to <span style="font-weight:700;color:var(--frontend-heading,#0F2B45)">+91 {{ phone }}</span>. <a href="#" onClick="{{ changeNumber }}" style="font-weight:700">Change</a></p>
+              <label style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">Enter OTP</span>
+                <input type="tel" value="{{ otp }}" onChange="{{ onOtp }}" placeholder="6-digit code" maxlength="6" style="width:100%;padding:13px 14px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:18px;letter-spacing:.15em;font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);color:var(--frontend-text,#212529)"></input>
+              </label>
+              <sc-if value="{{ otpError }}" hint-placeholder-val="{{ false }}">
+                <p style="display:flex;align-items:flex-start;gap:9px;background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:9px;padding:12px 13px;font-size:13.5px;line-height:1.5;color:var(--frontend-error-text,#8A2020)">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C62828" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4.5"></path><path d="M12 16h.01"></path></svg>
+                  {{ otpError }}
+                </p>
+              </sc-if>
+              <sc-if value="{{ otpSuccess }}" hint-placeholder-val="{{ false }}">
+                <p style="display:flex;align-items:center;gap:9px;background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);border-radius:9px;padding:12px 13px;font-size:13.5px;font-weight:600;line-height:1.5;color:var(--frontend-success-text,#1E5620)">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M4 12.5l5 5L20 6.5"></path></svg>
+                  Verified — opening your dashboard…
+                </p>
+              </sc-if>
+              <button type="button" onClick="{{ verifyOtp }}" style="display:flex;align-items:center;justify-content:center;padding:15px 20px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:16px;font-weight:700">Verify &amp; continue</button>
+              <button type="button" onClick="{{ resendOtp }}" disabled="{{ resendDisabled }}" style="{{ resendBtnStyle }}">{{ resendLabel }}</button>
+            </div>
+          </sc-if>
+        </sc-if>
+
+        <div style="display:flex;align-items:center;gap:12px;margin:20px 0">
+          <span style="flex:1 1 auto;height:1px;background:var(--frontend-border-subtle,#EDF2F7)"></span>
+          <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-placeholder,#9AA7B4)">or</span>
+          <span style="flex:1 1 auto;height:1px;background:var(--frontend-border-subtle,#EDF2F7)"></span>
+        </div>
+
+        <button type="button" onClick="{{ googleNotReady }}" style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;padding:13px 20px;border-radius:10px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:15px;font-weight:600;color:var(--frontend-text,#212529)" style-hover="background:#F2F6FA">
+          <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.04 12.27c0-.82-.07-1.61-.2-2.36H12v4.46h6.2c-.27 1.45-1.08 2.68-2.3 3.5v2.9h3.72c2.18-2 3.42-4.96 3.42-8.5z"></path><path fill="#34A853" d="M12 23c3.1 0 5.7-1.03 7.6-2.78l-3.72-2.9c-1.03.7-2.35 1.1-3.88 1.1-2.98 0-5.5-2.02-6.4-4.73H1.8v2.97C3.68 20.6 7.5 23 12 23z"></path><path fill="#FBBC05" d="M5.6 13.7c-.24-.7-.37-1.44-.37-2.2s.13-1.5.37-2.2V6.33H1.8A11.03 11.03 0 0 0 .7 11.5c0 1.85.44 3.6 1.1 5.17l3.8-2.97z"></path><path fill="#EA4335" d="M12 5.38c1.68 0 3.19.58 4.38 1.7l3.28-3.28C17.7 1.9 15.1.8 12 .8 7.5.8 3.68 3.2 1.8 6.33l3.8 2.97c.9-2.7 3.42-4.72 6.4-3.92z"></path></svg>
+          Continue with Google
+        </button>
+
+        <p style="font-size:12px;color:var(--frontend-placeholder,#9AA7B4);margin-top:10px;text-align:center">Design preview only — Google Sign-In connects once the app is deployed with server-side credential verification. See GOOGLE-LOGIN-IMPLEMENTATION.md.</p>
+
+        <p style="font-size:14px;color:var(--frontend-muted,#41505E);margin-top:20px;text-align:center">New here? <a href="#" style="font-weight:700">Create a free account</a></p>
+      </div>
+
+      <p style="font-size:12.5px;line-height:1.5;color:var(--frontend-placeholder,#9AA7B4);margin-top:14px;text-align:center">Student login is separate from admin login. Admin access lives at <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px">/admin/login</span>.</p>
+    </div>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    username: "", password: "", show: false, remember: true, error: "", success: false,
+    mode: "password",
+    phone: "", otp: "", otpStage: "phone", reqId: null, otpError: "", otpSuccess: false,
+    sendAttempts: 0, verifyAttempts: 0, cooldown: 0, sending: false, verifying: false
+  };
+
+  componentDidMount() {
+    console.info("OTP initialization started");
+    if (!window.__MSG91_CONFIG) {
+      window.__MSG91_CONFIG = {
+        widgetId: "36684563306f303934393532",
+        tokenAuth: "566035TWpjUygCwUqR6a94eecbP1",
+        exposeMethods: true,
+        success: () => { console.info("OTP initialization successful"); },
+        failure: (error) => { console.warn("OTP widget-level failure", error && error.type); }
+      };
+      // Loaded dynamically (not a blocking <script> in helmet) so a network/CSP
+      // failure to reach verify.msg91.com can never hang the rest of the page.
+      const el = document.createElement("script");
+      el.src = "https://verify.msg91.com/otp-provider.js";
+      el.async = true;
+      el.onload = () => {
+        window.__msg91Loaded = true;
+        try { window.initSendOTP(window.__MSG91_CONFIG); console.info("OTP provider loaded"); }
+        catch (e) { console.warn("OTP initialization failed", e && e.message); }
+      };
+      el.onerror = () => { window.__msg91Loaded = false; console.warn("OTP provider script failed to load"); };
+      document.head.appendChild(el);
+    }
+    let tries = 0;
+    this._otpPoll = setInterval(() => {
+      tries++;
+      if (typeof window.sendOtp === "function") {
+        clearInterval(this._otpPoll);
+        this.setState({ otpReady: true });
+        console.info("OTP request service available");
+      } else if (tries > 25 || window.__msg91Loaded === false) {
+        clearInterval(this._otpPoll);
+        this.setState({ otpReady: false });
+        console.warn("OTP initialization failed — sendOtp not available");
+      }
+    }, 200);
+  }
+  componentWillUnmount() {
+    clearInterval(this._otpPoll);
+    clearInterval(this._cooldownTimer);
+  }
+
+  startCooldown() {
+    clearInterval(this._cooldownTimer);
+    this.setState({ cooldown: 30 });
+    this._cooldownTimer = setInterval(() => {
+      this.setState(p => {
+        if (p.cooldown <= 1) { clearInterval(this._cooldownTimer); return { cooldown: 0 }; }
+        return { cooldown: p.cooldown - 1 };
+      });
+    }, 1000);
+  }
+
+  renderVals() {
+    const s = this.state;
+    const isOtpMode = s.mode === "otp";
+    return {
+      username: s.username,
+      password: s.password,
+      remember: s.remember,
+      error: s.error,
+      success: s.success,
+      pwType: s.show ? "text" : "password",
+      pwToggleLabel: s.show ? "Hide password" : "Show password",
+      onUser: e => this.setState({ username: e.target.value, error: "" }),
+      onPass: e => this.setState({ password: e.target.value, error: "" }),
+      onRemember: e => this.setState({ remember: e.target.checked }),
+      togglePw: () => this.setState(p => ({ show: !p.show })),
+
+      isPasswordMode: !isOtpMode, isOtpMode,
+      modeSubtitle: isOtpMode ? "Verify your mobile number with a one-time code." : "Use the username and password you registered with.",
+      passwordTabStyle: "flex:1;padding:9px 12px;border-radius:8px;border:0;font-size:13.5px;font-weight:700;" + (!isOtpMode ? "background:var(--frontend-surface,#FFFFFF);color:var(--frontend-primary,#0F4C81);box-shadow:0 1px 3px rgba(15,43,69,.1);" : "background:transparent;color:var(--frontend-muted,#41505E);"),
+      otpTabStyle: "flex:1;padding:9px 12px;border-radius:8px;border:0;font-size:13.5px;font-weight:700;" + (isOtpMode ? "background:var(--frontend-surface,#FFFFFF);color:var(--frontend-primary,#0F4C81);box-shadow:0 1px 3px rgba(15,43,69,.1);" : "background:transparent;color:var(--frontend-muted,#41505E);"),
+      pickPasswordMode: () => this.setState({ mode: "password", otpError: "" }),
+      pickOtpMode: () => this.setState({ mode: "otp", otpError: "" }),
+
+      phone: s.phone, otp: s.otp, otpError: s.otpError, otpSuccess: s.otpSuccess,
+      otpStagePhone: s.otpStage === "phone", otpStageCode: s.otpStage === "code",
+      onPhone: e => this.setState({ phone: e.target.value.replace(/[^0-9]/g, "").slice(0, 10), otpError: "" }),
+      onOtp: e => this.setState({ otp: e.target.value.replace(/[^0-9]/g, "").slice(0, 6), otpError: "" }),
+      changeNumber: e => { e.preventDefault(); this.setState({ otpStage: "phone", otp: "", otpError: "" }); },
+
+      sendDisabled: !/^[6-9]\d{9}$/.test(s.phone) || s.sending,
+      sendBtnStyle: "display:flex;align-items:center;justify-content:center;padding:15px 20px;border-radius:var(--frontend-btn-radius,10px);border:0;font-size:16px;font-weight:700;" +
+        ((!/^[6-9]\d{9}$/.test(s.phone) || s.sending) ? "background:var(--frontend-border,#E3EAF2);color:var(--frontend-faint,#7A8899);" : "background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);"),
+      sendBtnLabel: s.sending ? "Sending OTP…" : "Send OTP",
+
+      resendDisabled: s.cooldown > 0 || s.sending,
+      resendBtnStyle: "padding:11px 16px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14px;font-weight:600;" + (s.cooldown > 0 ? "color:var(--frontend-faint,#7A8899);" : "color:var(--frontend-primary,#0F4C81);"),
+      resendLabel: s.cooldown > 0 ? "Resend OTP in " + s.cooldown + "s" : "Resend OTP",
+
+      sendOtp: () => {
+        if (!/^[6-9]\d{9}$/.test(s.phone)) { this.setState({ otpError: "Enter a valid 10-digit Indian mobile number." }); return; }
+        if (s.otpReady !== true) { this.setState({ otpError: "Unable to initialize the OTP service. Please try again." }); return; }
+        if (s.sendAttempts >= 5) { this.setState({ otpError: "Too many OTP requests. Please wait before trying again." }); return; }
+        this.setState({ sending: true, otpError: "" });
+        console.info("OTP request started");
+        const normalized = "91" + s.phone;
+        window.sendOtp(normalized,
+          (data) => {
+            console.info("OTP request successful");
+            const reqId = (data && (data.message || data.reqId)) || null;
+            this.setState({ sending: false, otpStage: "code", reqId, sendAttempts: s.sendAttempts + 1, verifyAttempts: 0, otp: "" });
+            this.startCooldown();
+          },
+          (error) => {
+            console.warn("OTP request failed", error && (error.type || error.message));
+            this.setState({ sending: false, otpError: "We could not send the OTP. Please check your mobile number and try again.", sendAttempts: s.sendAttempts + 1 });
+          }
+        );
+      },
+
+      resendOtp: () => {
+        if (s.cooldown > 0 || !s.reqId) return;
+        console.info("OTP resend started");
+        window.retryOtp(null,
+          (data) => {
+            console.info("OTP resend successful");
+            const reqId = (data && (data.message || data.reqId)) || s.reqId;
+            this.setState({ reqId, verifyAttempts: 0, otpError: "" });
+            this.startCooldown();
+          },
+          (error) => {
+            console.warn("OTP resend failed", error && (error.type || error.message));
+            this.setState({ otpError: "We could not resend the OTP. Please try again." });
+          },
+          s.reqId
+        );
+      },
+
+      verifyOtp: () => {
+        if (!/^\d{4,6}$/.test(s.otp)) { this.setState({ otpError: "Enter the OTP you received." }); return; }
+        if (s.verifyAttempts >= 5) { this.setState({ otpError: "Too many incorrect attempts. Please request a new OTP." }); return; }
+        console.info("OTP verification started");
+        this.setState({ verifying: true, otpError: "" });
+        window.verifyOtp(Number(s.otp),
+          (data) => {
+            console.info("OTP verification successful");
+            this.setState({ verifying: false, otpSuccess: true, otpError: "" });
+            setTimeout(() => { window.location.href = "Student-Dashboard.dc.html"; }, 700);
+          },
+          (error) => {
+            console.warn("OTP verification failed", error && (error.type || error.message));
+            const msg = /expire/i.test((error && (error.type || error.message)) || "") ? "The OTP has expired. Please request a new OTP." : "The OTP is incorrect. Please try again.";
+            this.setState({ verifying: false, otpError: msg, verifyAttempts: s.verifyAttempts + 1 });
+          },
+          s.reqId
+        );
+      },
+
+      notReady: () => this.setState({ error: "Email OTP login is not connected yet. Use the demo credentials for now." }),
+      googleNotReady: () => this.setState({ error: "Google Sign-In is not connected yet. Use the demo credentials for now." }),
+      submit: e => {
+        e.preventDefault();
+        const u = this.state.username.trim().toLowerCase();
+        const p = this.state.password;
+        if (!u || !p) {
+          this.setState({ error: "Enter both username and password." });
+          return;
+        }
+        if (u !== "student" || p !== "Student@123") {
+          this.setState({ error: "Incorrect username or password. Demo login: student / Student@123", success: false });
+          return;
+        }
+        this.setState({ error: "", success: true });
+        setTimeout(() => { window.location.href = "Student-Dashboard.dc.html"; }, 700);
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

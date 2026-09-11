@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,h3,h4,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  button{font-family:inherit;cursor:pointer}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+<script src="admin-test-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Student-Header" active="dashboard" hint-size="100%,72px"></dc-import>
+
+  <main style="max-width:1200px;margin:0 auto;padding:clamp(24px,3.5vw,40px) 24px clamp(48px,6vw,72px);display:flex;flex-direction:column;gap:clamp(28px,3.5vw,44px)">
+
+    <section style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between">
+      <div style="min-width:0">
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">RUHS Medical Officer 2026</p>
+        <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(27px,3.2vw,38px);line-height:1.12;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:8px">{{ greeting }}</h1>
+        <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px">{{ heroSubtext }}</p>
+      </div>
+      <a href="#custom" style="display:inline-flex;align-items:center;gap:9px;padding:14px 22px;border-radius:var(--frontend-btn-radius,10px);background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:15.5px;font-weight:700;white-space:nowrap" style-hover="background:var(--frontend-primary-hover,#0B3A63)">
+        Build a practice test
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+      </a>
+    </section>
+
+    <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px">
+      <sc-for list="{{ statCards }}" as="c" hint-placeholder-count="8">
+        <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">{{ c.label }}</p>
+          <p style="font-size:32px;line-height:1.05;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:12px">{{ c.value }}</p>
+          <p style="font-size:12.5px;color:var(--frontend-faint,#7A8899);margin-top:10px">{{ c.note }}</p>
+        </div>
+      </sc-for>
+    </section>
+
+    <section id="practice">
+      <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(22px,2.4vw,28px);line-height:1.2;font-weight:700;letter-spacing:-.015em;color:var(--frontend-heading,#0F2B45)">Practice</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-top:18px">
+        <a href="Test-Player.dc.html" style="display:block;background:var(--frontend-surface,#FFFFFF);border:1.5px solid var(--frontend-primary,#0F4C81);border-radius:14px;padding:20px" style-hover="box-shadow:0 10px 26px -18px rgba(15,76,129,.5)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path></svg>
+            <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-warning,#B25E00);background:var(--frontend-warning-tint,#FFF6EC);border:1px solid var(--frontend-warning-border,#F8DDBE);border-radius:999px;padding:4px 8px">Resume</span>
+          </div>
+          <h3 style="font-size:17.5px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:14px">Full Mock Test</h3>
+          <p style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E);margin-top:7px">100 questions, 2 hours, printable OMR sheet.</p>
+          <p style="font-size:13px;color:var(--frontend-faint,#7A8899);margin-top:12px">Mock 10 · paused at Q42</p>
+          <p style="font-size:13.5px;font-weight:700;color:var(--frontend-primary,#0F4C81);margin-top:12px">Continue test →</p>
+        </a>
+        <a href="Student-Subject-Test.dc.html" style="display:block;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px" style-hover="border-color:var(--frontend-primary,#0F4C81)">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><circle cx="12" cy="12" r="4.5"></circle><circle cx="12" cy="12" r="1"></circle></svg>
+          <h3 style="font-size:17.5px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:14px">Subject Test</h3>
+          <p style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E);margin-top:7px">One subject at a time across all 19 MBBS subjects.</p>
+          <p style="font-size:13px;color:var(--frontend-faint,#7A8899);margin-top:12px">11 taken · 8 subjects left</p>
+          <p style="font-size:13.5px;font-weight:700;color:var(--frontend-primary,#0F4C81);margin-top:12px">Choose subject →</p>
+        </a>
+        <a href="Student-Old-Test-Series.dc.html" style="display:block;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px" style-hover="border-color:var(--frontend-primary,#0F4C81)">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h11l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"></path><path d="M15 4v5h5"></path><path d="M8 14h8"></path></svg>
+          <h3 style="font-size:17.5px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:14px">Old Test Series</h3>
+          <p style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E);margin-top:7px">Previous year papers with full AI explanations.</p>
+          <p style="font-size:13px;color:var(--frontend-faint,#7A8899);margin-top:12px">Latest: 2024 paper</p>
+          <p style="font-size:13.5px;font-weight:700;color:var(--frontend-primary,#0F4C81);margin-top:12px">See all papers →</p>
+        </a>
+        <a href="Student-Free-Sample.dc.html" style="display:block;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px" style-hover="border-color:var(--frontend-primary,#0F4C81)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path></svg>
+            <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-success-text,#1E5620);background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);border-radius:999px;padding:4px 8px">Free</span>
+          </div>
+          <h3 style="font-size:17.5px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:14px">Free Sample Test</h3>
+          <p style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E);margin-top:7px">25 questions to sample the AI explanations.</p>
+          <p style="font-size:13px;color:var(--frontend-faint,#7A8899);margin-top:12px">Unlimited retakes</p>
+          <p style="font-size:13.5px;font-weight:700;color:var(--frontend-primary,#0F4C81);margin-top:12px">Start sample →</p>
+        </a>
+      </div>
+    </section>
+
+    <section id="custom" style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-tint-border,#DCE7F2);border-radius:16px;padding:clamp(20px,3vw,28px)">
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between">
+        <div style="min-width:0">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">On the go</p>
+          <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(21px,2.3vw,27px);line-height:1.2;font-weight:700;letter-spacing:-.015em;color:var(--frontend-heading,#0F2B45);margin-top:6px">Create a custom practice test</h2>
+        </div>
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-faint,#7A8899)">{{ summaryLine }}</p>
+      </div>
+
+      <p style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E);margin-top:22px">1 · Subjects</p>
+      <ul style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+        <sc-for list="{{ subjects }}" as="s" hint-placeholder-count="8">
+          <li>
+            <button type="button" onClick="{{ s.toggle }}" style="{{ s.style }}">{{ s.name }}</button>
+          </li>
+        </sc-for>
+      </ul>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:22px;margin-top:24px">
+        <div style="min-width:0">
+          <p style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">2 · Number of questions</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+            <sc-for list="{{ counts }}" as="c" hint-placeholder-count="4">
+              <button type="button" onClick="{{ c.select }}" style="{{ c.style }}">{{ c.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="min-width:0">
+          <p style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">3 · Mode</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+            <sc-for list="{{ modes }}" as="m" hint-placeholder-count="3">
+              <button type="button" onClick="{{ m.select }}" style="{{ m.style }}">{{ m.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="min-width:0">
+          <p style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">4 · Question pool</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+            <sc-for list="{{ pools }}" as="p" hint-placeholder-count="3">
+              <button type="button" onClick="{{ p.select }}" style="{{ p.style }}">{{ p.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:24px;padding-top:20px;border-top:1px solid var(--frontend-border-subtle,#EDF2F7)">
+        <button type="button" onClick="{{ start }}" style="display:inline-flex;align-items:center;gap:9px;padding:14px 22px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:15.5px;font-weight:700" style-hover="background:var(--frontend-primary-hover,#0B3A63)">
+          Start custom test
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </button>
+        <button type="button" onClick="{{ reset }}" style="padding:14px 20px;border-radius:10px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:15px;font-weight:600;color:var(--frontend-muted,#41505E)" style-hover="background:#F2F6FA">Reset</button>
+        <p style="flex:1 1 220px;min-width:0;font-size:13px;line-height:1.5;color:var(--frontend-faint,#7A8899)">{{ hintLine }}</p>
+      </div>
+      <p style="font-size:13px;color:var(--frontend-faint,#7A8899);margin-top:14px">Looking for admin-built modules instead? <a href="Student-Custom-Module.dc.html" style="font-weight:700">Open Custom Module →</a></p>
+    </section>
+
+    <section>
+      <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(22px,2.4vw,28px);line-height:1.2;font-weight:700;letter-spacing:-.015em;color:var(--frontend-heading,#0F2B45)">Your account</h2>
+      <p style="font-size:15px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:70ch">Detailed information lives on its own page, so this dashboard stays an overview and your data loads only where you ask for it.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:18px">
+      <a href="Student-Analysis.dc.html" style="display:flex;flex-direction:column;gap:7px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px" style-hover="border-color:var(--frontend-primary,#0F4C81);box-shadow:0 10px 26px -20px rgba(15,76,129,.4)">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span style="flex:1 1 auto;min-width:0;font-size:16.5px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Detailed analysis</span>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;color:var(--frontend-primary,#0F4C81)"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </span>
+        <span style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E)">Accuracy, pace, subject mastery and weak topics across your attempts.</span>
+        <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-faint,#5C6B7A);margin-top:2px">{{ analysisPreview }}</span>
+      </a>
+      <a href="Student-Test-History.dc.html" style="display:flex;flex-direction:column;gap:7px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px" style-hover="border-color:var(--frontend-primary,#0F4C81);box-shadow:0 10px 26px -20px rgba(15,76,129,.4)">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span style="flex:1 1 auto;min-width:0;font-size:16.5px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Test history</span>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;color:var(--frontend-primary,#0F4C81)"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </span>
+        <span style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E)">Every attempt with score and accuracy. Each result opens on its own page.</span>
+        <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-faint,#5C6B7A);margin-top:2px">{{ historyPreview }}</span>
+      </a>
+      <a href="Student-Saved-Questions.dc.html" style="display:flex;flex-direction:column;gap:7px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px" style-hover="border-color:var(--frontend-primary,#0F4C81);box-shadow:0 10px 26px -20px rgba(15,76,129,.4)">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span style="flex:1 1 auto;min-width:0;font-size:16.5px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Saved questions & mistake notebook</span>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;color:var(--frontend-primary,#0F4C81)"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </span>
+        <span style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E)">Bookmarked questions and the ones you got wrong, ready to practise again.</span>
+        <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-faint,#5C6B7A);margin-top:2px">{{ savedPreview }}</span>
+      </a>
+      <a href="Student-Profile.dc.html" style="display:flex;flex-direction:column;gap:7px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px" style-hover="border-color:var(--frontend-primary,#0F4C81);box-shadow:0 10px 26px -20px rgba(15,76,129,.4)">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span style="flex:1 1 auto;min-width:0;font-size:16.5px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Candidate profile</span>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;color:var(--frontend-primary,#0F4C81)"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </span>
+        <span style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E)">Personal, academic, exam and account details on a dedicated page.</span>
+        <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-faint,#5C6B7A);margin-top:2px">MTS-2026-00184</span>
+      </a>
+      <a href="Student-Settings.dc.html" style="display:flex;flex-direction:column;gap:7px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:20px" style-hover="border-color:var(--frontend-primary,#0F4C81);box-shadow:0 10px 26px -20px rgba(15,76,129,.4)">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span style="flex:1 1 auto;min-width:0;font-size:16.5px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Settings, privacy & security</span>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;color:var(--frontend-primary,#0F4C81)"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </span>
+        <span style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E)">Password, verification, sessions and account deletion request.</span>
+        <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-faint,#5C6B7A);margin-top:2px">Email verification pending</span>
+      </a>
+      </div>
+    </section>
+
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+function fmt(n) { return (n || 0).toLocaleString("en-IN"); }
+
+class Component extends DCLogic {
+  state = {
+    stats: null,
+    mockTests: [],
+    picked: ["Pharmacology"],
+    count: 25,
+    mode: "Timed",
+    pool: "All questions",
+    started: false
+  };
+
+  componentDidMount() {
+    const load = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      const T = window.MTS && window.MTS.AdminTests;
+      if (D) this.setState({ stats: D.getStatistics() });
+      if (T) this.setState({ mockTests: T.published() });
+    };
+    load();
+    const D = window.MTS && window.MTS.StudentData;
+    const T = window.MTS && window.MTS.AdminTests;
+    this._offs = [D && D.subscribe(load), T && T.subscribe(load)].filter(Boolean);
+    if (!D && !T) this._t = setTimeout(load, 120);
+  }
+
+  componentWillUnmount() {
+    (this._offs || []).forEach(off => off());
+    if (this._t) clearTimeout(this._t);
+  }
+
+  chip(active) {
+    return "padding:10px 14px;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;" +
+      (active
+        ? "border:1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-primary,#0F4C81);"
+        : "border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);");
+  }
+
+  renderVals() {
+    const s = this.state;
+    const st = s.stats || {
+      questionsAttemptedTotal: 0, questionsAttemptedToday: 0, testsCompletedTotal: 0,
+      testsCompletedToday: 0, studyStreak: 0, longestStudyStreak: 0, accuracy: 0,
+      savedQuestionsCount: 0, mistakeQuestionsCount: 0
+    };
+
+    const names = ["Pharmacology", "General Medicine", "General Surgery", "PSM", "Pathology",
+      "Microbiology", "Obs & Gynae", "Paediatrics", "Orthopaedics", "FMT"];
+
+    const subjects = names.map(name => ({
+      name,
+      style: this.chip(s.picked.includes(name)),
+      toggle: () => this.setState(p => ({
+        started: false,
+        picked: p.picked.includes(name) ? p.picked.filter(x => x !== name) : p.picked.concat(name)
+      }))
+    }));
+
+    const counts = [10, 25, 50, 100].map(n => ({
+      label: n + " Q",
+      style: this.chip(s.count === n),
+      select: () => this.setState({ count: n, started: false })
+    }));
+
+    const modes = ["Timed", "Untimed", "OMR sheet"].map(label => ({
+      label,
+      style: this.chip(s.mode === label),
+      select: () => this.setState({ mode: label, started: false })
+    }));
+
+    const pools = ["All questions", "My mistakes", "Unattempted"].map(label => ({
+      label,
+      style: this.chip(s.pool === label),
+      select: () => this.setState({ pool: label, started: false })
+    }));
+
+    const subjLabel = s.picked.length === 0 ? "no subject" :
+      s.picked.length === 1 ? s.picked[0] : s.picked.length + " subjects";
+    const minutes = Math.round(s.count * 1.2);
+
+    let hintLine;
+    if (s.started) {
+      hintLine = "Test created — " + s.count + " questions from " + subjLabel +
+        " (" + s.mode.toLowerCase() + ", " + s.pool.toLowerCase() + "). In the app this opens the test player.";
+    } else if (s.picked.length === 0) {
+      hintLine = "Pick at least one subject to build a test.";
+    } else {
+      hintLine = s.mode === "Untimed"
+        ? "No timer — explanations unlock after each question."
+        : "Approx. " + minutes + " minutes at real exam pace.";
+    }
+
+    const dailyTarget = 100;
+    const remaining = Math.max(0, dailyTarget - st.questionsAttemptedToday);
+
+    const first = s.mockTests[0];
+    const mockTest = first ? {
+      name: first.name,
+      instructions: first.instructions,
+      meta: first.exam + " · " + first.totalQuestions + " Q · " + first.duration + " min",
+      badge: first.resumable ? "Resume" : "",
+      cta: first.resumable ? "Continue test →" : "Start test →"
+    } : {
+      name: "No Full Mock Test published yet",
+      instructions: "Admin hasn't published a Full Mock Test. Check back soon.",
+      meta: "",
+      badge: "",
+      cta: ""
+    };
+
+    const statCards = [
+      { label: "Questions Attempted", value: fmt(st.questionsAttemptedTotal), note: "All-time total" },
+      { label: "MCQs Attempted Today", value: fmt(st.questionsAttemptedToday), note: "Target " + dailyTarget + "/day" },
+      { label: "Tests Completed", value: fmt(st.testsCompletedTotal), note: "All-time total" },
+      { label: "Tests Completed Today", value: fmt(st.testsCompletedToday), note: "Since midnight" },
+      { label: "Study Streak", value: st.studyStreak + " days", note: "Best streak " + st.longestStudyStreak + " days" },
+      { label: "Accuracy", value: st.accuracy + "%", note: "Across all attempts" },
+      { label: "Saved Questions", value: fmt(st.savedQuestionsCount), note: "Bookmarked for later" },
+      { label: "Mistake Questions", value: fmt(st.mistakeQuestionsCount), note: "Ready to re-practice" }
+    ];
+
+    return {
+      mockTest,
+      greeting: "Good evening, Dr. Student",
+      heroSubtext: remaining > 0
+        ? "You are " + remaining + " questions away from today's target. Pharmacology is your weakest subject this week."
+        : "Today's target is done. Pharmacology is your weakest subject this week.",
+      statCards,
+      analysisPreview: "Accuracy " + st.accuracy + "% · Top 22%",
+      historyPreview: fmt(st.testsCompletedTotal) + " tests completed",
+      savedPreview: fmt(st.savedQuestionsCount) + " saved · " + fmt(st.mistakeQuestionsCount) + " mistakes",
+      subjects, counts, modes, pools, hintLine,
+      summaryLine: s.count + " Q · " + subjLabel + " · " + s.mode,
+      start: () => this.setState({ started: this.state.picked.length > 0 }),
+      reset: () => this.setState({ picked: [], count: 25, mode: "Timed", pool: "All questions", started: false })
+    };
+  }
+}
+
+</script>
+</body>
+</html>

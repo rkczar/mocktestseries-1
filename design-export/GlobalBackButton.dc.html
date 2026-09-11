@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<a href="{{ href }}" onClick="{{ onClick }}" style="display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600;color:var(--frontend-muted,#41505E);padding:6px 2px;margin-bottom:14px;-webkit-tap-highlight-color:transparent" style-hover="color:var(--frontend-primary,#0F4C81)">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"></path><path d="M11 18l-6-6 6-6"></path></svg>
+  {{ label }}
+</a>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:220,&quot;height&quot;:32},&quot;fallbackHref&quot;:{&quot;editor&quot;:null,&quot;default&quot;:&quot;Student-Dashboard.dc.html&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;fallbackLabel&quot;:{&quot;editor&quot;:null,&quot;default&quot;:&quot;Dashboard&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;currentFile&quot;:{&quot;editor&quot;:null,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+// Site-wide route -> display label map, used to build a dynamic label when the
+// browser's actual previous page (document.referrer) is a known internal page.
+const ROUTE_LABELS = {
+  "Homepage.dc.html": "Home",
+  "Student-Dashboard.dc.html": "Dashboard",
+  "Student-Analysis.dc.html": "Analysis",
+  "Student-Profile.dc.html": "Profile",
+  "Student-Test-History.dc.html": "Test History",
+  "Student-Custom-Module.dc.html": "Custom Test",
+  "Student-Free-Sample.dc.html": "Free Sample Test",
+  "Student-Subject-Test.dc.html": "Subject Test",
+  "Student-Settings.dc.html": "Settings",
+  "Student-Old-Test-Series.dc.html": "Old Test Series",
+  "Student-Saved-Questions.dc.html": "Saved Questions",
+  "Student-Login.dc.html": "Login",
+  "Exams.dc.html": "Exams",
+  "Contact-Us.dc.html": "Contact",
+  "RUHS-Medical-Officer.dc.html": "Exam Details",
+  "Admin-Dashboard.dc.html": "Admin Dashboard",
+  "Test-Player.dc.html": "Test"
+};
+
+class Component extends DCLogic {
+  // Props: fallbackHref, fallbackLabel (required — the safe parent/section destination),
+  // currentFile (this page's own filename, so we never treat "coming from ourselves" as valid history).
+  renderVals() {
+    const p = this.props || {};
+    let href = p.fallbackHref || "#";
+    let label = "Back to " + (p.fallbackLabel || "Dashboard");
+    let useHistory = false;
+
+    try {
+      const ref = document.referrer;
+      if (ref) {
+        const refUrl = new URL(ref);
+        if (refUrl.origin === window.location.origin) {
+          const refFile = refUrl.pathname.split("/").pop() || "";
+          if (refFile && refFile !== p.currentFile && ROUTE_LABELS[refFile]) {
+            label = "Back to " + ROUTE_LABELS[refFile];
+            href = refFile;
+            useHistory = true;
+          }
+        }
+      }
+    } catch (e) { /* no-op — falls back to the configured parent route */ }
+
+    return {
+      href, label,
+      onClick: e => {
+        if (useHistory && window.history.length > 1) { e.preventDefault(); window.history.back(); }
+        // else: plain link navigation to the configured fallback — never window.history.back()
+        // blindly, so we never leave the site or land on a broken/unrelated page.
+      }
+    };
+  }
+}
+
+</script>
+</body>
+</html>

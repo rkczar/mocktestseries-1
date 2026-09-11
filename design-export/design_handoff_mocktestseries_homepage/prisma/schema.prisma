@@ -1,0 +1,282 @@
+// MockTestSeries.in — starting Prisma schema.
+// Adjust as features land; every homepage value below is admin-editable data, not app constants.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ExamStatus {
+  ACTIVE
+  COMING_SOON
+  ARCHIVED
+}
+
+enum TestSeriesKind {
+  FULL_MOCK
+  PREVIOUS_YEAR
+  SUBJECT_WISE
+}
+
+enum AdminRole {
+  ADMIN
+  SUPER_ADMIN
+}
+
+// ---------- Public content (Admin Panel controlled) ----------
+
+model HomepageContent {
+  id                 String   @id @default(cuid())
+  heroEyebrow        String
+  heroHeading        String
+  heroDescription    String
+  finalCtaHeading    String
+  finalCtaBody       String
+  finalCtaNote       String?
+  updatedAt          DateTime @updatedAt
+  updatedById        String?
+}
+
+model HomepageSection {
+  id        String  @id @default(cuid())
+  key       String  @unique // hero | trust | featured_exams | popular_series | ai_usp | why_us | how_it_works | upcoming | final_cta
+  title     String?
+  eyebrow   String?
+  isVisible Boolean @default(true)
+  order     Int
+}
+
+model CtaButton {
+  id       String  @id @default(cuid())
+  slot     String  // hero_primary | hero_secondary | final_primary | final_secondary | header_primary
+  label    String
+  href     String
+  variant  String  @default("primary") // primary | secondary | accent | ghost
+  isActive Boolean @default(true)
+
+  @@unique([slot])
+}
+
+model Announcement {
+  id        String    @id @default(cuid())
+  tag       String? // e.g. "New"
+  message   String
+  linkLabel String?
+  linkHref  String?
+  isActive  Boolean   @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model Exam {
+  id          String       @id @default(cuid())
+  slug        String       @unique
+  title       String
+  shortTitle  String?
+  description String
+  iconUrl     String?
+  imageUrl    String?
+  status      ExamStatus   @default(COMING_SOON)
+  isFeatured  Boolean      @default(false)
+  order       Int          @default(0)
+  region      String?
+  metaChips   String[] // e.g. ["100 Q · 90 min", "12 mock tests", "AI explanations"]
+  seoTitle    String?
+  seoDesc     String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  testSeries  TestSeries[]
+  subjects    Subject[]
+
+  @@index([status, isFeatured, order])
+}
+
+model TestSeries {
+  id          String         @id @default(cuid())
+  slug        String         @unique
+  examId      String
+  exam        Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
+  kind        TestSeriesKind
+  title       String
+  description String
+  metaLabel   String? // "12 tests · 100 Q each"
+  isPopular   Boolean        @default(false)
+  order       Int            @default(0)
+  isFree      Boolean        @default(false)
+  tests       Test[]
+
+  @@index([isPopular, order])
+}
+
+model UpcomingExam {
+  id          String    @id @default(cuid())
+  title       String
+  subtitle    String?
+  examDate    DateTime?
+  dateLabel   String? // when the exact date is not announced
+  region      String?
+  status      String // "Notification out" | "Expected" | ...
+  statusTone  String    @default("neutral") // success | accent | neutral
+  actionLabel String?
+  actionHref  String?
+  examId      String?
+  order       Int       @default(0)
+  isVisible   Boolean   @default(true)
+
+  @@index([isVisible, examDate])
+}
+
+model PricingPlan {
+  id          String   @id @default(cuid())
+  name        String
+  priceInPaise Int
+  period      String // "one-time" | "monthly" | "yearly"
+  description String
+  features    String[]
+  isPopular   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  ctaLabel    String   @default("Get started")
+}
+
+// ---------- Exam content ----------
+
+model Subject {
+  id       String     @id @default(cuid())
+  examId   String
+  exam     Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
+  name     String
+  order    Int        @default(0)
+  questions Question[]
+}
+
+model Test {
+  id            String       @id @default(cuid())
+  testSeriesId  String
+  testSeries    TestSeries   @relation(fields: [testSeriesId], references: [id], onDelete: Cascade)
+  title         String
+  durationMin   Int
+  totalMarks    Int
+  negativeMark  Float        @default(0)
+  isPublished   Boolean      @default(false)
+  order         Int          @default(0)
+  questions     Question[]
+  attempts      TestAttempt[]
+}
+
+model Question {
+  id            String   @id @default(cuid())
+  testId        String?
+  test          Test?    @relation(fields: [testId], references: [id], onDelete: SetNull)
+  subjectId     String?
+  subject       Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  stem          String
+  options       Json // [{ key: "A", text: "..." }, ...]
+  correctKey    String
+  marks         Float    @default(1)
+  // AI explanation blocks
+  whyCorrect    String?
+  whyOthersWrong Json?
+  coreConcept   String?
+  examPearl     String?
+  memoryTrick   String?
+  order         Int      @default(0)
+}
+
+// ---------- Students (separate auth realm) ----------
+
+model Student {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  phone         String?       @unique
+  name          String
+  passwordHash  String?
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime      @default(now())
+  attempts      TestAttempt[]
+  accounts      StudentAccount[]
+  sessions      StudentSession[]
+}
+
+model StudentAccount {
+  id                String  @id @default(cuid())
+  studentId         String
+  student           Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  provider          String
+  providerAccountId String
+  type              String
+  access_token      String?
+  refresh_token     String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+
+  @@unique([provider, providerAccountId])
+}
+
+model StudentSession {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  studentId    String
+  student      Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  expires      DateTime
+}
+
+model TestAttempt {
+  id          String    @id @default(cuid())
+  studentId   String
+  student     Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  testId      String
+  test        Test      @relation(fields: [testId], references: [id], onDelete: Cascade)
+  startedAt   DateTime  @default(now())
+  submittedAt DateTime?
+  score       Float?
+  answers     Json? // { questionId: "B", ... }
+  analytics   Json? // accuracy, time per question, subject splits, weak topics
+
+  @@index([studentId, testId])
+}
+
+// ---------- Admins (separate auth realm) ----------
+
+model AdminUser {
+  id           String         @id @default(cuid())
+  email        String         @unique
+  name         String
+  passwordHash String
+  role         AdminRole      @default(ADMIN)
+  totpSecret   String?
+  isActive     Boolean        @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime       @default(now())
+  sessions     AdminSession[]
+  auditLogs    AuditLog[]
+}
+
+model AdminSession {
+  id           String    @id @default(cuid())
+  sessionToken String    @unique
+  adminId      String
+  admin        AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expires      DateTime
+}
+
+model AuditLog {
+  id        String    @id @default(cuid())
+  adminId   String
+  admin     AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  action    String // create | update | delete | reorder | publish
+  entity    String
+  entityId  String?
+  diff      Json?
+  createdAt DateTime  @default(now())
+
+  @@index([entity, createdAt])
+}

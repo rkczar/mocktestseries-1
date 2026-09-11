@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  button{font-family:inherit;cursor:pointer}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Student-Header" active="" hint-size="100%,72px"></dc-import>
+
+  <main style="flex:1 1 auto;max-width:1200px;width:100%;margin:0 auto;padding:clamp(22px,3vw,36px) 24px clamp(44px,5vw,64px)">
+    <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Student-Settings.dc.html" hint-size="140px,32px"></dc-import>
+    <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(27px,3.2vw,38px);line-height:1.12;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:12px">Settings, privacy &amp; security</h1>
+    <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:70ch">Account access, verification and deletion. Only your own account is reachable from here — the server checks that on every request, not just the interface.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:22px;align-items:start">
+      <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:22px">
+        <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:21px;font-weight:700;color:var(--frontend-heading,#0F2B45)">Account &amp; security</h2>
+        <ul style="display:flex;flex-direction:column;gap:12px;margin-top:16px">
+          <li style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:12px">
+            <span style="flex:1 1 180px;min-width:0;font-size:14.5px;font-weight:700;color:var(--frontend-text,#212529)">Password<span style="display:block;font-size:12.5px;font-weight:500;color:var(--frontend-faint,#5C6B7A);margin-top:2px">Last changed 12 days ago</span></span>
+            <a href="#" style="font-size:13.5px;font-weight:700;white-space:nowrap">Change</a>
+          </li>
+          <li style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:12px">
+            <span style="flex:1 1 180px;min-width:0;font-size:14.5px;font-weight:700;color:var(--frontend-text,#212529)">Email verification<span style="display:block;font-size:12.5px;font-weight:500;color:var(--frontend-warning,#9A5000);margin-top:2px">Pending — API to be connected</span></span>
+            <a href="#" style="font-size:13.5px;font-weight:700;white-space:nowrap">Verify</a>
+          </li>
+          <li style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:12px">
+            <span style="flex:1 1 180px;min-width:0;font-size:14.5px;font-weight:700;color:var(--frontend-text,#212529)">Mobile OTP login<span style="display:block;font-size:12.5px;font-weight:500;color:var(--frontend-faint,#5C6B7A);margin-top:2px">Replaces the temporary password login</span></span>
+            <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-muted,#41505E);background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:999px;padding:4px 9px;white-space:nowrap">Planned</span>
+          </li>
+          <li style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+            <span style="flex:1 1 180px;min-width:0;font-size:14.5px;font-weight:700;color:var(--frontend-text,#212529)">Active sessions<span style="display:block;font-size:12.5px;font-weight:500;color:var(--frontend-faint,#5C6B7A);margin-top:2px">2 devices signed in</span></span>
+            <a href="#" style="font-size:13.5px;font-weight:700;color:var(--frontend-error,#C62828);white-space:nowrap">Sign out all</a>
+          </li>
+        </ul>
+      </div>
+
+      <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:16px;padding:22px">
+        <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:21px;font-weight:700;color:var(--frontend-error-text,#8A2020)">Delete account</h2>
+        <p style="font-size:14px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px">Your attempts, scores, bookmarks and analysis are removed. An admin reviews every request — nothing is deleted automatically.</p>
+
+        <sc-if value="{{ idle }}" hint-placeholder-val="{{ true }}">
+          <button type="button" onClick="{{ start }}" style="margin-top:16px;padding:13px 18px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-error,#C62828);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;font-weight:700;color:var(--frontend-error,#C62828)">Request account deletion</button>
+        </sc-if>
+
+        <sc-if value="{{ form }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:16px">
+            <p style="font-size:13.5px;font-weight:700;color:var(--frontend-text,#212529)">Reason</p>
+            <ul style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+              <sc-for list="{{ reasons }}" as="r" hint-placeholder-count="4">
+                <li><button type="button" onClick="{{ r.click }}" style="{{ r.style }}">{{ r.label }}</button></li>
+              </sc-for>
+            </ul>
+            <p style="font-size:13px;line-height:1.55;color:var(--frontend-muted,#41505E);background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:10px;padding:12px 13px;margin-top:14px">Once an admin approves, your account is locked and permanently deleted after 12 hours. You can withdraw the request until then.</p>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px">
+              <button type="button" onClick="{{ submit }}" style="padding:13px 18px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-error,#C62828);color:#FFFFFF;font-size:14.5px;font-weight:700">Submit deletion request</button>
+              <button type="button" onClick="{{ cancel }}" style="padding:13px 18px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;font-weight:600;color:var(--frontend-muted,#41505E)">Cancel</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ pending }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:16px;background:var(--frontend-warning-tint,#FFF6EC);border:1px solid var(--frontend-warning-border,#F8DDBE);border-radius:12px;padding:15px">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--frontend-warning,#9A5000)">Request submitted · awaiting admin approval</p>
+            <p style="font-size:15px;line-height:1.55;font-weight:700;color:var(--frontend-text,#212529);margin-top:9px">Your request is submitted. Your account will be deleted in 12 hours once an admin approves it.</p>
+            <p style="font-size:12.5px;color:var(--frontend-muted,#41505E);margin-top:7px">{{ meta }}</p>
+            <button type="button" onClick="{{ withdraw }}" style="margin-top:13px;padding:12px 17px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81)">Withdraw request</button>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { step: "idle", reason: "" };
+  renderVals() {
+    const s = this.state;
+    const REASONS = ["Exam is over", "Not using it enough", "Privacy concern", "Other"];
+    return {
+      idle: s.step === "idle",
+      form: s.step === "form",
+      pending: s.step === "pending",
+      reasons: REASONS.map(label => ({
+        label,
+        style: "padding:10px 14px;border-radius:999px;font-size:13.5px;font-weight:600;" +
+          (s.reason === label
+            ? "border:1.5px solid var(--frontend-error,#C62828);background:var(--frontend-error-tint,#FDEDED);color:var(--frontend-error-text,#8A2020);"
+            : "border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);"),
+        click: () => this.setState({ reason: label })
+      })),
+      meta: "Request DEL-0042 · reason: " + (s.reason || "not given") + " · raised 08 Sep 2026, 19:40",
+      start: () => this.setState({ step: "form" }),
+      cancel: () => this.setState({ step: "idle", reason: "" }),
+      submit: () => this.setState({ step: "pending" }),
+      withdraw: () => this.setState({ step: "idle", reason: "" })
+    };
+  }
+}
+</script>
+</body>
+</html>

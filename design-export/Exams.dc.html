@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+</style>
+<script src="site-config.js"></script>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="exams-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Site-Header" active="/exams" hint-size="100%,140px"></dc-import>
+
+  <main style="flex:1 1 auto;max-width:1100px;width:100%;margin:0 auto;padding:clamp(28px,4vw,48px) 24px clamp(48px,6vw,72px)">
+    <dc-import name="GlobalBackButton" fallback-href="Homepage.dc.html" fallback-label="Home" current-file="Exams.dc.html" hint-size="140px,32px"></dc-import>
+    <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">Exams</p>
+    <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(28px,3.4vw,40px);line-height:1.1;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:8px">Every exam, in one place</h1>
+    <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:60ch">Live mock test series you can start today, and the exams we're preparing next. Managed entirely from the Admin Panel.</p>
+
+    <section style="margin-top:36px">
+      <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(21px,2.2vw,26px);font-weight:700;color:var(--frontend-heading,#0F2B45)">Live exams</h2>
+      <ul style="display:flex;flex-direction:column;gap:14px;margin-top:16px">
+        <sc-for list="{{ liveExams }}" as="e" hint-placeholder-count="1">
+          <li style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:clamp(20px,3vw,24px);display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between">
+            <div style="min-width:0">
+              <h3 style="font-size:19px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ e.name }}</h3>
+              <p style="font-size:14px;color:var(--frontend-faint,#7A8899);margin-top:6px">Full mock test series with AI-explained answers.</p>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
+              <span style="font-size:17px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ e.priceLabel }}</span>
+              <a href="{{ e.href }}" style="padding:12px 20px;border-radius:var(--frontend-btn-radius,10px);background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:14.5px;font-weight:700;white-space:nowrap" style-hover="background:var(--frontend-primary-hover,#0B3A63)">View Details</a>
+            </div>
+          </li>
+        </sc-for>
+      </ul>
+    </section>
+
+    <section style="margin-top:44px">
+      <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(21px,2.2vw,26px);font-weight:700;color:var(--frontend-heading,#0F2B45)">Upcoming exams</h2>
+      <p style="font-size:14px;color:var(--frontend-faint,#7A8899);margin-top:6px">Test series in preparation for future exam notifications.</p>
+
+      <sc-if value="{{ hasUpcoming }}" hint-placeholder-val="{{ true }}">
+        <ul style="display:flex;flex-direction:column;gap:14px;margin-top:16px">
+          <sc-for list="{{ upcomingExams }}" as="e" hint-placeholder-count="3">
+            <li style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:clamp(20px,3vw,24px)">
+              <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between">
+                <div style="min-width:0">
+                  <h3 style="font-size:18px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ e.name }}</h3>
+                  <p style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:60ch">{{ e.description }}</p>
+                </div>
+                <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400);background:var(--frontend-accent-tint,#FFF6EC);border:1px solid var(--frontend-accent-border,#F8DDBE);border-radius:999px;padding:5px 10px;white-space:nowrap">{{ e.dateLabel }}</span>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--frontend-border-subtle,#EDF2F7)">
+                <sc-if value="{{ e.hasPrice }}" hint-placeholder-val="{{ false }}">
+                  <span style="font-size:15px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ e.priceLabel }}</span>
+                </sc-if>
+                <span style="font-size:13px;color:var(--frontend-faint,#7A8899)">Set up your account now to get notified when it launches.</span>
+                <a href="Student-Login.dc.html" style="margin-left:auto;padding:11px 17px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81)" style-hover="background:var(--frontend-tint,#EEF4FA)">Get notified</a>
+              </div>
+            </li>
+          </sc-for>
+        </ul>
+      </sc-if>
+      <sc-if value="{{ hasUpcoming }}" hint-placeholder-val="{{ true }}">
+      </sc-if>
+      <sc-if value="{{ hasNoUpcoming }}" hint-placeholder-val="{{ false }}">
+        <p style="margin-top:16px;font-size:15px;color:var(--frontend-faint,#7A8899)">No upcoming exams are listed right now — check back soon.</p>
+      </sc-if>
+    </section>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+function fmtDate(iso) {
+  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+class Component extends DCLogic {
+  state = { current: [], upcoming: [] };
+
+  componentDidMount() {
+    const load = () => {
+      const E = window.MTS && window.MTS.ExamsData;
+      if (E) this.setState({ current: E.getCurrentExams(), upcoming: E.getVisibleUpcoming() });
+    };
+    load();
+    const tryBind = () => {
+      const E = window.MTS && window.MTS.ExamsData;
+      if (E) { this._off = E.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+  }
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+  }
+
+  renderVals() {
+    const { current, upcoming } = this.state;
+    return {
+      liveExams: current.map(e => ({
+        name: e.name,
+        priceLabel: e.price > 0 ? "\u20B9" + e.price : "Free",
+        href: e.route
+      })),
+      hasUpcoming: upcoming.length > 0,
+      hasNoUpcoming: upcoming.length === 0,
+      upcomingExams: upcoming.map(e => ({
+        name: e.name,
+        description: e.description,
+        dateLabel: "Expected " + fmtDate(e.expectedDate),
+        hasPrice: e.price > 0,
+        priceLabel: "\u20B9" + e.price
+      }))
+    };
+  }
+}
+
+</script>
+</body>
+</html>

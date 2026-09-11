@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Student-Header" active="analytics" hint-size="100%,72px"></dc-import>
+
+  <main style="flex:1 1 auto;max-width:1200px;width:100%;margin:0 auto;padding:clamp(22px,3vw,36px) 24px clamp(44px,5vw,64px)">
+    <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Student-Analysis.dc.html" hint-size="140px,32px"></dc-import>
+    <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(27px,3.2vw,38px);line-height:1.12;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:12px">Detailed analysis</h1>
+    <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:70ch">Accuracy, pace and subject mastery across your attempts, computed from your own results only.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:22px;align-items:start">
+      <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:22px">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;justify-content:space-between">
+          <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:21px;font-weight:700;color:var(--frontend-heading,#0F2B45)">Performance trend</h2>
+          <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-faint,#5C6B7A)">Last 7 tests</span>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:8px;height:150px;margin-top:20px">
+          <sc-for list="{{ bars }}" as="b" hint-placeholder-count="7">
+            <span style="flex:1 1 auto;height:{{ b.h }};border-radius:6px 6px 0 0;background:{{ b.bg }}"></span>
+          </sc-for>
+        </div>
+        <ul style="display:flex;flex-wrap:wrap;gap:12px 22px;margin-top:18px">
+          <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="4" hint-note="synced from student statistics">
+            <li style="font-size:13.5px;color:var(--frontend-faint,#5C6B7A)">{{ m.label }} <span style="font-weight:800;color:{{ m.color }}">{{ m.value }}</span></li>
+          </sc-for>
+        </ul>
+      </div>
+
+      <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:22px">
+        <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:21px;font-weight:700;color:var(--frontend-heading,#0F2B45)">Subject mastery</h2>
+        <ul style="display:flex;flex-direction:column;gap:14px;margin-top:18px">
+          <sc-for list="{{ subjects }}" as="s" hint-placeholder-count="5">
+            <li>
+              <div style="display:flex;gap:10px;justify-content:space-between;font-size:14px">
+                <span style="font-weight:700;color:var(--frontend-text,#212529)">{{ s.name }}</span>
+                <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-weight:600;color:var(--frontend-muted,#41505E)">{{ s.pct }}</span>
+              </div>
+              <div style="height:7px;border-radius:999px;background:var(--frontend-border-subtle,#EDF2F7);margin-top:7px;overflow:hidden">
+                <span style="display:block;width:{{ s.w }};height:100%;background:{{ s.bg }}"></span>
+              </div>
+            </li>
+          </sc-for>
+        </ul>
+        <p style="font-size:14px;line-height:1.55;color:var(--frontend-error-text,#8A2020);background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:10px;padding:12px 13px;margin-top:18px">Pharmacology is costing you the most marks — 57% of your lost marks come from it.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px">
+          <a href="Student-Saved-Questions.dc.html" style="padding:12px 17px;border-radius:var(--frontend-btn-radius,10px);background:var(--frontend-btn-primary-bg,#0F4C81);color:var(--frontend-btn-primary-text,#FFFFFF);font-size:14px;font-weight:700">Practice weak topics</a>
+          <a href="Student-Test-History.dc.html" style="padding:12px 17px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81)">Test history</a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { stats: null };
+
+  componentDidMount() {
+    const load = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) this.setState({ stats: D.getStatistics() });
+    };
+    load();
+    const tryBind = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) { this._off = D.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+  }
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+  }
+
+  renderVals() {
+    const st = this.state.stats || { accuracy: 0, totalSkipped: 0, totalCorrect: 0, totalIncorrect: 0 };
+    const attempted = st.totalCorrect + st.totalIncorrect;
+    const unattemptedPct = attempted + st.totalSkipped > 0 ? Math.round((st.totalSkipped / (attempted + st.totalSkipped)) * 100) : 0;
+    return {
+      bars: [44, 52, 48, 63, 59, 71, 78].map((h, i) => ({
+        h: h + "%",
+        bg: i >= 5 ? "var(--frontend-primary,#0F4C81)" : "var(--frontend-tint-border,#DCE7F2)"
+      })),
+      metrics: [
+        { label: "Accuracy", value: st.accuracy + "%", color: "var(--frontend-heading,#0F2B45)" },
+        { label: "Avg. time / question", value: "64s", color: "var(--frontend-heading,#0F2B45)" },
+        { label: "Unattempted", value: unattemptedPct + "%", color: "var(--frontend-error,#C62828)" },
+        { label: "Percentile", value: "Top 22%", color: "var(--frontend-heading,#0F2B45)" }
+      ],
+      subjects: [
+        { name: "General Surgery", pct: "82%", w: "82%", bg: "var(--frontend-success,#2E7D32)" },
+        { name: "Community Medicine (PSM)", pct: "74%", w: "74%", bg: "var(--frontend-success,#2E7D32)" },
+        { name: "General Medicine", pct: "61%", w: "61%", bg: "var(--frontend-accent,#F57C00)" },
+        { name: "Microbiology", pct: "58%", w: "58%", bg: "var(--frontend-accent,#F57C00)" },
+        { name: "Pharmacology", pct: "43%", w: "43%", bg: "var(--frontend-error,#C62828)" }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

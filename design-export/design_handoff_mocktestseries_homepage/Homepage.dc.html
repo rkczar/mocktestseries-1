@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:#F6F9FC;color:#212529;font-family:Manrope,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  h1,h2,h3,h4,p,ul,ol{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:#0F4C81;text-decoration:none}
+  a:hover{color:#0B3A63}
+  button{font-family:inherit}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#F6F9FC">
+
+  <div style="background:#0B3A63;color:#E8F0F8;font-size:13px;line-height:1.4;padding:9px 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;justify-content:center;text-align:center">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#F57C00;font-weight:600">New</span>
+      <span>RUHS Medical Officer 2026 test series is live — AI explanations on every question.</span>
+      <a href="#featured-exams" style="color:#fff;text-decoration:underline;text-underline-offset:3px;font-weight:600">View exam</a>
+    </div>
+  </div>
+
+  <header style="position:sticky;top:0;z-index:50;background:#FFFFFF;border-bottom:1px solid #E3EAF2">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px;height:72px;display:flex;align-items:center;gap:24px">
+      <a href="#" style="display:flex;align-items:center;gap:10px;flex:none">
+        <span style="width:34px;height:34px;border-radius:9px;background:#0F4C81;display:flex;align-items:center;justify-content:center;flex:none">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        </span>
+        <span style="font-family:'Source Serif 4',Georgia,serif;font-size:20px;font-weight:700;letter-spacing:-.01em;color:#0F4C81;white-space:nowrap">MockTestSeries<span style="color:#F57C00">.in</span></span>
+      </a>
+      <nav style="display:flex;align-items:center;gap:4px;margin-left:8px;flex:1 1 auto;min-width:0">
+        <a href="#" style="padding:9px 12px;border-radius:8px;font-size:14.5px;font-weight:700;color:#0F4C81;background:#EEF4FA;white-space:nowrap">Home</a>
+        <a href="#" style="padding:9px 12px;border-radius:8px;font-size:14.5px;font-weight:500;color:#41505E;white-space:nowrap" style-hover="background:#F2F6FA;color:#0F4C81">Exams</a>
+        <a href="#" style="padding:9px 12px;border-radius:8px;font-size:14.5px;font-weight:500;color:#41505E;white-space:nowrap" style-hover="background:#F2F6FA;color:#0F4C81">Test Series</a>
+        <a href="#" style="padding:9px 12px;border-radius:8px;font-size:14.5px;font-weight:500;color:#41505E;white-space:nowrap" style-hover="background:#F2F6FA;color:#0F4C81">Upcoming Exams</a>
+        <a href="#" style="padding:9px 12px;border-radius:8px;font-size:14.5px;font-weight:500;color:#41505E;white-space:nowrap" style-hover="background:#F2F6FA;color:#0F4C81">Pricing</a>
+      </nav>
+      <div style="display:flex;align-items:center;gap:10px;flex:none">
+        <a href="#" style="padding:10px 16px;border-radius:9px;border:1px solid #CFDCE9;font-size:14.5px;font-weight:600;color:#0F4C81;white-space:nowrap" style-hover="background:#F2F6FA">Login</a>
+        <a href="#" style="padding:11px 18px;border-radius:9px;background:#0F4C81;color:#FFFFFF;font-size:14.5px;font-weight:700;white-space:nowrap" style-hover="background:#0B3A63">Start Free</a>
+      </div>
+    </div>
+  </header>
+
+  <section style="background:#FFFFFF;border-bottom:1px solid #E3EAF2">
+    <div style="max-width:1200px;margin:0 auto;padding:clamp(44px,6vw,80px) 24px clamp(48px,6vw,84px);display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:clamp(32px,5vw,64px);align-items:center">
+      <div style="min-width:0">
+        <div style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px 6px 8px;border-radius:999px;background:#EEF4FA;border:1px solid #DCE7F2;margin-bottom:22px">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#F57C00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path></svg>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#0F4C81">AI-Powered Exam Preparation</span>
+        </div>
+        <h1 style="font-family:'Source Serif 4',Georgia,serif;font-size:clamp(38px,5.2vw,60px);line-height:1.06;font-weight:700;letter-spacing:-.02em;color:#0F2B45;text-wrap:balance">Practice Smart.<br>Understand Every Answer.</h1>
+        <p style="margin-top:20px;font-size:clamp(16px,1.4vw,18.5px);line-height:1.6;color:#41505E;max-width:52ch;text-wrap:pretty">Exam-focused mock tests with an AI tutor on every question — why the correct answer is right, why the others are wrong, and the concept behind it.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:30px">
+          <a href="#" style="display:inline-flex;align-items:center;gap:9px;padding:15px 24px;border-radius:10px;background:#0F4C81;color:#FFFFFF;font-size:16px;font-weight:700" style-hover="background:#0B3A63">
+            Start Free Mock Test
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+          </a>
+          <a href="#featured-exams" style="display:inline-flex;align-items:center;gap:9px;padding:15px 24px;border-radius:10px;background:#FFFFFF;border:1px solid #CFDCE9;color:#0F4C81;font-size:16px;font-weight:600" style-hover="background:#F2F6FA">Browse Exams</a>
+        </div>
+        <ul style="display:flex;flex-wrap:wrap;gap:10px 26px;margin-top:28px">
+          <li style="display:flex;align-items:center;gap:8px;font-size:14px;color:#41505E">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12.5l2.5 2.5 4.5-5"></path></svg>
+            No card required
+          </li>
+          <li style="display:flex;align-items:center;gap:8px;font-size:14px;color:#41505E">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12.5l2.5 2.5 4.5-5"></path></svg>
+            Real exam interface
+          </li>
+          <li style="display:flex;align-items:center;gap:8px;font-size:14px;color:#41505E">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12.5l2.5 2.5 4.5-5"></path></svg>
+            Instant analysis
+          </li>
+        </ul>
+      </div>
+
+      <div style="min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#7A8899">Interactive Test Preview</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;color:#C62828;background:#FDEDED;border:1px solid #F6D5D5;border-radius:999px;padding:4px 10px">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+            18:24
+          </span>
+        </div>
+        <div style="background:#FFFFFF;border:1px solid #DCE7F2;border-radius:16px;box-shadow:0 14px 40px -22px rgba(15,76,129,.35);overflow:hidden">
+          <div style="padding:16px 20px;border-bottom:1px solid #EDF2F7;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:10px;min-width:0">
+              <span style="font-size:13px;font-weight:700;color:#0F4C81;white-space:nowrap">Q 14 / 100</span>
+              <span style="width:1px;height:16px;background:#E3EAF2"></span>
+              <span style="font-size:13px;color:#7A8899;white-space:nowrap">Pharmacology</span>
+            </div>
+            <div style="display:flex;gap:6px">
+              <span style="width:22px;height:22px;border-radius:6px;background:#2E7D32"></span>
+              <span style="width:22px;height:22px;border-radius:6px;background:#C62828"></span>
+              <span style="width:22px;height:22px;border-radius:6px;background:#F57C00"></span>
+              <span style="width:22px;height:22px;border-radius:6px;background:#E3EAF2"></span>
+              <span style="width:22px;height:22px;border-radius:6px;background:#E3EAF2"></span>
+            </div>
+          </div>
+          <div style="padding:22px 20px 20px">
+            <p style="font-size:16.5px;line-height:1.5;font-weight:600;color:#212529;text-wrap:pretty">Which of the following is the drug of choice for status epilepticus in the emergency setting?</p>
+            <ul style="display:flex;flex-direction:column;gap:9px;margin-top:18px">
+              <li style="display:flex;align-items:center;gap:11px;padding:13px 14px;border:1px solid #E3EAF2;border-radius:10px;font-size:15px;color:#41505E">
+                <span style="width:26px;height:26px;flex:none;border-radius:7px;border:1px solid #CFDCE9;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;color:#7A8899">A</span>
+                Phenytoin
+              </li>
+              <li style="display:flex;align-items:center;gap:11px;padding:13px 14px;border:1.5px solid #2E7D32;background:#EEF7EE;border-radius:10px;font-size:15px;font-weight:600;color:#1E5620">
+                <span style="width:26px;height:26px;flex:none;border-radius:7px;background:#2E7D32;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;color:#FFFFFF">B</span>
+                Lorazepam
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="margin-left:auto;flex:none"><path d="M4 12.5l5 5L20 6.5"></path></svg>
+              </li>
+              <li style="display:flex;align-items:center;gap:11px;padding:13px 14px;border:1px solid #E3EAF2;border-radius:10px;font-size:15px;color:#41505E">
+                <span style="width:26px;height:26px;flex:none;border-radius:7px;border:1px solid #CFDCE9;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;color:#7A8899">C</span>
+                Valproate
+              </li>
+            </ul>
+            <div style="margin-top:16px;padding:14px 15px;border-radius:11px;background:#EEF4FA;border:1px solid #DCE7F2">
+              <div style="display:flex;align-items:center;gap:8px">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path></svg>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#0F4C81">AI Explanation</span>
+              </div>
+              <p style="margin-top:9px;font-size:14px;line-height:1.55;color:#41505E">Benzodiazepines act fastest by enhancing GABA-A inhibition. Lorazepam is preferred over diazepam for its longer anticonvulsant duration.</p>
+              <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:12px">
+                <span style="font-size:12px;font-weight:600;color:#0F4C81;background:#FFFFFF;border:1px solid #CFDCE9;border-radius:999px;padding:5px 11px">Why others wrong?</span>
+                <span style="font-size:12px;font-weight:600;color:#0F4C81;background:#FFFFFF;border:1px solid #CFDCE9;border-radius:999px;padding:5px 11px">Core concept</span>
+                <span style="font-size:12px;font-weight:600;color:#B25E00;background:#FFF6EC;border:1px solid #F8DDBE;border-radius:999px;padding:5px 11px">Memory trick</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background:#FFFFFF;border-bottom:1px solid #E3EAF2">
+    <div style="max-width:1200px;margin:0 auto;padding:28px 24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:20px">
+      <div style="display:flex;align-items:flex-start;gap:12px;min-width:0">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px"><path d="M15 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"></path><path d="M15 3v4h4"></path><path d="M9 13h6"></path><path d="M9 17h4"></path></svg>
+        <div style="min-width:0">
+          <p style="font-size:15px;font-weight:700;color:#212529">Exam-focused Questions</p>
+          <p style="font-size:13.5px;color:#7A8899;margin-top:3px">Mapped to the real syllabus</p>
+        </div>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:12px;min-width:0">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path><path d="M18 16.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z"></path></svg>
+        <div style="min-width:0">
+          <p style="font-size:15px;font-weight:700;color:#212529">AI Explanations</p>
+          <p style="font-size:13.5px;color:#7A8899;margin-top:3px">On every single question</p>
+        </div>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:12px;min-width:0">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px"><path d="M3 21h18"></path><path d="M6 21V11"></path><path d="M12 21V5"></path><path d="M18 21v-7"></path></svg>
+        <div style="min-width:0">
+          <p style="font-size:15px;font-weight:700;color:#212529">Detailed Analysis</p>
+          <p style="font-size:13.5px;color:#7A8899;margin-top:3px">Accuracy, speed, weak topics</p>
+        </div>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:12px;min-width:0">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px"><rect x="2.5" y="4" width="19" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+        <div style="min-width:0">
+          <p style="font-size:15px;font-weight:700;color:#212529">Real Exam Experience</p>
+          <p style="font-size:13.5px;color:#7A8899;margin-top:3px">Timed, palette-based UI</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="featured-exams" style="padding:clamp(56px,7vw,92px) 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between;margin-bottom:26px">
+        <div style="min-width:0">
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#F57C00">Featured Exams</p>
+          <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:clamp(27px,3vw,38px);line-height:1.15;font-weight:700;letter-spacing:-.015em;color:#0F2B45;margin-top:8px">Start with the exam you are preparing for</h2>
+        </div>
+        <a href="#" style="display:inline-flex;align-items:center;gap:7px;font-size:14.5px;font-weight:700;color:#0F4C81;white-space:nowrap">
+          All exams
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </a>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:20px">
+        <a href="#" style="display:block;grid-column:span 1;background:#FFFFFF;border:1.5px solid #0F4C81;border-radius:16px;padding:24px;box-shadow:0 10px 30px -20px rgba(15,76,129,.4)" style-hover="box-shadow:0 16px 36px -18px rgba(15,76,129,.45)">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span style="width:46px;height:46px;border-radius:12px;background:#EEF4FA;border:1px solid #DCE7F2;display:flex;align-items:center;justify-content:center;flex:none">
+              <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"></path><path d="M3 12h18"></path><rect x="4.5" y="4.5" width="15" height="15" rx="3"></rect></svg>
+            </span>
+            <span style="display:inline-flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#1E5620;background:#EEF7EE;border:1px solid #CFE3D0;border-radius:999px;padding:5px 10px">
+              <span style="width:6px;height:6px;border-radius:50%;background:#2E7D32"></span>
+              Active
+            </span>
+          </div>
+          <h3 style="font-size:20px;line-height:1.3;font-weight:800;color:#0F2B45;margin-top:18px">RUHS Medical Officer 2026</h3>
+          <p style="font-size:14.5px;line-height:1.55;color:#41505E;margin-top:8px;text-wrap:pretty">Full-length mocks, previous year papers and subject-wise practice for the Rajasthan University of Health Sciences MO recruitment.</p>
+          <ul style="display:flex;flex-wrap:wrap;gap:8px;margin-top:16px">
+            <li style="font-size:12.5px;font-weight:600;color:#41505E;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:7px;padding:5px 10px">100 Q · 90 min</li>
+            <li style="font-size:12.5px;font-weight:600;color:#41505E;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:7px;padding:5px 10px">12 mock tests</li>
+            <li style="font-size:12.5px;font-weight:600;color:#41505E;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:7px;padding:5px 10px">AI explanations</li>
+          </ul>
+          <span style="display:inline-flex;align-items:center;gap:8px;margin-top:20px;padding:12px 18px;border-radius:9px;background:#0F4C81;color:#FFFFFF;font-size:14.5px;font-weight:700">
+            Open exam page
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+          </span>
+        </a>
+
+        <div style="background:#FFFFFF;border:1px dashed #CFDCE9;border-radius:16px;padding:24px;display:flex;flex-direction:column">
+          <span style="display:inline-flex;align-self:flex-start;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#7A8899;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:999px;padding:5px 10px">Coming soon</span>
+          <h3 style="font-size:18px;font-weight:700;color:#41505E;margin-top:16px">Next exam slot</h3>
+          <p style="font-size:14px;line-height:1.55;color:#7A8899;margin-top:8px">Admin-added exams appear here automatically, in the order set in the Admin Panel. No homepage code changes needed.</p>
+          <div style="margin-top:auto;padding-top:18px">
+            <div style="height:76px;border-radius:10px;background:repeating-linear-gradient(135deg,#F2F6FA 0 8px,#FFFFFF 8px 16px);border:1px solid #E9EFF5;display:flex;align-items:center;justify-content:center">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9AA7B4;letter-spacing:.06em">exam icon / image</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="background:#FFFFFF;border:1px dashed #CFDCE9;border-radius:16px;padding:24px;display:flex;flex-direction:column">
+          <span style="display:inline-flex;align-self:flex-start;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#7A8899;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:999px;padding:5px 10px">Coming soon</span>
+          <h3 style="font-size:18px;font-weight:700;color:#41505E;margin-top:16px">Next exam slot</h3>
+          <p style="font-size:14px;line-height:1.55;color:#7A8899;margin-top:8px">Each card links to its own exam page at <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#41505E">/exams/[slug]</span>.</p>
+          <div style="margin-top:auto;padding-top:18px">
+            <div style="height:76px;border-radius:10px;background:repeating-linear-gradient(135deg,#F2F6FA 0 8px,#FFFFFF 8px 16px);border:1px solid #E9EFF5;display:flex;align-items:center;justify-content:center">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9AA7B4;letter-spacing:.06em">exam icon / image</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background:#FFFFFF;border-top:1px solid #E3EAF2;border-bottom:1px solid #E3EAF2;padding:clamp(56px,7vw,92px) 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#F57C00">Popular Test Series</p>
+      <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:clamp(27px,3vw,38px);line-height:1.15;font-weight:700;letter-spacing:-.015em;color:#0F2B45;margin-top:8px;max-width:22ch">Three ways to practice</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-top:28px">
+        <a href="#" style="display:block;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:14px;padding:24px" style-hover="border-color:#0F4C81;background:#FFFFFF">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path></svg>
+          <h3 style="font-size:18.5px;font-weight:800;color:#0F2B45;margin-top:16px">Full Mock Tests</h3>
+          <p style="font-size:14.5px;line-height:1.55;color:#41505E;margin-top:8px">Complete papers under real timing, with a question palette and instant scoring.</p>
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#7A8899;margin-top:14px">12 tests · 100 Q each</p>
+        </a>
+        <a href="#" style="display:block;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:14px;padding:24px" style-hover="border-color:#0F4C81;background:#FFFFFF">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h11l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"></path><path d="M15 4v5h5"></path><path d="M8 14h8"></path></svg>
+          <h3 style="font-size:18.5px;font-weight:800;color:#0F2B45;margin-top:16px">Previous Year Papers</h3>
+          <p style="font-size:14.5px;line-height:1.55;color:#41505E;margin-top:8px">Actual past papers, solved and explained question by question.</p>
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#7A8899;margin-top:14px">2019 – 2025</p>
+        </a>
+        <a href="#" style="display:block;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:14px;padding:24px" style-hover="border-color:#0F4C81;background:#FFFFFF">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><circle cx="12" cy="12" r="4.5"></circle><circle cx="12" cy="12" r="1"></circle></svg>
+          <h3 style="font-size:18.5px;font-weight:800;color:#0F2B45;margin-top:16px">Subject-wise Practice</h3>
+          <p style="font-size:14.5px;line-height:1.55;color:#41505E;margin-top:8px">Target one subject or topic at a time and clear it before moving on.</p>
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#7A8899;margin-top:14px">19 subjects</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding:clamp(56px,7vw,92px) 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:clamp(28px,4vw,56px);align-items:start">
+      <div style="min-width:0">
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#F57C00">The AI difference</p>
+        <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:clamp(27px,3vw,38px);line-height:1.15;font-weight:700;letter-spacing:-.015em;color:#0F2B45;margin-top:8px">Every question comes with a full explanation</h2>
+        <p style="font-size:16px;line-height:1.6;color:#41505E;margin-top:14px;max-width:48ch;text-wrap:pretty">Scores tell you where you stand. Explanations tell you what to fix. After each question the AI breaks the answer down five ways — and stays available for follow-up questions.</p>
+        <ul style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:24px">
+          <li style="display:flex;align-items:center;gap:10px;background:#FFFFFF;border:1px solid #E3EAF2;border-radius:10px;padding:13px 14px;font-size:14.5px;font-weight:700;color:#0F2B45">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M4 12.5l5 5L20 6.5"></path></svg>
+            Why Correct?
+          </li>
+          <li style="display:flex;align-items:center;gap:10px;background:#FFFFFF;border:1px solid #E3EAF2;border-radius:10px;padding:13px 14px;font-size:14.5px;font-weight:700;color:#0F2B45">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#C62828" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
+            Why Others Wrong?
+          </li>
+          <li style="display:flex;align-items:center;gap:10px;background:#FFFFFF;border:1px solid #E3EAF2;border-radius:10px;padding:13px 14px;font-size:14.5px;font-weight:700;color:#0F2B45">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 8v8"></path><path d="M8 12h8"></path></svg>
+            Core Concept
+          </li>
+          <li style="display:flex;align-items:center;gap:10px;background:#FFFFFF;border:1px solid #E3EAF2;border-radius:10px;padding:13px 14px;font-size:14.5px;font-weight:700;color:#0F2B45">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#F57C00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+            Exam Pearl
+          </li>
+          <li style="display:flex;align-items:center;gap:10px;background:#FFFFFF;border:1px solid #E3EAF2;border-radius:10px;padding:13px 14px;font-size:14.5px;font-weight:700;color:#0F2B45">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><rect x="4" y="4" width="16" height="16" rx="4"></rect><path d="M8 10h8"></path><path d="M8 14h5"></path></svg>
+            Memory Trick
+          </li>
+          <li style="display:flex;align-items:center;gap:10px;background:#0F4C81;border:1px solid #0F4C81;border-radius:10px;padding:13px 14px;font-size:14.5px;font-weight:700;color:#FFFFFF">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M21 12a8 8 0 1 1-3.2-6.4"></path><path d="M12 3l1.4 3.6L17 8l-3.6 1.4L12 13l-1.4-3.6L7 8l3.6-1.4L12 3z"></path></svg>
+            Ask AI
+          </li>
+        </ul>
+      </div>
+
+      <div style="min-width:0;background:#FFFFFF;border:1px solid #DCE7F2;border-radius:16px;overflow:hidden;box-shadow:0 14px 40px -26px rgba(15,76,129,.4)">
+        <div style="padding:15px 20px;background:#0F4C81;display:flex;align-items:center;gap:10px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path></svg>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#FFFFFF">AI Explanation · Q14</span>
+        </div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
+          <div>
+            <p style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;letter-spacing:.02em;color:#2E7D32;text-transform:uppercase">Why Correct?</p>
+            <p style="font-size:14.5px;line-height:1.6;color:#41505E;margin-top:6px">Lorazepam has a longer duration of anticonvulsant action than diazepam because of lower lipid solubility, so seizure control lasts longer after a single dose.</p>
+          </div>
+          <div style="height:1px;background:#EDF2F7"></div>
+          <div>
+            <p style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;letter-spacing:.02em;color:#C62828;text-transform:uppercase">Why Others Wrong?</p>
+            <ul style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+              <li style="font-size:14.5px;line-height:1.55;color:#41505E"><span style="font-weight:700;color:#212529">A. Phenytoin</span> — second-line; slow loading, risk of hypotension.</li>
+              <li style="font-size:14.5px;line-height:1.55;color:#41505E"><span style="font-weight:700;color:#212529">C. Valproate</span> — alternative second-line, not first choice.</li>
+            </ul>
+          </div>
+          <div style="height:1px;background:#EDF2F7"></div>
+          <div style="background:#FFF6EC;border:1px solid #F8DDBE;border-radius:11px;padding:14px">
+            <p style="font-size:12.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#B25E00">Exam Pearl</p>
+            <p style="font-size:14.5px;line-height:1.55;color:#5B4526;margin-top:6px">Status epilepticus: benzodiazepine first, always. Then load an anti-epileptic.</p>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:center;padding-top:2px">
+            <span style="flex:1 1 160px;min-width:0;padding:12px 14px;border:1px solid #CFDCE9;border-radius:9px;font-size:14px;color:#9AA7B4;background:#F6F9FC">Ask a follow-up question…</span>
+            <span style="display:inline-flex;align-items:center;gap:7px;padding:12px 16px;border-radius:9px;background:#0F4C81;color:#FFFFFF;font-size:14px;font-weight:700">
+              Ask AI
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background:#FFFFFF;border-top:1px solid #E3EAF2;border-bottom:1px solid #E3EAF2;padding:clamp(56px,7vw,92px) 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+      <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:clamp(27px,3vw,38px);line-height:1.15;font-weight:700;letter-spacing:-.015em;color:#0F2B45;max-width:26ch">Why MockTestSeries.in</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;margin-top:28px">
+        <div style="background:#F6F9FC;border:1px solid #E3EAF2;border-radius:14px;padding:22px">
+          <span style="width:40px;height:40px;border-radius:11px;background:#FFFFFF;border:1px solid #DCE7F2;display:flex;align-items:center;justify-content:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+          </span>
+          <h3 style="font-size:17px;font-weight:800;color:#0F2B45;margin-top:16px">Real Exam Experience</h3>
+          <p style="font-size:14px;line-height:1.55;color:#41505E;margin-top:7px">Timer, question palette, mark-for-review and submit flow that match the real test.</p>
+        </div>
+        <div style="background:#F6F9FC;border:1px solid #E3EAF2;border-radius:14px;padding:22px">
+          <span style="width:40px;height:40px;border-radius:11px;background:#FFFFFF;border:1px solid #DCE7F2;display:flex;align-items:center;justify-content:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"></path><path d="M6 21V11"></path><path d="M12 21V5"></path><path d="M18 21v-7"></path></svg>
+          </span>
+          <h3 style="font-size:17px;font-weight:800;color:#0F2B45;margin-top:16px">Performance Analytics</h3>
+          <p style="font-size:14px;line-height:1.55;color:#41505E;margin-top:7px">Accuracy, time per question, subject splits and progress across attempts.</p>
+        </div>
+        <div style="background:#F6F9FC;border:1px solid #E3EAF2;border-radius:14px;padding:22px">
+          <span style="width:40px;height:40px;border-radius:11px;background:#FFFFFF;border:1px solid #DCE7F2;display:flex;align-items:center;justify-content:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><circle cx="12" cy="12" r="4.5"></circle><circle cx="12" cy="12" r="1"></circle></svg>
+          </span>
+          <h3 style="font-size:17px;font-weight:800;color:#0F2B45;margin-top:16px">Weak Topic Detection</h3>
+          <p style="font-size:14px;line-height:1.55;color:#41505E;margin-top:7px">The topics costing you the most marks, ranked, with practice sets attached.</p>
+        </div>
+        <div style="background:#F6F9FC;border:1px solid #E3EAF2;border-radius:14px;padding:22px">
+          <span style="width:40px;height:40px;border-radius:11px;background:#FFFFFF;border:1px solid #DCE7F2;display:flex;align-items:center;justify-content:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 4v7h-7"></path></svg>
+          </span>
+          <h3 style="font-size:17px;font-weight:800;color:#0F2B45;margin-top:16px">Practice Again</h3>
+          <p style="font-size:14px;line-height:1.55;color:#41505E;margin-top:7px">Retake any test, or build a fresh set from only the questions you got wrong.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding:clamp(56px,7vw,92px) 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#F57C00">How it works</p>
+      <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:clamp(27px,3vw,38px);line-height:1.15;font-weight:700;letter-spacing:-.015em;color:#0F2B45;margin-top:8px">Four steps, start to improvement</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px;margin-top:30px">
+        <div style="border-top:2px solid #0F4C81;padding-top:18px">
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:#F57C00;letter-spacing:.06em">01</p>
+          <h3 style="font-size:18px;font-weight:800;color:#0F2B45;margin-top:10px">Choose Exam</h3>
+          <p style="font-size:14px;line-height:1.55;color:#41505E;margin-top:7px">Pick your exam and the test series that fits where you are.</p>
+        </div>
+        <div style="border-top:2px solid #DCE7F2;padding-top:18px">
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:#F57C00;letter-spacing:.06em">02</p>
+          <h3 style="font-size:18px;font-weight:800;color:#0F2B45;margin-top:10px">Take Test</h3>
+          <p style="font-size:14px;line-height:1.55;color:#41505E;margin-top:7px">Attempt it under real exam timing and interface conditions.</p>
+        </div>
+        <div style="border-top:2px solid #DCE7F2;padding-top:18px">
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:#F57C00;letter-spacing:.06em">03</p>
+          <h3 style="font-size:18px;font-weight:800;color:#0F2B45;margin-top:10px">Understand With AI</h3>
+          <p style="font-size:14px;line-height:1.55;color:#41505E;margin-top:7px">Go through every question with the AI explanation, then ask follow-ups.</p>
+        </div>
+        <div style="border-top:2px solid #DCE7F2;padding-top:18px">
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:#F57C00;letter-spacing:.06em">04</p>
+          <h3 style="font-size:18px;font-weight:800;color:#0F2B45;margin-top:10px">Analyze &amp; Improve</h3>
+          <p style="font-size:14px;line-height:1.55;color:#41505E;margin-top:7px">Review analytics, fix weak topics, retake and compare.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background:#FFFFFF;border-top:1px solid #E3EAF2;border-bottom:1px solid #E3EAF2;padding:clamp(56px,7vw,92px) 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between;margin-bottom:24px">
+        <div>
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#F57C00">Upcoming Exams</p>
+          <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:clamp(27px,3vw,38px);line-height:1.15;font-weight:700;letter-spacing:-.015em;color:#0F2B45;margin-top:8px">Know what is next</h2>
+        </div>
+        <a href="#" style="display:inline-flex;align-items:center;gap:7px;font-size:14.5px;font-weight:700;color:#0F4C81;white-space:nowrap">
+          Full calendar
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </a>
+      </div>
+      <ul style="display:flex;flex-direction:column;gap:10px">
+        <li style="display:flex;flex-wrap:wrap;gap:12px 18px;align-items:center;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:12px;padding:16px 18px">
+          <span style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:56px;height:56px;flex:none;border-radius:10px;background:#FFFFFF;border:1px solid #DCE7F2">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#F57C00">Mar</span>
+            <span style="font-size:19px;font-weight:800;color:#0F2B45;line-height:1.1">14</span>
+          </span>
+          <span style="flex:1 1 240px;min-width:0">
+            <span style="display:block;font-size:16px;font-weight:700;color:#0F2B45">RUHS Medical Officer 2026 — Written Exam</span>
+            <span style="display:block;font-size:13.5px;color:#7A8899;margin-top:3px">Rajasthan · 100 marks · 90 minutes</span>
+          </span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#1E5620;background:#EEF7EE;border:1px solid #CFE3D0;border-radius:999px;padding:5px 11px">Notification out</span>
+          <a href="#" style="font-size:14px;font-weight:700;color:#0F4C81;white-space:nowrap">Prepare →</a>
+        </li>
+        <li style="display:flex;flex-wrap:wrap;gap:12px 18px;align-items:center;background:#F6F9FC;border:1px solid #E3EAF2;border-radius:12px;padding:16px 18px">
+          <span style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:56px;height:56px;flex:none;border-radius:10px;background:#FFFFFF;border:1px solid #DCE7F2">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#F57C00">Apr</span>
+            <span style="font-size:19px;font-weight:800;color:#0F2B45;line-height:1.1">26</span>
+          </span>
+          <span style="flex:1 1 240px;min-width:0">
+            <span style="display:block;font-size:16px;font-weight:700;color:#0F2B45">Exam slot — added from Admin Panel</span>
+            <span style="display:block;font-size:13.5px;color:#7A8899;margin-top:3px">Title, date, region and status are all admin-editable fields</span>
+          </span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#B25E00;background:#FFF6EC;border:1px solid #F8DDBE;border-radius:999px;padding:5px 11px">Expected</span>
+          <a href="#" style="font-size:14px;font-weight:700;color:#0F4C81;white-space:nowrap">Notify me →</a>
+        </li>
+        <li style="display:flex;flex-wrap:wrap;gap:12px 18px;align-items:center;background:#F6F9FC;border:1px dashed #CFDCE9;border-radius:12px;padding:16px 18px">
+          <span style="display:flex;align-items:center;justify-content:center;width:56px;height:56px;flex:none;border-radius:10px;background:repeating-linear-gradient(135deg,#F2F6FA 0 8px,#FFFFFF 8px 16px);border:1px solid #E9EFF5"></span>
+          <span style="flex:1 1 240px;min-width:0;font-size:14px;color:#7A8899">Additional rows render from the <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#41505E">UpcomingExam</span> table, ordered by date.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section style="padding:clamp(56px,7vw,92px) 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+      <div style="background:#0F4C81;border-radius:20px;padding:clamp(32px,5vw,56px);display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:clamp(24px,4vw,48px);align-items:center">
+        <div style="min-width:0">
+          <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:clamp(27px,3.2vw,40px);line-height:1.12;font-weight:700;letter-spacing:-.015em;color:#FFFFFF;text-wrap:balance">Take your first mock test today</h2>
+          <p style="font-size:16.5px;line-height:1.6;color:#D7E5F1;margin-top:14px;max-width:46ch">Free to start. No card required. Full AI explanations on your first test.</p>
+        </div>
+        <div style="min-width:0;display:flex;flex-direction:column;gap:12px;align-items:flex-start">
+          <div style="display:flex;flex-wrap:wrap;gap:12px">
+            <a href="#" style="display:inline-flex;align-items:center;gap:9px;padding:15px 24px;border-radius:10px;background:#F57C00;color:#FFFFFF;font-size:16px;font-weight:700" style-hover="background:#DC6F00">
+              Start Free Mock Test
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+            </a>
+            <a href="#" style="display:inline-flex;align-items:center;padding:15px 24px;border-radius:10px;border:1px solid #4A7BA5;color:#FFFFFF;font-size:16px;font-weight:600" style-hover="background:#0B3A63">View Pricing</a>
+          </div>
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#A9C4DA;letter-spacing:.03em">Students register at /student/register</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer style="background:#FFFFFF;border-top:1px solid #E3EAF2;padding:clamp(40px,5vw,64px) 0 28px">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:32px">
+        <div style="min-width:0">
+          <a href="#" style="display:flex;align-items:center;gap:10px">
+            <span style="width:30px;height:30px;border-radius:8px;background:#0F4C81;display:flex;align-items:center;justify-content:center;flex:none">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+            </span>
+            <span style="font-family:'Source Serif 4',Georgia,serif;font-size:17.5px;font-weight:700;color:#0F4C81">MockTestSeries<span style="color:#F57C00">.in</span></span>
+          </a>
+          <p style="font-size:14px;line-height:1.6;color:#7A8899;margin-top:12px;max-width:34ch">AI-powered mock test series for competitive and recruitment exams in India.</p>
+        </div>
+        <div style="min-width:0">
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#9AA7B4">Practice</p>
+          <ul style="display:flex;flex-direction:column;gap:9px;margin-top:14px">
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Exams</a></li>
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Test Series</a></li>
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Upcoming Exams</a></li>
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Pricing</a></li>
+          </ul>
+        </div>
+        <div style="min-width:0">
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#9AA7B4">Students</p>
+          <ul style="display:flex;flex-direction:column;gap:9px;margin-top:14px">
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Login</a></li>
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Register</a></li>
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Dashboard</a></li>
+          </ul>
+        </div>
+        <div style="min-width:0">
+          <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#9AA7B4">Company</p>
+          <ul style="display:flex;flex-direction:column;gap:9px;margin-top:14px">
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">About</a></li>
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Contact</a></li>
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Privacy Policy</a></li>
+            <li><a href="#" style="font-size:14.5px;color:#41505E" style-hover="color:#0F4C81">Terms</a></li>
+          </ul>
+        </div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;justify-content:space-between;margin-top:36px;padding-top:20px;border-top:1px solid #EDF2F7">
+        <p style="font-size:13px;color:#9AA7B4">© 2026 MockTestSeries.in. All rights reserved.</p>
+        <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9AA7B4;letter-spacing:.03em">Made for serious aspirants</p>
+      </div>
+    </div>
+  </footer>
+
+</div>
+
+</x-dc>
+</body>
+</html>

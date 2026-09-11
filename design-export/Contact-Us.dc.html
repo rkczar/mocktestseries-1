@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  input,textarea,button{font-family:inherit}
+  input:focus,textarea:focus{outline:2px solid var(--frontend-primary,#0F4C81);outline-offset:1px}
+</style>
+<script src="site-config.js"></script>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Site-Header" active="/contact" hint-size="100%,72px"></dc-import>
+
+  <main style="flex:1 1 auto;max-width:1100px;width:100%;margin:0 auto;padding:clamp(28px,4vw,48px) 24px clamp(48px,6vw,72px)">
+    <dc-import name="GlobalBackButton" fallback-href="Homepage.dc.html" fallback-label="Home" current-file="Contact-Us.dc.html" hint-size="140px,32px"></dc-import>
+    <div id="contact-us" style="scroll-margin-top:96px"></div>
+    <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">Contact us</p>
+    <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(28px,3.4vw,40px);line-height:1.1;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:8px">Get in touch</h1>
+    <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:60ch">Questions about an exam, a technical issue, or feedback on the platform — send us a message and our team will get back to you.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:28px;margin-top:32px;align-items:start">
+
+      <div>
+        <h2 style="font-size:20px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Get in Touch</h2>
+        <ul style="display:flex;flex-direction:column;gap:16px;margin-top:18px">
+          <li style="display:flex;align-items:flex-start;gap:12px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3.5 6.5l8.5 6 8.5-6"></path></svg>
+            <span>
+              <span style="display:block;font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Email</span>
+              <a href="{{ emailHref }}" style="display:block;font-size:15.5px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:3px" style-hover="color:var(--frontend-primary,#0F4C81)">{{ email }}</a>
+            </span>
+          </li>
+          <li style="display:flex;align-items:flex-start;gap:12px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px"><rect x="3" y="3" width="18" height="18" rx="5"></rect><circle cx="12" cy="12" r="4"></circle><circle cx="17.2" cy="6.8" r="1.1" fill="#0F4C81" stroke="none"></circle></svg>
+            <span>
+              <span style="display:block;font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Instagram</span>
+              <a href="{{ instagramUrl }}" style="display:block;font-size:15.5px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:3px" style-hover="color:var(--frontend-primary,#0F4C81)">{{ instagram }}</a>
+            </span>
+          </li>
+          <li style="display:flex;align-items:flex-start;gap:12px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F4C81" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11z"></path><circle cx="12" cy="10" r="2.6"></circle></svg>
+            <span>
+              <span style="display:block;font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Location</span>
+              <span style="display:block;font-size:15.5px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:3px">{{ address }}</span>
+            </span>
+          </li>
+        </ul>
+      </div>
+
+      <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:clamp(22px,3vw,28px)">
+        <sc-if value="{{ sent }}" hint-placeholder-val="{{ false }}">
+          <div style="text-align:center;padding:12px 0">
+            <span style="width:52px;height:52px;margin:0 auto;border-radius:50%;background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);display:flex;align-items:center;justify-content:center">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4 10-11"></path></svg>
+            </span>
+            <h3 style="font-size:19px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:14px">Message sent</h3>
+            <p style="font-size:14.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px">Your message has been sent successfully. Our team will get back to you soon.</p>
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12.5px;color:var(--frontend-faint,#7A8899);margin-top:10px">Reference {{ refId }}</p>
+            <button type="button" onClick="{{ resetForm }}" style="margin-top:18px;padding:12px 18px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81)" style-hover="background:var(--frontend-tint,#EEF4FA)">Send another message</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ formOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <label style="display:flex;flex-direction:column;gap:7px">
+              <span style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">Your Name</span>
+              <input type="text" value="{{ name }}" onInput="{{ setName }}" placeholder="Full name" style="width:100%;padding:13px 14px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:15px;color:var(--frontend-text,#212529)">
+            </label>
+            <label style="display:flex;flex-direction:column;gap:7px">
+              <span style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">Email Address</span>
+              <input type="email" value="{{ email2 }}" onInput="{{ setEmail }}" placeholder="you@example.com" style="width:100%;padding:13px 14px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:15px;color:var(--frontend-text,#212529)">
+            </label>
+            <label style="display:flex;flex-direction:column;gap:7px">
+              <span style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">Message</span>
+              <textarea value="{{ message }}" onInput="{{ setMessage }}" rows="5" placeholder="How can we help?" style="width:100%;padding:13px 14px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:15px;color:var(--frontend-text,#212529);resize:vertical"></textarea>
+            </label>
+            <sc-if value="{{ error }}" hint-placeholder-val="{{ false }}">
+              <p style="background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:9px;padding:11px 12px;font-size:13.5px;font-weight:600;color:var(--frontend-error,#C62828)">{{ error }}</p>
+            </sc-if>
+            <button type="button" onClick="{{ submit }}" style="align-self:flex-start;padding:14px 22px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:15.5px;font-weight:700" style-hover="background:var(--frontend-primary-hover,#0B3A63)">Send Message</button>
+          </div>
+        </sc-if>
+      </div>
+
+    </div>
+
+    <sc-if value="{{ aboutOn }}" hint-placeholder-val="{{ true }}">
+      <section id="about-us" style="scroll-margin-top:96px;margin-top:56px;padding-top:40px;border-top:1px solid var(--frontend-border,#E3EAF2)">
+        <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(24px,2.8vw,32px);font-weight:700;color:var(--frontend-heading,#0F2B45)">{{ aboutTitle }}</h2>
+        <div style="margin-top:18px;max-width:70ch">
+          <sc-for list="{{ aboutBlocks }}" as="b" hint-placeholder-count="4">
+            <sc-if value="{{ b.isHeading }}" hint-placeholder-val="{{ false }}">
+              <h3 style="font-size:17px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:20px">{{ b.text }}</h3>
+            </sc-if>
+            <sc-if value="{{ b.isBullet }}" hint-placeholder-val="{{ false }}">
+              <p style="font-size:15px;line-height:1.7;color:var(--frontend-muted,#41505E);margin-top:6px;padding-left:18px;position:relative"><span style="position:absolute;left:0">•</span>{{ b.text }}</p>
+            </sc-if>
+            <sc-if value="{{ b.isParagraph }}" hint-placeholder-val="{{ true }}">
+              <p style="font-size:15px;line-height:1.7;color:var(--frontend-muted,#41505E);margin-top:10px">{{ b.text }}</p>
+            </sc-if>
+          </sc-for>
+        </div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{ privacyOn }}" hint-placeholder-val="{{ true }}">
+      <section id="privacy-policy" style="scroll-margin-top:96px;margin-top:56px;padding-top:40px;border-top:1px solid var(--frontend-border,#E3EAF2)">
+        <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(24px,2.8vw,32px);font-weight:700;color:var(--frontend-heading,#0F2B45)">{{ privacyTitle }}</h2>
+        <p style="font-size:13px;color:var(--frontend-faint,#7A8899);margin-top:8px">Last updated {{ privacyUpdated }}</p>
+        <div style="margin-top:18px;max-width:70ch">
+          <sc-for list="{{ privacyBlocks }}" as="b" hint-placeholder-count="10">
+            <sc-if value="{{ b.isHeading }}" hint-placeholder-val="{{ false }}">
+              <h3 style="font-size:17px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:20px">{{ b.text }}</h3>
+            </sc-if>
+            <sc-if value="{{ b.isBullet }}" hint-placeholder-val="{{ false }}">
+              <p style="font-size:15px;line-height:1.7;color:var(--frontend-muted,#41505E);margin-top:6px;padding-left:18px;position:relative"><span style="position:absolute;left:0">•</span>{{ b.text }}</p>
+            </sc-if>
+            <sc-if value="{{ b.isParagraph }}" hint-placeholder-val="{{ true }}">
+              <p style="font-size:15px;line-height:1.7;color:var(--frontend-muted,#41505E);margin-top:10px">{{ b.text }}</p>
+            </sc-if>
+          </sc-for>
+        </div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{ termsOn }}" hint-placeholder-val="{{ true }}">
+      <section id="terms-and-conditions" style="scroll-margin-top:96px;margin-top:56px;padding-top:40px;border-top:1px solid var(--frontend-border,#E3EAF2)">
+        <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(24px,2.8vw,32px);font-weight:700;color:var(--frontend-heading,#0F2B45)">{{ termsTitle }}</h2>
+        <p style="font-size:13px;color:var(--frontend-faint,#7A8899);margin-top:8px">Last updated {{ termsUpdated }}</p>
+        <div style="margin-top:18px;max-width:70ch">
+          <sc-for list="{{ termsBlocks }}" as="b" hint-placeholder-count="10">
+            <sc-if value="{{ b.isHeading }}" hint-placeholder-val="{{ false }}">
+              <h3 style="font-size:17px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:20px">{{ b.text }}</h3>
+            </sc-if>
+            <sc-if value="{{ b.isBullet }}" hint-placeholder-val="{{ false }}">
+              <p style="font-size:15px;line-height:1.7;color:var(--frontend-muted,#41505E);margin-top:6px;padding-left:18px;position:relative"><span style="position:absolute;left:0">•</span>{{ b.text }}</p>
+            </sc-if>
+            <sc-if value="{{ b.isParagraph }}" hint-placeholder-val="{{ true }}">
+              <p style="font-size:15px;line-height:1.7;color:var(--frontend-muted,#41505E);margin-top:10px">{{ b.text }}</p>
+            </sc-if>
+          </sc-for>
+        </div>
+      </section>
+    </sc-if>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+function isValidEmail(v) { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim()); }
+
+function parseBlocks(text) {
+  return (text || "").split("\n").filter(l => l.trim() !== "").map(line => {
+    const t = line.trim();
+    if (t.startsWith("## ")) return { isHeading: true, isBullet: false, isParagraph: false, text: t.slice(3) };
+    if (t.startsWith("- ")) return { isHeading: false, isBullet: true, isParagraph: false, text: t.slice(2) };
+    return { isHeading: false, isBullet: false, isParagraph: true, text: t };
+  });
+}
+
+function fmtDate(iso) {
+  try { return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
+  catch (e) { return iso || ""; }
+}
+
+class Component extends DCLogic {
+  state = { cfg: null, name: "", email: "", message: "", error: "", sent: false, refId: "" };
+
+  componentDidMount() {
+    const load = () => {
+      const S = window.MTS && window.MTS.SiteConfig;
+      if (S) this.setState({ cfg: S.getPublished() });
+    };
+    load();
+    const tryBind = () => {
+      const S = window.MTS && window.MTS.SiteConfig;
+      if (S) { this._off = S.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+    if (window.location.hash) {
+      setTimeout(() => {
+        const el = document.getElementById(window.location.hash.slice(1));
+        if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY, behavior: "smooth" });
+      }, 300);
+    }
+  }
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+  }
+
+  renderVals() {
+    const cfg = this.state.cfg || (window.MTS ? window.MTS.SiteConfig.defaults() : null);
+    const c = (cfg && cfg.footer && cfg.footer.contact) || {};
+    const legal = (cfg && cfg.legalContent) || (window.MTS ? window.MTS.SiteConfig.defaults().legalContent : {});
+    const about = legal.aboutUs || {}, privacy = legal.privacyPolicy || {}, terms = legal.termsAndConditions || {};
+    const s = this.state;
+    return {
+      aboutOn: about.enabled !== false,
+      aboutTitle: about.title || "About Mock Test Series.in",
+      aboutBlocks: parseBlocks(about.content),
+      privacyOn: privacy.enabled !== false,
+      privacyTitle: privacy.title || "Privacy Policy",
+      privacyUpdated: fmtDate(privacy.lastUpdated),
+      privacyBlocks: parseBlocks(privacy.content),
+      termsOn: terms.enabled !== false,
+      termsTitle: terms.title || "Terms and Conditions",
+      termsUpdated: fmtDate(terms.lastUpdated),
+      termsBlocks: parseBlocks(terms.content),
+      email: c.email || "info@mocktestseries.com",
+      emailHref: "mailto:" + (c.email || "info@mocktestseries.com"),
+      instagram: c.instagram || "Mock Test Series.in",
+      instagramUrl: c.instagramUrl || "#",
+      address: c.address || "Jaipur, Rajasthan, India",
+      name: s.name, email2: s.email, message: s.message,
+      setName: e => this.setState({ name: e.target.value, error: "" }),
+      setEmail: e => this.setState({ email: e.target.value, error: "" }),
+      setMessage: e => this.setState({ message: e.target.value, error: "" }),
+      error: s.error,
+      sent: s.sent,
+      formOpen: !s.sent,
+      refId: s.refId,
+      resetForm: () => this.setState({ sent: false, name: "", email: "", message: "", error: "" }),
+      submit: () => {
+        const st = this.state;
+        if (!st.name.trim() || !st.message.trim()) { this.setState({ error: "Please fill in your name and message." }); return; }
+        if (!isValidEmail(st.email)) { this.setState({ error: "Please enter a valid email address." }); return; }
+        const D = window.MTS && window.MTS.StudentData;
+        let studentUid = null, studentName = st.name.trim();
+        try {
+          if (window.localStorage.getItem("mts.studentProfile.v1") && D) {
+            const p = D.getProfile();
+            studentUid = p.id;
+          }
+        } catch (e) {}
+        const rec = window.MTS.Messages.add({
+          category: "Contact Us",
+          name: studentName,
+          email: st.email.trim(),
+          message: st.message.trim(),
+          studentUid
+        });
+        this.setState({ sent: true, refId: rec.id, error: "" });
+      }
+    };
+  }
+}
+
+</script>
+</body>
+</html>

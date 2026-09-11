@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  button{font-family:inherit;cursor:pointer}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Student-Header" active="saved-mistake" hint-size="100%,72px"></dc-import>
+
+  <main style="flex:1 1 auto;max-width:1200px;width:100%;margin:0 auto;padding:clamp(22px,3vw,36px) 24px clamp(44px,5vw,64px)">
+    <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Student-Saved-Questions.dc.html" hint-size="140px,32px"></dc-import>
+    <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(27px,3.2vw,38px);line-height:1.12;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:12px">Saved questions &amp; mistake notebook</h1>
+    <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:70ch">Questions you bookmarked and the ones you got wrong. Every entry links to the question record it came from.</p>
+
+    <div style="display:flex;flex-wrap:wrap;gap:9px;margin-top:20px">
+      <sc-for list="{{ filters }}" as="f" hint-placeholder-count="3">
+        <button type="button" onClick="{{ f.click }}" style="{{ f.style }}">{{ f.label }}</button>
+      </sc-for>
+      <span style="flex:1 1 auto"></span>
+      <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-faint,#5C6B7A);align-self:center">{{ count }}</span>
+    </div>
+
+    <ul style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
+      <sc-for list="{{ items }}" as="i" hint-placeholder-count="5">
+        <li style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:12px;padding:16px">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+            <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;font-weight:600;color:var(--frontend-primary,#0F4C81)">{{ i.code }}</span>
+            <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-muted,#41505E);background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:6px;padding:4px 8px">{{ i.subject }}</span>
+            <span style="{{ i.tagStyle }}">{{ i.tag }}</span>
+            <span style="font-size:12.5px;color:var(--frontend-faint,#5C6B7A);margin-left:auto">{{ i.when }}</span>
+          </div>
+          <p style="font-size:15px;line-height:1.5;font-weight:600;color:var(--frontend-text,#212529);margin-top:10px">{{ i.question }}</p>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:11px">
+            <a href="Test-Player.dc.html" style="font-size:13.5px;font-weight:700">Read AI explanation</a>
+            <a href="Test-Player.dc.html" style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)">Retry question</a>
+          </div>
+        </li>
+      </sc-for>
+    </ul>
+
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:20px">
+      <a href="Test-Player.dc.html" style="padding:13px 19px;border-radius:var(--frontend-btn-radius,10px);background:var(--frontend-btn-primary-bg,#0F4C81);color:var(--frontend-btn-primary-text,#FFFFFF);font-size:14.5px;font-weight:700">{{ practiceLabel }}</a>
+      <a href="Student-Analysis.dc.html" style="padding:13px 19px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14.5px;font-weight:700;color:var(--frontend-primary,#0F4C81)">See analysis</a>
+    </div>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const ITEMS = [
+  { code: "RUHS-MO-2024-Q0014", subject: "Pharmacology", kind: "Bookmarked", when: "saved 08 Sep",
+    question: "Which of the following is the drug of choice for status epilepticus in the emergency setting?" },
+  { code: "RUHS-MO-2024-Q0087", subject: "Community Medicine", kind: "Mistake", when: "missed twice",
+    question: "In a screening programme for a disease with very low prevalence, which value is most affected?" },
+  { code: "RUHS-MO-2024-Q0044", subject: "General Surgery", kind: "Bookmarked", when: "saved 06 Sep",
+    question: "Free gas under the diaphragm with peritonitis — next best step?" },
+  { code: "RUHS-MO-2024-Q0201", subject: "Anatomy", kind: "Mistake", when: "missed once",
+    question: "Which nerve is most commonly injured in a mid-shaft humerus fracture?" },
+  { code: "RUHS-MO-2024-Q0132", subject: "Pharmacology", kind: "Mistake", when: "missed once",
+    question: "Which anti-epileptic is loaded after the first benzodiazepine dose fails?" }
+];
+
+class Component extends DCLogic {
+  state = { filter: "All", stats: null };
+
+  componentDidMount() {
+    const load = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) this.setState({ stats: D.getStatistics() });
+    };
+    load();
+    const tryBind = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) { this._off = D.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+  }
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+  }
+
+  renderVals() {
+    const s = this.state;
+    const st = s.stats || { savedQuestionsCount: 0, mistakeQuestionsCount: 0 };
+    const shown = s.filter === "All" ? ITEMS : ITEMS.filter(i => i.kind === (s.filter === "Bookmarked" ? "Bookmarked" : "Mistake"));
+    const pill = active => "padding:10px 14px;border-radius:999px;font-size:13.5px;font-weight:600;" +
+      (active
+        ? "border:1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-primary,#0F4C81);"
+        : "border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);");
+    return {
+      filters: ["All", "Bookmarked", "Mistakes"].map(label => ({
+        label, style: pill(s.filter === label), click: () => this.setState({ filter: label })
+      })),
+      count: shown.length + " of " + ITEMS.length + " shown · " + st.savedQuestionsCount + " bookmarked · " + st.mistakeQuestionsCount + " mistakes",
+      items: shown.map(i => ({
+        code: i.code, subject: i.subject, question: i.question, when: i.when, tag: i.kind,
+        tagStyle: "font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:4px 9px;" +
+          (i.kind === "Bookmarked"
+            ? "color:var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);border:1px solid var(--frontend-tint-border,#DCE7F2);"
+            : "color:var(--frontend-error-text,#8A2020);background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);")
+      })),
+      practiceLabel: s.filter === "Bookmarked" ? "Practice " + st.savedQuestionsCount + " bookmarked questions" : "Practice all " + st.mistakeQuestionsCount + " mistakes"
+    };
+  }
+}
+</script>
+</body>
+</html>

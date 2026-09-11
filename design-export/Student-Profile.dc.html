@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,h3,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Student-Header" active="" hint-size="100%,72px"></dc-import>
+
+  <main style="flex:1 1 auto;max-width:1200px;width:100%;margin:0 auto;padding:clamp(22px,3vw,36px) 24px clamp(44px,5vw,64px)">
+    <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Student-Profile.dc.html" hint-size="140px,32px"></dc-import>
+    <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(27px,3.2vw,38px);line-height:1.12;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:12px">Candidate profile</h1>
+    <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:70ch">Your personal, academic and account details. This page loads only your own record — nothing here is rendered into the dashboard.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:24px;align-items:start">
+      <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:22px">
+        <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
+          <span style="width:56px;height:56px;flex:none;border-radius:50%;background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:800">{{ initials }}</span>
+          <div style="flex:1 1 160px;min-width:0">
+            <p style="font-size:17px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ name }}</p>
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12.5px;color:var(--frontend-faint,#5C6B7A);margin-top:3px">{{ candidateId }}</p>
+          </div>
+          <a href="Student-Edit-Profile.dc.html" style="padding:11px 16px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81);white-space:nowrap" style-hover="background:var(--frontend-tint,#EEF4FA)">Edit profile</a>
+        </div>
+
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#5C6B7A);margin-top:22px">Personal</p>
+        <ul style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+          <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:10px"><span style="color:var(--frontend-faint,#5C6B7A)">Full name</span><span style="font-weight:700">{{ name }}</span></li>
+          <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:10px"><span style="color:var(--frontend-faint,#5C6B7A)">Email</span><span style="font-weight:700">{{ email }}</span></li>
+          <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:10px"><span style="color:var(--frontend-faint,#5C6B7A)">Mobile</span><span style="font-weight:700">{{ phone }}</span></li>
+          <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px"><span style="color:var(--frontend-faint,#5C6B7A)">State</span><span style="font-weight:700">Rajasthan</span></li>
+        </ul>
+
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#5C6B7A);margin-top:22px">Academic</p>
+        <ul style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+          <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:10px"><span style="color:var(--frontend-faint,#5C6B7A)">Qualification</span><span style="font-weight:700">MBBS</span></li>
+          <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:10px"><span style="color:var(--frontend-faint,#5C6B7A)">College</span><span style="font-weight:700">SMS Medical College, Jaipur</span></li>
+          <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px"><span style="color:var(--frontend-faint,#5C6B7A)">Year of passing</span><span style="font-weight:700">2024</span></li>
+        </ul>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:22px">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#5C6B7A)">Exam &amp; plan</p>
+          <ul style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+            <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:10px"><span style="color:var(--frontend-faint,#5C6B7A)">Target exam</span><span style="font-weight:700">RUHS Medical Officer 2026</span></li>
+            <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:10px"><span style="color:var(--frontend-faint,#5C6B7A)">Plan</span><span style="font-weight:700">Free · 3 mocks left</span></li>
+            <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px"><span style="color:var(--frontend-faint,#5C6B7A)">Daily target</span><span style="font-weight:700">100 MCQ</span></li>
+          </ul>
+          <a href="#" style="display:inline-flex;align-items:center;margin-top:16px;padding:12px 17px;border-radius:var(--frontend-btn-radius,10px);background:var(--frontend-btn-secondary-bg,#A85400);color:var(--frontend-btn-secondary-text,#FFFFFF);font-size:14px;font-weight:700">Upgrade plan</a>
+        </div>
+
+        <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:22px">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#5C6B7A)">Test summary</p>
+          <ul style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-top:12px">
+            <li style="background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:11px;padding:13px"><p style="font-size:21px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ testsCompletedTotal }}</p><p style="font-size:12.5px;color:var(--frontend-faint,#5C6B7A);margin-top:3px">Tests completed</p></li>
+            <li style="background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:11px;padding:13px"><p style="font-size:21px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ accuracy }}</p><p style="font-size:12.5px;color:var(--frontend-faint,#5C6B7A);margin-top:3px">Average accuracy</p></li>
+            <li style="background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:11px;padding:13px"><p style="font-size:21px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ studyStreak }}</p><p style="font-size:12.5px;color:var(--frontend-faint,#5C6B7A);margin-top:3px">Day streak</p></li>
+          </ul>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:16px">
+            <a href="Student-Test-History.dc.html" style="padding:12px 17px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81)" style-hover="background:var(--frontend-tint,#EEF4FA)">Test history</a>
+            <a href="Student-Analysis.dc.html" style="padding:12px 17px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81)" style-hover="background:var(--frontend-tint,#EEF4FA)">Detailed analysis</a>
+          </div>
+        </div>
+
+        <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:22px">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#5C6B7A)">Account</p>
+          <ul style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+            <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);padding-bottom:10px"><span style="color:var(--frontend-faint,#5C6B7A)">Registered</span><span style="font-weight:700">{{ createdAt }}</span></li>
+            <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:14.5px"><span style="color:var(--frontend-faint,#5C6B7A)">Last login</span><span style="font-weight:700">{{ lastLoginAt }}</span></li>
+          </ul>
+          <a href="Student-Settings.dc.html" style="display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81)">Settings, privacy &amp; security →</a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) +
+    ", " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+class Component extends DCLogic {
+  state = { profile: null };
+
+  componentDidMount() {
+    const load = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) this.setState({ profile: D.getProfile() });
+    };
+    load();
+    const tryBind = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) { this._off = D.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+  }
+
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+  }
+
+  renderVals() {
+    const p = this.state.profile;
+    if (!p) return {};
+    const b = p.basicDetails, s = p.statistics;
+    return {
+      name: b.name,
+      initials: b.initials,
+      candidateId: b.candidateId,
+      email: b.email,
+      phone: b.phone,
+      createdAt: fmtDate(b.createdAt).split(",")[0],
+      lastLoginAt: fmtDate(b.lastLoginAt),
+      testsCompletedTotal: s.testsCompletedTotal,
+      accuracy: s.accuracy + "%",
+      studyStreak: s.studyStreak
+    };
+  }
+}
+
+</script>
+</body>
+</html>

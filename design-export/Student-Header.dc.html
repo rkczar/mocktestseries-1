@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif)}
+  a{text-decoration:none}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+</helmet>
+
+<header style="position:sticky;top:0;z-index:50;background:var(--frontend-surface,#FFFFFF);border-bottom:1px solid var(--frontend-border,#E3EAF2)">
+  <div style="max-width:1200px;margin:0 auto;padding:12px 24px;min-height:72px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 20px">
+    <a href="Student-Dashboard.dc.html" style="display:flex;align-items:center;gap:10px;flex:none">
+      <span style="width:34px;height:34px;border-radius:9px;background:var(--frontend-primary,#0F4C81);display:flex;align-items:center;justify-content:center;flex:none">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+      </span>
+      <span style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:20px;font-weight:700;letter-spacing:-.01em;color:var(--frontend-primary,#0F4C81);white-space:nowrap">MockTestSeries<span style="color:var(--frontend-accent-text,#A85400)">.in</span></span>
+    </a>
+    <nav style="display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;flex-wrap:wrap">
+      <sc-for list="{{ navItems }}" as="item" hint-placeholder-count="6">
+        <a href="{{ item.href }}" style="{{ item.style }}">{{ item.label }}</a>
+      </sc-for>
+    </nav>
+    <div style="display:flex;align-items:center;gap:10px;flex:none;margin-left:auto">
+      <a href="Student-Profile.dc.html" style="display:flex;align-items:center;gap:9px;padding:7px 12px 7px 8px;border-radius:999px;border:1px solid var(--frontend-border,#E3EAF2);background:var(--frontend-background,#F6F9FC)" style-hover="border-color:var(--frontend-primary,#0F4C81)">
+        <span style="width:28px;height:28px;border-radius:50%;background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;flex:none">{{ initials }}</span>
+        <span style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E);white-space:nowrap">{{ studentName }}</span>
+      </a>
+      <a href="Student-Login.dc.html" style="padding:10px 14px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14px;font-weight:600;color:var(--frontend-primary,#0F4C81);white-space:nowrap" style-hover="background:#F2F6FA">Logout</a>
+    </div>
+  </div>
+</header>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1200,&quot;height&quot;:90},&quot;active&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;dashboard&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;dashboard&quot;,&quot;custom-module&quot;,&quot;practice&quot;,&quot;test-history&quot;,&quot;saved-mistake&quot;,&quot;analytics&quot;,&quot;&quot;]}}">
+const NAV = [
+  { id: "dashboard", label: "Dashboard", href: "Student-Dashboard.dc.html" },
+  { id: "custom-module", label: "Custom Module", href: "Student-Custom-Module.dc.html" },
+  { id: "practice", label: "Practice", href: "Student-Dashboard.dc.html#practice" },
+  { id: "test-history", label: "Test History", href: "Student-Test-History.dc.html" },
+  { id: "saved-mistake", label: "Saved & Mistake", href: "Student-Saved-Questions.dc.html" },
+  { id: "analytics", label: "Analytics", href: "Student-Analysis.dc.html" }
+];
+
+class Component extends DCLogic {
+  state = { name: "Dr. Student", initials: "DS" };
+
+  componentDidMount() {
+    const load = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) {
+        const p = D.getProfile();
+        this.setState({ name: p.basicDetails.name, initials: p.basicDetails.initials });
+      }
+    };
+    load();
+    const tryBind = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) { this._off = D.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+  }
+
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+  }
+
+  renderVals() {
+    const active = this.props.active || "";
+    return {
+      studentName: this.state.name,
+      initials: this.state.initials,
+      navItems: NAV.map(n => ({
+        label: n.label,
+        href: n.href,
+        style: "padding:9px 12px;border-radius:8px;font-size:14.5px;white-space:nowrap;" +
+          (n.id === active
+            ? "font-weight:700;color:var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);"
+            : "font-weight:500;color:var(--frontend-muted,#41505E);")
+      }))
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  button{font-family:inherit;cursor:pointer}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="exams-data.js"></script>
+<script src="question-bank-data.js"></script>
+<script src="custom-module-data.js"></script>
+<script src="student-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Student-Header" active="subject-test" hint-size="100%,72px"></dc-import>
+
+  <main style="flex:1 1 auto;max-width:900px;width:100%;margin:0 auto;padding:clamp(24px,3.5vw,40px) 24px clamp(48px,6vw,72px)">
+    <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Student-Subject-Test.dc.html" hint-size="140px,32px"></dc-import>
+    <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">Subject test</p>
+    <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(27px,3.2vw,38px);line-height:1.12;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:8px">Choose a subject</h1>
+    <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:64ch">One subject at a time — pick a subject, choose how many questions, and start.</p>
+
+    <sc-if value="{{ hasExam }}" hint-placeholder-val="{{ true }}">
+      <div style="margin-top:28px;display:flex;flex-direction:column;gap:22px">
+
+        <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:20px">
+          <p style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Exam</p>
+          <p style="font-size:16px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:4px">{{ examName }}</p>
+        </div>
+
+        <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:20px">
+          <p style="font-size:16px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Subjects</p>
+          <sc-if value="{{ hasSubjects }}" hint-placeholder-val="{{ true }}">
+            <ul style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:14px">
+              <sc-for list="{{ subjectRows }}" as="s" hint-placeholder-count="4">
+                <li>
+                  <button type="button" onClick="{{ s.pick }}" style="{{ s.style }}">
+                    <span style="{{ s.boxStyle }}">{{ s.dot }}</span>
+                    <span style="flex:1;text-align:left">{{ s.subject }}</span>
+                    <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12.5px;color:var(--frontend-faint,#7A8899)">{{ s.count }}</span>
+                  </button>
+                </li>
+              </sc-for>
+            </ul>
+          </sc-if>
+          <sc-if value="{{ noSubjects }}" hint-placeholder-val="{{ false }}">
+            <p style="font-size:14px;color:var(--frontend-muted,#41505E);margin-top:12px">No subjects are currently available for this exam. Check back once the admin publishes the question bank.</p>
+          </sc-if>
+        </div>
+
+        <sc-if value="{{ hasSelection }}" hint-placeholder-val="{{ false }}">
+          <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:20px">
+            <p style="font-size:16px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Number of questions</p>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+              <sc-for list="{{ countOptions }}" as="c" hint-placeholder-count="6">
+                <button type="button" onClick="{{ c.click }}" style="{{ c.style }}">{{ c.label }}</button>
+              </sc-for>
+            </div>
+            <sc-if value="{{ isCustomCount }}" hint-placeholder-val="{{ false }}">
+              <input type="number" min="1" value="{{ customCountValue }}" onInput="{{ onCustomCount }}" placeholder="Enter a number" style="margin-top:10px;width:160px;padding:10px 12px;border-radius:8px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-background,#F6F9FC);font-size:14px;color:var(--frontend-text,#212529)">
+            </sc-if>
+
+            <div style="margin-top:16px;padding:14px 16px;border-radius:11px;background:var(--frontend-tint,#EEF4FA);border:1px solid var(--frontend-tint-border,#DCE7F2)">
+              <p style="font-size:14.5px;font-weight:700;color:var(--frontend-heading,#0F2B45)">{{ availableSummary }}</p>
+              <sc-if value="{{ isLimited }}" hint-placeholder-val="{{ false }}">
+                <p style="font-size:13.5px;color:var(--frontend-muted,#41505E);margin-top:4px">{{ limitedNote }}</p>
+              </sc-if>
+            </div>
+
+            <p style="font-size:12.5px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin:16px 0 6px">Timing</p>
+            <div style="display:flex;flex-wrap:wrap;gap:7px">
+              <button type="button" onClick="{{ setTimed }}" style="{{ timedBtnStyle }}">Timed</button>
+              <button type="button" onClick="{{ setUntimed }}" style="{{ untimedBtnStyle }}">Untimed</button>
+            </div>
+            <p style="font-size:13px;color:var(--frontend-muted,#41505E);margin-top:8px">{{ timingNote }}</p>
+
+            <button type="button" onClick="{{ startTest }}" disabled="{{ startDisabled }}" style="{{ startStyle }}">{{ startLabel }}</button>
+          </div>
+        </sc-if>
+
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ hasNoExam }}" hint-placeholder-val="{{ false }}">
+      <div style="margin-top:32px;background:var(--frontend-surface,#FFFFFF);border:1px dashed var(--frontend-border-strong,#CFDCE9);border-radius:16px;padding:36px;text-align:center">
+        <h2 style="font-size:18px;font-weight:800;color:var(--frontend-heading,#0F2B45)">No enrolled exam found</h2>
+        <p style="font-size:14.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px">Subject Test becomes available once you're enrolled in an exam.</p>
+      </div>
+    </sc-if>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    ready: false,
+    examId: null, examName: "",
+    subject: null,
+    count: 20, customCount: "", timed: true
+  };
+
+  componentDidMount() {
+    const tryBind = () => {
+      const ED = window.MTS && window.MTS.ExamsData;
+      const CM = window.MTS && window.MTS.CustomModules;
+      if (ED && CM) {
+        const exams = ED.getCurrentExams();
+        const exam = exams[0] || null;
+        this.setState({ ready: true, examId: exam ? exam.id : null, examName: exam ? exam.name : "" });
+        this._off = CM.subscribe(() => this.forceUpdate());
+      } else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+  }
+  componentWillUnmount() { if (this._off) this._off(); if (this._t) clearTimeout(this._t); }
+
+  pillStyle(active) {
+    return "padding:8px 13px;border-radius:999px;font-size:13px;font-weight:600;border:" +
+      (active ? "1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-primary,#0F4C81);" : "1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);");
+  }
+
+  renderVals() {
+    const s = this.state;
+    const CM = window.MTS && window.MTS.CustomModules;
+    if (!s.ready) return { hasExam: false, hasNoExam: false };
+    if (!s.examId || !CM) return { hasExam: false, hasNoExam: true };
+
+    const subjectRows = CM.getAvailableSubjects(s.examId);
+    const available = s.subject ? CM.countAvailable(s.examId, { subjects: [s.subject], year: "All", topic: "All", difficulty: "All" }) : 0;
+    const requested = s.count === "custom" ? (parseInt(s.customCount, 10) || 0) : s.count;
+    const actual = Math.min(requested, available);
+
+    return {
+      hasExam: true, hasNoExam: false,
+      examName: s.examName,
+      hasSubjects: subjectRows.length > 0,
+      noSubjects: subjectRows.length === 0,
+      subjectRows: subjectRows.map(r => {
+        const active = s.subject === r.subject;
+        return {
+          subject: r.subject, count: r.count + " q",
+          dot: active ? "●" : "",
+          style: "width:100%;display:flex;align-items:center;gap:10px;padding:12px 13px;border-radius:10px;font-size:14.5px;font-weight:600;text-align:left;" +
+            (active ? "border:1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-heading,#0F2B45);" : "border:1px solid var(--frontend-border,#E3EAF2);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);"),
+          boxStyle: "width:18px;height:18px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;color:#FFFFFF;" + (active ? "background:var(--frontend-primary,#0F4C81);" : "border:1.5px solid var(--frontend-border-strong,#CFDCE9);"),
+          pick: () => this.setState({ subject: r.subject, count: 20, customCount: "" })
+        };
+      }),
+      hasSelection: !!s.subject,
+
+      countOptions: [10, 20, 30, 50, 100, "custom"].map(c => ({
+        label: c === "custom" ? "Custom" : String(c),
+        style: this.pillStyle(s.count === c), click: () => this.setState({ count: c })
+      })),
+      isCustomCount: s.count === "custom",
+      customCountValue: s.customCount,
+      onCustomCount: e => this.setState({ customCount: e.target.value.replace(/[^0-9]/g, "") }),
+
+      availableSummary: !s.subject
+        ? "Select a subject to see how many questions are available."
+        : available + " question(s) available in " + s.subject + ".",
+      isLimited: !!s.subject && requested > available,
+      limitedNote: "Only " + available + " question" + (available === 1 ? "" : "s") + " are available in this subject — you can start with " + available + ".",
+
+      setTimed: () => this.setState({ timed: true }),
+      setUntimed: () => this.setState({ timed: false }),
+      timedBtnStyle: this.pillStyle(s.timed),
+      untimedBtnStyle: this.pillStyle(!s.timed),
+      timingNote: s.timed
+        ? "1 minute per question — " + actual + " question(s) means " + actual + " minute(s) on the clock."
+        : "No countdown. Submit whenever you're ready.",
+
+      startDisabled: !s.subject || requested < 1 || available === 0,
+      startStyle: "margin-top:16px;width:100%;padding:13px 18px;border-radius:var(--frontend-btn-radius,10px);border:0;font-size:14.5px;font-weight:700;" +
+        (!s.subject || requested < 1 || available === 0
+          ? "background:var(--frontend-border,#E3EAF2);color:var(--frontend-faint,#7A8899);cursor:not-allowed;"
+          : "background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);"),
+      startLabel: actual > 0 && actual < requested ? "Start Test with " + actual + " Questions" : "Start Test" + (actual > 0 ? " (" + actual + " Questions)" : ""),
+
+      startTest: () => {
+        if (!s.subject || requested < 1 || available === 0) return;
+        const D = window.MTS && window.MTS.StudentData;
+        const profile = D ? D.getProfile() : null;
+        const attempt = CM.createAttempt({
+          examId: s.examId, examName: s.examName,
+          subjects: [s.subject], year: "All", topic: "All", difficulty: "All",
+          requested: requested, timed: s.timed,
+          label: s.examName + " · " + s.subject + " Subject Test",
+          studentId: profile ? profile.id : "guest", studentName: profile ? profile.basicDetails.name : "Guest"
+        });
+        CM.setPendingAttempt(attempt.id);
+        window.location.href = "Test-Player.dc.html?attempt=" + encodeURIComponent(attempt.id);
+      }
+    };
+  }
+}
+
+</script>
+</body>
+</html>

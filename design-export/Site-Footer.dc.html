@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,h3,h4,p,ul,ol{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  button,input,textarea{font-family:inherit}
+</style>
+<script src="site-config.js"></script>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+</helmet>
+
+<div>
+
+  <footer style="background:var(--frontend-surface,#FFFFFF);border-top:1px solid var(--frontend-border,#E3EAF2);padding:clamp(40px,5vw,64px) 0 28px">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:32px">
+
+        <div style="min-width:0">
+          <a href="Homepage.dc.html" style="display:flex;align-items:center;gap:10px">
+            <span style="width:30px;height:30px;border-radius:8px;background:var(--frontend-primary,#0F4C81);display:flex;align-items:center;justify-content:center;flex:none">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--frontend-on-brand,#FFFFFF)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+            </span>
+            <span style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:17.5px;font-weight:700;color:var(--frontend-primary,#0F4C81)">MockTestSeries<span style="color:var(--frontend-accent-text,#A85400)">.in</span></span>
+          </a>
+          <p style="font-size:14px;line-height:1.6;color:var(--frontend-faint,#7A8899);margin-top:12px;max-width:34ch;text-wrap:pretty">{{ tagline }}</p>
+          <sc-if value="{{ showGrow }}" hint-placeholder-val="{{ true }}">
+            <button type="button" onClick="{{ openGrow }}" style="display:inline-flex;align-items:center;gap:8px;margin-top:18px;padding:11px 16px;border-radius:9px;border:1px solid var(--frontend-accent-border,#F8DDBE);background:var(--frontend-accent-tint,#FFF6EC);font-size:14px;font-weight:700;color:var(--frontend-accent-text,#A85400);cursor:pointer" style-hover="border-color:var(--frontend-accent,#F57C00)">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+              Grow with Us
+            </button>
+          </sc-if>
+        </div>
+
+        <sc-for list="{{ sections }}" as="sec" hint-placeholder-count="3">
+          <div style="min-width:0">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-placeholder,#9AA7B4)">{{ sec.title }}</p>
+            <ul style="display:flex;flex-direction:column;gap:9px;margin-top:14px">
+              <sc-for list="{{ sec.links }}" as="link" hint-placeholder-count="4">
+                <li><a href="{{ link.href }}" style="font-size:14.5px;color:var(--frontend-muted,#41505E)" style-hover="color:var(--frontend-primary,#0F4C81)">{{ link.label }}</a></li>
+              </sc-for>
+            </ul>
+          </div>
+        </sc-for>
+
+        <sc-if value="{{ showContact }}" hint-placeholder-val="{{ true }}">
+          <div style="min-width:0">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-placeholder,#9AA7B4)">{{ contactTitle }}</p>
+            <ul style="display:flex;flex-direction:column;gap:11px;margin-top:14px">
+              <sc-if value="{{ hasEmail }}" hint-placeholder-val="{{ true }}">
+                <li style="display:flex;align-items:flex-start;gap:9px">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7A8899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:3px"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3.5 6.5l8.5 6 8.5-6"></path></svg>
+                  <a href="{{ emailHref }}" style="font-size:14.5px;color:var(--frontend-muted,#41505E);word-break:break-word" style-hover="color:var(--frontend-primary,#0F4C81)">{{ email }}</a>
+                </li>
+              </sc-if>
+              <sc-if value="{{ hasPhone }}" hint-placeholder-val="{{ true }}">
+                <li style="display:flex;align-items:flex-start;gap:9px">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7A8899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:3px"><path d="M5 3h3l2 5-2.5 1.5a12 12 0 0 0 6 6L15 13l5 2v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 3 5.2A2 2 0 0 1 5 3z"></path></svg>
+                  <span style="font-size:14.5px;color:var(--frontend-muted,#41505E)">{{ phone }}</span>
+                </li>
+              </sc-if>
+              <sc-if value="{{ hasInstagram }}" hint-placeholder-val="{{ true }}">
+                <li style="display:flex;align-items:flex-start;gap:9px">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7A8899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:3px"><rect x="3" y="3" width="18" height="18" rx="5"></rect><circle cx="12" cy="12" r="4"></circle><circle cx="17.2" cy="6.8" r="1.1" fill="#7A8899" stroke="none"></circle></svg>
+                  <a href="{{ instagramUrl }}" style="font-size:14.5px;color:var(--frontend-muted,#41505E)" style-hover="color:var(--frontend-primary,#0F4C81)">{{ instagram }}</a>
+                </li>
+              </sc-if>
+              <sc-if value="{{ hasAddress }}" hint-placeholder-val="{{ true }}">
+                <li style="display:flex;align-items:flex-start;gap:9px">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7A8899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:3px"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11z"></path><circle cx="12" cy="10" r="2.6"></circle></svg>
+                  <span style="font-size:14.5px;color:var(--frontend-muted,#41505E)">{{ address }}</span>
+                </li>
+              </sc-if>
+            </ul>
+          </div>
+        </sc-if>
+
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;justify-content:space-between;margin-top:36px;padding-top:20px;border-top:1px solid var(--frontend-border-subtle,#EDF2F7)">
+        <p style="font-size:13px;color:var(--frontend-placeholder,#9AA7B4)">{{ copyright }}</p>
+        <sc-if value="{{ showMade }}" hint-placeholder-val="{{ true }}">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-placeholder,#9AA7B4);letter-spacing:.03em">{{ madeText }}</p>
+        </sc-if>
+      </div>
+    </div>
+  </footer>
+
+  <sc-if value="{{ modalOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:200;background:rgba(11,34,54,.55);display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow-y:auto">
+      <div style="width:100%;max-width:560px;margin:auto;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;box-shadow:0 30px 70px -30px rgba(11,34,54,.6);overflow:hidden">
+
+        <div style="display:flex;align-items:flex-start;gap:14px;padding:22px 24px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7)">
+          <div style="flex:1 1 auto;min-width:0">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">Work with us</p>
+            <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:25px;line-height:1.2;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:5px">Grow with Us</h2>
+            <p style="font-size:14px;line-height:1.55;color:var(--frontend-muted,#41505E);margin-top:8px;text-wrap:pretty">Tell us how you would like to contribute. Our team reviews every submission and replies on the contact details you provide.</p>
+          </div>
+          <button type="button" onClick="{{ closeModal }}" aria-label="Close" style="flex:none;width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid var(--frontend-border,#E3EAF2);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);cursor:pointer" style-hover="background:#F2F6FA">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+          </button>
+        </div>
+
+        <sc-if value="{{ submitted }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:30px 24px 32px;text-align:center">
+            <span style="width:52px;height:52px;margin:0 auto;border-radius:50%;background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);display:flex;align-items:center;justify-content:center">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4 10-11"></path></svg>
+            </span>
+            <h3 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:21px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:16px">Submission received</h3>
+            <p style="font-size:14.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:9px">Your reference is <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-weight:600;color:var(--frontend-primary,#0F4C81)">{{ refId }}</span>. It now appears in Admin → Messages with status New.</p>
+            <button type="button" onClick="{{ closeModal }}" style="margin-top:22px;padding:13px 22px;border-radius:10px;border:0;background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);font-size:15px;font-weight:700;cursor:pointer" style-hover="background:var(--frontend-primary-hover,#0B3A63)">Done</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ formOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:22px 24px 24px;display:flex;flex-direction:column;gap:18px">
+
+            <div>
+              <label for="gwu-name" style="display:block;font-size:13px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-bottom:7px">Your Name</label>
+              <input id="gwu-name" type="text" value="{{ formName }}" onInput="{{ setFormName }}" placeholder="Full name" style="width:100%;padding:12px 13px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;color:var(--frontend-text,#212529)">
+            </div>
+
+            <div>
+              <p style="font-size:13px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-bottom:9px">How can you help us?</p>
+              <div style="display:flex;flex-wrap:wrap;gap:8px">
+                <sc-for list="{{ options }}" as="opt" hint-placeholder-count="6">
+                  <sc-if value="{{ opt.picked }}" hint-placeholder-val="{{ false }}">
+                    <button type="button" onClick="{{ opt.toggle }}" style="padding:10px 14px;border-radius:999px;border:1px solid var(--frontend-primary,#0F4C81);background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);font-size:13.5px;font-weight:700;cursor:pointer">{{ opt.label }}</button>
+                  </sc-if>
+                  <sc-if value="{{ opt.unpicked }}" hint-placeholder-val="{{ true }}">
+                    <button type="button" onClick="{{ opt.toggle }}" style="padding:10px 14px;border-radius:999px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);font-size:13.5px;font-weight:600;cursor:pointer" style-hover="border-color:var(--frontend-primary,#0F4C81);color:var(--frontend-primary,#0F4C81)">{{ opt.label }}</button>
+                  </sc-if>
+                </sc-for>
+              </div>
+            </div>
+
+            <div>
+              <label for="gwu-msg" style="display:block;font-size:13px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-bottom:7px">Tell us more</label>
+              <textarea id="gwu-msg" rows="4" value="{{ formMessage }}" onInput="{{ setFormMessage }}" placeholder="Your experience, subjects you can cover, or how you would like to contribute." style="width:100%;padding:12px 13px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;line-height:1.55;color:var(--frontend-text,#212529);resize:vertical"></textarea>
+            </div>
+
+            <div>
+              <p style="font-size:13px;font-weight:700;color:var(--frontend-heading,#0F2B45);margin-bottom:9px">Your Contact Details</p>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+                <input type="email" value="{{ formEmail }}" onInput="{{ setFormEmail }}" placeholder="Email address" style="width:100%;padding:12px 13px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;color:var(--frontend-text,#212529)">
+                <input type="tel" value="{{ formPhone }}" onInput="{{ setFormPhone }}" placeholder="Phone / WhatsApp (optional)" style="width:100%;padding:12px 13px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;color:var(--frontend-text,#212529)">
+              </div>
+            </div>
+
+            <sc-if value="{{ hasError }}" hint-placeholder-val="{{ false }}">
+              <p style="background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:9px;padding:11px 12px;font-size:13.5px;font-weight:600;color:var(--frontend-error,#C62828)">{{ error }}</p>
+            </sc-if>
+
+            <div style="display:flex;flex-wrap:wrap;gap:10px;padding-top:4px">
+              <button type="button" onClick="{{ submit }}" style="flex:1 1 180px;padding:14px 20px;border-radius:10px;border:0;background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);font-size:15px;font-weight:700;cursor:pointer" style-hover="background:var(--frontend-primary-hover,#0B3A63)">Submit</button>
+              <button type="button" onClick="{{ closeModal }}" style="flex:0 1 120px;padding:14px 20px;border-radius:10px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:15px;font-weight:600;color:var(--frontend-muted,#41505E);cursor:pointer" style-hover="background:#F2F6FA">Cancel</button>
+            </div>
+
+            <p style="font-size:12.5px;line-height:1.55;color:var(--frontend-placeholder,#9AA7B4)">Submissions are stored against your contact details and routed to Admin → Messages. We do not share them with third parties.</p>
+          </div>
+        </sc-if>
+
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1200,&quot;height&quot;:420}}">
+const ROUTE_FILES = {
+  "/": "Homepage.dc.html",
+  "/exams": "Homepage.dc.html",
+  "/exams": "Exams.dc.html",
+  "/exams/ruhs-mo": "RUHS-Medical-Officer.dc.html",
+  "/test-series": "Homepage.dc.html",
+  "/upcoming-exams": "Exams.dc.html",
+  "/about": "Contact-Us.dc.html#about-us",
+  "/contact": "Contact-Us.dc.html",
+  "/contact#about-us": "Contact-Us.dc.html#about-us",
+  "/contact#privacy-policy": "Contact-Us.dc.html#privacy-policy",
+  "/contact#terms-and-conditions": "Contact-Us.dc.html#terms-and-conditions",
+  "/updates": "Homepage.dc.html",
+  "/privacy": "Contact-Us.dc.html#privacy-policy",
+  "/terms": "Contact-Us.dc.html#terms-and-conditions",
+  "/about": "Contact-Us.dc.html#about-us",
+  "/student/login": "Student-Login.dc.html",
+  "/student/register": "Student-Login.dc.html",
+  "/dashboard": "Student-Dashboard.dc.html"
+};
+
+class Component extends DCLogic {
+  state = {
+    cfg: null, open: false, submitted: false, refId: "",
+    name: "", interests: [], message: "", email: "", phone: "", error: ""
+  };
+
+  componentDidMount() {
+    const load = () => {
+      const S = window.MTS && window.MTS.SiteConfig;
+      if (S) this.setState({ cfg: S.getPublished() });
+    };
+    load();
+    const tryBind = () => {
+      const S = window.MTS && window.MTS.SiteConfig;
+      if (S) { this._off = S.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+
+    this._onOpen = () => this.setState({ open: true, submitted: false, error: "" });
+    window.addEventListener("mts:growwithus:open", this._onOpen);
+    this._onKey = (e) => { if (e.key === "Escape" && this.state.open) this.setState({ open: false }); };
+    window.addEventListener("keydown", this._onKey);
+  }
+
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+    window.removeEventListener("mts:growwithus:open", this._onOpen);
+    window.removeEventListener("keydown", this._onKey);
+  }
+
+  toggleInterest(label) {
+    this.setState(s => ({
+      interests: s.interests.indexOf(label) > -1
+        ? s.interests.filter(x => x !== label)
+        : s.interests.concat([label]),
+      error: ""
+    }));
+  }
+
+  submitForm() {
+    const s = this.state;
+    if (!s.name.trim()) { this.setState({ error: "Please enter your name." }); return; }
+    if (!s.interests.length) { this.setState({ error: "Please select at least one option." }); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.email.trim())) { this.setState({ error: "Please enter a valid email address." }); return; }
+
+    const rec = window.MTS.Messages.add({
+      category: "Grow With Us",
+      name: s.name.trim(),
+      email: s.email.trim(),
+      phone: s.phone.trim(),
+      interests: s.interests.slice(),
+      message: s.message.trim()
+    });
+
+    this.setState({
+      submitted: true, refId: rec.id, error: "",
+      name: "", interests: [], message: "", email: "", phone: ""
+    });
+  }
+
+  renderVals() {
+    const SC = window.MTS && window.MTS.SiteConfig;
+    const cfg = this.state.cfg || (SC ? SC.defaults() : null);
+    if (!cfg) return {};
+    const f = cfg.footer;
+    const c = f.contact || {};
+    const s = this.state;
+    const opts = (window.MTS && window.MTS.GrowWithUs && window.MTS.GrowWithUs.options) || [];
+
+    return {
+      tagline: f.tagline || "AI-powered mock tests and practice resources designed for serious aspirants.",
+      sections: f.sections.filter(x => x.enabled).map(x => ({
+        title: x.title,
+        links: x.links.filter(l => l.enabled && (!window.MTS || !window.MTS.PagesRegistry || window.MTS.PagesRegistry.isEnabled(l.route))).map(l => ({
+          label: l.label,
+          href: ROUTE_FILES[l.route] || "#"
+        }))
+      })),
+      showContact: !!c.enabled,
+      contactTitle: c.title || "Contact",
+      hasEmail: !!c.email, email: c.email, emailHref: "mailto:" + (c.email || ""),
+      hasPhone: !!c.phone, phone: c.phone,
+      hasInstagram: !!c.instagram, instagram: c.instagram, instagramUrl: c.instagramUrl || "#",
+      hasAddress: !!c.address, address: c.address,
+      copyright: f.copyright || "© 2026 MockTestSeries.in. All rights reserved.",
+      showMade: !!f.madeInIndia,
+      madeText: f.madeInIndiaText,
+      showGrow: !!f.growWithUs,
+      openGrow: () => this.setState({ open: true, submitted: false, error: "" }),
+
+      modalOpen: s.open,
+      submitted: s.submitted,
+      formOpen: s.open && !s.submitted,
+      refId: s.refId,
+      closeModal: () => this.setState({ open: false }),
+      formName: s.name,
+      setFormName: (e) => this.setState({ name: e.target.value, error: "" }),
+      formMessage: s.message,
+      setFormMessage: (e) => this.setState({ message: e.target.value }),
+      formEmail: s.email,
+      setFormEmail: (e) => this.setState({ email: e.target.value, error: "" }),
+      formPhone: s.phone,
+      setFormPhone: (e) => this.setState({ phone: e.target.value }),
+      options: opts.map(label => ({
+        label,
+        picked: s.interests.indexOf(label) > -1,
+        unpicked: s.interests.indexOf(label) === -1,
+        toggle: () => this.toggleInterest(label)
+      })),
+      hasError: !!s.error,
+      error: s.error,
+      submit: () => this.submitForm()
+    };
+  }
+}
+
+</script>
+</body>
+</html>

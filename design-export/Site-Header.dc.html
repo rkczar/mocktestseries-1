@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,h3,h4,p,ul,ol{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  button{font-family:inherit}
+</style>
+<script src="site-config.js"></script>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+</helmet>
+
+<div>
+
+  <sc-if value="{{ showAnnouncement }}" hint-placeholder-val="{{ true }}">
+    <div style="background:var(--frontend-inverse-surface,#0B3A63);color:var(--frontend-inverse-muted,#D7E5F1);font-size:13px;line-height:1.4;padding:9px 0">
+      <div style="max-width:1200px;margin:0 auto;padding:0 24px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;justify-content:center;text-align:center">
+        <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-inverse-accent,#F9A94A);font-weight:600">{{ annTag }}</span>
+        <span>{{ annText }}</span>
+        <a href="{{ annHref }}" style="color:var(--frontend-inverse-text,#FFFFFF);text-decoration:underline;text-underline-offset:3px;font-weight:600">{{ annLinkLabel }}</a>
+      </div>
+    </div>
+  </sc-if>
+
+  <header style="position:sticky;top:0;z-index:50;background:var(--frontend-surface,#FFFFFF);border-bottom:1px solid var(--frontend-border,#E3EAF2)">
+    <div style="max-width:1200px;margin:0 auto;padding:12px 24px;min-height:72px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 20px">
+      <a href="Homepage.dc.html" style="display:flex;align-items:center;gap:10px;flex:none">
+        <span style="width:34px;height:34px;border-radius:9px;background:var(--frontend-primary,#0F4C81);display:flex;align-items:center;justify-content:center;flex:none">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--frontend-on-brand,#FFFFFF)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        </span>
+        <span style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:20px;font-weight:700;letter-spacing:-.01em;color:var(--frontend-primary,#0F4C81);white-space:nowrap">MockTestSeries<span style="color:var(--frontend-accent-text,#A85400)">.in</span></span>
+      </a>
+
+      <nav style="display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;flex-wrap:wrap">
+        <sc-for list="{{ navItems }}" as="item" hint-placeholder-count="5">
+          <sc-if value="{{ item.isActive }}" hint-placeholder-val="{{ false }}">
+            <a href="{{ item.href }}" style="padding:9px 12px;border-radius:8px;font-size:14.5px;font-weight:700;color:var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA)">{{ item.label }}</a>
+          </sc-if>
+          <sc-if value="{{ item.isInactive }}" hint-placeholder-val="{{ true }}">
+            <a href="{{ item.href }}" style="padding:9px 12px;border-radius:8px;font-size:14.5px;font-weight:500;color:var(--frontend-muted,#41505E)" style-hover="background:#F2F6FA;color:var(--frontend-primary,#0F4C81)">{{ item.label }}</a>
+          </sc-if>
+        </sc-for>
+      </nav>
+
+      <div style="display:flex;align-items:center;gap:10px;flex:none;margin-left:auto">
+        <sc-if value="{{ showGrow }}" hint-placeholder-val="{{ true }}">
+          <button type="button" onClick="{{ openGrow }}" style="display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border-radius:9px;border:1px dashed var(--frontend-accent-border,#F8DDBE);background:var(--frontend-accent-tint,#FFF6EC);font-size:14px;font-weight:700;color:var(--frontend-accent-text,#A85400);white-space:nowrap;cursor:pointer" style-hover="border-style:solid">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+            Grow with Us
+          </button>
+        </sc-if>
+        <a href="Student-Login.dc.html" style="padding:10px 16px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14.5px;font-weight:600;color:var(--frontend-primary,#0F4C81);white-space:nowrap" style-hover="background:#F2F6FA">{{ loginLabel }}</a>
+        <sc-if value="{{ showCta }}" hint-placeholder-val="{{ true }}">
+          <a href="Student-Login.dc.html" style="padding:11px 18px;border-radius:9px;background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);font-size:14.5px;font-weight:700;white-space:nowrap" style-hover="background:var(--frontend-primary-hover,#0B3A63)">{{ ctaLabel }}</a>
+        </sc-if>
+      </div>
+    </div>
+  </header>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1200,&quot;height&quot;:160},&quot;active&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;/&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Header&quot;},&quot;announcement&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Header&quot;}}">
+const ROUTE_FILES = {
+  "/": "Homepage.dc.html",
+  "/exams": "Homepage.dc.html",
+  "/exams": "Exams.dc.html",
+  "/exams/ruhs-mo": "RUHS-Medical-Officer.dc.html",
+  "/test-series": "Homepage.dc.html",
+  "/upcoming-exams": "Exams.dc.html",
+  "/about": "Contact-Us.dc.html#about-us",
+  "/contact": "Contact-Us.dc.html",
+  "/contact#about-us": "Contact-Us.dc.html#about-us",
+  "/contact#privacy-policy": "Contact-Us.dc.html#privacy-policy",
+  "/contact#terms-and-conditions": "Contact-Us.dc.html#terms-and-conditions",
+  "/student/login": "Student-Login.dc.html",
+  "/student/register": "Student-Login.dc.html",
+  "/dashboard": "Student-Dashboard.dc.html",
+  "/privacy": "Contact-Us.dc.html#privacy-policy",
+  "/terms": "Contact-Us.dc.html#terms-and-conditions",
+  "/updates": "Homepage.dc.html",
+  "/contact": "Contact-Us.dc.html"
+};
+
+class Component extends DCLogic {
+  state = { cfg: null };
+
+  componentDidMount() {
+    const load = () => {
+      const S = window.MTS && window.MTS.SiteConfig;
+      if (S) this.setState({ cfg: S.getPublished() });
+    };
+    load();
+    const tryBind = () => {
+      const S = window.MTS && window.MTS.SiteConfig;
+      if (S) { this._off = S.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+  }
+
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+  }
+
+  renderVals() {
+    const cfg = this.state.cfg || (window.MTS ? window.MTS.SiteConfig.defaults() : null);
+    if (!cfg) return {};
+    const active = this.props.active || "/";
+    const h = cfg.header;
+    const a = cfg.announcement;
+
+    return {
+      showAnnouncement: !!(a && a.enabled) && this.props.announcement !== false,
+      annTag: a.tag,
+      annText: a.text,
+      annLinkLabel: a.linkLabel,
+      annHref: ROUTE_FILES[a.linkRoute] || "#",
+      navItems: h.items.filter(i => i.enabled && (!window.MTS || !window.MTS.PagesRegistry || window.MTS.PagesRegistry.isEnabled(i.route))).map(i => ({
+        label: i.label,
+        href: ROUTE_FILES[i.route] || "#",
+        isActive: i.route === active,
+        isInactive: i.route !== active
+      })),
+      showGrow: !!h.growWithUs,
+      openGrow: () => window.MTS && window.MTS.GrowWithUs.open(),
+      showThemeToggle: !!h.showThemeToggle,
+      cycleTheme: () => {
+        if (window.MTSTheme && window.MTSTheme.cycle) window.MTSTheme.cycle();
+      },
+      loginLabel: h.loginLabel,
+      showCta: !!h.ctaEnabled,
+      ctaLabel: h.ctaLabel
+    };
+  }
+}
+
+</script>
+</body>
+</html>

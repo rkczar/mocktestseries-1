@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,h3,h4,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+  button,textarea{font-family:inherit}
+  button{cursor:pointer}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+<script src="ai-data.js"></script>
+<script src="custom-module-data.js"></script>
+<script src="admin-test-data.js"></script>
+<script src="site-config.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <header style="position:sticky;top:0;z-index:40;background:var(--frontend-surface,#FFFFFF);border-bottom:1px solid var(--frontend-border,#E3EAF2)">
+    <div style="max-width:1200px;margin:0 auto;padding:12px 24px;min-height:68px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px">
+      <a href="Student-Dashboard.dc.html" style="display:flex;align-items:center;gap:10px;flex:none">
+        <span style="width:32px;height:32px;border-radius:9px;background:var(--frontend-primary,#0F4C81);display:flex;align-items:center;justify-content:center;flex:none">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+        </span>
+        <span style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:18.5px;font-weight:700;color:var(--frontend-primary,#0F4C81);white-space:nowrap">MockTestSeries<span style="color:var(--frontend-accent-text,#A85400)">.in</span></span>
+      </a>
+      <div style="flex:1 1 200px;min-width:0">
+        <p style="font-size:14.5px;font-weight:700;color:var(--frontend-heading,#0F2B45)">{{ examName }}</p>
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;color:var(--frontend-faint,#7A8899);margin-top:2px">{{ testLabel }}</p>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex:none;margin-left:auto">
+        <sc-if value="{{ isActive }}" hint-placeholder-val="{{ true }}">
+          <sc-if value="{{ showClock }}" hint-placeholder-val="{{ true }}">
+            <span style="display:inline-flex;align-items:center;gap:7px;font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:13.5px;font-weight:600;color:var(--frontend-error,#C62828);background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:9px;padding:9px 13px">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+              {{ clock }}
+            </span>
+          </sc-if>
+          <sc-if value="{{ showUntimedBadge }}" hint-placeholder-val="{{ false }}">
+            <span style="display:inline-flex;align-items:center;gap:7px;font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--frontend-muted,#41505E);background:var(--frontend-tint,#EEF4FA);border:1px solid var(--frontend-tint-border,#DCE7F2);border-radius:9px;padding:9px 13px">Untimed</span>
+          </sc-if>
+          <button type="button" onClick="{{ askSubmit }}" style="padding:10px 16px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14px;font-weight:700;color:var(--frontend-primary,#0F4C81);white-space:nowrap" style-hover="background:#F2F6FA">Submit test</button>
+        </sc-if>
+        <sc-if value="{{ isSubmitted }}" hint-placeholder-val="{{ false }}">
+          <span style="display:inline-flex;align-items:center;gap:7px;font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--frontend-success-text,#1E5620);background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);border-radius:9px;padding:9px 13px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"></path></svg>
+            Test Submitted
+          </span>
+        </sc-if>
+      </div>
+    </div>
+    <div style="height:3px;background:var(--frontend-tint,#EEF4FA)">
+      <span style="display:block;height:100%;background:var(--frontend-primary,#0F4C81);width:{{ progressPct }}"></span>
+    </div>
+  </header>
+
+  <main style="flex:1 1 auto;width:100%;max-width:1200px;margin:0 auto;padding:clamp(20px,3vw,32px) 24px clamp(40px,5vw,64px)">
+
+    <sc-if value="{{ hasLoadError }}" hint-placeholder-val="{{ false }}">
+      <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Test-Player.dc.html" hint-size="140px,32px"></dc-import>
+      <div style="max-width:640px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-error-border,#F6D5D5);border-radius:14px;padding:28px">
+        <p style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-error,#C62828)">Test not available</p>
+        <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-heading,#0F2B45);margin-top:10px">{{ loadErrorMsg }}</p>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTest }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start">
+        <div style="min-width:0;flex:1 1 480px;max-width:820px">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12.5px;font-weight:600;letter-spacing:.06em;color:var(--frontend-faint,#7A8899);white-space:nowrap">QUESTION {{ qNumber }} / {{ total }}</p>
+            <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-muted,#41505E);background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:999px;padding:5px 10px">{{ subject }}</span>
+          </div>
+          <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:clamp(20px,3vw,28px);margin-top:12px">
+            <p style="font-size:clamp(16.5px,1.5vw,19px);line-height:1.5;font-weight:600;color:var(--frontend-text,#212529);text-wrap:pretty">{{ stem }}</p>
+            <ul style="display:flex;flex-direction:column;gap:10px;margin-top:22px">
+              <sc-for list="{{ options }}" as="o" hint-placeholder-count="4">
+                <li>
+                  <button type="button" onClick="{{ o.pick }}" style="{{ o.style }}">
+                    <span style="{{ o.keyStyle }}">{{ o.key }}</span>
+                    <span style="flex:1 1 auto;min-width:0;text-align:left">{{ o.text }}</span>
+                  </button>
+                </li>
+              </sc-for>
+            </ul>
+            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:24px;padding-top:20px;border-top:1px solid var(--frontend-border-subtle,#EDF2F7)">
+              <button type="button" onClick="{{ prev }}" style="padding:13px 20px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;font-weight:600;color:var(--frontend-muted,#41505E)" style-hover="background:#F2F6FA">Previous</button>
+              <button type="button" onClick="{{ saveAnswer }}" style="padding:13px 22px;border-radius:9px;border:0;background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);font-size:14.5px;font-weight:700" style-hover="background:var(--frontend-primary-hover,#0B3A63)">{{ saveLabel }}</button>
+              <button type="button" onClick="{{ markReview }}" style="padding:13px 20px;border-radius:9px;border:1px solid var(--frontend-warning-border,#F8DDBE);background:var(--frontend-warning-tint,#FFF6EC);font-size:14.5px;font-weight:600;color:var(--frontend-warning,#B25E00)" style-hover="background:#FDEBD5">{{ markLabel }}</button>
+              <button type="button" onClick="{{ next }}" style="margin-left:auto;padding:13px 20px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;font-weight:600;color:var(--frontend-muted,#41505E)" style-hover="background:#F2F6FA">Next</button>
+            </div>
+            <p style="font-size:12.5px;color:var(--frontend-placeholder,#9AA7B4);margin-top:14px">{{ modeNote }}</p>
+          </div>
+        </div>
+        <div style="flex:0 0 240px;min-width:220px;position:sticky;top:84px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:16px;max-height:640px;overflow-y:auto">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Question navigator</p>
+          <ul style="display:flex;flex-direction:column;gap:6px;margin-top:12px;font-size:12px;color:var(--frontend-faint,#7A8899)">
+            <li style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--frontend-tint,#EEF4FA);border:1px solid var(--frontend-primary,#0F4C81)"></span>Answered</li>
+            <li style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border-strong,#CFDCE9)"></span>Unanswered</li>
+            <li style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--frontend-surface,#FFFFFF);border:2px dashed var(--frontend-accent,#F57C00)"></span>Marked for review</li>
+          </ul>
+          <ul style="display:flex;flex-wrap:wrap;gap:7px;margin-top:14px">
+            <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="10">
+              <li><button type="button" onClick="{{ n.go }}" style="{{ n.style }}">{{ n.label }}</button></li>
+            </sc-for>
+          </ul>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isReview }}" hint-placeholder-val="{{ false }}">
+      <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Test-Player.dc.html" hint-size="140px,32px"></dc-import>
+      <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start">
+      <div style="min-width:0;flex:1 1 480px;max-width:860px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;align-items:stretch;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:12px;padding:10px">
+          <button type="button" onClick="{{ shareWhatsApp }}" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:10px 14px;border-radius:9px;border:1px solid var(--frontend-success-border,#CFE3D0);background:var(--frontend-success-tint,#EEF7EE);font-size:13.5px;font-weight:700;color:var(--frontend-success-text,#1E5620)" style-hover="background:#E3F1E4">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5z"></path></svg>
+            WhatsApp Share
+          </button>
+          <button type="button" onClick="{{ toggleSave }}" style="{{ saveBtnStyle }}min-height:44px;justify-content:center;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v17l-6-4.5L6 21z"></path></svg>
+            {{ saveBtnLabel }}
+          </button>
+          <button type="button" onClick="{{ openReport }}" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:10px 14px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E)" style-hover="background:#F2F6FA">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h9l-1 3h6l-1.5 5L19 17H5"></path></svg>
+            Report Question
+          </button>
+          <button type="button" onClick="{{ toggleAi }}" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:10px 16px;border-radius:9px;border:0;background:var(--frontend-primary,#0F4C81);font-size:13.5px;font-weight:700;color:var(--frontend-on-brand,#FFFFFF)" style-hover="background:var(--frontend-primary-hover,#0B3A63)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path></svg>
+            {{ askAiLabel }}
+          </button>
+        </div>
+
+        <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;padding:clamp(20px,3vw,28px);margin-top:14px">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12.5px;font-weight:600;letter-spacing:.06em;color:var(--frontend-faint,#7A8899);white-space:nowrap">QUESTION {{ qNumber }} / {{ total }}</p>
+            <span style="{{ verdictStyle }}">{{ verdictLabel }}</span>
+          </div>
+          <p style="font-size:clamp(16.5px,1.5vw,19px);line-height:1.5;font-weight:600;color:var(--frontend-text,#212529);margin-top:12px;text-wrap:pretty">{{ stem }}</p>
+
+          <ul style="display:flex;flex-direction:column;gap:9px;margin-top:20px">
+            <sc-for list="{{ reviewOptions }}" as="o" hint-placeholder-count="4">
+              <li style="{{ o.style }}">
+                <span style="{{ o.keyStyle }}">{{ o.key }}</span>
+                <span style="flex:1 1 auto;min-width:0">{{ o.text }}</span>
+                <span style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:{{ o.tagColor }};white-space:nowrap">{{ o.tag }}</span>
+              </li>
+            </sc-for>
+          </ul>
+
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:18px">
+            <p style="flex:1 1 180px;min-width:0;background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:10px;padding:12px 14px;font-size:14px;color:var(--frontend-muted,#41505E)">Your Answer: <span style="font-weight:800;color:{{ yourColor }}">{{ yourAnswer }}</span></p>
+            <p style="flex:1 1 180px;min-width:0;background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);border-radius:10px;padding:12px 14px;font-size:14px;color:var(--frontend-success-text,#1E5620)">Correct Answer: <span style="font-weight:800">{{ correctAnswer }}</span></p>
+          </div>
+
+          <sc-if value="{{ aiLoading }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:20px;padding:16px;border-radius:11px;background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);font-size:14px;color:var(--frontend-muted,#41505E)">Generating AI explanation…</div>
+          </sc-if>
+
+          <sc-if value="{{ aiOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:20px;padding:clamp(16px,2.5vw,20px);border-radius:14px;background:var(--frontend-tint,#EEF4FA);border:1px solid var(--frontend-tint-border,#DCE7F2)">
+              <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-primary,#0F4C81)">AI Explanation</p>
+              <ul style="display:flex;flex-wrap:wrap;gap:7px;margin-top:12px">
+                <sc-for list="{{ aiTabs }}" as="t" hint-placeholder-count="6">
+                  <li><button type="button" onClick="{{ t.select }}" style="{{ t.style }}">{{ t.label }}</button></li>
+                </sc-for>
+              </ul>
+              <ul style="display:flex;flex-direction:column;gap:12px;margin-top:16px">
+                <sc-for list="{{ aiBlocks }}" as="b" hint-placeholder-count="3">
+                  <li style="{{ b.wrapStyle }}">
+                    <p style="font-size:13px;font-weight:800;letter-spacing:.02em;color:{{ b.color }}">{{ b.title }}</p>
+                    <p style="font-size:14.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:6px">{{ b.body }}</p>
+                  </li>
+                </sc-for>
+              </ul>
+              <sc-if value="{{ aiError }}" hint-placeholder-val="{{ false }}">
+                <button type="button" onClick="{{ retryAi }}" style="margin-top:12px;padding:10px 16px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:13.5px;font-weight:700;color:var(--frontend-primary,#0F4C81)">Try Again</button>
+              </sc-if>
+            </div>
+          </sc-if>
+
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:24px;padding-top:20px;border-top:1px solid var(--frontend-border-subtle,#EDF2F7)">
+            <button type="button" onClick="{{ prev }}" style="padding:13px 20px;border-radius:9px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;font-weight:600;color:var(--frontend-muted,#41505E)" style-hover="background:#F2F6FA">Previous Question</button>
+            <button type="button" onClick="{{ next }}" style="margin-left:auto;padding:13px 22px;border-radius:9px;border:0;background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);font-size:14.5px;font-weight:700" style-hover="background:var(--frontend-primary-hover,#0B3A63)">{{ nextLabel }}</button>
+          </div>
+        </div>
+
+      </div>
+      <div style="flex:0 0 240px;min-width:220px;position:sticky;top:84px;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:16px;max-height:640px;overflow-y:auto">
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Question navigator</p>
+        <ul style="display:flex;flex-direction:column;gap:6px;margin-top:12px;font-size:12px;color:var(--frontend-faint,#7A8899)">
+          <li style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--frontend-success,#2E7D32)"></span>Correct</li>
+          <li style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--frontend-error,#C62828)"></span>Incorrect</li>
+          <li style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--frontend-border-strong,#CFDCE9)"></span>Unattempted</li>
+          <li style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--frontend-surface,#FFFFFF);border:2px dashed var(--frontend-accent,#F57C00)"></span>Marked for review</li>
+        </ul>
+        <ul style="display:flex;flex-wrap:wrap;gap:7px;margin-top:14px">
+          <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="10">
+            <li><button type="button" onClick="{{ n.go }}" style="{{ n.style }}">{{ n.label }}</button></li>
+          </sc-for>
+        </ul>
+      </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isResult }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width:860px">
+        <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Test-Player.dc.html" hint-size="140px,32px"></dc-import>
+        <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">Test submitted</p>
+        <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(28px,3.4vw,40px);line-height:1.1;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:8px">{{ resultHeadline }}</h1>
+
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;background:var(--frontend-tint,#EEF4FA);border:1px solid var(--frontend-tint-border,#DCE7F2);border-radius:12px;padding:14px 16px;margin-top:20px">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-primary,#0F4C81)">Attempt summary</p>
+          <p style="font-size:16px;font-weight:800;color:var(--frontend-heading,#0F2B45)">{{ attemptedCount }} attempted <span style="color:var(--frontend-faint,#7A8899);font-weight:600">+</span> {{ skippedCount }} unattempted <span style="color:var(--frontend-faint,#7A8899);font-weight:600">of {{ total }}</span></p>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-top:16px">
+          <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:18px">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Score</p>
+            <p style="font-size:32px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:10px">{{ score }}</p>
+          </div>
+          <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:18px">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Attempted</p>
+            <p style="font-size:32px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:10px">{{ attemptedCount }}</p>
+          </div>
+          <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:18px">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Correct</p>
+            <p style="font-size:32px;font-weight:800;color:var(--frontend-success,#2E7D32);margin-top:10px">{{ correctCount }}</p>
+          </div>
+          <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:18px">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Incorrect</p>
+            <p style="font-size:32px;font-weight:800;color:var(--frontend-error,#C62828);margin-top:10px">{{ wrongCount }}</p>
+          </div>
+          <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:18px">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Unattempted</p>
+            <p style="font-size:32px;font-weight:800;color:var(--frontend-muted,#41505E);margin-top:10px">{{ skippedCount }}</p>
+          </div>
+          <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:14px;padding:18px">
+            <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Marked for review</p>
+            <p style="font-size:32px;font-weight:800;color:var(--frontend-warning,#B25E00);margin-top:10px">{{ markedCount }}</p>
+          </div>
+        </div>
+
+        <div style="margin-top:32px">
+          <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--frontend-accent-text,#A85400)">Detailed analysis</p>
+          <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(20px,2.2vw,25px);font-weight:700;color:var(--frontend-heading,#0F2B45);margin-top:6px">How you performed</h2>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:16px">
+            <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:12px;padding:14px">
+              <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Accuracy</p>
+              <p style="font-size:24px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:6px">{{ accuracyPct }}%</p>
+            </div>
+            <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:12px;padding:14px">
+              <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Percentage</p>
+              <p style="font-size:24px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:6px">{{ percentagePct }}%</p>
+            </div>
+            <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:12px;padding:14px">
+              <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Time Taken</p>
+              <p style="font-size:24px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:6px">{{ timeTakenStr }}</p>
+            </div>
+          </div>
+
+          <p style="font-size:13.5px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:24px">Subject-wise performance</p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+            <sc-for list="{{ subjectRows }}" as="sr" hint-placeholder-count="3">
+              <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:10px;padding:11px 14px">
+                <p style="font-size:14px;font-weight:700;color:var(--frontend-heading,#0F2B45)">{{ sr.subject }}</p>
+                <p style="font-size:13px;color:var(--frontend-muted,#41505E)">{{ sr.correct }} correct · {{ sr.incorrect }} incorrect · {{ sr.unattempted }} unattempted · {{ sr.accuracy }}% accuracy</p>
+              </div>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ hasTopicBreakdown }}" hint-placeholder-val="{{ false }}">
+            <p style="font-size:13.5px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:20px">Topic-wise performance</p>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+              <sc-for list="{{ topicRows }}" as="tp" hint-placeholder-count="3">
+                <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:10px;padding:11px 14px">
+                  <p style="font-size:14px;font-weight:700;color:var(--frontend-heading,#0F2B45)">{{ tp.topic }}</p>
+                  <p style="font-size:13px;color:var(--frontend-muted,#41505E)">{{ tp.correct }} correct · {{ tp.incorrect }} incorrect · {{ tp.unattempted }} unattempted · {{ tp.accuracy }}% accuracy</p>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <p style="font-size:13.5px;font-weight:800;color:var(--frontend-heading,#0F2B45);margin-top:20px">Question-wise performance</p>
+          <div style="overflow-x:auto;margin-top:10px;border:1px solid var(--frontend-border,#E3EAF2);border-radius:12px">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:560px">
+              <thead>
+                <tr style="background:var(--frontend-tint,#EEF4FA)">
+                  <th style="text-align:left;padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">#</th>
+                  <th style="text-align:left;padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Code</th>
+                  <th style="text-align:left;padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Your answer</th>
+                  <th style="text-align:left;padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Correct answer</th>
+                  <th style="text-align:left;padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Status</th>
+                  <th style="text-align:right;padding:10px 12px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--frontend-faint,#7A8899)">Marks</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ questionRows }}" as="qr" hint-placeholder-count="6">
+                  <tr style="border-top:1px solid var(--frontend-border-subtle,#EDF2F7)">
+                    <td style="padding:10px 12px;color:var(--frontend-muted,#41505E)">{{ qr.number }}</td>
+                    <td style="padding:10px 12px;font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11.5px;color:var(--frontend-faint,#7A8899)">{{ qr.code }}</td>
+                    <td style="padding:10px 12px;color:var(--frontend-text,#212529)">{{ qr.yourAnswer }}</td>
+                    <td style="padding:10px 12px;color:var(--frontend-text,#212529)">{{ qr.correctAnswer }}</td>
+                    <td style="padding:10px 12px;font-weight:700;color:{{ qr.statusColor }}">{{ qr.status }}</td>
+                    <td style="padding:10px 12px;text-align:right;font-weight:700;color:{{ qr.statusColor }}">{{ qr.marks }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:28px">
+          <button type="button" onClick="{{ startReview }}" style="display:inline-flex;align-items:center;gap:9px;padding:14px 22px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:15.5px;font-weight:700" style-hover="background:var(--frontend-primary-hover,#0B3A63)">
+            Question-wise review
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+          </button>
+          <a href="Student-Dashboard.dc.html" style="display:inline-flex;align-items:center;padding:14px 22px;border-radius:10px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:15.5px;font-weight:600;color:var(--frontend-primary,#0F4C81)" style-hover="background:#F2F6FA">Back to dashboard</a>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showMsgFab }}" hint-placeholder-val="{{ false }}">
+      <button type="button" onClick="{{ openMsgModal }}" aria-label="Message to Admin" title="Message to Admin" style="position:fixed;right:clamp(14px,3vw,24px);bottom:clamp(14px,3vw,24px);z-index:60;width:52px;height:52px;border-radius:50%;border:0;background:var(--frontend-primary,#0F4C81);color:#FFFFFF;display:flex;align-items:center;justify-content:center;box-shadow:0 10px 26px -8px rgba(15,43,69,.55)" style-hover="background:var(--frontend-primary-hover,#0B3A63)">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5z"></path></svg>
+      </button>
+    </sc-if>
+
+    <sc-if value="{{ showMsgModal }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;inset:0;z-index:70;background:rgba(15,43,69,.55);display:flex;align-items:center;justify-content:center;padding:24px">
+        <div style="width:100%;max-width:480px;background:var(--frontend-surface,#FFFFFF);border-radius:18px;padding:clamp(20px,3vw,28px);box-shadow:0 30px 70px -30px rgba(15,43,69,.6)">
+          <div style="display:flex;gap:12px;align-items:flex-start;justify-content:space-between">
+            <h2 style="font-size:20px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Message to Admin</h2>
+            <button type="button" onClick="{{ closeMsgModal }}" style="padding:6px;border:0;background:none;color:var(--frontend-faint,#7A8899);line-height:0">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
+            </button>
+          </div>
+          <p style="font-size:13.5px;color:var(--frontend-faint,#5C6B7A);margin-top:6px">{{ msgContext }}</p>
+          <sc-if value="{{ msgSent }}" hint-placeholder-val="{{ false }}">
+            <p style="display:flex;align-items:center;gap:9px;background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);border-radius:9px;padding:12px 13px;font-size:13.5px;font-weight:600;color:var(--frontend-success-text,#1E5620);margin-top:14px">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M4 12.5l5 5L20 6.5"></path></svg>
+              {{ msgSent }}
+            </p>
+            <button type="button" onClick="{{ closeMsgModal }}" style="margin-top:16px;width:100%;padding:13px 18px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:14.5px;font-weight:700">Close</button>
+          </sc-if>
+          <sc-if value="{{ msgIdle }}" hint-placeholder-val="{{ true }}">
+            <ul style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px">
+              <sc-for list="{{ msgCategories }}" as="m" hint-placeholder-count="6">
+                <li><button type="button" onClick="{{ m.click }}" style="{{ m.style }}">{{ m.label }}</button></li>
+              </sc-for>
+            </ul>
+            <textarea value="{{ msgText }}" onChange="{{ onMsgText }}" rows="4" placeholder="Describe your complaint, suggestion or feedback…" style="width:100%;margin-top:12px;padding:12px 13px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:14.5px;color:var(--frontend-text,#212529);resize:vertical"></textarea>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px">
+              <button type="button" onClick="{{ sendMsg }}" style="flex:1 1 160px;padding:13px 18px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:14.5px;font-weight:700">Send Message</button>
+              <button type="button" onClick="{{ closeMsgModal }}" style="flex:1 1 110px;padding:13px 18px;border-radius:10px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:14.5px;font-weight:600;color:var(--frontend-muted,#41505E)">Cancel</button>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+  </main>
+
+  <sc-if value="{{ showModeModal }}" hint-placeholder-val="{{ true }}">
+    <div style="position:fixed;inset:0;z-index:70;background:rgba(15,43,69,.55);display:flex;align-items:center;justify-content:center;padding:24px">
+      <div style="width:100%;max-width:560px;background:var(--frontend-surface,#FFFFFF);border-radius:18px;padding:clamp(22px,3vw,32px);box-shadow:0 30px 70px -30px rgba(15,43,69,.6)">
+        <h2 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(22px,2.6vw,29px);line-height:1.15;font-weight:700;letter-spacing:-.015em;color:var(--frontend-heading,#0F2B45)">How would you like to view answers?</h2>
+        <p style="font-size:14.5px;line-height:1.55;color:var(--frontend-faint,#7A8899);margin-top:10px">This choice stays active for the whole test session.</p>
+        <div style="display:flex;flex-direction:column;gap:12px;margin-top:22px">
+          <button type="button" onClick="{{ pickEach }}" style="{{ modeEachStyle }}">
+            <span style="{{ modeEachDot }}"></span>
+            <span style="flex:1 1 auto;min-width:0;text-align:left">
+              <span style="display:block;font-size:16px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Show Answer After Each Question</span>
+              <span style="display:block;font-size:13.5px;line-height:1.5;color:var(--frontend-muted,#41505E);margin-top:5px">View the correct answer and explanation immediately after submitting each question.</span>
+            </span>
+          </button>
+          <button type="button" onClick="{{ pickEnd }}" style="{{ modeEndStyle }}">
+            <span style="{{ modeEndDot }}"></span>
+            <span style="flex:1 1 auto;min-width:0;text-align:left">
+              <span style="display:block;font-size:16px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Show Answers After Test Submission</span>
+              <span style="display:block;font-size:13.5px;line-height:1.5;color:var(--frontend-muted,#41505E);margin-top:5px">Complete the entire test first and review all answers after submission.</span>
+            </span>
+          </button>
+        </div>
+        <button type="button" onClick="{{ continueToTest }}" style="width:100%;display:flex;align-items:center;justify-content:center;gap:9px;padding:15px 20px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:16px;font-weight:700;margin-top:22px" style-hover="background:var(--frontend-primary-hover,#0B3A63)">
+          Continue to Test
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 5l7 7-7 7"></path></svg>
+        </button>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showReport }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:70;background:rgba(15,43,69,.55);display:flex;align-items:center;justify-content:center;padding:24px">
+      <div style="width:100%;max-width:520px;max-height:86vh;overflow-y:auto;background:var(--frontend-surface,#FFFFFF);border-radius:18px;padding:clamp(20px,3vw,28px);box-shadow:0 30px 70px -30px rgba(15,43,69,.6)">
+        <div style="display:flex;gap:12px;align-items:flex-start;justify-content:space-between">
+          <h2 style="font-size:21px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Report Question</h2>
+          <button type="button" onClick="{{ closeReport }}" style="padding:6px;border:0;background:none;color:var(--frontend-faint,#7A8899);line-height:0" style-hover="color:var(--frontend-text,#212529)">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
+          </button>
+        </div>
+        <ul style="display:flex;flex-direction:column;gap:7px;background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:11px;padding:13px;margin-top:16px">
+          <sc-for list="{{ queryContext }}" as="c" hint-placeholder-count="6">
+            <li style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;font-size:13px">
+              <span style="color:var(--frontend-faint,#5C6B7A)">{{ c.label }}</span>
+              <span style="font-weight:700;color:var(--frontend-text,#212529);text-align:right">{{ c.value }}</span>
+            </li>
+          </sc-for>
+        </ul>
+        <p style="font-size:12px;line-height:1.5;color:var(--frontend-faint,#5C6B7A);margin-top:8px">Captured automatically — you do not need to type any question, exam or test details.</p>
+        <p style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E);margin-top:18px">Query type</p>
+        <ul style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+          <sc-for list="{{ reasons }}" as="r" hint-placeholder-count="7">
+            <li><button type="button" onClick="{{ r.pick }}" style="{{ r.style }}"><span style="{{ r.dot }}"></span>{{ r.label }}</button></li>
+          </sc-for>
+        </ul>
+        <p style="font-size:14px;color:var(--frontend-muted,#41505E);background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:9px;padding:11px 13px;margin-top:16px">Your Answer: <span style="font-weight:800;color:var(--frontend-text,#212529)">{{ yourAnswer }}</span> · Question {{ qNumber }}</p>
+        <p style="font-size:13.5px;font-weight:700;color:var(--frontend-muted,#41505E);margin-top:16px">Your message</p>
+        <textarea value="{{ reportComment }}" onChange="{{ onComment }}" rows="3" placeholder="Optional — tell us what looks wrong" style="width:100%;margin-top:8px;padding:12px 13px;border:1px solid var(--frontend-border-strong,#CFDCE9);border-radius:9px;background:var(--frontend-background,#F6F9FC);font-size:14.5px;color:var(--frontend-text,#212529);resize:vertical"></textarea>
+        <sc-if value="{{ reportSent }}" hint-placeholder-val="{{ false }}">
+          <p style="display:flex;align-items:center;gap:9px;background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);border-radius:9px;padding:12px 13px;font-size:13.5px;font-weight:600;color:var(--frontend-success-text,#1E5620);margin-top:14px">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M4 12.5l5 5L20 6.5"></path></svg>
+            {{ reportSent }}
+          </p>
+        </sc-if>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:18px">
+          <button type="button" onClick="{{ submitReport }}" style="flex:1 1 170px;padding:14px 20px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:15.5px;font-weight:700" style-hover="background:var(--frontend-primary-hover,#0B3A63)">Submit Query</button>
+          <button type="button" onClick="{{ closeReport }}" style="flex:1 1 110px;padding:14px 20px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:15.5px;font-weight:600;color:var(--frontend-muted,#41505E)" style-hover="background:var(--frontend-tint,#EEF4FA)">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showSubmitConfirm }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:70;background:rgba(15,43,69,.55);display:flex;align-items:center;justify-content:center;padding:24px">
+      <div style="width:100%;max-width:440px;background:var(--frontend-surface,#FFFFFF);border-radius:18px;padding:clamp(20px,3vw,28px);box-shadow:0 30px 70px -30px rgba(15,43,69,.6)">
+        <h2 style="font-size:21px;font-weight:800;color:var(--frontend-heading,#0F2B45)">Submit this test?</h2>
+        <p style="font-size:14.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:10px">{{ submitSummary }}</p>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:20px">
+          <button type="button" onClick="{{ confirmSubmit }}" style="flex:1 1 150px;padding:14px 18px;border-radius:var(--frontend-btn-radius,10px);border:0;background:var(--frontend-btn-primary-bg,var(--frontend-primary,#0F4C81));color:var(--frontend-btn-primary-text,#FFFFFF);font-size:15px;font-weight:700" style-hover="background:var(--frontend-primary-hover,#0B3A63)">Submit test</button>
+          <button type="button" onClick="{{ cancelSubmit }}" style="flex:1 1 120px;padding:14px 18px;border-radius:10px;border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);font-size:15px;font-weight:600;color:var(--frontend-muted,#41505E)" style-hover="background:#F2F6FA">Keep testing</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <footer style="background:var(--frontend-surface,#FFFFFF);border-top:1px solid var(--frontend-border,#E3EAF2);padding:18px 0">
+    <div style="max-width:1200px;margin:0 auto;padding:0 24px;display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;justify-content:space-between">
+      <p style="font-size:13px;color:var(--frontend-placeholder,#9AA7B4)">© 2026 MockTestSeries.in</p>
+      <p style="font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12px;color:var(--frontend-placeholder,#9AA7B4)">{{ modeBadge }}</p>
+    </div>
+  </footer>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:900}}">
+let QUESTIONS = [
+  {
+    subject: "Pharmacology",
+    stem: "Which of the following is the drug of choice for status epilepticus in the emergency setting?",
+    options: { A: "Phenytoin", B: "Lorazepam", C: "Valproate", D: "Levetiracetam" },
+    correct: "B",
+    explanation: "Status epilepticus needs a drug that reaches the brain fast and stops seizure activity. Benzodiazepines enhance GABA-A mediated inhibition within minutes, which is why they are first-line before any long-acting anti-epileptic is loaded.",
+    notes: {
+      A: "Phenytoin is a second-line loading agent — slow infusion, risk of hypotension and arrhythmia, so it does not abort the seizure fast enough.",
+      B: "Lorazepam is correct: rapid onset plus a longer anticonvulsant duration than diazepam because of lower lipid solubility and slower redistribution.",
+      C: "Valproate is an accepted second-line option after benzodiazepine failure, not the initial drug of choice.",
+      D: "Levetiracetam is also second-line; useful when phenytoin is contraindicated, but not first."
+    },
+    pearl: "Benzodiazepine first, always. Then load the anti-epileptic.",
+    concept: "First-line management of status epilepticus",
+    variations: [
+      { pattern: "Clinical Case Based", text: "A 24-year-old is brought in with continuous generalised tonic-clonic seizures for 8 minutes. IV access is secured. What should be given first?", answer: "IV lorazepam" },
+      { pattern: "Negative Question", text: "All of the following are second-line agents in status epilepticus EXCEPT:", answer: "Lorazepam" },
+      { pattern: "Assertion–Reason", text: "Assertion: Lorazepam is preferred over diazepam in status epilepticus. Reason: Lorazepam has a longer duration of anticonvulsant action.", answer: "Both true, reason explains assertion" }
+    ]
+  },
+  {
+    subject: "Community Medicine",
+    stem: "In a screening programme for a disease with very low prevalence, which value is most affected?",
+    options: { A: "Sensitivity", B: "Specificity", C: "Positive predictive value", D: "Negative predictive value" },
+    correct: "C",
+    explanation: "Sensitivity and specificity are properties of the test itself and stay stable across populations. Predictive values depend on prevalence: as prevalence falls, more of the positives are false positives, so PPV drops sharply while NPV stays high.",
+    notes: {
+      A: "Sensitivity is intrinsic to the test and does not change with prevalence.",
+      B: "Specificity is likewise a property of the test, independent of prevalence.",
+      C: "Correct — low prevalence means a larger share of positive results are false positives, so positive predictive value falls.",
+      D: "NPV actually rises when prevalence is low, so it is not the value most compromised."
+    },
+    pearl: "Sensitivity and specificity are test properties; predictive values are population properties.",
+    concept: "Effect of prevalence on predictive values",
+    variations: [
+      { pattern: "Statement Based", text: "Which statement is true when a test is applied to a low-prevalence population?", answer: "PPV decreases, NPV increases" },
+      { pattern: "Application Based", text: "A test with 95% sensitivity and 95% specificity is used where prevalence is 1 per 1000. Roughly what proportion of positives are true positives?", answer: "About 2%" }
+    ]
+  },
+  {
+    subject: "General Surgery",
+    stem: "A 45-year-old presents with sudden severe epigastric pain and board-like rigidity. Erect chest X-ray shows free gas under the diaphragm. Next best step?",
+    options: { A: "Urgent laparotomy", B: "CT abdomen with contrast", C: "Upper GI endoscopy", D: "Conservative management with antibiotics" },
+    correct: "A",
+    explanation: "Free gas under the diaphragm with peritonitis indicates a perforated viscus. Once the clinical and radiological diagnosis is established, further imaging only delays definitive treatment — resuscitation and urgent laparotomy are indicated.",
+    notes: {
+      A: "Correct — pneumoperitoneum plus peritonitis is an indication for urgent surgical exploration after resuscitation.",
+      B: "CT adds little when perforation is already confirmed and delays theatre.",
+      C: "Endoscopy is contraindicated in suspected perforation; insufflation worsens the leak.",
+      D: "Non-operative management is reserved for very selected sealed perforations without generalised peritonitis."
+    },
+    pearl: "Pneumoperitoneum + peritonitis = theatre, not more imaging.",
+    concept: "Management of perforated peptic ulcer",
+    variations: [
+      { pattern: "Best Answer", text: "Which single finding most strongly mandates immediate laparotomy in acute abdomen?", answer: "Free gas with generalised peritonitis" },
+      { pattern: "Exam-Trap Question", text: "Which investigation is contraindicated in suspected hollow viscus perforation?", answer: "Upper GI endoscopy" }
+    ]
+  }
+];
+
+let TEST_META = { name: "Full Mock Test 10", exam: "RUHS Medical Officer 2026", examId: "RUHS-MO-2024", attemptId: null, timed: true, durationSeconds: null };
+
+// A pending Custom Module attempt (frozen question set from the real Question Bank,
+// built by Student-Custom-Module/Subject-Test/Old-Test-Series/Free-Sample) takes over the
+// question set for this session. Only the built-in demo route (no pendingId at all) uses the
+// generic seed QUESTIONS below — a pendingId that fails to resolve is a real error and must
+// surface as one (LOAD_ERROR), never silently render the unrelated generic set.
+let LOAD_ERROR = null;
+(function loadCustomAttempt() {
+  const CM = window.MTS && window.MTS.CustomModules;
+  if (!CM) return;
+  const pendingId = CM.getPendingAttempt();
+  if (!pendingId) return;
+  const attempt = CM.getAttempt(pendingId);
+  if (!attempt || !attempt.questions || !attempt.questions.length) {
+    LOAD_ERROR = "This test could not be loaded. The selected paper/attempt has no questions mapped. Please go back and try again.";
+    return;
+  }
+  // Defensive scope check: every question in a frozen attempt must belong to the attempt's
+  // own exam — a single mismatched row means the pool this attempt was built from was wrong,
+  // and we refuse to start rather than silently mixing another exam's/paper's questions in.
+  const scopeOk = attempt.questions.every(q => !attempt.examId || !q.examId || q.examId === attempt.examId);
+  if (!scopeOk) {
+    LOAD_ERROR = "This test's question set failed a scope check (cross-exam mismatch) and was blocked from starting. Please report this to Admin.";
+    return;
+  }
+  QUESTIONS = attempt.questions.map(q => {
+    const note = (k) => k === q.correctAnswer ? (q.explanation || "This is the correct answer.") : "Not the correct answer. " + (q.explanation || "");
+    return {
+      id: q.id, code: q.code, subject: q.subject,
+      stem: q.question, options: { A: q.optionA, B: q.optionB, C: q.optionC, D: q.optionD },
+      correct: q.correctAnswer, concept: q.topic || q.subject,
+      explanation: q.explanation || "Explanation not available for this question yet.",
+      notes: { A: note("A"), B: note("B"), C: note("C"), D: note("D") },
+      pearl: "", variations: []
+    };
+  });
+  TEST_META = {
+    name: attempt.label || ("Custom Test · " + attempt.subjects.join(", ")),
+    exam: attempt.examName, examId: attempt.examId, attemptId: attempt.id,
+    // 1 minute per selected question when timed, per the Custom Module's own configuration —
+    // never the exam's default duration. Untimed attempts run no countdown at all.
+    timed: attempt.timed !== false,
+    durationSeconds: attempt.timed !== false ? (attempt.durationMinutes || attempt.questions.length) * 60 : null
+  };
+})();
+
+const QUERY_TYPES = ["Wrong Answer", "Incorrect Question", "Typing/Error", "Explanation Issue", "Other"];
+const AI_TABS = ["Full Explanation", "Why A?", "Why B?", "Why C?", "Why D?", "How Else Can This Be Asked?", "Generate Similar Questions"];
+
+class Component extends DCLogic {
+  state = {
+    view: "test",
+    modeModal: true,
+    mode: "each",
+    idx: 0,
+    answers: {},
+    locked: {},
+    saved: {},
+    marked: {},
+    seconds: TEST_META.durationSeconds != null ? TEST_META.durationSeconds : 7200,
+    reportOpen: false,
+    reason: "",
+    comment: "",
+    reportSent: "",
+    aiOpen: false,
+    aiTab: "Full Explanation",
+    level: "Similar",
+    submitConfirm: false,
+    testId: "test-" + Date.now(),
+    recorded: false,
+    msgCategory: "",
+    msgText: "",
+    msgSent: "",
+    showMsgModal: false,
+    aiRecord: null,
+    aiVariants: [],
+    aiLoading: false,
+    status: "IN_PROGRESS"
+  };
+
+  componentDidMount() {
+    const CM = window.MTS && window.MTS.CustomModules;
+    let sessionId = null;
+    try { sessionId = new URLSearchParams(window.location.search).get("attempt"); } catch (e) {}
+    if (!sessionId && TEST_META.attemptId) sessionId = TEST_META.attemptId;
+    if (!sessionId) sessionId = "sess-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("attempt", sessionId);
+      window.history.replaceState(null, "", url.toString());
+    } catch (e) {}
+    this.sessionKey = "mts.testSession." + sessionId;
+
+    // A submitted attempt is a permanent state. It is looked up two ways so refresh,
+    // back/forward nav, and re-opening from history all land read-only: first the
+    // durable attempt record (survives even if this browser's session cache is empty),
+    // then this session's own local cache (keeps idx/marked/saved UI state on refresh).
+    const cmAttempt = CM && TEST_META.attemptId ? CM.getAttempt(TEST_META.attemptId) : null;
+    let sessionCache = null;
+    try { const raw = window.localStorage.getItem(this.sessionKey); sessionCache = raw ? JSON.parse(raw) : null; } catch (e) {}
+
+    if (cmAttempt && cmAttempt.status === "submitted") {
+      const answers = {};
+      (cmAttempt.perQuestion || []).forEach((p, i) => { if (p.studentAnswer) answers[i] = p.studentAnswer; });
+      this.setState(Object.assign({}, sessionCache || {}, {
+        testId: sessionId, status: "SUBMITTED", view: "result", modeModal: false, recorded: true,
+        answers: (sessionCache && sessionCache.answers) || answers, aiOpen: false, submitConfirm: false, showMsgModal: false
+      }));
+      return;
+    }
+    if (sessionCache && sessionCache.status === "SUBMITTED") {
+      this.setState(Object.assign({}, sessionCache, { testId: sessionId, aiOpen: false, submitConfirm: false, showMsgModal: false }));
+      return;
+    }
+    if (sessionCache) {
+      this.setState(Object.assign({}, sessionCache, { testId: sessionId, aiOpen: false, submitConfirm: false, showMsgModal: false }));
+      this.startTimer();
+      return;
+    }
+    this.setState({ testId: sessionId });
+    this.startTimer();
+  }
+  startTimer() {
+    if (TEST_META.timed === false) return; // Untimed sessions never run a countdown or auto-submit.
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      if (this.state.status !== "IN_PROGRESS") { clearInterval(this.timer); this.timer = null; return; }
+      if (this.state.seconds <= 1) {
+        clearInterval(this.timer); this.timer = null;
+        this.setState({ seconds: 0 }, () => this.submitNow());
+        return;
+      }
+      this.setState(p => ({ seconds: p.seconds - 1 }));
+    }, 1000);
+  }
+  submitNow() {
+    if (this.state.status === "SUBMITTED") { this.setState({ submitConfirm: false, view: "result" }); return; }
+    const stats = this.scored();
+    const D = window.MTS && window.MTS.StudentData;
+    const CM = window.MTS && window.MTS.CustomModules;
+    if (D && !this.state.recorded) {
+      const totalDuration = TEST_META.timed === false ? 0 : (TEST_META.durationSeconds != null ? TEST_META.durationSeconds : 7200);
+      const timeTaken = totalDuration - this.state.seconds;
+      const scorePct = Math.round((stats.correct / QUESTIONS.length) * 100);
+      D.recordTestCompletion({
+        id: this.state.testId, name: TEST_META.name, exam: TEST_META.exam,
+        date: new Date().toISOString().slice(0, 10), total: QUESTIONS.length,
+        attempted: stats.correct + stats.wrong, correct: stats.correct, incorrect: stats.wrong, skipped: stats.skipped,
+        score: scorePct, accuracy: (stats.correct + stats.wrong) > 0 ? Math.round((stats.correct / (stats.correct + stats.wrong)) * 100) : 0,
+        timeTaken
+      });
+      if (CM && TEST_META.attemptId) {
+        const perQuestion = QUESTIONS.map((qq, i) => ({
+          questionId: qq.id, code: qq.code, subject: qq.subject,
+          studentAnswer: this.state.answers[i] || null, correctAnswer: qq.correct,
+          isCorrect: this.state.answers[i] === qq.correct
+        }));
+        CM.submitAttempt(TEST_META.attemptId, perQuestion);
+        CM.clearPendingAttempt();
+      }
+    }
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    this.setState({ submitConfirm: false, status: "SUBMITTED", view: "result", aiOpen: false, recorded: true });
+  }
+  componentWillUnmount() { if (this.timer) clearInterval(this.timer); }
+  componentDidUpdate() { this.persistSession(); }
+  persistSession() {
+    if (!this.sessionKey) return;
+    const s = this.state;
+    try {
+      window.localStorage.setItem(this.sessionKey, JSON.stringify({
+        status: s.status, view: s.view, idx: s.idx, answers: s.answers, marked: s.marked, saved: s.saved,
+        seconds: s.seconds, mode: s.mode, modeModal: false, recorded: s.recorded, testId: s.testId
+      }));
+    } catch (e) {}
+  }
+
+  optBase(active) {
+    return "width:100%;display:flex;align-items:center;gap:12px;padding:14px 15px;border-radius:11px;font-size:15.5px;text-align:left;" +
+      (active ? "border:1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-heading,#0F2B45);font-weight:700;"
+              : "border:1px solid var(--frontend-border,#E3EAF2);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);font-weight:500;");
+  }
+  keyChip(kind) {
+    const base = "width:27px;height:27px;flex:none;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:12.5px;font-weight:600;";
+    if (kind === "correct") return base + "background:var(--frontend-success,#2E7D32);color:var(--frontend-on-brand,#FFFFFF);";
+    if (kind === "wrong") return base + "background:var(--frontend-error,#C62828);color:var(--frontend-on-brand,#FFFFFF);";
+    if (kind === "active") return base + "background:var(--frontend-primary,#0F4C81);color:var(--frontend-on-brand,#FFFFFF);";
+    return base + "border:1px solid var(--frontend-border-strong,#CFDCE9);color:var(--frontend-faint,#7A8899);";
+  }
+  pill(active) {
+    return "padding:9px 13px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;" +
+      (active ? "border:1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-primary,#0F4C81);"
+              : "border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);");
+  }
+  radioRow(active) {
+    return "width:100%;display:flex;align-items:center;gap:11px;padding:12px 13px;border-radius:10px;font-size:14.5px;font-weight:600;text-align:left;" +
+      (active ? "border:1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-heading,#0F2B45);"
+              : "border:1px solid var(--frontend-border,#E3EAF2);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);");
+  }
+  dot(active) {
+    return "width:16px;height:16px;flex:none;border-radius:50%;border:" +
+      (active ? "5px solid var(--frontend-primary,#0F4C81)" : "1.5px solid var(--frontend-border-strong,#CFDCE9)") + ";background:var(--frontend-surface,#FFFFFF);";
+  }
+
+  scored() {
+    let correct = 0, wrong = 0, skipped = 0;
+    QUESTIONS.forEach((q, i) => {
+      const a = this.state.answers[i];
+      if (!a) skipped++;
+      else if (a === q.correct) correct++;
+      else wrong++;
+    });
+    return { correct, wrong, skipped };
+  }
+
+  loadAi() {
+    const AI = window.MTS && window.MTS.AI;
+    if (!AI) { this.setState({ aiRecord: null, aiVariants: [] }); return; }
+    const s = this.state;
+    const q = QUESTIONS[s.idx];
+    const keys = ["A", "B", "C", "D"];
+    const qid = q.code || ("RUHS-MO-2024-Q0" + String(14 + s.idx).padStart(3, "0"));
+    const qObj = Object.assign({}, q, { id: q.id || qid, code: qid, examId: TEST_META.examId, examName: TEST_META.exam });
+    const profile = window.MTS && window.MTS.StudentData ? window.MTS.StudentData.getProfile() : null;
+    const usageCtx = {
+      studentId: profile ? profile.id : "guest",
+      studentName: profile ? profile.basicDetails.name : "Guest",
+      examId: qObj.examId, examName: qObj.examName, subject: qObj.subject
+    };
+    const record = AI.getOrGenerateSolution(qObj, qq => ({
+      explanation: qq.explanation,
+      optionAnalysis: keys.reduce((acc, k) => { acc[k] = qq.notes[k]; return acc; }, {}),
+      memoryTrick: qq.pearl
+    }), usageCtx);
+    const variants = AI.getOrGenerateVariants(qObj, qq => qq.variations.map(v => ({ pattern: v.pattern, text: v.text, answer: v.answer })), usageCtx);
+    this.setState({ aiRecord: record, aiVariants: variants });
+  }
+
+  goto(i) {
+    if (this.state.status === "SUBMITTED") { this.setState({ idx: Math.max(0, Math.min(i, QUESTIONS.length - 1)), aiOpen: false }); return; }
+    const last = QUESTIONS.length - 1;
+    if (i > last) {
+      if (this.state.mode === "each") { this.setState({ submitConfirm: true }); return; }
+      this.setState({ submitConfirm: true });
+      return;
+    }
+    this.setState({ idx: Math.max(0, i), view: this.state.view === "review" && this.state.mode === "each" ? "test" : this.state.view, aiOpen: false });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const q = QUESTIONS[s.idx];
+    const keys = ["A", "B", "C", "D"];
+    const answered = s.answers[s.idx];
+    const isReview = s.view === "review";
+    const mm = String(Math.floor(s.seconds / 60)).padStart(2, "0");
+    const ss = String(s.seconds % 60).padStart(2, "0");
+    const stats = this.scored();
+
+    // Detailed Analysis — reuses the same per-question answers/QUESTIONS data as the
+    // score/review views (no second calculation engine, no fabricated numbers).
+    const AT = window.MTS && window.MTS.AdminTests;
+    const testCfg = AT ? AT.all().find(t => t.name === TEST_META.name) : null;
+    const negMark = testCfg ? testCfg.negativeMarking : 0;
+    const TOTAL_SECONDS = TEST_META.timed === false ? 0 : (TEST_META.durationSeconds != null ? TEST_META.durationSeconds : 7200);
+    const timeTakenSec = TOTAL_SECONDS - s.seconds;
+    const timeTakenStr = String(Math.floor(timeTakenSec / 60)).padStart(2, "0") + "m " + String(timeTakenSec % 60).padStart(2, "0") + "s";
+    const attempted = stats.correct + stats.wrong;
+
+    const bySubject = {};
+    QUESTIONS.forEach((qq, i) => {
+      const key = qq.subject || "General";
+      const row = bySubject[key] || (bySubject[key] = { subject: key, correct: 0, incorrect: 0, unattempted: 0 });
+      const a = s.answers[i];
+      if (!a) row.unattempted++; else if (a === qq.correct) row.correct++; else row.incorrect++;
+    });
+    const subjectRows = Object.values(bySubject).map(r => ({ ...r, accuracy: (r.correct + r.incorrect) ? Math.round(r.correct / (r.correct + r.incorrect) * 100) : 0 }));
+
+    const byTopic = {};
+    QUESTIONS.forEach((qq, i) => {
+      const key = qq.concept || qq.topic || qq.subject || "General";
+      const row = byTopic[key] || (byTopic[key] = { topic: key, correct: 0, incorrect: 0, unattempted: 0 });
+      const a = s.answers[i];
+      if (!a) row.unattempted++; else if (a === qq.correct) row.correct++; else row.incorrect++;
+    });
+    const topicRows = Object.values(byTopic).map(r => ({ ...r, accuracy: (r.correct + r.incorrect) ? Math.round(r.correct / (r.correct + r.incorrect) * 100) : 0 }));
+    const hasTopicBreakdown = topicRows.length > 1 || (topicRows.length === 1 && topicRows[0].topic !== subjectRows[0].subject);
+
+    const questionRows = QUESTIONS.map((qq, i) => {
+      const a = s.answers[i];
+      const status = !a ? "Unattempted" : (a === qq.correct ? "Correct" : "Incorrect");
+      const marksNum = !a ? 0 : (a === qq.correct ? 1 : -negMark);
+      const statusColor = status === "Correct" ? "var(--frontend-success,#2E7D32)" : status === "Incorrect" ? "var(--frontend-error,#C62828)" : "var(--frontend-muted,#41505E)";
+      return {
+        number: i + 1, code: qq.code || ("Q" + String(i + 1).padStart(3, "0")),
+        yourAnswer: a ? a + ". " + qq.options[a] : "Not attempted",
+        correctAnswer: qq.correct + ". " + qq.options[qq.correct],
+        status, marks: marksNum > 0 ? "+" + marksNum : String(marksNum), statusColor
+      };
+    });
+
+    const options = keys.map(k => ({
+      key: k, text: q.options[k],
+      style: this.optBase(answered === k),
+      keyStyle: this.keyChip(answered === k ? "active" : "idle"),
+      pick: () => this.setState(p => ({ answers: Object.assign({}, p.answers, { [p.idx]: k }) }))
+    }));
+
+    const reviewOptions = keys.map(k => {
+      const isCorrect = k === q.correct;
+      const isYours = answered === k;
+      let style = "display:flex;align-items:center;gap:12px;padding:13px 15px;border-radius:11px;font-size:15px;";
+      let tag = "", tagColor = "var(--frontend-faint,#7A8899)", kind = "idle";
+      if (isCorrect) { style += "border:1.5px solid var(--frontend-success,#2E7D32);background:var(--frontend-success-tint,#EEF7EE);color:var(--frontend-success-text,#1E5620);font-weight:700;"; tag = "Correct"; tagColor = "var(--frontend-success-text,#1E5620)"; kind = "correct"; }
+      else if (isYours) { style += "border:1.5px solid var(--frontend-error,#C62828);background:var(--frontend-error-tint,#FDEDED);color:var(--frontend-error-text,#8A2020);font-weight:700;"; tag = "Your answer"; tagColor = "var(--frontend-error-text,#8A2020)"; kind = "wrong"; }
+      else { style += "border:1px solid var(--frontend-border,#E3EAF2);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);"; }
+      return { key: k, text: q.options[k], style, keyStyle: this.keyChip(kind), tag, tagColor };
+    });
+
+    const optionNotes = keys.map(k => ({
+      title: k === q.correct ? "Why " + k + " is correct?" : "Why not " + k + "?",
+      body: q.notes[k],
+      color: k === q.correct ? "var(--frontend-success,#2E7D32)" : "var(--frontend-error,#C62828)"
+    }));
+
+    const navItems = QUESTIONS.map((qq, i) => {
+      const a = s.answers[i];
+      let bg = "var(--frontend-surface,#FFFFFF)", bd = "var(--frontend-border-strong,#CFDCE9)", col = "var(--frontend-muted,#41505E)";
+      if (isReview || s.view === "result") {
+        if (!a) { bg = "#F1F5F9"; bd = "var(--frontend-border-strong,#CFDCE9)"; }
+        else if (a === qq.correct) { bg = "var(--frontend-success,#2E7D32)"; bd = "var(--frontend-success,#2E7D32)"; col = "var(--frontend-surface,#FFFFFF)"; }
+        else { bg = "var(--frontend-error,#C62828)"; bd = "var(--frontend-error,#C62828)"; col = "var(--frontend-surface,#FFFFFF)"; }
+      } else if (a) { bg = "var(--frontend-tint,#EEF4FA)"; bd = "var(--frontend-primary,#0F4C81)"; col = "var(--frontend-primary,#0F4C81)"; }
+      const active = i === s.idx;
+      let border = active ? "2px solid var(--frontend-primary,#0F4C81)" : "1px solid " + bd;
+      if (s.marked[i] && !active) border = "2px dashed var(--frontend-accent,#F57C00)";
+      return {
+        label: String(i + 1),
+        style: "width:36px;height:36px;border-radius:9px;font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:13px;font-weight:600;background:" + bg +
+          ";border:" + border + ";color:" + col + ";",
+        go: () => this.setState({ idx: i, aiOpen: false })
+      };
+    });
+
+    // AI panel content
+    const tab = s.aiTab;
+    let aiBlocks = [], aiTitle = tab;
+    const blockWrap = "background:var(--frontend-background,#F6F9FC);border:1px solid var(--frontend-border,#E3EAF2);border-radius:11px;padding:14px;";
+    if (tab === "Full Explanation") {
+      const rec = s.aiRecord;
+      if (!rec) {
+        aiTitle = "AI explanation unavailable";
+        aiBlocks = [{ title: "COULD NOT GENERATE", body: "AI explanation could not be generated. Please try again.", color: "var(--frontend-error,#C62828)", wrapStyle: blockWrap }];
+      } else {
+        aiBlocks = [
+          { title: "WHAT THIS QUESTION TESTS", body: q.concept, color: "var(--frontend-primary,#0F4C81)", wrapStyle: blockWrap },
+          { title: "CORRECT ANSWER", body: q.correct + ". " + q.options[q.correct], color: "var(--frontend-success,#2E7D32)", wrapStyle: blockWrap },
+          { title: "REASONING", body: rec.explanation, color: "var(--frontend-primary,#0F4C81)", wrapStyle: blockWrap },
+          { title: "COMMON TRAP", body: rec.optionAnalysis[keys.find(k => k !== q.correct)], color: "var(--frontend-error,#C62828)", wrapStyle: blockWrap },
+          { title: "MEMORY TRICK / QUICK RECALL", body: rec.memoryTrick, color: "var(--frontend-warning,#B25E00)", wrapStyle: "background:var(--frontend-warning-tint,#FFF6EC);border:1px solid var(--frontend-warning-border,#F8DDBE);border-radius:11px;padding:14px;" }
+        ];
+      }
+    } else if (tab.indexOf("Why ") === 0) {
+      const k = tab.charAt(4);
+      aiTitle = k === q.correct ? "Why " + k + " is correct" : "Why " + k + " is incorrect";
+      aiBlocks = [
+        { title: k + ". " + q.options[k], body: q.notes[k], color: k === q.correct ? "var(--frontend-success,#2E7D32)" : "var(--frontend-error,#C62828)", wrapStyle: blockWrap },
+        { title: "CONCEPT BEHIND IT", body: q.concept + " — " + q.pearl, color: "var(--frontend-primary,#0F4C81)", wrapStyle: blockWrap }
+      ];
+    } else if (tab === "How Else Can This Be Asked?") {
+      aiTitle = "Same concept, other question patterns";
+      aiBlocks = (q.variations && q.variations.length) ? q.variations.map(v => ({
+        title: v.pattern.toUpperCase(), body: v.text + "  ▸ Answer: " + v.answer, color: "var(--frontend-primary,#0F4C81)", wrapStyle: blockWrap
+      })) : [{ title: "NOT AVAILABLE", body: "No pre-built variations for this question yet.", color: "var(--frontend-faint,#7A8899)", wrapStyle: blockWrap }];
+    } else if (tab === "Generate Similar Questions") {
+      aiTitle = "AI generated variations · max 5 per question";
+      const variants = s.aiVariants || [];
+      aiBlocks = variants.length ? variants.map((v, i) => ({
+        title: "AI-GENERATED VARIANT " + (i + 1) + " — " + v.pattern.toUpperCase(),
+        body: v.text + "  ▸ Correct answer: " + v.answer,
+        color: "var(--frontend-primary,#0F4C81)", wrapStyle: "background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-tint-border,#DCE7F2);border-radius:11px;padding:14px;"
+      })) : [{ title: "NO VARIANTS YET", body: "AI explanation is temporarily unavailable. Please try again later.", color: "var(--frontend-error,#C62828)", wrapStyle: blockWrap }];
+    }
+
+    return {
+      testLabel: TEST_META.name + " · " + QUESTIONS.length + " questions",
+      examName: TEST_META.exam,
+      clock: mm + ":" + ss,
+      progressPct: Math.round(((s.idx + 1) / QUESTIONS.length) * 100) + "%",
+      total: QUESTIONS.length,
+      qNumber: String(s.idx + 1).padStart(2, "0"),
+      subject: q.subject,
+      stem: q.stem,
+      explanation: q.explanation,
+      pearl: q.pearl,
+      options, reviewOptions, optionNotes, navItems,
+      hasLoadError: !!LOAD_ERROR,
+      loadErrorMsg: LOAD_ERROR || "",
+      isTest: s.view === "test" && !LOAD_ERROR,
+      isReview: isReview && !LOAD_ERROR,
+      isResult: s.view === "result" && !LOAD_ERROR,
+      isActive: s.status === "IN_PROGRESS",
+      isSubmitted: s.status === "SUBMITTED",
+      showClock: s.status === "IN_PROGRESS" && TEST_META.timed !== false,
+      showUntimedBadge: s.status === "IN_PROGRESS" && TEST_META.timed === false,
+      showModeModal: s.modeModal && s.status !== "SUBMITTED",
+      showReport: s.reportOpen,
+      showSubmitConfirm: s.submitConfirm && s.status !== "SUBMITTED",
+      aiOpen: s.aiOpen,
+      aiLoading: s.aiLoading,
+      eyeLabel: s.aiOpen ? "👁 Hide Explanation" : "👁 View Explanation",
+      eyeButtonStyle: "display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;font-size:12.5px;font-weight:700;" +
+        (s.aiOpen ? "border:1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-primary,#0F4C81);" : "border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);"),
+      aiError: s.aiOpen && !s.aiLoading && s.aiTab === "Full Explanation" && !s.aiRecord,
+      retryAi: () => { this.setState({ aiLoading: true }); setTimeout(() => { this.loadAi(); this.setState({ aiLoading: false }); }, 300); },
+      aiTabs: AI_TABS.map(label => ({ label, style: this.pill(s.aiTab === label), select: () => this.setState({ aiTab: label }) })),
+      aiTitle, aiBlocks,
+      reasons: QUERY_TYPES.map(label => ({ label, style: this.radioRow(s.reason === label), dot: this.dot(s.reason === label), pick: () => this.setState({ reason: label, reportSent: "" }) })),
+      reportComment: s.comment,
+      reportSent: s.reportSent,
+      queryContext: [
+        ["Question code", "RUHS-MO-2024-Q0" + String(14 + s.idx).padStart(3, "0")],
+        ["Exam", "RUHS Medical Officer 2026"],
+        ["Subject / topic", q.subject + " · " + (q.concept || "—")],
+        ["Test", "Full Mock Test 10"],
+        ["Your answer", answered ? answered + ". " + q.options[answered] : "Not attempted"],
+        ["Student", "Dr. Student · MTS-2026-00184"]
+      ].map(([label, value]) => ({ label, value })),
+      yourAnswer: answered ? answered + ". " + q.options[answered] : "Not attempted",
+      yourColor: answered ? (answered === q.correct ? "var(--frontend-success-text,#1E5620)" : "var(--frontend-error-text,#8A2020)") : "var(--frontend-muted,#41505E)",
+      correctAnswer: q.correct + ". " + q.options[q.correct],
+      verdictLabel: !answered ? "Unattempted" : (answered === q.correct ? "Correct" : "Incorrect"),
+      verdictStyle: "font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:5px 10px;" +
+        (!answered ? "color:var(--frontend-muted,#41505E);background:#F1F5F9;border:1px solid var(--frontend-border-strong,#CFDCE9);"
+          : answered === q.correct ? "color:var(--frontend-success-text,#1E5620);background:var(--frontend-success-tint,#EEF7EE);border:1px solid var(--frontend-success-border,#CFE3D0);"
+          : "color:var(--frontend-error-text,#8A2020);background:var(--frontend-error-tint,#FDEDED);border:1px solid var(--frontend-error-border,#F6D5D5);"),
+      saveLabel: answered ? (s.mode === "each" ? "Submit answer" : "Save answer") : "Select an option",
+      markLabel: s.marked[s.idx] ? "Marked for review" : "Mark for review",
+      modeNote: s.mode === "each"
+        ? "Instant review mode — the explanation opens as soon as you submit this answer."
+        : "Answers and explanations stay hidden until you submit the test.",
+      modeBadge: s.mode === "each" ? "Answer mode · after each question" : "Answer mode · after submission",
+      nextLabel: s.idx === QUESTIONS.length - 1 ? "Finish" : "Next Question",
+      saveBtnLabel: s.saved[s.idx] ? "Saved ✓" : "Save",
+      saveBtnStyle: "display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:9px;font-size:13.5px;font-weight:700;" +
+        (s.saved[s.idx] ? "border:1.5px solid var(--frontend-primary,#0F4C81);background:var(--frontend-tint,#EEF4FA);color:var(--frontend-primary,#0F4C81);" : "border:1px solid var(--frontend-border-strong,#CFDCE9);background:var(--frontend-surface,#FFFFFF);color:var(--frontend-muted,#41505E);"),
+      score: stats.correct + " / " + QUESTIONS.length,
+      correctCount: stats.correct,
+      wrongCount: stats.wrong,
+      skippedCount: stats.skipped,
+      attemptedCount: attempted,
+      markedCount: Object.keys(s.marked).filter(k => s.marked[k]).length,
+      accuracyPct: attempted ? Math.round(stats.correct / attempted * 100) : 0,
+      percentagePct: QUESTIONS.length ? Math.round(stats.correct / QUESTIONS.length * 100) : 0,
+      timeTakenStr, subjectRows, topicRows, hasTopicBreakdown, questionRows,
+      askAiLabel: s.aiOpen ? "Hide AI Explanation" : "Ask AI",
+      showMsgFab: isReview || s.view === "result",
+      showMsgModal: s.showMsgModal,
+      msgContext: TEST_META.name + " · " + TEST_META.exam,
+      openMsgModal: () => this.setState({ showMsgModal: true, msgSent: "", msgCategory: "", msgText: "" }),
+      closeMsgModal: () => this.setState({ showMsgModal: false }),
+      msgIdle: !s.msgSent,
+      msgSent: s.msgSent,
+      msgText: s.msgText,
+      msgCategories: ["Complaint", "Suggestion", "Technical Issue", "Question Issue", "Test Issue", "Other"].map(label => ({
+        label, style: this.pill(s.msgCategory === label), click: () => this.setState({ msgCategory: label })
+      })),
+      onMsgText: e => this.setState({ msgText: e.target.value }),
+      sendMsg: () => {
+        if (!this.state.msgCategory || !this.state.msgText.trim()) return;
+        const M = window.MTS && window.MTS.Messages;
+        const D = window.MTS && window.MTS.StudentData;
+        const profile = D ? D.getProfile() : null;
+        if (M) {
+          M.add({
+            category: this.state.msgCategory,
+            message: this.state.msgText.trim(),
+            name: profile ? profile.basicDetails.name : "Dr. Student",
+            email: profile ? profile.basicDetails.email : "",
+            studentUid: profile ? profile.id : null,
+            examId: "RUHS Medical Officer 2026",
+            testId: this.state.testId
+          });
+        }
+        this.setState({ msgSent: "Message sent to Admin — you'll see status updates from your dashboard." });
+      },
+      resultHeadline: stats.correct >= QUESTIONS.length / 2 ? "Solid attempt — now fix the misses" : "Review every miss before the next mock",
+      submitSummary: stats.skipped > 0
+        ? stats.skipped + " question(s) are still unattempted. Submitting now will lock the paper and open the question-wise review."
+        : "All questions attempted. Submitting will lock the paper and open the question-wise review.",
+
+      pickEach: () => this.setState({ mode: "each" }),
+      pickEnd: () => this.setState({ mode: "end" }),
+      modeEachStyle: this.radioRow(s.mode === "each") + "align-items:flex-start;padding:16px;",
+      modeEndStyle: this.radioRow(s.mode === "end") + "align-items:flex-start;padding:16px;",
+      modeEachDot: this.dot(s.mode === "each") + "margin-top:3px;",
+      modeEndDot: this.dot(s.mode === "end") + "margin-top:3px;",
+      continueToTest: () => this.setState({ modeModal: false, view: "test" }),
+
+      saveAnswer: () => {
+        if (!this.state.answers[this.state.idx]) return;
+        if (this.state.mode === "each") this.setState({ view: "review" });
+        else this.goto(this.state.idx + 1);
+      },
+      markReview: () => this.setState(p => ({ marked: Object.assign({}, p.marked, { [p.idx]: !p.marked[p.idx] }) })),
+      prev: () => {
+        if (this.state.status === "SUBMITTED") { this.setState(p => ({ idx: Math.max(0, p.idx - 1), aiOpen: false })); return; }
+        this.setState(p => ({ idx: Math.max(0, p.idx - 1), view: p.mode === "each" && p.view === "review" ? "test" : p.view, aiOpen: false }));
+      },
+      next: () => {
+        const last = QUESTIONS.length - 1;
+        if (this.state.status === "SUBMITTED") {
+          if (this.state.idx < last) this.setState(p => ({ idx: p.idx + 1, aiOpen: false }));
+          return;
+        }
+        if (this.state.idx === last) {
+          if (this.state.view === "review" && this.state.mode === "end") { this.setState({ view: "result", aiOpen: false }); return; }
+          this.setState({ submitConfirm: true, aiOpen: false });
+          return;
+        }
+        this.setState(p => ({ idx: p.idx + 1, view: p.mode === "each" && p.view === "review" ? "test" : p.view, aiOpen: false }));
+      },
+      askSubmit: () => { if (this.state.status === "SUBMITTED") return; this.setState({ submitConfirm: true }); },
+      cancelSubmit: () => this.setState({ submitConfirm: false }),
+      confirmSubmit: () => this.submitNow(),
+      startReview: () => this.setState({ view: "review", idx: 0 }),
+
+      toggleSave: () => this.setState(p => ({ saved: Object.assign({}, p.saved, { [p.idx]: !p.saved[p.idx] }) })),
+      shareWhatsApp: () => {
+        const text = "RUHS MO practice question\n\n" + q.stem + "\n\nA. " + q.options.A + "\nB. " + q.options.B +
+          "\nC. " + q.options.C + "\nD. " + q.options.D + "\n\nCorrect answer: " + q.correct + ". " + q.options[q.correct] +
+          "\n\nvia MockTestSeries.in";
+        window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank", "noopener");
+      },
+      openReport: () => this.setState({ reportOpen: true, reportSent: "" }),
+      closeReport: () => this.setState({ reportOpen: false }),
+      onComment: e => this.setState({ comment: e.target.value }),
+      submitReport: () => {
+        if (!this.state.reason) { this.setState({ reportSent: "" }); return; }
+        const id = "QRY-" + String(2481 + this.state.idx).padStart(5, "0");
+        this.setState({ reportSent: "Query " + id + " submitted · status Pending. Track it under My Queries on your dashboard." });
+      },
+      toggleAi: () => {
+        if (this.state.aiOpen) { this.setState({ aiOpen: false }); return; }
+        this.setState({ aiLoading: true });
+        setTimeout(() => { this.loadAi(); this.setState({ aiOpen: true, aiLoading: false }); }, 350);
+      },
+      noop: () => {}
+    };
+  }
+}
+</script>
+</body>
+</html>

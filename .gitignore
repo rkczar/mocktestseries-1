@@ -1,0 +1,23 @@
+# Node
+node_modules/
+.next/
+out/
+dist/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS
+.DS_Store
+
+# Prisma
+prisma/*.db
+
+# PM2
+.pm2/

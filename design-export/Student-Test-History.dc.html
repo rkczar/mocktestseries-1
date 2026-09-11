@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{margin:0;background:var(--frontend-background,#F6F9FC);color:var(--frontend-text,#212529);font-family:var(--frontend-font-body,Manrope,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+  h1,h2,p,ul{margin:0}
+  ul{padding:0;list-style:none}
+  a{color:var(--frontend-primary,#0F4C81);text-decoration:none}
+  a:hover{color:var(--frontend-primary-hover,#0B3A63)}
+</style>
+<script src="frontend-appearance.js"></script>
+<script src="theme-modes.js"></script>
+<script src="student-data.js"></script>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--frontend-background,#F6F9FC)">
+
+  <dc-import name="Student-Header" active="test-history" hint-size="100%,72px"></dc-import>
+
+  <main style="flex:1 1 auto;max-width:1200px;width:100%;margin:0 auto;padding:clamp(22px,3vw,36px) 24px clamp(44px,5vw,64px)">
+    <dc-import name="GlobalBackButton" fallback-href="Student-Dashboard.dc.html" fallback-label="Dashboard" current-file="Student-Test-History.dc.html" hint-size="140px,32px"></dc-import>
+    <h1 style="font-family:var(--frontend-font-heading,'Source Serif 4',Georgia,serif);font-size:clamp(27px,3.2vw,38px);line-height:1.12;font-weight:700;letter-spacing:-.02em;color:var(--frontend-heading,#0F2B45);margin-top:12px">Test history</h1>
+    <p style="font-size:15.5px;line-height:1.6;color:var(--frontend-muted,#41505E);margin-top:8px;max-width:70ch">Every attempt you have made, newest first. Each result opens on its own page — nothing expands inside this list.</p>
+
+    <div style="background:var(--frontend-surface,#FFFFFF);border:1px solid var(--frontend-border,#E3EAF2);border-radius:16px;margin-top:20px;overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;min-width:720px">
+        <thead>
+          <tr>
+            <sc-for list="{{ cols }}" as="c" hint-placeholder-count="8">
+              <th style="text-align:left;padding:12px 14px;background:var(--frontend-tint,#EEF4FA);border-bottom:1px solid var(--frontend-tint-border,#DCE7F2);font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--frontend-primary,#0F4C81);white-space:nowrap">{{ c }}</th>
+            </sc-for>
+          </tr>
+        </thead>
+        <tbody>
+          <sc-for list="{{ attempts }}" as="a" hint-placeholder-count="5">
+            <tr>
+              <td style="padding:13px 14px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);font-size:14px;font-weight:600;color:var(--frontend-text,#212529)">{{ a.test }}</td>
+              <td style="padding:13px 14px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:13px;color:var(--frontend-muted,#41505E);white-space:nowrap">{{ a.score }}</td>
+              <td style="padding:13px 14px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);font-size:13px;color:var(--frontend-faint,#5C6B7A);white-space:nowrap">{{ a.attempted }}</td>
+              <td style="padding:13px 14px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);font-family:var(--frontend-font-mono,'IBM Plex Mono',monospace);font-size:13px;color:var(--frontend-muted,#41505E)">{{ a.accuracy }}</td>
+              <td style="padding:13px 14px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);font-size:13px;color:var(--frontend-faint,#5C6B7A);white-space:nowrap">{{ a.time }}</td>
+              <td style="padding:13px 14px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);font-size:13px;color:var(--frontend-faint,#5C6B7A);white-space:nowrap">{{ a.date }}</td>
+              <td style="padding:13px 14px;border-bottom:1px solid var(--frontend-border-subtle,#EDF2F7);white-space:nowrap"><a href="{{ a.href }}" style="font-size:13px;font-weight:700">Open result</a></td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:18px">
+      <a href="Student-Analysis.dc.html" style="padding:12px 18px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14.5px;font-weight:700;color:var(--frontend-primary,#0F4C81)">Detailed analysis</a>
+      <a href="Student-Saved-Questions.dc.html" style="padding:12px 18px;border-radius:var(--frontend-btn-radius,10px);border:1px solid var(--frontend-border-strong,#CFDCE9);font-size:14.5px;font-weight:700;color:var(--frontend-primary,#0F4C81)">Saved &amp; mistakes</a>
+    </div>
+  </main>
+
+  <dc-import name="Site-Footer" hint-size="100%,380px"></dc-import>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+function fmtTime(sec) {
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h > 0 ? h + "h " + m + "m" : m + "m";
+}
+function fmtDate(iso) {
+  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+class Component extends DCLogic {
+  state = { history: [] };
+
+  componentDidMount() {
+    const load = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) this.setState({ history: D.getTestHistory() });
+    };
+    load();
+    const tryBind = () => {
+      const D = window.MTS && window.MTS.StudentData;
+      if (D) { this._off = D.subscribe(load); load(); }
+      else this._t = setTimeout(tryBind, 100);
+    };
+    tryBind();
+  }
+
+  componentWillUnmount() {
+    if (this._off) this._off();
+    if (this._t) clearTimeout(this._t);
+  }
+
+  renderVals() {
+    return {
+      cols: ["Test", "Score", "Attempted", "Accuracy", "Time", "Date", ""],
+      attempts: this.state.history.map(t => ({
+        test: t.name,
+        score: t.score + " / " + t.total,
+        attempted: t.attempted + " / " + t.total,
+        accuracy: t.accuracy + "%",
+        time: fmtTime(t.timeTaken),
+        date: fmtDate(t.date),
+        href: "Student-Test-Result.dc.html#" + t.id
+      }))
+    };
+  }
+}
+
+</script>
+</body>
+</html>
