@@ -4,7 +4,17 @@ import { prisma } from "@/lib/db";
 
 export async function writeAuditLog(params: {
   adminId: string;
-  action: "create" | "update" | "delete" | "reorder" | "publish" | "import" | "clear_cache" | "hard_reset";
+  action:
+    | "create"
+    | "update"
+    | "delete"
+    | "reorder"
+    | "publish"
+    | "import"
+    | "clear_cache"
+    | "hard_reset"
+    | "diagram_refresh"
+    | "diagram_meta_update";
   entity: string;
   entityId?: string;
   diff?: unknown;

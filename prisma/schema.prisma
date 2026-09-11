@@ -367,3 +367,43 @@ model AppearanceSetting {
   updatedAt      DateTime @updatedAt
   updatedById    String?
 }
+
+// ---------- Website Diagram (Admin-only architecture map) ----------
+// The graph itself (pages/routes/connections) is never hand-maintained here — it's derived by
+// lib/diagram/* from the actual app/ route tree and source files, then cached below so page loads
+// don't re-scan the filesystem. These models only hold the two things that genuinely can't be
+// detected automatically: a snapshot cache and admin-authored overlays/annotations.
+
+model DiagramSnapshot {
+  // Single-row cache — there is only ever one "latest" snapshot. A fixed id keeps upserts simple.
+  id            String   @id @default("singleton")
+  data          Json // { nodes: DiagramNode[], edges: DiagramEdge[], summary: {...} }
+  generatedAt   DateTime
+  generatedById String?
+}
+
+// Admin-authored overlay for a detected route. Never stores anything that is itself detectable
+// (route existence, links, status of a well-formed page) — only what requires human judgment.
+model DiagramNodeMeta {
+  id             String   @id @default(cuid())
+  route          String   @unique
+  displayName    String?
+  sectionLabel   String?
+  statusOverride String? // ACTIVE | COMING_SOON | DRAFT | IN_DEVELOPMENT | NEEDS_REVIEW
+  notes          String?
+  updatedAt      DateTime @updatedAt
+  updatedById    String?
+}
+
+// A future/planned page that does not exist in the codebase yet. Kept structurally separate from
+// DiagramNodeMeta (which annotates a route that IS detected) so the diagram can never confuse a
+// real, implemented page with something merely planned.
+model DiagramPlannedPage {
+  id           String   @id @default(cuid())
+  label        String
+  plannedRoute String?
+  section      String
+  notes        String?
+  createdAt    DateTime @default(now())
+  createdById  String?
+}

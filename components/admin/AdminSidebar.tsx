@@ -8,6 +8,7 @@ import {
   FileQuestion,
   Home,
   LayoutDashboard,
+  Network,
   Palette,
   ShieldCheck,
   Users,
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, minRole: "ADMIN" as const },
+  { href: "/admin/diagram", label: "Website Diagram", icon: Network, minRole: "ADMIN" as const },
   { href: "/admin/homepage", label: "Homepage", icon: Home, minRole: "ADMIN" as const },
   { href: "/admin/announcements", label: "Announcements", icon: Bell, minRole: "ADMIN" as const },
   { href: "/admin/exams", label: "Exams", icon: ClipboardCheck, minRole: "ADMIN" as const },
