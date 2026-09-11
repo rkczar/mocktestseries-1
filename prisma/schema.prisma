@@ -27,18 +27,23 @@ enum AdminRole {
   SUPER_ADMIN
 }
 
+enum QuestionStatus {
+  DRAFT
+  PUBLISHED
+}
+
 // ---------- Public content (Admin Panel controlled) ----------
 
 model HomepageContent {
-  id                 String   @id @default(cuid())
-  heroEyebrow        String
-  heroHeading        String
-  heroDescription    String
-  finalCtaHeading    String
-  finalCtaBody       String
-  finalCtaNote       String?
-  updatedAt          DateTime @updatedAt
-  updatedById        String?
+  id              String   @id @default(cuid())
+  heroEyebrow     String
+  heroHeading     String
+  heroDescription String
+  finalCtaHeading String
+  finalCtaBody    String
+  finalCtaNote    String?
+  updatedAt       DateTime @updatedAt
+  updatedById     String?
 }
 
 model HomepageSection {
@@ -52,7 +57,7 @@ model HomepageSection {
 
 model CtaButton {
   id       String  @id @default(cuid())
-  slot     String  // hero_primary | hero_secondary | final_primary | final_secondary | header_primary
+  slot     String // hero_primary | hero_secondary | final_primary | final_secondary | header_primary
   label    String
   href     String
   variant  String  @default("primary") // primary | secondary | accent | ghost
@@ -74,24 +79,26 @@ model Announcement {
 }
 
 model Exam {
-  id          String       @id @default(cuid())
-  slug        String       @unique
-  title       String
-  shortTitle  String?
-  description String
-  iconUrl     String?
-  imageUrl    String?
-  status      ExamStatus   @default(COMING_SOON)
-  isFeatured  Boolean      @default(false)
-  order       Int          @default(0)
-  region      String?
-  metaChips   String[] // e.g. ["100 Q · 90 min", "12 mock tests", "AI explanations"]
-  seoTitle    String?
-  seoDesc     String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  testSeries  TestSeries[]
-  subjects    Subject[]
+  id            String        @id @default(cuid())
+  slug          String        @unique
+  title         String
+  shortTitle    String?
+  description   String
+  iconUrl       String?
+  imageUrl      String?
+  status        ExamStatus    @default(COMING_SOON)
+  isFeatured    Boolean       @default(false)
+  order         Int           @default(0)
+  region        String?
+  metaChips     String[] // e.g. ["100 Q · 90 min", "12 mock tests", "AI explanations"]
+  seoTitle      String?
+  seoDesc       String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  testSeries    TestSeries[]
+  subjects      Subject[]
+  questions     Question[]
+  importBatches ImportBatch[]
 
   @@index([status, isFeatured, order])
 }
@@ -132,73 +139,113 @@ model UpcomingExam {
 }
 
 model PricingPlan {
-  id          String   @id @default(cuid())
-  name        String
+  id           String   @id @default(cuid())
+  name         String
   priceInPaise Int
-  period      String // "one-time" | "monthly" | "yearly"
-  description String
-  features    String[]
-  isPopular   Boolean  @default(false)
-  isActive    Boolean  @default(true)
-  order       Int      @default(0)
-  ctaLabel    String   @default("Get started")
+  period       String // "one-time" | "monthly" | "yearly"
+  description  String
+  features     String[]
+  isPopular    Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  order        Int      @default(0)
+  ctaLabel     String   @default("Get started")
 }
 
 // ---------- Exam content ----------
 
 model Subject {
-  id       String     @id @default(cuid())
-  examId   String
-  exam     Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
-  name     String
-  order    Int        @default(0)
-  questions Question[]
+  id                       String     @id @default(cuid())
+  examId                   String
+  exam                     Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
+  name                     String
+  order                    Int        @default(0)
+  isEnabledForCustomModule Boolean    @default(true)
+  questions                Question[]
+
+  @@unique([examId, name])
 }
 
 model Test {
-  id            String       @id @default(cuid())
-  testSeriesId  String
-  testSeries    TestSeries   @relation(fields: [testSeriesId], references: [id], onDelete: Cascade)
-  title         String
-  durationMin   Int
-  totalMarks    Int
-  negativeMark  Float        @default(0)
-  isPublished   Boolean      @default(false)
-  order         Int          @default(0)
-  questions     Question[]
-  attempts      TestAttempt[]
+  id           String        @id @default(cuid())
+  testSeriesId String
+  testSeries   TestSeries    @relation(fields: [testSeriesId], references: [id], onDelete: Cascade)
+  title        String
+  durationMin  Int
+  totalMarks   Int
+  negativeMark Float         @default(0)
+  isPublished  Boolean       @default(false)
+  order        Int           @default(0)
+  questions    Question[]
+  attempts     TestAttempt[]
 }
 
+// Hierarchy: Exam -> Exam Year (paperYear, no separate Paper entity) -> Subject -> Topic ->
+// SubTopic -> Question. See QUESTION-BANK.md.
 model Question {
-  id            String   @id @default(cuid())
-  testId        String?
-  test          Test?    @relation(fields: [testId], references: [id], onDelete: SetNull)
-  subjectId     String?
-  subject       Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
-  stem          String
-  options       Json // [{ key: "A", text: "..." }, ...]
-  correctKey    String
-  marks         Float    @default(1)
-  // AI explanation blocks
-  whyCorrect    String?
-  whyOthersWrong Json?
-  coreConcept   String?
-  examPearl     String?
-  memoryTrick   String?
-  order         Int      @default(0)
+  id             String         @id @default(cuid())
+  code           String         @unique // {ShortCode}-{Year}-{seq}, unique per exam+year
+  examId         String
+  exam           Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
+  paperYear      Int
+  questionNumber Int?
+  subjectId      String?
+  subject        Subject?       @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  topic          String?
+  subTopic       String?
+  stem           String
+  optionA        String
+  optionB        String
+  optionC        String
+  optionD        String
+  correctAnswer  String // A | B | C | D
+  explanation    String?
+  source         String?
+  difficulty     String? // Easy | Medium | Hard
+  status         QuestionStatus @default(DRAFT)
+  marks          Float          @default(1)
+  testId         String?
+  test           Test?          @relation(fields: [testId], references: [id], onDelete: SetNull)
+  order          Int            @default(0)
+  createdById    String?
+  createdBy      AdminUser?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([examId, paperYear, questionNumber])
+  @@index([examId, paperYear, subjectId, topic])
+  @@index([status])
+}
+
+model ImportBatch {
+  id               String     @id @default(cuid())
+  examId           String
+  exam             Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
+  fileName         String
+  fileHash         String
+  totalRows        Int        @default(0)
+  importedCount    Int        @default(0)
+  replacedCount    Int        @default(0)
+  addedAnywayCount Int        @default(0)
+  invalidCount     Int        @default(0)
+  createdById      String?
+  createdBy        AdminUser? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime   @default(now())
+
+  @@index([examId, createdAt])
 }
 
 // ---------- Students (separate auth realm) ----------
 
 model Student {
-  id            String        @id @default(cuid())
-  email         String        @unique
-  phone         String?       @unique
+  id            String           @id @default(cuid())
+  email         String           @unique
+  phone         String?          @unique
   name          String
   passwordHash  String?
   emailVerified DateTime?
   image         String?
-  createdAt     DateTime      @default(now())
+  isActive      Boolean          @default(true)
+  createdAt     DateTime         @default(now())
   attempts      TestAttempt[]
   accounts      StudentAccount[]
   sessions      StudentSession[]
@@ -247,17 +294,20 @@ model TestAttempt {
 // ---------- Admins (separate auth realm) ----------
 
 model AdminUser {
-  id           String         @id @default(cuid())
-  email        String         @unique
-  name         String
-  passwordHash String
-  role         AdminRole      @default(ADMIN)
-  totpSecret   String?
-  isActive     Boolean        @default(true)
-  lastLoginAt  DateTime?
-  createdAt    DateTime       @default(now())
-  sessions     AdminSession[]
-  auditLogs    AuditLog[]
+  id            String         @id @default(cuid())
+  email         String         @unique
+  name          String
+  passwordHash  String
+  role          AdminRole      @default(ADMIN)
+  totpSecret    String?
+  isActive      Boolean        @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime       @default(now())
+  sessions      AdminSession[]
+  auditLogs     AuditLog[]
+  questions     Question[]
+  importBatches ImportBatch[]
+  uploadedFiles UploadedFile[]
 }
 
 model AdminSession {
@@ -279,4 +329,33 @@ model AuditLog {
   createdAt DateTime  @default(now())
 
   @@index([entity, createdAt])
+}
+
+// ---------- Storage (provider-agnostic; see lib/storage) ----------
+
+model UploadedFile {
+  id           String     @id @default(cuid())
+  key          String     @unique // storage-provider-relative path
+  url          String // public URL to serve the file through
+  mimeType     String
+  sizeBytes    Int
+  originalName String
+  uploadedById String?
+  uploadedBy   AdminUser? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+}
+
+// ---------- Appearance (frontend colors, fonts, button radius only) ----------
+
+model AppearanceSetting {
+  id             String   @id @default(cuid())
+  primaryColor   String   @default("#0F4C81")
+  accentColor    String   @default("#F57C00")
+  successColor   String   @default("#2E7D32")
+  errorColor     String   @default("#C62828")
+  fontDisplay    String   @default("Source Serif 4") // one of the pre-loaded display fonts
+  fontBody       String   @default("Manrope") // one of the pre-loaded body fonts
+  buttonRadiusPx Int      @default(10)
+  updatedAt      DateTime @updatedAt
+  updatedById    String?
 }

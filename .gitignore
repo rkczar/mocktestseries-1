@@ -21,3 +21,7 @@ prisma/*.db
 
 # PM2
 .pm2/
+
+# Local file storage (see lib/storage) — never commit uploaded content.
+# Root-anchored so this doesn't also match lib/storage/ (the provider source code).
+/storage/
