@@ -3,6 +3,7 @@
 import {
   Bell,
   ClipboardCheck,
+  Database,
   DollarSign,
   FileQuestion,
   Home,
@@ -28,6 +29,7 @@ const NAV = [
   { href: "/admin/students", label: "Students", icon: Users, minRole: "ADMIN" as const },
   { href: "/admin/admins", label: "Admins & Roles", icon: ShieldCheck, minRole: "SUPER_ADMIN" as const },
   { href: "/admin/appearance", label: "Appearance", icon: Palette, minRole: "ADMIN" as const },
+  { href: "/admin/cache", label: "Cache Management", icon: Database, minRole: "ADMIN" as const },
 ];
 
 export function AdminSidebar({ role }: { role: "ADMIN" | "SUPER_ADMIN" }) {

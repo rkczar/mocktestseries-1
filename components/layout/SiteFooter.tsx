@@ -1,6 +1,8 @@
 import { AtSign, Mail, MapPin } from "lucide-react";
 import Link from "next/link";
 
+import { FooterCacheControls } from "@/components/cache/FooterCacheControls";
+
 import { Logo } from "./Logo";
 
 const SUPPORT_EMAIL = "info@mocktestseries.com";
@@ -13,12 +15,19 @@ const LEGAL_LINKS = [
   { label: "Terms and Conditions", href: "/terms" },
 ];
 
-export function SiteFooter() {
+export function SiteFooter({
+  showCacheControls = false,
+}: {
+  /** Whether the compact dev-phase Cache Management control renders at all (lib/cache/config.ts). */
+  showCacheControls?: boolean;
+}) {
   const year = new Date().getFullYear();
 
   return (
     <footer className="border-t border-border bg-surface pt-12 pb-7">
       <div className="mx-auto flex max-w-[1200px] flex-col gap-8 px-6">
+        {showCacheControls ? <FooterCacheControls /> : null}
+
         <div className="flex flex-wrap items-start justify-between gap-x-10 gap-y-7">
           <div className="min-w-0 max-w-[36ch]">
             <Logo size="sm" />
