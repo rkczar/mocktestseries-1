@@ -211,9 +211,16 @@ model Question {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
+  // Cached AI-generated walkthrough — identical for every student, generated once on first
+  // request and reused after that instead of calling the model again.
+  aiExplanation            String?
+  aiExplanationModel       String?
+  aiExplanationGeneratedAt DateTime?
+
   @@unique([examId, paperYear, questionNumber])
   @@index([examId, paperYear, subjectId, topic])
   @@index([status])
+  @@index([testId])
 }
 
 model ImportBatch {

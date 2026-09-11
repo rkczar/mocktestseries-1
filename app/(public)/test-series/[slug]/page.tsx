@@ -99,7 +99,7 @@ export default async function TestSeriesDetailPage({
                   </p>
                 </div>
                 <Link
-                  href="/student/login"
+                  href={`/student/tests/${test.id}`}
                   className="rounded-[9px] bg-primary px-4 py-2.5 text-sm font-bold whitespace-nowrap text-primary-foreground hover:bg-primary-hover"
                 >
                   Attempt test
