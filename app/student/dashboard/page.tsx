@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
 import { BarChart3, FileText, Target } from "lucide-react";
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
 import { Container } from "@/components/common/Container";
 import { Logo } from "@/components/layout/Logo";
-import { studentAuth } from "@/lib/auth/student";
+import { requireStudent } from "@/lib/auth/requireStudent";
 
 import { studentLogoutAction } from "./actions";
 
@@ -30,8 +29,7 @@ const SHELL_CARDS = [
 ];
 
 export default async function StudentDashboardPage() {
-  const session = await studentAuth();
-  if (!session) redirect("/student/login?next=/student/dashboard");
+  const { student } = await requireStudent();
 
   return (
     <div className="flex min-h-full flex-col bg-background">
@@ -51,7 +49,7 @@ export default async function StudentDashboardPage() {
 
       <Container className="py-[clamp(28px,4vw,48px)]">
         <h1 className="font-display text-[clamp(26px,3vw,34px)] font-bold text-text-heading">
-          Welcome, {session.user.name ?? session.user.email}
+          Welcome, {student.name}
         </h1>
         <p className="mt-2 max-w-[60ch] text-[15.5px] leading-relaxed text-text-muted">
           Your dashboard is ready. Take a mock test from the{" "}

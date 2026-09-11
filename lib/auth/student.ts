@@ -23,7 +23,7 @@ const {
         if (!email || !password) return null;
 
         const student = await prisma.student.findUnique({ where: { email } });
-        if (!student?.passwordHash) return null;
+        if (!student?.passwordHash || !student.isActive) return null;
 
         const isValid = await verify(student.passwordHash, password);
         if (!isValid) return null;

@@ -10,9 +10,11 @@ const variantClasses = {
   ghost: "border border-panel-border text-white hover:bg-primary-hover",
 } as const;
 
+// Radius is a CSS var (--radius-button) so it inherits the admin-configured value from
+// /admin/appearance instead of a hard-coded pixel size — see app/layout.tsx.
 const sizeClasses = {
-  sm: "gap-2 rounded-[9px] px-4 py-2.5 text-[14.5px] font-bold",
-  lg: "gap-2.5 rounded-[10px] px-6 py-[15px] text-base font-bold",
+  sm: "gap-2 rounded-[var(--radius-button)] px-4 py-2.5 text-[14.5px] font-bold",
+  lg: "gap-2.5 rounded-[var(--radius-button)] px-6 py-[15px] text-base font-bold",
 } as const;
 
 export function CtaLink({
