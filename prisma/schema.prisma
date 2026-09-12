@@ -43,19 +43,21 @@ model RolePermission {
 }
 
 model AdminUser {
-  id            String     @id @default(cuid())
-  name          String
-  username      String     @unique
-  email         String?    @unique
-  passwordHash  String
-  roleId        String
-  role          Role       @relation(fields: [roleId], references: [id])
-  isActive      Boolean    @default(true)
-  lastLoginAt   DateTime?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
-  auditLogs     AuditLog[]
-  loginAttempts LoginAttempt[]
+  id                   String            @id @default(cuid())
+  name                 String
+  username             String            @unique
+  email                String?           @unique
+  passwordHash         String
+  roleId               String
+  role                 Role              @relation(fields: [roleId], references: [id])
+  isActive             Boolean           @default(true)
+  lastLoginAt          DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  auditLogs            AuditLog[]
+  loginAttempts        LoginAttempt[]
+  deletionReviews      DeletionRequest[]
+  createdCustomModules CustomModule[]
 }
 
 model LoginAttempt {
@@ -71,14 +73,14 @@ model LoginAttempt {
 }
 
 model AuditLog {
-  id          String     @id @default(cuid())
-  actorId     String?
-  actor       AdminUser? @relation(fields: [actorId], references: [id])
-  action      String
-  entityType  String
-  entityId    String?
-  metadata    Json?
-  createdAt   DateTime   @default(now())
+  id         String     @id @default(cuid())
+  actorId    String?
+  actor      AdminUser? @relation(fields: [actorId], references: [id])
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime   @default(now())
 
   @@index([entityType, entityId])
   @@index([createdAt])
@@ -107,16 +109,21 @@ model Exam {
   subjects           Subject[]
   previousYearPapers PreviousYearPaper[]
   testSeries         TestSeries[]
+  questions          Question[]
+  mockTests          MockTest[]
+  customModules      CustomModule[]
+  testAttempts       TestAttempt[]
 }
 
 model Subject {
-  id        String   @id @default(cuid())
+  id        String     @id @default(cuid())
   examId    String
-  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  exam      Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
   name      String
-  order     Int      @default(0)
+  order     Int        @default(0)
   topics    Topic[]
-  createdAt DateTime @default(now())
+  questions Question[]
+  createdAt DateTime   @default(now())
 }
 
 model Topic {
@@ -126,6 +133,9 @@ model Topic {
   name      String
   order     Int      @default(0)
   createdAt DateTime @default(now())
+
+  subTopics SubTopic[]
+  questions Question[]
 }
 
 model PreviousYearPaper {
@@ -137,6 +147,9 @@ model PreviousYearPaper {
   isActive  Boolean  @default(true)
   order     Int      @default(0)
   createdAt DateTime @default(now())
+
+  questions    Question[]
+  testAttempts TestAttempt[]
 }
 
 model TestSeries {
@@ -149,6 +162,8 @@ model TestSeries {
   isActive    Boolean  @default(true)
   order       Int      @default(0)
   createdAt   DateTime @default(now())
+
+  mockTests MockTest[]
 }
 
 // ---------------------------------------------------------------------------
@@ -156,14 +171,14 @@ model TestSeries {
 // ---------------------------------------------------------------------------
 
 model AppearanceConfig {
-  id            String   @id @default(cuid())
-  isActive      Boolean  @default(true)
-  colors        Json
-  fonts         Json
-  buttonStyle   Json
+  id             String   @id @default(cuid())
+  isActive       Boolean  @default(true)
+  colors         Json
+  fonts          Json
+  buttonStyle    Json
   componentStyle Json
-  updatedAt     DateTime @updatedAt
-  createdAt     DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
 }
 
 // ---------------------------------------------------------------------------
@@ -186,16 +201,16 @@ enum RouteStatus {
 }
 
 model RouteRegistryEntry {
-  id            String        @id @default(cuid())
-  pageName      String
-  route         String        @unique
-  module        String
-  userType      RouteUserType
-  authRequired  Boolean       @default(false)
-  parentRoute   String?
-  status        RouteStatus   @default(CONNECTED)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id           String        @id @default(cuid())
+  pageName     String
+  route        String        @unique
+  module       String
+  userType     RouteUserType
+  authRequired Boolean       @default(false)
+  parentRoute  String?
+  status       RouteStatus   @default(CONNECTED)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 }
 
 model NavigationItem {
@@ -249,16 +264,16 @@ model HomepageConfig {
 }
 
 model HomepageSection {
-  id               String              @id @default(cuid())
+  id               String             @id @default(cuid())
   homepageConfigId String
-  homepageConfig   HomepageConfig      @relation(fields: [homepageConfigId], references: [id], onDelete: Cascade)
+  homepageConfig   HomepageConfig     @relation(fields: [homepageConfigId], references: [id], onDelete: Cascade)
   key              HomepageSectionKey
-  isEnabled        Boolean             @default(true)
-  order            Int                 @default(0)
+  isEnabled        Boolean            @default(true)
+  order            Int                @default(0)
   content          Json
   references       Json?
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   @@unique([homepageConfigId, key])
 }
@@ -271,4 +286,489 @@ model Setting {
   key       String   @id
   value     Json
   updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Student identity & auth
+//
+// Fully separate from AdminUser/RBAC by design: a second next-auth instance
+// (lib/auth-student.ts) issues its own session cookie, so an admin session
+// and a student session can never be the same credential. Google sign-in
+// links via StudentOAuthAccount (no Prisma Adapter — JWT sessions, same
+// pattern as the admin Credentials provider). Mobile OTP is verified against
+// OtpRequest by a Credentials provider named "otp".
+// ---------------------------------------------------------------------------
+
+enum StudentStatus {
+  ACTIVE
+  SUSPENDED
+  DELETION_REQUESTED
+  DELETED
+}
+
+enum StudentAuthProvider {
+  CREDENTIALS
+  GOOGLE
+  OTP
+}
+
+enum OAuthProviderName {
+  GOOGLE
+}
+
+enum OtpPurpose {
+  LOGIN
+  REGISTER
+}
+
+enum DeletionRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/**
+ * Single-row atomic counter backing the human-readable studentId (e.g. MTS-000123).
+ */
+model StudentIdCounter {
+  id    Int @id @default(1)
+  value Int @default(0)
+}
+
+model Student {
+  id           String              @id @default(cuid())
+  studentId    String              @unique
+  name         String
+  email        String?             @unique
+  mobile       String?             @unique
+  passwordHash String?
+  authProvider StudentAuthProvider
+  status       StudentStatus       @default(ACTIVE)
+  lastLoginAt  DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  profile           StudentProfile?
+  oauthAccounts     StudentOAuthAccount[]
+  loginAttempts     StudentLoginAttempt[]
+  deletionRequests  DeletionRequest[]
+  testAttempts      TestAttempt[]
+  answers           Answer[]
+  savedQuestions    SavedQuestion[]
+  activities        StudentActivity[]
+  reportedQuestions ReportedQuestion[]
+
+  @@index([status])
+}
+
+model StudentProfile {
+  studentId    String   @id
+  student      Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  photoUrl     String?
+  bio          String?
+  targetExamId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model StudentOAuthAccount {
+  id                String            @id @default(cuid())
+  studentId         String
+  student           Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  provider          OAuthProviderName
+  providerAccountId String
+  email             String?
+  createdAt         DateTime          @default(now())
+
+  @@unique([provider, providerAccountId])
+}
+
+/**
+ * OTP codes are hashed at rest; never store the plaintext code.
+ */
+model OtpRequest {
+  id          String     @id @default(cuid())
+  mobile      String
+  purpose     OtpPurpose
+  otpHash     String
+  expiresAt   DateTime
+  attempts    Int        @default(0)
+  maxAttempts Int        @default(5)
+  consumedAt  DateTime?
+  lastSentAt  DateTime   @default(now())
+  ipAddress   String?
+  createdAt   DateTime   @default(now())
+
+  @@index([mobile, purpose, createdAt])
+}
+
+model StudentLoginAttempt {
+  id         String   @id @default(cuid())
+  identifier String
+  ipAddress  String
+  success    Boolean
+  createdAt  DateTime @default(now())
+  studentId  String?
+  student    Student? @relation(fields: [studentId], references: [id])
+
+  @@index([identifier, ipAddress, createdAt])
+}
+
+model DeletionRequest {
+  id                String                @id @default(cuid())
+  studentId         String
+  student           Student               @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  reason            String?
+  status            DeletionRequestStatus @default(PENDING)
+  requestedAt       DateTime              @default(now())
+  reviewedAt        DateTime?
+  reviewedByAdminId String?
+  reviewedByAdmin   AdminUser?            @relation(fields: [reviewedByAdminId], references: [id])
+  notes             String?
+
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Question Bank
+//
+// Admin-owned content, read-only from the student side. Exam/Subject/Topic
+// already exist; SubTopic and PreviousYearPaper-linkage are additive here.
+// ---------------------------------------------------------------------------
+
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuestionStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model SubTopic {
+  id        String   @id @default(cuid())
+  topicId   String
+  topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  name      String
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  questions Question[]
+}
+
+model Question {
+  id                  String             @id @default(cuid())
+  code                String             @unique
+  examId              String
+  exam                Exam               @relation(fields: [examId], references: [id], onDelete: Cascade)
+  subjectId           String
+  subject             Subject            @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topicId             String?
+  topic               Topic?             @relation(fields: [topicId], references: [id])
+  subTopicId          String?
+  subTopic            SubTopic?          @relation(fields: [subTopicId], references: [id])
+  previousYearPaperId String?
+  previousYearPaper   PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id])
+  text                String
+  imageUrl            String?
+  difficulty          QuestionDifficulty @default(MEDIUM)
+  status              QuestionStatus     @default(DRAFT)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  options               QuestionOption[]
+  mockTestQuestions     MockTestQuestion[]
+  customModuleQuestions CustomModuleQuestion[]
+  savedByStudents       SavedQuestion[]
+  reports               ReportedQuestion[]
+  aiExplanation         AIExplanation?
+
+  @@index([examId, subjectId, topicId])
+  @@index([status])
+}
+
+model QuestionOption {
+  id         String   @id @default(cuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String
+  text       String
+  imageUrl   String?
+  isCorrect  Boolean  @default(false)
+  order      Int      @default(0)
+}
+
+// ---------------------------------------------------------------------------
+// Mock Tests / Test Series
+// ---------------------------------------------------------------------------
+
+enum MockTestStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum AccessType {
+  FREE
+  PAID
+}
+
+model MockTest {
+  id              String         @id @default(cuid())
+  examId          String
+  exam            Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
+  testSeriesId    String?
+  testSeries      TestSeries?    @relation(fields: [testSeriesId], references: [id])
+  title           String
+  description     String?
+  durationMinutes Int
+  negativeMarking Float          @default(0)
+  instructions    String?
+  accessType      AccessType     @default(FREE)
+  status          MockTestStatus @default(DRAFT)
+  order           Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  questions    MockTestQuestion[]
+  testAttempts TestAttempt[]
+
+  @@index([examId, status])
+}
+
+model MockTestQuestion {
+  id         String   @id @default(cuid())
+  mockTestId String
+  mockTest   MockTest @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id])
+  order      Int      @default(0)
+
+  @@unique([mockTestId, questionId])
+}
+
+// ---------------------------------------------------------------------------
+// Custom Modules
+//
+// One canonical admin-owned CustomModule record — never duplicated per
+// student. Manual mode links questions directly via CustomModuleQuestion;
+// rule-based mode stores the rule in ruleConfig and resolves it into the
+// same CustomModuleQuestion rows at publish/edit time, so the served list is
+// always a concrete snapshot future attempts read from. Editing a module
+// only affects attempts started after the edit — see TestAttemptQuestion.
+// ---------------------------------------------------------------------------
+
+enum CustomModuleStatus {
+  DRAFT
+  PUBLISHED
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum SelectionMode {
+  MANUAL
+  RULE_BASED
+}
+
+model CustomModule {
+  id               String             @id @default(cuid())
+  examId           String
+  exam             Exam               @relation(fields: [examId], references: [id], onDelete: Cascade)
+  title            String
+  description      String?
+  selectionMode    SelectionMode      @default(MANUAL)
+  ruleConfig       Json?
+  durationMinutes  Int?
+  negativeMarking  Float              @default(0)
+  instructions     String?
+  accessType       AccessType         @default(FREE)
+  status           CustomModuleStatus @default(DRAFT)
+  order            Int                @default(0)
+  createdByAdminId String?
+  createdByAdmin   AdminUser?         @relation(fields: [createdByAdminId], references: [id])
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  questions    CustomModuleQuestion[]
+  testAttempts TestAttempt[]
+
+  @@index([examId, status])
+}
+
+model CustomModuleQuestion {
+  id             String       @id @default(cuid())
+  customModuleId String
+  customModule   CustomModule @relation(fields: [customModuleId], references: [id], onDelete: Cascade)
+  questionId     String
+  question       Question     @relation(fields: [questionId], references: [id])
+  order          Int          @default(0)
+
+  @@unique([customModuleId, questionId])
+}
+
+// ---------------------------------------------------------------------------
+// Test Attempts
+//
+// Unifies Mock Test / Previous Year Paper / Custom Module attempts under one
+// table so History and admin analytics have one place to read from.
+// TestAttemptQuestion.questionSnapshot freezes the question/options as they
+// were at attempt-start, so later admin edits never change past results.
+// ---------------------------------------------------------------------------
+
+enum AttemptSourceType {
+  MOCK_TEST
+  PREVIOUS_YEAR_PAPER
+  CUSTOM_MODULE
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  ABANDONED
+}
+
+enum AnswerStatus {
+  UNANSWERED
+  ANSWERED
+  MARKED_FOR_REVIEW
+  ANSWERED_AND_MARKED
+}
+
+model TestAttempt {
+  id                  String             @id @default(cuid())
+  studentId           String
+  student             Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  sourceType          AttemptSourceType
+  examId              String
+  exam                Exam               @relation(fields: [examId], references: [id])
+  mockTestId          String?
+  mockTest            MockTest?          @relation(fields: [mockTestId], references: [id])
+  previousYearPaperId String?
+  previousYearPaper   PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id])
+  customModuleId      String?
+  customModule        CustomModule?      @relation(fields: [customModuleId], references: [id])
+  status              AttemptStatus      @default(IN_PROGRESS)
+  durationMinutes     Int
+  negativeMarking     Float              @default(0)
+  totalQuestions      Int
+  correctCount        Int?
+  incorrectCount      Int?
+  unansweredCount     Int?
+  score               Float?
+  maxScore            Float?
+  timeTakenSeconds    Int?
+  startedAt           DateTime           @default(now())
+  submittedAt         DateTime?
+  createdAt           DateTime           @default(now())
+
+  questions TestAttemptQuestion[]
+  answers   Answer[]
+
+  @@index([studentId, sourceType])
+  @@index([customModuleId])
+  @@index([mockTestId])
+  @@index([previousYearPaperId])
+}
+
+model TestAttemptQuestion {
+  id               String      @id @default(cuid())
+  attemptId        String
+  attempt          TestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId       String
+  order            Int         @default(0)
+  questionSnapshot Json
+
+  answer Answer?
+
+  @@unique([attemptId, questionId])
+}
+
+model Answer {
+  id                  String              @id @default(cuid())
+  attemptId           String
+  attempt             TestAttempt         @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  attemptQuestionId   String              @unique
+  attemptQuestion     TestAttemptQuestion @relation(fields: [attemptQuestionId], references: [id], onDelete: Cascade)
+  studentId           String
+  student             Student             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  questionId          String
+  selectedOptionLabel String?
+  isCorrect           Boolean?
+  status              AnswerStatus        @default(UNANSWERED)
+  answeredAt          DateTime?
+
+  @@index([studentId])
+  @@index([attemptId])
+}
+
+// ---------------------------------------------------------------------------
+// Saved Questions / History / Reports / AI Explanations
+// ---------------------------------------------------------------------------
+
+model SavedQuestion {
+  id         String   @id @default(cuid())
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([studentId, questionId])
+}
+
+model StudentActivity {
+  id        String   @id @default(cuid())
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  activity  String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([studentId, createdAt])
+}
+
+enum ReportType {
+  WRONG_ANSWER
+  WRONG_OPTION
+  TYPO
+  DUPLICATE
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWED
+  RESOLVED
+}
+
+model ReportedQuestion {
+  id             String       @id @default(cuid())
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  questionId     String
+  question       Question     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  attemptId      String?
+  customModuleId String?
+  reportType     ReportType   @default(OTHER)
+  message        String?
+  status         ReportStatus @default(OPEN)
+  createdAt      DateTime     @default(now())
+  reviewedAt     DateTime?
+
+  @@index([status])
+  @@index([questionId])
+}
+
+model AIExplanation {
+  id         String   @id @default(cuid())
+  questionId String   @unique
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  content    Json
+  model      String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }

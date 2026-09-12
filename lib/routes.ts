@@ -57,27 +57,32 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Topics", route: "/admin/exams/topics", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "DRAFT" },
   { pageName: "Syllabus", route: "/admin/exams/syllabus", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "DRAFT" },
 
-  // Questions (Phase 7)
-  { pageName: "All Questions", route: "/admin/questions", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
-  { pageName: "Add Question", route: "/admin/questions/add", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
+  // Questions (Phase 7 — All Questions/Add/Reports ship real in this slice)
+  { pageName: "All Questions", route: "/admin/questions", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+  { pageName: "Add Question", route: "/admin/questions/add", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
   { pageName: "Bulk Import", route: "/admin/questions/bulk-import", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
   { pageName: "Question Templates", route: "/admin/questions/templates", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
-  { pageName: "Question Reports", route: "/admin/questions/reports", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
+  { pageName: "Question Reports", route: "/admin/questions/reports", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
   { pageName: "Question Queries", route: "/admin/questions/queries", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
 
-  // Tests (Phase 9)
+  // Tests (Phase 9 — Mock Tests ships real in this slice)
   { pageName: "Test Builder", route: "/admin/tests/builder", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
-  { pageName: "Mock Tests", route: "/admin/tests/mock", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
+  { pageName: "Mock Tests", route: "/admin/tests/mock", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "CONNECTED" },
   { pageName: "Random Tests", route: "/admin/tests/random", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
   { pageName: "Custom Tests", route: "/admin/tests/custom", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
   { pageName: "Live Tests", route: "/admin/tests/live", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
   { pageName: "Scheduled Tests", route: "/admin/tests/scheduled", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
 
-  // Students (Phase 8)
-  { pageName: "All Students", route: "/admin/students", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
-  { pageName: "Test History", route: "/admin/students/history", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "DRAFT" },
-  { pageName: "Attempted Questions", route: "/admin/students/attempted", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "DRAFT" },
-  { pageName: "Deletion Requests", route: "/admin/students/deletion-requests", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "DRAFT" },
+  // Custom Modules — canonical admin-owned system consumed by the Student Custom Module page
+  { pageName: "Custom Modules", route: "/admin/custom-modules", module: "Custom Modules", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+  { pageName: "Custom Module Detail", route: "/admin/custom-modules/[id]", module: "Custom Modules", userType: "ADMIN", authRequired: true, parentRoute: "/admin/custom-modules", status: "CONNECTED" },
+
+  // Students (Phase 8 — ships real in this slice)
+  { pageName: "All Students", route: "/admin/students", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+  { pageName: "Student Detail", route: "/admin/students/[id]", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
+  { pageName: "Test History", route: "/admin/students/history", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
+  { pageName: "Attempted Questions", route: "/admin/students/attempted", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
+  { pageName: "Deletion Requests", route: "/admin/students/deletion-requests", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
 
   // AI (Phase 10)
   { pageName: "AI Solution Manager", route: "/admin/ai/solution-manager", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
@@ -102,4 +107,26 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Security", route: "/admin/settings/security", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "DRAFT" },
   { pageName: "Authentication", route: "/admin/settings/authentication", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "DRAFT" },
   { pageName: "Notifications", route: "/admin/settings/notifications", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "DRAFT" },
+
+  // Student Auth — a fully separate next-auth instance/cookie from Admin (see lib/auth-student.ts)
+  { pageName: "Student Login / Register", route: "/login", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/", status: "CONNECTED" },
+  { pageName: "Student Login (alias)", route: "/student/login", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/login", status: "CONNECTED" },
+  { pageName: "Student Register (alias)", route: "/student/register", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/login", status: "CONNECTED" },
+
+  // Student Dashboard
+  { pageName: "Student Dashboard", route: "/student/dashboard", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/login", status: "CONNECTED" },
+  { pageName: "My Exams", route: "/student/exams", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+  { pageName: "Exam Detail", route: "/student/exams/[examId]", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/exams", status: "CONNECTED" },
+  { pageName: "Test Series", route: "/student/test-series", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+  { pageName: "Custom Module", route: "/student/custom-module", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+  { pageName: "Custom Module Detail", route: "/student/custom-module/[id]", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/custom-module", status: "CONNECTED" },
+  { pageName: "History", route: "/student/history", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+  { pageName: "Saved Questions", route: "/student/saved", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+  { pageName: "My Profile", route: "/student/profile", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+
+  // Test-taking flow
+  { pageName: "Attempt Instructions", route: "/student/attempt/[attemptId]", module: "Test Flow", userType: "STUDENT", authRequired: true, parentRoute: "/student/exams", status: "CONNECTED" },
+  { pageName: "Attempt Run", route: "/student/attempt/[attemptId]/run", module: "Test Flow", userType: "STUDENT", authRequired: true, parentRoute: "/student/attempt/[attemptId]", status: "CONNECTED" },
+  { pageName: "Attempt Result", route: "/student/attempt/[attemptId]/result", module: "Test Flow", userType: "STUDENT", authRequired: true, parentRoute: "/student/attempt/[attemptId]/run", status: "CONNECTED" },
+  { pageName: "Attempt Review", route: "/student/attempt/[attemptId]/review", module: "Test Flow", userType: "STUDENT", authRequired: true, parentRoute: "/student/attempt/[attemptId]/result", status: "CONNECTED" },
 ];
