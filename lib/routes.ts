@@ -31,6 +31,9 @@ export interface RouteManifestEntry {
 export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   // Public
   { pageName: "Homepage", route: "/", module: "Website", userType: "PUBLIC", authRequired: false, status: "CONNECTED" },
+  { pageName: "Privacy Policy", route: "/privacy", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "DRAFT" },
+  { pageName: "Terms and Conditions", route: "/terms", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "DRAFT" },
+  { pageName: "Contact Us", route: "/contact", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "DRAFT" },
 
   // Admin auth
   { pageName: "Admin Login", route: "/admin/login", module: "Admin Auth", userType: "ADMIN", authRequired: false, status: "CONNECTED" },
@@ -38,6 +41,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
 
   // Website
   { pageName: "Homepage Builder", route: "/admin/website/homepage", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+  { pageName: "Homepage Preview", route: "/admin/website/homepage/preview", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin/website/homepage", status: "CONNECTED" },
   { pageName: "Website Diagram", route: "/admin/website/diagram", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Appearance", route: "/admin/website/appearance", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Navigation", route: "/admin/website/navigation", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },

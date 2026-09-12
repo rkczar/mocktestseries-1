@@ -23,6 +23,7 @@ import argon2 from "argon2";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, RoleName } from "@prisma/client";
 import { PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from "../lib/permissions";
+import { ROUTE_MANIFEST } from "../lib/routes";
 
 const MIN_PASSWORD_LENGTH = 10;
 const USERNAME_PATTERN = /^[a-z0-9._-]+$/;
@@ -67,6 +68,36 @@ async function seedRolesAndPermissions() {
   }
 
   return roleByName;
+}
+
+/**
+ * Syncs lib/routes.ts (the single manifest a developer edits when adding a
+ * page) into RouteRegistryEntry. Status is only set on first insert — the
+ * Website Diagram's own check action (runDiagramCheckAction) recomputes
+ * CONNECTED/WARNING/ORPHAN live, and re-seeding must not clobber that.
+ */
+async function seedRouteRegistry() {
+  for (const entry of ROUTE_MANIFEST) {
+    await prisma.routeRegistryEntry.upsert({
+      where: { route: entry.route },
+      update: {
+        pageName: entry.pageName,
+        module: entry.module,
+        userType: entry.userType,
+        authRequired: entry.authRequired,
+        parentRoute: entry.parentRoute,
+      },
+      create: {
+        pageName: entry.pageName,
+        route: entry.route,
+        module: entry.module,
+        userType: entry.userType,
+        authRequired: entry.authRequired,
+        parentRoute: entry.parentRoute,
+        status: entry.status,
+      },
+    });
+  }
 }
 
 function validatePassword(password: string) {
@@ -152,6 +183,7 @@ async function main() {
   const masterAdminRole = roleByName.get(RoleName.MASTER_ADMIN);
   if (!masterAdminRole) throw new Error("MASTER_ADMIN role failed to seed.");
   await seedMasterAdmin(masterAdminRole.id);
+  await seedRouteRegistry();
 
   const count = await prisma.adminUser.count({ where: { role: { name: RoleName.MASTER_ADMIN } } });
   console.log(`MASTER_ADMIN accounts in database: ${count}`);

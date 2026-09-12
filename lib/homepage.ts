@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { SECTION_META, SECTION_ORDER } from "@/lib/homepage-sections";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, HomepageConfig, HomepageSection } from "@prisma/client";
 
 /**
  * Returns the current DRAFT HomepageConfig (with sections), creating one if
@@ -60,4 +60,41 @@ export async function getPublishedHomepage() {
     include: { sections: { orderBy: { order: "asc" } } },
     orderBy: { version: "desc" },
   });
+}
+
+/**
+ * In-memory, never-persisted config built straight from SECTION_META's
+ * defaults — the same source getOrCreateDraft() seeds a new draft from. Used
+ * only when no admin has published a Homepage yet, so the public site never
+ * renders blank. Not a second source of truth: change the defaults in
+ * lib/homepage-sections.ts and both this fallback and every new draft pick
+ * it up.
+ */
+export function getFallbackHomepage(): HomepageConfig & { sections: HomepageSection[] } {
+  const now = new Date();
+  return {
+    id: "fallback",
+    version: 0,
+    status: "DRAFT",
+    seo: {
+      title: "Mock Test Series.in — RUHS Rajasthan Medical Officer Exam 2026",
+      metaDescription:
+        "Mock tests, previous year papers, and AI-powered explanations for the RUHS Medical Officer Exam 2026.",
+    } as Prisma.JsonValue,
+    publishedAt: null,
+    createdBy: null,
+    createdAt: now,
+    updatedAt: now,
+    sections: SECTION_ORDER.map((key, index) => ({
+      id: `fallback-${key}`,
+      homepageConfigId: "fallback",
+      key,
+      isEnabled: true,
+      order: index,
+      content: SECTION_META[key].defaultContent as Prisma.JsonValue,
+      references: {} as Prisma.JsonValue,
+      createdAt: now,
+      updatedAt: now,
+    })),
+  };
 }
