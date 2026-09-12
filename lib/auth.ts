@@ -2,15 +2,13 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import argon2 from "argon2";
 import { prisma } from "@/lib/prisma";
-import { DEFAULT_ROLE_PERMISSIONS, type PermissionKey } from "@/lib/permissions";
+import { authConfig } from "@/lib/auth.config";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
-  pages: { signIn: "/admin/login" },
-  trustHost: true,
+  ...authConfig,
   providers: [
     Credentials({
       credentials: {
@@ -72,23 +70,4 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       },
     }),
   ],
-  callbacks: {
-    async jwt({ token, user }) {
-      if (user) {
-        token.role = (user as { role: string }).role;
-        token.permissions = DEFAULT_ROLE_PERMISSIONS[
-          (user as { role: keyof typeof DEFAULT_ROLE_PERMISSIONS }).role
-        ];
-      }
-      return token;
-    },
-    async session({ session, token }) {
-      if (session.user) {
-        session.user.id = token.sub;
-        session.user.role = token.role;
-        session.user.permissions = token.permissions;
-      }
-      return session;
-    },
-  },
 });

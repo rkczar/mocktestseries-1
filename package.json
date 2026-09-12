@@ -12,6 +12,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@radix-ui/react-avatar": "^1.2.6",
     "@radix-ui/react-dialog": "^1.1.23",
@@ -26,10 +27,12 @@
     "argon2": "^0.45.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dotenv": "^17.4.2",
     "lucide-react": "^1.45.0",
     "next": "16.3.5",
     "next-auth": "^5.0.0-beta.32",
-    "prisma": "^8.0.0-rc.13",
+    "pg": "^8.23.0",
+    "prisma": "7.10.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "tailwind-merge": "^3.6.0",
@@ -38,6 +41,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
@@ -46,6 +50,9 @@
     "typescript": "^5"
   },
   "allowScripts": {
-    "argon2@0.45.1": true
+    "argon2@0.45.1": true,
+    "@prisma/engines@7.10.0": true,
+    "prisma@7.10.0": true,
+    "unrs-resolver@1.12.2": true
   }
 }
