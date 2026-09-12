@@ -1,3 +1,4 @@
+import { ReportStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -5,15 +6,29 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 export const metadata = { title: "Dashboard — Mock Test Series.in Admin" };
 
 export default async function AdminDashboardPage() {
-  const [examCount, activeExamCount, testSeriesCount, pypCount, adminUserCount, publishedHomepage] =
-    await Promise.all([
-      prisma.exam.count(),
-      prisma.exam.count({ where: { isActive: true } }),
-      prisma.testSeries.count(),
-      prisma.previousYearPaper.count(),
-      prisma.adminUser.count(),
-      prisma.homepageConfig.findFirst({ where: { status: "PUBLISHED" } }),
-    ]);
+  const [
+    examCount,
+    activeExamCount,
+    testSeriesCount,
+    pypCount,
+    adminUserCount,
+    publishedHomepage,
+    studentCount,
+    questionCount,
+    attemptCount,
+    pendingReportCount,
+  ] = await Promise.all([
+    prisma.exam.count(),
+    prisma.exam.count({ where: { isActive: true } }),
+    prisma.testSeries.count(),
+    prisma.previousYearPaper.count(),
+    prisma.adminUser.count(),
+    prisma.homepageConfig.findFirst({ where: { status: "PUBLISHED" } }),
+    prisma.student.count(),
+    prisma.question.count(),
+    prisma.testAttempt.count(),
+    prisma.reportedQuestion.count({ where: { status: ReportStatus.OPEN } }),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -28,12 +43,12 @@ export default async function AdminDashboardPage() {
         <StatCard label="Test Series" value={testSeriesCount} />
         <StatCard label="Previous Year Papers" value={pypCount} />
         <StatCard label="Admin Users" value={adminUserCount} />
-        <StatCard label="Total Students" value={0} connected={false} />
-        <StatCard label="Total Questions" value={0} connected={false} />
-        <StatCard label="Total Test Attempts" value={0} connected={false} />
+        <StatCard label="Total Students" value={studentCount} />
+        <StatCard label="Total Questions" value={questionCount} />
+        <StatCard label="Total Test Attempts" value={attemptCount} />
+        <StatCard label="Pending Question Reports" value={pendingReportCount} />
         <StatCard label="Today's Revenue" value={0} connected={false} />
         <StatCard label="AI Answers Generated" value={0} connected={false} />
-        <StatCard label="Pending Question Reports" value={0} connected={false} />
         <StatCard label="Pending AI Work" value={0} connected={false} />
       </div>
 
