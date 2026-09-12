@@ -1,11 +1,14 @@
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
-import { getOwnedAttempt } from "@/lib/student-data";
+import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { BackButton } from "@/components/student/back-button";
+import { SaveQuestionButton } from "@/components/student/save-question-button";
+import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 import { cn } from "@/lib/utils";
 import { ExplanationPanel } from "./explanation-panel";
+import { toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
 
 export const metadata = { title: "Review Answers — Mock Test Series.in" };
 
@@ -15,6 +18,11 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);
+
+  const savedIds = await getSavedQuestionIdSet(
+    student.id,
+    attempt.questions.map((tq) => tq.questionId)
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
@@ -77,6 +85,14 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
                     </div>
                   );
                 })}
+              </div>
+
+              <div className="mt-4 flex gap-2">
+                <SaveQuestionButton
+                  initialSaved={savedIds.has(tq.questionId)}
+                  onToggle={toggleSaveQuestionAction.bind(null, tq.questionId)}
+                />
+                <ReportQuestionDialog onSubmit={reportAttemptQuestionAction.bind(null, attemptId, tq.questionId)} />
               </div>
 
               <ExplanationPanel questionId={tq.questionId} snapshot={snapshot} />

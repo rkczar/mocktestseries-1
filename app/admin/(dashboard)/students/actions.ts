@@ -43,10 +43,18 @@ export async function approveDeletionRequestAction(requestId: string) {
 
 export async function rejectDeletionRequestAction(requestId: string) {
   const session = await requirePermission(PERMISSIONS.STUDENTS_MANAGE);
-  const request = await prisma.deletionRequest.update({
-    where: { id: requestId },
-    data: { status: DeletionRequestStatus.REJECTED, reviewedAt: new Date(), reviewedByAdminId: session.user.id },
-  });
+  const existing = await prisma.deletionRequest.findUniqueOrThrow({ where: { id: requestId } });
+
+  const [request] = await prisma.$transaction([
+    prisma.deletionRequest.update({
+      where: { id: requestId },
+      data: { status: DeletionRequestStatus.REJECTED, reviewedAt: new Date(), reviewedByAdminId: session.user.id },
+    }),
+    prisma.student.updateMany({
+      where: { id: existing.studentId, status: StudentStatus.DELETION_REQUESTED },
+      data: { status: StudentStatus.ACTIVE },
+    }),
+  ]);
 
   await prisma.auditLog.create({
     data: {

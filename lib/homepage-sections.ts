@@ -57,7 +57,7 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
     defaultContent: {
       logoText: "Mock Test Series.in",
       navItems: [["Exams", "/#featured-exam"], ["Test Series", "/#test-series"]],
-      loginHref: "/",
+      loginHref: "/login",
     },
   },
   HERO: {
@@ -267,7 +267,12 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
       email: "support@mocktestseries.in",
       location: "Rajasthan, India",
       instagramUrl: "",
-      links: [["Privacy Policy", "/privacy"], ["Terms and Conditions", "/terms"], ["Contact Us", "/contact"]],
+      links: [
+        ["Student Login", "/login"],
+        ["Privacy Policy", "/privacy"],
+        ["Terms and Conditions", "/terms"],
+        ["Contact Us", "/contact"],
+      ],
     },
   },
 };

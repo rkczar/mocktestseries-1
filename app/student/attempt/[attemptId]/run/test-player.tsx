@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight, Clock, Flag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SaveQuestionButton } from "@/components/student/save-question-button";
+import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import { cn } from "@/lib/utils";
-import { saveAnswerAction, submitAttemptAction } from "../actions";
+import { saveAnswerAction, submitAttemptAction, toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
 
 export interface PlayerOption {
   label: string;
@@ -21,6 +23,7 @@ export interface PlayerQuestion {
   options: PlayerOption[];
   selectedOptionLabel: string | null;
   markForReview: boolean;
+  saved: boolean;
 }
 
 interface QuestionState {
@@ -145,9 +148,17 @@ export function TestPlayer({
               <span className="text-sm font-medium text-[var(--color-muted-foreground)]">
                 Question {current + 1} of {questions.length}
               </span>
-              <span className="rounded-full bg-[var(--color-border)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-foreground)]">
-                {question.difficulty}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-[var(--color-border)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-foreground)]">
+                  {question.difficulty}
+                </span>
+                <SaveQuestionButton
+                  key={question.questionId}
+                  initialSaved={question.saved}
+                  onToggle={toggleSaveQuestionAction.bind(null, question.questionId)}
+                />
+                <ReportQuestionDialog onSubmit={reportAttemptQuestionAction.bind(null, attemptId, question.questionId)} />
+              </div>
             </div>
 
             <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-foreground)]">{question.text}</p>

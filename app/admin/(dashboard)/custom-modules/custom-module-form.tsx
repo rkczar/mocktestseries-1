@@ -35,7 +35,7 @@ export function CustomModuleForm({ exams }: { exams: ExamTree[] }) {
   }, [state.success]);
 
   const exam = useMemo(() => exams.find((e) => e.id === examId), [exams, examId]);
-  const subjects = exam?.subjects ?? [];
+  const subjects = useMemo(() => exam?.subjects ?? [], [exam]);
   const topics = useMemo(() => subjects.find((s) => s.id === ruleSubjectId)?.topics ?? [], [subjects, ruleSubjectId]);
 
   return (

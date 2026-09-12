@@ -3,8 +3,10 @@ import {
   AttemptSourceType,
   AttemptStatus,
   CustomModuleStatus,
+  DeletionRequestStatus,
   MockTestStatus,
   QuestionStatus,
+  StudentStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
@@ -200,11 +202,10 @@ export async function getStudentAttemptHistory(
   return prisma.testAttempt.findMany({
     where: {
       studentId,
-      status: AttemptStatus.SUBMITTED,
       examId: filters.examId || undefined,
       sourceType: filters.sourceType || undefined,
     },
-    orderBy: { submittedAt: "desc" },
+    orderBy: { startedAt: "desc" },
     include: { exam: true, mockTest: true, customModule: true, previousYearPaper: true },
   });
 }
@@ -231,13 +232,23 @@ export async function getSavedQuestions(studentId: string) {
   return prisma.savedQuestion.findMany({
     where: { studentId },
     orderBy: { createdAt: "desc" },
-    include: { question: { include: { exam: true, subject: true } } },
+    include: { question: { include: { exam: true, subject: true, topic: true, options: true } } },
   });
 }
 
 export async function isQuestionSaved(studentId: string, questionId: string) {
   const row = await prisma.savedQuestion.findUnique({ where: { studentId_questionId: { studentId, questionId } } });
   return Boolean(row);
+}
+
+/** Bulk-checks which of `questionIds` the student has saved — one query instead of N. */
+export async function getSavedQuestionIdSet(studentId: string, questionIds: string[]) {
+  if (questionIds.length === 0) return new Set<string>();
+  const rows = await prisma.savedQuestion.findMany({
+    where: { studentId, questionId: { in: questionIds } },
+    select: { questionId: true },
+  });
+  return new Set(rows.map((r) => r.questionId));
 }
 
 export async function toggleSavedQuestion(studentId: string, questionId: string) {
@@ -247,6 +258,7 @@ export async function toggleSavedQuestion(studentId: string, questionId: string)
     return false;
   }
   await prisma.savedQuestion.create({ data: { studentId, questionId } });
+  await logActivity(studentId, "QUESTION_SAVED", { questionId });
   return true;
 }
 
@@ -265,6 +277,7 @@ export async function reportQuestion(
   await prisma.reportedQuestion.create({
     data: { studentId, questionId, reportType, message, attemptId, customModuleId },
   });
+  await logActivity(studentId, "QUESTION_REPORTED", { questionId, reportType });
 }
 
 // ---------------------------------------------------------------------------
@@ -273,4 +286,41 @@ export async function reportQuestion(
 
 export async function getStoredAiExplanation(questionId: string) {
   return prisma.aIExplanation.findUnique({ where: { questionId } });
+}
+
+// ---------------------------------------------------------------------------
+// Profile / Account
+// ---------------------------------------------------------------------------
+
+export async function updateStudentProfile(studentId: string, data: { name: string; bio: string }) {
+  await prisma.$transaction([
+    prisma.student.update({ where: { id: studentId }, data: { name: data.name } }),
+    prisma.studentProfile.upsert({
+      where: { studentId },
+      update: { bio: data.bio || null },
+      create: { studentId, bio: data.bio || null },
+    }),
+  ]);
+  await logActivity(studentId, "PROFILE_UPDATED");
+}
+
+/** Idempotent — returns the existing pending request instead of creating a duplicate. */
+export async function requestAccountDeletion(studentId: string, reason: string | undefined) {
+  const existing = await prisma.deletionRequest.findFirst({
+    where: { studentId, status: DeletionRequestStatus.PENDING },
+  });
+  if (existing) return existing;
+
+  const [request] = await prisma.$transaction([
+    prisma.deletionRequest.create({ data: { studentId, reason: reason || null } }),
+    prisma.student.update({ where: { id: studentId }, data: { status: StudentStatus.DELETION_REQUESTED } }),
+  ]);
+  await logActivity(studentId, "DELETION_REQUESTED");
+  return request;
+}
+
+export async function getPendingDeletionRequest(studentId: string) {
+  return prisma.deletionRequest.findFirst({
+    where: { studentId, status: DeletionRequestStatus.PENDING },
+  });
 }

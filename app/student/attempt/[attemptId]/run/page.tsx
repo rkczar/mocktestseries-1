@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus, AnswerStatus } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
-import { getOwnedAttempt } from "@/lib/student-data";
+import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { remainingSecondsFor, type QuestionSnapshot } from "@/lib/test-attempt";
 import { TestPlayer } from "./test-player";
 
@@ -15,6 +15,10 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
   if (attempt.status === AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}/result`);
 
   const remainingSeconds = remainingSecondsFor(attempt);
+  const savedIds = await getSavedQuestionIdSet(
+    student.id,
+    attempt.questions.map((tq) => tq.questionId)
+  );
 
   const questions = attempt.questions.map((tq) => {
     const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
@@ -27,6 +31,7 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
       selectedOptionLabel: tq.answer?.selectedOptionLabel ?? null,
       markForReview:
         tq.answer?.status === AnswerStatus.MARKED_FOR_REVIEW || tq.answer?.status === AnswerStatus.ANSWERED_AND_MARKED,
+      saved: savedIds.has(tq.questionId),
     };
   });
 

@@ -51,9 +51,9 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
   const [topicId, setTopicId] = useState(defaults?.topicId ?? "");
 
   const exam = useMemo(() => exams.find((e) => e.id === examId), [exams, examId]);
-  const subjects = exam?.subjects ?? [];
+  const subjects = useMemo(() => exam?.subjects ?? [], [exam]);
   const subject = useMemo(() => subjects.find((s) => s.id === subjectId), [subjects, subjectId]);
-  const topics = subject?.topics ?? [];
+  const topics = useMemo(() => subject?.topics ?? [], [subject]);
   const topic = useMemo(() => topics.find((t) => t.id === topicId), [topics, topicId]);
   const subTopics = topic?.subTopics ?? [];
   const papers = exam?.previousYearPapers ?? [];

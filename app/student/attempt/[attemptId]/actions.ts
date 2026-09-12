@@ -1,9 +1,11 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import type { ReportType } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
 import { saveAnswer, submitAttempt, type QuestionSnapshot } from "@/lib/test-attempt";
 import { getOrCreateExplanation, AiNotConfiguredError } from "@/lib/ai-explanation";
+import { toggleSavedQuestion, reportQuestion } from "@/lib/student-data";
 
 export async function saveAnswerAction(
   attemptId: string,
@@ -19,6 +21,21 @@ export async function submitAttemptAction(attemptId: string) {
   const student = await requireStudent();
   await submitAttempt(attemptId, student.id);
   redirect(`/student/attempt/${attemptId}/result`);
+}
+
+export async function toggleSaveQuestionAction(questionId: string) {
+  const student = await requireStudent();
+  await toggleSavedQuestion(student.id, questionId);
+}
+
+export async function reportAttemptQuestionAction(
+  attemptId: string,
+  questionId: string,
+  reportType: ReportType,
+  message: string
+) {
+  const student = await requireStudent();
+  await reportQuestion(student.id, questionId, reportType, message || undefined, attemptId);
 }
 
 export async function getExplanationAction(questionId: string, snapshot: QuestionSnapshot) {
