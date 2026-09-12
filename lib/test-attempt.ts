@@ -168,6 +168,11 @@ export async function startPreviousYearPaperAttempt(studentId: string, paperId: 
   });
 }
 
+export function remainingSecondsFor(attempt: { durationMinutes: number; startedAt: Date }) {
+  const elapsedSeconds = Math.floor((Date.now() - attempt.startedAt.getTime()) / 1000);
+  return Math.max(attempt.durationMinutes * 60 - elapsedSeconds, 0);
+}
+
 export async function saveAnswer(
   attemptId: string,
   studentId: string,

@@ -1,0 +1,89 @@
+import { notFound, redirect } from "next/navigation";
+import { AttemptStatus } from "@prisma/client";
+import { requireStudent } from "@/lib/student-session";
+import { getOwnedAttempt } from "@/lib/student-data";
+import { BackButton } from "@/components/student/back-button";
+import type { QuestionSnapshot } from "@/lib/test-attempt";
+import { cn } from "@/lib/utils";
+import { ExplanationPanel } from "./explanation-panel";
+
+export const metadata = { title: "Review Answers — Mock Test Series.in" };
+
+export default async function AttemptReviewPage({ params }: { params: Promise<{ attemptId: string }> }) {
+  const { attemptId } = await params;
+  const student = await requireStudent();
+  const attempt = await getOwnedAttempt(attemptId, student.id);
+  if (!attempt) notFound();
+  if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);
+
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+      <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
+      <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Review Answers</h1>
+
+      <div className="flex flex-col gap-4">
+        {attempt.questions.map((tq, i) => {
+          const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
+          const selected = tq.answer?.selectedOptionLabel ?? null;
+          const isCorrect = tq.answer?.isCorrect ?? null;
+
+          return (
+            <div key={tq.id} className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-sm font-medium text-[var(--color-muted-foreground)]">Question {i + 1}</span>
+                <span
+                  className={cn(
+                    "rounded-full px-2.5 py-0.5 text-xs font-medium",
+                    isCorrect === true && "bg-[var(--color-success)]/15 text-[var(--color-success)]",
+                    isCorrect === false && "bg-[var(--color-error)]/15 text-[var(--color-error)]",
+                    isCorrect === null && "bg-[var(--color-border)] text-[var(--color-muted-foreground)]"
+                  )}
+                >
+                  {isCorrect === true ? "Correct" : isCorrect === false ? "Incorrect" : "Not Answered"}
+                </span>
+              </div>
+
+              <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-foreground)]">{snapshot.text}</p>
+              {snapshot.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={snapshot.imageUrl}
+                  alt=""
+                  className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                />
+              ) : null}
+
+              <div className="mt-4 flex flex-col gap-2">
+                {snapshot.options.map((opt) => {
+                  const isSelected = selected === opt.label;
+                  const isAnswer = opt.label === snapshot.correctLabel;
+                  return (
+                    <div
+                      key={opt.label}
+                      className={cn(
+                        "rounded-[var(--radius-card)] border p-3 text-sm",
+                        isAnswer
+                          ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
+                          : isSelected
+                            ? "border-[var(--color-error)] bg-[var(--color-error)]/10"
+                            : "border-[var(--color-border)]"
+                      )}
+                    >
+                      <span className="font-semibold">{opt.label}.</span> {opt.text}
+                      {isAnswer ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
+                      {isSelected && !isAnswer ? (
+                        <span className="ml-2 text-xs font-medium text-[var(--color-error)]">Your answer</span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <ExplanationPanel questionId={tq.questionId} snapshot={snapshot} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
