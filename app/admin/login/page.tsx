@@ -3,6 +3,7 @@ import { ShieldCheck } from "lucide-react";
 import { getAdminSession } from "@/lib/rbac";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { LoginForm } from "./login-form";
+import { CacheTools } from "./cache-tools";
 
 export const metadata = { title: "Admin Login — Mock Test Series.in" };
 
@@ -46,6 +47,10 @@ export default async function AdminLoginPage({
         <p className="mt-6 text-center text-xs text-[var(--color-muted-foreground)]">
           Protected area. All access attempts are logged.
         </p>
+
+        <div className="mt-4">
+          <CacheTools />
+        </div>
       </div>
     </div>
   );
