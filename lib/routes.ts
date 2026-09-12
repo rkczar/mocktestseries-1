@@ -53,8 +53,8 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Manage Exams", route: "/admin/exams", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Previous Year Papers", route: "/admin/exams/previous-year-papers", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
   { pageName: "Test Series", route: "/admin/exams/test-series", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
-  { pageName: "Subjects", route: "/admin/exams/subjects", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "DRAFT" },
-  { pageName: "Topics", route: "/admin/exams/topics", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "DRAFT" },
+  { pageName: "Subjects", route: "/admin/exams/subjects", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
+  { pageName: "Topics", route: "/admin/exams/topics", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
   { pageName: "Syllabus", route: "/admin/exams/syllabus", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "DRAFT" },
 
   // Questions (Phase 7 — All Questions/Add/Reports ship real in this slice)
