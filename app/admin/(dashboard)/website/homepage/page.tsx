@@ -3,6 +3,7 @@ import { ExternalLink } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateDraft } from "@/lib/homepage";
 import { SECTION_META } from "@/lib/homepage-sections";
+import { getHomepageStatistics } from "@/lib/homepage-statistics";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { HomepageBuilder } from "./homepage-builder";
@@ -17,7 +18,7 @@ export const metadata = { title: "Homepage — Mock Test Series.in Admin" };
 export default async function HomepageBuilderPage() {
   const draft = await getOrCreateDraft();
 
-  const [exams, papers, seriesList, otherVersions] = await Promise.all([
+  const [exams, papers, seriesList, otherVersions, liveStats] = await Promise.all([
     prisma.exam.findMany({ orderBy: { name: "asc" } }),
     prisma.previousYearPaper.findMany({ orderBy: { year: "desc" } }),
     prisma.testSeries.findMany({ orderBy: { name: "asc" } }),
@@ -26,6 +27,7 @@ export default async function HomepageBuilderPage() {
       orderBy: { version: "desc" },
       select: { id: true, version: true, status: true, publishedAt: true },
     }),
+    getHomepageStatistics(),
   ]);
 
   const sections: SectionCardData[] = draft.sections.map((s) => ({
@@ -64,6 +66,7 @@ export default async function HomepageBuilderPage() {
         examOptions={exams.map((e) => ({ id: e.id, name: e.name }))}
         paperOptions={papers.map((p) => ({ id: p.id, name: `${p.title} (${p.year})` }))}
         seriesOptions={seriesList.map((s) => ({ id: s.id, name: s.name }))}
+        liveStats={liveStats}
       />
 
       <Card>

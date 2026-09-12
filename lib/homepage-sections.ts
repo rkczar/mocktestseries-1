@@ -7,6 +7,8 @@ export type SectionFieldType =
   | "list"
   | "pairlist"
   | "statistics"
+  | "boolean"
+  | "upcomingExamsConfig"
   | "examSingle"
   | "examMulti"
   | "paperMulti"
@@ -91,10 +93,20 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
     fields: [
       { key: "title", label: "Title", type: "text" },
       { key: "description", label: "Description", type: "textarea" },
-      { key: "ctaText", label: "CTA text", type: "text" },
+      { key: "ctaText", label: "Primary CTA text", type: "text" },
+      { key: "secondaryCtaText", label: "Secondary CTA text", type: "text" },
+      { key: "secondaryCtaHref", label: "Secondary CTA link", type: "url" },
+      { key: "aiExplanationEnabled", label: "Show \"AI Explanations Available\" badge", type: "boolean" },
       { key: "examId", label: "Featured exam", type: "examSingle" },
     ],
-    defaultContent: { title: "Featured Exam", description: "", ctaText: "View Details" },
+    defaultContent: {
+      title: "Featured Exam",
+      description: "",
+      ctaText: "Take Mock Test",
+      secondaryCtaText: "Previous Year Papers",
+      secondaryCtaHref: "#previous-year-papers",
+      aiExplanationEnabled: true,
+    },
   },
   MOCK_TEST_PROMOTION: {
     key: "MOCK_TEST_PROMOTION",
@@ -197,10 +209,10 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
     description: "Exams marked upcoming in Exam Management — Admin → Website → Homepage → Upcoming Exams",
     fields: [
       { key: "heading", label: "Heading", type: "text" },
-      { key: "ctaText", label: "CTA text", type: "text" },
-      { key: "examIds", label: "Exams to show", type: "examMulti" },
+      { key: "ctaText", label: "Default CTA text", type: "text" },
+      { key: "exams", label: "Exams to show", type: "upcomingExamsConfig" },
     ],
-    defaultContent: { heading: "Upcoming Exams", ctaText: "Learn More" },
+    defaultContent: { heading: "Upcoming Exams", ctaText: "Learn More", exams: [] },
   },
   TEST_SERIES: {
     key: "TEST_SERIES",
@@ -216,23 +228,26 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
   },
   STATISTICS: {
     key: "STATISTICS",
-    label: "Statistics",
-    description: "Trust-building numbers — Admin → Website → Homepage → Statistics",
+    label: "Platform Statistics",
+    description: "Trust-building numbers — Admin → Website → Homepage → Platform Statistics",
     fields: [
       { key: "heading", label: "Heading", type: "text" },
-      {
-        key: "metrics",
-        label: "Metrics (one per line: Label | DYNAMIC:examsActive|previousYearPapers|testSeriesCount OR ADMIN:value)",
-        type: "statistics",
-        help: "Example: Mock Tests | ADMIN:50+     Previous Year Papers | DYNAMIC:previousYearPapers",
-      },
+      { key: "showModeBadge", label: "Publicly show a Live/Demo/Manual tag on each card", type: "boolean" },
+      { key: "metrics", label: "Cards", type: "statistics" },
     ],
     defaultContent: {
       heading: "Trusted by aspirants across Rajasthan",
+      showModeBadge: false,
       metrics: [
-        { label: "Mock Tests", source: "ADMIN_CONFIGURED", manualValue: "50+" },
-        { label: "Previous Year Papers", source: "DYNAMIC", dynamicKey: "previousYearPapers" },
-        { label: "Active Exams", source: "DYNAMIC", dynamicKey: "examsActive" },
+        { id: "questions-answered", label: "Questions Answered", icon: "helpCircle", description: "Total questions answered by students.", enabled: true, mode: "LIVE", dynamicKey: "questionsAnswered" },
+        { id: "ai-explanations", label: "AI Explanations", icon: "sparkles", description: "AI-generated explanations available.", enabled: true, mode: "LIVE", dynamicKey: "aiExplanations" },
+        { id: "exams", label: "Exams", icon: "graduationCap", description: "Active exams on the platform.", enabled: true, mode: "LIVE", dynamicKey: "examsActive" },
+        { id: "test-series", label: "Test Series", icon: "clipboardList", description: "Published mock test series.", enabled: true, mode: "LIVE", dynamicKey: "testSeriesCount" },
+        { id: "question-bank", label: "Question Bank", icon: "bookOpen", description: "Questions in the question bank.", enabled: true, mode: "LIVE", dynamicKey: "questionBank" },
+        { id: "registered-students", label: "Registered Students", icon: "users", description: "Students registered on the platform.", enabled: true, mode: "LIVE", dynamicKey: "registeredStudents" },
+        { id: "active-students", label: "Active Students", icon: "userCheck", description: "Currently active student accounts.", enabled: false, mode: "LIVE", dynamicKey: "activeStudents" },
+        { id: "mock-tests-attempted", label: "Mock Tests Attempted", icon: "checkCircle", description: "Mock test attempts submitted.", enabled: true, mode: "LIVE", dynamicKey: "mockTestsAttempted" },
+        { id: "pyq-papers", label: "Previous Year Papers", icon: "fileText", description: "Previous year papers available.", enabled: true, mode: "LIVE", dynamicKey: "previousYearPapers" },
       ],
     },
   },

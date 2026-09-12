@@ -18,6 +18,7 @@ import {
 } from "@dnd-kit/sortable";
 import { SectionCard, type SectionCardData } from "./section-card";
 import { reorderSectionsAction } from "./actions";
+import type { HomepageStatsSnapshot } from "@/lib/homepage-statistics";
 
 type RefOption = { id: string; name: string };
 
@@ -26,11 +27,13 @@ export function HomepageBuilder({
   examOptions,
   paperOptions,
   seriesOptions,
+  liveStats,
 }: {
   initialSections: SectionCardData[];
   examOptions: RefOption[];
   paperOptions: RefOption[];
   seriesOptions: RefOption[];
+  liveStats: HomepageStatsSnapshot;
 }) {
   const [sections, setSections] = useState(initialSections);
   const [, startTransition] = useTransition();
@@ -64,6 +67,7 @@ export function HomepageBuilder({
               examOptions={examOptions}
               paperOptions={paperOptions}
               seriesOptions={seriesOptions}
+              liveStats={liveStats}
             />
           ))}
         </div>

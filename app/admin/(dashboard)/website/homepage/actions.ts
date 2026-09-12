@@ -1,10 +1,11 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getOrCreateDraft } from "@/lib/homepage";
+import { normalizeStatMetrics } from "@/lib/homepage-field-codec";
 import type { Prisma } from "@prisma/client";
 
 export async function toggleSectionAction(sectionId: string, isEnabled: boolean) {
@@ -35,15 +36,48 @@ export async function updateSectionContentAction(
   references: Record<string, unknown>
 ): Promise<SectionContentFormState> {
   const session = await requirePermission(PERMISSIONS.WEBSITE_MANAGE);
+
+  const existing = await prisma.homepageSection.findUnique({ where: { id: sectionId } });
+  let modeChanges: { label: string; from: string; to: string }[] | undefined;
+
+  if (existing?.key === "STATISTICS") {
+    const before = normalizeStatMetrics((existing.content as Record<string, unknown>).metrics);
+    const after = normalizeStatMetrics(content.metrics);
+    const beforeById = new Map(before.map((m) => [m.id, m]));
+    const changes: { label: string; from: string; to: string }[] = [];
+    for (const m of after) {
+      const prev = beforeById.get(m.id);
+      if (prev && prev.mode !== m.mode) changes.push({ label: m.label, from: prev.mode, to: m.mode });
+    }
+    if (changes.length > 0) modeChanges = changes;
+  }
+
   await prisma.homepageSection.update({
     where: { id: sectionId },
     data: { content: content as Prisma.InputJsonValue, references: references as Prisma.InputJsonValue },
   });
   await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "HOMEPAGE_SECTION_UPDATED", entityType: "HomepageSection", entityId: sectionId },
+    data: {
+      actorId: session.user.id,
+      action: "HOMEPAGE_SECTION_UPDATED",
+      entityType: "HomepageSection",
+      entityId: sectionId,
+      ...(modeChanges ? { metadata: { modeChanges } } : {}),
+    },
   });
   revalidatePath("/admin/website/homepage");
+  revalidatePath("/");
   return { success: true };
+}
+
+export async function refreshHomepageStatisticsAction() {
+  const session = await requirePermission(PERMISSIONS.WEBSITE_MANAGE);
+  updateTag("homepage-statistics");
+  await prisma.auditLog.create({
+    data: { actorId: session.user.id, action: "HOMEPAGE_STATISTICS_REFRESHED", entityType: "HomepageConfig", entityId: "global" },
+  });
+  revalidatePath("/admin/website/homepage");
+  revalidatePath("/");
 }
 
 export async function publishHomepageAction() {

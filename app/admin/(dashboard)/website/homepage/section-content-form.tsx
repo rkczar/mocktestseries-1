@@ -4,21 +4,31 @@ import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import type { SectionFieldDef, SectionMeta } from "@/lib/homepage-sections";
-import {
-  pairListToText,
-  textToPairList,
-  listToText,
-  textToList,
-  statisticsToText,
-  textToStatistics,
-} from "@/lib/homepage-field-codec";
+import { pairListToText, textToPairList, listToText, textToList } from "@/lib/homepage-field-codec";
+import type { HomepageStatsSnapshot } from "@/lib/homepage-statistics";
 import { updateSectionContentAction } from "./actions";
+import { StatisticsFieldEditor } from "./statistics-field-editor";
+import { UpcomingExamsFieldEditor } from "./upcoming-exams-field-editor";
 
 type RefOption = { id: string; name: string };
 
 function isReferenceField(type: SectionFieldDef["type"]) {
   return type === "examSingle" || type === "examMulti" || type === "paperMulti" || type === "seriesMulti";
+}
+
+function isStandaloneField(type: SectionFieldDef["type"]) {
+  return type === "statistics" || type === "upcomingExamsConfig";
+}
+
+function BooleanFieldEditor({ field, checked, onChange }: { field: SectionFieldDef; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <Label htmlFor={field.key}>{field.label}</Label>
+      <Switch id={field.key} checked={checked} onCheckedChange={onChange} />
+    </div>
+  );
 }
 
 function TextAreaFieldEditor({
@@ -30,7 +40,7 @@ function TextAreaFieldEditor({
   value: string;
   onChange: (v: string) => void;
 }) {
-  const isTextarea = field.type === "textarea" || field.type === "pairlist" || field.type === "list" || field.type === "statistics";
+  const isTextarea = field.type === "textarea" || field.type === "pairlist" || field.type === "list";
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={field.key}>{field.label}</Label>
@@ -111,6 +121,7 @@ export function SectionContentForm({
   examOptions,
   paperOptions,
   seriesOptions,
+  liveStats,
 }: {
   sectionId: string;
   meta: SectionMeta;
@@ -119,23 +130,35 @@ export function SectionContentForm({
   examOptions: RefOption[];
   paperOptions: RefOption[];
   seriesOptions: RefOption[];
+  liveStats: HomepageStatsSnapshot;
 }) {
+  const simpleFields = meta.fields.filter((f) => !isStandaloneField(f.type));
+  const standaloneFields = meta.fields.filter((f) => isStandaloneField(f.type));
+
   const [textValues, setTextValues] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    for (const field of meta.fields) {
-      if (isReferenceField(field.type)) continue;
+    for (const field of simpleFields) {
+      if (isReferenceField(field.type) || field.type === "boolean") continue;
       const raw = content[field.key];
       if (field.type === "pairlist") init[field.key] = pairListToText(raw);
       else if (field.type === "list") init[field.key] = listToText(raw);
-      else if (field.type === "statistics") init[field.key] = statisticsToText(raw);
       else init[field.key] = typeof raw === "string" ? raw : "";
+    }
+    return init;
+  });
+
+  const [boolValues, setBoolValues] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    for (const field of simpleFields) {
+      if (field.type !== "boolean") continue;
+      init[field.key] = content[field.key] === true;
     }
     return init;
   });
 
   const [refValues, setRefValues] = useState<Record<string, string[]>>(() => {
     const init: Record<string, string[]> = {};
-    for (const field of meta.fields) {
+    for (const field of simpleFields) {
       if (!isReferenceField(field.type)) continue;
       if (field.type === "examSingle") {
         const v = references.examId;
@@ -156,10 +179,10 @@ export function SectionContentForm({
     const newContent: Record<string, unknown> = { ...content };
     const newReferences: Record<string, unknown> = { ...references };
 
-    for (const field of meta.fields) {
+    for (const field of simpleFields) {
       if (field.type === "pairlist") newContent[field.key] = textToPairList(textValues[field.key] ?? "");
       else if (field.type === "list") newContent[field.key] = textToList(textValues[field.key] ?? "");
-      else if (field.type === "statistics") newContent[field.key] = textToStatistics(textValues[field.key] ?? "");
+      else if (field.type === "boolean") newContent[field.key] = boolValues[field.key] ?? false;
       else if (field.type === "examSingle") newReferences.examId = refValues[field.key]?.[0];
       else if (field.type === "examMulti") newReferences.examIds = refValues[field.key] ?? [];
       else if (field.type === "paperMulti") newReferences.paperIds = refValues[field.key] ?? [];
@@ -176,7 +199,7 @@ export function SectionContentForm({
 
   return (
     <div className="flex flex-col gap-4 border-t border-[var(--color-border)] pt-4">
-      {meta.fields.map((field) => {
+      {simpleFields.map((field) => {
         if (field.type === "examSingle" || field.type === "examMulti") {
           return (
             <ReferencePicker
@@ -210,6 +233,16 @@ export function SectionContentForm({
             />
           );
         }
+        if (field.type === "boolean") {
+          return (
+            <BooleanFieldEditor
+              key={field.key}
+              field={field}
+              checked={boolValues[field.key] ?? false}
+              onChange={(v) => setBoolValues((s) => ({ ...s, [field.key]: v }))}
+            />
+          );
+        }
         return (
           <TextAreaFieldEditor
             key={field.key}
@@ -220,12 +253,34 @@ export function SectionContentForm({
         );
       })}
 
-      <div className="flex items-center gap-3">
-        <Button type="button" size="sm" disabled={pending} onClick={handleSave}>
-          {pending ? "Saving…" : "Save Section"}
-        </Button>
-        {saved ? <span className="text-sm text-[var(--color-success)]">Saved to draft.</span> : null}
-      </div>
+      {simpleFields.length > 0 ? (
+        <div className="flex items-center gap-3">
+          <Button type="button" size="sm" disabled={pending} onClick={handleSave}>
+            {pending ? "Saving…" : "Save Section"}
+          </Button>
+          {saved ? <span className="text-sm text-[var(--color-success)]">Saved to draft.</span> : null}
+        </div>
+      ) : null}
+
+      {standaloneFields.map((field) => {
+        if (field.type === "statistics") {
+          return (
+            <div key={field.key} className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-4">
+              <Label>{field.label}</Label>
+              <StatisticsFieldEditor sectionId={sectionId} content={content} references={references} liveStats={liveStats} />
+            </div>
+          );
+        }
+        if (field.type === "upcomingExamsConfig") {
+          return (
+            <div key={field.key} className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-4">
+              <Label>{field.label}</Label>
+              <UpcomingExamsFieldEditor sectionId={sectionId} content={content} references={references} examOptions={examOptions} />
+            </div>
+          );
+        }
+        return null;
+      })}
     </div>
   );
 }

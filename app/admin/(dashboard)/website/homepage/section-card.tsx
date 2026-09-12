@@ -7,6 +7,7 @@ import { GripVertical, ChevronDown } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import type { SectionMeta } from "@/lib/homepage-sections";
+import type { HomepageStatsSnapshot } from "@/lib/homepage-statistics";
 import { SectionContentForm } from "./section-content-form";
 import { toggleSectionAction } from "./actions";
 
@@ -25,11 +26,13 @@ export function SectionCard({
   examOptions,
   paperOptions,
   seriesOptions,
+  liveStats,
 }: {
   section: SectionCardData;
   examOptions: RefOption[];
   paperOptions: RefOption[];
   seriesOptions: RefOption[];
+  liveStats: HomepageStatsSnapshot;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: section.id });
   const [open, setOpen] = useState(false);
@@ -81,6 +84,7 @@ export function SectionCard({
             examOptions={examOptions}
             paperOptions={paperOptions}
             seriesOptions={seriesOptions}
+            liveStats={liveStats}
           />
         </div>
       ) : null}
