@@ -1,0 +1,275 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC
+// ---------------------------------------------------------------------------
+
+enum RoleName {
+  MASTER_ADMIN
+  ADMIN
+  TEACHER
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  name        RoleName         @unique
+  description String?
+  permissions RolePermission[]
+  adminUsers  AdminUser[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  description String?
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model AdminUser {
+  id            String     @id @default(cuid())
+  name          String
+  username      String     @unique
+  email         String?    @unique
+  passwordHash  String
+  roleId        String
+  role          Role       @relation(fields: [roleId], references: [id])
+  isActive      Boolean    @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  auditLogs     AuditLog[]
+  loginAttempts LoginAttempt[]
+}
+
+model LoginAttempt {
+  id          String     @id @default(cuid())
+  username    String
+  ipAddress   String
+  success     Boolean
+  createdAt   DateTime   @default(now())
+  adminUserId String?
+  adminUser   AdminUser? @relation(fields: [adminUserId], references: [id])
+
+  @@index([username, ipAddress, createdAt])
+}
+
+model AuditLog {
+  id          String     @id @default(cuid())
+  actorId     String?
+  actor       AdminUser? @relation(fields: [actorId], references: [id])
+  action      String
+  entityType  String
+  entityId    String?
+  metadata    Json?
+  createdAt   DateTime   @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Content stubs (minimal now, expanded in Phase 7/9)
+// ---------------------------------------------------------------------------
+
+model Exam {
+  id              String    @id @default(cuid())
+  name            String
+  code            String    @unique
+  year            Int?
+  description     String?
+  isActive        Boolean   @default(true)
+  isUpcoming      Boolean   @default(false)
+  upcomingDate    DateTime?
+  order           Int       @default(0)
+  negativeMarking Float?
+  durationMinutes Int?
+  instructions    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  subjects           Subject[]
+  previousYearPapers PreviousYearPaper[]
+  testSeries         TestSeries[]
+}
+
+model Subject {
+  id        String   @id @default(cuid())
+  examId    String
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  name      String
+  order     Int      @default(0)
+  topics    Topic[]
+  createdAt DateTime @default(now())
+}
+
+model Topic {
+  id        String   @id @default(cuid())
+  subjectId String
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  name      String
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model PreviousYearPaper {
+  id        String   @id @default(cuid())
+  examId    String
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  year      Int
+  title     String
+  isActive  Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model TestSeries {
+  id          String   @id @default(cuid())
+  examId      String
+  exam        Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  testCount   Int      @default(0)
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Universal Appearance
+// ---------------------------------------------------------------------------
+
+model AppearanceConfig {
+  id            String   @id @default(cuid())
+  isActive      Boolean  @default(true)
+  colors        Json
+  fonts         Json
+  buttonStyle   Json
+  componentStyle Json
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Route Registry / Website Diagram
+// ---------------------------------------------------------------------------
+
+enum RouteUserType {
+  PUBLIC
+  STUDENT
+  ADMIN
+}
+
+enum RouteStatus {
+  CONNECTED
+  WARNING
+  BROKEN
+  ORPHAN
+  UNAUTHORIZED
+  DRAFT
+}
+
+model RouteRegistryEntry {
+  id            String        @id @default(cuid())
+  pageName      String
+  route         String        @unique
+  module        String
+  userType      RouteUserType
+  authRequired  Boolean       @default(false)
+  parentRoute   String?
+  status        RouteStatus   @default(CONNECTED)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+model NavigationItem {
+  id        String   @id @default(cuid())
+  label     String
+  href      String
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Homepage
+// ---------------------------------------------------------------------------
+
+enum HomepageConfigStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum HomepageSectionKey {
+  HEADER
+  HERO
+  FEATURED_EXAM
+  MOCK_TEST_PROMOTION
+  PREVIOUS_YEAR_PAPERS
+  AI_USP
+  BENEFITS
+  HOW_IT_WORKS
+  STATISTICS
+  UPCOMING_EXAMS
+  TEST_SERIES
+  CTA
+  FOOTER
+}
+
+model HomepageConfig {
+  id          String               @id @default(cuid())
+  version     Int
+  status      HomepageConfigStatus @default(DRAFT)
+  seo         Json?
+  publishedAt DateTime?
+  createdBy   String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  sections    HomepageSection[]
+
+  @@unique([version])
+}
+
+model HomepageSection {
+  id               String              @id @default(cuid())
+  homepageConfigId String
+  homepageConfig   HomepageConfig      @relation(fields: [homepageConfigId], references: [id], onDelete: Cascade)
+  key              HomepageSectionKey
+  isEnabled        Boolean             @default(true)
+  order            Int                 @default(0)
+  content          Json
+  references       Json?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@unique([homepageConfigId, key])
+}
+
+// ---------------------------------------------------------------------------
+// Settings (key-value, fleshed out in Phase 11)
+// ---------------------------------------------------------------------------
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

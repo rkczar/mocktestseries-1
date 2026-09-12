@@ -1,26 +1,90 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------- */
+/* Brand tokens — defaults; overridden at runtime by inline <style> from   */
+/* AppearanceConfig (Admin -> Website -> Appearance). These are the "day"  */
+/* source-of-truth values per the product spec (Section 7).                */
+/* ---------------------------------------------------------------------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-primary: #0f4c81;
+  --color-secondary: #1b6fa8;
+  --color-accent: #f57c00;
+  --color-success: #2e7d32;
+  --color-error: #c62828;
+  --color-warning: #f57c00;
+  --color-info: #0f4c81;
+
+  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+
+  --radius-button: 0.5rem;
+  --radius-card: 0.75rem;
+  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.05), 0 1px 3px 0 rgb(0 0 0 / 0.06);
+}
+
+/* Structural / per-mode tokens (Day / Night / Eye-Saver). Not admin-       */
+/* configurable — these are the three fixed appearance modes (Section 6). */
+:root,
+:root[data-theme="light"] {
+  --color-background: #f7f9fb;
+  --color-surface: #ffffff;
+  --color-card: #ffffff;
+  --color-foreground: #212529;
+  --color-muted-foreground: #5b6472;
+  --color-border: #e2e6ea;
+}
+
+:root[data-theme="dark"] {
+  --color-background: #0b1220;
+  --color-surface: #121a2b;
+  --color-card: #151f33;
+  --color-foreground: #eef1f5;
+  --color-muted-foreground: #9aa5b5;
+  --color-border: #26314a;
+}
+
+:root[data-theme="eyesaver"] {
+  --color-background: #000000;
+  --color-surface: #0a0a0a;
+  --color-card: #0a0a0a;
+  --color-foreground: #ffffff;
+  --color-muted-foreground: #b3b3b3;
+  --color-border: #262626;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--color-background);
+  --color-foreground: var(--color-foreground);
+  --color-surface: var(--color-surface);
+  --color-card: var(--color-card);
+  --color-muted-foreground: var(--color-muted-foreground);
+  --color-border: var(--color-border);
+  --color-primary: var(--color-primary);
+  --color-secondary: var(--color-secondary);
+  --color-accent: var(--color-accent);
+  --color-success: var(--color-success);
+  --color-error: var(--color-error);
+  --color-warning: var(--color-warning);
+  --color-info: var(--color-info);
+  --font-sans: var(--font-body);
+  --font-heading: var(--font-heading);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: var(--color-border);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-body);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
