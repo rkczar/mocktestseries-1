@@ -385,12 +385,18 @@ model StudentOAuthAccount {
 
 /**
  * OTP codes are hashed at rest; never store the plaintext code.
+ *
+ * When delivery goes through the MSG91 Widget API, MSG91 generates and holds
+ * the actual code — `otpHash` is a random, never-checked placeholder for that
+ * case (kept non-null so the column needs no special-casing) and `providerRef`
+ * holds MSG91's `reqId`, which verifyOtp needs to check the code with MSG91.
  */
 model OtpRequest {
   id          String     @id @default(cuid())
   mobile      String
   purpose     OtpPurpose
   otpHash     String
+  providerRef String?
   expiresAt   DateTime
   attempts    Int        @default(0)
   maxAttempts Int        @default(5)

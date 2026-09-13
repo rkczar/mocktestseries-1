@@ -163,7 +163,11 @@ export function Msg91Card({ msg91 }: { msg91: AuthProviderPublicConfig["msg91"] 
           <CardTitle>MSG91 (Mobile OTP)</CardTitle>
           <StatusBadge configured={msg91.configured} enabled={msg91.enabled} />
         </div>
-        <CardDescription>Delivers the 6-digit verification code for Phone OTP login.</CardDescription>
+        <CardDescription>
+          Delivers the 6-digit verification code for Phone OTP login. Set a Widget ID to use the MSG91 OTP
+          Widget (MSG91 generates and checks the code); otherwise Sender ID + Flow ID route through the Flow
+          API with our own code generation.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <form action={saveAction} className="flex flex-col gap-4">
@@ -188,13 +192,18 @@ export function Msg91Card({ msg91 }: { msg91: AuthProviderPublicConfig["msg91"] 
             />
           </div>
 
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="msg91-widget-id">Widget ID (OTP Widget)</Label>
+            <Input id="msg91-widget-id" name="widgetId" defaultValue={msg91.widgetId} placeholder="36xxxxxxxxxxxxxxxxxxxxxx" />
+          </div>
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="msg91-sender-id">Sender ID</Label>
+              <Label htmlFor="msg91-sender-id">Sender ID (Flow API only)</Label>
               <Input id="msg91-sender-id" name="senderId" defaultValue={msg91.senderId} placeholder="MTSRIN" />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="msg91-flow-id">Flow ID (OTP template)</Label>
+              <Label htmlFor="msg91-flow-id">Flow ID (Flow API only)</Label>
               <Input id="msg91-flow-id" name="flowId" defaultValue={msg91.flowId} placeholder="64xxxxxxxxxxxxxxxxxxxxxx" />
             </div>
           </div>

@@ -4,7 +4,7 @@ import argon2 from "argon2";
 import type { OtpPurpose } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendSms } from "@/lib/sms";
-import { getSmsProviderName } from "@/lib/auth-provider-config";
+import { getSmsProviderName, getMsg91Credentials } from "@/lib/auth-provider-config";
 
 const OTP_LENGTH = 6;
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -13,10 +13,45 @@ const MAX_VERIFY_ATTEMPTS = 5;
 const MAX_SENDS_PER_WINDOW = 5;
 const SEND_WINDOW_MS = 15 * 60 * 1000;
 
+const MSG91_WIDGET_BASE = "https://api.msg91.com/api/v5/widget";
+
 export class OtpError extends Error {}
 
 function generateOtp(): string {
   return crypto.randomInt(0, 10 ** OTP_LENGTH).toString().padStart(OTP_LENGTH, "0");
+}
+
+/** MSG91 wants the mobile number as bare digits with country code, no `+`. */
+function toMsg91Identifier(mobile: string): string {
+  const digits = mobile.replace(/\D/g, "");
+  return digits.startsWith("91") ? digits : `91${digits}`;
+}
+
+interface Msg91WidgetResponse {
+  type: "success" | "error";
+  message: string;
+}
+
+/**
+ * Calls one of MSG91's OTP Widget REST endpoints (sendOtp / verifyOtp /
+ * verifyAccessToken) — server-to-server, authenticated with the account auth
+ * key. Unlike the client-side widget script, this never touches the browser.
+ */
+async function msg91WidgetRequest(
+  path: "sendOtp" | "verifyOtp" | "verifyAccessToken",
+  authKey: string,
+  body: Record<string, unknown>
+): Promise<Msg91WidgetResponse> {
+  const res = await fetch(`${MSG91_WIDGET_BASE}/${path}`, {
+    method: "POST",
+    headers: { authkey: authKey, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => null)) as Msg91WidgetResponse | null;
+  if (!data || typeof data.message !== "string") {
+    throw new Error(`MSG91 widget ${path} returned an unexpected response (${res.status}).`);
+  }
+  return data;
 }
 
 /** Requests a fresh OTP for `mobile`, enforcing resend cooldown + a send-rate cap. */
@@ -38,6 +73,39 @@ export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress:
     if (elapsed < RESEND_COOLDOWN_MS) {
       throw new OtpError(`Please wait ${Math.ceil((RESEND_COOLDOWN_MS - elapsed) / 1000)}s before requesting another code.`);
     }
+  }
+
+  const { authKey, widgetId } = await getMsg91Credentials();
+
+  if (authKey && widgetId) {
+    let reqId: string;
+    try {
+      const result = await msg91WidgetRequest("sendOtp", authKey, {
+        widgetId,
+        identifier: toMsg91Identifier(mobile),
+      });
+      if (result.type !== "success") throw new Error(result.message);
+      reqId = result.message;
+    } catch (error) {
+      console.error("[otp] MSG91 widget sendOtp failed:", error);
+      throw new OtpError("We couldn't send a verification code right now. Please try Password login instead, or contact support.");
+    }
+
+    // otpHash is unused when MSG91 holds the code (see the OtpRequest doc comment
+    // in prisma/schema.prisma) — a random placeholder keeps the column non-null.
+    const placeholderHash = await argon2.hash(crypto.randomUUID());
+    await prisma.otpRequest.create({
+      data: {
+        mobile,
+        purpose,
+        otpHash: placeholderHash,
+        providerRef: reqId,
+        expiresAt: new Date(Date.now() + OTP_TTL_MS),
+        ipAddress,
+        maxAttempts: MAX_VERIFY_ATTEMPTS,
+      },
+    });
+    return { devCode: undefined };
   }
 
   const code = generateOtp();
@@ -74,6 +142,51 @@ export async function verifyOtp(mobile: string, purpose: OtpPurpose, code: strin
   if (record.expiresAt < new Date()) throw new OtpError("This code has expired. Please request a new one.");
   if (record.attempts >= record.maxAttempts) {
     throw new OtpError("Too many incorrect attempts. Please request a new code.");
+  }
+
+  if (record.providerRef) {
+    const { authKey, widgetId } = await getMsg91Credentials();
+    if (!authKey || !widgetId) {
+      // Credentials were removed after the code was sent — there is no local
+      // hash to fall back to, so this pending request can only be expired.
+      throw new OtpError("This code has expired. Please request a new one.");
+    }
+
+    let verifyResult: Msg91WidgetResponse;
+    try {
+      verifyResult = await msg91WidgetRequest("verifyOtp", authKey, {
+        widgetId,
+        reqId: record.providerRef,
+        otp: code,
+      });
+    } catch (error) {
+      console.error("[otp] MSG91 widget verifyOtp request failed:", error);
+      throw new OtpError("Verification failed. Please try again.");
+    }
+
+    let verified = false;
+    if (verifyResult.type === "success") {
+      // verifyOtp returns a JWT access token; verifyAccessToken is the step that
+      // actually confirms it's genuine and tells us which identifier it was
+      // issued for, so we check that instead of trusting the token itself.
+      try {
+        const check = await msg91WidgetRequest("verifyAccessToken", authKey, {
+          "access-token": verifyResult.message,
+        });
+        verified = check.type === "success" && check.message === toMsg91Identifier(mobile);
+      } catch (error) {
+        console.error("[otp] MSG91 widget verifyAccessToken request failed:", error);
+        throw new OtpError("Verification failed. Please try again.");
+      }
+    }
+
+    if (!verified) {
+      await prisma.otpRequest.update({ where: { id: record.id }, data: { attempts: { increment: 1 } } });
+      throw new OtpError("Incorrect code.");
+    }
+
+    await prisma.otpRequest.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+    return;
   }
 
   const valid = await argon2.verify(record.otpHash, code).catch(() => false);

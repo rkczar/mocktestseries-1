@@ -45,6 +45,8 @@ export interface Msg91PublicConfig {
   configured: boolean;
   senderId: string;
   flowId: string;
+  /** MSG91 Widget ID (OTP Widget product). When set, OTP delivery/verification goes through the Widget REST API instead of the Flow API + our own code generation. */
+  widgetId: string;
   lastTest: ProviderLastTest | null;
   updatedAt: string | null;
 }
@@ -70,6 +72,7 @@ interface StoredMsg91 {
   authKeyCipher?: string;
   senderId?: string;
   flowId?: string;
+  widgetId?: string;
   lastTest?: ProviderLastTest | null;
   updatedAt?: string;
 }
@@ -138,6 +141,7 @@ function toPublic(raw: StoredProviders): AuthProviderPublicConfig {
     configured: authKeyConfigured,
     senderId: msg.senderId ?? process.env.MSG91_SENDER_ID ?? "",
     flowId: msg.flowId ?? process.env.MSG91_FLOW_ID ?? "",
+    widgetId: msg.widgetId ?? process.env.MSG91_WIDGET_ID ?? "",
     lastTest: msg.lastTest ?? null,
     updatedAt: msg.updatedAt ?? null,
   };
@@ -177,6 +181,7 @@ export async function getMsg91Credentials(): Promise<{
   authKey: string | null;
   senderId: string | null;
   flowId: string | null;
+  widgetId: string | null;
 }> {
   const raw = await readStored();
   const storedKey = raw.msg91?.authKeyCipher ? decryptSecret(raw.msg91.authKeyCipher) : null;
@@ -184,6 +189,7 @@ export async function getMsg91Credentials(): Promise<{
     authKey: (storedKey || process.env.MSG91_AUTH_KEY || "").trim() || null,
     senderId: (raw.msg91?.senderId || process.env.MSG91_SENDER_ID || "").trim() || null,
     flowId: (raw.msg91?.flowId || process.env.MSG91_FLOW_ID || "").trim() || null,
+    widgetId: (raw.msg91?.widgetId || process.env.MSG91_WIDGET_ID || "").trim() || null,
   };
 }
 
@@ -199,6 +205,7 @@ export interface ProviderConfigUpdate {
     authKey?: string;
     senderId?: string;
     flowId?: string;
+    widgetId?: string;
   };
   toggles?: { passwordEnabled?: boolean; otpEnabled?: boolean; registerEnabled?: boolean };
 }
@@ -231,6 +238,7 @@ export async function saveAuthProviderConfig(update: ProviderConfigUpdate): Prom
     }
     if (update.msg91.senderId !== undefined) next.senderId = update.msg91.senderId.trim() || undefined;
     if (update.msg91.flowId !== undefined) next.flowId = update.msg91.flowId.trim() || undefined;
+    if (update.msg91.widgetId !== undefined) next.widgetId = update.msg91.widgetId.trim() || undefined;
     next.lastTest = null;
     next.updatedAt = new Date().toISOString();
     raw.msg91 = next;
@@ -301,22 +309,34 @@ export async function testGoogleConnection(): Promise<ProviderLastTest> {
 }
 
 /**
- * Validates an MSG91 auth key by calling MSG91's account balance endpoint —
- * any authenticated response proves the key itself is accepted; the balance
- * value is discarded and never relayed to the admin UI.
+ * Validates an MSG91 auth key by calling MSG91's (legacy but still-serviced)
+ * balance endpoint for the OTP route (type=4). Note: the v5
+ * `control.msg91.com/api/v5/user/balance` route used previously is dead
+ * (404 for every request, valid key or not) — this was a silent no-op
+ * "Test Connection" bug. `balance.php` returns the numeric balance as plain
+ * text on success and a `{"msgType":"error"}` JSON body when the key/route
+ * is rejected, which is what we key off below. The balance value itself is
+ * discarded and never relayed to the admin UI.
  */
 async function probeMsg91Credentials(authKey: string): Promise<ProviderLastTest> {
   try {
-    const res = await fetch("https://control.msg91.com/api/v5/user/balance", {
-      headers: { authkey: authKey },
-    });
-    if (res.ok) {
-      return { ok: true, message: "Connection successful — MSG91 accepted the Auth Key.", at: new Date().toISOString() };
+    const res = await fetch(
+      `https://control.msg91.com/api/balance.php?authkey=${encodeURIComponent(authKey)}&type=4`
+    );
+    const text = (await res.text()).trim();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
     }
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, message: "MSG91 rejected the Auth Key.", at: new Date().toISOString() };
+    if (parsed && typeof parsed === "object" && (parsed as { msgType?: string }).msgType === "error") {
+      return { ok: false, message: `MSG91 rejected the request: ${(parsed as { msg?: string }).msg ?? text}`, at: new Date().toISOString() };
     }
-    return { ok: false, message: `MSG91 returned an unexpected status (${res.status}).`, at: new Date().toISOString() };
+    if (/^-?\d+(\.\d+)?$/.test(text)) {
+      return { ok: true, message: "Connection successful — MSG91 responded with an account balance.", at: new Date().toISOString() };
+    }
+    return { ok: false, message: `MSG91 returned an unexpected response: ${text.slice(0, 200)}`, at: new Date().toISOString() };
   } catch {
     return { ok: false, message: "Could not reach MSG91.", at: new Date().toISOString() };
   }

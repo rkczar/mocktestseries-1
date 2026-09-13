@@ -56,9 +56,10 @@ export async function saveMsg91ConfigAction(
   const authKey = String(formData.get("authKey") ?? "").trim();
   const senderId = String(formData.get("senderId") ?? "").trim();
   const flowId = String(formData.get("flowId") ?? "").trim();
+  const widgetId = String(formData.get("widgetId") ?? "").trim();
 
   await saveAuthProviderConfig({
-    msg91: { enabled, authKey: authKey || undefined, senderId, flowId },
+    msg91: { enabled, authKey: authKey || undefined, senderId, flowId, widgetId },
   });
 
   await prisma.auditLog.create({
