@@ -5,15 +5,17 @@ import { usePathname } from "next/navigation";
 import { Menu, LogOut } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { MobileSidebar } from "@/components/admin/sidebar";
-import { ADMIN_NAV } from "@/lib/admin-nav";
+import { ADMIN_NAV, isNavItemActive } from "@/lib/admin-nav";
 import { logoutAction } from "@/app/admin/(dashboard)/actions";
 
 function useBreadcrumb(pathname: string) {
-  for (const group of ADMIN_NAV) {
-    const item = group.items.find((i) => i.href === pathname);
-    if (item) return [group.label, item.label];
+  let match: (typeof ADMIN_NAV)[number] | undefined;
+  for (const item of ADMIN_NAV) {
+    if (isNavItemActive(pathname, item.href) && (!match || item.href.length > match.href.length)) {
+      match = item;
+    }
   }
-  return ["Admin"];
+  return match ? [match.label] : ["Admin"];
 }
 
 export function AdminHeader({ adminName, role }: { adminName: string; role: string }) {

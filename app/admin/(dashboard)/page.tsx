@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { ReportStatus, DeletionRequestStatus, QuestionStatus, MockTestStatus } from "@prisma/client";
 import { Plus, FileWarning, UserX, FileClock } from "lucide-react";
+import { HardDrive } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { getStorageSnapshot, formatBytes } from "@/lib/storage-stats";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in Admin" };
 
@@ -163,6 +165,11 @@ export default async function AdminDashboardPage() {
     recentDeletions,
     recentAuditLogs,
   } = await loadDashboardData();
+  const storage = await getStorageSnapshot();
+  const diskUsedPercent =
+    storage.filesystem.totalBytes && storage.filesystem.usedBytes
+      ? Math.round((storage.filesystem.usedBytes / storage.filesystem.totalBytes) * 100)
+      : null;
 
   const attentionItems = [
     ...recentReports.map((r) => ({
@@ -225,6 +232,33 @@ export default async function AdminDashboardPage() {
         <StatCard label="Pending Question Reports" value={pendingReportCount} />
         <StatCard label="Deletion Requests" value={pendingDeletionCount} />
         <StatCard label="Revenue (MTD)" value={0} connected={false} />
+        <Link
+          href="/admin/system?tab=storage"
+          className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-foreground)_5%,transparent)]"
+        >
+          <CardHeader className="flex-row items-center justify-between gap-2 pb-1">
+            <CardTitle className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]">
+              VPS Storage
+            </CardTitle>
+            <HardDrive className="h-3.5 w-3.5 text-[var(--color-muted-foreground)]" aria-hidden />
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-semibold text-[var(--color-foreground)]">
+              {formatBytes(storage.filesystem.usedBytes)}
+              {storage.filesystem.totalBytes ? (
+                <span className="text-sm font-normal text-[var(--color-muted-foreground)]">
+                  {" "}
+                  / {formatBytes(storage.filesystem.totalBytes)}
+                </span>
+              ) : null}
+              {diskUsedPercent != null ? (
+                <span className="ml-1 text-sm font-normal text-[var(--color-muted-foreground)]">
+                  ({diskUsedPercent}%)
+                </span>
+              ) : null}
+            </p>
+          </CardContent>
+        </Link>
       </div>
 
       <div>

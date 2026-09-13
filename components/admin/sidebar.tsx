@@ -3,110 +3,110 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronDown, X } from "lucide-react";
-import { ADMIN_NAV } from "@/lib/admin-nav";
+import { ChevronsLeft, ChevronsRight, X } from "lucide-react";
+import { ADMIN_NAV, isNavItemActive } from "@/lib/admin-nav";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-function NavGroup({
-  group,
+const SIDEBAR_COOKIE = "admin_sidebar_collapsed";
+
+function setSidebarCookie(collapsed: boolean) {
+  document.cookie = `${SIDEBAR_COOKIE}=${collapsed ? "1" : "0"}; path=/; max-age=31536000`;
+}
+
+function NavLink({
+  item,
   pathname,
+  collapsed,
   onNavigate,
 }: {
-  group: (typeof ADMIN_NAV)[number];
+  item: (typeof ADMIN_NAV)[number];
   pathname: string;
+  collapsed: boolean;
   onNavigate?: () => void;
 }) {
-  const isGroupActive = group.items.some((item) => pathname === item.href);
-  const [open, setOpen] = useState(isGroupActive);
-  const Icon = group.icon;
+  const active = isNavItemActive(pathname, item.href);
+  const Icon = item.icon;
 
-  // A single-item group has nothing to expand — the header itself must be the
-  // real, visible navigation link, not a button that only toggles a hidden
-  // accordion no one can see (that previously left it looking clickable but
-  // going nowhere, e.g. this hid Dashboard / Custom Modules / Monitoring).
-  if (group.items.length === 1) {
-    return (
-      <Link
-        href={group.items[0].href}
-        onClick={onNavigate}
-        className={cn(
-          "flex w-full items-center gap-2 rounded-[var(--radius-button)] px-3 py-2 text-sm font-medium transition-colors",
-          isGroupActive
-            ? "bg-[var(--color-primary)]/10 text-[var(--color-primary)]"
-            : "text-[var(--color-foreground)] hover:bg-[var(--color-surface)]"
-        )}
-      >
-        <Icon className="h-4 w-4" aria-hidden />
-        {group.label}
-      </Link>
-    );
-  }
+  const link = (
+    <Link
+      href={item.href}
+      onClick={onNavigate}
+      className={cn(
+        "flex items-center gap-2 rounded-[var(--radius-button)] px-3 py-2 text-sm font-medium transition-colors",
+        collapsed && "justify-center px-0",
+        active
+          ? "bg-[var(--color-primary)]/10 text-[var(--color-primary)]"
+          : "text-[var(--color-foreground)] hover:bg-[var(--color-surface)]"
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" aria-hidden />
+      {collapsed ? <span className="sr-only">{item.label}</span> : item.label}
+    </Link>
+  );
+
+  if (!collapsed) return link;
 
   return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          "flex w-full items-center justify-between rounded-[var(--radius-button)] px-3 py-2 text-sm font-medium transition-colors",
-          isGroupActive
-            ? "bg-[var(--color-primary)]/10 text-[var(--color-primary)]"
-            : "text-[var(--color-foreground)] hover:bg-[var(--color-surface)]"
-        )}
-      >
-        <span className="flex items-center gap-2">
-          <Icon className="h-4 w-4" aria-hidden />
-          {group.label}
-        </span>
-        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} aria-hidden />
-      </button>
-      {open ? (
-        <div className="mt-1 flex flex-col gap-0.5 border-l border-[var(--color-border)] pl-4">
-          {group.items.map((item) => {
-            const active = pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={onNavigate}
-                className={cn(
-                  "flex items-center justify-between rounded-[var(--radius-button)] px-3 py-1.5 text-sm transition-colors",
-                  active
-                    ? "bg-[var(--color-primary)]/10 font-medium text-[var(--color-primary)]"
-                    : "text-[var(--color-muted-foreground)] hover:bg-[var(--color-surface)] hover:text-[var(--color-foreground)]"
-                )}
-              >
-                {item.label}
-                {item.status === "draft" ? (
-                  <span className="rounded-full bg-[var(--color-warning)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-warning)]">
-                    Soon
-                  </span>
-                ) : null}
-              </Link>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right">{item.label}</TooltipContent>
+    </Tooltip>
   );
 }
 
-function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
+function SidebarContent({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
     <nav className="flex flex-col gap-1 p-3" aria-label="Admin navigation">
-      {ADMIN_NAV.map((group) => (
-        <NavGroup key={group.label} group={group} pathname={pathname} onNavigate={onNavigate} />
+      {ADMIN_NAV.map((item) => (
+        <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />
       ))}
     </nav>
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ defaultCollapsed = false }: { defaultCollapsed?: boolean }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
+  function toggle() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      setSidebarCookie(next);
+      return next;
+    });
+  }
+
   return (
-    <aside className="hidden w-64 shrink-0 overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-card)] lg:block">
-      <SidebarContent />
-    </aside>
+    <TooltipProvider delayDuration={200}>
+      <aside
+        className={cn(
+          "hidden shrink-0 overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-card)] lg:block",
+          collapsed ? "w-16" : "w-64"
+        )}
+      >
+        <div
+          className={cn(
+            "flex items-center border-b border-[var(--color-border)] p-2",
+            collapsed ? "justify-center" : "justify-end"
+          )}
+        >
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="rounded-[var(--radius-button)] p-1.5 text-[var(--color-muted-foreground)] hover:bg-[var(--color-surface)] hover:text-[var(--color-foreground)]"
+          >
+            {collapsed ? (
+              <ChevronsRight className="h-4 w-4" aria-hidden />
+            ) : (
+              <ChevronsLeft className="h-4 w-4" aria-hidden />
+            )}
+          </button>
+        </div>
+        <SidebarContent collapsed={collapsed} />
+      </aside>
+    </TooltipProvider>
   );
 }
 
@@ -127,7 +127,7 @@ export function MobileSidebar({ open, onClose }: { open: boolean; onClose: () =>
             <X className="h-4 w-4" aria-hidden />
           </button>
         </div>
-        <SidebarContent onNavigate={onClose} />
+        <SidebarContent collapsed={false} onNavigate={onClose} />
       </div>
     </div>
   );

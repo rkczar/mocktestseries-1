@@ -8,11 +8,11 @@ export function studentFlowNodeIds(): string[] {
   return STUDENT_JOURNEY_FLOW;
 }
 
-/** Every admin sidebar group's primary page, plus login — this is the sidebar's own real structure (`lib/admin-nav.ts`), not a hand-drawn tree. */
+/** Every admin sidebar item's page, plus login — this is the sidebar's own real structure (`lib/admin-nav.ts`), not a hand-drawn tree. */
 export function adminFlowNodeIds(): string[] {
   const ids = new Set<string>(["/admin/login", "/admin"]);
-  for (const group of ADMIN_NAV) {
-    if (group.items[0]) ids.add(group.items[0].href);
+  for (const item of ADMIN_NAV) {
+    ids.add(item.href);
   }
   return [...ids];
 }
