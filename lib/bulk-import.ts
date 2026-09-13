@@ -150,18 +150,18 @@ async function parseCSV(file: File): Promise<{ rows: BulkImportRow[]; errors: st
       header: true,
       skipEmptyLines: true,
       transformHeader: normalizeColumnName,
-      complete: (results) => {
+      complete: (results: Papa.ParseResult<Record<string, string>>) => {
         const rows = results.data
           .map((row, index) => mapRowData(row, index + 2)) // +2 for header + 1-indexed
           .filter((row): row is BulkImportRow => row !== null);
 
         if (results.errors.length > 0) {
-          errors.push(...results.errors.map((e: any) => `Row ${e.row}: ${e.message}`));
+          errors.push(...results.errors.map((e: Papa.ParseError) => `Row ${e.row}: ${e.message}`));
         }
 
         resolve({ rows, errors });
       },
-      error: (error: any) => {
+      error: (error: Error) => {
         errors.push(`CSV parsing error: ${error.message}`);
         resolve({ rows: [], errors });
       },
@@ -182,23 +182,23 @@ async function parseExcel(file: File): Promise<{ rows: BulkImportRow[]; errors: 
       return { rows: [], errors };
     }
 
-    const jsonData = XLSX.utils.sheet_to_json<any>(firstSheet, {
+    const jsonData = XLSX.utils.sheet_to_json<unknown>(firstSheet, {
       header: 1,
       defval: "",
-    }) as any[][];
+    }) as unknown[][];
 
     if (jsonData.length < 2) {
       errors.push("Excel file must contain at least a header row and one data row.");
       return { rows: [], errors };
     }
 
-    const headers = jsonData[0].map((h: any) => normalizeColumnName(String(h)));
+    const headers = jsonData[0].map((h: unknown) => normalizeColumnName(String(h)));
     const rows: BulkImportRow[] = [];
 
     for (let i = 1; i < jsonData.length; i++) {
       const rowData: Record<string, string> = {};
       headers.forEach((header: string, index: number) => {
-        rowData[header] = String(jsonData[i][index] ?? "").trim();
+        rowData[header] = String((jsonData[i] as unknown[])[index] ?? "").trim();
       });
 
       const mapped = mapRowData(rowData, i + 1);

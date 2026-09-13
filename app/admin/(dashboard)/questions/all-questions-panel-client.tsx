@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -61,7 +61,7 @@ export function AllQuestionsPanelClient({
   const limit = 50;
   const totalPages = Math.ceil(total / limit);
 
-  const fetchQuestions = async () => {
+  const fetchQuestions = useCallback(async () => {
     setIsLoading(true);
     try {
       const params = new URLSearchParams({
@@ -89,12 +89,11 @@ export function AllQuestionsPanelClient({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [page, search, examId, examYear, subjectId, topicId, difficulty, status, source, isPyq]);
 
   useEffect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    fetchQuestions();
-  }, [page, search, examId, examYear, subjectId, topicId, difficulty, status, source, isPyq]);
+    void fetchQuestions();
+  }, [fetchQuestions]);
 
   const handleToggleSelect = (id: string) => {
     const newSelected = new Set(selectedIds);
