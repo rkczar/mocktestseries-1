@@ -21,3 +21,26 @@ export function list(content: Record<string, unknown>, key: string): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string");
 }
+
+export interface StepItem {
+  title: string;
+  description?: string;
+}
+
+/**
+ * Reads "How It Works" steps. Supports both the current pair shape
+ * (["Choose Exam", "description"]) and the legacy string-only shape.
+ */
+export function stepList(content: Record<string, unknown>, key: string): StepItem[] {
+  const value = content[key];
+  if (!Array.isArray(value)) return [];
+  const items: StepItem[] = [];
+  for (const raw of value) {
+    if (typeof raw === "string" && raw.trim()) items.push({ title: raw });
+    else if (Array.isArray(raw)) {
+      const [title, description] = raw;
+      if (typeof title === "string" && title.trim()) items.push({ title, description: typeof description === "string" ? description : undefined });
+    }
+  }
+  return items;
+}

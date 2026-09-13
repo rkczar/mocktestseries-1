@@ -4,17 +4,18 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-button)] text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-button)] text-sm font-medium tracking-[-0.01em] transition-colors disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]",
   {
     variants: {
       variant: {
-        primary: "bg-[var(--color-primary)] text-white hover:opacity-90",
-        secondary: "bg-[var(--color-secondary)] text-white hover:opacity-90",
-        outline: "border border-[var(--color-border)] bg-transparent text-[var(--color-foreground)] hover:bg-[var(--color-surface)]",
-        ghost: "bg-transparent text-[var(--color-foreground)] hover:bg-[var(--color-surface)]",
-        danger: "bg-[var(--color-error)] text-white hover:opacity-90",
-        success: "bg-[var(--color-success)] text-white hover:opacity-90",
-        cta: "bg-[var(--color-accent)] text-white hover:opacity-90 shadow-[var(--shadow-card)]",
+        primary: "bg-[var(--color-action-fill)] text-[var(--color-action-ink)] shadow-[0_1px_4px_rgba(0,0,0,0.1),0_0_1px_rgba(0,0,0,0.1)] hover:opacity-90",
+        secondary:
+          "bg-[color-mix(in_srgb,var(--color-foreground)_8%,transparent)] text-[var(--color-foreground)] hover:bg-[color-mix(in_srgb,var(--color-foreground)_14%,transparent)]",
+        outline: "border border-[var(--color-border)] bg-transparent text-[var(--color-foreground)] hover:bg-[color-mix(in_srgb,var(--color-foreground)_6%,transparent)]",
+        ghost: "bg-transparent text-[var(--color-muted-foreground)] hover:bg-[color-mix(in_srgb,var(--color-foreground)_6%,transparent)] hover:text-[var(--color-foreground)]",
+        danger: "bg-[var(--color-error)] text-[#1a1a1a] hover:opacity-90",
+        success: "bg-[var(--color-success)] text-[#1a1a1a] hover:opacity-90",
+        cta: "bg-[var(--color-action-fill)] text-[var(--color-action-ink)] shadow-[0_1px_4px_rgba(0,0,0,0.1),0_0_1px_rgba(0,0,0,0.1)] hover:opacity-90",
       },
       size: {
         sm: "h-8 px-3 text-xs",

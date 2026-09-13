@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useState, type ReactNode, type CSSProperties } from "react";
 import { useFormStatus } from "react-dom";
 import { Eye, EyeOff, Loader2, GraduationCap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import type { LoginPageConfig } from "@/lib/login-page";
+import type { AuthProviderPublicConfig } from "@/lib/auth-provider-config";
 import {
   loginWithPasswordAction,
   registerWithPasswordAction,
@@ -16,10 +17,18 @@ import {
   type AuthFormState,
 } from "./actions";
 
-function SubmitButton({ children, pendingLabel }: { children: React.ReactNode; pendingLabel: string }) {
+function SubmitButton({
+  children,
+  pendingLabel,
+  style,
+}: {
+  children: ReactNode;
+  pendingLabel: string;
+  style?: CSSProperties;
+}) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" size="lg" className="w-full" disabled={pending}>
+    <Button type="submit" size="lg" className="w-full" style={style} disabled={pending}>
       {pending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
       {pending ? pendingLabel : children}
     </Button>
@@ -55,7 +64,17 @@ function GoogleButton({ callbackUrl }: { callbackUrl: string }) {
   );
 }
 
-function PasswordLoginForm({ callbackUrl }: { callbackUrl: string }) {
+function Divider() {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="h-px flex-1 bg-[var(--color-border)]" />
+      <span className="text-xs text-[var(--color-muted-foreground)]">OR</span>
+      <span className="h-px flex-1 bg-[var(--color-border)]" />
+    </div>
+  );
+}
+
+function PasswordLoginForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
   const [state, formAction] = useActionState<AuthFormState, FormData>(loginWithPasswordAction, {});
   const [show, setShow] = useState(false);
 
@@ -63,14 +82,14 @@ function PasswordLoginForm({ callbackUrl }: { callbackUrl: string }) {
     <form action={formAction} className="flex flex-col gap-4" noValidate>
       <input type="hidden" name="callbackUrl" value={callbackUrl} />
       <div className="flex flex-col gap-2">
-        <Label htmlFor="identifier">Email or Mobile Number</Label>
+        <Label htmlFor="identifier">User ID or Email</Label>
         <Input id="identifier" name="identifier" type="text" autoComplete="username" required placeholder="you@example.com" />
       </div>
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="password">Password</Label>
           <span className="text-xs text-[var(--color-muted-foreground)]" title="Password reset via email will be available once an email provider is configured.">
-            Forgot password?
+            Forgot?
           </span>
         </div>
         <div className="relative">
@@ -93,12 +112,14 @@ function PasswordLoginForm({ callbackUrl }: { callbackUrl: string }) {
         </div>
       </div>
       <ErrorBanner message={state.error} />
-      <SubmitButton pendingLabel="Signing in…">Login</SubmitButton>
+      <SubmitButton pendingLabel="Signing in…" style={buttonStyle}>
+        Sign In
+      </SubmitButton>
     </form>
   );
 }
 
-function PasswordRegisterForm({ callbackUrl }: { callbackUrl: string }) {
+function PasswordRegisterForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
   const [state, formAction] = useActionState<AuthFormState, FormData>(registerWithPasswordAction, {});
 
   return (
@@ -129,12 +150,14 @@ function PasswordRegisterForm({ callbackUrl }: { callbackUrl: string }) {
         I accept the Terms &amp; Conditions and Privacy Policy.
       </label>
       <ErrorBanner message={state.error} />
-      <SubmitButton pendingLabel="Creating account…">Create Account</SubmitButton>
+      <SubmitButton pendingLabel="Creating account…" style={buttonStyle}>
+        Create Account
+      </SubmitButton>
     </form>
   );
 }
 
-function MobileOtpForm({ callbackUrl }: { callbackUrl: string }) {
+function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
   const [sendState, sendAction] = useActionState<AuthFormState, FormData>(sendMobileOtpAction, {});
   const [verifyState, verifyAction] = useActionState<AuthFormState, FormData>(verifyMobileOtpAction, {});
   const [resendState, resendAction] = useActionState<AuthFormState, FormData>(sendMobileOtpAction, {});
@@ -149,7 +172,9 @@ function MobileOtpForm({ callbackUrl }: { callbackUrl: string }) {
           <Input id="otp-mobile" name="mobile" type="tel" autoComplete="tel" required placeholder="+91XXXXXXXXXX" />
         </div>
         <ErrorBanner message={sendState.error} />
-        <SubmitButton pendingLabel="Sending code…">Send OTP</SubmitButton>
+        <SubmitButton pendingLabel="Sending code…" style={buttonStyle}>
+          Send OTP
+        </SubmitButton>
       </form>
     );
   }
@@ -184,8 +209,17 @@ function MobileOtpForm({ callbackUrl }: { callbackUrl: string }) {
       ) : null}
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="otp-code">Verification Code</Label>
-        <Input id="otp-code" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" required maxLength={6} />
+        <Label htmlFor="otp-code">OTP</Label>
+        <Input
+          id="otp-code"
+          name="code"
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          required
+          maxLength={6}
+          className="text-center text-lg tracking-[0.5em]"
+        />
       </div>
 
       <ErrorBanner message={verifyState.error} />
@@ -199,71 +233,126 @@ function MobileOtpForm({ callbackUrl }: { callbackUrl: string }) {
         </form>
       </div>
 
-      <SubmitButton pendingLabel="Verifying…">Verify &amp; Continue</SubmitButton>
+      <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
+        Verify &amp; Sign In
+      </SubmitButton>
     </form>
   );
 }
 
-export function LoginScreen({ callbackUrl, googleEnabled, defaultTab }: { callbackUrl: string; googleEnabled: boolean; defaultTab: string }) {
+export function LoginScreen({
+  callbackUrl,
+  defaultMode,
+  defaultMethod,
+  pageConfig,
+  providerConfig,
+}: {
+  callbackUrl: string;
+  defaultMode: "signin" | "register";
+  defaultMethod: "password" | "otp";
+  pageConfig: LoginPageConfig;
+  providerConfig: AuthProviderPublicConfig;
+}) {
+  const showGoogle = providerConfig.google.enabled && providerConfig.google.configured;
+  const showPassword = providerConfig.passwordEnabled;
+  const showOtp = providerConfig.otpEnabled;
+  const showRegister = providerConfig.registerEnabled;
+
+  const [mode, setMode] = useState<"signin" | "register">(defaultMode);
+  const [method, setMethod] = useState<"password" | "otp">(showPassword ? defaultMethod : "otp");
+
+  const buttonStyle: CSSProperties = {};
+  if (pageConfig.buttons.radius) buttonStyle.borderRadius = pageConfig.buttons.radius;
+  if (pageConfig.buttons.height) buttonStyle.height = pageConfig.buttons.height;
+
   return (
-    <div className="w-full max-w-sm">
+    <div className="relative z-10 w-full" style={{ maxWidth: pageConfig.cardWidth }}>
       <div className="mb-8 flex flex-col items-center gap-3 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--color-primary)] text-white shadow-[var(--shadow-card)]">
-          <GraduationCap className="h-6 w-6" aria-hidden />
-        </div>
+        {pageConfig.branding.showLogo ? (
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500 text-white shadow-lg">
+            <GraduationCap className="h-6 w-6" aria-hidden />
+          </div>
+        ) : null}
         <div>
-          <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Mock Test Series.in</h1>
-          <p className="text-sm text-[var(--color-muted-foreground)]">Student Login</p>
+          <h1 className="text-xl font-semibold text-white">{pageConfig.branding.siteName}</h1>
+          <p className="mt-1 text-base font-medium text-white/90">{pageConfig.branding.loginTitle}</p>
+          {pageConfig.branding.subtitle ? <p className="text-sm text-white/50">{pageConfig.branding.subtitle}</p> : null}
         </div>
       </div>
 
-      <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-6 shadow-[var(--shadow-card)]">
-        <Tabs defaultValue={defaultTab}>
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="login">Login</TabsTrigger>
-            <TabsTrigger value="register">Create Account</TabsTrigger>
-            <TabsTrigger value="otp">Mobile OTP</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="login" className="flex flex-col gap-4">
-            <PasswordLoginForm callbackUrl={callbackUrl} />
-            {googleEnabled ? (
+      <div
+        className="border p-6 shadow-2xl"
+        style={{ borderColor: pageConfig.background.border, borderRadius: pageConfig.cardRadius, background: "rgba(255,255,255,0.03)" }}
+      >
+        {mode === "register" ? (
+          <div className="flex flex-col gap-4">
+            <p className="text-sm font-medium text-white">Create Account</p>
+            <PasswordRegisterForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} />
+            {showGoogle ? (
               <>
                 <Divider />
                 <GoogleButton callbackUrl={callbackUrl} />
               </>
             ) : null}
-          </TabsContent>
-
-          <TabsContent value="register" className="flex flex-col gap-4">
-            <PasswordRegisterForm callbackUrl={callbackUrl} />
-            {googleEnabled ? (
+            <button type="button" onClick={() => setMode("signin")} className="text-center text-sm text-indigo-400 hover:underline">
+              Already have an account? Sign in
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            {showGoogle ? (
               <>
-                <Divider />
                 <GoogleButton callbackUrl={callbackUrl} />
+                {showPassword || showOtp ? <Divider /> : null}
               </>
             ) : null}
-          </TabsContent>
 
-          <TabsContent value="otp">
-            <MobileOtpForm callbackUrl={callbackUrl} />
-          </TabsContent>
-        </Tabs>
+            {showPassword && showOtp ? (
+              <div className="grid grid-cols-2 gap-1 rounded-[var(--radius-button)] bg-white/5 p-1 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setMethod("password")}
+                  className={`rounded-[calc(var(--radius-button)-2px)] py-1.5 font-medium transition-colors ${
+                    method === "password" ? "bg-white/10 text-white" : "text-white/50 hover:text-white/80"
+                  }`}
+                >
+                  User ID / Password
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMethod("otp")}
+                  className={`rounded-[calc(var(--radius-button)-2px)] py-1.5 font-medium transition-colors ${
+                    method === "otp" ? "bg-white/10 text-white" : "text-white/50 hover:text-white/80"
+                  }`}
+                >
+                  Phone OTP
+                </button>
+              </div>
+            ) : null}
+
+            {showPassword && method === "password" ? <PasswordLoginForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} /> : null}
+            {showOtp && method === "otp" ? <MobileOtpForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} /> : null}
+            {!showPassword && !showOtp && !showGoogle ? (
+              <p className="text-center text-sm text-white/50">
+                Sign-in is temporarily unavailable. Please contact support.
+              </p>
+            ) : null}
+
+            {showRegister ? (
+              <p className="text-center text-sm text-white/50">
+                New User?{" "}
+                <button type="button" onClick={() => setMode("register")} className="font-medium text-indigo-400 hover:underline">
+                  Create Account
+                </button>
+              </p>
+            ) : null}
+          </div>
+        )}
       </div>
 
-      <p className="mt-6 text-center text-xs text-[var(--color-muted-foreground)]">
+      <p className="mt-6 text-center text-xs text-white/30">
         By continuing you agree to our Terms &amp; Conditions and Privacy Policy.
       </p>
-    </div>
-  );
-}
-
-function Divider() {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="h-px flex-1 bg-[var(--color-border)]" />
-      <span className="text-xs text-[var(--color-muted-foreground)]">or</span>
-      <span className="h-px flex-1 bg-[var(--color-border)]" />
     </div>
   );
 }

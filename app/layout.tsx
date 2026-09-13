@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const cookieStore = await cookies();
   const themeCookie = cookieStore.get(THEME_COOKIE)?.value;
-  const theme = isTheme(themeCookie) ? themeCookie : "light";
+  const theme = isTheme(themeCookie) ? themeCookie : "dark";
 
   const appearance = await getAppearance();
 
@@ -35,6 +35,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
+        <meta name="theme-color" content={theme === "light" ? "#fbfbfc" : "#0b0c0e"} />
         <style dangerouslySetInnerHTML={{ __html: appearanceToCssVariables(appearance) }} />
       </head>
       <body className="min-h-full flex flex-col">{children}</body>

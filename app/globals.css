@@ -2,45 +2,64 @@
 
 /* ---------------------------------------------------------------------- */
 /* Brand tokens — defaults; overridden at runtime by inline <style> from   */
-/* AppearanceConfig (Admin -> Website -> Appearance). These are the "day"  */
-/* source-of-truth values per the product spec (Section 7).                */
+/* AppearanceConfig (Admin -> Website -> Appearance). Direction: a dark,   */
+/* restrained "mission control" register (near-black canvas, hairline      */
+/* borders, one chromatic accent) adapted from Refero's "Default" style    */
+/* reference for an exam-prep product — see CLAUDE.md design notes.        */
 /* ---------------------------------------------------------------------- */
 :root {
-  --color-primary: #0f4c81;
-  --color-secondary: #1b6fa8;
-  --color-accent: #f57c00;
-  --color-success: #2e7d32;
-  --color-error: #c62828;
-  --color-warning: #f57c00;
-  --color-info: #0f4c81;
+  --color-primary: #3b82f6; /* signal blue — links, active states, icon fills, focus rings. Never a large fill. */
+  --color-secondary: #60a5fa; /* lighter informational blue */
+  --color-accent: #ea580c; /* decorative/urgency accent — timers, highlights. Not a CTA color. */
+  --color-success: #22c55e;
+  --color-error: #f87171;
+  --color-warning: #f59e0b;
+  --color-info: #60a5fa;
 
   --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-body: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", "Roboto Mono", monospace;
 
-  --radius-button: 0.5rem;
+  --radius-button: 0.625rem;
   --radius-card: 0.75rem;
-  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.05), 0 1px 3px 0 rgb(0 0 0 / 0.06);
+  --radius-badge: 0.375rem;
 }
 
 /* Structural / per-mode tokens (Day / Night / Eye-Saver). Not admin-       */
-/* configurable — these are the three fixed appearance modes (Section 6). */
+/* configurable. Night is the default register: near-black canvas,         */
+/* off-white pill as the one non-chromatic primary action. Day and         */
+/* Eye-Saver translate the same roles rather than inverting mechanically.  */
 :root,
-:root[data-theme="light"] {
-  --color-background: #f7f9fb;
-  --color-surface: #ffffff;
-  --color-card: #ffffff;
-  --color-foreground: #212529;
-  --color-muted-foreground: #5b6472;
-  --color-border: #e2e6ea;
+:root[data-theme="dark"] {
+  --color-background: #0b0c0e;
+  --color-surface: #131416;
+  --color-card: #131416;
+  --color-foreground: #ffffff;
+  --color-muted-foreground: #9aa1ac;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-action-fill: #f2f2f2;
+  --color-action-ink: #1a1a1a;
+  --shadow-card:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 20px 44px -16px rgba(0, 0, 0, 0.65),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+  color-scheme: dark;
 }
 
-:root[data-theme="dark"] {
-  --color-background: #0b1220;
-  --color-surface: #121a2b;
-  --color-card: #151f33;
-  --color-foreground: #eef1f5;
-  --color-muted-foreground: #9aa5b5;
-  --color-border: #26314a;
+:root[data-theme="light"] {
+  --color-background: #fbfbfc;
+  --color-surface: #ffffff;
+  --color-card: #ffffff;
+  --color-foreground: #16171a;
+  --color-muted-foreground: #61646b;
+  --color-border: #e6e7ea;
+  --color-action-fill: #16171a;
+  --color-action-ink: #ffffff;
+  --shadow-card:
+    0 1px 2px rgba(16, 17, 20, 0.04),
+    0 16px 32px -16px rgba(16, 17, 20, 0.14),
+    0 0 0 1px rgba(16, 17, 20, 0.04);
+  color-scheme: light;
 }
 
 :root[data-theme="eyesaver"] {
@@ -49,7 +68,14 @@
   --color-card: #0a0a0a;
   --color-foreground: #ffffff;
   --color-muted-foreground: #b3b3b3;
-  --color-border: #262626;
+  --color-border: rgba(255, 255, 255, 0.12);
+  --color-action-fill: #f2f2f2;
+  --color-action-ink: #111111;
+  --shadow-card:
+    0 1px 2px rgba(0, 0, 0, 0.6),
+    0 20px 48px -16px rgba(0, 0, 0, 0.8),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -68,6 +94,25 @@
   --color-info: var(--color-info);
   --font-sans: var(--font-body);
   --font-heading: var(--font-heading);
+  --font-mono: var(--font-mono);
+}
+
+/* Whisper-weight display scale: tighter, larger, weight 400 by default —  */
+/* the "terminal readout" register. Overrides Tailwind's default steps so  */
+/* headings across the whole app (admin included) share one system.        */
+@theme {
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.5rem;
+  --text-xl--line-height: 1.9rem;
+  --text-2xl: 2rem;
+  --text-2xl--line-height: 2.3rem;
+  --text-3xl: 2.625rem;
+  --text-3xl--line-height: 1.15;
+  --text-4xl: 3.25rem;
+  --text-4xl--line-height: 1.05;
+  --text-5xl: 4rem;
+  --text-5xl--line-height: 0.98;
 }
 
 * {
@@ -82,6 +127,13 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-heading);
+  font-weight: 400;
+  text-wrap: balance;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-primary) 35%, transparent);
+  color: var(--color-foreground);
 }
 
 :focus-visible {

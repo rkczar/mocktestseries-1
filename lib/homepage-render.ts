@@ -1,6 +1,13 @@
 import { prisma } from "@/lib/prisma";
-import type { HomepageConfig, HomepageSection, Exam, PreviousYearPaper, TestSeries } from "@prisma/client";
-import { normalizeStatMetrics, normalizeUpcomingExams, type StatMetric, type UpcomingExamConfig } from "@/lib/homepage-field-codec";
+import type { HomepageConfig, HomepageSection, Exam, PreviousYearPaper, TestSeries, MockTest } from "@prisma/client";
+import {
+  normalizeStatMetrics,
+  normalizeUpcomingExams,
+  normalizeHeroPanel,
+  type StatMetric,
+  type UpcomingExamConfig,
+  type HeroPanelConfig,
+} from "@/lib/homepage-field-codec";
 import { getHomepageStatistics } from "@/lib/homepage-statistics";
 
 export interface ResolvedStatValue {
@@ -20,6 +27,32 @@ export interface ResolvedExamStats {
   aiExplanations: number;
 }
 
+export interface ResolvedHeroPanel {
+  config: HeroPanelConfig;
+  /** Real platform aggregates shown when the panel is in LIVE mode. */
+  live: { questionsAnswered: number; mockTestsAttempted: number; aiExplanations: number; activeExams: number };
+  /** Zero iff there is no live data to show yet. */
+  liveCount: number;
+}
+
+export interface ResolvedFeaturedTest {
+  id: string;
+  title: string;
+  durationMinutes: number;
+  negativeMarking: number;
+  questionCount: number;
+  status: MockTest["status"];
+  examId: string;
+  examName: string;
+  route: string;
+}
+
+export interface ResolvedUpcomingExam {
+  exam: Exam;
+  config: UpcomingExamConfig;
+  daysLeft: number | null;
+}
+
 export interface ResolvedHomepage {
   seo: { title?: string; metaDescription?: string; canonicalUrl?: string; ogTitle?: string; ogDescription?: string };
   sections: {
@@ -30,10 +63,17 @@ export interface ResolvedHomepage {
     resolved: {
       exam?: Exam | null;
       examStats?: ResolvedExamStats | null;
-      upcomingExams?: { exam: Exam; config: UpcomingExamConfig }[];
+      examRoute?: string | null;
+      upcomingExams?: ResolvedUpcomingExam[];
       papers?: PreviousYearPaper[];
-      testSeries?: TestSeries[];
+      paperExamId?: string | null;
+      testSeries?: (TestSeries & { exam: { name: string } })[];
+      featuredTests?: ResolvedFeaturedTest[];
+      liveMockTestCount?: number;
       statValues?: ResolvedStatValue[];
+      heroPanel?: ResolvedHeroPanel;
+      brand?: string;
+      copyrightLine?: string;
     };
   }[];
 }
@@ -63,7 +103,22 @@ async function resolveExamStats(examId: string): Promise<ResolvedExamStats> {
   };
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function daysUntil(date: Date): number {
+  return Math.ceil((date.getTime() - Date.now()) / DAY_MS);
+}
+
 export async function resolveHomepage(config: HomepageConfig & { sections: HomepageSection[] }): Promise<ResolvedHomepage> {
+  // Single shared live-stats snapshot for every section that needs platform
+  // totals (statistics cards, hero panel LIVE mode, hero supporting stats).
+  const platformStats = getHomepageStatistics();
+  const liveMockTestCountPromise = prisma.mockTest.count({ where: { status: "PUBLISHED" } });
+
+  const headerSection = config.sections.find((s) => s.key === "HEADER");
+  const headerContent = (headerSection?.content as Record<string, unknown>) ?? {};
+  const brand = typeof headerContent.logoText === "string" && headerContent.logoText ? headerContent.logoText : "Mock Test Series.in";
+
   const sections = await Promise.all(
     config.sections
       .sort((a, b) => a.order - b.order)
@@ -77,7 +132,40 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
           resolved.exam = exam && exam.isActive ? exam : null;
           if (resolved.exam) {
             resolved.examStats = await resolveExamStats(resolved.exam.id);
+            resolved.examRoute = `/student/exams/${resolved.exam.id}`;
           }
+        }
+
+        if (section.key === "HERO") {
+          const panel = normalizeHeroPanel(content.panel);
+          let live = { questionsAnswered: 0, mockTestsAttempted: 0, aiExplanations: 0, activeExams: 0 };
+          if (panel.mode === "LIVE") {
+            live = {
+              questionsAnswered: (await platformStats).values.questionsAnswered,
+              mockTestsAttempted: (await platformStats).values.mockTestsAttempted,
+              aiExplanations: (await platformStats).values.aiExplanations,
+              activeExams: (await platformStats).values.examsActive,
+            };
+          }
+          const liveCount = Object.values(live).reduce((sum, n) => sum + (n || 0), 0);
+          resolved.heroPanel = { config: panel, live, liveCount };
+
+          // Supporting statistics under the headline (real numbers only).
+          const stats = await platformStats;
+          const heroStatValues: ResolvedStatValue[] = [
+            {
+              label: "Published Tests",
+              value: String((await liveMockTestCountPromise)),
+              mode: "LIVE",
+            },
+            { label: "Questions", value: String(stats.values.questionBank), mode: "LIVE" },
+            { label: "Active Exams", value: String(stats.values.examsActive), mode: "LIVE" },
+          ];
+          resolved.statValues = heroStatValues.filter((s) => s.value !== "0");
+        }
+
+        if (section.key === "MOCK_TEST_PROMOTION") {
+          resolved.liveMockTestCount = await liveMockTestCountPromise;
         }
 
         if (section.key === "UPCOMING_EXAMS") {
@@ -90,27 +178,95 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
             resolved.upcomingExams = configs
               .map((config) => {
                 const exam = examById.get(config.examId);
-                return exam ? { exam, config } : null;
+                return exam ? { exam, config, daysLeft: exam.upcomingDate ? daysUntil(exam.upcomingDate) : null } : null;
               })
-              .filter((entry): entry is { exam: Exam; config: UpcomingExamConfig } => entry !== null);
+              .filter((entry): entry is ResolvedUpcomingExam => entry !== null);
           }
         }
 
-        if (section.key === "PREVIOUS_YEAR_PAPERS" && Array.isArray(references.paperIds)) {
-          resolved.papers = await prisma.previousYearPaper.findMany({
-            where: { id: { in: references.paperIds as string[] }, isActive: true },
-            orderBy: { year: "desc" },
-          });
+        if (section.key === "PREVIOUS_YEAR_PAPERS") {
+          const explicitIds = Array.isArray(references.paperIds) ? (references.paperIds as string[]) : [];
+          const examId = typeof references.examId === "string" ? references.examId : undefined;
+          const maxCardsRaw = typeof content.maxCards === "string" ? content.maxCards.trim() : "";
+          const maxCards = Number.isFinite(Number(maxCardsRaw)) && Number(maxCardsRaw) > 0 ? Number(maxCardsRaw) : undefined;
+
+          if (explicitIds.length > 0) {
+            resolved.papers = await prisma.previousYearPaper.findMany({
+              where: { id: { in: explicitIds }, isActive: true },
+              orderBy: { year: "desc" },
+            });
+          } else if (examId) {
+            resolved.papers = await prisma.previousYearPaper.findMany({
+              where: { examId, isActive: true },
+              orderBy: [{ year: "desc" }, { order: "asc" }],
+              take: maxCards,
+            });
+          }
+          resolved.paperExamId = examId ?? null;
         }
 
         if (section.key === "TEST_SERIES" && Array.isArray(references.testSeriesIds)) {
           resolved.testSeries = await prisma.testSeries.findMany({
             where: { id: { in: references.testSeriesIds as string[] }, isActive: true },
+            orderBy: { order: "asc" },
+            include: { exam: { select: { name: true } } },
           });
         }
 
+        if (section.key === "TEST_SERIES") {
+          const explicitTestIds = Array.isArray(references.featuredTestIds) ? (references.featuredTestIds as string[]) : [];
+          const showLiveTests = content.showLiveTests !== false;
+          const maxTestsRaw = typeof content.maxTests === "string" ? content.maxTests.trim() : "";
+          const maxTests = Number.isFinite(Number(maxTestsRaw)) && Number(maxTestsRaw) > 0 ? Number(maxTestsRaw) : 6;
+
+          const rows: { mockTest: MockTest; questionCount: number; examName: string }[] = [];
+          if (showLiveTests) {
+            const baseQuery = {
+              where: { status: "PUBLISHED" as const },
+              include: { _count: { select: { questions: true } }, exam: { select: { id: true, name: true } } },
+              orderBy: { createdAt: "desc" as const },
+              take: Math.max(maxTests, explicitTestIds.length),
+            };
+            if (explicitTestIds.length > 0) {
+              const explicit = await prisma.mockTest.findMany({ ...baseQuery, where: { id: { in: explicitTestIds }, status: "PUBLISHED" } });
+              const byId = new Map(explicit.map((t) => [t.id, t]));
+              explicitTestIds.forEach((id) => {
+                const t = byId.get(id);
+                if (t) rows.push({ mockTest: t, questionCount: t._count.questions, examName: t.exam.name });
+              });
+              // Top up with the newest tests if fewer explicit ones exist than the limit.
+              const remaining = maxTests - rows.length;
+              if (remaining > 0) {
+                const extra = await prisma.mockTest.findMany({
+                  where: { status: "PUBLISHED", id: { notIn: explicitTestIds } },
+                  include: { _count: { select: { questions: true } }, exam: { select: { id: true, name: true } } },
+                  orderBy: { createdAt: "desc" },
+                  take: remaining,
+                });
+                extra.forEach((t) => rows.push({ mockTest: t, questionCount: t._count.questions, examName: t.exam.name }));
+              }
+            } else {
+              const auto = await prisma.mockTest.findMany({ ...baseQuery, take: maxTests });
+              auto.forEach((t) => rows.push({ mockTest: t, questionCount: t._count.questions, examName: t.exam.name }));
+            }
+          }
+
+          resolved.featuredTests = rows.map(({ mockTest, questionCount, examName }) => ({
+            id: mockTest.id,
+            title: mockTest.title,
+            durationMinutes: mockTest.durationMinutes,
+            negativeMarking: mockTest.negativeMarking,
+            questionCount,
+            status: mockTest.status,
+            examId: mockTest.examId,
+            examName,
+            route: `/student/exams/${mockTest.examId}`,
+          }));
+        }
+
         if (section.key === "STATISTICS" && Array.isArray(content.metrics)) {
-          const stats = await getHomepageStatistics();
+          const stats = await platformStats;
+          const hideZeroLive = content.hideZeroLive === true;
           const metrics = normalizeStatMetrics(content.metrics).filter((m) => m.enabled);
           resolved.statValues = metrics.map((m) => ({
             label: m.label,
@@ -121,6 +277,16 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
             link: m.link,
             mode: m.mode,
           }));
+          if (hideZeroLive) {
+            resolved.statValues = resolved.statValues.filter((v) => !(v.mode === "LIVE" && v.value === "0"));
+          }
+        }
+
+        if (section.key === "FOOTER") {
+          const year = new Date().getFullYear();
+          const override = typeof content.copyrightOverride === "string" ? content.copyrightOverride : "";
+          resolved.brand = brand;
+          resolved.copyrightLine = override || `© ${year} ${brand}`;
         }
 
         return { key: section.key, isEnabled: section.isEnabled, order: section.order, content, resolved };

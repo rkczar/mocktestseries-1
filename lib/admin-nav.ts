@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   CreditCard,
   Settings,
+  Activity,
 } from "lucide-react";
 
 export interface AdminNavItem {
@@ -36,6 +37,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     icon: Globe,
     items: [
       { label: "Homepage", href: "/admin/website/homepage", status: "live" },
+      { label: "Login Page", href: "/admin/website/login-page", status: "live" },
       { label: "Website Diagram", href: "/admin/website/diagram", status: "live" },
       { label: "Appearance", href: "/admin/website/appearance", status: "live" },
       { label: "Navigation", href: "/admin/website/navigation", status: "draft" },
@@ -131,8 +133,13 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     items: [
       { label: "General Settings", href: "/admin/settings/general", status: "draft" },
       { label: "Security", href: "/admin/settings/security", status: "draft" },
-      { label: "Authentication", href: "/admin/settings/authentication", status: "draft" },
+      { label: "Authentication", href: "/admin/settings/authentication", status: "live" },
       { label: "Notifications", href: "/admin/settings/notifications", status: "draft" },
     ],
+  },
+  {
+    label: "Monitoring",
+    icon: Activity,
+    items: [{ label: "Authentication", href: "/admin/monitoring/authentication", status: "live" }],
   },
 ];

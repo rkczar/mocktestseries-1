@@ -26,19 +26,19 @@ export interface AppearanceComponentStyle {
 
 export const DEFAULT_APPEARANCE = {
   colors: {
-    primary: "#0F4C81",
-    secondary: "#1B6FA8",
-    accent: "#F57C00",
-    success: "#2E7D32",
-    error: "#C62828",
-    warning: "#F57C00",
-    info: "#0F4C81",
+    primary: "#3B82F6",
+    secondary: "#60A5FA",
+    accent: "#EA580C",
+    success: "#22C55E",
+    error: "#F87171",
+    warning: "#F59E0B",
+    info: "#60A5FA",
   } satisfies AppearanceColors,
   fonts: {
     heading: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif",
     body: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif",
   } satisfies AppearanceFonts,
-  buttonStyle: { radius: "0.5rem" } satisfies AppearanceButtonStyle,
+  buttonStyle: { radius: "0.625rem" } satisfies AppearanceButtonStyle,
   componentStyle: { cardRadius: "0.75rem", shadowIntensity: "sm" } satisfies AppearanceComponentStyle,
 };
 

@@ -6,10 +6,14 @@ import type { NextAuthConfig } from "next-auth";
  * Credentials/Google providers or Prisma here, since middleware runs on the
  * Edge runtime. The real providers live in lib/auth-student.ts.
  *
- * A distinct cookie name (`student-session-token`, vs next-auth's default
- * `authjs.session-token` used by the Admin instance) guarantees an admin
- * session and a student session are never the same credential, and that
- * neither dashboard is reachable with the other's session.
+ * Distinct cookie names (`student-session-token`, `student-csrf-token`,
+ * `student-callback-url` vs next-auth's `authjs.*` defaults used by the
+ * Admin instance) guarantee an admin session and a student session are
+ * never the same credential, and that neither dashboard is reachable with
+ * the other's session. All three must be renamed, not just sessionToken —
+ * next-auth does not scope cookies by `basePath`, so leaving csrfToken/
+ * callbackUrl at their defaults would have both instances read and write
+ * the exact same two cookies in the same browser.
  */
 export const studentAuthConfig = {
   basePath: "/api/student-auth",
@@ -22,6 +26,23 @@ export const studentAuthConfig = {
       name: "student-session-token",
       options: {
         httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+      },
+    },
+    csrfToken: {
+      name: "student-csrf-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+      },
+    },
+    callbackUrl: {
+      name: "student-callback-url",
+      options: {
         sameSite: "lax",
         path: "/",
         secure: process.env.NODE_ENV === "production",

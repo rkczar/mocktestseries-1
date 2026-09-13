@@ -125,6 +125,41 @@ export function normalizeUpcomingExams(raw: unknown, fallbackExamIds?: unknown):
   return [];
 }
 
+export type HeroPanelMode = "DEMO" | "LIVE" | "HIDDEN";
+
+export interface HeroPanelConfig {
+  enabled: boolean;
+  mode: HeroPanelMode;
+  showBadge: boolean;
+  badgeLabel?: string;
+  score?: string;
+  maxScore?: string;
+  percentile?: string;
+  correct?: string;
+  time?: string;
+}
+
+/**
+ * Normalizes the HERO "analytics preview" panel. Legacy content (no `panel`
+ * field) always degrades to disabled, so an old config can never accidentally
+ * display fake scorecard values.
+ */
+export function normalizeHeroPanel(raw: unknown): HeroPanelConfig {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const mode = r.mode === "DEMO" || r.mode === "LIVE" ? r.mode : "HIDDEN";
+  return {
+    enabled: r.enabled === true,
+    mode,
+    showBadge: r.showBadge !== false,
+    badgeLabel: typeof r.badgeLabel === "string" ? r.badgeLabel : "Preview",
+    score: typeof r.score === "string" ? r.score : undefined,
+    maxScore: typeof r.maxScore === "string" ? r.maxScore : undefined,
+    percentile: typeof r.percentile === "string" ? r.percentile : undefined,
+    correct: typeof r.correct === "string" ? r.correct : undefined,
+    time: typeof r.time === "string" ? r.time : undefined,
+  };
+}
+
 export function pairListToText(value: unknown): string {
   if (!Array.isArray(value)) return "";
   return value.map((pair) => (Array.isArray(pair) ? `${pair[0] ?? ""} | ${pair[1] ?? ""}` : "")).join("\n");

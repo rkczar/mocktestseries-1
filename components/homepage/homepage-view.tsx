@@ -64,7 +64,10 @@ export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
       </main>
 
       {footer?.isEnabled !== false ? (
-        <SiteFooter content={(footer?.content as Record<string, unknown>) ?? {}} />
+        <SiteFooter
+          content={(footer?.content as Record<string, unknown>) ?? {}}
+          resolved={footer?.resolved ?? {}}
+        />
       ) : null}
     </div>
   );

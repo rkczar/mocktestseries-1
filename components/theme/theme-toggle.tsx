@@ -30,11 +30,11 @@ function notify() {
 
 function readThemeFromDom(): Theme {
   const attr = document.documentElement.dataset.theme;
-  return isTheme(attr) ? attr : "light";
+  return isTheme(attr) ? attr : "dark";
 }
 
 function getServerSnapshot(): Theme {
-  return "light";
+  return "dark";
 }
 
 function applyTheme(theme: Theme) {

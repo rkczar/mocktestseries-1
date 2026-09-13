@@ -84,12 +84,13 @@ export function StudentHeader({ name, studentId }: { name: string; studentId: st
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <form action={studentLogoutAction} className="w-full">
-                  <button type="submit" className="flex w-full items-center gap-2">
-                    <LogOut className="h-4 w-4" aria-hidden /> Logout
-                  </button>
-                </form>
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  void studentLogoutAction();
+                }}
+              >
+                <LogOut className="h-4 w-4" aria-hidden /> Logout
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
