@@ -17,8 +17,30 @@ function NavGroup({
   onNavigate?: () => void;
 }) {
   const isGroupActive = group.items.some((item) => pathname === item.href);
-  const [open, setOpen] = useState(isGroupActive || group.items.length === 1);
+  const [open, setOpen] = useState(isGroupActive);
   const Icon = group.icon;
+
+  // A single-item group has nothing to expand — the header itself must be the
+  // real, visible navigation link, not a button that only toggles a hidden
+  // accordion no one can see (that previously left it looking clickable but
+  // going nowhere, e.g. this hid Dashboard / Custom Modules / Monitoring).
+  if (group.items.length === 1) {
+    return (
+      <Link
+        href={group.items[0].href}
+        onClick={onNavigate}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-[var(--radius-button)] px-3 py-2 text-sm font-medium transition-colors",
+          isGroupActive
+            ? "bg-[var(--color-primary)]/10 text-[var(--color-primary)]"
+            : "text-[var(--color-foreground)] hover:bg-[var(--color-surface)]"
+        )}
+      >
+        <Icon className="h-4 w-4" aria-hidden />
+        {group.label}
+      </Link>
+    );
+  }
 
   return (
     <div>
@@ -36,11 +58,9 @@ function NavGroup({
           <Icon className="h-4 w-4" aria-hidden />
           {group.label}
         </span>
-        {group.items.length > 1 ? (
-          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} aria-hidden />
-        ) : null}
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} aria-hidden />
       </button>
-      {open && group.items.length > 1 ? (
+      {open ? (
         <div className="mt-1 flex flex-col gap-0.5 border-l border-[var(--color-border)] pl-4">
           {group.items.map((item) => {
             const active = pathname === item.href;
@@ -66,15 +86,6 @@ function NavGroup({
             );
           })}
         </div>
-      ) : null}
-      {group.items.length === 1 ? (
-        <Link
-          href={group.items[0].href}
-          onClick={onNavigate}
-          className="sr-only"
-        >
-          {group.items[0].label}
-        </Link>
       ) : null}
     </div>
   );

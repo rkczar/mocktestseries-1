@@ -4,6 +4,7 @@ import argon2 from "argon2";
 import type { OtpPurpose } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendSms } from "@/lib/sms";
+import { getSmsProviderName } from "@/lib/auth-provider-config";
 
 const OTP_LENGTH = 6;
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -47,9 +48,18 @@ export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress:
     data: { mobile, purpose, otpHash, expiresAt, ipAddress, maxAttempts: MAX_VERIFY_ATTEMPTS },
   });
 
-  await sendSms(mobile, `Your MockTestSeries.in verification code is ${code}. It expires in 5 minutes.`);
+  const providerName = await getSmsProviderName();
+  try {
+    await sendSms(mobile, `Your MockTestSeries.in verification code is ${code}. It expires in 5 minutes.`);
+  } catch (error) {
+    // The row above is already written, but with no channel that reached the
+    // student it must not be reported as a pending code — surface a clear,
+    // honest failure instead of a false "check your phone" state.
+    console.error(`[otp] sendSms failed via ${providerName}:`, error);
+    throw new OtpError("We couldn't send a verification code right now. Please try Password login instead, or contact support.");
+  }
 
-  const isDevProvider = (process.env.SMS_PROVIDER ?? "console") === "console";
+  const isDevProvider = providerName === "console";
   return { devCode: process.env.NODE_ENV !== "production" && isDevProvider ? code : undefined };
 }
 
