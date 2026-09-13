@@ -15,16 +15,36 @@ const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
 
 export type DrawerSelection = { kind: "node"; node: DiagramNode } | { kind: "edge"; edge: DiagramEdge };
 
-function ConnectionRow({ nodeId, source, label, broken }: { nodeId: string; source: string; label?: string; broken: boolean }) {
+function ConnectionRow({
+  nodeId,
+  source,
+  label,
+  broken,
+  pageNameByRoute,
+}: {
+  nodeId: string;
+  source: string;
+  label?: string;
+  broken: boolean;
+  pageNameByRoute: Map<string, string>;
+}) {
   return (
     <div className={styles.connectionRow} data-broken={broken || undefined}>
-      <span className={styles.connectionRoute}>{nodeId}</span>
+      <span className={styles.connectionRoute}>{pageNameByRoute.get(nodeId) ?? nodeId}</span>
       <span className={styles.connectionSource}>{label ?? source}</span>
     </div>
   );
 }
 
-export function DetailsDrawer({ selection, onClose }: { selection: DrawerSelection; onClose: () => void }) {
+export function DetailsDrawer({
+  selection,
+  pageNameByRoute,
+  onClose,
+}: {
+  selection: DrawerSelection;
+  pageNameByRoute: Map<string, string>;
+  onClose: () => void;
+}) {
   return (
     <aside className={styles.drawer}>
       <div className={styles.drawerHeader}>
@@ -56,6 +76,13 @@ export function DetailsDrawer({ selection, onClose }: { selection: DrawerSelecti
           </div>
           {selection.node.isolated ? (
             <div className={styles.warningBox}>⚠ Isolated page — no incoming or outgoing connections detected.</div>
+          ) : selection.node.noIncoming ? (
+            <div className={styles.warningBox}>⚠ Nothing links into this page yet — it&apos;s only reachable by typing the URL directly.</div>
+          ) : null}
+          {selection.node.autoDiscovered ? (
+            <div className={styles.warningBox}>
+              🆕 Auto-discovered — this page exists in the codebase but hasn&apos;t been added to the route registry yet.
+            </div>
           ) : null}
 
           <div>
@@ -65,7 +92,7 @@ export function DetailsDrawer({ selection, onClose }: { selection: DrawerSelecti
             {selection.node.incoming.length ? (
               <div className={styles.connectionList}>
                 {selection.node.incoming.map((c, i) => (
-                  <ConnectionRow key={`${c.nodeId}-${i}`} nodeId={c.nodeId} source={c.source} label={c.label} broken={c.broken} />
+                  <ConnectionRow key={`${c.nodeId}-${i}`} nodeId={c.nodeId} source={c.source} label={c.label} broken={c.broken} pageNameByRoute={pageNameByRoute} />
                 ))}
               </div>
             ) : (
@@ -80,7 +107,7 @@ export function DetailsDrawer({ selection, onClose }: { selection: DrawerSelecti
             {selection.node.outgoing.length ? (
               <div className={styles.connectionList}>
                 {selection.node.outgoing.map((c, i) => (
-                  <ConnectionRow key={`${c.nodeId}-${i}`} nodeId={c.nodeId} source={c.source} label={c.label} broken={c.broken} />
+                  <ConnectionRow key={`${c.nodeId}-${i}`} nodeId={c.nodeId} source={c.source} label={c.label} broken={c.broken} pageNameByRoute={pageNameByRoute} />
                 ))}
               </div>
             ) : (
@@ -92,10 +119,12 @@ export function DetailsDrawer({ selection, onClose }: { selection: DrawerSelecti
         <div className={styles.drawerBody}>
           <div>
             <p className={styles.drawerFieldLabel}>From</p>
+            <p className={styles.drawerFieldValue}>{pageNameByRoute.get(selection.edge.from) ?? selection.edge.from}</p>
             <p className={styles.drawerFieldValueMono}>{selection.edge.from}</p>
           </div>
           <div>
             <p className={styles.drawerFieldLabel}>To</p>
+            <p className={styles.drawerFieldValue}>{pageNameByRoute.get(selection.edge.to) ?? selection.edge.to}</p>
             <p className={styles.drawerFieldValueMono}>{selection.edge.to}</p>
           </div>
           <div className={styles.drawerRow}>

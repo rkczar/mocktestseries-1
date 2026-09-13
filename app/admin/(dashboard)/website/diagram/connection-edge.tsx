@@ -3,7 +3,7 @@ import type { ConnectionSource } from "@/lib/route-connections";
 import styles from "./graph-view.module.css";
 
 export type ConnectionEdgeType = Edge<
-  { source: ConnectionSource; label?: string; broken: boolean; showLabel?: boolean },
+  { source: ConnectionSource; label?: string; broken: boolean; showLabel?: boolean; dimmed?: boolean },
   "connectionEdge"
 >;
 
@@ -29,6 +29,7 @@ export function ConnectionEdge({
   });
 
   const broken = data?.broken ?? false;
+  const dimmed = data?.dimmed ?? false;
 
   return (
     <>
@@ -38,6 +39,7 @@ export function ConnectionEdge({
         markerEnd={markerEnd}
         className={styles.edge}
         data-broken={broken || undefined}
+        data-dimmed={dimmed || undefined}
         style={broken ? { strokeDasharray: 5 } : undefined}
       />
       {data && data.showLabel !== false ? (
@@ -45,6 +47,7 @@ export function ConnectionEdge({
           <div
             className={styles.edgeLabel}
             data-broken={broken || undefined}
+            data-dimmed={dimmed || undefined}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           >
             {broken ? "⚠ " : ""}

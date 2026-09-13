@@ -133,7 +133,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     items: [
       { label: "General Settings", href: "/admin/settings/general", status: "draft" },
       { label: "Security", href: "/admin/settings/security", status: "draft" },
-      { label: "Authentication", href: "/admin/settings/authentication", status: "live" },
+      { label: "API Management", href: "/admin/settings/authentication", status: "live" },
       { label: "Notifications", href: "/admin/settings/notifications", status: "draft" },
     ],
   },

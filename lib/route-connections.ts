@@ -20,7 +20,8 @@ export type ConnectionSource =
   | "cta"
   | "redirect"
   | "form"
-  | "internal";
+  | "internal"
+  | "scanned";
 
 export interface RouteConnection {
   from: string;

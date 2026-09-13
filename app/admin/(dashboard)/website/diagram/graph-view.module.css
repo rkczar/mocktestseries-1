@@ -55,7 +55,14 @@
 }
 
 .node[data-dimmed] {
-  opacity: 0.35;
+  opacity: 0.3;
+  filter: grayscale(0.4);
+}
+
+.nodeNewTag {
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: var(--color-info);
 }
 
 .nodeHeader {
@@ -112,6 +119,14 @@
 
 .edge[data-broken] {
   stroke: var(--color-error);
+}
+
+.edge[data-dimmed] {
+  opacity: 0.15;
+}
+
+.edgeLabel[data-dimmed] {
+  opacity: 0.2;
 }
 
 .edgeLabel {

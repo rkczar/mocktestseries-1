@@ -7,14 +7,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { SelectNative } from "@/components/ui/select-native";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import type { AuthProviderPublicConfig } from "@/lib/auth-provider-config";
+import type { GeminiPublicConfig } from "@/lib/gemini-config";
+import type { RazorpayPublicConfig } from "@/lib/razorpay-config";
 import {
   saveGoogleConfigAction,
   saveMsg91ConfigAction,
   saveLoginMethodTogglesAction,
   testGoogleConnectionAction,
   testMsg91ConnectionAction,
+  saveGeminiConfigAction,
+  testGeminiConnectionAction,
+  saveRazorpayConfigAction,
+  testRazorpayConnectionAction,
   type SettingsFormState,
   type TestConnectionState,
 } from "./actions";
@@ -206,6 +213,139 @@ export function Msg91Card({ msg91 }: { msg91: AuthProviderPublicConfig["msg91"] 
               <Label htmlFor="msg91-flow-id">Flow ID (Flow API only)</Label>
               <Input id="msg91-flow-id" name="flowId" defaultValue={msg91.flowId} placeholder="64xxxxxxxxxxxxxxxxxxxxxx" />
             </div>
+          </div>
+
+          <CardFooter className="flex-wrap items-center gap-3 p-0">
+            <SubmitButton pendingLabel="Saving…">Save Configuration</SubmitButton>
+            <SaveFeedback state={saveState} />
+          </CardFooter>
+        </form>
+
+        <form action={testAction} className="mt-3 flex flex-col gap-2 border-t border-[var(--color-border)] pt-3">
+          <div className="flex items-center gap-3">
+            <TestButton />
+            <TestResult state={testState} />
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function GeminiCard({ gemini }: { gemini: GeminiPublicConfig }) {
+  const [saveState, saveAction] = useActionState<SettingsFormState, FormData>(saveGeminiConfigAction, {});
+  const [testState, testAction] = useActionState<TestConnectionState, FormData>(testGeminiConnectionAction, {
+    result: gemini.lastTest ?? undefined,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>Gemini AI</CardTitle>
+          <StatusBadge configured={gemini.configured} enabled={gemini.enabled} />
+        </div>
+        <CardDescription>
+          Stores a Gemini API key for future AI features. Question explanations today run on Anthropic Claude
+          (ANTHROPIC_API_KEY) — this key isn&apos;t consumed by that pipeline yet.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form action={saveAction} className="flex flex-col gap-4">
+          <div className="flex items-center justify-between rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-[var(--color-foreground)]">Enabled</p>
+              <p className="text-xs text-[var(--color-muted-foreground)]">Allow AI explanation generation to use Gemini.</p>
+            </div>
+            <Switch name="enabled" defaultChecked={gemini.enabled} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="gemini-api-key">
+              API Key {gemini.apiKeyConfigured ? <span className="text-[var(--color-muted-foreground)]">(configured — leave blank to keep)</span> : null}
+            </Label>
+            <Input
+              id="gemini-api-key"
+              name="apiKey"
+              type="password"
+              autoComplete="off"
+              placeholder={gemini.apiKeyConfigured ? "••••••••••••••••" : "Paste Gemini API key"}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="gemini-model">Model</Label>
+            <Input id="gemini-model" name="model" defaultValue={gemini.model} placeholder="gemini-2.5-flash" />
+          </div>
+
+          <CardFooter className="flex-wrap items-center gap-3 p-0">
+            <SubmitButton pendingLabel="Saving…">Save Configuration</SubmitButton>
+            <SaveFeedback state={saveState} />
+          </CardFooter>
+        </form>
+
+        <form action={testAction} className="mt-3 flex flex-col gap-2 border-t border-[var(--color-border)] pt-3">
+          <div className="flex items-center gap-3">
+            <TestButton />
+            <TestResult state={testState} />
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function RazorpayCard({ razorpay }: { razorpay: RazorpayPublicConfig }) {
+  const [saveState, saveAction] = useActionState<SettingsFormState, FormData>(saveRazorpayConfigAction, {});
+  const [testState, testAction] = useActionState<TestConnectionState, FormData>(testRazorpayConnectionAction, {
+    result: razorpay.lastTest ?? undefined,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>Razorpay Payment Gateway</CardTitle>
+          <StatusBadge configured={razorpay.configured} enabled={razorpay.enabled} />
+        </div>
+        <CardDescription>
+          Prototype only — credentials are stored encrypted, but no checkout flow calls Razorpay yet.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form action={saveAction} className="flex flex-col gap-4">
+          <div className="flex items-center justify-between rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-[var(--color-foreground)]">Enabled</p>
+              <p className="text-xs text-[var(--color-muted-foreground)]">Reserved for when checkout is wired up.</p>
+            </div>
+            <Switch name="enabled" defaultChecked={razorpay.enabled} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="razorpay-mode">Mode</Label>
+            <SelectNative id="razorpay-mode" name="mode" defaultValue={razorpay.mode}>
+              <option value="test">Test mode</option>
+              <option value="live">Live mode</option>
+            </SelectNative>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="razorpay-key-id">Key ID</Label>
+            <Input id="razorpay-key-id" name="keyId" defaultValue={razorpay.keyId} placeholder="rzp_test_xxxxxxxxxxxxxx" />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="razorpay-key-secret">
+              Key Secret {razorpay.keySecretConfigured ? <span className="text-[var(--color-muted-foreground)]">(configured — leave blank to keep)</span> : null}
+            </Label>
+            <Input
+              id="razorpay-key-secret"
+              name="keySecret"
+              type="password"
+              autoComplete="off"
+              placeholder={razorpay.keySecretConfigured ? "••••••••••••••••" : "Paste key secret"}
+            />
           </div>
 
           <CardFooter className="flex-wrap items-center gap-3 p-0">

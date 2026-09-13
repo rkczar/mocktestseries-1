@@ -10,6 +10,8 @@ import {
   testMsg91Connection,
   type ProviderLastTest,
 } from "@/lib/auth-provider-config";
+import { saveGeminiConfig, testGeminiConnection } from "@/lib/gemini-config";
+import { saveRazorpayConfig, testRazorpayConnection, type RazorpayMode } from "@/lib/razorpay-config";
 
 export interface SettingsFormState {
   error?: string;
@@ -26,6 +28,15 @@ function revalidateAuthSurfaces() {
   revalidatePath("/login");
 }
 
+async function logAudit(
+  actorId: string | undefined,
+  action: string,
+  entityId: string,
+  metadata?: Record<string, boolean>
+) {
+  await prisma.auditLog.create({ data: { actorId, action, entityType: "Setting", entityId, metadata } });
+}
+
 export async function saveGoogleConfigAction(
   _prev: SettingsFormState,
   formData: FormData
@@ -37,10 +48,7 @@ export async function saveGoogleConfigAction(
   const clientSecret = String(formData.get("clientSecret") ?? "").trim();
 
   await saveAuthProviderConfig({ google: { enabled, clientId, clientSecret: clientSecret || undefined } });
-
-  await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "AUTH_PROVIDER_GOOGLE_SAVED", entityType: "Setting", entityId: "auth.providers" },
-  });
+  await logAudit(session.user.id, "AUTH_PROVIDER_GOOGLE_SAVED", "auth.providers", { enabled });
 
   revalidateAuthSurfaces();
   return { success: true };
@@ -61,10 +69,7 @@ export async function saveMsg91ConfigAction(
   await saveAuthProviderConfig({
     msg91: { enabled, authKey: authKey || undefined, senderId, flowId, widgetId },
   });
-
-  await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "AUTH_PROVIDER_MSG91_SAVED", entityType: "Setting", entityId: "auth.providers" },
-  });
+  await logAudit(session.user.id, "AUTH_PROVIDER_MSG91_SAVED", "auth.providers", { enabled });
 
   revalidateAuthSurfaces();
   return { success: true };
@@ -84,24 +89,75 @@ export async function saveLoginMethodTogglesAction(
     },
   });
 
-  await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "AUTH_LOGIN_METHODS_SAVED", entityType: "Setting", entityId: "auth.providers" },
-  });
+  await logAudit(session.user.id, "AUTH_LOGIN_METHODS_SAVED", "auth.providers");
 
   revalidateAuthSurfaces();
   return { success: true };
 }
 
 export async function testGoogleConnectionAction(): Promise<TestConnectionState> {
-  await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
+  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
   const result = await testGoogleConnection();
+  await logAudit(session.user.id, "AUTH_PROVIDER_GOOGLE_TESTED", "auth.providers", { ok: result.ok });
   revalidateAuthSurfaces();
   return { result };
 }
 
 export async function testMsg91ConnectionAction(): Promise<TestConnectionState> {
-  await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
+  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
   const result = await testMsg91Connection();
+  await logAudit(session.user.id, "AUTH_PROVIDER_MSG91_TESTED", "auth.providers", { ok: result.ok });
   revalidateAuthSurfaces();
+  return { result };
+}
+
+export async function saveGeminiConfigAction(
+  _prev: SettingsFormState,
+  formData: FormData
+): Promise<SettingsFormState> {
+  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
+
+  const enabled = formData.get("enabled") === "on";
+  const apiKey = String(formData.get("apiKey") ?? "").trim();
+  const model = String(formData.get("model") ?? "").trim();
+
+  await saveGeminiConfig({ enabled, apiKey: apiKey || undefined, model });
+  await logAudit(session.user.id, "API_GEMINI_SAVED", "api.gemini", { enabled });
+
+  revalidatePath("/admin/settings/authentication");
+  return { success: true };
+}
+
+export async function testGeminiConnectionAction(): Promise<TestConnectionState> {
+  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
+  const result = await testGeminiConnection();
+  await logAudit(session.user.id, "API_GEMINI_TESTED", "api.gemini", { ok: result.ok });
+  revalidatePath("/admin/settings/authentication");
+  return { result };
+}
+
+export async function saveRazorpayConfigAction(
+  _prev: SettingsFormState,
+  formData: FormData
+): Promise<SettingsFormState> {
+  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
+
+  const enabled = formData.get("enabled") === "on";
+  const mode = (String(formData.get("mode") ?? "test") === "live" ? "live" : "test") as RazorpayMode;
+  const keyId = String(formData.get("keyId") ?? "").trim();
+  const keySecret = String(formData.get("keySecret") ?? "").trim();
+
+  await saveRazorpayConfig({ enabled, mode, keyId, keySecret: keySecret || undefined });
+  await logAudit(session.user.id, "API_RAZORPAY_SAVED", "api.razorpay", { enabled });
+
+  revalidatePath("/admin/settings/authentication");
+  return { success: true };
+}
+
+export async function testRazorpayConnectionAction(): Promise<TestConnectionState> {
+  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
+  const result = await testRazorpayConnection();
+  await logAudit(session.user.id, "API_RAZORPAY_TESTED", "api.razorpay", { ok: result.ok });
+  revalidatePath("/admin/settings/authentication");
   return { result };
 }

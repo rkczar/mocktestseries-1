@@ -17,6 +17,8 @@ export interface DiagramEntry {
   authRequired: boolean;
   parentRoute?: string | null;
   status: string;
+  /** True when this entry was found on disk (a real page.tsx) but isn't in the registry DB yet — the diagram picked it up automatically. */
+  autoDiscovered?: boolean;
 }
 
 export interface ConnectionRef {
@@ -34,10 +36,13 @@ export interface DiagramNode {
   userType: string;
   authRequired: boolean;
   status: string;
+  autoDiscovered: boolean;
   incoming: ConnectionRef[];
   outgoing: ConnectionRef[];
   connectionCount: number;
   isolated: boolean;
+  /** Has outgoing navigation but nothing links into it — a common, milder problem than a fully isolated page. */
+  noIncoming: boolean;
   x: number;
   y: number;
 }
@@ -108,11 +113,13 @@ export function buildGraph(entries: DiagramEntry[], connections: RouteConnection
       userType: entry.userType,
       authRequired: entry.authRequired,
       status: entry.status,
+      autoDiscovered: entry.autoDiscovered ?? false,
       incoming,
       outgoing,
       connectionCount: incoming.length + outgoing.length,
       // Homepage is the root of the tree and expected to have no incoming edge.
       isolated: incoming.length === 0 && outgoing.length === 0 && entry.route !== "/",
+      noIncoming: incoming.length === 0 && outgoing.length > 0 && entry.route !== "/",
       x: 0,
       y: 0,
     };
