@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, type ReactNode, type CSSProperties } from "react";
+import { useActionState, useState, useRef, useEffect, type ReactNode, type CSSProperties } from "react";
 import { useFormStatus } from "react-dom";
 import { Eye, EyeOff, Loader2, GraduationCap } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -157,10 +157,121 @@ function PasswordRegisterForm({ callbackUrl, buttonStyle }: { callbackUrl: strin
   );
 }
 
+const OTP_LENGTH = 6;
+const RESEND_COOLDOWN_SECONDS = 30;
+
+/**
+ * Six single-digit boxes backing one hidden `code` field, so the server
+ * action (which expects a plain `code` form value) needs no changes.
+ * Auto-advances on entry, moves back on backspace/left-arrow, and fills all
+ * boxes from a single pasted code.
+ */
+function OtpBoxInput({ autoSubmit }: { autoSubmit: () => void }) {
+  const [digits, setDigits] = useState<string[]>(() => Array(OTP_LENGTH).fill(""));
+  const boxRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    boxRefs.current[0]?.focus();
+  }, []);
+
+  function setDigit(index: number, value: string) {
+    setDigits((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      if (next.every((d) => d.length === 1)) {
+        // Let the DOM update (hidden input value) before submitting.
+        setTimeout(autoSubmit, 0);
+      }
+      return next;
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor="otp-box-0">OTP</Label>
+      <div className="flex justify-between gap-2">
+        {digits.map((digit, i) => (
+          <input
+            key={i}
+            id={`otp-box-${i}`}
+            ref={(el) => {
+              boxRefs.current[i] = el;
+            }}
+            type="text"
+            inputMode="numeric"
+            autoComplete={i === 0 ? "one-time-code" : "off"}
+            maxLength={1}
+            value={digit}
+            onChange={(e) => {
+              const val = e.target.value.replace(/\D/g, "").slice(-1);
+              setDigit(i, val);
+              if (val && i < OTP_LENGTH - 1) boxRefs.current[i + 1]?.focus();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Backspace" && !digits[i] && i > 0) {
+                boxRefs.current[i - 1]?.focus();
+                setDigit(i - 1, "");
+              } else if (e.key === "ArrowLeft" && i > 0) {
+                boxRefs.current[i - 1]?.focus();
+              } else if (e.key === "ArrowRight" && i < OTP_LENGTH - 1) {
+                boxRefs.current[i + 1]?.focus();
+              }
+            }}
+            onPaste={(e) => {
+              e.preventDefault();
+              const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, OTP_LENGTH);
+              if (!pasted) return;
+              const next = Array(OTP_LENGTH).fill("");
+              pasted.split("").forEach((ch, idx) => {
+                next[idx] = ch;
+              });
+              setDigits(next);
+              const focusIndex = Math.min(pasted.length, OTP_LENGTH - 1);
+              boxRefs.current[focusIndex]?.focus();
+              if (pasted.length === OTP_LENGTH) setTimeout(autoSubmit, 0);
+            }}
+            className="h-12 w-11 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] text-center font-mono text-xl font-bold text-[var(--color-foreground)] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+          />
+        ))}
+      </div>
+      <input type="hidden" name="code" value={digits.join("")} />
+    </div>
+  );
+}
+
+function ResendCountdown({ onResend }: { onResend: () => void }) {
+  const [secondsLeft, setSecondsLeft] = useState(RESEND_COOLDOWN_SECONDS);
+
+  useEffect(() => {
+    if (secondsLeft <= 0) return;
+    const t = setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [secondsLeft]);
+
+  if (secondsLeft > 0) {
+    return <span className="text-sm text-[var(--color-muted-foreground)]">Resend code in {secondsLeft}s</span>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setSecondsLeft(RESEND_COOLDOWN_SECONDS);
+        onResend();
+      }}
+      className="text-sm text-[var(--color-primary)] hover:underline"
+    >
+      Resend code
+    </button>
+  );
+}
+
 function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
   const [sendState, sendAction] = useActionState<AuthFormState, FormData>(sendMobileOtpAction, {});
   const [verifyState, verifyAction] = useActionState<AuthFormState, FormData>(verifyMobileOtpAction, {});
   const [resendState, resendAction] = useActionState<AuthFormState, FormData>(sendMobileOtpAction, {});
+  const verifyFormRef = useRef<HTMLFormElement>(null);
+  const resendFormRef = useRef<HTMLFormElement>(null);
 
   const active = resendState.sent ? resendState : sendState;
 
@@ -180,7 +291,7 @@ function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; butt
   }
 
   return (
-    <form action={verifyAction} className="flex flex-col gap-4" noValidate>
+    <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
       <input type="hidden" name="callbackUrl" value={callbackUrl} />
       <input type="hidden" name="mobile" value={active.mobile} />
       <input type="hidden" name="existing" value={String(active.existing)} />
@@ -208,29 +319,15 @@ function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; butt
         </>
       ) : null}
 
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="otp-code">OTP</Label>
-        <Input
-          id="otp-code"
-          name="code"
-          type="text"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          required
-          maxLength={6}
-          className="text-center text-lg tracking-[0.5em]"
-        />
-      </div>
+      <OtpBoxInput autoSubmit={() => verifyFormRef.current?.requestSubmit()} />
 
       <ErrorBanner message={verifyState.error} />
 
       <div className="flex items-center justify-between">
-        <form action={resendAction}>
+        <form ref={resendFormRef} action={resendAction}>
           <input type="hidden" name="mobile" value={active.mobile} />
-          <button type="submit" className="text-sm text-[var(--color-primary)] hover:underline">
-            Resend code
-          </button>
         </form>
+        <ResendCountdown onResend={() => resendFormRef.current?.requestSubmit()} />
       </div>
 
       <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
