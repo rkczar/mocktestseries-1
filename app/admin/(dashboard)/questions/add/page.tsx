@@ -36,10 +36,12 @@ export default async function AddQuestionPage({
     defaults = {
       id: question.id,
       examId: question.examId,
+      examYear: question.examYear,
       subjectId: question.subjectId,
       topicId: question.topicId,
       subTopicId: question.subTopicId,
       previousYearPaperId: question.previousYearPaperId,
+      source: question.source,
       text: question.text,
       imageUrl: question.imageUrl,
       difficulty: question.difficulty,

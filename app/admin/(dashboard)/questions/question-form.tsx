@@ -22,10 +22,12 @@ export interface ExamTree {
 export interface QuestionDefaults {
   id: string;
   examId: string;
+  examYear: number | null;
   subjectId: string;
   topicId: string | null;
   subTopicId: string | null;
   previousYearPaperId: string | null;
+  source: "QUESTION_BANK" | "PYQ";
   text: string;
   imageUrl: string | null;
   difficulty: "EASY" | "MEDIUM" | "HARD";
@@ -89,6 +91,19 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
         </div>
 
         <div className="flex flex-col gap-1.5">
+          <Label htmlFor="examYear">Exam Year</Label>
+          <Input
+            id="examYear"
+            name="examYear"
+            type="number"
+            min="2000"
+            max="2099"
+            defaultValue={defaults?.examYear ?? ""}
+            placeholder="e.g., 2024"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
           <Label htmlFor="subjectId">Subject</Label>
           <SelectNative
             id="subjectId"
@@ -132,6 +147,14 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
                 {st.name}
               </option>
             ))}
+          </SelectNative>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="source">Source</Label>
+          <SelectNative id="source" name="source" defaultValue={defaults?.source ?? "QUESTION_BANK"}>
+            <option value="QUESTION_BANK">Question Bank</option>
+            <option value="PYQ">Previous Year Paper</option>
           </SelectNative>
         </div>
 

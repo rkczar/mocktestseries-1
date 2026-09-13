@@ -58,6 +58,7 @@ model AdminUser {
   loginAttempts        LoginAttempt[]
   deletionReviews      DeletionRequest[]
   createdCustomModules CustomModule[]
+  bulkImportRuns       BulkImportRun[]
 }
 
 model LoginAttempt {
@@ -456,6 +457,44 @@ enum QuestionStatus {
   ARCHIVED
 }
 
+/**
+ * Where a question came from. QUESTION_BANK = authored for the bank;
+ * PYQ = a previous-year paper question (mirrors previousYearPaperId).
+ */
+enum QuestionSource {
+  QUESTION_BANK
+  PYQ
+}
+
+/** Role of a question inside the AI variant system. */
+enum AiVariantType {
+  /** The original question that AI variants hang off of. */
+  CANONICAL
+  /** AI-generated rephrasing testing the same fact. */
+  AI_SIMILAR
+  /** AI-generated lookalike that is deliberately wrong. */
+  AI_TRAP
+}
+
+/** Position a generated variant occupies under its canonical question (max 5). */
+enum AiSlot {
+  AI01
+  AI02
+  AI03
+  AI04
+  AI05
+}
+
+/** One-shot lifecycle for AI variant/explanation generation. */
+enum AiGenerationStatus {
+  /** Ordinary bank/PYQ question, nothing requested yet. */
+  NONE
+  PENDING
+  GENERATING
+  COMPLETED
+  FAILED
+}
+
 model SubTopic {
   id        String   @id @default(cuid())
   topicId   String
@@ -465,6 +504,19 @@ model SubTopic {
   createdAt DateTime @default(now())
 
   questions Question[]
+}
+
+/**
+ * Per-scope atomic counter backing canonical human-readable Question codes
+ * (e.g. "RUHS MO 2024 W01"). scope = "<normalized exam code> <year>".
+ * Monotonic per scope: deleted codes are never re-issued, re-imports never
+ * renumber existing questions, and a sequence number is only consumed when
+ * the transaction that allocates it commits (so invalid import rows never
+ * burn numbers). See lib/question-code.ts.
+ */
+model QuestionCodeCounter {
+  scope String @id
+  value Int    @default(0)
 }
 
 model Question {
@@ -482,10 +534,20 @@ model Question {
   previousYearPaper   PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id])
   text                String
   imageUrl            String?
-  difficulty          QuestionDifficulty @default(MEDIUM)
-  status              QuestionStatus     @default(DRAFT)
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
+  difficulty          QuestionDifficulty     @default(MEDIUM)
+  status              QuestionStatus         @default(DRAFT)
+  source              QuestionSource         @default(QUESTION_BANK)
+  examYear            Int?
+  // AI variant provenance: canonical questions have no parent; AI_SIMILAR /
+  // AI_TRAP variants point at the canonical row and carry an AI01–AI05 slot
+  // plus a one-shot generation status.
+  parentQuestionId    String?
+  parentQuestion      Question?              @relation("AiQuestionVariants", fields: [parentQuestionId], references: [id], onDelete: SetNull)
+  aiVariantType       AiVariantType?
+  aiSlot              AiSlot?
+  aiGenerationStatus  AiGenerationStatus     @default(NONE)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
 
   options               QuestionOption[]
   mockTestQuestions     MockTestQuestion[]
@@ -493,8 +555,14 @@ model Question {
   savedByStudents       SavedQuestion[]
   reports               ReportedQuestion[]
   aiExplanation         AIExplanation?
+  aiVariants            Question[]           @relation("AiQuestionVariants")
 
+  @@index([examId, examYear])
   @@index([examId, subjectId, topicId])
+  @@index([topicId, subTopicId])
+  @@index([previousYearPaperId, status])
+  @@index([source, status])
+  @@index([parentQuestionId])
   @@index([status])
 }
 
@@ -779,4 +847,75 @@ model AIExplanation {
   model      String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Bulk Import History
+//
+// Tracks every bulk import run and its constituent rows for audit trail and
+// debugging. Each run can have thousands of rows, so row-level detail is in
+// BulkImportRow.
+// ---------------------------------------------------------------------------
+
+enum BulkImportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  PARTIALLY_COMPLETED
+}
+
+enum BulkImportRowStatus {
+  PENDING
+  SUCCESS
+  SKIPPED
+  REPLACED
+  FAILED
+}
+
+enum BulkImportDuplicateStrategy {
+  SKIP
+  REPLACE
+  ADD_AS_NEW
+}
+
+model BulkImportRun {
+  id                  String                       @id @default(cuid())
+  adminUserId         String
+  adminUser           AdminUser                    @relation(fields: [adminUserId], references: [id])
+  filename            String
+  totalRows           Int
+  validRows           Int                          @default(0)
+  invalidRows         Int                          @default(0)
+  successCount        Int                          @default(0)
+  skippedCount        Int                          @default(0)
+  replacedCount       Int                          @default(0)
+  failedCount         Int                          @default(0)
+  duplicateStrategy   BulkImportDuplicateStrategy
+  status              BulkImportStatus             @default(PENDING)
+  startedAt           DateTime                     @default(now())
+  completedAt         DateTime?
+  errorMessage        String?
+  createdAt           DateTime                     @default(now())
+
+  rows BulkImportRow[]
+
+  @@index([adminUserId, createdAt])
+  @@index([status, createdAt])
+}
+
+model BulkImportRow {
+  id              String               @id @default(cuid())
+  runId           String
+  run             BulkImportRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  rowNumber       Int
+  status          BulkImportRowStatus  @default(PENDING)
+  questionId      String?
+  questionCode    String?
+  errorMessage    String?
+  rawData         Json
+  createdAt       DateTime             @default(now())
+
+  @@index([runId, rowNumber])
+  @@index([runId, status])
 }
