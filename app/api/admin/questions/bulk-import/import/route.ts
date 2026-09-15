@@ -4,6 +4,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { allocateQuestionCode, questionCodeScope } from "@/lib/question-code";
 import { BulkImportDuplicateStrategy, BulkImportStatus, BulkImportRowStatus } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import type { ValidatedImportRow } from "@/lib/bulk-import";
 
 const OPTION_LABELS = ["A", "B", "C", "D"] as const;
@@ -55,6 +56,15 @@ export async function POST(request: NextRequest) {
     let replacedCount = 0;
     let failedCount = 0;
 
+    // Rows already written earlier in THIS run, keyed by (exam, subject, text).
+    // validateWithDatabase only checks against questions that existed before
+    // the run started, so two identical rows in the same file would otherwise
+    // both be treated as non-duplicates and both get created. Consulting this
+    // map makes later rows in the same file duplicate-detect against earlier
+    // rows in the same file too, so SKIP/REPLACE/ADD_AS_NEW still apply.
+    const seenInRun = new Map<string, { id: string; code: string }>();
+    const runDuplicateKey = (examId: string, subjectId: string, text: string) => `${examId}:${subjectId}:${text}`;
+
     // Process each valid row
     for (const row of validRows) {
       try {
@@ -76,9 +86,11 @@ export async function POST(request: NextRequest) {
             difficulty,
             status,
             source,
-            isDuplicate,
-            duplicateQuestionId,
           } = resolvedData;
+
+          const runMatch = seenInRun.get(runDuplicateKey(examId, subjectId, data.questionText));
+          const isDuplicate = resolvedData.isDuplicate || Boolean(runMatch);
+          const duplicateQuestionId = runMatch?.id ?? resolvedData.duplicateQuestionId;
 
           let questionId: string | null = null;
           let questionCode: string | null = null;
@@ -88,14 +100,20 @@ export async function POST(request: NextRequest) {
             if (duplicateStrategy === BulkImportDuplicateStrategy.SKIP) {
               skippedCount++;
 
+              const existingCode = (await tx.question.findUnique({ where: { id: duplicateQuestionId } }))?.code;
+              seenInRun.set(runDuplicateKey(examId, subjectId, data.questionText), {
+                id: duplicateQuestionId,
+                code: existingCode ?? "",
+              });
+
               await tx.bulkImportRow.create({
                 data: {
                   runId: run.id,
                   rowNumber: row.rowNumber,
                   status: BulkImportRowStatus.SKIPPED,
                   questionId: duplicateQuestionId,
-                  questionCode: (await tx.question.findUnique({ where: { id: duplicateQuestionId } }))?.code,
-                  rawData: data as any,
+                  questionCode: existingCode,
+                  rawData: data as unknown as Prisma.InputJsonValue,
                 },
               });
               return;
@@ -134,6 +152,7 @@ export async function POST(request: NextRequest) {
               });
 
               replacedCount++;
+              seenInRun.set(runDuplicateKey(examId, subjectId, data.questionText), { id: questionId, code: questionCode });
 
               await tx.bulkImportRow.create({
                 data: {
@@ -142,7 +161,7 @@ export async function POST(request: NextRequest) {
                   status: BulkImportRowStatus.REPLACED,
                   questionId,
                   questionCode,
-                  rawData: data as any,
+                  rawData: data as unknown as Prisma.InputJsonValue,
                 },
               });
               return;
@@ -185,6 +204,7 @@ export async function POST(request: NextRequest) {
             });
 
             successCount++;
+            seenInRun.set(runDuplicateKey(examId, subjectId, data.questionText), { id: questionId, code: questionCode });
           }
 
           // Record import row
@@ -195,7 +215,7 @@ export async function POST(request: NextRequest) {
               status: BulkImportRowStatus.SUCCESS,
               questionId,
               questionCode,
-              rawData: data as any,
+              rawData: data as unknown as Prisma.InputJsonValue,
             },
           });
         });
@@ -209,7 +229,7 @@ export async function POST(request: NextRequest) {
             rowNumber: row.rowNumber,
             status: BulkImportRowStatus.FAILED,
             errorMessage: error instanceof Error ? error.message : "Unknown error",
-            rawData: row.data as any,
+            rawData: row.data as unknown as Prisma.InputJsonValue,
           },
         });
       }
@@ -223,7 +243,7 @@ export async function POST(request: NextRequest) {
           rowNumber: row.rowNumber,
           status: BulkImportRowStatus.FAILED,
           errorMessage: row.errors.join(", "),
-          rawData: row.data as any,
+          rawData: row.data as unknown as Prisma.InputJsonValue,
         },
       });
     }

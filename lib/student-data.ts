@@ -192,6 +192,60 @@ export async function getPreviousYearPaperForStudent(paperId: string, studentId:
 }
 
 // ---------------------------------------------------------------------------
+// Subject Test (unified test engine — Step 3)
+// ---------------------------------------------------------------------------
+
+/** Catalog for /student/subject-test — every active exam with a subject count. */
+export async function getSubjectTestExams() {
+  return prisma.exam.findMany({
+    where: { isActive: true },
+    orderBy: [{ order: "asc" }, { name: "asc" }],
+    include: { _count: { select: { subjects: true } } },
+  });
+}
+
+/**
+ * Everything the subject-test builder screen needs, scoped to one exam:
+ * subject/topic/sub-topic hierarchy and the distinct years that have any
+ * PUBLISHED question under this exam. Question counts per selection are left
+ * to the live `countPublishedQuestions` calls on the form's server action so
+ * the numbers always reflect the current question bank.
+ */
+export async function getSubjectTestSetup(examId: string) {
+  const exam = await prisma.exam.findFirst({
+    where: { id: examId, isActive: true },
+    select: {
+      id: true,
+      name: true,
+      instructions: true,
+      durationMinutes: true,
+      negativeMarking: true,
+      subjects: {
+        orderBy: { order: "asc" },
+        select: {
+          id: true,
+          name: true,
+          topics: {
+            orderBy: { order: "asc" },
+            select: { id: true, name: true, subTopics: { orderBy: { order: "asc" }, select: { id: true, name: true } } },
+          },
+        },
+      },
+    },
+  });
+  if (!exam) return null;
+
+  const years = await prisma.question.groupBy({
+    by: ["examYear"],
+    where: { examId, status: QuestionStatus.PUBLISHED, examYear: { not: null } },
+    _count: { _all: true },
+    orderBy: { examYear: "desc" },
+  });
+
+  return { exam, years: years.map((y) => y.examYear as number).filter((y): y is number => y !== null) };
+}
+
+// ---------------------------------------------------------------------------
 // History
 // ---------------------------------------------------------------------------
 
@@ -206,7 +260,7 @@ export async function getStudentAttemptHistory(
       sourceType: filters.sourceType || undefined,
     },
     orderBy: { startedAt: "desc" },
-    include: { exam: true, mockTest: true, customModule: true, previousYearPaper: true },
+    include: { exam: true, mockTest: true, customModule: true, previousYearPaper: true, subject: true },
   });
 }
 
@@ -219,6 +273,7 @@ export async function getOwnedAttempt(attemptId: string, studentId: string) {
       mockTest: true,
       customModule: true,
       previousYearPaper: true,
+      subject: true,
       questions: { orderBy: { order: "asc" }, include: { answer: true } },
     },
   });

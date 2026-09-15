@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { StatusSelect } from "./status-select";
 import { Search, ChevronLeft, ChevronRight } from "lucide-react";
 
 const DIFFICULTY_VARIANT = { EASY: "success", MEDIUM: "warning", HARD: "error" } as const;
+const LIMIT = 50;
 
 interface Question {
   id: string;
@@ -43,7 +44,7 @@ export function AllQuestionsPanelClient({
   const [questions, setQuestions] = useState<Question[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [isLoading, setIsLoading] = useState(false);
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState<string>("");
 
@@ -58,42 +59,63 @@ export function AllQuestionsPanelClient({
   const [source, setSource] = useState(initialFilters.source || "");
   const [isPyq, setIsPyq] = useState(initialFilters.isPyq || "");
 
-  const limit = 50;
-  const totalPages = Math.ceil(total / limit);
+  const totalPages = Math.ceil(total / LIMIT);
 
-  const fetchQuestions = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: String(page),
-        limit: String(limit),
-      });
-
-      if (search) params.set("search", search);
-      if (examId) params.set("examId", examId);
-      if (examYear) params.set("examYear", examYear);
-      if (subjectId) params.set("subjectId", subjectId);
-      if (topicId) params.set("topicId", topicId);
-      if (difficulty) params.set("difficulty", difficulty);
-      if (status) params.set("status", status);
-      if (source) params.set("source", source);
-      if (isPyq) params.set("isPyq", isPyq);
-
-      const response = await fetch(`/api/admin/questions?${params}`);
-      const data = await response.json();
-
-      setQuestions(data.questions);
-      setTotal(data.pagination.total);
-    } catch (error) {
-      console.error("Failed to fetch questions:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, search, examId, examYear, subjectId, topicId, difficulty, status, source, isPyq]);
+  // Encodes every value the fetch depends on, including the manual-refresh
+  // nonce. Comparing this against `loadedKey` (set once a fetch resolves)
+  // derives `isLoading` during render, so no effect ever needs to call
+  // setState synchronously before its first await.
+  const fetchKey = useMemo(
+    () =>
+      JSON.stringify({ page, search, examId, examYear, subjectId, topicId, difficulty, status, source, isPyq, refreshNonce }),
+    [page, search, examId, examYear, subjectId, topicId, difficulty, status, source, isPyq, refreshNonce]
+  );
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const isLoading = loadedKey !== fetchKey;
 
   useEffect(() => {
-    void fetchQuestions();
-  }, [fetchQuestions]);
+    const f = JSON.parse(fetchKey) as {
+      page: number;
+      search: string;
+      examId: string;
+      examYear: string;
+      subjectId: string;
+      topicId: string;
+      difficulty: string;
+      status: string;
+      source: string;
+      isPyq: string;
+    };
+    let cancelled = false;
+    const params = new URLSearchParams({ page: String(f.page), limit: String(LIMIT) });
+    if (f.search) params.set("search", f.search);
+    if (f.examId) params.set("examId", f.examId);
+    if (f.examYear) params.set("examYear", f.examYear);
+    if (f.subjectId) params.set("subjectId", f.subjectId);
+    if (f.topicId) params.set("topicId", f.topicId);
+    if (f.difficulty) params.set("difficulty", f.difficulty);
+    if (f.status) params.set("status", f.status);
+    if (f.source) params.set("source", f.source);
+    if (f.isPyq) params.set("isPyq", f.isPyq);
+
+    fetch(`/api/admin/questions?${params}`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (cancelled) return;
+        setQuestions(data.questions);
+        setTotal(data.pagination.total);
+      })
+      .catch((error) => {
+        console.error("Failed to fetch questions:", error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadedKey(fetchKey);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchKey]);
 
   const handleToggleSelect = (id: string) => {
     const newSelected = new Set(selectedIds);
@@ -148,7 +170,7 @@ export function AllQuestionsPanelClient({
 
       setSelectedIds(new Set());
       setBulkAction("");
-      fetchQuestions();
+      setRefreshNonce((n) => n + 1);
     } catch (error) {
       console.error("Bulk action failed:", error);
       alert("Failed to perform bulk action");
@@ -439,7 +461,7 @@ export function AllQuestionsPanelClient({
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-4 pt-4 border-t border-[var(--color-border)]">
               <p className="text-sm text-[var(--color-muted-foreground)]">
-                Showing {(page - 1) * limit + 1}-{Math.min(page * limit, total)} of {total}
+                Showing {(page - 1) * LIMIT + 1}-{Math.min(page * LIMIT, total)} of {total}
               </p>
               <div className="flex gap-2">
                 <Button onClick={() => setPage(page - 1)} disabled={page === 1} variant="outline" size="sm">

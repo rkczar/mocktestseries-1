@@ -4,6 +4,7 @@ import { AttemptStatus } from "@prisma/client";
 import { CheckCircle2, Clock, MinusCircle, Trophy, XCircle } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { getOwnedAttempt } from "@/lib/student-data";
+import { attemptTitle } from "@/lib/attempt-title";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -16,10 +17,7 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
   if (!attempt) notFound();
   if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);
 
-  const title =
-    attempt.mockTest?.title ??
-    attempt.customModule?.title ??
-    (attempt.previousYearPaper ? `${attempt.previousYearPaper.title} (${attempt.previousYearPaper.year})` : attempt.exam.name);
+  const title = attemptTitle(attempt);
 
   const percentage = attempt.maxScore ? Math.max(0, Math.round(((attempt.score ?? 0) / attempt.maxScore) * 100)) : 0;
   const minutesTaken = attempt.timeTakenSeconds ? Math.round(attempt.timeTakenSeconds / 60) : 0;

@@ -59,6 +59,8 @@ model AdminUser {
   deletionReviews      DeletionRequest[]
   createdCustomModules CustomModule[]
   bulkImportRuns       BulkImportRun[]
+  createdGrandTests    GrandTest[]
+  createdLiveTests     LiveTest[]
 }
 
 model LoginAttempt {
@@ -114,17 +116,21 @@ model Exam {
   mockTests          MockTest[]
   customModules      CustomModule[]
   testAttempts       TestAttempt[]
+  grandTests         GrandTest[]
+  liveTests          LiveTest[]
+  enrollments        StudentExamEnrollment[]
 }
 
 model Subject {
-  id        String     @id @default(cuid())
-  examId    String
-  exam      Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
-  name      String
-  order     Int        @default(0)
-  topics    Topic[]
-  questions Question[]
-  createdAt DateTime   @default(now())
+  id           String        @id @default(cuid())
+  examId       String
+  exam         Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
+  name         String
+  order        Int           @default(0)
+  topics       Topic[]
+  questions    Question[]
+  testAttempts TestAttempt[]
+  createdAt    DateTime      @default(now())
 }
 
 model Topic {
@@ -358,6 +364,8 @@ model Student {
   savedQuestions    SavedQuestion[]
   activities        StudentActivity[]
   reportedQuestions ReportedQuestion[]
+  customModules     CustomModule[]      @relation("StudentCustomModules")
+  examEnrollments   StudentExamEnrollment[]
 
   @@index([status])
 }
@@ -552,6 +560,8 @@ model Question {
   options               QuestionOption[]
   mockTestQuestions     MockTestQuestion[]
   customModuleQuestions CustomModuleQuestion[]
+  grandTestQuestions    GrandTestQuestion[]
+  liveTestQuestions     LiveTestQuestion[]
   savedByStudents       SavedQuestion[]
   reports               ReportedQuestion[]
   aiExplanation         AIExplanation?
@@ -664,15 +674,24 @@ model CustomModule {
   accessType       AccessType         @default(FREE)
   status           CustomModuleStatus @default(DRAFT)
   order            Int                @default(0)
-  createdByAdminId String?
-  createdByAdmin   AdminUser?         @relation(fields: [createdByAdminId], references: [id])
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  createdByAdminId  String?
+  createdByAdmin    AdminUser?        @relation(fields: [createdByAdminId], references: [id])
+  // Student-driven custom modules. The question set is still resolved once
+  // into CustomModuleQuestion (the immutable snapshot students practice), the
+  // owner is remembered for "My Modules", and shareToken is an opaque,
+  // non-guessable link that never exposes the internal id.
+  createdByStudentId String?
+  createdByStudent  Student?          @relation("StudentCustomModules", fields: [createdByStudentId], references: [id])
+  isStudentOwned    Boolean           @default(false)
+  shareToken        String?           @unique
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
   questions    CustomModuleQuestion[]
   testAttempts TestAttempt[]
 
   @@index([examId, status])
+  @@index([createdByStudentId])
 }
 
 model CustomModuleQuestion {
@@ -687,16 +706,156 @@ model CustomModuleQuestion {
 }
 
 // ---------------------------------------------------------------------------
+// Grand Tests
+//
+// Admin-configurable, exam-scoped full-length tests with a question-selection
+// rule (subjects / topics / difficulty). On Publish the rule is resolved ONCE
+// into GrandTestQuestion — the immutable, ordered set every student sees.
+// Attempts run through the unified TestAttempt engine (testType GRAND_TEST).
+// ---------------------------------------------------------------------------
+
+enum GrandTestStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model GrandTest {
+  id              String          @id @default(cuid())
+  examId          String
+  exam            Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  durationMinutes Int
+  negativeMarking Float           @default(0)
+  instructions    String?
+  accessType      AccessType      @default(FREE)
+  status          GrandTestStatus @default(DRAFT)
+  questionCount   Int
+  // Selection rule (resolved into GrandTestQuestion at publish time):
+  // { subjects?: string[]; topics?: string[]; subTopics?: string[]; difficulty?: QuestionDifficulty[] }
+  subjects        Json?
+  topics          Json?
+  difficulty      Json?
+  order           Int             @default(0)
+  publishedAt     DateTime?
+  createdByAdminId String?
+  createdByAdmin  AdminUser?      @relation(fields: [createdByAdminId], references: [id])
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  questions    GrandTestQuestion[]
+  testAttempts TestAttempt[]
+
+  @@index([examId, status])
+}
+
+model GrandTestQuestion {
+  id          String    @id @default(cuid())
+  grandTestId String
+  grandTest   GrandTest @relation(fields: [grandTestId], references: [id], onDelete: Cascade)
+  questionId  String
+  question    Question  @relation(fields: [questionId], references: [id])
+  order       Int       @default(0)
+
+  @@unique([grandTestId, questionId])
+  @@index([questionId])
+}
+
+// ---------------------------------------------------------------------------
+// Live / Scheduled Tests
+//
+// A global test window (startAt → endAt) shared by every student, plus a
+// per-student duration cap. LIVE state is DERIVED from authoritative server
+// time (see lib/attempt-timing.ts), never from the browser. On Publish the
+// selection rule is resolved once into LiveTestQuestion (same immutable-set
+// guarantee as GrandTest). Attempts run through the unified engine with
+// testType LIVE_TEST; effective end = min(started+duration, global endAt).
+// ---------------------------------------------------------------------------
+
+enum LiveTestStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  ENDED
+  RESULT_PUBLISHED
+  CANCELLED
+}
+
+model LiveTest {
+  id                    String         @id @default(cuid())
+  examId                String
+  exam                  Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
+  title                 String
+  description           String?
+  startAt               DateTime
+  endAt                 DateTime
+  studentDurationMinutes Int
+  negativeMarking       Float          @default(0)
+  instructions          String?
+  accessType            AccessType     @default(FREE)
+  status                LiveTestStatus @default(DRAFT)
+  questionCount         Int
+  // Selection rule (resolved into LiveTestQuestion at publish time):
+  // { subjects?: string[]; topics?: string[]; subTopics?: string[]; difficulty?: QuestionDifficulty[] }
+  subjects              Json?
+  topics                Json?
+  difficulty            Json?
+  order                 Int            @default(0)
+  publishedAt           DateTime?
+  createdByAdminId      String?
+  createdByAdmin        AdminUser?     @relation(fields: [createdByAdminId], references: [id])
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  questions    LiveTestQuestion[]
+  testAttempts TestAttempt[]
+
+  @@index([status, startAt])
+  @@index([examId, status])
+}
+
+model LiveTestQuestion {
+  id         String   @id @default(cuid())
+  liveTestId String
+  liveTest   LiveTest @relation(fields: [liveTestId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id])
+  order      Int      @default(0)
+
+  @@unique([liveTestId, questionId])
+  @@index([questionId])
+}
+
+// ---------------------------------------------------------------------------
 // Test Attempts
 //
-// Unifies Mock Test / Previous Year Paper / Custom Module attempts under one
-// table so History and admin analytics have one place to read from.
-// TestAttemptQuestion.questionSnapshot freezes the question/options as they
-// were at attempt-start, so later admin edits never change past results.
+// Unifies Mock Test / Previous Year Paper / Custom Module / Subject / Grand /
+// Live attempts under one table so History and admin analytics have one place
+// to read from. TestAttemptQuestion.questionSnapshot freezes the
+// question/options as they were at attempt-start, so later admin edits never
+// change past results. testType identifies the production-facing test kind.
 // ---------------------------------------------------------------------------
 
 enum AttemptSourceType {
   MOCK_TEST
+  PREVIOUS_YEAR_PAPER
+  CUSTOM_MODULE
+  SUBJECT_TEST
+}
+
+/**
+ * Production-facing test type carried on every attempt. Maps onto
+ * AttemptSourceType for the legacy sources (FULL_MOCK ⇄ MOCK_TEST,
+ * CUSTOM_MODULE ⇄ CUSTOM_MODULE, PREVIOUS_YEAR_PAPER ⇄ PREVIOUS_YEAR_PAPER)
+ * and adds the newer first-class types. All types run through the same
+ * TestAttempt / TestAttemptQuestion / Answer engine.
+ */
+enum TestType {
+  FULL_MOCK
+  SUBJECT_TEST
+  GRAND_TEST
+  LIVE_TEST
   PREVIOUS_YEAR_PAPER
   CUSTOM_MODULE
 }
@@ -719,6 +878,7 @@ model TestAttempt {
   studentId           String
   student             Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
   sourceType          AttemptSourceType
+  testType            TestType           @default(FULL_MOCK)
   examId              String
   exam                Exam               @relation(fields: [examId], references: [id])
   mockTestId          String?
@@ -727,6 +887,21 @@ model TestAttempt {
   previousYearPaper   PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id])
   customModuleId      String?
   customModule        CustomModule?      @relation(fields: [customModuleId], references: [id])
+  // Subject-test linkage (recorded so resume/analytics know the selection).
+  subjectId           String?
+  subject             Subject?           @relation(fields: [subjectId], references: [id])
+  topicIds            Json?
+  // The exact filters a student chose when the attempt was generated, kept so
+  // the attempt is self-describing and resume never needs to re-resolve the
+  // question set (the set itself is frozen in TestAttemptQuestion). Shape:
+  // { year?: number; source?: QuestionSource; difficulty?: QuestionDifficulty[];
+  //   subTopicIds?: string[] }. All types may populate it in a later step.
+  selection           Json?
+  // Grand / Live test linkage.
+  grandTestId         String?
+  grandTest           GrandTest?         @relation(fields: [grandTestId], references: [id])
+  liveTestId          String?
+  liveTest            LiveTest?          @relation(fields: [liveTestId], references: [id])
   status              AttemptStatus      @default(IN_PROGRESS)
   durationMinutes     Int
   negativeMarking     Float              @default(0)
@@ -745,9 +920,16 @@ model TestAttempt {
   answers   Answer[]
 
   @@index([studentId, sourceType])
+  @@index([studentId, status, testType])
+  @@index([studentId, examId, status])
+  @@index([testType, status])
+  @@index([examId, status])
   @@index([customModuleId])
   @@index([mockTestId])
   @@index([previousYearPaperId])
+  @@index([subjectId])
+  @@index([grandTestId])
+  @@index([liveTestId])
 }
 
 model TestAttemptQuestion {
@@ -761,6 +943,7 @@ model TestAttemptQuestion {
   answer Answer?
 
   @@unique([attemptId, questionId])
+  @@index([questionId])
 }
 
 model Answer {
@@ -779,6 +962,27 @@ model Answer {
 
   @@index([studentId])
   @@index([attemptId])
+}
+
+// ---------------------------------------------------------------------------
+// Exam enrollment
+//
+// Optional, additive: "My Exams" shows exams a student has opted into. Access
+// is NOT gated on enrollment today (free/demo admin behavior must keep
+// working), but the record gives students a focused list and analytics a
+// first-class "my exams" dimension.
+// ---------------------------------------------------------------------------
+
+model StudentExamEnrollment {
+  id        String   @id @default(cuid())
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  examId    String
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([studentId, examId])
+  @@index([examId])
 }
 
 // ---------------------------------------------------------------------------
@@ -840,13 +1044,21 @@ model ReportedQuestion {
 }
 
 model AIExplanation {
-  id         String   @id @default(cuid())
-  questionId String   @unique
-  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  content    Json
-  model      String
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id            String             @id @default(cuid())
+  questionId    String             @unique
+  question      Question           @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  content       Json
+  model         String
+  // One-shot lifecycle used to prevent duplicate concurrent generation for
+  // the same question and to surface failures to the admin panel.
+  status        AiGenerationStatus @default(COMPLETED)
+  provider      String             @default("anthropic")
+  promptVersion String?
+  generatedAt   DateTime?
+  retryCount    Int                @default(0)
+  errorMessage  String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 }
 
 // ---------------------------------------------------------------------------

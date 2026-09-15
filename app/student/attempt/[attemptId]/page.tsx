@@ -4,24 +4,13 @@ import { AttemptStatus } from "@prisma/client";
 import { ClipboardList, Clock, ListChecks, AlertTriangle } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { getOwnedAttempt } from "@/lib/student-data";
+import { attemptTitle, attemptInstructions } from "@/lib/attempt-title";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 export const metadata = { title: "Test Instructions — Mock Test Series.in" };
 
 type OwnedAttempt = NonNullable<Awaited<ReturnType<typeof getOwnedAttempt>>>;
-
-function attemptTitle(attempt: OwnedAttempt) {
-  return (
-    attempt.mockTest?.title ??
-    attempt.customModule?.title ??
-    (attempt.previousYearPaper ? `${attempt.previousYearPaper.title} (${attempt.previousYearPaper.year})` : attempt.exam.name)
-  );
-}
-
-function attemptInstructions(attempt: OwnedAttempt) {
-  return attempt.mockTest?.instructions ?? attempt.customModule?.instructions ?? attempt.exam.instructions ?? null;
-}
 
 export default async function AttemptInstructionsPage({ params }: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = await params;
@@ -30,12 +19,13 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
   if (!attempt) notFound();
   if (attempt.status === AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}/result`);
 
-  const instructions = attemptInstructions(attempt);
+  const title = attemptTitle(attempt as OwnedAttempt);
+  const instructions = attemptInstructions(attempt as OwnedAttempt);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center gap-6 px-4 py-10 sm:px-6">
       <div className="text-center">
-        <h1 className="text-2xl font-semibold text-[var(--color-foreground)]">{attemptTitle(attempt)}</h1>
+        <h1 className="text-2xl font-semibold text-[var(--color-foreground)]">{title}</h1>
         <p className="mt-1 text-sm text-[var(--color-muted-foreground)]">{attempt.exam.name}</p>
       </div>
 

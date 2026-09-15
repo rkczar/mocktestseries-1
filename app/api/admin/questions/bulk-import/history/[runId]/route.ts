@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 
 export async function GET(
   request: NextRequest,
@@ -30,9 +31,9 @@ export async function GET(
       return NextResponse.json({ error: "Import run not found" }, { status: 404 });
     }
 
-    const where: any = { runId };
+    const where: Prisma.BulkImportRowWhereInput = { runId };
     if (status) {
-      where.status = status;
+      where.status = status as Prisma.BulkImportRowWhereInput["status"];
     }
 
     const [rows, total] = await Promise.all([

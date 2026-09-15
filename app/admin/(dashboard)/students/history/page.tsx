@@ -9,6 +9,7 @@ const SOURCE_LABEL = {
   MOCK_TEST: "Mock Test",
   PREVIOUS_YEAR_PAPER: "Previous Year Paper",
   CUSTOM_MODULE: "Custom Module",
+  SUBJECT_TEST: "Subject Test",
 } as const;
 
 export default async function StudentsHistoryPage({

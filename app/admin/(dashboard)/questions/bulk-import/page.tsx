@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Upload, AlertCircle, CheckCircle, XCircle, FileSpreadsheet } from "lucide-react";
+import { AlertCircle, CheckCircle, FileSpreadsheet } from "lucide-react";
 import type { ParsedImportRow, ValidatedImportRow } from "@/lib/bulk-import";
 import type { BulkImportDuplicateStrategy } from "@prisma/client";
 

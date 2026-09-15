@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { GraduationCap, ClipboardList, ListChecks, History as HistoryIcon, ArrowRight } from "lucide-react";
+import { GraduationCap, ClipboardList, ListChecks, History as HistoryIcon, ArrowRight, BookOpen } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
 import { AttemptStatus } from "@prisma/client";
+import { attemptTitle } from "@/lib/attempt-title";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -10,6 +11,7 @@ export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
 const QUICK_LINKS = [
   { label: "My Exams", href: "/student/exams", icon: GraduationCap, description: "Browse exams, subjects and papers" },
+  { label: "Subject Test", href: "/student/subject-test", icon: BookOpen, description: "Practice by subject" },
   { label: "Test Series", href: "/student/test-series", icon: ClipboardList, description: "Published mock tests" },
   { label: "Custom Module", href: "/student/custom-module", icon: ListChecks, description: "Focused practice sets" },
   { label: "History", href: "/student/history", icon: HistoryIcon, description: "Your past attempts" },
@@ -22,7 +24,7 @@ export default async function StudentDashboardPage() {
     prisma.testAttempt.findFirst({
       where: { studentId: student.id, status: AttemptStatus.IN_PROGRESS },
       orderBy: { startedAt: "desc" },
-      include: { exam: true, mockTest: true, customModule: true, previousYearPaper: true },
+      include: { exam: true, mockTest: true, customModule: true, previousYearPaper: true, subject: true },
     }),
     prisma.testAttempt.count({ where: { studentId: student.id, status: AttemptStatus.SUBMITTED } }),
     prisma.testAttempt.aggregate({
@@ -47,7 +49,7 @@ export default async function StudentDashboardPage() {
           <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
             <div>
               <p className="text-sm font-medium text-[var(--color-foreground)]">
-                Continue: {inProgress.mockTest?.title ?? inProgress.customModule?.title ?? inProgress.previousYearPaper?.title ?? "Test in progress"}
+                Continue: {attemptTitle(inProgress as NonNullable<typeof inProgress>)}
               </p>
               <p className="text-sm text-[var(--color-muted-foreground)]">{inProgress.exam.name}</p>
             </div>
@@ -60,7 +62,7 @@ export default async function StudentDashboardPage() {
         </Card>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {QUICK_LINKS.map((link) => (
           <Link key={link.href} href={link.href}>
             <Card className="h-full transition-shadow hover:shadow-md">

@@ -1,8 +1,9 @@
+import { AttemptSourceType } from "@prisma/client";
 import Link from "next/link";
 import { History as HistoryIcon } from "lucide-react";
-import { AttemptSourceType } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
 import { getStudentAttemptHistory } from "@/lib/student-data";
+import { attemptTitle } from "@/lib/attempt-title";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,15 +12,17 @@ import { cn } from "@/lib/utils";
 
 export const metadata = { title: "History — Mock Test Series.in" };
 
-const SOURCE_LABEL: Record<AttemptSourceType, string> = {
+const SOURCE_LABEL: Record<string, string> = {
   MOCK_TEST: "Mock Test",
   PREVIOUS_YEAR_PAPER: "Previous Year Paper",
   CUSTOM_MODULE: "Custom Module",
+  SUBJECT_TEST: "Subject Test",
 };
 
-const TYPE_FILTERS: { label: string; value: AttemptSourceType | "" }[] = [
+const TYPE_FILTERS: { label: string; value: string }[] = [
   { label: "All", value: "" },
   { label: "Mock Tests", value: "MOCK_TEST" },
+  { label: "Subject Tests", value: "SUBJECT_TEST" },
   { label: "Previous Year Papers", value: "PREVIOUS_YEAR_PAPER" },
   { label: "Custom Modules", value: "CUSTOM_MODULE" },
 ];
@@ -86,7 +89,7 @@ export default async function StudentHistoryPage({
               </thead>
               <tbody>
                 {attempts.map((a) => {
-                  const name = a.mockTest?.title ?? a.customModule?.title ?? (a.previousYearPaper ? `${a.previousYearPaper.title} (${a.previousYearPaper.year})` : "—");
+                  const name = attemptTitle(a);
                   const minutesTaken = a.timeTakenSeconds ? Math.round(a.timeTakenSeconds / 60) : null;
                   return (
                     <tr key={a.id} className="border-b border-[var(--color-border)] last:border-0">

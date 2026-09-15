@@ -6,9 +6,16 @@ import {
   CustomModuleStatus,
   MockTestStatus,
   QuestionStatus,
+  TestType,
+  type Prisma,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/student-data";
+import { isExpired, elapsedSecondsFor, remainingSecondsFor } from "@/lib/attempt-timing";
+import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
+
+export { remainingSecondsFor, InsufficientQuestionsError };
+export type { QuestionSelectionFilters } from "@/lib/question-selection";
 
 export interface QuestionSnapshot {
   code: string;
@@ -28,6 +35,14 @@ export interface QuestionWithOptions {
   options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean }[];
 }
 
+/** Legacy source-grouping → production-facing test type, kept in one place. */
+const TEST_TYPE_BY_SOURCE: Record<AttemptSourceType, TestType> = {
+  [AttemptSourceType.MOCK_TEST]: TestType.FULL_MOCK,
+  [AttemptSourceType.PREVIOUS_YEAR_PAPER]: TestType.PREVIOUS_YEAR_PAPER,
+  [AttemptSourceType.CUSTOM_MODULE]: TestType.CUSTOM_MODULE,
+  [AttemptSourceType.SUBJECT_TEST]: TestType.SUBJECT_TEST,
+};
+
 function toSnapshot(question: QuestionWithOptions): QuestionSnapshot {
   return {
     code: question.code,
@@ -39,6 +54,13 @@ function toSnapshot(question: QuestionWithOptions): QuestionSnapshot {
   };
 }
 
+/**
+ * Create a TestAttempt from an already-resolved, fixed question set, then
+ * freeze every question/option into TestAttemptQuestion.questionSnapshot and
+ * seed an UNANSWERED Answer per question. The set is persisted verbatim at
+ * start time and never re-resolved or reshuffled on resume. Also acts as a
+ * guardrail so a test with no questions can never be started.
+ */
 async function createAttemptFromQuestions(params: {
   studentId: string;
   sourceType: AttemptSourceType;
@@ -46,6 +68,10 @@ async function createAttemptFromQuestions(params: {
   mockTestId?: string;
   customModuleId?: string;
   previousYearPaperId?: string;
+  subjectId?: string;
+  topicIds?: string[];
+  selection?: Record<string, unknown> | null;
+  testType?: TestType;
   durationMinutes: number;
   negativeMarking: number;
   questions: QuestionWithOptions[];
@@ -58,10 +84,14 @@ async function createAttemptFromQuestions(params: {
     data: {
       studentId: params.studentId,
       sourceType: params.sourceType,
+      testType: params.testType ?? TEST_TYPE_BY_SOURCE[params.sourceType],
       examId: params.examId,
       mockTestId: params.mockTestId,
       customModuleId: params.customModuleId,
       previousYearPaperId: params.previousYearPaperId,
+      subjectId: params.subjectId,
+      topicIds: params.topicIds && params.topicIds.length > 0 ? params.topicIds : undefined,
+      selection: (params.selection ?? undefined) as Prisma.InputJsonValue | undefined,
       durationMinutes: params.durationMinutes,
       negativeMarking: params.negativeMarking,
       totalQuestions: params.questions.length,
@@ -117,7 +147,7 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
     mockTestId: mockTest.id,
     durationMinutes: mockTest.durationMinutes,
     negativeMarking: mockTest.negativeMarking,
-    questions: mockTest.questions.map((mq) => mq.question),
+    questions: mockTest.questions.map((mq) => mq.question as unknown as QuestionWithOptions),
   });
 }
 
@@ -138,7 +168,7 @@ export async function startCustomModuleAttempt(studentId: string, moduleId: stri
     customModuleId: customModule.id,
     durationMinutes: customModule.durationMinutes ?? 30,
     negativeMarking: customModule.negativeMarking,
-    questions: customModule.questions.map((mq) => mq.question),
+    questions: customModule.questions.map((mq) => mq.question as unknown as QuestionWithOptions),
   });
 }
 
@@ -164,13 +194,60 @@ export async function startPreviousYearPaperAttempt(studentId: string, paperId: 
     previousYearPaperId: paper.id,
     durationMinutes: paper.exam.durationMinutes ?? 60,
     negativeMarking: paper.exam.negativeMarking ?? 0,
-    questions,
+    questions: questions as unknown as QuestionWithOptions[],
   });
 }
 
-export function remainingSecondsFor(attempt: { durationMinutes: number; startedAt: Date }) {
-  const elapsedSeconds = Math.floor((Date.now() - attempt.startedAt.getTime()) / 1000);
-  return Math.max(attempt.durationMinutes * 60 - elapsedSeconds, 0);
+export interface SubjectTestSelection extends QuestionSelectionFilters {
+  durationMinutes: number;
+  count: number;
+}
+
+/**
+ * Generate (or resume) a SUBJECT_TEST attempt.
+ *
+ * The question set is resolved on the server from validated filters, then
+ * frozen into the attempt at start. If the student already has an IN_PROGRESS
+ * subject test for the same subject, that attempt is returned untouched —
+ * resume never re-selects or re-shuffles. `durationMinutes` is authoritative
+ * for the server-side window (see lib/attempt-timing.ts).
+ */
+export async function startSubjectTestAttempt(studentId: string, selection: SubjectTestSelection) {
+  const resumable = await findResumableAttempt(studentId, { testType: TestType.SUBJECT_TEST, subjectId: selection.subjectId });
+  if (resumable) return resumable;
+  if (!selection.subjectId) throw new Error("A subject is required to start a subject test.");
+  if (!selection.examId) throw new Error("An exam is required to start a subject test.");
+
+  const { questions } = await selectPublishedQuestions({
+    examId: selection.examId,
+    year: selection.year,
+    subjectId: selection.subjectId,
+    topicId: selection.topicId,
+    subTopicId: selection.subTopicId,
+    source: selection.source,
+    difficulty: selection.difficulty,
+    count: selection.count,
+  });
+
+  const subject = await prisma.subject.findUnique({ where: { id: selection.subjectId }, select: { name: true } });
+
+  return createAttemptFromQuestions({
+    studentId,
+    sourceType: AttemptSourceType.SUBJECT_TEST,
+    examId: selection.examId,
+    subjectId: selection.subjectId,
+    topicIds: selection.topicId ? [selection.topicId] : undefined,
+    selection: {
+      year: selection.year ?? null,
+      source: selection.source ?? null,
+      difficulty: selection.difficulty ?? null,
+      subTopicIds: selection.subTopicId ? [selection.subTopicId] : null,
+      subjects: [{ id: selection.subjectId, name: subject?.name ?? null }],
+    },
+    durationMinutes: selection.durationMinutes,
+    negativeMarking: 0,
+    questions: questions as unknown as QuestionWithOptions[],
+  });
 }
 
 export async function saveAnswer(
@@ -182,6 +259,10 @@ export async function saveAnswer(
 ) {
   const attempt = await prisma.testAttempt.findFirst({ where: { id: attemptId, studentId, status: AttemptStatus.IN_PROGRESS } });
   if (!attempt) throw new Error("This attempt is not available for editing.");
+
+  if (isExpired(attempt)) {
+    throw new Error("Time is up — this test has ended and answers can no longer be changed.");
+  }
 
   const attemptQuestion = await prisma.testAttemptQuestion.findFirst({ where: { attemptId, questionId } });
   if (!attemptQuestion) throw new Error("Question does not belong to this attempt.");
@@ -237,7 +318,9 @@ export async function submitAttempt(attemptId: string, studentId: string) {
 
   const score = correctCount * 1 - incorrectCount * attempt.negativeMarking;
   const maxScore = attempt.totalQuestions;
-  const timeTakenSeconds = Math.round((Date.now() - attempt.startedAt.getTime()) / 1000);
+  // Late submits stay valid, but the reported time can never exceed the window:
+  // answers could not have been changed after effectiveEnd, so capping is honest.
+  const timeTakenSeconds = elapsedSecondsFor(attempt);
 
   await prisma.$transaction([
     ...updates,

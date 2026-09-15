@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
-import type { QuestionStatus, QuestionDifficulty, QuestionSource } from "@prisma/client";
+import type { Prisma, QuestionStatus, QuestionDifficulty, QuestionSource } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
   try {
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search") || undefined;
 
     // Build where clause
-    const where: any = {};
+    const where: Prisma.QuestionWhereInput = {};
 
     if (examId) where.examId = examId;
     if (examYear) where.examYear = examYear;

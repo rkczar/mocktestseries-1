@@ -2,7 +2,6 @@ import "server-only";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { QuestionDifficulty, QuestionStatus, QuestionSource, type Prisma } from "@prisma/client";
-import { normalizeQuestionCodeExamCode, questionCodeScope } from "./question-code";
 
 // ---------------------------------------------------------------------------
 // Type Definitions
@@ -66,23 +65,6 @@ export interface ImportValidationResult {
 // ---------------------------------------------------------------------------
 // Column Mapping
 // ---------------------------------------------------------------------------
-
-const REQUIRED_COLUMNS = [
-  "exam",
-  "examYear",
-  "subject",
-  "topic",
-  "subTopic",
-  "source",
-  "questionText",
-  "optionA",
-  "optionB",
-  "optionC",
-  "optionD",
-  "correctAnswer",
-  "difficulty",
-  "status",
-] as const;
 
 const COLUMN_ALIASES: Record<string, string[]> = {
   exam: ["exam", "exam_name", "examination"],

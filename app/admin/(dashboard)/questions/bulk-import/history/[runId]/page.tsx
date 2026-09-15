@@ -169,7 +169,7 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
                       )}
                     </td>
                     <td className="py-2.5 pr-4 max-w-md truncate">
-                      {(row.rawData as any)?.questionText || "—"}
+                      {(row.rawData as { questionText?: string } | null)?.questionText || "—"}
                     </td>
                     <td className="py-2.5 pr-4 text-xs text-[var(--color-error)]">
                       {row.errorMessage || "—"}

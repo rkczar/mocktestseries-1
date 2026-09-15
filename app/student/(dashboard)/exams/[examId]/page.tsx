@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BookOpen, Clock, FileText, ListChecks } from "lucide-react";
 import { getExamDetailForStudent } from "@/lib/student-data";
@@ -39,6 +40,9 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
                 ) : null}
               </div>
             ))}
+            <Button asChild variant="outline" size="sm" className="mt-1 w-fit">
+              <Link href={`/student/subject-test/${examId}`}>Practice by subject →</Link>
+            </Button>
           </CardContent>
         </Card>
       ) : null}

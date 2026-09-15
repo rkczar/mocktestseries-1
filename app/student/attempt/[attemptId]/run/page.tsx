@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { AttemptStatus, AnswerStatus } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
+import { attemptTitle } from "@/lib/attempt-title";
 import { remainingSecondsFor, type QuestionSnapshot } from "@/lib/test-attempt";
 import { TestPlayer } from "./test-player";
 
@@ -35,10 +36,7 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
     };
   });
 
-  const title =
-    attempt.mockTest?.title ??
-    attempt.customModule?.title ??
-    (attempt.previousYearPaper ? `${attempt.previousYearPaper.title} (${attempt.previousYearPaper.year})` : attempt.exam.name);
+  const title = attemptTitle(attempt);
 
   return (
     <TestPlayer attemptId={attempt.id} title={title} initialRemainingSeconds={remainingSeconds} questions={questions} />
