@@ -155,15 +155,17 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
   });
 }
 
-export async function startCustomModuleAttempt(studentId: string, moduleId: string) {
-  const resumable = await findResumableAttempt(studentId, { customModuleId: moduleId });
-  if (resumable) return resumable;
+const CUSTOM_MODULE_QUESTIONS_INCLUDE = {
+  questions: { orderBy: { order: "asc" as const }, include: { question: { include: { options: true } } } },
+};
 
-  const customModule = await prisma.customModule.findFirst({
-    where: { id: moduleId, status: { in: [CustomModuleStatus.PUBLISHED, CustomModuleStatus.ACTIVE] } },
-    include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
-  });
-  if (!customModule) throw new Error("This custom module is not available.");
+type CustomModuleWithQuestions = Awaited<
+  ReturnType<typeof prisma.customModule.findFirstOrThrow<{ include: typeof CUSTOM_MODULE_QUESTIONS_INCLUDE }>>
+>;
+
+async function startFromCustomModuleRow(studentId: string, customModule: CustomModuleWithQuestions) {
+  const resumable = await findResumableAttempt(studentId, { customModuleId: customModule.id });
+  if (resumable) return resumable;
 
   return createAttemptFromQuestions({
     studentId,
@@ -174,6 +176,41 @@ export async function startCustomModuleAttempt(studentId: string, moduleId: stri
     negativeMarking: customModule.negativeMarking,
     questions: customModule.questions.map((mq) => mq.question as unknown as QuestionWithOptions),
   });
+}
+
+/**
+ * A student-owned Custom Module V2 (isStudentOwned) is private to its
+ * creator through this path — the `OR` clause is the entire enforcement
+ * point, so a student can never start another student's private module just
+ * by guessing/enumerating its id. Sharing is handled separately, by
+ * shareToken, never by id (see startSharedCustomModuleAttempt).
+ */
+export async function startCustomModuleAttempt(studentId: string, moduleId: string) {
+  const customModule = await prisma.customModule.findFirst({
+    where: {
+      id: moduleId,
+      status: { in: [CustomModuleStatus.PUBLISHED, CustomModuleStatus.ACTIVE] },
+      OR: [{ isStudentOwned: false }, { createdByStudentId: studentId }],
+    },
+    include: CUSTOM_MODULE_QUESTIONS_INCLUDE,
+  });
+  if (!customModule) throw new Error("This custom module is not available.");
+  return startFromCustomModuleRow(studentId, customModule);
+}
+
+/**
+ * Start (or resume) an attempt against a module the student reached via its
+ * unguessable share link rather than ownership — the token itself is the
+ * authorization, so any signed-in student holding it may start their own
+ * independent attempt against the same fixed question set.
+ */
+export async function startSharedCustomModuleAttempt(studentId: string, shareToken: string) {
+  const customModule = await prisma.customModule.findFirst({
+    where: { shareToken, status: { in: [CustomModuleStatus.PUBLISHED, CustomModuleStatus.ACTIVE] } },
+    include: CUSTOM_MODULE_QUESTIONS_INCLUDE,
+  });
+  if (!customModule) throw new Error("This shared module link is invalid or no longer available.");
+  return startFromCustomModuleRow(studentId, customModule);
 }
 
 /**

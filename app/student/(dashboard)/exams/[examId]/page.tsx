@@ -165,6 +165,11 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
               </div>
             ))
           )}
+          <div className="pt-3">
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/student/custom-module/builder?examId=${examId}`}>Build Your Own Module →</Link>
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

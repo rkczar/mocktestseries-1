@@ -163,9 +163,19 @@ export async function getPublishedCustomModulesForStudent(studentId: string, exa
   }));
 }
 
+/**
+ * A student-owned module is only visible to its creator here — the `OR`
+ * clause is the whole enforcement point, mirroring startCustomModuleAttempt
+ * in lib/test-attempt.ts. Shared access goes through the shareToken path
+ * (getCustomModuleByShareToken) instead of this id-keyed lookup.
+ */
 export async function getCustomModuleDetailForStudent(moduleId: string, studentId: string) {
   const customModule = await prisma.customModule.findFirst({
-    where: { id: moduleId, status: { in: VISIBLE_CUSTOM_MODULE_STATUSES } },
+    where: {
+      id: moduleId,
+      status: { in: VISIBLE_CUSTOM_MODULE_STATUSES },
+      OR: [{ isStudentOwned: false }, { createdByStudentId: studentId }],
+    },
     include: { exam: true, _count: { select: { questions: true } } },
   });
   if (!customModule) return null;
@@ -176,6 +186,49 @@ export async function getCustomModuleDetailForStudent(moduleId: string, studentI
   });
 
   return { module: customModule, attempts };
+}
+
+/** "My Modules" — every Custom Module V2 the student built themselves, newest first. */
+export async function getStudentOwnedCustomModules(studentId: string) {
+  const modules = await prisma.customModule.findMany({
+    where: { createdByStudentId: studentId, isStudentOwned: true },
+    orderBy: { createdAt: "desc" },
+    include: { exam: true, _count: { select: { questions: true } } },
+  });
+
+  const latestAttempts = await prisma.testAttempt.findMany({
+    where: { studentId, sourceType: AttemptSourceType.CUSTOM_MODULE, customModuleId: { in: modules.map((m) => m.id) } },
+    orderBy: { startedAt: "desc" },
+    select: { customModuleId: true, id: true, status: true, score: true, maxScore: true },
+  });
+  const latestByModule = new Map<string, (typeof latestAttempts)[number]>();
+  for (const a of latestAttempts) {
+    if (a.customModuleId && !latestByModule.has(a.customModuleId)) latestByModule.set(a.customModuleId, a);
+  }
+
+  return modules.map((m) => ({ module: m, latestAttempt: latestByModule.get(m.id) ?? null }));
+}
+
+/** Looked up by the unguessable share token only — never by id — so a private module can't be reached by guessing. */
+export async function getCustomModuleByShareToken(shareToken: string) {
+  return prisma.customModule.findFirst({
+    where: { shareToken, status: { in: VISIBLE_CUSTOM_MODULE_STATUSES } },
+    include: { exam: true, _count: { select: { questions: true } } },
+  });
+}
+
+/** Idempotent — returns the existing token if one was already generated, otherwise mints and persists a new opaque one. */
+export async function ensureCustomModuleShareToken(moduleId: string, studentId: string) {
+  const existing = await prisma.customModule.findFirst({
+    where: { id: moduleId, createdByStudentId: studentId, isStudentOwned: true },
+    select: { shareToken: true },
+  });
+  if (!existing) throw new Error("Module not found.");
+  if (existing.shareToken) return existing.shareToken;
+
+  const token = crypto.randomUUID().replace(/-/g, "");
+  await prisma.customModule.update({ where: { id: moduleId }, data: { shareToken: token } });
+  return token;
 }
 
 // ---------------------------------------------------------------------------

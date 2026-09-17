@@ -34,6 +34,13 @@ export interface QuestionWithOptions {
   options: QuestionOption[];
 }
 
+/**
+ * A student-history-scoped narrowing on top of the ordinary filters — used by
+ * Custom Module V2 ("Incorrect", "Unattempted", "Saved"). Requires
+ * `studentId` on the filter set; ignored otherwise.
+ */
+export type AttemptFilterMode = "INCORRECT" | "UNATTEMPTED" | "SAVED";
+
 /** Filters that identify which questions are eligible for selection. */
 export interface QuestionSelectionFilters {
   examId: string;
@@ -43,6 +50,8 @@ export interface QuestionSelectionFilters {
   subTopicId?: string | null;
   source?: QuestionSource | null;
   difficulty?: QuestionDifficulty[] | null;
+  studentId?: string | null;
+  attemptFilter?: AttemptFilterMode | null;
 }
 
 /** A selection request: eligible pool constrained by filters, then `count` drawn. */
@@ -80,7 +89,7 @@ export function shuffle<T>(arr: T[]): T[] {
  * to fail fast with InsufficientQuestionsError.
  */
 export async function countPublishedQuestions(filters: QuestionSelectionFilters): Promise<number> {
-  return prisma.question.count({ where: toQuestionWhere(filters) });
+  return prisma.question.count({ where: await buildQuestionWhere(filters) });
 }
 
 /** True if the count needed is more than what is PUBLISHED and in scope. */
@@ -100,6 +109,41 @@ function toQuestionWhere(filters: QuestionSelectionFilters) {
     difficulty:
       filters.difficulty && filters.difficulty.length > 0 ? { in: filters.difficulty } : undefined,
   };
+}
+
+/**
+ * Question has no Prisma relation to Answer (deliberate, snapshot-only
+ * design — see lib/test-attempt.ts), so "Incorrect" / "Unattempted" can't be
+ * expressed as a nested Prisma filter. Resolve the id set with one small,
+ * student-scoped query first, then narrow the ordinary where by `id`. Bounded
+ * by one student's own history, never the whole bank.
+ */
+async function applyAttemptFilter(where: ReturnType<typeof toQuestionWhere>, filters: QuestionSelectionFilters) {
+  if (!filters.studentId || !filters.attemptFilter) return where;
+
+  if (filters.attemptFilter === "SAVED") {
+    const rows = await prisma.savedQuestion.findMany({ where: { studentId: filters.studentId }, select: { questionId: true } });
+    return { ...where, id: { in: rows.map((r) => r.questionId) } };
+  }
+  if (filters.attemptFilter === "INCORRECT") {
+    const rows = await prisma.answer.findMany({
+      where: { studentId: filters.studentId, isCorrect: false },
+      select: { questionId: true },
+      distinct: ["questionId"],
+    });
+    return { ...where, id: { in: rows.map((r) => r.questionId) } };
+  }
+  // UNATTEMPTED: exclude every question the student has ever answered/marked (any non-UNANSWERED status).
+  const rows = await prisma.answer.findMany({
+    where: { studentId: filters.studentId, status: { not: "UNANSWERED" } },
+    select: { questionId: true },
+    distinct: ["questionId"],
+  });
+  return { ...where, id: { notIn: rows.map((r) => r.questionId) } };
+}
+
+async function buildQuestionWhere(filters: QuestionSelectionFilters) {
+  return applyAttemptFilter(toQuestionWhere(filters), filters);
 }
 
 /**
@@ -158,7 +202,7 @@ export async function selectPublishedQuestions(
   if (request.count < 1) throw new Error("Question count must be at least 1.");
   await assertValidOwnershipChain(request);
 
-  const where = toQuestionWhere(request);
+  const where = await buildQuestionWhere(request);
   const available = await prisma.question.count({ where });
   if (available < request.count) {
     throw new InsufficientQuestionsError(request.count, available);

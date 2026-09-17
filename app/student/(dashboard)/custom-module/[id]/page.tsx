@@ -7,6 +7,7 @@ import { startCustomModuleFromExamAction } from "@/app/student/(dashboard)/exams
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
+import { ShareModuleControl } from "./share-module-control";
 
 export const metadata = { title: "Custom Module — Mock Test Series.in" };
 
@@ -24,9 +25,14 @@ export default async function CustomModuleDetailPage({ params }: { params: Promi
     <div className="flex flex-col gap-6">
       <BackButton href="/student/custom-module" />
 
-      <div>
-        <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{m.title}</h1>
-        <p className="text-sm text-[var(--color-muted-foreground)]">{m.exam.name}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{m.title}</h1>
+          <p className="text-sm text-[var(--color-muted-foreground)]">{m.exam.name}</p>
+        </div>
+        {m.isStudentOwned && m.createdByStudentId === student.id ? (
+          <ShareModuleControl moduleId={m.id} existingToken={m.shareToken} />
+        ) : null}
       </div>
 
       {m.description ? (
