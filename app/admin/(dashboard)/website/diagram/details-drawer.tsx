@@ -1,17 +1,8 @@
 import { X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import type { BadgeProps } from "@/components/ui/badge";
 import type { DiagramNode, DiagramEdge } from "@/lib/diagram-graph";
+import { resolveDisplayStatus } from "@/lib/diagram-status";
 import styles from "./graph-view.module.css";
-
-const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
-  CONNECTED: "success",
-  WARNING: "warning",
-  BROKEN: "error",
-  ORPHAN: "error",
-  UNAUTHORIZED: "error",
-  DRAFT: "neutral",
-};
 
 export type DrawerSelection = { kind: "node"; node: DiagramNode } | { kind: "edge"; edge: DiagramEdge };
 
@@ -71,10 +62,14 @@ export function DetailsDrawer({
             </div>
             <div>
               <p className={styles.drawerFieldLabel}>Status</p>
-              <Badge variant={STATUS_VARIANT[selection.node.status]}>{selection.node.status}</Badge>
+              <Badge variant={resolveDisplayStatus(selection.node).variant}>{resolveDisplayStatus(selection.node).label}</Badge>
             </div>
           </div>
-          {selection.node.isolated ? (
+          {selection.node.deprecated ? (
+            <div className={styles.warningBox}>⚠ Deprecated — kept in the codebase for old links/bookmarks, no longer part of the current product surface.</div>
+          ) : selection.node.missing ? (
+            <div className={styles.warningBox}>⚠ Missing — registered in the route registry but no matching page.tsx exists on disk.</div>
+          ) : selection.node.isolated ? (
             <div className={styles.warningBox}>⚠ Isolated page — no incoming or outgoing connections detected.</div>
           ) : selection.node.noIncoming ? (
             <div className={styles.warningBox}>⚠ Nothing links into this page yet — it&apos;s only reachable by typing the URL directly.</div>

@@ -105,8 +105,12 @@ function toQuestionWhere(filters: QuestionSelectionFilters) {
 /**
  * Validate the ownership chain exam → subject → topic → sub-topic.
  * Throws if any linkage does not resolve to the exam the caller claims.
+ * Exported so callers that must validate a filter set before it reaches
+ * selectPublishedQuestions (e.g. Grand Test blueprint lines, validated at
+ * create/update time as well as at publish-time resolution) can reuse the
+ * exact same check rather than re-implementing it.
  */
-async function assertValidOwnershipChain(filters: QuestionSelectionFilters) {
+export async function assertValidOwnershipChain(filters: QuestionSelectionFilters) {
   if (filters.subjectId) {
     const subject = await prisma.subject.findUnique({ where: { id: filters.subjectId }, select: { examId: true } });
     if (!subject || subject.examId !== filters.examId) {

@@ -1,18 +1,10 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CheckButton } from "./check-button";
 import type { BadgeProps } from "@/components/ui/badge";
+import { CheckButton } from "./check-button";
 import type { DiagramEntry } from "@/lib/diagram-graph";
+import { resolveDisplayStatus } from "@/lib/diagram-status";
 import type { GlobalNavGroup } from "@/lib/global-nav-links";
-
-const STATUS_VARIANT: Record<string, BadgeProps["variant"]> = {
-  CONNECTED: "success",
-  WARNING: "warning",
-  BROKEN: "error",
-  ORPHAN: "error",
-  UNAUTHORIZED: "error",
-  DRAFT: "neutral",
-};
 
 function GlobalNavCard({ groups }: { groups: GlobalNavGroup[] }) {
   if (groups.length === 0) return null;
@@ -49,8 +41,10 @@ export function RegistryTable({ entries, globalNavGroups }: { entries: DiagramEn
     return acc;
   }, {});
 
-  const counts = entries.reduce<Record<string, number>>((acc, e) => {
-    acc[e.status] = (acc[e.status] ?? 0) + 1;
+  const counts = entries.reduce<Record<string, { label: string; variant: BadgeProps["variant"]; count: number }>>((acc, e) => {
+    const status = resolveDisplayStatus(e);
+    if (!acc[status.key]) acc[status.key] = { label: status.label, variant: status.variant, count: 0 };
+    acc[status.key].count += 1;
     return acc;
   }, {});
 
@@ -66,8 +60,8 @@ export function RegistryTable({ entries, globalNavGroups }: { entries: DiagramEn
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {Object.entries(counts).map(([status, count]) => (
-          <Badge key={status} variant={STATUS_VARIANT[status]}>{status}: {count}</Badge>
+        {Object.entries(counts).map(([key, { label, variant, count }]) => (
+          <Badge key={key} variant={variant}>{label}: {count}</Badge>
         ))}
       </div>
 
@@ -92,19 +86,22 @@ export function RegistryTable({ entries, globalNavGroups }: { entries: DiagramEn
                 </tr>
               </thead>
               <tbody>
-                {moduleEntries.map((entry) => (
-                  <tr key={entry.route} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="py-2.5 pr-4 font-medium text-[var(--color-foreground)]">
-                      {entry.pageName}
-                      {entry.autoDiscovered ? <span className="ml-1.5 text-xs font-normal text-[var(--color-info)]">🆕 new</span> : null}
-                    </td>
-                    <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{entry.route}</td>
-                    <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{entry.parentRoute ?? "—"}</td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{entry.userType}</td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{entry.authRequired ? "Required" : "Public"}</td>
-                    <td className="py-2.5 pr-4"><Badge variant={STATUS_VARIANT[entry.status]}>{entry.status}</Badge></td>
-                  </tr>
-                ))}
+                {moduleEntries.map((entry) => {
+                  const status = resolveDisplayStatus(entry);
+                  return (
+                    <tr key={entry.route} className="border-b border-[var(--color-border)] last:border-0">
+                      <td className="py-2.5 pr-4 font-medium text-[var(--color-foreground)]">
+                        {entry.pageName}
+                        {entry.autoDiscovered ? <span className="ml-1.5 text-xs font-normal text-[var(--color-info)]">🆕 new</span> : null}
+                      </td>
+                      <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{entry.route}</td>
+                      <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{entry.parentRoute ?? "—"}</td>
+                      <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{entry.userType}</td>
+                      <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{entry.authRequired ? "Required" : "Public"}</td>
+                      <td className="py-2.5 pr-4"><Badge variant={status.variant}>{status.label}</Badge></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </CardContent>

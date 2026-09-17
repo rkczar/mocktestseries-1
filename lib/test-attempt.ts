@@ -4,6 +4,7 @@ import {
   AttemptSourceType,
   AttemptStatus,
   CustomModuleStatus,
+  GrandTestStatus,
   MockTestStatus,
   QuestionStatus,
   TestType,
@@ -41,6 +42,7 @@ const TEST_TYPE_BY_SOURCE: Record<AttemptSourceType, TestType> = {
   [AttemptSourceType.PREVIOUS_YEAR_PAPER]: TestType.PREVIOUS_YEAR_PAPER,
   [AttemptSourceType.CUSTOM_MODULE]: TestType.CUSTOM_MODULE,
   [AttemptSourceType.SUBJECT_TEST]: TestType.SUBJECT_TEST,
+  [AttemptSourceType.GRAND_TEST]: TestType.GRAND_TEST,
 };
 
 function toSnapshot(question: QuestionWithOptions): QuestionSnapshot {
@@ -68,6 +70,7 @@ async function createAttemptFromQuestions(params: {
   mockTestId?: string;
   customModuleId?: string;
   previousYearPaperId?: string;
+  grandTestId?: string;
   subjectId?: string;
   topicIds?: string[];
   selection?: Record<string, unknown> | null;
@@ -89,6 +92,7 @@ async function createAttemptFromQuestions(params: {
       mockTestId: params.mockTestId,
       customModuleId: params.customModuleId,
       previousYearPaperId: params.previousYearPaperId,
+      grandTestId: params.grandTestId,
       subjectId: params.subjectId,
       topicIds: params.topicIds && params.topicIds.length > 0 ? params.topicIds : undefined,
       selection: (params.selection ?? undefined) as Prisma.InputJsonValue | undefined,
@@ -169,6 +173,34 @@ export async function startCustomModuleAttempt(studentId: string, moduleId: stri
     durationMinutes: customModule.durationMinutes ?? 30,
     negativeMarking: customModule.negativeMarking,
     questions: customModule.questions.map((mq) => mq.question as unknown as QuestionWithOptions),
+  });
+}
+
+/**
+ * Generate (or resume) a GRAND_TEST attempt from a Grand Test's already
+ * publish-time-resolved, immutable GrandTestQuestion set. Every student who
+ * starts the same Grand Test gets the exact same question set/order — the
+ * blueprint is resolved once at publish, never per-student and never here.
+ */
+export async function startGrandTestAttempt(studentId: string, grandTestId: string) {
+  const resumable = await findResumableAttempt(studentId, { grandTestId });
+  if (resumable) return resumable;
+
+  const grandTest = await prisma.grandTest.findFirst({
+    where: { id: grandTestId, status: GrandTestStatus.PUBLISHED },
+    include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
+  });
+  if (!grandTest) throw new Error("This grand test is not available.");
+
+  return createAttemptFromQuestions({
+    studentId,
+    sourceType: AttemptSourceType.GRAND_TEST,
+    testType: TestType.GRAND_TEST,
+    examId: grandTest.examId,
+    grandTestId: grandTest.id,
+    durationMinutes: grandTest.durationMinutes,
+    negativeMarking: grandTest.negativeMarking,
+    questions: grandTest.questions.map((gq) => gq.question as unknown as QuestionWithOptions),
   });
 }
 

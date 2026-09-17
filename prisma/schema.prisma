@@ -732,11 +732,16 @@ model GrandTest {
   accessType      AccessType      @default(FREE)
   status          GrandTestStatus @default(DRAFT)
   questionCount   Int
-  // Selection rule (resolved into GrandTestQuestion at publish time):
-  // { subjects?: string[]; topics?: string[]; subTopics?: string[]; difficulty?: QuestionDifficulty[] }
+  // Deprecated flat-filter rule, superseded by `blueprint` below. Never
+  // written by app code as of Step 4; kept only for schema continuity.
   subjects        Json?
   topics          Json?
   difficulty      Json?
+  // Per-subject blueprint, resolved into GrandTestQuestion at publish time.
+  // Shape: [{ subjectId: string; topicId?: string; subTopicId?: string;
+  //           difficulty?: QuestionDifficulty[]; count: number }]
+  // The sum of every line's `count` must equal `questionCount`.
+  blueprint       Json?
   order           Int             @default(0)
   publishedAt     DateTime?
   createdByAdminId String?
@@ -842,6 +847,7 @@ enum AttemptSourceType {
   PREVIOUS_YEAR_PAPER
   CUSTOM_MODULE
   SUBJECT_TEST
+  GRAND_TEST
 }
 
 /**

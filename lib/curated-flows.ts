@@ -21,3 +21,19 @@ export function publicFlowNodeIds(entries: DiagramEntry[]): string[] {
   const ids = entries.filter((e) => e.module === "Website" && e.userType === "PUBLIC").map((e) => e.route);
   return [...new Set([...ids, "/login"])];
 }
+
+/**
+ * The single end-to-end chain the product is built around: an admin signs
+ * in and manages the site, a visitor lands on the public site and logs in
+ * as a student, the student takes a test, and lands on their result and
+ * answer review (analysis). Same real, currently-wired pages as the Admin
+ * Flow and Student Flow tabs — just chained into one readable strip instead
+ * of split across tabs.
+ */
+export function fullJourneyFlowNodeIds(): string[] {
+  return [
+    "/admin/login",
+    "/admin",
+    ...STUDENT_JOURNEY_FLOW,
+  ];
+}

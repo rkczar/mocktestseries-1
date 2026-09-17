@@ -1,6 +1,7 @@
 import "server-only";
 import { scanAppRoutes, scanOutgoingLinks } from "./route-scanner";
 import { ROUTE_CONNECTIONS, type RouteConnection } from "./route-connections";
+import { DEPRECATED_ROUTES } from "./deprecated-routes";
 import type { DiagramEntry } from "./diagram-graph";
 
 export interface DiagramSource {
@@ -24,13 +25,15 @@ export function buildDiagramSource(dbEntries: DiagramEntry[]): DiagramSource {
   const scannedRoutes = scanAppRoutes();
   const scannedByRoute = new Map(scannedRoutes.map((r) => [r.route, r]));
   const dbByRoute = new Map(dbEntries.map((e) => [e.route, e]));
+  const deprecatedRoutes = new Set(DEPRECATED_ROUTES);
 
   const entries: DiagramEntry[] = dbEntries.map((entry) => {
     const scanned = scannedByRoute.get(entry.route);
+    const deprecated = deprecatedRoutes.has(entry.route);
     if (!scanned && entry.status !== "DRAFT") {
-      return { ...entry, status: "BROKEN", autoDiscovered: false };
+      return { ...entry, status: "BROKEN", autoDiscovered: false, missing: true, deprecated };
     }
-    return { ...entry, autoDiscovered: false };
+    return { ...entry, autoDiscovered: false, missing: false, deprecated };
   });
 
   for (const scanned of scannedRoutes) {
@@ -44,6 +47,8 @@ export function buildDiagramSource(dbEntries: DiagramEntry[]): DiagramSource {
       parentRoute: scanned.parentRoute,
       status: "CONNECTED",
       autoDiscovered: true,
+      missing: false,
+      deprecated: deprecatedRoutes.has(scanned.route),
     });
   }
 

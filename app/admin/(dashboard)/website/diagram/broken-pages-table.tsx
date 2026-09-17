@@ -1,9 +1,10 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { DiagramNode } from "@/lib/diagram-graph";
+import { resolveDisplayStatus } from "@/lib/diagram-status";
 
 function problemFor(node: DiagramNode): string {
-  if (node.status === "BROKEN") return "Broken route — registered but no page.tsx found";
+  if (node.missing) return "Missing — registered but no page.tsx found on disk";
   if (node.status === "ORPHAN") return "Orphan — parent page no longer exists";
   if (node.status === "UNAUTHORIZED") return "Public route requires auth — misconfigured";
   if (node.isolated) return "Isolated — no incoming or outgoing links";
@@ -12,9 +13,10 @@ function problemFor(node: DiagramNode): string {
 }
 
 export function BrokenPagesTable({ nodes }: { nodes: DiagramNode[] }) {
-  const problems = nodes.filter(
-    (n) => n.status === "BROKEN" || n.status === "ORPHAN" || n.status === "UNAUTHORIZED" || n.isolated || n.noIncoming
-  );
+  const problems = nodes.filter((n) => {
+    const key = resolveDisplayStatus(n).key;
+    return key === "BROKEN" || key === "MISSING";
+  });
 
   return (
     <Card>
@@ -47,7 +49,7 @@ export function BrokenPagesTable({ nodes }: { nodes: DiagramNode[] }) {
                   <td className="py-2.5 pr-4 font-medium text-[var(--color-foreground)]">{node.pageName}</td>
                   <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{node.route}</td>
                   <td className="py-2.5 pr-4">
-                    <Badge variant="error">{problemFor(node)}</Badge>
+                    <Badge variant={resolveDisplayStatus(node).variant}>{problemFor(node)}</Badge>
                   </td>
                   <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{node.incoming.length}</td>
                   <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{node.outgoing.length}</td>

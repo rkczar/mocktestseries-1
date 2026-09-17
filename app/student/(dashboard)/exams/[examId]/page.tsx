@@ -1,11 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { BookOpen, Clock, FileText, ListChecks } from "lucide-react";
+import { BookOpen, Clock, FileText, ListChecks, Trophy } from "lucide-react";
 import { getExamDetailForStudent } from "@/lib/student-data";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
-import { startMockTestFromExamAction, startPaperFromExamAction, startCustomModuleFromExamAction } from "./actions";
+import {
+  startMockTestFromExamAction,
+  startPaperFromExamAction,
+  startCustomModuleFromExamAction,
+  startGrandTestFromExamAction,
+} from "./actions";
 
 export const metadata = { title: "Exam — Mock Test Series.in" };
 
@@ -14,7 +19,7 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
   const detail = await getExamDetailForStudent(examId);
   if (!detail) notFound();
 
-  const { exam, mockTests, customModules } = detail;
+  const { exam, mockTests, customModules, grandTests } = detail;
 
   return (
     <div className="flex flex-col gap-6">
@@ -67,6 +72,36 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
                   </p>
                 </div>
                 <form action={startMockTestFromExamAction.bind(null, mt.id)}>
+                  <Button type="submit" size="sm">
+                    Start
+                  </Button>
+                </form>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Trophy className="h-4 w-4" aria-hidden /> Grand Tests
+          </CardTitle>
+          <CardDescription>{grandTests.length} available</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col divide-y divide-[var(--color-border)]">
+          {grandTests.length === 0 ? (
+            <p className="py-4 text-sm text-[var(--color-muted-foreground)]">No grand tests published yet.</p>
+          ) : (
+            grandTests.map((gt) => (
+              <div key={gt.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                <div>
+                  <p className="text-sm font-medium text-[var(--color-foreground)]">{gt.title}</p>
+                  <p className="text-xs text-[var(--color-muted-foreground)]">
+                    {gt.questionCount} Qs · {gt.durationMinutes} min
+                  </p>
+                </div>
+                <form action={startGrandTestFromExamAction.bind(null, gt.id)}>
                   <Button type="submit" size="sm">
                     Start
                   </Button>

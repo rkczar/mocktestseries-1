@@ -1,20 +1,8 @@
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { Badge } from "@/components/ui/badge";
-import type { BadgeProps } from "@/components/ui/badge";
 import type { DiagramNode } from "@/lib/diagram-graph";
+import { resolveDisplayStatus } from "@/lib/diagram-status";
 import styles from "./graph-view.module.css";
-
-/** Presentational label layered on top of the stored `status` — computed live from the graph shape, not persisted. */
-function displayStatus(node: DiagramNode): { label: string; variant: BadgeProps["variant"] } {
-  if (node.status === "BROKEN" || node.status === "ORPHAN" || node.status === "UNAUTHORIZED") {
-    return { label: node.status, variant: "error" };
-  }
-  if (node.status === "DRAFT") return { label: "DRAFT", variant: "neutral" };
-  if (node.isolated) return { label: "ORPHAN", variant: "error" };
-  if (node.noIncoming) return { label: "NO INCOMING", variant: "warning" };
-  if (node.status === "WARNING") return { label: "WARNING", variant: "warning" };
-  return { label: "CONNECTED", variant: "success" };
-}
 
 const USER_TYPE_COLOR: Record<string, string> = {
   PUBLIC: "var(--color-info)",
@@ -27,7 +15,7 @@ export type PageNodeType = Node<{ node: DiagramNode; dimmed?: boolean }, "pageNo
 export function PageNode({ data, selected }: NodeProps<PageNodeType>) {
   const { node, dimmed } = data;
   const accent = USER_TYPE_COLOR[node.userType] ?? "var(--color-border)";
-  const status = displayStatus(node);
+  const status = resolveDisplayStatus(node);
 
   return (
     <div

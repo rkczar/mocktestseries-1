@@ -65,6 +65,40 @@ function parseQuestionForm(formData: FormData) {
   });
 }
 
+type HierarchyDb = Pick<Prisma.TransactionClient, "subject" | "topic" | "subTopic">;
+
+/**
+ * Server-side guard against cross-exam hierarchy corruption (e.g. a question
+ * for one exam referencing a Subject/Topic/SubTopic that belongs to another
+ * exam). Bulk Import already enforces this via chained lookups; this mirrors
+ * that check for the single-question create/edit path, which previously
+ * trusted client-side dropdown filtering only.
+ */
+async function assertHierarchyConsistency(
+  db: HierarchyDb,
+  params: { examId: string; subjectId: string; topicId?: string | null; subTopicId?: string | null }
+): Promise<string | null> {
+  const subject = await db.subject.findUnique({ where: { id: params.subjectId }, select: { examId: true } });
+  if (!subject) return "Selected subject was not found.";
+  if (subject.examId !== params.examId) return "Selected subject does not belong to the selected exam.";
+
+  if (params.topicId) {
+    const topic = await db.topic.findUnique({ where: { id: params.topicId }, select: { subjectId: true } });
+    if (!topic) return "Selected topic was not found.";
+    if (topic.subjectId !== params.subjectId) return "Selected topic does not belong to the selected subject.";
+  }
+
+  if (params.subTopicId) {
+    const subTopic = await db.subTopic.findUnique({ where: { id: params.subTopicId }, select: { topicId: true } });
+    if (!subTopic) return "Selected sub-topic was not found.";
+    if (!params.topicId || subTopic.topicId !== params.topicId) {
+      return "Selected sub-topic does not belong to the selected topic.";
+    }
+  }
+
+  return null;
+}
+
 async function upsertOptions(
   db: Pick<Prisma.TransactionClient, "questionOption">,
   questionId: string,
@@ -99,6 +133,9 @@ export async function createQuestionAction(
 
   const { examId, examYear, subjectId, topicId, subTopicId, previousYearPaperId, source, text, imageUrl, difficulty, status } =
     parsed.data;
+
+  const hierarchyError = await assertHierarchyConsistency(prisma, { examId, subjectId, topicId, subTopicId });
+  if (hierarchyError) return { error: hierarchyError };
 
   await prisma.$transaction(async (tx) => {
     const { examCode, examYear: resolvedYear } = await resolveQuestionCodeInput(tx, {
@@ -159,6 +196,9 @@ export async function updateQuestionAction(
 
   const { examId, examYear, subjectId, topicId, subTopicId, previousYearPaperId, source, text, imageUrl, difficulty, status } =
     parsed.data;
+
+  const hierarchyError = await assertHierarchyConsistency(prisma, { examId, subjectId, topicId, subTopicId });
+  if (hierarchyError) return { error: hierarchyError };
 
   await prisma.$transaction(async (tx) => {
     const existing = await tx.question.findUnique({

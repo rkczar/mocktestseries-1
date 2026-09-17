@@ -19,6 +19,10 @@ export interface DiagramEntry {
   status: string;
   /** True when this entry was found on disk (a real page.tsx) but isn't in the registry DB yet — the diagram picked it up automatically. */
   autoDiscovered?: boolean;
+  /** True when this route is registered but no matching page.tsx exists on disk right now. */
+  missing?: boolean;
+  /** True when this route is listed in lib/deprecated-routes.ts. */
+  deprecated?: boolean;
 }
 
 export interface ConnectionRef {
@@ -37,6 +41,8 @@ export interface DiagramNode {
   authRequired: boolean;
   status: string;
   autoDiscovered: boolean;
+  missing: boolean;
+  deprecated: boolean;
   incoming: ConnectionRef[];
   outgoing: ConnectionRef[];
   connectionCount: number;
@@ -114,6 +120,8 @@ export function buildGraph(entries: DiagramEntry[], connections: RouteConnection
       authRequired: entry.authRequired,
       status: entry.status,
       autoDiscovered: entry.autoDiscovered ?? false,
+      missing: entry.missing ?? false,
+      deprecated: entry.deprecated ?? false,
       incoming,
       outgoing,
       connectionCount: incoming.length + outgoing.length,

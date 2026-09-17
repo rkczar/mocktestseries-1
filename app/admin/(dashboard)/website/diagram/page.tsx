@@ -3,7 +3,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { buildGraph, type DiagramEntry } from "@/lib/diagram-graph";
 import { buildDiagramSource } from "@/lib/diagram-source";
 import { scanGlobalNavLinks } from "@/lib/global-nav-links";
-import { studentFlowNodeIds, adminFlowNodeIds, publicFlowNodeIds } from "@/lib/curated-flows";
+import { studentFlowNodeIds, adminFlowNodeIds, publicFlowNodeIds, fullJourneyFlowNodeIds } from "@/lib/curated-flows";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { RegistryTable } from "./registry-table";
 import { BrokenPagesTable } from "./broken-pages-table";
@@ -49,6 +49,7 @@ export default async function WebsiteDiagramPage() {
       <Tabs defaultValue="overview">
         <TabsList className="h-auto flex-wrap gap-1">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="journey">Full Journey</TabsTrigger>
           <TabsTrigger value="student">Student Flow</TabsTrigger>
           <TabsTrigger value="admin">Admin Flow</TabsTrigger>
           <TabsTrigger value="public">Public Flow</TabsTrigger>
@@ -58,6 +59,16 @@ export default async function WebsiteDiagramPage() {
 
         <TabsContent value="overview">
           <GraphView graph={graph} variant="explorable" />
+        </TabsContent>
+
+        <TabsContent value="journey">
+          <GraphView
+            graph={graph}
+            variant="fixed"
+            fixedNodeIds={fullJourneyFlowNodeIds()}
+            flowErrors={flowErrors}
+            caption="The complete Admin → Website → Student → Test → Result/Analysis journey, end to end."
+          />
         </TabsContent>
 
         <TabsContent value="student">

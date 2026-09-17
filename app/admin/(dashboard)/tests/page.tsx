@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import BuilderPage from "./builder/page";
 import MockTestsPage from "./mock/page";
 import CustomModulesPage from "../custom-modules/page";
+import GrandTestsPage from "./grand/page";
 import CustomTestsPage from "./custom/page";
 import RandomTestsPage from "./random/page";
 import LiveTestsPage from "./live/page";
@@ -45,6 +46,7 @@ export default function TestsControlCenter() {
           { value: "builder", label: "Create Test", content: <BuilderPage /> },
           { value: "mock", label: "Mock Tests", content: <MockTestsPage /> },
           { value: "custom-modules", label: "Custom Modules", content: <CustomModulesPage /> },
+          { value: "grand", label: "Grand Tests", content: <GrandTestsPage /> },
           { value: "custom", label: "Custom Tests", content: <CustomTestsPage /> },
           { value: "random", label: "Random Tests", content: <RandomTestsPage /> },
           { value: "live", label: "Live Tests", content: <LiveTestsPage /> },

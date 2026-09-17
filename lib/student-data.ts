@@ -4,6 +4,7 @@ import {
   AttemptStatus,
   CustomModuleStatus,
   DeletionRequestStatus,
+  GrandTestStatus,
   MockTestStatus,
   QuestionStatus,
   StudentStatus,
@@ -67,7 +68,7 @@ export async function getExamDetailForStudent(examId: string) {
   });
   if (!exam) return null;
 
-  const [mockTests, customModules] = await Promise.all([
+  const [mockTests, customModules, grandTests] = await Promise.all([
     prisma.mockTest.findMany({
       where: { examId, status: MockTestStatus.PUBLISHED },
       orderBy: { order: "asc" },
@@ -78,9 +79,14 @@ export async function getExamDetailForStudent(examId: string) {
       orderBy: { order: "asc" },
       include: { _count: { select: { questions: true } } },
     }),
+    prisma.grandTest.findMany({
+      where: { examId, status: GrandTestStatus.PUBLISHED },
+      orderBy: { order: "asc" },
+      select: { id: true, title: true, questionCount: true, durationMinutes: true },
+    }),
   ]);
 
-  return { exam, mockTests, customModules };
+  return { exam, mockTests, customModules, grandTests };
 }
 
 // ---------------------------------------------------------------------------
