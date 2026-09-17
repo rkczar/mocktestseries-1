@@ -11,6 +11,7 @@ const SOURCE_LABEL = {
   CUSTOM_MODULE: "Custom Module",
   SUBJECT_TEST: "Subject Test",
   GRAND_TEST: "Grand Test",
+  LIVE_TEST: "Live Test",
 } as const;
 
 export default async function StudentsHistoryPage({
@@ -26,7 +27,7 @@ export default async function StudentsHistoryPage({
       where: { examId: examId || undefined },
       orderBy: { startedAt: "desc" },
       take: 200,
-      include: { student: true, exam: true, mockTest: true, customModule: true, previousYearPaper: true, grandTest: true },
+      include: { student: true, exam: true, mockTest: true, customModule: true, previousYearPaper: true, grandTest: true, liveTest: true },
     }),
   ]);
 
@@ -87,7 +88,7 @@ export default async function StudentsHistoryPage({
                       <Badge variant="neutral">{SOURCE_LABEL[a.sourceType]}</Badge>
                     </td>
                     <td className="py-2.5 pr-4 text-[var(--color-foreground)]">
-                      {a.mockTest?.title ?? a.customModule?.title ?? a.previousYearPaper?.title ?? a.grandTest?.title ?? "—"}
+                      {a.mockTest?.title ?? a.customModule?.title ?? a.previousYearPaper?.title ?? a.grandTest?.title ?? a.liveTest?.title ?? "—"}
                     </td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{a.exam.name}</td>
                     <td className="py-2.5 pr-4">{a.score !== null ? `${a.score} / ${a.maxScore}` : "In progress"}</td>

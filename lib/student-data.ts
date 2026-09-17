@@ -232,6 +232,57 @@ export async function ensureCustomModuleShareToken(moduleId: string, studentId: 
 }
 
 // ---------------------------------------------------------------------------
+// Live Tests
+// ---------------------------------------------------------------------------
+
+/**
+ * Every Live Test that's been locked (SCHEDULED or later — never a DRAFT
+ * still being configured), bucketed into the four student-facing sections
+ * by DERIVED state, not the raw persisted status (see lib/live-test.ts).
+ * CANCELLED tests are omitted entirely — nothing useful for a student to do
+ * with one.
+ */
+export async function getLiveTestsForStudent(studentId: string) {
+  const { deriveLiveTestState } = await import("@/lib/live-test");
+
+  const liveTests = await prisma.liveTest.findMany({
+    where: { status: { not: "DRAFT" } },
+    orderBy: { startAt: "asc" },
+    include: { exam: true },
+  });
+
+  const attempts = await prisma.testAttempt.findMany({
+    where: { studentId, sourceType: AttemptSourceType.LIVE_TEST, liveTestId: { in: liveTests.map((l) => l.id) } },
+    select: { liveTestId: true, id: true, status: true, score: true, maxScore: true },
+  });
+  const attemptByLiveTest = new Map(attempts.map((a) => [a.liveTestId, a]));
+
+  const now = new Date();
+  const upcoming: typeof liveTests = [];
+  const live: typeof liveTests = [];
+  const completed: typeof liveTests = [];
+  const resultsAvailable: typeof liveTests = [];
+
+  for (const lt of liveTests) {
+    const state = deriveLiveTestState(lt, now);
+    if (state === "CANCELLED") continue;
+    if (state === "SCHEDULED") upcoming.push(lt);
+    else if (state === "LIVE") live.push(lt);
+    else if (state === "RESULT_PUBLISHED") resultsAvailable.push(lt);
+    else completed.push(lt); // ENDED, result not yet published
+  }
+
+  const withAttempt = (rows: typeof liveTests) => rows.map((lt) => ({ liveTest: lt, attempt: attemptByLiveTest.get(lt.id) ?? null }));
+
+  return {
+    upcoming: withAttempt(upcoming),
+    live: withAttempt(live),
+    completed: withAttempt(completed),
+    resultsAvailable: withAttempt(resultsAvailable),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Previous Year Papers
 // ---------------------------------------------------------------------------
 
@@ -323,9 +374,16 @@ export async function getStudentAttemptHistory(
   });
 }
 
-/** Ownership-checked attempt fetch — returns null (never another student's row) if not owned by studentId. */
+/**
+ * Ownership-checked attempt fetch — returns null (never another student's
+ * row) if not owned by studentId. Also the request-time reconciliation point
+ * (Step 5.6): if the attempt is still IN_PROGRESS but its effective window
+ * has closed, it's finalized here before being returned, so every page that
+ * reads an attempt (run/result/review) always sees settled, consistent
+ * state — never a stale IN_PROGRESS row past its own deadline.
+ */
 export async function getOwnedAttempt(attemptId: string, studentId: string) {
-  return prisma.testAttempt.findFirst({
+  const attempt = await prisma.testAttempt.findFirst({
     where: { id: attemptId, studentId },
     include: {
       exam: true,
@@ -333,9 +391,18 @@ export async function getOwnedAttempt(attemptId: string, studentId: string) {
       customModule: true,
       previousYearPaper: true,
       subject: true,
+      grandTest: true,
+      liveTest: true,
       questions: { orderBy: { order: "asc" }, include: { answer: true } },
     },
   });
+  if (!attempt) return null;
+
+  const { finalizeIfExpired } = await import("@/lib/test-attempt");
+  if (await finalizeIfExpired(attempt)) {
+    return getOwnedAttempt(attemptId, studentId);
+  }
+  return attempt;
 }
 
 // ---------------------------------------------------------------------------

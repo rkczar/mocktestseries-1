@@ -801,11 +801,18 @@ model LiveTest {
   accessType            AccessType     @default(FREE)
   status                LiveTestStatus @default(DRAFT)
   questionCount         Int
-  // Selection rule (resolved into LiveTestQuestion at publish time):
-  // { subjects?: string[]; topics?: string[]; subTopics?: string[]; difficulty?: QuestionDifficulty[] }
+  // Deprecated flat-filter rule, superseded by `blueprint` below (same
+  // Step 4 → Step 5 continuity as GrandTest.subjects/topics/difficulty).
+  // Never written by app code as of Step 5; kept only for schema continuity.
   subjects              Json?
   topics                Json?
   difficulty            Json?
+  // Per-subject blueprint, resolved into LiveTestQuestion when the test is
+  // locked (SCHEDULED). Shape identical to GrandTest.blueprint:
+  // [{ subjectId: string; topicId?: string; subTopicId?: string;
+  //    difficulty?: QuestionDifficulty[]; count: number }]
+  // The sum of every line's `count` must equal `questionCount`.
+  blueprint             Json?
   order                 Int            @default(0)
   publishedAt           DateTime?
   createdByAdminId      String?
@@ -848,6 +855,7 @@ enum AttemptSourceType {
   CUSTOM_MODULE
   SUBJECT_TEST
   GRAND_TEST
+  LIVE_TEST
 }
 
 /**

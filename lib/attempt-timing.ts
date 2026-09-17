@@ -4,7 +4,11 @@
  * The countdown shown to a student is UI only. This module is the single
  * source of truth for a test's authoritative time window:
  *
- *     effectiveEnd = startedAt + durationMinutes
+ *     effectiveEnd = MIN(startedAt + durationMinutes, liveTestEndAt ?? +Infinity)
+ *
+ * The `liveTestEndAt` cap only ever applies to Live Test attempts (see
+ * `ServerTimedAttempt`) — every other test type is unaffected and behaves
+ * exactly as before.
  *
  * Every mutating server action (saveAnswer / submitAttempt / resume /
  * continue) must verify the window through `isExpired` here — never by
@@ -32,11 +36,24 @@
 export interface ServerTimedAttempt {
   startedAt: Date;
   durationMinutes: number;
+  /**
+   * Live Test only: the test's global end time, shared by every student.
+   * When present, it caps the by-duration end so a student who joins late
+   * never gets their full duration past the global window — e.g. a
+   * 2:00–3:00 PM Live Test with a 60-minute student duration, joined at
+   * 2:40 PM, ends at 3:00 PM, not 3:40 PM. Undefined/null for every other
+   * test type, which is a no-op (unbounded cap).
+   */
+  liveTestEndAt?: Date | null;
 }
 
-/** Authoritative end of an attempt: startedAt + duration. */
+/** Authoritative end of an attempt: startedAt + duration, capped by the Live Test's global endAt when present. */
 export function effectiveEndFor(attempt: ServerTimedAttempt): Date {
-  return new Date(attempt.startedAt.getTime() + attempt.durationMinutes * 60_000);
+  const byDuration = new Date(attempt.startedAt.getTime() + attempt.durationMinutes * 60_000);
+  if (attempt.liveTestEndAt && attempt.liveTestEndAt.getTime() < byDuration.getTime()) {
+    return attempt.liveTestEndAt;
+  }
+  return byDuration;
 }
 
 /** Server's own clock — the only clock ever trusted. */
@@ -64,11 +81,13 @@ export function remainingSecondsFor(attempt: ServerTimedAttempt, now: Date = ser
 
 /**
  * Whole seconds that elapsed since the attempt started, clamped to
- * [0, duration]. Used for `timeTakenSeconds` on submission so a late submit
- * can never report more time than the window actually permitted.
+ * [0, effective window]. Used for `timeTakenSeconds` on submission so a late
+ * submit can never report more time than the window actually permitted —
+ * for a Live Test this is the effective (possibly global-endAt-capped)
+ * window, not the nominal per-student duration.
  */
 export function elapsedSecondsFor(attempt: ServerTimedAttempt, now: Date = serverNow()): number {
-  const windowMs = attempt.durationMinutes * 60_000;
+  const windowMs = effectiveEndFor(attempt).getTime() - attempt.startedAt.getTime();
   const elapsedMs = now.getTime() - attempt.startedAt.getTime();
   return Math.min(Math.max(Math.floor(elapsedMs / 1000), 0), Math.floor(windowMs / 1000));
 }

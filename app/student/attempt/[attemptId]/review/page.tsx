@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
-import { AttemptStatus } from "@prisma/client";
+import { AttemptStatus, TestType } from "@prisma/client";
+import { Clock } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { BackButton } from "@/components/student/back-button";
@@ -7,6 +8,7 @@ import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 import { cn } from "@/lib/utils";
+import { Card, CardContent } from "@/components/ui/card";
 import { ExplanationPanel } from "./explanation-panel";
 import { toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
 
@@ -18,6 +20,26 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);
+
+  // Live Test: the answer key (correct option, per-option explanation) stays
+  // hidden until the admin explicitly publishes results — a submission must
+  // never itself expose it (Step 5.8).
+  if (attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED") {
+    return (
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+        <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
+        <Card>
+          <CardContent className="flex flex-col items-center gap-2 py-16 text-center">
+            <Clock className="h-8 w-8 text-[var(--color-muted-foreground)]" aria-hidden />
+            <p className="text-sm font-medium text-[var(--color-foreground)]">Answer review isn&apos;t available yet</p>
+            <p className="text-sm text-[var(--color-muted-foreground)]">
+              This is a Live Test — the answer key is released once results are published for everyone.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const savedIds = await getSavedQuestionIdSet(
     student.id,

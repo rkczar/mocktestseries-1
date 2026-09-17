@@ -8,6 +8,8 @@ interface TitleableAttempt {
   mockTest?: { title?: string | null } | null;
   customModule?: { title?: string | null } | null;
   previousYearPaper?: { title?: string | null; year?: number | null } | null;
+  grandTest?: { title?: string | null } | null;
+  liveTest?: { title?: string | null } | null;
   subject?: { name?: string | null } | null;
   exam?: { name?: string | null } | null;
 }
@@ -20,6 +22,8 @@ export function attemptTitle(attempt: TitleableAttempt): string {
       ? `${attempt.previousYearPaper.title} (${attempt.previousYearPaper.year})`
       : attempt.previousYearPaper.title;
   }
+  if (attempt.grandTest?.title) return attempt.grandTest.title;
+  if (attempt.liveTest?.title) return attempt.liveTest.title;
   if (attempt.subject?.name) return `${attempt.subject.name} — Subject Test`;
   return attempt.exam?.name ?? "Test";
 }
@@ -32,9 +36,18 @@ export function attemptTitle(attempt: TitleableAttempt): string {
 interface InstructableAttempt {
   mockTest?: { instructions?: string | null } | null;
   customModule?: { instructions?: string | null } | null;
+  grandTest?: { instructions?: string | null } | null;
+  liveTest?: { instructions?: string | null } | null;
   exam?: { instructions?: string | null } | null;
 }
 
 export function attemptInstructions(attempt: InstructableAttempt): string | null {
-  return attempt.mockTest?.instructions ?? attempt.customModule?.instructions ?? attempt.exam?.instructions ?? null;
+  return (
+    attempt.mockTest?.instructions ??
+    attempt.customModule?.instructions ??
+    attempt.grandTest?.instructions ??
+    attempt.liveTest?.instructions ??
+    attempt.exam?.instructions ??
+    null
+  );
 }

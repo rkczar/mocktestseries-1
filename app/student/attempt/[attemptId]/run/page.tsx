@@ -3,7 +3,7 @@ import { AttemptStatus, AnswerStatus } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
-import { remainingSecondsFor, type QuestionSnapshot } from "@/lib/test-attempt";
+import { remainingSecondsFor, toServerTimedAttempt, type QuestionSnapshot } from "@/lib/test-attempt";
 import { TestPlayer } from "./test-player";
 
 export const metadata = { title: "Test in Progress — Mock Test Series.in" };
@@ -15,7 +15,7 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
   if (!attempt) notFound();
   if (attempt.status === AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}/result`);
 
-  const remainingSeconds = remainingSecondsFor(attempt);
+  const remainingSeconds = remainingSecondsFor(toServerTimedAttempt(attempt));
   const savedIds = await getSavedQuestionIdSet(
     student.id,
     attempt.questions.map((tq) => tq.questionId)

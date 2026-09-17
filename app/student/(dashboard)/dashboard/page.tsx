@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { GraduationCap, ClipboardList, ListChecks, History as HistoryIcon, ArrowRight, BookOpen } from "lucide-react";
+import { GraduationCap, ClipboardList, ListChecks, History as HistoryIcon, ArrowRight, BookOpen, Radio } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
 import { AttemptStatus } from "@prisma/client";
@@ -13,6 +13,7 @@ const QUICK_LINKS = [
   { label: "My Exams", href: "/student/exams", icon: GraduationCap, description: "Browse exams, subjects and papers" },
   { label: "Subject Test", href: "/student/subject-test", icon: BookOpen, description: "Practice by subject" },
   { label: "Test Series", href: "/student/test-series", icon: ClipboardList, description: "Published mock tests" },
+  { label: "Live Tests", href: "/student/live-tests", icon: Radio, description: "Scheduled tests, taken together" },
   { label: "Custom Module", href: "/student/custom-module", icon: ListChecks, description: "Focused practice sets" },
   { label: "History", href: "/student/history", icon: HistoryIcon, description: "Your past attempts" },
 ];

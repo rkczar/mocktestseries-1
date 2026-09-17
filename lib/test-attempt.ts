@@ -12,7 +12,8 @@ import {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/student-data";
-import { isExpired, elapsedSecondsFor, remainingSecondsFor } from "@/lib/attempt-timing";
+import { isExpired, elapsedSecondsFor, remainingSecondsFor, type ServerTimedAttempt } from "@/lib/attempt-timing";
+import { deriveLiveTestState } from "@/lib/live-test";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
 
 export { remainingSecondsFor, InsufficientQuestionsError };
@@ -43,7 +44,17 @@ const TEST_TYPE_BY_SOURCE: Record<AttemptSourceType, TestType> = {
   [AttemptSourceType.CUSTOM_MODULE]: TestType.CUSTOM_MODULE,
   [AttemptSourceType.SUBJECT_TEST]: TestType.SUBJECT_TEST,
   [AttemptSourceType.GRAND_TEST]: TestType.GRAND_TEST,
+  [AttemptSourceType.LIVE_TEST]: TestType.LIVE_TEST,
 };
+
+/** Builds the shape lib/attempt-timing.ts needs, threading a Live Test's global endAt through as the cap. */
+export function toServerTimedAttempt(attempt: {
+  startedAt: Date;
+  durationMinutes: number;
+  liveTest?: { endAt: Date } | null;
+}): ServerTimedAttempt {
+  return { startedAt: attempt.startedAt, durationMinutes: attempt.durationMinutes, liveTestEndAt: attempt.liveTest?.endAt ?? null };
+}
 
 function toSnapshot(question: QuestionWithOptions): QuestionSnapshot {
   return {
@@ -71,6 +82,7 @@ async function createAttemptFromQuestions(params: {
   customModuleId?: string;
   previousYearPaperId?: string;
   grandTestId?: string;
+  liveTestId?: string;
   subjectId?: string;
   topicIds?: string[];
   selection?: Record<string, unknown> | null;
@@ -93,6 +105,7 @@ async function createAttemptFromQuestions(params: {
       customModuleId: params.customModuleId,
       previousYearPaperId: params.previousYearPaperId,
       grandTestId: params.grandTestId,
+      liveTestId: params.liveTestId,
       subjectId: params.subjectId,
       topicIds: params.topicIds && params.topicIds.length > 0 ? params.topicIds : undefined,
       selection: (params.selection ?? undefined) as Prisma.InputJsonValue | undefined,
@@ -241,6 +254,43 @@ export async function startGrandTestAttempt(studentId: string, grandTestId: stri
   });
 }
 
+/**
+ * Generate (or resume) a LIVE_TEST attempt from a Live Test's already
+ * lock-time-resolved, immutable LiveTestQuestion set. Starting is only ever
+ * allowed while the DERIVED state is LIVE — never based on a stale client
+ * clock or on the persisted `status` alone (see lib/live-test.ts). The
+ * attempt's nominal duration is `studentDurationMinutes`; the actual,
+ * possibly-shorter effective window (capped by the test's global `endAt`)
+ * is enforced by lib/attempt-timing.ts via `liveTest.endAt` on every read.
+ */
+export async function startLiveTestAttempt(studentId: string, liveTestId: string) {
+  const resumable = await findResumableAttempt(studentId, { liveTestId });
+  if (resumable) return resumable;
+
+  const liveTest = await prisma.liveTest.findUnique({
+    where: { id: liveTestId },
+    include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
+  });
+  if (!liveTest) throw new Error("This live test does not exist.");
+
+  const state = deriveLiveTestState(liveTest, new Date());
+  if (state === "DRAFT") throw new Error("This live test has not been published yet.");
+  if (state === "CANCELLED") throw new Error("This live test was cancelled.");
+  if (state === "SCHEDULED") throw new Error("This live test has not started yet.");
+  if (state === "ENDED" || state === "RESULT_PUBLISHED") throw new Error("This live test has ended.");
+
+  return createAttemptFromQuestions({
+    studentId,
+    sourceType: AttemptSourceType.LIVE_TEST,
+    testType: TestType.LIVE_TEST,
+    examId: liveTest.examId,
+    liveTestId: liveTest.id,
+    durationMinutes: liveTest.studentDurationMinutes,
+    negativeMarking: liveTest.negativeMarking,
+    questions: liveTest.questions.map((lq) => lq.question as unknown as QuestionWithOptions),
+  });
+}
+
 export async function startPreviousYearPaperAttempt(studentId: string, paperId: string) {
   const resumable = await findResumableAttempt(studentId, { previousYearPaperId: paperId });
   if (resumable) return resumable;
@@ -326,10 +376,13 @@ export async function saveAnswer(
   selectedOptionLabel: string | null,
   markForReview: boolean
 ) {
-  const attempt = await prisma.testAttempt.findFirst({ where: { id: attemptId, studentId, status: AttemptStatus.IN_PROGRESS } });
+  const attempt = await prisma.testAttempt.findFirst({
+    where: { id: attemptId, studentId, status: AttemptStatus.IN_PROGRESS },
+    include: { liveTest: { select: { endAt: true } } },
+  });
   if (!attempt) throw new Error("This attempt is not available for editing.");
 
-  if (isExpired(attempt)) {
+  if (isExpired(toServerTimedAttempt(attempt))) {
     throw new Error("Time is up — this test has ended and answers can no longer be changed.");
   }
 
@@ -353,7 +406,7 @@ export async function saveAnswer(
 export async function submitAttempt(attemptId: string, studentId: string) {
   const attempt = await prisma.testAttempt.findFirst({
     where: { id: attemptId, studentId },
-    include: { questions: { include: { answer: true } } },
+    include: { questions: { include: { answer: true } }, liveTest: { select: { endAt: true } } },
   });
   if (!attempt) throw new Error("Attempt not found.");
   if (attempt.status === AttemptStatus.SUBMITTED) return attempt;
@@ -389,7 +442,7 @@ export async function submitAttempt(attemptId: string, studentId: string) {
   const maxScore = attempt.totalQuestions;
   // Late submits stay valid, but the reported time can never exceed the window:
   // answers could not have been changed after effectiveEnd, so capping is honest.
-  const timeTakenSeconds = elapsedSecondsFor(attempt);
+  const timeTakenSeconds = elapsedSecondsFor(toServerTimedAttempt(attempt));
 
   await prisma.$transaction([
     ...updates,
@@ -411,4 +464,51 @@ export async function submitAttempt(attemptId: string, studentId: string) {
   await logActivity(studentId, "TEST_SUBMITTED", { attemptId, score, maxScore });
 
   return prisma.testAttempt.findUniqueOrThrow({ where: { id: attemptId } });
+}
+
+/**
+ * Request-time reconciliation (Step 5.6): auto-finalizes an attempt that's
+ * still IN_PROGRESS but whose effective window has already closed —
+ * independent of any browser, cron, or PM2 process. Called from every
+ * server-side read of an owned attempt (lib/student-data.ts#getOwnedAttempt),
+ * so the very next time ANYONE touches the attempt (the student reopening
+ * the app, an admin viewing history/analytics, a manual reconcile sweep)
+ * finalizes it — a browser that never comes back no longer leaves the
+ * attempt dangling forever. `submitAttempt` is itself idempotent (returns
+ * immediately once SUBMITTED), so calling this repeatedly, including
+ * concurrently, can never double-score or double-count.
+ */
+export async function finalizeIfExpired(attempt: {
+  id: string;
+  studentId: string;
+  status: AttemptStatus;
+  startedAt: Date;
+  durationMinutes: number;
+  liveTest?: { endAt: Date } | null;
+}): Promise<boolean> {
+  if (attempt.status !== AttemptStatus.IN_PROGRESS) return false;
+  if (!isExpired(toServerTimedAttempt(attempt))) return false;
+  await submitAttempt(attempt.id, attempt.studentId);
+  return true;
+}
+
+/**
+ * Sweeps every IN_PROGRESS attempt whose window has closed and finalizes it.
+ * Safe to call repeatedly/concurrently (submitAttempt is idempotent) and
+ * safe to run from a request handler — there is no dependency on a cron
+ * process or a specific PM2 worker. Used by the admin Live Test detail page
+ * (both opportunistically on load and via an explicit "Reconcile Now"
+ * action) since that is where a dangling attempt is most visible, but it is
+ * general — any test type's timed-out attempts get swept.
+ */
+export async function reconcileExpiredAttempts(filter: { liveTestId?: string } = {}): Promise<number> {
+  const candidates = await prisma.testAttempt.findMany({
+    where: { status: AttemptStatus.IN_PROGRESS, ...filter },
+    select: { id: true, studentId: true, status: true, startedAt: true, durationMinutes: true, liveTest: { select: { endAt: true } } },
+  });
+  let finalized = 0;
+  for (const attempt of candidates) {
+    if (await finalizeIfExpired(attempt)) finalized += 1;
+  }
+  return finalized;
 }

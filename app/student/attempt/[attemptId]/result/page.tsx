@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { AttemptStatus } from "@prisma/client";
+import { AttemptStatus, TestType } from "@prisma/client";
 import { CheckCircle2, Clock, MinusCircle, Trophy, XCircle } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { getOwnedAttempt } from "@/lib/student-data";
@@ -18,6 +18,7 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
   if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);
 
   const title = attemptTitle(attempt);
+  const reviewLocked = attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED";
 
   const percentage = attempt.maxScore ? Math.max(0, Math.round(((attempt.score ?? 0) / attempt.maxScore) * 100)) : 0;
   const minutesTaken = attempt.timeTakenSeconds ? Math.round(attempt.timeTakenSeconds / 60) : 0;
@@ -62,12 +63,20 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
         />
       </div>
 
+      {reviewLocked ? (
+        <p className="text-center text-xs text-[var(--color-muted-foreground)]">
+          Answer review will be available once results are published for this Live Test.
+        </p>
+      ) : null}
+
       <div className="flex flex-col gap-2 sm:flex-row">
         <Button asChild variant="outline" className="flex-1">
           <Link href="/student/dashboard">Back to Dashboard</Link>
         </Button>
-        <Button asChild className="flex-1">
-          <Link href={`/student/attempt/${attemptId}/review`}>Review Answers</Link>
+        <Button asChild className="flex-1" disabled={reviewLocked}>
+          <Link href={`/student/attempt/${attemptId}/review`} aria-disabled={reviewLocked}>
+            Review Answers
+          </Link>
         </Button>
       </div>
     </div>
