@@ -55,22 +55,23 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Test Series", route: "/admin/exams/test-series", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
   { pageName: "Subjects", route: "/admin/exams/subjects", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
   { pageName: "Topics", route: "/admin/exams/topics", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
-  { pageName: "Syllabus", route: "/admin/exams/syllabus", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "DRAFT" },
+  { pageName: "Syllabus", route: "/admin/exams/syllabus", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
 
   // Questions (Phase 7 — All Questions/Add/Reports ship real in this slice)
   { pageName: "All Questions", route: "/admin/questions", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Add Question", route: "/admin/questions/add", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
-  { pageName: "Bulk Import", route: "/admin/questions/bulk-import", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
+  { pageName: "Bulk Import", route: "/admin/questions/bulk-import", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
   { pageName: "Question Templates", route: "/admin/questions/templates", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
   { pageName: "Question Reports", route: "/admin/questions/reports", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
-  { pageName: "Question Queries", route: "/admin/questions/queries", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
+  // Re-exports ../reports/page (same ReportedQuestion-backed triage UI) rather than a second, parallel one — see app/admin/(dashboard)/questions/queries/page.tsx.
+  { pageName: "Question Queries", route: "/admin/questions/queries", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
 
   // Tests (Phase 9 — Mock Tests ships real in this slice)
   { pageName: "Test Builder", route: "/admin/tests/builder", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
   { pageName: "Mock Tests", route: "/admin/tests/mock", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "CONNECTED" },
   { pageName: "Random Tests", route: "/admin/tests/random", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
   { pageName: "Custom Tests", route: "/admin/tests/custom", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
-  { pageName: "Live Tests", route: "/admin/tests/live", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
+  { pageName: "Live Tests", route: "/admin/tests/live", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "CONNECTED" },
   { pageName: "Scheduled Tests", route: "/admin/tests/scheduled", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
 
   // Custom Modules — canonical admin-owned system consumed by the Student Custom Module page
@@ -84,12 +85,13 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Attempted Questions", route: "/admin/students/attempted", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
   { pageName: "Deletion Requests", route: "/admin/students/deletion-requests", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
 
-  // AI (Phase 10)
+  // AI (Phase 10) — Solutions, Variants, Usage and Settings all ship real implementations
+  // now; only the Solution Manager landing page is still an honest stub.
   { pageName: "AI Solution Manager", route: "/admin/ai/solution-manager", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
-  { pageName: "AI Solutions", route: "/admin/ai/solutions", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "DRAFT" },
-  { pageName: "AI Question Variants", route: "/admin/ai/variants", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "DRAFT" },
-  { pageName: "AI Usage", route: "/admin/ai/usage", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "DRAFT" },
-  { pageName: "AI Settings", route: "/admin/ai/settings", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "DRAFT" },
+  { pageName: "AI Solutions", route: "/admin/ai/solutions", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
+  { pageName: "AI Question Variants", route: "/admin/ai/variants", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
+  { pageName: "AI Usage", route: "/admin/ai/usage", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
+  { pageName: "AI Settings", route: "/admin/ai/settings", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
 
   // Users & Access (RBAC ships this slice — minimal)
   { pageName: "Admin Users", route: "/admin/users/admins", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },

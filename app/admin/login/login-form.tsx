@@ -61,14 +61,11 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-sm">
+      <div className="flex items-center text-sm">
         <label className="flex items-center gap-2 text-[var(--color-muted-foreground)]">
           <input type="checkbox" name="rememberMe" className="h-4 w-4 rounded border-[var(--color-border)]" />
           Remember me
         </label>
-        <a href="/admin/forgot-password" className="text-[var(--color-primary)] hover:underline">
-          Forgot password?
-        </a>
       </div>
 
       {state.error ? (

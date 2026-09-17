@@ -29,7 +29,9 @@ export async function createSubjectAction(_prev: SubjectFormState, formData: For
 
   revalidatePath("/admin/exams/subjects");
   revalidatePath("/admin/exams/topics");
+  revalidatePath("/admin/exams/syllabus");
   revalidatePath("/admin/questions/add");
+  revalidatePath("/student/exams/[examId]", "page");
   return { success: true };
 }
 
@@ -50,4 +52,6 @@ export async function deleteSubjectAction(subjectId: string) {
   });
 
   revalidatePath("/admin/exams/subjects");
+  revalidatePath("/admin/exams/syllabus");
+  revalidatePath("/student/exams/[examId]", "page");
 }

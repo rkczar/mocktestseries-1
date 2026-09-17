@@ -2,7 +2,7 @@
 
 import { requireStudent } from "@/lib/student-session";
 import { getOrCreateExplanation, AiNotConfiguredError, AiGenerationInProgressError } from "@/lib/ai-explanation";
-import { getStoredAiExplanation, isAiGenerationRateLimited, logActivity } from "@/lib/student-data";
+import { getStoredAiExplanation, isAiGenerationRateLimited, hasInProgressAttemptForQuestion, logActivity } from "@/lib/student-data";
 
 /**
  * Shared by every context that shows a question with an "Ask AI" button
@@ -11,6 +11,13 @@ import { getStoredAiExplanation, isAiGenerationRateLimited, logActivity } from "
  */
 export async function getExplanationAction(questionId: string) {
   const student = await requireStudent();
+
+  // Neither caller carries an attemptId, so this is the one place that can
+  // catch "this question belongs to a test I'm still taking" regardless of
+  // which surface asked — blocks both a fresh generation and a cache read.
+  if (await hasInProgressAttemptForQuestion(student.id, questionId)) {
+    return { ok: false as const, error: "Ask AI is available once you've submitted this test." };
+  }
 
   const cached = await getStoredAiExplanation(questionId);
   const isNewGeneration = cached?.status !== "COMPLETED";

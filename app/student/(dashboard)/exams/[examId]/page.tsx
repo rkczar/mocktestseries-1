@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { BookOpen, Clock, FileText, ListChecks, Trophy } from "lucide-react";
+import { Clock, FileText, ListChecks, Trophy } from "lucide-react";
 import { getExamDetailForStudent } from "@/lib/student-data";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
+import { ExamSyllabus } from "@/components/student/exam-syllabus";
 import {
   startMockTestFromExamAction,
   startPaperFromExamAction,
@@ -30,27 +31,12 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
       </div>
 
       {exam.subjects.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BookOpen className="h-4 w-4" aria-hidden /> Subjects &amp; Topics
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {exam.subjects.map((s) => (
-              <div key={s.id}>
-                <p className="text-sm font-medium text-[var(--color-foreground)]">{s.name}</p>
-                {s.topics.length > 0 ? (
-                  <p className="text-xs text-[var(--color-muted-foreground)]">{s.topics.map((t) => t.name).join(" · ")}</p>
-                ) : null}
-              </div>
-            ))}
-            <Button asChild variant="outline" size="sm" className="mt-1 w-fit">
-              <Link href={`/student/subject-test/${examId}`}>Practice by subject →</Link>
-            </Button>
-          </CardContent>
-        </Card>
+        <Button asChild variant="outline" size="sm" className="w-fit">
+          <Link href={`/student/subject-test/${examId}`}>Practice by subject →</Link>
+        </Button>
       ) : null}
+
+      {exam.syllabusEnabled ? <ExamSyllabus subjects={exam.subjects} description={exam.syllabusDescription} /> : null}
 
       <Card>
         <CardHeader>

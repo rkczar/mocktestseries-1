@@ -1,6 +1,7 @@
 import "server-only";
 import { scanAppRoutes, scanOutgoingLinks } from "./route-scanner";
 import { ROUTE_CONNECTIONS, type RouteConnection } from "./route-connections";
+import { ADMIN_CONFIG_LINKS } from "./diagram-admin-links";
 import { DEPRECATED_ROUTES } from "./deprecated-routes";
 import type { DiagramEntry } from "./diagram-graph";
 
@@ -53,6 +54,10 @@ export function buildDiagramSource(dbEntries: DiagramEntry[]): DiagramSource {
   }
 
   const merged = new Map<string, RouteConnection>(ROUTE_CONNECTIONS.map((c) => [connectionKey(c.from, c.to), c]));
+
+  for (const link of ADMIN_CONFIG_LINKS) {
+    merged.set(connectionKey(link.from, link.to), { ...link, source: "admin-config" });
+  }
 
   for (const scanned of scannedRoutes) {
     for (const link of scanOutgoingLinks(scanned)) {

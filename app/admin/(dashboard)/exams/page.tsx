@@ -38,7 +38,7 @@ export default async function ExamsControlCenter({
               </div>
             ),
           },
-          { value: "syllabus", label: "Syllabus", content: <SyllabusPage /> },
+          { value: "syllabus", label: "Syllabus", content: <SyllabusPage searchParams={Promise.resolve({ examId })} /> },
           {
             value: "pyp",
             label: "Previous Year Papers",

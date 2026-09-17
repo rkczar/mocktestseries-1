@@ -21,7 +21,8 @@ export type ConnectionSource =
   | "redirect"
   | "form"
   | "internal"
-  | "scanned";
+  | "scanned"
+  | "admin-config";
 
 export interface RouteConnection {
   from: string;

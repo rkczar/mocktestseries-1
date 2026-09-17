@@ -5,21 +5,16 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
+import { topicSchema, createTopicChecked, bulkCreateTopics, type TopicFormState, type BulkTopicFormState } from "@/lib/topic-taxonomy";
 
-const topicSchema = z.object({
-  subjectId: z.string().min(1, "Select a subject"),
-  name: z.string().trim().min(2, "Name must be at least 2 characters.").max(120),
-});
-
-export interface TopicFormState {
-  error?: string;
-  success?: boolean;
-}
+export type { TopicFormState, BulkTopicFormState };
 
 function revalidateTopicPages() {
   revalidatePath("/admin/exams/topics");
+  revalidatePath("/admin/exams/syllabus");
   revalidatePath("/admin/questions/add");
   revalidatePath("/admin/custom-modules");
+  revalidatePath("/student/exams/[examId]", "page");
 }
 
 export async function createTopicAction(_prev: TopicFormState, formData: FormData): Promise<TopicFormState> {
@@ -27,14 +22,40 @@ export async function createTopicAction(_prev: TopicFormState, formData: FormDat
   const parsed = topicSchema.safeParse({ subjectId: formData.get("subjectId"), name: formData.get("name") });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
 
-  const topic = await prisma.topic.create({ data: parsed.data });
+  const result = await createTopicChecked(prisma, parsed.data.subjectId, parsed.data.name);
+  if ("error" in result) return { error: result.error };
 
   await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "TOPIC_CREATED", entityType: "Topic", entityId: topic.id },
+    data: { actorId: session.user.id, action: "TOPIC_CREATED", entityType: "Topic", entityId: result.topic.id },
   });
 
   revalidateTopicPages();
   return { success: true };
+}
+
+/**
+ * Bulk Add Topics — one topic name per line, de-duped and validated by
+ * bulkCreateTopics (lib/topic-taxonomy.ts). No cap on how many topics can be
+ * added.
+ */
+export async function bulkCreateTopicsAction(subjectId: string, namesText: string): Promise<BulkTopicFormState> {
+  const session = await requirePermission(PERMISSIONS.EXAMS_MANAGE);
+  const outcome = await bulkCreateTopics(subjectId, namesText);
+
+  if (outcome.result && outcome.result.added.length > 0) {
+    await prisma.auditLog.create({
+      data: {
+        actorId: session.user.id,
+        action: "TOPIC_BULK_CREATED",
+        entityType: "Subject",
+        entityId: subjectId,
+        metadata: { count: outcome.result.added.length, names: outcome.result.added },
+      },
+    });
+  }
+
+  revalidateTopicPages();
+  return outcome;
 }
 
 export async function deleteTopicAction(topicId: string) {

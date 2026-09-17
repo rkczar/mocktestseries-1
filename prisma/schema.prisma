@@ -94,20 +94,27 @@ model AuditLog {
 // ---------------------------------------------------------------------------
 
 model Exam {
-  id              String    @id @default(cuid())
-  name            String
-  code            String    @unique
-  year            Int?
-  description     String?
-  isActive        Boolean   @default(true)
-  isUpcoming      Boolean   @default(false)
-  upcomingDate    DateTime?
-  order           Int       @default(0)
-  negativeMarking Float?
-  durationMinutes Int?
-  instructions    String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  name                String
+  code                String    @unique
+  year                Int?
+  description         String?
+  isActive            Boolean   @default(true)
+  isUpcoming          Boolean   @default(false)
+  upcomingDate        DateTime?
+  order               Int       @default(0)
+  negativeMarking     Float?
+  durationMinutes     Int?
+  instructions        String?
+  // Syllabus (Admin -> Exams -> Syllabus). The Subject/Topic hierarchy itself
+  // is the same canonical taxonomy Question Bank and bulk import already use
+  // — this flag/description are the only syllabus-specific state that
+  // doesn't already exist elsewhere. Disabled (the default) hides the public
+  // syllabus section entirely rather than showing an empty one.
+  syllabusEnabled     Boolean   @default(false)
+  syllabusDescription String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   subjects           Subject[]
   previousYearPapers PreviousYearPaper[]
@@ -122,24 +129,26 @@ model Exam {
 }
 
 model Subject {
-  id           String        @id @default(cuid())
-  examId       String
-  exam         Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
-  name         String
-  order        Int           @default(0)
-  topics       Topic[]
-  questions    Question[]
-  testAttempts TestAttempt[]
-  createdAt    DateTime      @default(now())
+  id                  String        @id @default(cuid())
+  examId              String
+  exam                Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
+  name                String
+  order               Int           @default(0)
+  syllabusDescription String?
+  topics              Topic[]
+  questions           Question[]
+  testAttempts        TestAttempt[]
+  createdAt           DateTime      @default(now())
 }
 
 model Topic {
-  id        String   @id @default(cuid())
-  subjectId String
-  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  name      String
-  order     Int      @default(0)
-  createdAt DateTime @default(now())
+  id                  String   @id @default(cuid())
+  subjectId           String
+  subject             Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  name                String
+  order               Int      @default(0)
+  syllabusDescription String?
+  createdAt           DateTime @default(now())
 
   subTopics SubTopic[]
   questions Question[]
@@ -364,7 +373,7 @@ model Student {
   savedQuestions    SavedQuestion[]
   activities        StudentActivity[]
   reportedQuestions ReportedQuestion[]
-  customModules     CustomModule[]      @relation("StudentCustomModules")
+  customModules     CustomModule[]          @relation("StudentCustomModules")
   examEnrollments   StudentExamEnrollment[]
 
   @@index([status])
@@ -394,7 +403,6 @@ model StudentOAuthAccount {
 
 /**
  * OTP codes are hashed at rest; never store the plaintext code.
- *
  * When delivery goes through the MSG91 Widget API, MSG91 generates and holds
  * the actual code — `otpHash` is a random, never-checked placeholder for that
  * case (kept non-null so the column needs no special-casing) and `providerRef`
@@ -474,17 +482,27 @@ enum QuestionSource {
   PYQ
 }
 
-/** Role of a question inside the AI variant system. */
+/**
+ * Role of a question inside the AI variant system.
+ */
 enum AiVariantType {
-  /** The original question that AI variants hang off of. */
+  /**
+   * The original question that AI variants hang off of.
+   */
   CANONICAL
-  /** AI-generated rephrasing testing the same fact. */
+  /**
+   * AI-generated rephrasing testing the same fact.
+   */
   AI_SIMILAR
-  /** AI-generated lookalike that is deliberately wrong. */
+  /**
+   * AI-generated lookalike that is deliberately wrong.
+   */
   AI_TRAP
 }
 
-/** Position a generated variant occupies under its canonical question (max 5). */
+/**
+ * Position a generated variant occupies under its canonical question (max 5).
+ */
 enum AiSlot {
   AI01
   AI02
@@ -493,9 +511,13 @@ enum AiSlot {
   AI05
 }
 
-/** One-shot lifecycle for AI variant/explanation generation. */
+/**
+ * One-shot lifecycle for AI variant/explanation generation.
+ */
 enum AiGenerationStatus {
-  /** Ordinary bank/PYQ question, nothing requested yet. */
+  /**
+   * Ordinary bank/PYQ question, nothing requested yet.
+   */
   NONE
   PENDING
   GENERATING
@@ -542,9 +564,9 @@ model Question {
   previousYearPaper   PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id])
   text                String
   imageUrl            String?
-  difficulty          QuestionDifficulty     @default(MEDIUM)
-  status              QuestionStatus         @default(DRAFT)
-  source              QuestionSource         @default(QUESTION_BANK)
+  difficulty          QuestionDifficulty @default(MEDIUM)
+  status              QuestionStatus     @default(DRAFT)
+  source              QuestionSource     @default(QUESTION_BANK)
   examYear            Int?
   // AI variant provenance: canonical questions have no parent; AI_SIMILAR /
   // AI_TRAP variants point at the canonical row and carry an AI01–AI05 slot
@@ -553,10 +575,10 @@ model Question {
   // possible values, so a parent can never accumulate more than 5 variant
   // rows, and two concurrent admins can never both claim the same slot.
   parentQuestionId    String?
-  parentQuestion      Question?              @relation("AiQuestionVariants", fields: [parentQuestionId], references: [id], onDelete: SetNull)
+  parentQuestion      Question?          @relation("AiQuestionVariants", fields: [parentQuestionId], references: [id], onDelete: SetNull)
   aiVariantType       AiVariantType?
   aiSlot              AiSlot?
-  aiGenerationStatus  AiGenerationStatus     @default(NONE)
+  aiGenerationStatus  AiGenerationStatus @default(NONE)
   // Provenance for a generated variant, mirroring AIExplanation's fields —
   // never mix output silently across prompt/model changes (Step 7.3).
   aiProvider          String?
@@ -564,8 +586,8 @@ model Question {
   aiPromptVersion     String?
   aiGeneratedAt       DateTime?
   aiErrorMessage      String?
-  createdAt           DateTime               @default(now())
-  updatedAt           DateTime               @updatedAt
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
   options               QuestionOption[]
   mockTestQuestions     MockTestQuestion[]
@@ -575,7 +597,7 @@ model Question {
   savedByStudents       SavedQuestion[]
   reports               ReportedQuestion[]
   aiExplanation         AIExplanation?
-  aiVariants            Question[]           @relation("AiQuestionVariants")
+  aiVariants            Question[]             @relation("AiQuestionVariants")
 
   @@unique([parentQuestionId, aiSlot])
   @@index([examId, examYear])
@@ -673,31 +695,31 @@ enum SelectionMode {
 }
 
 model CustomModule {
-  id               String             @id @default(cuid())
-  examId           String
-  exam             Exam               @relation(fields: [examId], references: [id], onDelete: Cascade)
-  title            String
-  description      String?
-  selectionMode    SelectionMode      @default(MANUAL)
-  ruleConfig       Json?
-  durationMinutes  Int?
-  negativeMarking  Float              @default(0)
-  instructions     String?
-  accessType       AccessType         @default(FREE)
-  status           CustomModuleStatus @default(DRAFT)
-  order            Int                @default(0)
-  createdByAdminId  String?
-  createdByAdmin    AdminUser?        @relation(fields: [createdByAdminId], references: [id])
+  id                 String             @id @default(cuid())
+  examId             String
+  exam               Exam               @relation(fields: [examId], references: [id], onDelete: Cascade)
+  title              String
+  description        String?
+  selectionMode      SelectionMode      @default(MANUAL)
+  ruleConfig         Json?
+  durationMinutes    Int?
+  negativeMarking    Float              @default(0)
+  instructions       String?
+  accessType         AccessType         @default(FREE)
+  status             CustomModuleStatus @default(DRAFT)
+  order              Int                @default(0)
+  createdByAdminId   String?
+  createdByAdmin     AdminUser?         @relation(fields: [createdByAdminId], references: [id])
   // Student-driven custom modules. The question set is still resolved once
   // into CustomModuleQuestion (the immutable snapshot students practice), the
   // owner is remembered for "My Modules", and shareToken is an opaque,
   // non-guessable link that never exposes the internal id.
   createdByStudentId String?
-  createdByStudent  Student?          @relation("StudentCustomModules", fields: [createdByStudentId], references: [id])
-  isStudentOwned    Boolean           @default(false)
-  shareToken        String?           @unique
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  createdByStudent   Student?           @relation("StudentCustomModules", fields: [createdByStudentId], references: [id])
+  isStudentOwned     Boolean            @default(false)
+  shareToken         String?            @unique
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   questions    CustomModuleQuestion[]
   testAttempts TestAttempt[]
@@ -733,33 +755,33 @@ enum GrandTestStatus {
 }
 
 model GrandTest {
-  id              String          @id @default(cuid())
-  examId          String
-  exam            Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
-  title           String
-  description     String?
-  durationMinutes Int
-  negativeMarking Float           @default(0)
-  instructions    String?
-  accessType      AccessType      @default(FREE)
-  status          GrandTestStatus @default(DRAFT)
-  questionCount   Int
+  id               String          @id @default(cuid())
+  examId           String
+  exam             Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
+  title            String
+  description      String?
+  durationMinutes  Int
+  negativeMarking  Float           @default(0)
+  instructions     String?
+  accessType       AccessType      @default(FREE)
+  status           GrandTestStatus @default(DRAFT)
+  questionCount    Int
   // Deprecated flat-filter rule, superseded by `blueprint` below. Never
   // written by app code as of Step 4; kept only for schema continuity.
-  subjects        Json?
-  topics          Json?
-  difficulty      Json?
+  subjects         Json?
+  topics           Json?
+  difficulty       Json?
   // Per-subject blueprint, resolved into GrandTestQuestion at publish time.
   // Shape: [{ subjectId: string; topicId?: string; subTopicId?: string;
   //           difficulty?: QuestionDifficulty[]; count: number }]
   // The sum of every line's `count` must equal `questionCount`.
-  blueprint       Json?
-  order           Int             @default(0)
-  publishedAt     DateTime?
+  blueprint        Json?
+  order            Int             @default(0)
+  publishedAt      DateTime?
   createdByAdminId String?
-  createdByAdmin  AdminUser?      @relation(fields: [createdByAdminId], references: [id])
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdByAdmin   AdminUser?      @relation(fields: [createdByAdminId], references: [id])
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 
   questions    GrandTestQuestion[]
   testAttempts TestAttempt[]
@@ -800,37 +822,37 @@ enum LiveTestStatus {
 }
 
 model LiveTest {
-  id                    String         @id @default(cuid())
-  examId                String
-  exam                  Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
-  title                 String
-  description           String?
-  startAt               DateTime
-  endAt                 DateTime
+  id                     String         @id @default(cuid())
+  examId                 String
+  exam                   Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
+  title                  String
+  description            String?
+  startAt                DateTime
+  endAt                  DateTime
   studentDurationMinutes Int
-  negativeMarking       Float          @default(0)
-  instructions          String?
-  accessType            AccessType     @default(FREE)
-  status                LiveTestStatus @default(DRAFT)
-  questionCount         Int
+  negativeMarking        Float          @default(0)
+  instructions           String?
+  accessType             AccessType     @default(FREE)
+  status                 LiveTestStatus @default(DRAFT)
+  questionCount          Int
   // Deprecated flat-filter rule, superseded by `blueprint` below (same
   // Step 4 → Step 5 continuity as GrandTest.subjects/topics/difficulty).
   // Never written by app code as of Step 5; kept only for schema continuity.
-  subjects              Json?
-  topics                Json?
-  difficulty            Json?
+  subjects               Json?
+  topics                 Json?
+  difficulty             Json?
   // Per-subject blueprint, resolved into LiveTestQuestion when the test is
   // locked (SCHEDULED). Shape identical to GrandTest.blueprint:
   // [{ subjectId: string; topicId?: string; subTopicId?: string;
   //    difficulty?: QuestionDifficulty[]; count: number }]
   // The sum of every line's `count` must equal `questionCount`.
-  blueprint             Json?
-  order                 Int            @default(0)
-  publishedAt           DateTime?
-  createdByAdminId      String?
-  createdByAdmin        AdminUser?     @relation(fields: [createdByAdminId], references: [id])
-  createdAt             DateTime       @default(now())
-  updatedAt             DateTime       @updatedAt
+  blueprint              Json?
+  order                  Int            @default(0)
+  publishedAt            DateTime?
+  createdByAdminId       String?
+  createdByAdmin         AdminUser?     @relation(fields: [createdByAdminId], references: [id])
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
 
   questions    LiveTestQuestion[]
   testAttempts TestAttempt[]
@@ -1118,23 +1140,23 @@ enum BulkImportDuplicateStrategy {
 }
 
 model BulkImportRun {
-  id                  String                       @id @default(cuid())
-  adminUserId         String
-  adminUser           AdminUser                    @relation(fields: [adminUserId], references: [id])
-  filename            String
-  totalRows           Int
-  validRows           Int                          @default(0)
-  invalidRows         Int                          @default(0)
-  successCount        Int                          @default(0)
-  skippedCount        Int                          @default(0)
-  replacedCount       Int                          @default(0)
-  failedCount         Int                          @default(0)
-  duplicateStrategy   BulkImportDuplicateStrategy
-  status              BulkImportStatus             @default(PENDING)
-  startedAt           DateTime                     @default(now())
-  completedAt         DateTime?
-  errorMessage        String?
-  createdAt           DateTime                     @default(now())
+  id                String                      @id @default(cuid())
+  adminUserId       String
+  adminUser         AdminUser                   @relation(fields: [adminUserId], references: [id])
+  filename          String
+  totalRows         Int
+  validRows         Int                         @default(0)
+  invalidRows       Int                         @default(0)
+  successCount      Int                         @default(0)
+  skippedCount      Int                         @default(0)
+  replacedCount     Int                         @default(0)
+  failedCount       Int                         @default(0)
+  duplicateStrategy BulkImportDuplicateStrategy
+  status            BulkImportStatus            @default(PENDING)
+  startedAt         DateTime                    @default(now())
+  completedAt       DateTime?
+  errorMessage      String?
+  createdAt         DateTime                    @default(now())
 
   rows BulkImportRow[]
 
@@ -1143,16 +1165,16 @@ model BulkImportRun {
 }
 
 model BulkImportRow {
-  id              String               @id @default(cuid())
-  runId           String
-  run             BulkImportRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
-  rowNumber       Int
-  status          BulkImportRowStatus  @default(PENDING)
-  questionId      String?
-  questionCode    String?
-  errorMessage    String?
-  rawData         Json
-  createdAt       DateTime             @default(now())
+  id           String              @id @default(cuid())
+  runId        String
+  run          BulkImportRun       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  rowNumber    Int
+  status       BulkImportRowStatus @default(PENDING)
+  questionId   String?
+  questionCode String?
+  errorMessage String?
+  rawData      Json
+  createdAt    DateTime            @default(now())
 
   @@index([runId, rowNumber])
   @@index([runId, status])

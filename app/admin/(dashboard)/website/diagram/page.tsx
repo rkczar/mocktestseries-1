@@ -40,15 +40,16 @@ export default async function WebsiteDiagramPage() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Website Diagram</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          A live architecture inspector — every page, every real connection between them, what&apos;s broken, and
-          what&apos;s disconnected. Routes and links are scanned from the actual codebase on every load, so a new
-          page or link shows up here automatically.
+          A live architecture inspector — every page, grouped by system, every real connection between them
+          (including which admin modules configure which frontend pages), what&apos;s broken, and what&apos;s
+          disconnected. Routes and links are scanned from the actual codebase on every load — hit{" "}
+          <strong>Refresh Live Map</strong> on the Site Map tab to re-scan and reconcile registry status on demand.
         </p>
       </div>
 
       <Tabs defaultValue="overview">
         <TabsList className="h-auto flex-wrap gap-1">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="overview">Site Map</TabsTrigger>
           <TabsTrigger value="journey">Full Journey</TabsTrigger>
           <TabsTrigger value="student">Student Flow</TabsTrigger>
           <TabsTrigger value="admin">Admin Flow</TabsTrigger>

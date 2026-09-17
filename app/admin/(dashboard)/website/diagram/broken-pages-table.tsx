@@ -15,7 +15,7 @@ function problemFor(node: DiagramNode): string {
 export function BrokenPagesTable({ nodes }: { nodes: DiagramNode[] }) {
   const problems = nodes.filter((n) => {
     const key = resolveDisplayStatus(n).key;
-    return key === "BROKEN" || key === "MISSING";
+    return key === "BROKEN" || key === "MISSING" || key === "DISCONNECTED";
   });
 
   return (

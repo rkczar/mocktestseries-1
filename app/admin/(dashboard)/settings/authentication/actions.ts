@@ -10,7 +10,6 @@ import {
   testMsg91Connection,
   type ProviderLastTest,
 } from "@/lib/auth-provider-config";
-import { saveGeminiConfig, testGeminiConnection } from "@/lib/gemini-config";
 import { saveRazorpayConfig, testRazorpayConnection, type RazorpayMode } from "@/lib/razorpay-config";
 
 export interface SettingsFormState {
@@ -108,31 +107,6 @@ export async function testMsg91ConnectionAction(): Promise<TestConnectionState> 
   const result = await testMsg91Connection();
   await logAudit(session.user.id, "AUTH_PROVIDER_MSG91_TESTED", "auth.providers", { ok: result.ok });
   revalidateAuthSurfaces();
-  return { result };
-}
-
-export async function saveGeminiConfigAction(
-  _prev: SettingsFormState,
-  formData: FormData
-): Promise<SettingsFormState> {
-  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
-
-  const enabled = formData.get("enabled") === "on";
-  const apiKey = String(formData.get("apiKey") ?? "").trim();
-  const model = String(formData.get("model") ?? "").trim();
-
-  await saveGeminiConfig({ enabled, apiKey: apiKey || undefined, model });
-  await logAudit(session.user.id, "API_GEMINI_SAVED", "api.gemini", { enabled });
-
-  revalidatePath("/admin/settings/authentication");
-  return { success: true };
-}
-
-export async function testGeminiConnectionAction(): Promise<TestConnectionState> {
-  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
-  const result = await testGeminiConnection();
-  await logAudit(session.user.id, "API_GEMINI_TESTED", "api.gemini", { ok: result.ok });
-  revalidatePath("/admin/settings/authentication");
   return { result };
 }
 

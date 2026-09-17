@@ -2,7 +2,22 @@ import { X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { DiagramNode, DiagramEdge } from "@/lib/diagram-graph";
 import { resolveDisplayStatus } from "@/lib/diagram-status";
+import { classifyGroup, groupMeta } from "@/lib/diagram-groups";
 import styles from "./graph-view.module.css";
+
+function roleRequirement(node: DiagramNode): string {
+  if (node.userType === "ADMIN") return node.authRequired ? "Admin — sign-in required" : "Admin — public (no sign-in)";
+  if (node.userType === "STUDENT") return node.authRequired ? "Student — sign-in required" : "Student — public (no sign-in)";
+  return node.authRequired ? "Public — sign-in required" : "Public — no sign-in required";
+}
+
+function routeHealth(node: DiagramNode): { text: string; ok: boolean } {
+  const brokenDeps = node.incoming.filter((c) => c.broken).length + node.outgoing.filter((c) => c.broken).length;
+  if (node.missing) return { text: "Unreachable — page file missing on disk", ok: false };
+  if (brokenDeps > 0) return { text: `${brokenDeps} broken connection${brokenDeps === 1 ? "" : "s"} touching this page`, ok: false };
+  if (node.isolated) return { text: "No connections at all", ok: false };
+  return { text: "Healthy — no broken connections detected", ok: true };
+}
 
 export type DrawerSelection = { kind: "node"; node: DiagramNode } | { kind: "edge"; edge: DiagramEdge };
 
@@ -65,6 +80,42 @@ export function DetailsDrawer({
               <Badge variant={resolveDisplayStatus(selection.node).variant}>{resolveDisplayStatus(selection.node).label}</Badge>
             </div>
           </div>
+          <div className={styles.drawerRow}>
+            <div>
+              <p className={styles.drawerFieldLabel}>Page Type</p>
+              <p className={styles.drawerFieldValue}>{groupMeta(classifyGroup(selection.node)).label}</p>
+            </div>
+            <div>
+              <p className={styles.drawerFieldLabel}>Access / Role</p>
+              <p className={styles.drawerFieldValue}>{roleRequirement(selection.node)}</p>
+            </div>
+          </div>
+          <div>
+            <p className={styles.drawerFieldLabel}>Route Health</p>
+            <p className={routeHealth(selection.node).ok ? styles.drawerFieldValue : styles.drawerFieldValueError}>
+              {routeHealth(selection.node).text}
+            </p>
+          </div>
+          {(() => {
+            const configuredBy = selection.node.incoming.filter((c) => c.source === "admin-config");
+            const configures = selection.node.outgoing.filter((c) => c.source === "admin-config");
+            if (configuredBy.length === 0 && configures.length === 0) return null;
+            return (
+              <div>
+                <p className={styles.drawerFieldLabel}>Connected Admin Module</p>
+                {configuredBy.map((c, i) => (
+                  <p key={`in-${i}`} className={styles.drawerFieldValue}>
+                    ⚙ Configured by {pageNameByRoute.get(c.nodeId) ?? c.nodeId}
+                  </p>
+                ))}
+                {configures.map((c, i) => (
+                  <p key={`out-${i}`} className={styles.drawerFieldValue}>
+                    ⚙ Configures {pageNameByRoute.get(c.nodeId) ?? c.nodeId}
+                  </p>
+                ))}
+              </div>
+            );
+          })()}
           {selection.node.deprecated ? (
             <div className={styles.warningBox}>⚠ Deprecated — kept in the codebase for old links/bookmarks, no longer part of the current product surface.</div>
           ) : selection.node.missing ? (

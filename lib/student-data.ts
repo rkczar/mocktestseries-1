@@ -101,7 +101,10 @@ export async function getExamDetailForStudent(examId: string) {
   const exam = await prisma.exam.findFirst({
     where: { id: examId, isActive: true },
     include: {
-      subjects: { orderBy: { order: "asc" }, include: { topics: { orderBy: { order: "asc" } } } },
+      subjects: {
+        orderBy: [{ order: "asc" }, { name: "asc" }],
+        include: { topics: { orderBy: [{ order: "asc" }, { name: "asc" }] } },
+      },
       previousYearPapers: { where: { isActive: true }, orderBy: { year: "desc" } },
     },
   });
@@ -449,6 +452,24 @@ export async function getOwnedAttempt(attemptId: string, studentId: string) {
     return getOwnedAttempt(attemptId, studentId);
   }
   return attempt;
+}
+
+/**
+ * True if this student currently has an IN_PROGRESS attempt that includes
+ * this question. Ask AI (lib/ai-explanation.ts via app/student/ai-actions.ts)
+ * is shared by both the (post-submission) Review page and Saved Questions —
+ * neither of which carries an attemptId — so this is the one check that
+ * correctly blocks getting the AI explanation for a question that's part of
+ * a test the student is still actively taking, regardless of which surface
+ * they request it from (a student can Save a question mid-attempt, then open
+ * Saved Questions in another tab).
+ */
+export async function hasInProgressAttemptForQuestion(studentId: string, questionId: string): Promise<boolean> {
+  const blocking = await prisma.testAttemptQuestion.findFirst({
+    where: { questionId, attempt: { studentId, status: AttemptStatus.IN_PROGRESS } },
+    select: { id: true },
+  });
+  return blocking !== null;
 }
 
 // ---------------------------------------------------------------------------

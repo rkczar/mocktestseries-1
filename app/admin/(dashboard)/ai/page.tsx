@@ -17,8 +17,8 @@ function AiOverview() {
       </CardHeader>
       <CardContent>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          Gemini AI configuration lives under Settings → Authentication. Generated solutions, question
-          variants, and per-model usage/cost reporting will populate here once this module is built out.
+          Solutions lists every cached Ask AI explanation. Variants manages AI01–AI05 alternate practice questions.
+          Usage shows live counts by status. Configure the Gemini API key under the Settings tab.
         </p>
       </CardContent>
     </Card>

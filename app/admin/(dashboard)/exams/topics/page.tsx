@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { TopicForm } from "./topic-form";
 import { TopicDeleteButton } from "./topic-delete-button";
 import { SubTopicsDialog } from "./sub-topics-dialog";
+import { BulkAddTopicsDialog } from "./bulk-add-topics-dialog";
 
 export const metadata = { title: "Topics — Mock Test Series.in Admin" };
 
@@ -39,8 +40,9 @@ export default async function TopicsPage({
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
           <CardTitle>Add Topic</CardTitle>
+          <BulkAddTopicsDialog exams={exams} defaultSubjectId={subjectId} />
         </CardHeader>
         <CardContent>
           <TopicForm exams={exams} defaultSubjectId={subjectId} />
