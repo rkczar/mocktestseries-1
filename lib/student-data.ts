@@ -7,6 +7,7 @@ import {
   GrandTestStatus,
   MockTestStatus,
   QuestionStatus,
+  ReportType,
   StudentStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -450,7 +451,7 @@ export async function toggleSavedQuestion(studentId: string, questionId: string)
 export async function reportQuestion(
   studentId: string,
   questionId: string,
-  reportType: "WRONG_ANSWER" | "WRONG_OPTION" | "TYPO" | "DUPLICATE" | "OTHER",
+  reportType: ReportType,
   message: string | undefined,
   attemptId?: string,
   customModuleId?: string
@@ -467,6 +468,23 @@ export async function reportQuestion(
 
 export async function getStoredAiExplanation(questionId: string) {
   return prisma.aIExplanation.findUnique({ where: { questionId } });
+}
+
+const AI_RATE_LIMIT_WINDOW_MS = 60 * 60_000;
+const AI_RATE_LIMIT_MAX_NEW_GENERATIONS = 30;
+
+/**
+ * Sensible per-student cost control (Step 6.4) on DISTINCT, UNCACHED AI
+ * generations only — a cache hit is a cheap DB read and is never rate
+ * limited. Reuses the existing StudentActivity log rather than a new table:
+ * every genuinely new generation is logged as AI_EXPLANATION_GENERATED, and
+ * this counts how many a student triggered in the last hour.
+ */
+export async function isAiGenerationRateLimited(studentId: string): Promise<boolean> {
+  const count = await prisma.studentActivity.count({
+    where: { studentId, activity: "AI_EXPLANATION_GENERATED", createdAt: { gte: new Date(Date.now() - AI_RATE_LIMIT_WINDOW_MS) } },
+  });
+  return count >= AI_RATE_LIMIT_MAX_NEW_GENERATIONS;
 }
 
 // ---------------------------------------------------------------------------

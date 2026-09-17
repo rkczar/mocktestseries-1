@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { BackButton } from "@/components/student/back-button";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
+import { ExplanationPanel } from "@/components/student/explanation-panel";
 import { unsaveQuestionAction, reportSavedQuestionAction } from "./actions";
 
 export const metadata = { title: "Saved Questions — Mock Test Series.in" };
@@ -69,6 +70,8 @@ export default async function SavedQuestionsPage() {
                 <SaveQuestionButton initialSaved onToggle={unsaveQuestionAction.bind(null, q.id)} />
                 <ReportQuestionDialog onSubmit={reportSavedQuestionAction.bind(null, q.id)} />
               </div>
+
+              <ExplanationPanel questionId={q.id} />
             </div>
           ))}
         </div>

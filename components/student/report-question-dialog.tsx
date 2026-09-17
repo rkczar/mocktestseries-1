@@ -19,9 +19,9 @@ import { Label } from "@/components/ui/label";
 
 const REPORT_TYPES: { value: ReportType; label: string }[] = [
   { value: "WRONG_ANSWER", label: "Wrong answer marked as correct" },
-  { value: "WRONG_OPTION", label: "Option text is incorrect" },
-  { value: "TYPO", label: "Typo / formatting issue" },
-  { value: "DUPLICATE", label: "Duplicate question" },
+  { value: "WRONG_QUESTION", label: "Wrong question (text/options don't make sense)" },
+  { value: "INCORRECT_EXPLANATION", label: "Incorrect AI explanation" },
+  { value: "IMAGE_ISSUE", label: "Image is missing or broken" },
   { value: "OTHER", label: "Other" },
 ];
 

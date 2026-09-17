@@ -3,15 +3,25 @@ import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ReportStatusSelect } from "./report-status-select";
+import { ReportStatusFilter } from "./status-filter";
 
 export const metadata = { title: "Question Reports — Mock Test Series.in Admin" };
 
-export default async function QuestionReportsPage() {
-  const reports = await prisma.reportedQuestion.findMany({
-    orderBy: { createdAt: "desc" },
-    include: { question: true, student: true },
-    take: 200,
-  });
+export default async function QuestionReportsPage({ searchParams }: { searchParams?: Promise<{ status?: string }> }) {
+  const params = (await searchParams) ?? {};
+  const filterStatus = params.status === "OPEN" || params.status === "REVIEWED" || params.status === "RESOLVED" ? params.status : undefined;
+
+  const [counts, reports] = await Promise.all([
+    prisma.reportedQuestion.groupBy({ by: ["status"], _count: { _all: true } }),
+    prisma.reportedQuestion.findMany({
+      where: { status: filterStatus },
+      orderBy: { createdAt: "desc" },
+      include: { question: true, student: true },
+      take: 200,
+    }),
+  ]);
+  const countByStatus = Object.fromEntries(counts.map((c) => [c.status, c._count._all]));
+  const totalCount = counts.reduce((sum, c) => sum + c._count._all, 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -22,10 +32,12 @@ export default async function QuestionReportsPage() {
         </p>
       </div>
 
+      <ReportStatusFilter countByStatus={countByStatus} totalCount={totalCount} />
+
       <Card>
         <CardHeader>
           <CardTitle>Reports</CardTitle>
-          <CardDescription>{reports.length} total</CardDescription>
+          <CardDescription>{reports.length} shown</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {reports.length === 0 ? (

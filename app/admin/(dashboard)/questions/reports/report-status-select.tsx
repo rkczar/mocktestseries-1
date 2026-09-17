@@ -16,8 +16,8 @@ export function ReportStatusSelect({ reportId, status }: { reportId: string; sta
       className="h-8 w-32 text-xs"
       aria-label="Report status"
     >
-      <option value="OPEN">Open</option>
-      <option value="REVIEWED">Reviewed</option>
+      <option value="OPEN">Pending</option>
+      <option value="REVIEWED">In Progress</option>
       <option value="RESOLVED">Resolved</option>
     </SelectNative>
   );

@@ -1,26 +1,43 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { QuestionSnapshot } from "@/lib/test-attempt";
-import { getExplanationAction } from "../actions";
+import { getExplanationAction } from "@/app/student/ai-actions";
 
-export function ExplanationPanel({ questionId, snapshot }: { questionId: string; snapshot: QuestionSnapshot }) {
+const AUTO_RETRY_DELAYS_MS = [2500, 4000]; // a couple of gentle retries while someone else's generation finishes
+
+export function ExplanationPanel({ questionId }: { questionId: string }) {
   const [isPending, startTransition] = useTransition();
   const [content, setContent] = useState<Record<string, string> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [waitingOnOther, setWaitingOnOther] = useState(false);
+  const attemptRef = useRef(0);
 
-  const handleClick = () => {
+  const run = () => {
     setError(null);
     startTransition(async () => {
-      const result = await getExplanationAction(questionId, snapshot);
+      const result = await getExplanationAction(questionId);
       if (result.ok) {
         setContent(result.content);
-      } else {
-        setError(result.error);
+        setWaitingOnOther(false);
+        return;
       }
+      if (result.retry && attemptRef.current < AUTO_RETRY_DELAYS_MS.length) {
+        setWaitingOnOther(true);
+        const delay = AUTO_RETRY_DELAYS_MS[attemptRef.current];
+        attemptRef.current += 1;
+        setTimeout(run, delay);
+        return;
+      }
+      setWaitingOnOther(false);
+      setError(result.error);
     });
+  };
+
+  const handleClick = () => {
+    attemptRef.current = 0;
+    run();
   };
 
   if (content) {
@@ -43,16 +60,16 @@ export function ExplanationPanel({ questionId, snapshot }: { questionId: string;
               {value}
             </p>
           ))}
+          {content.coreConcept ? (
+            <p>
+              <span className="font-medium">Core concept: </span>
+              {content.coreConcept}
+            </p>
+          ) : null}
           {content.memoryTrick ? (
             <p>
               <span className="font-medium">Memory trick: </span>
               {content.memoryTrick}
-            </p>
-          ) : null}
-          {content.rephrase ? (
-            <p>
-              <span className="font-medium">Rephrased: </span>
-              {content.rephrase}
             </p>
           ) : null}
         </div>
@@ -64,7 +81,7 @@ export function ExplanationPanel({ questionId, snapshot }: { questionId: string;
     <div className="mt-4">
       <Button variant="outline" size="sm" onClick={handleClick} disabled={isPending}>
         {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Sparkles className="h-4 w-4" aria-hidden />}
-        {isPending ? "Generating…" : "Get AI Explanation"}
+        {isPending ? (waitingOnOther ? "Generating (someone else started this one)…" : "Generating…") : "Get AI Explanation"}
       </Button>
       {error ? <p className="mt-2 text-sm text-[var(--color-error)]">{error}</p> : null}
     </div>

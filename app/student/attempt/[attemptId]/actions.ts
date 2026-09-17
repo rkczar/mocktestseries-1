@@ -3,8 +3,7 @@
 import { redirect } from "next/navigation";
 import type { ReportType } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
-import { saveAnswer, submitAttempt, type QuestionSnapshot } from "@/lib/test-attempt";
-import { getOrCreateExplanation, AiNotConfiguredError } from "@/lib/ai-explanation";
+import { saveAnswer, submitAttempt } from "@/lib/test-attempt";
 import { toggleSavedQuestion, reportQuestion } from "@/lib/student-data";
 
 export async function saveAnswerAction(
@@ -38,15 +37,3 @@ export async function reportAttemptQuestionAction(
   await reportQuestion(student.id, questionId, reportType, message || undefined, attemptId);
 }
 
-export async function getExplanationAction(questionId: string, snapshot: QuestionSnapshot) {
-  await requireStudent();
-  try {
-    const explanation = await getOrCreateExplanation(questionId, snapshot);
-    return { ok: true as const, content: explanation.content as Record<string, string> };
-  } catch (error) {
-    if (error instanceof AiNotConfiguredError) {
-      return { ok: false as const, error: error.message };
-    }
-    return { ok: false as const, error: error instanceof Error ? error.message : "Something went wrong generating the explanation." };
-  }
-}

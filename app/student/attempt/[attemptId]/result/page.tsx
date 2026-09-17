@@ -7,6 +7,7 @@ import { getOwnedAttempt } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
 
 export const metadata = { title: "Test Result — Mock Test Series.in" };
 
@@ -79,6 +80,10 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
           </Link>
         </Button>
       </div>
+
+      <WhatsAppShareButton
+        text={`I scored ${(attempt.score ?? 0).toFixed(2)}/${attempt.maxScore} (${percentage}%) on "${title}" — Mock Test Series.in`}
+      />
     </div>
   );
 }

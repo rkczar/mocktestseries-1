@@ -6,10 +6,10 @@ import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { BackButton } from "@/components/student/back-button";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
+import { ExplanationPanel } from "@/components/student/explanation-panel";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
-import { ExplanationPanel } from "./explanation-panel";
 import { toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
 
 export const metadata = { title: "Review Answers — Mock Test Series.in" };
@@ -117,7 +117,7 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
                 <ReportQuestionDialog onSubmit={reportAttemptQuestionAction.bind(null, attemptId, tq.questionId)} />
               </div>
 
-              <ExplanationPanel questionId={tq.questionId} snapshot={snapshot} />
+              <ExplanationPanel questionId={tq.questionId} />
             </div>
           );
         })}
