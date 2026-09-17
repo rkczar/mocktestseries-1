@@ -1,10 +1,10 @@
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { SubjectDeleteButton } from "../subjects/subject-delete-button";
-import { MoveButtons } from "./move-buttons";
+import { SubjectMoveButtons } from "./subject-move-buttons";
 import { DescriptionForm } from "./description-form";
 import { AddTopicForm } from "./add-topic-form";
 import { TopicRow } from "./topic-row";
-import { updateSubjectSyllabusDescriptionAction, moveSubjectAction } from "./actions";
+import { updateSubjectSyllabusDescriptionAction } from "./actions";
 
 interface SubjectPanelProps {
   examId: string;
@@ -30,12 +30,7 @@ export function SubjectPanel({ examId, subject, isFirst, isLast }: SubjectPanelP
       <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
         <h3 className="text-sm font-semibold text-[var(--color-foreground)]">{subject.name}</h3>
         <div className="flex items-center gap-2">
-          <MoveButtons
-            label={subject.name}
-            disableUp={isFirst}
-            disableDown={isLast}
-            onMove={(direction) => moveSubjectAction(examId, subject.id, direction)}
-          />
+          <SubjectMoveButtons examId={examId} subjectId={subject.id} label={subject.name} disableUp={isFirst} disableDown={isLast} />
           <SubjectDeleteButton subjectId={subject.id} />
         </div>
       </CardHeader>
