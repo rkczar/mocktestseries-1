@@ -11,6 +11,8 @@ import {
   StudentStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { toIstDateString } from "@/lib/ist-time";
+import { attemptTitle } from "@/lib/attempt-title";
 
 /**
  * Every function here takes the authenticated studentId as a required
@@ -43,20 +45,56 @@ export async function getStudentProfile(studentId: string) {
 // Exams / My Exams
 // ---------------------------------------------------------------------------
 
-export async function getActiveExamsCatalog() {
-  return prisma.exam.findMany({
-    where: { isActive: true },
-    orderBy: [{ order: "asc" }, { name: "asc" }],
-    include: {
-      _count: {
-        select: {
-          previousYearPapers: true,
-          mockTests: { where: { status: MockTestStatus.PUBLISHED } },
-          customModules: { where: { status: { in: VISIBLE_CUSTOM_MODULE_STATUSES } } },
+export async function getActiveExamsCatalog(studentId?: string) {
+  const [exams, enrollments] = await Promise.all([
+    prisma.exam.findMany({
+      where: { isActive: true },
+      orderBy: [{ order: "asc" }, { name: "asc" }],
+      include: {
+        _count: {
+          select: {
+            previousYearPapers: true,
+            mockTests: { where: { status: MockTestStatus.PUBLISHED } },
+            customModules: { where: { status: { in: VISIBLE_CUSTOM_MODULE_STATUSES } } },
+          },
         },
       },
-    },
+    }),
+    studentId ? prisma.studentExamEnrollment.findMany({ where: { studentId }, select: { examId: true } }) : Promise.resolve([]),
+  ]);
+  const enrolledIds = new Set(enrollments.map((e) => e.examId));
+  return exams.map((exam) => ({ ...exam, isEnrolled: enrolledIds.has(exam.id) }));
+}
+
+// ---------------------------------------------------------------------------
+// Exam enrollment ("My Exams")
+//
+// Additive: access to content is NOT gated on enrollment (free/demo behavior
+// keeps working everywhere else) — this only gives a student a focused list
+// and, later, a first-class dimension for paid-access gating (Step 7.5).
+// ---------------------------------------------------------------------------
+
+export async function enrollInExam(studentId: string, examId: string) {
+  await prisma.studentExamEnrollment.upsert({
+    where: { studentId_examId: { studentId, examId } },
+    update: {},
+    create: { studentId, examId },
   });
+  await logActivity(studentId, "EXAM_ENROLLED", { examId });
+}
+
+export async function unenrollFromExam(studentId: string, examId: string) {
+  await prisma.studentExamEnrollment.deleteMany({ where: { studentId, examId } });
+  await logActivity(studentId, "EXAM_UNENROLLED", { examId });
+}
+
+export async function getEnrolledExams(studentId: string) {
+  const enrollments = await prisma.studentExamEnrollment.findMany({
+    where: { studentId },
+    orderBy: { createdAt: "desc" },
+    include: { exam: true },
+  });
+  return enrollments.map((e) => e.exam);
 }
 
 export async function getExamDetailForStudent(examId: string) {
@@ -522,4 +560,219 @@ export async function getPendingDeletionRequest(studentId: string) {
   return prisma.deletionRequest.findFirst({
     where: { studentId, status: DeletionRequestStatus.PENDING },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard (Step 7.6) — every figure here is a real, server-side aggregate
+// against this student's own rows. No hardcoded/demo values.
+// ---------------------------------------------------------------------------
+
+const DASHBOARD_ATTEMPT_INCLUDE = {
+  exam: true,
+  mockTest: true,
+  customModule: true,
+  previousYearPaper: true,
+  grandTest: true,
+  liveTest: true,
+  subject: true,
+} as const;
+
+/** Consecutive-day study streak in IST, walking back from today until a day with no activity is hit. */
+async function computeStudyStreak(studentId: string): Promise<number> {
+  const since = new Date(Date.now() - 60 * 24 * 60 * 60_000); // 60 days is more than enough to find any real gap
+  const activity = await prisma.studentActivity.findMany({
+    where: { studentId, createdAt: { gte: since } },
+    select: { createdAt: true },
+  });
+  if (activity.length === 0) return 0;
+
+  const activeDays = new Set(activity.map((a) => toIstDateString(a.createdAt)));
+  let streak = 0;
+  const cursor = new Date();
+  for (;;) {
+    const dayKey = toIstDateString(cursor);
+    if (!activeDays.has(dayKey)) break;
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+export async function getDashboardMetrics(studentId: string) {
+  const startOfTodayIst = parseIstDayStartAsUtc(new Date());
+
+  const [mcqSolvedToday, distinctAttemptedRows, testsCompleted, avgScoreAgg, recentAttempt, inProgress, studyStreak, upcomingExam] =
+    await Promise.all([
+      prisma.answer.count({ where: { studentId, status: { not: "UNANSWERED" }, answeredAt: { gte: startOfTodayIst } } }),
+      prisma.answer.findMany({ where: { studentId, status: { not: "UNANSWERED" } }, select: { questionId: true }, distinct: ["questionId"] }),
+      prisma.testAttempt.count({ where: { studentId, status: AttemptStatus.SUBMITTED } }),
+      prisma.testAttempt.aggregate({ where: { studentId, status: AttemptStatus.SUBMITTED }, _avg: { score: true } }),
+      prisma.testAttempt.findFirst({
+        where: { studentId, status: AttemptStatus.SUBMITTED },
+        orderBy: { submittedAt: "desc" },
+        include: DASHBOARD_ATTEMPT_INCLUDE,
+      }),
+      prisma.testAttempt.findFirst({
+        where: { studentId, status: AttemptStatus.IN_PROGRESS },
+        orderBy: { startedAt: "desc" },
+        include: DASHBOARD_ATTEMPT_INCLUDE,
+      }),
+      computeStudyStreak(studentId),
+      getUpcomingExamForStudent(studentId),
+    ]);
+
+  const weakTopics = await getWeakTopics(studentId, 5);
+
+  return {
+    mcqSolvedToday,
+    questionsAttempted: distinctAttemptedRows.length,
+    testsCompleted,
+    averageScore: avgScoreAgg._avg.score,
+    studyStreak,
+    upcomingExam: upcomingExam
+      ? { id: upcomingExam.id, name: upcomingExam.name, daysLeft: daysUntil(upcomingExam.upcomingDate) }
+      : null,
+    recentTest: recentAttempt ? { id: recentAttempt.id, title: attemptTitle(recentAttempt), score: recentAttempt.score, maxScore: recentAttempt.maxScore } : null,
+    inProgress,
+    weakTopics,
+  };
+}
+
+function parseIstDayStartAsUtc(now: Date): Date {
+  const istDateStr = toIstDateString(now); // "YYYY-MM-DD" in IST
+  return new Date(`${istDateStr}T00:00:00+05:30`);
+}
+
+function daysUntil(date: Date | null): number | null {
+  if (!date) return null;
+  const ms = date.getTime() - Date.now();
+  return Math.max(0, Math.ceil(ms / (24 * 60 * 60_000)));
+}
+
+/** Nearest upcoming exam among the student's enrolled exams; falls back to any upcoming exam if they haven't enrolled in one yet. */
+export async function getUpcomingExamForStudent(studentId: string) {
+  const enrolled = await prisma.studentExamEnrollment.findMany({ where: { studentId }, select: { examId: true } });
+  const examIds = enrolled.map((e) => e.examId);
+
+  if (examIds.length > 0) {
+    const enrolledUpcoming = await prisma.exam.findFirst({
+      where: { isActive: true, isUpcoming: true, upcomingDate: { not: null, gte: new Date() }, id: { in: examIds } },
+      orderBy: { upcomingDate: "asc" },
+    });
+    if (enrolledUpcoming) return enrolledUpcoming;
+  }
+
+  return prisma.exam.findFirst({
+    where: { isActive: true, isUpcoming: true, upcomingDate: { not: null, gte: new Date() } },
+    orderBy: { upcomingDate: "asc" },
+  });
+}
+
+/**
+ * Topics with the most incorrect answers, bounded to a recent window of this
+ * student's own wrong answers (never the whole bank) — a small, indexed
+ * query plus in-memory aggregation over at most `sampleSize` rows, not a
+ * huge client-side dataset.
+ */
+export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 500) {
+  const wrongAnswers = await prisma.answer.findMany({
+    where: { studentId, isCorrect: false },
+    select: { questionId: true },
+    orderBy: { id: "desc" },
+    take: sampleSize,
+  });
+  if (wrongAnswers.length === 0) return [];
+
+  const countByQuestion = new Map<string, number>();
+  for (const a of wrongAnswers) countByQuestion.set(a.questionId, (countByQuestion.get(a.questionId) ?? 0) + 1);
+
+  const questions = await prisma.question.findMany({
+    where: { id: { in: [...countByQuestion.keys()] } },
+    select: { id: true, topicId: true, topic: { select: { name: true } } },
+  });
+
+  const countByTopic = new Map<string, { name: string; count: number }>();
+  for (const q of questions) {
+    if (!q.topicId || !q.topic) continue;
+    const add = countByQuestion.get(q.id) ?? 0;
+    const existing = countByTopic.get(q.topicId);
+    countByTopic.set(q.topicId, { name: q.topic.name, count: (existing?.count ?? 0) + add });
+  }
+
+  return [...countByTopic.entries()]
+    .map(([topicId, v]) => ({ topicId, name: v.name, incorrectCount: v.count }))
+    .sort((a, b) => b.incorrectCount - a.incorrectCount)
+    .slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------
+// Analytics (Step 7.7) — server-side aggregation from attempts/answers.
+// ---------------------------------------------------------------------------
+
+export async function getStudentAnalytics(studentId: string) {
+  const [totals, byExam, bySubject, submittedAttempts] = await Promise.all([
+    prisma.answer.groupBy({ by: ["status"], where: { studentId }, _count: { _all: true } }),
+    prisma.testAttempt.groupBy({
+      by: ["examId"],
+      where: { studentId, status: AttemptStatus.SUBMITTED },
+      _avg: { score: true },
+      _count: { _all: true },
+    }),
+    prisma.testAttempt.groupBy({
+      by: ["subjectId"],
+      where: { studentId, status: AttemptStatus.SUBMITTED, subjectId: { not: null } },
+      _avg: { score: true },
+      _count: { _all: true },
+    }),
+    prisma.testAttempt.findMany({
+      where: { studentId, status: AttemptStatus.SUBMITTED },
+      orderBy: { submittedAt: "asc" },
+      select: { submittedAt: true, score: true, maxScore: true, testType: true },
+    }),
+  ]);
+
+  const correctByStatus = Object.fromEntries(totals.map((t) => [t.status, t._count._all]));
+  const attempted = (correctByStatus.ANSWERED ?? 0) + (correctByStatus.ANSWERED_AND_MARKED ?? 0);
+  const unattempted = (correctByStatus.UNANSWERED ?? 0) + (correctByStatus.MARKED_FOR_REVIEW ?? 0);
+
+  const correctIncorrect = await prisma.answer.groupBy({
+    by: ["isCorrect"],
+    where: { studentId, isCorrect: { not: null } },
+    _count: { _all: true },
+  });
+  const correct = correctIncorrect.find((c) => c.isCorrect === true)?._count._all ?? 0;
+  const incorrect = correctIncorrect.find((c) => c.isCorrect === false)?._count._all ?? 0;
+  const accuracy = correct + incorrect > 0 ? (correct / (correct + incorrect)) * 100 : null;
+
+  const examIds = byExam.map((e) => e.examId);
+  const subjectIds = bySubject.map((s) => s.subjectId).filter((s): s is string => s !== null);
+  const [exams, subjects] = await Promise.all([
+    prisma.exam.findMany({ where: { id: { in: examIds } }, select: { id: true, name: true } }),
+    prisma.subject.findMany({ where: { id: { in: subjectIds } }, select: { id: true, name: true } }),
+  ]);
+  const examNameById = new Map(exams.map((e) => [e.id, e.name]));
+  const subjectNameById = new Map(subjects.map((s) => [s.id, s.name]));
+
+  return {
+    attempted,
+    unattempted,
+    correct,
+    incorrect,
+    accuracy,
+    examPerformance: byExam.map((e) => ({ examId: e.examId, name: examNameById.get(e.examId) ?? "—", attempts: e._count._all, averageScore: e._avg.score })),
+    subjectPerformance: bySubject.map((s) => ({
+      subjectId: s.subjectId as string,
+      name: subjectNameById.get(s.subjectId as string) ?? "—",
+      attempts: s._count._all,
+      averageScore: s._avg.score,
+    })),
+    weakTopics: await getWeakTopics(studentId, 8),
+    performanceOverTime: submittedAttempts.map((a) => ({
+      date: a.submittedAt,
+      score: a.score,
+      maxScore: a.maxScore,
+      percentage: a.maxScore ? Math.round(((a.score ?? 0) / a.maxScore) * 100) : null,
+      testType: a.testType,
+    })),
+  };
 }

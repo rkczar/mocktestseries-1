@@ -37,6 +37,11 @@ export function toIstDateTimeLocalValue(date: Date): string {
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 }
 
+/** The IST calendar date ("YYYY-MM-DD") a moment falls on — used to bucket activity into study-streak days by IST, not UTC. */
+export function toIstDateString(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+}
+
 /** Human-readable IST display, e.g. "17 Sep 2026, 2:00 PM IST". */
 export function formatIst(date: Date): string {
   const formatted = new Intl.DateTimeFormat("en-IN", {

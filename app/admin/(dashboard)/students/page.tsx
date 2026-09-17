@@ -3,6 +3,7 @@ import { AllStudentsPanel } from "./all-students-panel";
 import AttemptedQuestionsPage from "./attempted/page";
 import StudentsHistoryPage from "./history/page";
 import DeletionRequestsPage from "./deletion-requests/page";
+import EnrollmentPage from "./enrollment/page";
 
 export const metadata = { title: "Students — Mock Test Series.in Admin" };
 
@@ -33,6 +34,7 @@ export default async function StudentsControlCenter({
             content: <StudentsHistoryPage searchParams={Promise.resolve({ examId })} />,
           },
           { value: "deletion-requests", label: "Deletion Requests", content: <DeletionRequestsPage /> },
+          { value: "enrollment", label: "Enrollment", content: <EnrollmentPage /> },
         ]}
       />
     </div>

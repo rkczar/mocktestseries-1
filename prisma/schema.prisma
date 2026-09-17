@@ -548,12 +548,22 @@ model Question {
   examYear            Int?
   // AI variant provenance: canonical questions have no parent; AI_SIMILAR /
   // AI_TRAP variants point at the canonical row and carry an AI01–AI05 slot
-  // plus a one-shot generation status.
+  // plus a one-shot generation status. `@@unique([parentQuestionId, aiSlot])`
+  // is the server-side max-5-per-question enforcement: aiSlot has exactly 5
+  // possible values, so a parent can never accumulate more than 5 variant
+  // rows, and two concurrent admins can never both claim the same slot.
   parentQuestionId    String?
   parentQuestion      Question?              @relation("AiQuestionVariants", fields: [parentQuestionId], references: [id], onDelete: SetNull)
   aiVariantType       AiVariantType?
   aiSlot              AiSlot?
   aiGenerationStatus  AiGenerationStatus     @default(NONE)
+  // Provenance for a generated variant, mirroring AIExplanation's fields —
+  // never mix output silently across prompt/model changes (Step 7.3).
+  aiProvider          String?
+  aiModel             String?
+  aiPromptVersion     String?
+  aiGeneratedAt       DateTime?
+  aiErrorMessage      String?
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
 
@@ -567,6 +577,7 @@ model Question {
   aiExplanation         AIExplanation?
   aiVariants            Question[]           @relation("AiQuestionVariants")
 
+  @@unique([parentQuestionId, aiSlot])
   @@index([examId, examYear])
   @@index([examId, subjectId, topicId])
   @@index([topicId, subTopicId])
@@ -574,6 +585,7 @@ model Question {
   @@index([source, status])
   @@index([parentQuestionId])
   @@index([status])
+  @@index([aiGenerationStatus])
 }
 
 model QuestionOption {
