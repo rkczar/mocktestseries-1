@@ -232,6 +232,7 @@ export async function getStudentOwnedCustomModules(studentId: string) {
   const modules = await prisma.customModule.findMany({
     where: { createdByStudentId: studentId, isStudentOwned: true },
     orderBy: { createdAt: "desc" },
+    take: 50, // most recent — a student building many modules shouldn't make this list unbounded
     include: { exam: true, _count: { select: { questions: true } } },
   });
 
@@ -285,8 +286,11 @@ export async function getLiveTestsForStudent(studentId: string) {
   const { deriveLiveTestState } = await import("@/lib/live-test");
 
   const liveTests = await prisma.liveTest.findMany({
-    where: { status: { not: "DRAFT" } },
-    orderBy: { startAt: "asc" },
+    // CANCELLED excluded here (not just in the JS bucketing below) so a long
+    // history of cancelled tests never inflates this query.
+    where: { status: { notIn: ["DRAFT", "CANCELLED"] } },
+    orderBy: { startAt: "desc" },
+    take: 200,
     include: { exam: true },
   });
 
@@ -314,8 +318,11 @@ export async function getLiveTestsForStudent(studentId: string) {
   const withAttempt = (rows: typeof liveTests) => rows.map((lt) => ({ liveTest: lt, attempt: attemptByLiveTest.get(lt.id) ?? null }));
 
   return {
-    upcoming: withAttempt(upcoming),
-    live: withAttempt(live),
+    // The base query is ordered by startAt DESC (so the take:200 cap can
+    // never truncate away future/live tests — see above); Upcoming/Live read
+    // more naturally soonest-first, so those two are reversed for display.
+    upcoming: withAttempt(upcoming.reverse()),
+    live: withAttempt(live.reverse()),
     completed: withAttempt(completed),
     resultsAvailable: withAttempt(resultsAvailable),
   };
@@ -726,10 +733,12 @@ export async function getStudentAnalytics(studentId: string) {
     }),
     prisma.testAttempt.findMany({
       where: { studentId, status: AttemptStatus.SUBMITTED },
-      orderBy: { submittedAt: "asc" },
+      orderBy: { submittedAt: "desc" },
+      take: 100, // most recent 100 — a long test history shouldn't ship an unbounded list to the client
       select: { submittedAt: true, score: true, maxScore: true, testType: true },
     }),
   ]);
+  submittedAttempts.reverse(); // oldest-first for the on-page history/chart
 
   const correctByStatus = Object.fromEntries(totals.map((t) => [t.status, t._count._all]));
   const attempted = (correctByStatus.ANSWERED ?? 0) + (correctByStatus.ANSWERED_AND_MARKED ?? 0);

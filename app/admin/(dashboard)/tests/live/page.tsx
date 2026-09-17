@@ -39,6 +39,7 @@ export default async function LiveTestsPage() {
     }),
     prisma.liveTest.findMany({
       orderBy: { startAt: "desc" },
+      take: 200,
       include: { exam: true, _count: { select: { questions: true, testAttempts: true } } },
     }),
   ]);

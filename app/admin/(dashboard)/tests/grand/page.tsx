@@ -34,6 +34,7 @@ export default async function GrandTestsPage() {
     }),
     prisma.grandTest.findMany({
       orderBy: { createdAt: "desc" },
+      take: 200,
       include: { exam: true, _count: { select: { questions: true, testAttempts: true } } },
     }),
   ]);
