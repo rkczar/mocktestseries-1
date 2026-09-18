@@ -31,7 +31,6 @@ interface Draft {
   ambient: boolean;
   buttonRadius: string;
   showLogo: boolean;
-  siteName: string;
   loginTitle: string;
   subtitle: string;
   leftCanvasEnabled: boolean;
@@ -62,7 +61,6 @@ function toDraft(config: LoginPageConfig): Draft {
     ambient: config.background.ambient,
     buttonRadius: config.buttons.radius ?? "0.5rem",
     showLogo: config.branding.showLogo,
-    siteName: config.branding.siteName,
     loginTitle: config.branding.loginTitle,
     subtitle: config.branding.subtitle,
     leftCanvasEnabled: config.leftCanvas.enabled,
@@ -239,14 +237,9 @@ export function LoginPageForm({ config }: { config: LoginPageConfig }) {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <ToggleRow label="Show logo" name="showLogo" checked={draft.showLogo} onChange={(v) => set("showLogo", v)} />
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="logoUrl">Logo URL</Label>
-              <Input id="logoUrl" name="logoUrl" defaultValue={config.branding.logoUrl ?? ""} placeholder="/logo.svg" />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="siteName">Site name</Label>
-              <Input id="siteName" name="siteName" value={draft.siteName} onChange={(e) => set("siteName", e.target.value)} />
-            </div>
+            <p className="text-xs text-[var(--color-muted-foreground)]">
+              The site wordmark is fixed (MockTestSeries.in™) and isn&apos;t editable here.
+            </p>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="loginTitle">Login title</Label>
               <Input id="loginTitle" name="loginTitle" value={draft.loginTitle} onChange={(e) => set("loginTitle", e.target.value)} />

@@ -6,6 +6,7 @@ import { Eye, EyeOff, Loader2, GraduationCap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { BrandLogo } from "@/components/brand/BrandLogo";
 import type { LoginPageConfig } from "@/lib/login-page";
 import type { AuthProviderPublicConfig } from "@/lib/auth-provider-config";
 import {
@@ -371,7 +372,7 @@ export function LoginScreen({
           </div>
         ) : null}
         <div>
-          <h1 className="text-xl font-semibold text-white">{pageConfig.branding.siteName}</h1>
+          <BrandLogo size="lg" href={null} className="justify-center text-white" />
           <p className="mt-1 text-base font-medium text-white/90">{pageConfig.branding.loginTitle}</p>
           {pageConfig.branding.subtitle ? <p className="text-sm text-white/50">{pageConfig.branding.subtitle}</p> : null}
         </div>

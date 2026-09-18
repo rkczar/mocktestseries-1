@@ -39,8 +39,6 @@ export interface LoginBackground {
 
 export interface LoginBranding {
   showLogo: boolean;
-  logoUrl?: string;
-  siteName: string;
   loginTitle: string;
   subtitle: string;
 }
@@ -79,8 +77,6 @@ export const DEFAULT_LOGIN_PAGE_CONFIG: LoginPageConfig = {
   buttons: { radius: undefined, height: undefined },
   branding: {
     showLogo: true,
-    logoUrl: undefined,
-    siteName: "Mock Test Series.in",
     loginTitle: "Student Login",
     subtitle: "Sign in to access your test portal",
   },

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { str, pairs } from "./content-helpers";
 import type { ResolvedHomepage } from "@/lib/homepage-render";
+import { BrandLogo } from "@/components/brand/BrandLogo";
+import { BRAND_NAME } from "@/lib/brand";
 
 export function SiteFooter({
   content,
@@ -13,16 +15,13 @@ export function SiteFooter({
   const location = str(content, "location");
   const instagramUrl = str(content, "instagramUrl");
   const links = pairs(content, "links");
-  const brand = resolved.brand || str(content, "logoText", "Mock Test Series.in");
-  const copyrightLine = resolved.copyrightLine || `© ${new Date().getFullYear()} ${brand}`;
+  const copyrightLine = resolved.copyrightLine || `© ${new Date().getFullYear()} ${BRAND_NAME}`;
 
   return (
     <footer className="border-t border-[var(--color-border)] bg-[var(--color-surface)]">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-12 sm:px-6 md:flex-row md:items-start md:justify-between">
         <div className="flex flex-col gap-2">
-          <p className="text-base font-semibold text-[var(--color-foreground)]" style={{ fontFamily: "var(--font-heading)" }}>
-            {brand}
-          </p>
+          <BrandLogo size="md" href={null} />
           {location ? <p className="text-sm text-[var(--color-muted-foreground)]">{location}</p> : null}
           {email ? (
             <a href={`mailto:${email}`} className="text-sm text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]">

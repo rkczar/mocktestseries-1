@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { studentLogoutAction } from "@/app/student/(dashboard)/actions";
+import { BrandLogo } from "@/components/brand/BrandLogo";
 
 const NAV_ITEMS = [
   { label: "My Exams", href: "/student/exams" },
@@ -34,8 +35,8 @@ export function StudentHeader({ name, studentId }: { name: string; studentId: st
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-primary)] text-white">
             <GraduationCap className="h-4 w-4" aria-hidden />
           </span>
-          <span className="hidden text-sm font-bold sm:inline" style={{ fontFamily: "var(--font-heading)" }}>
-            Mock Test Series.in
+          <span className="hidden sm:inline">
+            <BrandLogo size="sm" href={null} />
           </span>
         </Link>
 

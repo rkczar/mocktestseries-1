@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
+import { BrandLogo } from "@/components/brand/BrandLogo";
 import { str, pairs } from "./content-helpers";
 
 export function SiteHeader({ content }: { content: Record<string, unknown> }) {
-  const logoText = str(content, "logoText", "Mock Test Series.in");
   const navItems = pairs(content, "navItems");
   const loginHref = str(content, "loginHref", "/login");
   const loginButtonText = str(content, "loginButtonText", "Login");
@@ -13,13 +13,7 @@ export function SiteHeader({ content }: { content: Record<string, unknown> }) {
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--color-border)] bg-[var(--color-background)]/90 backdrop-blur supports-[backdrop-filter]:bg-[var(--color-background)]/70">
       <div className="mx-auto flex h-[4.5rem] w-full max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-        <Link
-          href="/"
-          className="shrink-0 text-base font-semibold tracking-tight text-[var(--color-foreground)] sm:text-lg"
-          style={{ fontFamily: "var(--font-heading)" }}
-        >
-          {logoText}
-        </Link>
+        <BrandLogo size="lg" />
 
         {navItems.length > 0 ? (
           <nav className="hidden flex-1 items-center justify-center gap-7 md:flex" aria-label="Primary">

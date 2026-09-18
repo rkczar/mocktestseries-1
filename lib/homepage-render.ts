@@ -9,6 +9,7 @@ import {
   type HeroPanelConfig,
 } from "@/lib/homepage-field-codec";
 import { getHomepageStatistics } from "@/lib/homepage-statistics";
+import { BRAND_NAME } from "@/lib/brand";
 
 export interface ResolvedStatValue {
   label: string;
@@ -72,7 +73,6 @@ export interface ResolvedHomepage {
       liveMockTestCount?: number;
       statValues?: ResolvedStatValue[];
       heroPanel?: ResolvedHeroPanel;
-      brand?: string;
       copyrightLine?: string;
     };
   }[];
@@ -114,10 +114,6 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
   // totals (statistics cards, hero panel LIVE mode, hero supporting stats).
   const platformStats = getHomepageStatistics();
   const liveMockTestCountPromise = prisma.mockTest.count({ where: { status: "PUBLISHED" } });
-
-  const headerSection = config.sections.find((s) => s.key === "HEADER");
-  const headerContent = (headerSection?.content as Record<string, unknown>) ?? {};
-  const brand = typeof headerContent.logoText === "string" && headerContent.logoText ? headerContent.logoText : "Mock Test Series.in";
 
   const sections = await Promise.all(
     config.sections
@@ -285,8 +281,7 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
         if (section.key === "FOOTER") {
           const year = new Date().getFullYear();
           const override = typeof content.copyrightOverride === "string" ? content.copyrightOverride : "";
-          resolved.brand = brand;
-          resolved.copyrightLine = override || `© ${year} ${brand}`;
+          resolved.copyrightLine = override || `© ${year} ${BRAND_NAME}`;
         }
 
         return { key: section.key, isEnabled: section.isEnabled, order: section.order, content, resolved };

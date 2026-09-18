@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { getAdminSession } from "@/lib/rbac";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { BrandLogo } from "@/components/brand/BrandLogo";
 import { LoginForm } from "./login-form";
 import { CacheTools } from "./cache-tools";
 
@@ -29,9 +30,7 @@ export default async function AdminLoginPage({
             <ShieldCheck className="h-6 w-6" aria-hidden />
           </div>
           <div>
-            <h1 className="text-xl font-semibold text-[var(--color-foreground)]">
-              Mock Test Series.in
-            </h1>
+            <BrandLogo size="lg" href={null} />
             <p className="text-sm text-[var(--color-muted-foreground)]">Admin Control Center</p>
           </div>
         </div>

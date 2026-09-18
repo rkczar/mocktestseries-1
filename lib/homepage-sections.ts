@@ -62,16 +62,14 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
   HEADER: {
     key: "HEADER",
     label: "Header",
-    description: "Logo, navigation, login button — Admin → Website → Homepage → Header",
+    description: "Navigation, login button — Admin → Website → Homepage → Header. The site logo is fixed (see components/brand/BrandLogo.tsx) and is not editable here.",
     fields: [
-      { key: "logoText", label: "Logo text", type: "text" },
       { key: "navItems", label: "Navigation items (one per line: Label | /route)", type: "pairlist" },
       { key: "loginHref", label: "Student login link", type: "url" },
       { key: "loginButtonText", label: "Login button text", type: "text" },
       { key: "loginButtonVisible", label: "Show login button", type: "boolean" },
     ],
     defaultContent: {
-      logoText: "Mock Test Series.in",
       navItems: [["Exams", "/#featured-exam"], ["Test Series", "/#test-series"]],
       loginHref: "/login",
       loginButtonText: "Login",
