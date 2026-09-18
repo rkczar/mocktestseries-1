@@ -61,6 +61,7 @@ model AdminUser {
   bulkImportRuns       BulkImportRun[]
   createdGrandTests    GrandTest[]
   createdLiveTests     LiveTest[]
+  createdAnnouncements Announcement[]
 }
 
 model LoginAttempt {
@@ -126,6 +127,7 @@ model Exam {
   grandTests         GrandTest[]
   liveTests          LiveTest[]
   enrollments        StudentExamEnrollment[]
+  announcements      Announcement[]
 }
 
 model Subject {
@@ -364,17 +366,19 @@ model Student {
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
-  profile           StudentProfile?
-  oauthAccounts     StudentOAuthAccount[]
-  loginAttempts     StudentLoginAttempt[]
-  deletionRequests  DeletionRequest[]
-  testAttempts      TestAttempt[]
-  answers           Answer[]
-  savedQuestions    SavedQuestion[]
-  activities        StudentActivity[]
-  reportedQuestions ReportedQuestion[]
-  customModules     CustomModule[]          @relation("StudentCustomModules")
-  examEnrollments   StudentExamEnrollment[]
+  profile                 StudentProfile?
+  oauthAccounts           StudentOAuthAccount[]
+  loginAttempts           StudentLoginAttempt[]
+  deletionRequests        DeletionRequest[]
+  testAttempts            TestAttempt[]
+  answers                 Answer[]
+  savedQuestions          SavedQuestion[]
+  activities              StudentActivity[]
+  reportedQuestions       ReportedQuestion[]
+  customModules           CustomModule[]             @relation("StudentCustomModules")
+  examEnrollments         StudentExamEnrollment[]
+  notificationStates      StudentNotificationState[]
+  announcementRecipientOf AnnouncementRecipient[]
 
   @@index([status])
 }
@@ -653,8 +657,9 @@ model MockTest {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  questions    MockTestQuestion[]
-  testAttempts TestAttempt[]
+  questions     MockTestQuestion[]
+  testAttempts  TestAttempt[]
+  announcements Announcement[]
 
   @@index([examId, status])
 }
@@ -783,8 +788,9 @@ model GrandTest {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
-  questions    GrandTestQuestion[]
-  testAttempts TestAttempt[]
+  questions     GrandTestQuestion[]
+  testAttempts  TestAttempt[]
+  announcements Announcement[]
 
   @@index([examId, status])
 }
@@ -854,8 +860,9 @@ model LiveTest {
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 
-  questions    LiveTestQuestion[]
-  testAttempts TestAttempt[]
+  questions     LiveTestQuestion[]
+  testAttempts  TestAttempt[]
+  announcements Announcement[]
 
   @@index([status, startAt])
   @@index([examId, status])
@@ -1178,4 +1185,120 @@ model BulkImportRow {
 
   @@index([runId, rowNumber])
   @@index([runId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Announcements / Student Notifications
+//
+// One Announcement row per broadcast — never duplicated per student. Audience
+// is resolved server-side at read time (lib/notifications.ts): ALL_STUDENTS /
+// EXAM_STUDENTS (via StudentExamEnrollment) / ACTIVE_STUDENTS (Student.status)
+// / SELECTED_STUDENTS (explicit AnnouncementRecipient rows). A student's
+// read/unread state is a separate, lazily-created row (StudentNotificationState)
+// keyed by (studentId, announcementId) — one announcement reaching thousands
+// of students costs one row, not thousands, until each student actually
+// opens or marks it.
+//
+// Visibility is derived from server time exactly like LiveTest
+// (see lib/live-test.ts / lib/notifications.ts): status PUBLISHED AND
+// (publishAt is null or in the past) AND (expiresAt is null or in the
+// future). DRAFT and ARCHIVED never resolve as visible regardless of dates.
+// ---------------------------------------------------------------------------
+
+enum AnnouncementType {
+  GENERAL
+  IMPORTANT
+  EXAM_UPDATE
+  NEW_TEST
+  LIVE_TEST
+  RESULT
+  MAINTENANCE
+}
+
+enum AnnouncementPriority {
+  NORMAL
+  IMPORTANT
+}
+
+enum AnnouncementAudience {
+  ALL_STUDENTS
+  EXAM_STUDENTS
+  ACTIVE_STUDENTS
+  SELECTED_STUDENTS
+}
+
+enum AnnouncementStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Announcement {
+  id               String               @id @default(cuid())
+  title            String
+  message          String
+  content          String?
+  type             AnnouncementType     @default(GENERAL)
+  priority         AnnouncementPriority @default(NORMAL)
+  audience         AnnouncementAudience @default(ALL_STUDENTS)
+  examId           String?
+  exam             Exam?                @relation(fields: [examId], references: [id])
+  mockTestId       String?
+  mockTest         MockTest?            @relation(fields: [mockTestId], references: [id])
+  grandTestId      String?
+  grandTest        GrandTest?           @relation(fields: [grandTestId], references: [id])
+  liveTestId       String?
+  liveTest         LiveTest?            @relation(fields: [liveTestId], references: [id])
+  ctaLabel         String?
+  ctaRoute         String?
+  showOnDashboard  Boolean              @default(false)
+  status           AnnouncementStatus   @default(DRAFT)
+  publishAt        DateTime?
+  expiresAt        DateTime?
+  createdByAdminId String?
+  createdByAdmin   AdminUser?           @relation(fields: [createdByAdminId], references: [id])
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  recipients AnnouncementRecipient[]
+  reads      StudentNotificationState[]
+
+  @@index([status, publishAt])
+  @@index([status, expiresAt])
+  @@index([audience, examId])
+  @@index([examId])
+  @@index([showOnDashboard, status])
+}
+
+/**
+ * Explicit recipient list — only populated/consulted when audience = SELECTED_STUDENTS.
+ */
+model AnnouncementRecipient {
+  id             String       @id @default(cuid())
+  announcementId String
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([announcementId, studentId])
+  @@index([studentId])
+}
+
+/**
+ * Lazily created: absent row (or readAt null) means unread. Upserted, never double-inserted (unique constraint absorbs the two-PM2-worker race).
+ */
+model StudentNotificationState {
+  id             String       @id @default(cuid())
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  announcementId String
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([studentId, announcementId])
+  @@index([studentId, readAt])
+  @@index([announcementId])
 }

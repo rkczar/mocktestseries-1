@@ -16,6 +16,7 @@ export const PERMISSIONS = {
   TESTS_MANAGE: "tests:manage",
   CUSTOM_MODULES_MANAGE: "custom-modules:manage",
   STUDENTS_MANAGE: "students:manage",
+  ANNOUNCEMENTS_MANAGE: "announcements:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -30,6 +31,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.TESTS_MANAGE,
     PERMISSIONS.CUSTOM_MODULES_MANAGE,
     PERMISSIONS.STUDENTS_MANAGE,
+    PERMISSIONS.ANNOUNCEMENTS_MANAGE,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };

@@ -47,7 +47,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Navigation", route: "/admin/website/navigation", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
   { pageName: "Website Content", route: "/admin/website/content", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
   { pageName: "Footer", route: "/admin/website/footer", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
-  { pageName: "Announcements", route: "/admin/website/announcements", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
+  { pageName: "Announcements", route: "/admin/website/announcements", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
 
   // Exams (minimal working CRUD ships this slice)
   { pageName: "Manage Exams", route: "/admin/exams", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },

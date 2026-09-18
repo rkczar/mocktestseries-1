@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { studentLogoutAction } from "@/app/student/(dashboard)/actions";
 import { BrandLogo } from "@/components/brand/BrandLogo";
+import { NotificationBell, type BellAnnouncement } from "@/components/student/notification-bell";
 
 const NAV_ITEMS = [
   { label: "My Exams", href: "/student/exams" },
@@ -24,7 +25,15 @@ const NAV_ITEMS = [
   { label: "History", href: "/student/history" },
 ];
 
-export function StudentHeader({ name, studentId }: { name: string; studentId: string }) {
+export function StudentHeader({
+  name,
+  studentId,
+  announcements,
+}: {
+  name: string;
+  studentId: string;
+  announcements: BellAnnouncement[];
+}) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -57,6 +66,8 @@ export function StudentHeader({ name, studentId }: { name: string; studentId: st
 
         <div className="flex shrink-0 items-center gap-2">
           <ThemeToggle />
+
+          <NotificationBell announcements={announcements} />
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
