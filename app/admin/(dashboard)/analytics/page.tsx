@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { getPlatformAnalytics } from "@/lib/admin-analytics";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -79,6 +81,37 @@ function PerformanceTable({
   );
 }
 
+function ModuleSummaryCard({
+  title,
+  href,
+  stats,
+}: {
+  title: string;
+  href: string;
+  stats: { label: string; value: string | number }[];
+}) {
+  return (
+    <Link href={href} className="block">
+      <Card className="h-full transition-colors hover:border-[var(--color-primary)]">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm">{title}</CardTitle>
+            <ArrowRight className="h-4 w-4 text-[var(--color-muted-foreground)]" aria-hidden />
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-1">
+          {stats.map((s) => (
+            <div key={s.label} className="flex items-center justify-between text-sm">
+              <span className="text-[var(--color-muted-foreground)]">{s.label}</span>
+              <span className="font-medium text-[var(--color-foreground)]">{s.value}</span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
 export default async function AnalyticsPage() {
   const a = await getPlatformAnalytics();
 
@@ -109,6 +142,7 @@ export default async function AnalyticsPage() {
         <StatCard label="In-Progress Attempts" value={a.inProgressAttempts} />
         <StatCard label="Overall Accuracy" value={formatPercent(a.overallAccuracy)} />
         <StatCard label="Average Score" value={formatPercent(a.averageScorePercent)} />
+        <StatCard label="Saved Questions" value={a.savedQuestionsCount} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -159,6 +193,13 @@ export default async function AnalyticsPage() {
         />
       </div>
 
+      <PerformanceTable
+        title="Performance by Test Type"
+        description="Mock, Subject, Grand, Live, Previous Year Paper, and Custom Module attempts, submitted only"
+        emptyLabel="No submitted attempts yet."
+        rows={a.testTypePerformance.map((t) => ({ key: t.testType, name: t.name, attempts: t.attempts, averageScore: t.averageScore ?? null }))}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>Accuracy by Difficulty</CardTitle>
@@ -181,6 +222,36 @@ export default async function AnalyticsPage() {
           )}
         </CardContent>
       </Card>
+
+      <div>
+        <h2 className="mb-3 text-sm font-medium text-[var(--color-muted-foreground)]">More detail in other modules</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <ModuleSummaryCard
+            title="AI Usage"
+            href="/admin/ai/usage"
+            stats={[
+              { label: "Ask AI Explanations", value: a.aiUsage.explanationsTotal.toLocaleString("en-IN") },
+              { label: "AI Question Variants", value: a.aiUsage.variantsTotal.toLocaleString("en-IN") },
+            ]}
+          />
+          <ModuleSummaryCard
+            title="Question Reports"
+            href="/admin/questions/reports"
+            stats={[
+              { label: "Open", value: a.questionReports.openTotal.toLocaleString("en-IN") },
+              { label: "Total", value: a.questionReports.total.toLocaleString("en-IN") },
+            ]}
+          />
+          <ModuleSummaryCard
+            title="Authentication Monitoring"
+            href="/admin/monitoring/authentication"
+            stats={[
+              { label: `Attempts (${a.auth.windowDays}d)`, value: a.auth.attempts.toLocaleString("en-IN") },
+              { label: "Success Rate", value: formatPercent(a.auth.successRate) },
+            ]}
+          />
+        </div>
+      </div>
     </div>
   );
 }

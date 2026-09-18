@@ -4,6 +4,16 @@ import { prisma } from "@/lib/prisma";
 import { toIstDateString } from "@/lib/ist-time";
 
 const TREND_DAYS = 14;
+const AUTH_WINDOW_DAYS = 30;
+
+const TEST_TYPE_LABELS: Record<string, string> = {
+  FULL_MOCK: "Mock Test",
+  SUBJECT_TEST: "Subject Test",
+  GRAND_TEST: "Grand Test",
+  LIVE_TEST: "Live Test",
+  PREVIOUS_YEAR_PAPER: "Previous Year Paper",
+  CUSTOM_MODULE: "Custom Module",
+};
 
 /** Builds an oldest-to-newest daily series over the trailing `days` IST calendar days, zero-filling days with no rows. */
 function bucketByIstDay(timestamps: Date[], days: number): { date: string; count: number }[] {
@@ -35,6 +45,7 @@ export async function getPlatformAnalytics() {
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const since14d = new Date(Date.now() - TREND_DAYS * 24 * 60 * 60 * 1000);
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const authWindowStart = new Date(Date.now() - AUTH_WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
   const [
     totalStudents,
@@ -48,9 +59,16 @@ export async function getPlatformAnalytics() {
     attemptRows,
     byExam,
     bySubject,
+    byTestType,
     difficultyBreakdown,
     avgScorePercentRows,
     distinctCounts,
+    savedQuestionsCount,
+    aiExplanationsTotal,
+    aiVariantsTotal,
+    reportedQuestionCounts,
+    authAttempts30d,
+    authSuccesses30d,
   ] = await Promise.all([
     prisma.student.count(),
     prisma.student.count({ where: { lastLoginAt: { gte: since7d } } }),
@@ -80,6 +98,13 @@ export async function getPlatformAnalytics() {
       orderBy: { _count: { subjectId: "desc" } },
       take: 8,
     }),
+    prisma.testAttempt.groupBy({
+      by: ["testType"],
+      where: { status: AttemptStatus.SUBMITTED },
+      _avg: { score: true },
+      _count: { testType: true },
+      orderBy: { _count: { testType: "desc" } },
+    }),
     prisma.$queryRaw<{ difficulty: string; total: bigint; correct: bigint }[]>`
       SELECT q.difficulty AS difficulty, COUNT(a.id) AS total, COUNT(*) FILTER (WHERE a."isCorrect" = true) AS correct
       FROM "Answer" a
@@ -98,6 +123,12 @@ export async function getPlatformAnalytics() {
         (SELECT COUNT(DISTINCT "studentId") FROM "TestAttempt") AS attempted,
         (SELECT COUNT(DISTINCT "studentId") FROM "TestAttempt" WHERE status = 'SUBMITTED') AS submitted
     `,
+    prisma.savedQuestion.count(),
+    prisma.aIExplanation.count(),
+    prisma.question.count({ where: { parentQuestionId: { not: null } } }),
+    prisma.reportedQuestion.groupBy({ by: ["status"], _count: { _all: true } }),
+    prisma.studentLoginAttempt.count({ where: { createdAt: { gte: authWindowStart } } }),
+    prisma.studentLoginAttempt.count({ where: { createdAt: { gte: authWindowStart }, success: true } }),
   ]);
 
   const correct = answerCorrectness.find((c) => c.isCorrect === true)?._count._all ?? 0;
@@ -124,6 +155,9 @@ export async function getPlatformAnalytics() {
     .filter((d) => d.total > 0);
 
   const funnel = distinctCounts[0];
+
+  const reportCountByStatus = Object.fromEntries(reportedQuestionCounts.map((r) => [r.status, r._count._all]));
+  const reportsTotal = reportedQuestionCounts.reduce((sum, r) => sum + r._count._all, 0);
 
   return {
     totalStudents,
@@ -154,12 +188,35 @@ export async function getPlatformAnalytics() {
       attempts: s._count.subjectId,
       averageScore: s._avg.score,
     })),
+    testTypePerformance: byTestType.map((t) => ({
+      testType: t.testType,
+      name: TEST_TYPE_LABELS[t.testType] ?? t.testType,
+      attempts: t._count.testType,
+      averageScore: t._avg.score,
+    })),
     difficultyStats,
     funnel: {
       registered: totalStudents,
       enrolled: Number(funnel?.enrolled ?? 0),
       attempted: Number(funnel?.attempted ?? 0),
       submitted: Number(funnel?.submitted ?? 0),
+    },
+    savedQuestionsCount,
+    // Lightweight cross-links into the modules that already own these numbers in
+    // full detail (Admin → AI Usage / Question Reports / Authentication
+    // Monitoring) — Analytics summarizes, it doesn't replace those pages.
+    aiUsage: {
+      explanationsTotal: aiExplanationsTotal,
+      variantsTotal: aiVariantsTotal,
+    },
+    questionReports: {
+      openTotal: reportCountByStatus.OPEN ?? 0,
+      total: reportsTotal,
+    },
+    auth: {
+      windowDays: AUTH_WINDOW_DAYS,
+      attempts: authAttempts30d,
+      successRate: authAttempts30d > 0 ? (authSuccesses30d / authAttempts30d) * 100 : null,
     },
   };
 }
