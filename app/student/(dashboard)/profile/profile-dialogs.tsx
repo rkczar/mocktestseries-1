@@ -43,7 +43,18 @@ export function EditProfileDialog({ name, bio }: { name: string; bio: string }) 
         <form action={formAction} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="name">Full Name</Label>
-            <Input id="name" name="name" defaultValue={name} required minLength={2} />
+            <div
+              id="name"
+              className="flex items-center justify-between gap-2 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)]"
+            >
+              {name}
+              <span className="shrink-0 rounded-[var(--radius-badge)] bg-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium uppercase text-[var(--color-muted-foreground)]">
+                Read Only
+              </span>
+            </div>
+            <p className="text-xs text-[var(--color-muted-foreground)]">
+              Your name can&apos;t be changed here. Contact support if it needs to be corrected.
+            </p>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="bio">Bio (optional)</Label>

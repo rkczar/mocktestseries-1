@@ -557,15 +557,19 @@ export async function isAiGenerationRateLimited(studentId: string): Promise<bool
 // Profile / Account
 // ---------------------------------------------------------------------------
 
-export async function updateStudentProfile(studentId: string, data: { name: string; bio: string }) {
-  await prisma.$transaction([
-    prisma.student.update({ where: { id: studentId }, data: { name: data.name } }),
-    prisma.studentProfile.upsert({
-      where: { studentId },
-      update: { bio: data.bio || null },
-      create: { studentId, bio: data.bio || null },
-    }),
-  ]);
+/**
+ * Students may only ever change their own bio here — the account `name` is
+ * intentionally excluded from this data shape so a student can never rename
+ * themselves through this path, no matter what a caller passes in. Only an
+ * authorized Admin (Admin -> Students -> Student Profile, PERMISSIONS.STUDENTS_MANAGE)
+ * may correct a student's name, via correctStudentNameAction.
+ */
+export async function updateStudentProfile(studentId: string, data: { bio: string }) {
+  await prisma.studentProfile.upsert({
+    where: { studentId },
+    update: { bio: data.bio || null },
+    create: { studentId, bio: data.bio || null },
+  });
   await logActivity(studentId, "PROFILE_UPDATED");
 }
 

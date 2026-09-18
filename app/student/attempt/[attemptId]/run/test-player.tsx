@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight, Clock, Flag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { TextSizeControl } from "@/components/theme/text-size-control";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import { cn } from "@/lib/utils";
@@ -128,16 +130,20 @@ export function TestPlayer({
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 sm:px-6">
-        <p className="truncate text-sm font-semibold text-[var(--color-foreground)]">{title}</p>
-        <div
-          className={cn(
-            "flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold tabular-nums",
-            timeLow ? "bg-[var(--color-error)]/15 text-[var(--color-error)]" : "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-          )}
-        >
-          <Clock className="h-4 w-4" aria-hidden />
-          {String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 sm:gap-4 sm:px-6">
+        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--color-foreground)]">{title}</p>
+        <div className="flex shrink-0 items-center gap-2">
+          <ThemeToggle />
+          <TextSizeControl />
+          <div
+            className={cn(
+              "flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold tabular-nums",
+              timeLow ? "bg-[var(--color-error)]/15 text-[var(--color-error)]" : "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+            )}
+          >
+            <Clock className="h-4 w-4" aria-hidden />
+            {String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}
+          </div>
         </div>
       </header>
 
@@ -161,7 +167,7 @@ export function TestPlayer({
               </div>
             </div>
 
-            <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-foreground)]">{question.text}</p>
+            <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">{question.text}</p>
             {question.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img

@@ -40,7 +40,7 @@ export default async function SavedQuestionsPage() {
                 <span className="font-mono text-xs text-[var(--color-muted-foreground)]">{q.code}</span>
               </div>
 
-              <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-foreground)]">{q.text}</p>
+              <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">{q.text}</p>
               {q.imageUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img

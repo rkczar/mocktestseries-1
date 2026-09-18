@@ -1,7 +1,10 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getAdminSession } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { NameCorrectionDialog } from "./name-correction-dialog";
 
 export const metadata = { title: "Student — Mock Test Series.in Admin" };
 
@@ -32,12 +35,17 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
   if (!student) notFound();
 
   const latestDeletionRequest = student.deletionRequests[0];
+  const session = await getAdminSession();
+  const canCorrectName = Boolean(session?.user?.permissions?.includes(PERMISSIONS.STUDENTS_MANAGE));
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{student.name}</h1>
-        <p className="text-sm text-[var(--color-muted-foreground)] font-mono">{student.studentId}</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{student.name}</h1>
+          <p className="text-sm text-[var(--color-muted-foreground)] font-mono">{student.studentId}</p>
+        </div>
+        {canCorrectName ? <NameCorrectionDialog studentId={student.id} name={student.name} /> : null}
       </div>
 
       <Card>

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { GraduationCap, Menu, X, User, LogOut, Bookmark } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { TextSizeControl } from "@/components/theme/text-size-control";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -66,6 +67,7 @@ export function StudentHeader({
 
         <div className="flex shrink-0 items-center gap-2">
           <ThemeToggle />
+          <TextSizeControl />
 
           <NotificationBell announcements={announcements} />
 

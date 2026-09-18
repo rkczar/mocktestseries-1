@@ -23,6 +23,25 @@
   --radius-button: 0.625rem;
   --radius-card: 0.75rem;
   --radius-badge: 0.375rem;
+
+  /* Student accessibility: text-size scale multiplier. Overridden per       */
+  /* [data-text-size] below; every --text-* token in the @theme block reads  */
+  /* through this so a size change scales font-size everywhere those        */
+  /* utilities are used, without touching spacing/layout tokens.            */
+  --text-scale: 1;
+}
+
+/* Student "Text Size" accessibility control (Day/Dark/Eye-Saver independent — */
+/* set on <html> alongside, but never coupled to, [data-theme]). Values match */
+/* the product spec: Small ~90%, Default 100%, Large ~112.5%, Extra Large 125%.*/
+:root[data-text-size="sm"] {
+  --text-scale: 0.9;
+}
+:root[data-text-size="lg"] {
+  --text-scale: 1.125;
+}
+:root[data-text-size="xl"] {
+  --text-scale: 1.25;
 }
 
 /* Structural / per-mode tokens (Day / Night / Eye-Saver). Not admin-       */
@@ -99,20 +118,34 @@
 
 /* Whisper-weight display scale: tighter, larger, weight 400 by default —  */
 /* the "terminal readout" register. Overrides Tailwind's default steps so  */
-/* headings across the whole app (admin included) share one system.        */
+/* headings across the whole app (admin included) share one system. Every  */
+/* step is expressed as base-size * var(--text-scale) so the Student       */
+/* Text Size control (above) scales all of these tokens at once instead of */
+/* each component hardcoding its own accessibility logic.                  */
 @theme {
-  --text-lg: 1.125rem;
-  --text-lg--line-height: 1.5rem;
-  --text-xl: 1.5rem;
-  --text-xl--line-height: 1.9rem;
-  --text-2xl: 2rem;
-  --text-2xl--line-height: 2.3rem;
-  --text-3xl: 2.625rem;
+  --text-xs: calc(0.75rem * var(--text-scale));
+  --text-xs--line-height: calc(1rem * var(--text-scale));
+  --text-sm: calc(0.875rem * var(--text-scale));
+  --text-sm--line-height: calc(1.25rem * var(--text-scale));
+  --text-base: calc(1rem * var(--text-scale));
+  --text-base--line-height: calc(1.5rem * var(--text-scale));
+  --text-lg: calc(1.125rem * var(--text-scale));
+  --text-lg--line-height: calc(1.5rem * var(--text-scale));
+  --text-xl: calc(1.5rem * var(--text-scale));
+  --text-xl--line-height: calc(1.9rem * var(--text-scale));
+  --text-2xl: calc(2rem * var(--text-scale));
+  --text-2xl--line-height: calc(2.3rem * var(--text-scale));
+  --text-3xl: calc(2.625rem * var(--text-scale));
   --text-3xl--line-height: 1.15;
-  --text-4xl: 3.25rem;
+  --text-4xl: calc(3.25rem * var(--text-scale));
   --text-4xl--line-height: 1.05;
-  --text-5xl: 4rem;
+  --text-5xl: calc(4rem * var(--text-scale));
   --text-5xl--line-height: 0.98;
+
+  /* Semantic token for question/answer/explanation body copy (Test Player, */
+  /* Review, Saved Questions) — was a hardcoded 15px in three components.   */
+  --text-question: calc(0.9375rem * var(--text-scale));
+  --text-question--line-height: 1.625;
 }
 
 * {

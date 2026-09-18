@@ -10,6 +10,7 @@ import { ExplanationPanel } from "@/components/student/explanation-panel";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
+import { AccessibilityControls } from "@/components/student/accessibility-controls";
 import { toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
 
 export const metadata = { title: "Review Answers — Mock Test Series.in" };
@@ -27,7 +28,10 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
   if (attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED") {
     return (
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-        <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
+        <div className="flex items-center justify-between gap-2">
+          <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
+          <AccessibilityControls />
+        </div>
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-16 text-center">
             <Clock className="h-8 w-8 text-[var(--color-muted-foreground)]" aria-hidden />
@@ -48,7 +52,10 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
+      <div className="flex items-center justify-between gap-2">
+        <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
+        <AccessibilityControls />
+      </div>
       <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Review Answers</h1>
 
       <div className="flex flex-col gap-4">
@@ -73,7 +80,7 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
                 </span>
               </div>
 
-              <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-foreground)]">{snapshot.text}</p>
+              <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">{snapshot.text}</p>
               {snapshot.imageUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img

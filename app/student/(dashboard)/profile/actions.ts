@@ -12,14 +12,19 @@ export interface ProfileActionState {
   success?: string;
 }
 
+/**
+ * Student-facing profile edit. The account `name` is a Student-Profile field
+ * a student must never be able to change themselves (see Admin -> Students
+ * for the authorized correction path) — this handler intentionally never
+ * reads a "name" field from formData, so a modified form, a raw fetch to
+ * this Server Action, or DevTools-edited HTML cannot rename the account
+ * either; only `bio` is ever forwarded to updateStudentProfile.
+ */
 export async function updateProfileAction(_prev: ProfileActionState, formData: FormData): Promise<ProfileActionState> {
   const student = await requireStudent();
-  const name = String(formData.get("name") ?? "").trim();
   const bio = String(formData.get("bio") ?? "").trim();
 
-  if (name.length < 2) return { error: "Full name must be at least 2 characters." };
-
-  await updateStudentProfile(student.id, { name, bio });
+  await updateStudentProfile(student.id, { bio });
   revalidatePath("/student/profile");
   return { success: "Profile updated." };
 }

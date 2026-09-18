@@ -8,6 +8,7 @@ import { attemptTitle } from "@/lib/attempt-title";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
+import { AccessibilityControls } from "@/components/student/accessibility-controls";
 
 export const metadata = { title: "Test Result — Mock Test Series.in" };
 
@@ -26,6 +27,7 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center gap-6 px-4 py-10 sm:px-6">
+      <AccessibilityControls className="justify-end" />
       <div className="text-center">
         <Trophy className="mx-auto h-10 w-10 text-[var(--color-accent)]" aria-hidden />
         <h1 className="mt-2 text-2xl font-semibold text-[var(--color-foreground)]">{title}</h1>
