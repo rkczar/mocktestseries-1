@@ -49,6 +49,7 @@ export const SECTION_ORDER: HomepageSectionKey[] = [
   "STATISTICS",
   "CTA",
   "FOOTER",
+  "CONTACT_INFO",
 ];
 
 /**
@@ -334,6 +335,40 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
         ["Contact Us", "/contact"],
       ],
       copyrightOverride: "",
+    },
+  },
+  CONTACT_INFO: {
+    key: "CONTACT_INFO",
+    label: "Contact / About / Legal",
+    description:
+      "About Us, Privacy Policy, and Terms & Conditions content shown on /contact, /privacy, /terms — Admin → Website → Homepage → Contact / About / Legal. Contact email and location live in the Footer section above (one canonical source for both the footer and the Contact page).",
+    fields: [
+      { key: "aboutHeading", label: "About heading", type: "text" },
+      { key: "aboutBody", label: "About body", type: "textarea" },
+      {
+        key: "privacyBody",
+        label: "Privacy Policy body (start a line with \"## \" for a heading)",
+        type: "textarea",
+      },
+      { key: "privacyLastUpdated", label: "Privacy Policy last updated (YYYY-MM-DD)", type: "text" },
+      {
+        key: "termsBody",
+        label: "Terms & Conditions body (start a line with \"## \" for a heading)",
+        type: "textarea",
+      },
+      { key: "termsLastUpdated", label: "Terms & Conditions last updated (YYYY-MM-DD)", type: "text" },
+      { key: "contactFormEnabled", label: "Show the Message Us form on /contact", type: "boolean" },
+      { key: "growWithUsEnabled", label: "Show \"Grow with Us\" in the header/footer", type: "boolean" },
+    ],
+    defaultContent: {
+      aboutHeading: "About MockTestSeries.in",
+      aboutBody: "",
+      privacyBody: "",
+      privacyLastUpdated: "",
+      termsBody: "",
+      termsLastUpdated: "",
+      contactFormEnabled: true,
+      growWithUsEnabled: true,
     },
   },
 };

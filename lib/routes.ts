@@ -31,9 +31,9 @@ export interface RouteManifestEntry {
 export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   // Public
   { pageName: "Homepage", route: "/", module: "Website", userType: "PUBLIC", authRequired: false, status: "CONNECTED" },
-  { pageName: "Privacy Policy", route: "/privacy", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "DRAFT" },
-  { pageName: "Terms and Conditions", route: "/terms", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "DRAFT" },
-  { pageName: "Contact Us", route: "/contact", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "DRAFT" },
+  { pageName: "Privacy Policy", route: "/privacy", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
+  { pageName: "Terms and Conditions", route: "/terms", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
+  { pageName: "Contact Us", route: "/contact", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
 
   // Admin auth
   { pageName: "Admin Login", route: "/admin/login", module: "Admin Auth", userType: "ADMIN", authRequired: false, status: "CONNECTED" },
@@ -48,6 +48,11 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Website Content", route: "/admin/website/content", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
   { pageName: "Footer", route: "/admin/website/footer", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
   { pageName: "Announcements", route: "/admin/website/announcements", module: "Website", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+
+  // Communications — inbound Contact Us / Grow With Us inbox (distinct from
+  // Announcements above, which is outbound Admin -> Students).
+  { pageName: "Communications", route: "/admin/communications", module: "Communications", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+  { pageName: "Communication Detail", route: "/admin/communications/[id]", module: "Communications", userType: "ADMIN", authRequired: true, parentRoute: "/admin/communications", status: "CONNECTED" },
 
   // Exams (minimal working CRUD ships this slice)
   { pageName: "Manage Exams", route: "/admin/exams", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },

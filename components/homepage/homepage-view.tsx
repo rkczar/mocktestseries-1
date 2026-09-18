@@ -38,6 +38,8 @@ export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
   const byKey = new Map(homepage.sections.map((s) => [s.key, s]));
   const header = byKey.get("HEADER");
   const footer = byKey.get("FOOTER");
+  const contactInfo = byKey.get("CONTACT_INFO");
+  const growWithUsEnabled = (contactInfo?.content as Record<string, unknown> | undefined)?.growWithUsEnabled !== false;
 
   const bodySections = homepage.sections.filter(
     (s) => s.isEnabled && s.key !== "HEADER" && s.key !== "FOOTER"
@@ -46,7 +48,7 @@ export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
   return (
     <div className="flex min-h-full flex-col bg-[var(--color-background)]">
       {header?.isEnabled !== false ? (
-        <SiteHeader content={(header?.content as Record<string, unknown>) ?? {}} />
+        <SiteHeader content={(header?.content as Record<string, unknown>) ?? {}} growWithUsEnabled={growWithUsEnabled} />
       ) : null}
 
       <main className="flex-1">
@@ -67,6 +69,7 @@ export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
         <SiteFooter
           content={(footer?.content as Record<string, unknown>) ?? {}}
           resolved={footer?.resolved ?? {}}
+          growWithUsEnabled={growWithUsEnabled}
         />
       ) : null}
     </div>

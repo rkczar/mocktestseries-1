@@ -2,9 +2,16 @@ import Link from "next/link";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/brand/BrandLogo";
+import { GrowWithUsButton } from "./grow-with-us";
 import { str, pairs } from "./content-helpers";
 
-export function SiteHeader({ content }: { content: Record<string, unknown> }) {
+export function SiteHeader({
+  content,
+  growWithUsEnabled = false,
+}: {
+  content: Record<string, unknown>;
+  growWithUsEnabled?: boolean;
+}) {
   const navItems = pairs(content, "navItems");
   const loginHref = str(content, "loginHref", "/login");
   const loginButtonText = str(content, "loginButtonText", "Login");
@@ -32,6 +39,7 @@ export function SiteHeader({ content }: { content: Record<string, unknown> }) {
         )}
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          {growWithUsEnabled ? <GrowWithUsButton className="hidden sm:inline-flex" /> : null}
           <ThemeToggle />
           {loginButtonVisible ? (
             <Button asChild size="sm" variant="secondary" className="hidden sm:inline-flex">
@@ -41,7 +49,7 @@ export function SiteHeader({ content }: { content: Record<string, unknown> }) {
         </div>
       </div>
 
-      {navItems.length > 0 ? (
+      {navItems.length > 0 || growWithUsEnabled ? (
         <nav
           className="flex items-center gap-4 overflow-x-auto border-t border-[var(--color-border)] px-4 py-2 md:hidden"
           aria-label="Primary"
@@ -55,6 +63,7 @@ export function SiteHeader({ content }: { content: Record<string, unknown> }) {
               {label}
             </Link>
           ))}
+          {growWithUsEnabled ? <GrowWithUsButton variant="ghost" className="shrink-0 sm:hidden" /> : null}
           {loginButtonVisible ? (
             <Link href={loginHref} className="shrink-0 text-sm font-semibold text-[var(--color-primary)]">
               {loginButtonText}

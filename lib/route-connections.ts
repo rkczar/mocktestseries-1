@@ -40,6 +40,25 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   // callbackUrl.startsWith("/admin") ? callbackUrl : "/admin" }).
   { from: "/admin/login", to: "/admin", source: "redirect", label: "Successful sign-in" },
 
+  // /privacy and /terms are thin redirects (app/privacy/page.tsx,
+  // app/terms/page.tsx) into the combined /contact page's anchored sections.
+  { from: "/privacy", to: "/contact", source: "redirect", label: "Privacy Policy section" },
+  { from: "/terms", to: "/contact", source: "redirect", label: "Terms & Conditions section" },
+
+  // lib/communications-actions.ts:submitContactMessageAction — the Message Us
+  // form on /contact creates a Communication row surfaced at
+  // /admin/communications (Contact tab).
+  { from: "/contact", to: "/admin/communications", source: "form", label: "Message Us submission" },
+
+  // components/homepage/grow-with-us.tsx (GrowWithUsButton) renders sitewide,
+  // in both the public header and footer (components/homepage/site-header.tsx,
+  // site-footer.tsx) — not tied to one page, so this edge is anchored at the
+  // homepage as a representative entry point, matching how lib/global-nav-links.ts
+  // deliberately keeps other shared-chrome links out of page-specific edges.
+  // lib/communications-actions.ts:submitGrowWithUsAction creates a
+  // Communication row surfaced at /admin/communications (Grow With Us tab).
+  { from: "/", to: "/admin/communications", source: "form", label: "Grow with Us (header/footer, sitewide) submission" },
+
   // app/student/(dashboard)/dashboard/page.tsx — "Continue" button on the
   // in-progress-attempt card.
   { from: "/student/dashboard", to: "/student/attempt/[attemptId]/run", source: "button", label: "Continue in-progress attempt" },

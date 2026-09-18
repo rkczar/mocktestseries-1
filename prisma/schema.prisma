@@ -43,25 +43,26 @@ model RolePermission {
 }
 
 model AdminUser {
-  id                   String            @id @default(cuid())
-  name                 String
-  username             String            @unique
-  email                String?           @unique
-  passwordHash         String
-  roleId               String
-  role                 Role              @relation(fields: [roleId], references: [id])
-  isActive             Boolean           @default(true)
-  lastLoginAt          DateTime?
-  createdAt            DateTime          @default(now())
-  updatedAt            DateTime          @updatedAt
-  auditLogs            AuditLog[]
-  loginAttempts        LoginAttempt[]
-  deletionReviews      DeletionRequest[]
-  createdCustomModules CustomModule[]
-  bulkImportRuns       BulkImportRun[]
-  createdGrandTests    GrandTest[]
-  createdLiveTests     LiveTest[]
-  createdAnnouncements Announcement[]
+  id                     String            @id @default(cuid())
+  name                   String
+  username               String            @unique
+  email                  String?           @unique
+  passwordHash           String
+  roleId                 String
+  role                   Role              @relation(fields: [roleId], references: [id])
+  isActive               Boolean           @default(true)
+  lastLoginAt            DateTime?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  auditLogs              AuditLog[]
+  loginAttempts          LoginAttempt[]
+  deletionReviews        DeletionRequest[]
+  createdCustomModules   CustomModule[]
+  bulkImportRuns         BulkImportRun[]
+  createdGrandTests      GrandTest[]
+  createdLiveTests       LiveTest[]
+  createdAnnouncements   Announcement[]
+  assignedCommunications Communication[]
 }
 
 model LoginAttempt {
@@ -265,6 +266,7 @@ enum HomepageSectionKey {
   TEST_SERIES
   CTA
   FOOTER
+  CONTACT_INFO
 }
 
 model HomepageConfig {
@@ -379,6 +381,7 @@ model Student {
   examEnrollments         StudentExamEnrollment[]
   notificationStates      StudentNotificationState[]
   announcementRecipientOf AnnouncementRecipient[]
+  communications          Communication[]
 
   @@index([status])
 }
@@ -1301,4 +1304,69 @@ model StudentNotificationState {
   @@unique([studentId, announcementId])
   @@index([studentId, readAt])
   @@index([announcementId])
+}
+
+// ---------------------------------------------------------------------------
+// Communications — the single canonical inbound-message store behind the
+// public Contact Us / Message Us and Grow With Us forms, and Admin →
+// Communications. Distinct from Announcement (outbound, Admin → Students).
+// ---------------------------------------------------------------------------
+
+enum CommunicationType {
+  CONTACT
+  GROW_WITH_US
+}
+
+enum CommunicationStatus {
+  NEW
+  READ
+  IN_PROGRESS
+  RESOLVED
+  ARCHIVED
+}
+
+enum GrowWithUsInterest {
+  TEACHER
+  TEST_SERIES_CREATOR
+  IT_SUPPORT
+  CONTENT_CONTRIBUTOR
+  OTHER
+}
+
+/**
+ * One row per public submission from Contact Us → Message Us, or from the
+ * sitewide Grow With Us dialog. `referenceId` is shown to the submitter as
+ * their tracking reference and never doubles as the primary key so it can
+ * be regenerated/formatted independently of storage. `studentId` is set
+ * only when the submitter was signed in at submit time (derived from the
+ * server-side session, never from client input) — the form still works for
+ * anonymous public visitors.
+ */
+model Communication {
+  id              String              @id @default(cuid())
+  referenceId     String              @unique
+  type            CommunicationType
+  interestType    GrowWithUsInterest?
+  name            String
+  email           String
+  phone           String?
+  subject         String?
+  message         String
+  status          CommunicationStatus @default(NEW)
+  internalNote    String?
+  studentId       String?
+  student         Student?            @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  assignedAdminId String?
+  assignedAdmin   AdminUser?          @relation(fields: [assignedAdminId], references: [id])
+  ipAddress       String?
+  userAgent       String?
+  readAt          DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([type, status, createdAt])
+  @@index([status])
+  @@index([email])
+  @@index([ipAddress, createdAt])
 }
