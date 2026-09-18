@@ -1,7 +1,14 @@
-import { StubPage } from "@/components/admin/stub-page";
+import { AvailableElsewhere } from "@/components/admin/available-elsewhere";
 
 export const metadata = { title: "Footer — Mock Test Series.in Admin" };
 
 export default function Page() {
-  return <StubPage title="Footer" phase="Phase 6" />;
+  return (
+    <AvailableElsewhere
+      title="Footer"
+      message="Footer content (contact email, location, Instagram, footer links, copyright) is edited on the Footer section of the Homepage Builder, not here."
+      linkHref="/admin/website?tab=homepage"
+      linkLabel="Go to Homepage → Footer"
+    />
+  );
 }
