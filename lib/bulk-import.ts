@@ -152,6 +152,57 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   status: ["status"],
 };
 
+/**
+ * BulkImportRow keys that are safe to bulk-edit from the Bulk Import Preview's
+ * "Manage Columns" control (SET_COLUMN / CLEAR_COLUMN / IGNORE_COLUMN /
+ * KEEP_COLUMN bulk actions). Excludes `rowNumber`, which is structural, not a
+ * template column.
+ */
+export const IMPORT_ROW_EDITABLE_KEYS: (keyof BulkImportRow)[] = [
+  "exam",
+  "examYear",
+  "questionCode",
+  "questionNumber",
+  "subject",
+  "topic",
+  "subTopic",
+  "source",
+  "questionText",
+  "optionA",
+  "optionB",
+  "optionC",
+  "optionD",
+  "correctAnswer",
+  "explanation",
+  "difficulty",
+  "image",
+  "questionImageFilename",
+  "optionAImageFilename",
+  "optionBImageFilename",
+  "optionCImageFilename",
+  "optionDImageFilename",
+  "status",
+];
+
+/**
+ * Columns `validateImportRows` treats as blocking-required — without these a
+ * Question genuinely cannot be created. "Ignore Column" refuses to remove
+ * these from an import; "Clear All" is still allowed (it just surfaces a
+ * per-row validation error, same as blanking the cell by hand would).
+ */
+export const REQUIRED_IMPORT_COLUMNS: (keyof BulkImportRow)[] = [
+  "exam",
+  "examYear",
+  "subject",
+  "questionText",
+  "optionA",
+  "optionB",
+  "optionC",
+  "optionD",
+  "correctAnswer",
+  "difficulty",
+];
+
 function normalizeColumnName(header: string): string {
   const normalized = header.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 

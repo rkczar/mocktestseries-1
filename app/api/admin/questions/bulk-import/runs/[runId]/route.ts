@@ -28,8 +28,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     const { searchParams } = new URL(request.url);
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
-    const pageSize = Math.min(200, Math.max(1, parseInt(searchParams.get("pageSize") || "25", 10) || 25));
+    const pageSizeParam = searchParams.get("pageSize");
+    const showAll = pageSizeParam === "all";
+    const page = showAll ? 1 : Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+    const pageSize = showAll ? 0 : Math.min(500, Math.max(1, parseInt(pageSizeParam || "25", 10) || 25));
     const filter = (searchParams.get("filter") || "all") as RowFilter;
 
     const removedWanted = filter === "removed";
@@ -67,8 +69,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     const filtered = enriched.filter(matchesFilter);
     const total = filtered.length;
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
-    const pageSlice = filtered.slice((page - 1) * pageSize, page * pageSize);
+    const totalPages = showAll ? 1 : Math.max(1, Math.ceil(total / pageSize));
+    const pageSlice = showAll ? filtered : filtered.slice((page - 1) * pageSize, page * pageSize);
 
     // Summary is always computed over the full non-removed set, independent of the active filter/page.
     const summaryBase = removedWanted
@@ -137,7 +139,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         adminUser: run.adminUser,
       },
       page,
-      pageSize,
+      pageSize: showAll ? total : pageSize,
       total,
       totalPages,
       rows: pageSlice.map(({ row, merged, imageMatches }) => ({

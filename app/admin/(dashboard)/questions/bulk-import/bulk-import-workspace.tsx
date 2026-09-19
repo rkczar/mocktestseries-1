@@ -124,7 +124,41 @@ const FILTER_CHIPS: { key: RowFilter; label: string }[] = [
 ];
 
 const SEVERITY_VARIANT = { VALID: "success", WARNING: "warning", ERROR: "error" } as const;
-const PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = ["25", "50", "100", "all"] as const;
+type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
+
+type ColumnMode = "SET" | "CLEAR" | "IGNORE" | "KEEP";
+
+interface ColumnDef {
+  key: keyof RowData;
+  label: string;
+  required: boolean;
+}
+
+const MANAGED_COLUMNS: ColumnDef[] = [
+  { key: "questionCode", label: "Question Code", required: false },
+  { key: "questionNumber", label: "Question Number", required: false },
+  { key: "exam", label: "Exam", required: true },
+  { key: "examYear", label: "Year", required: true },
+  { key: "subject", label: "Subject", required: true },
+  { key: "topic", label: "Topic", required: false },
+  { key: "subTopic", label: "SubTopic", required: false },
+  { key: "questionText", label: "Question Text", required: true },
+  { key: "optionA", label: "Option A", required: true },
+  { key: "optionB", label: "Option B", required: true },
+  { key: "optionC", label: "Option C", required: true },
+  { key: "optionD", label: "Option D", required: true },
+  { key: "correctAnswer", label: "Correct Answer", required: true },
+  { key: "explanation", label: "Explanation", required: false },
+  { key: "difficulty", label: "Difficulty", required: true },
+  { key: "source", label: "Source", required: false },
+  { key: "status", label: "Status", required: false },
+  { key: "questionImageFilename", label: "Question Image Filename", required: false },
+  { key: "optionAImageFilename", label: "Option A Image Filename", required: false },
+  { key: "optionBImageFilename", label: "Option B Image Filename", required: false },
+  { key: "optionCImageFilename", label: "Option C Image Filename", required: false },
+  { key: "optionDImageFilename", label: "Option D Image Filename", required: false },
+];
 
 export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
   const router = useRouter();
@@ -136,9 +170,14 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
   const [rows, setRows] = useState<StagedRow[]>([]);
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [page, setPage] = useState(1);
+  const [pageSizeOption, setPageSizeOption] = useState<PageSizeOption>("25");
   const [totalPages, setTotalPages] = useState(1);
+  const [totalRows, setTotalRows] = useState(0);
   const [filter, setFilter] = useState<RowFilter>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [applyScope, setApplyScope] = useState<"selected" | "all">("selected");
+  const [columnState, setColumnState] = useState<Record<string, ColumnMode>>({});
+  const [showColumnManager, setShowColumnManager] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -155,26 +194,28 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
   const [validating, setValidating] = useState(false);
 
   const loadRun = useCallback(
-    async (id: string, opts?: { page?: number; filter?: RowFilter }) => {
+    async (id: string, opts?: { page?: number; filter?: RowFilter; pageSize?: PageSizeOption }) => {
       setLoading(true);
       setError(null);
       try {
         const p = opts?.page ?? page;
         const f = opts?.filter ?? filter;
-        const res = await fetch(`/api/admin/questions/bulk-import/runs/${id}?page=${p}&pageSize=${PAGE_SIZE}&filter=${f}`);
+        const ps = opts?.pageSize ?? pageSizeOption;
+        const res = await fetch(`/api/admin/questions/bulk-import/runs/${id}?page=${p}&pageSize=${ps}&filter=${f}`);
         if (!res.ok) throw new Error((await res.json()).error || "Failed to load import run");
         const data = await res.json();
         setRun(data.run);
         setRows(data.rows);
         setSummary(data.summary);
         setTotalPages(data.totalPages);
+        setTotalRows(data.total);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load import run");
       } finally {
         setLoading(false);
       }
     },
-    [page, filter]
+    [page, filter, pageSizeOption]
   );
 
   useEffect(() => {
@@ -183,9 +224,9 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
     // synchronous render-cascade the set-state-in-effect rule is meant to
     // catch, since the real state updates happen after the awaited fetch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (runId) loadRun(runId, { page, filter });
+    if (runId) loadRun(runId, { page, filter, pageSize: pageSizeOption });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId, page, filter]);
+  }, [runId, page, filter, pageSizeOption]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -243,6 +284,9 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
     setExamId("");
     setExamYear("");
     setDuplicateStrategy("SKIP");
+    setPageSizeOption("25");
+    setApplyScope("selected");
+    setColumnState({});
     router.replace("/admin/questions/bulk-import");
   };
 
@@ -266,6 +310,11 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
     });
   };
 
+  // "all" scope sends an empty rowIds array, which the backend treats as
+  // "every non-removed row in the run" — including rows off the current
+  // page/filter, not just what's currently selected.
+  const scopedRowIds = (): string[] => (applyScope === "all" ? [] : Array.from(selected));
+
   const runBulkAction = async (action: string, rowIds?: string[]) => {
     if (!runId) return;
     setLoading(true);
@@ -274,7 +323,7 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
       const res = await fetch(`/api/admin/questions/bulk-import/runs/${runId}/bulk-actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, rowIds: rowIds ?? Array.from(selected) }),
+        body: JSON.stringify({ action, rowIds: rowIds ?? scopedRowIds() }),
       });
       if (!res.ok) throw new Error((await res.json()).error || "Bulk action failed");
       const data = await res.json();
@@ -283,6 +332,34 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
       await loadRun(runId, { page, filter });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bulk action failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runColumnAction = async (mode: ColumnMode, column: string, value?: string) => {
+    if (!runId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const actionByMode: Record<ColumnMode, string> = {
+        SET: "SET_COLUMN",
+        CLEAR: "CLEAR_COLUMN",
+        IGNORE: "IGNORE_COLUMN",
+        KEEP: "KEEP_COLUMN",
+      };
+      const res = await fetch(`/api/admin/questions/bulk-import/runs/${runId}/bulk-actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: actionByMode[mode], column, value, rowIds: scopedRowIds() }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Column action failed");
+      const data = await res.json();
+      setColumnState((prev) => ({ ...prev, [column]: mode }));
+      setNotice(`${column}: ${mode.toLowerCase()} applied to ${data.affected ?? 0} row(s)`);
+      await loadRun(runId, { page, filter });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Column action failed");
     } finally {
       setLoading(false);
     }
@@ -526,22 +603,53 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
                 </button>
               ))}
             </div>
+            <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] pb-3">
+              <span className="text-xs font-medium text-[var(--color-muted-foreground)]">Apply bulk actions to:</span>
+              <div className="flex rounded-md border border-[var(--color-border)] p-0.5 text-xs">
+                <button
+                  onClick={() => setApplyScope("selected")}
+                  className={`rounded px-2 py-1 font-medium transition-colors ${
+                    applyScope === "selected" ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted-foreground)]"
+                  }`}
+                >
+                  Selected Rows ({selected.size})
+                </button>
+                <button
+                  onClick={() => setApplyScope("all")}
+                  className={`rounded px-2 py-1 font-medium transition-colors ${
+                    applyScope === "all" ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted-foreground)]"
+                  }`}
+                >
+                  All Rows in Import ({summary?.total ?? 0})
+                </button>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => setShowColumnManager(true)}>
+                Manage Columns
+              </Button>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="outline" disabled={selected.size === 0 || loading} onClick={() => runBulkAction("IMPORT_VALID_ONLY")}>
-                Import Valid Only
-              </Button>
-              <Button size="sm" variant="outline" disabled={selected.size === 0 || loading} onClick={() => runBulkAction("MOVE_TO_DRAFT")}>
-                Move Selected to Draft
-              </Button>
-              <Button size="sm" variant="outline" disabled={selected.size === 0 || loading} onClick={() => runBulkAction("MARK_REVIEW_REQUIRED")}>
-                Mark Selected Review Required
-              </Button>
-              <Button size="sm" variant="outline" disabled={selected.size === 0 || loading} onClick={() => runBulkAction("REMOVE_FROM_IMPORT")}>
-                Remove Selected
-              </Button>
-              <Button size="sm" variant="outline" disabled={selected.size === 0 || loading} onClick={() => runBulkAction("REVALIDATE")}>
-                <RefreshCw className="h-3 w-3" /> Revalidate Selected
-              </Button>
+              {(() => {
+                const scopeEmpty = applyScope === "selected" && selected.size === 0;
+                return (
+                  <>
+                    <Button size="sm" variant="outline" disabled={scopeEmpty || loading} onClick={() => runBulkAction("IMPORT_VALID_ONLY")}>
+                      Import Valid Only
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={scopeEmpty || loading} onClick={() => runBulkAction("MOVE_TO_DRAFT")}>
+                      Move to Draft
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={scopeEmpty || loading} onClick={() => runBulkAction("MARK_REVIEW_REQUIRED")}>
+                      Mark Review Required
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={scopeEmpty || loading} onClick={() => runBulkAction("REMOVE_FROM_IMPORT")}>
+                      Remove
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={scopeEmpty || loading} onClick={() => runBulkAction("REVALIDATE")}>
+                      <RefreshCw className="h-3 w-3" /> Revalidate
+                    </Button>
+                  </>
+                );
+              })()}
               <Button size="sm" variant="outline" asChild>
                 <a href={`/api/admin/questions/bulk-import/runs/${runId}/error-report`}>
                   <Download className="h-3 w-3" /> Error Report
@@ -555,7 +663,19 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+          {showColumnManager && (
+            <ColumnManagerDialog
+              columnState={columnState}
+              applyScope={applyScope}
+              selectedCount={selected.size}
+              totalCount={summary?.total ?? 0}
+              onClose={() => setShowColumnManager(false)}
+              onApply={runColumnAction}
+              loading={loading}
+            />
+          )}
+
+          <div className="max-h-[70vh] overflow-auto rounded-lg border border-[var(--color-border)]">
             <table className="w-full min-w-[1400px] text-sm">
               <thead className="sticky top-0 bg-[var(--color-muted)] border-b border-[var(--color-border)]">
                 <tr>
@@ -657,15 +777,44 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
             </table>
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-[var(--color-muted-foreground)]">
-              Page {page} of {totalPages}
+              {pageSizeOption === "all" ? `Showing all ${totalRows} row(s)` : `Page ${page} of ${totalPages} (${totalRows} row(s))`}
             </p>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
+                <span>Rows per page:</span>
+                {PAGE_SIZE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt}
+                    onClick={() => {
+                      setPageSizeOption(opt);
+                      setPage(1);
+                    }}
+                    className={`rounded px-2 py-1 font-medium transition-colors ${
+                      pageSizeOption === opt
+                        ? "bg-[var(--color-primary)] text-white"
+                        : "border border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+                    }`}
+                  >
+                    {opt === "all" ? "Show All" : opt}
+                  </button>
+                ))}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pageSizeOption === "all" || page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
                 Previous
               </Button>
-              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pageSizeOption === "all" || page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
                 Next
               </Button>
             </div>
@@ -816,5 +965,114 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <label className="text-xs font-medium text-[var(--color-muted-foreground)]">{label}</label>
       {children}
     </div>
+  );
+}
+
+const COLUMN_MODE_LABEL: Record<ColumnMode, string> = {
+  SET: "Set for all rows",
+  CLEAR: "Cleared",
+  IGNORE: "Ignored",
+  KEEP: "Original",
+};
+
+/**
+ * "Manage Columns" — bulk edit/clear/ignore per uploaded column, scoped to
+ * either the current row selection or the whole staging batch (via
+ * `applyScope`, shared with the toolbar above). Each action is a single
+ * server round-trip that touches every targeted row, so it always covers the
+ * complete batch, not just the current page.
+ */
+function ColumnManagerDialog({
+  columnState,
+  applyScope,
+  selectedCount,
+  totalCount,
+  onClose,
+  onApply,
+  loading,
+}: {
+  columnState: Record<string, ColumnMode>;
+  applyScope: "selected" | "all";
+  selectedCount: number;
+  totalCount: number;
+  onClose: () => void;
+  onApply: (mode: ColumnMode, column: string, value?: string) => Promise<void>;
+  loading: boolean;
+}) {
+  const [setValueDraft, setSetValueDraft] = useState<Record<string, string>>({});
+
+  const scopeLabel = applyScope === "all" ? `all ${totalCount} row(s) in this import` : `${selectedCount} selected row(s)`;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Manage Columns</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <Alert>
+            <AlertDescription className="text-xs">
+              Actions below apply to <strong>{scopeLabel}</strong> (change the scope from the toolbar before opening this dialog).
+              &quot;Ignore Column&quot; excludes that field from this import only — it never changes the downloadable template, the database
+              schema, or existing questions.
+            </AlertDescription>
+          </Alert>
+
+          <div className="flex flex-col divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)]">
+            {MANAGED_COLUMNS.map((col) => {
+              const mode = columnState[col.key];
+              return (
+                <div key={col.key} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                  <div className="flex min-w-[10rem] flex-col">
+                    <span className="text-sm font-medium text-[var(--color-foreground)]">
+                      {col.label}
+                      {col.required && <span className="ml-1 text-[var(--color-error)]">*</span>}
+                    </span>
+                    <Badge variant={mode ? "info" : "neutral"}>{mode ? COLUMN_MODE_LABEL[mode] : "Original"}</Badge>
+                  </div>
+
+                  <Input
+                    placeholder={`Set all ${col.label} values...`}
+                    value={setValueDraft[col.key] ?? ""}
+                    onChange={(e) => setSetValueDraft((prev) => ({ ...prev, [col.key]: e.target.value }))}
+                    className="h-8 max-w-[14rem] flex-1 text-xs"
+                    disabled={loading}
+                  />
+                  <Button
+                    size="compact"
+                    variant="outline"
+                    disabled={loading || !(setValueDraft[col.key] ?? "").trim()}
+                    onClick={() => onApply("SET", col.key, setValueDraft[col.key])}
+                  >
+                    Set All
+                  </Button>
+                  <Button size="compact" variant="outline" disabled={loading} onClick={() => onApply("CLEAR", col.key)}>
+                    Clear All
+                  </Button>
+                  {col.required ? (
+                    <span className="text-xs text-[var(--color-muted-foreground)]" title={`${col.label} is required to create a Question and cannot be ignored.`}>
+                      Required — cannot ignore
+                    </span>
+                  ) : (
+                    <Button size="compact" variant="outline" disabled={loading} onClick={() => onApply("IGNORE", col.key)}>
+                      Ignore Column
+                    </Button>
+                  )}
+                  <Button size="compact" variant="outline" disabled={loading || !mode} onClick={() => onApply("KEEP", col.key)}>
+                    Keep Original
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button variant="outline" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
