@@ -111,6 +111,14 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
                       {isSelected && !isAnswer ? (
                         <span className="ml-2 text-xs font-medium text-[var(--color-error)]">Your answer</span>
                       ) : null}
+                      {opt.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={opt.imageUrl}
+                          alt=""
+                          className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                        />
+                      ) : null}
                     </div>
                   );
                 })}

@@ -10,9 +10,14 @@ datasource db {
 // RBAC
 // ---------------------------------------------------------------------------
 
+// FULL_ADMIN is stored in the database as "ADMIN" (@map) — this is a pure
+// rename of the exported name, not a data migration. Per the RBAC redesign,
+// FULL_ADMIN is global read-only on the Question Bank specifically (see
+// DEFAULT_ROLE_PERMISSIONS in lib/permissions.ts); it is unchanged for every
+// other admin area (Website, Exams, Tests, Students, etc.).
 enum RoleName {
   MASTER_ADMIN
-  ADMIN
+  FULL_ADMIN @map("ADMIN")
   TEACHER
 }
 
@@ -129,6 +134,7 @@ model Exam {
   liveTests          LiveTest[]
   enrollments        StudentExamEnrollment[]
   announcements      Announcement[]
+  bulkImportRuns     BulkImportRun[]
 }
 
 model Subject {
@@ -593,6 +599,14 @@ model Question {
   aiPromptVersion     String?
   aiGeneratedAt       DateTime?
   aiErrorMessage      String?
+  // Review/import provenance (Question Bank bulk-import workspace). A
+  // question can be PUBLISHED/DRAFT and still need manual review (missing
+  // image, uncertain taxonomy match, duplicate suspicion) — this is
+  // orthogonal to status so nothing filtering by status silently changes.
+  reviewRequired      Boolean            @default(false)
+  reviewReason        String?
+  importBatchId       String?
+  importBatch         BulkImportRun?     @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -615,6 +629,8 @@ model Question {
   @@index([parentQuestionId])
   @@index([status])
   @@index([aiGenerationStatus])
+  @@index([importBatchId])
+  @@index([reviewRequired])
 }
 
 model QuestionOption {
@@ -1133,6 +1149,14 @@ enum BulkImportStatus {
   COMPLETED
   FAILED
   PARTIALLY_COMPLETED
+  // Staging-phase statuses (Validate & Preview Workspace). A run now exists
+  // from the moment a file is uploaded — not only at final import — so it
+  // has a stable batch identity/history entry throughout the workflow.
+  UPLOADED
+  VALIDATING
+  READY
+  IMPORTED
+  PARTIALLY_IMPORTED
 }
 
 enum BulkImportRowStatus {
@@ -1141,6 +1165,21 @@ enum BulkImportRowStatus {
   SKIPPED
   REPLACED
   FAILED
+}
+
+/** Validation severity for a staged row, independent of its final processing BulkImportRowStatus. */
+enum ImportRowSeverity {
+  VALID
+  WARNING
+  ERROR
+}
+
+/** Structured format of the uploaded bulk-import source file. */
+enum ImportFileFormat {
+  CSV
+  XLS
+  XLSX
+  DOCX
 }
 
 enum BulkImportDuplicateStrategy {
@@ -1154,13 +1193,24 @@ model BulkImportRun {
   adminUserId       String
   adminUser         AdminUser                   @relation(fields: [adminUserId], references: [id])
   filename          String
+  format            ImportFileFormat?
+  // Human-readable batch identity, e.g. "NEET UG 2026 — Code 12". Optional
+  // exam context lets Admin filter/select an entire uploaded file's
+  // questions later from All Questions.
+  label             String?
+  examId            String?
+  exam              Exam?                       @relation(fields: [examId], references: [id], onDelete: SetNull)
+  examYear          Int?
   totalRows         Int
   validRows         Int                         @default(0)
   invalidRows       Int                         @default(0)
+  warningRows       Int                         @default(0)
   successCount      Int                         @default(0)
   skippedCount      Int                         @default(0)
   replacedCount     Int                         @default(0)
   failedCount       Int                         @default(0)
+  draftCount        Int                         @default(0)
+  reviewRequiredCount Int                       @default(0)
   duplicateStrategy BulkImportDuplicateStrategy
   status            BulkImportStatus            @default(PENDING)
   startedAt         DateTime                    @default(now())
@@ -1168,26 +1218,43 @@ model BulkImportRun {
   errorMessage      String?
   createdAt         DateTime                    @default(now())
 
-  rows BulkImportRow[]
+  rows              BulkImportRow[]
+  importedQuestions Question[]
 
   @@index([adminUserId, createdAt])
   @@index([status, createdAt])
+  @@index([examId, examYear])
 }
 
 model BulkImportRow {
-  id           String              @id @default(cuid())
-  runId        String
-  run          BulkImportRun       @relation(fields: [runId], references: [id], onDelete: Cascade)
-  rowNumber    Int
-  status       BulkImportRowStatus @default(PENDING)
-  questionId   String?
-  questionCode String?
-  errorMessage String?
-  rawData      Json
-  createdAt    DateTime            @default(now())
+  id                String              @id @default(cuid())
+  runId             String
+  run               BulkImportRun       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  rowNumber         Int
+  status            BulkImportRowStatus @default(PENDING)
+  severity          ImportRowSeverity   @default(ERROR)
+  questionId        String?
+  questionCode      String?
+  errorMessage      String?
+  // Structured per-row messages (string[] each), richer than the single
+  // legacy errorMessage above — powers the Validate & Preview Workspace.
+  errors            Json?
+  warnings          Json?
+  rawData           Json
+  // Admin's inline corrections overlaid onto rawData before
+  // import/revalidation; null until the row has been edited.
+  editedData        Json?
+  removedFromImport Boolean             @default(false)
+  reviewRequired    Boolean             @default(false)
+  // Per-row override of the status the resulting Question should get on
+  // import (e.g. explicit "Save as Draft"); null = use the run's default.
+  targetStatus      QuestionStatus?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
 
   @@index([runId, rowNumber])
   @@index([runId, status])
+  @@index([runId, severity])
 }
 
 // ---------------------------------------------------------------------------

@@ -46,6 +46,8 @@ export default async function AddQuestionPage({
       imageUrl: question.imageUrl,
       difficulty: question.difficulty,
       status: question.status,
+      reviewRequired: question.reviewRequired,
+      reviewReason: question.reviewReason,
       options: question.options,
     };
   }

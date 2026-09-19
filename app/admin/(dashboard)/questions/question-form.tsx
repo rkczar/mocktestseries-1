@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ImageUploadField } from "./image-upload-field";
 import { createQuestionAction, updateQuestionAction, type QuestionFormState } from "./actions";
 
 export interface ExamTree {
@@ -32,7 +34,9 @@ export interface QuestionDefaults {
   imageUrl: string | null;
   difficulty: "EASY" | "MEDIUM" | "HARD";
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
-  options: { label: string; text: string; isCorrect: boolean }[];
+  reviewRequired?: boolean;
+  reviewReason?: string | null;
+  options: { label: string; text: string; imageUrl?: string | null; isCorrect: boolean }[];
 }
 
 function SubmitButton({ editing }: { editing: boolean }) {
@@ -61,7 +65,9 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
   const papers = exam?.previousYearPapers ?? [];
 
   const optionText = (label: string) => defaults?.options.find((o) => o.label === label)?.text ?? "";
+  const optionImageUrl = (label: string) => defaults?.options.find((o) => o.label === label)?.imageUrl ?? null;
   const correctLabel = defaults?.options.find((o) => o.isCorrect)?.label ?? "A";
+  const [reviewRequired, setReviewRequired] = useState(defaults?.reviewRequired ?? false);
 
   return (
     <form action={formAction} className="flex flex-col gap-5">
@@ -192,37 +198,76 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
         />
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="imageUrl">Question Image URL (optional)</Label>
-        <Input id="imageUrl" name="imageUrl" type="url" defaultValue={defaults?.imageUrl ?? ""} placeholder="https://…" />
-      </div>
+      <ImageUploadField
+        label="Question Image (optional)"
+        name="imageUrl"
+        target="question"
+        questionId={defaults?.id}
+        defaultUrl={defaults?.imageUrl}
+      />
 
-      <div className="flex flex-col gap-3">
-        <Label>Options — mark the correct answer</Label>
+      <div className="flex flex-col gap-4">
+        <Label>Options — mark the correct answer (each option needs text, an image, or both)</Label>
         {(["A", "B", "C", "D"] as const).map((label) => (
-          <div key={label} className="flex items-center gap-3">
-            <input
-              type="radio"
-              name="correctOption"
-              value={label}
-              defaultChecked={correctLabel === label}
-              required
-              className="h-4 w-4"
-              aria-label={`Option ${label} is correct`}
-            />
-            <span className="w-6 shrink-0 text-sm font-medium text-[var(--color-muted-foreground)]">{label}</span>
-            <Input name={`option${label}`} defaultValue={optionText(label)} required placeholder={`Option ${label} text`} />
+          <div
+            key={label}
+            className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 sm:flex-row sm:items-start"
+          >
+            <div className="flex items-center gap-3 sm:pt-2.5">
+              <input
+                type="radio"
+                name="correctOption"
+                value={label}
+                defaultChecked={correctLabel === label}
+                required
+                className="h-4 w-4"
+                aria-label={`Option ${label} is correct`}
+              />
+              <span className="w-6 shrink-0 text-sm font-medium text-[var(--color-muted-foreground)]">{label}</span>
+            </div>
+            <div className="flex-1">
+              <Input name={`option${label}`} defaultValue={optionText(label)} placeholder={`Option ${label} text (optional if image provided)`} />
+            </div>
+            <div className="sm:w-64">
+              <ImageUploadField
+                label={`Option ${label} image`}
+                name={`option${label}ImageUrl`}
+                target={label}
+                questionId={defaults?.id}
+                defaultUrl={optionImageUrl(label)}
+              />
+            </div>
           </div>
         ))}
       </div>
 
-      <div className="flex flex-col gap-1.5 sm:w-64">
-        <Label htmlFor="status">Status</Label>
-        <SelectNative id="status" name="status" defaultValue={defaults?.status ?? "DRAFT"}>
-          <option value="DRAFT">Draft</option>
-          <option value="PUBLISHED">Published</option>
-          <option value="ARCHIVED">Archived</option>
-        </SelectNative>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="status">Status</Label>
+          <SelectNative id="status" name="status" defaultValue={defaults?.status ?? "DRAFT"}>
+            <option value="DRAFT">Draft</option>
+            <option value="PUBLISHED">Published</option>
+            <option value="ARCHIVED">Archived</option>
+          </SelectNative>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Label className="flex items-center gap-2">
+            <Checkbox
+              name="reviewRequired"
+              checked={reviewRequired}
+              onCheckedChange={(checked) => setReviewRequired(checked === true)}
+            />
+            Needs manual review
+          </Label>
+          {reviewRequired ? (
+            <Input
+              name="reviewReason"
+              defaultValue={defaults?.reviewReason ?? ""}
+              placeholder="Why does this question need review?"
+            />
+          ) : null}
+        </div>
       </div>
 
       <div className="flex items-center gap-3">

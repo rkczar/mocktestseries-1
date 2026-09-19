@@ -135,10 +135,18 @@ async function main() {
     check("valid row resolves the syllabus-created SubTopic", validResolved?.resolvedData?.subTopicId === subTopicA1.id);
 
     const invalidResolved = dbValidated.rows.find((r) => r.rowNumber === 3);
-    check("row naming a nonexistent subject is rejected", invalidResolved?.isValid === false);
+    // Bulk import Part 3: an unmapped Subject/Topic/SubTopic name is flagged
+    // for mapping (WARNING), not hard-rejected (ERROR) — the admin can map it
+    // or create the taxonomy explicitly via the Validate & Preview Workspace.
+    check("row naming a nonexistent subject is flagged for mapping, not rejected outright", invalidResolved?.severity === "WARNING");
+    check("...and is still considered importable (isValid) pending mapping", invalidResolved?.isValid === true);
     check(
-      "...with a clear, row-specific error message",
-      !!invalidResolved?.errors.some((e) => e.includes('Subject "Nonexistent Subject XYZ"') && e.includes(examA.name))
+      "...with a clear, row-specific warning message",
+      !!invalidResolved?.warnings.some((w) => w.includes('Subject "Nonexistent Subject XYZ"') && w.includes(examA.name))
+    );
+    check(
+      "...and flagged as needing taxonomy mapping",
+      !!invalidResolved?.unmapped?.some((u) => u.field === "subject" && u.value === "Nonexistent Subject XYZ")
     );
 
     console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

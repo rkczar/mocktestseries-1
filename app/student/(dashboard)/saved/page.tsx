@@ -62,6 +62,14 @@ export default async function SavedQuestionsPage() {
                   >
                     <span className="font-semibold">{opt.label}.</span> {opt.text}
                     {opt.isCorrect ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
+                    {opt.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={opt.imageUrl}
+                        alt=""
+                        className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                      />
+                    ) : null}
                   </div>
                 ))}
               </div>

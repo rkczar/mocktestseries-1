@@ -8,9 +8,15 @@ export async function AllQuestionsPanel({
   examYear,
   subjectId,
   topicId,
+  subTopicId,
   difficulty,
   source,
-  isPyq
+  isPyq,
+  hasImage,
+  reviewRequired,
+  importBatchId,
+  importedFrom,
+  importedTo,
 }: {
   examId?: string;
   status?: string;
@@ -18,12 +24,18 @@ export async function AllQuestionsPanel({
   examYear?: string;
   subjectId?: string;
   topicId?: string;
+  subTopicId?: string;
   difficulty?: string;
   source?: string;
   isPyq?: string;
+  hasImage?: string;
+  reviewRequired?: string;
+  importBatchId?: string;
+  importedFrom?: string;
+  importedTo?: string;
 }) {
   // Fetch filter options
-  const [exams, subjects, topics] = await Promise.all([
+  const [exams, subjects, topics, subTopics, importBatches] = await Promise.all([
     prisma.exam.findMany({
       orderBy: { order: "asc" },
       select: { id: true, name: true }
@@ -36,6 +48,15 @@ export async function AllQuestionsPanel({
       orderBy: { name: "asc" },
       select: { id: true, name: true, subjectId: true }
     }),
+    prisma.subTopic.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, topicId: true }
+    }),
+    prisma.bulkImportRun.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: { id: true, label: true, filename: true, createdAt: true },
+    }),
   ]);
 
   const initialFilters = {
@@ -45,15 +66,31 @@ export async function AllQuestionsPanel({
     examYear: examYear || "",
     subjectId: subjectId || "",
     topicId: topicId || "",
+    subTopicId: subTopicId || "",
     difficulty: difficulty || "",
     source: source || "",
     isPyq: isPyq || "",
+    hasImage: hasImage || "",
+    reviewRequired: reviewRequired || "",
+    importBatchId: importBatchId || "",
+    importedFrom: importedFrom || "",
+    importedTo: importedTo || "",
   };
 
   return (
     <AllQuestionsPanelClient
       initialFilters={initialFilters}
-      filterOptions={{ exams, subjects, topics }}
+      filterOptions={{
+        exams,
+        subjects,
+        topics,
+        subTopics,
+        importBatches: importBatches.map((b) => ({
+          id: b.id,
+          label: b.label ?? b.filename,
+          createdAt: b.createdAt.toISOString(),
+        })),
+      }}
     />
   );
 }

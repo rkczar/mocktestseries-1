@@ -8,30 +8,65 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StatusSelect } from "./status-select";
-import { Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, ImageIcon } from "lucide-react";
 
 const DIFFICULTY_VARIANT = { EASY: "success", MEDIUM: "warning", HARD: "error" } as const;
 const LIMIT = 50;
+
+const OPTION_LABELS = ["A", "B", "C", "D"] as const;
+
+interface QuestionOptionRow {
+  id: string;
+  label: string;
+  text: string;
+  imageUrl: string | null;
+  isCorrect: boolean;
+}
 
 interface Question {
   id: string;
   code: string;
   text: string;
+  imageUrl: string | null;
   difficulty: "EASY" | "MEDIUM" | "HARD";
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   examYear: number | null;
   source: string;
+  reviewRequired: boolean;
+  createdAt: string;
   exam: { id: string; name: string };
   subject: { id: string; name: string };
   topic: { id: string; name: string } | null;
   subTopic: { id: string; name: string } | null;
   previousYearPaper: { id: string; year: number; title: string } | null;
+  importBatch: { id: string; label: string | null; filename: string; createdAt: string } | null;
+  options: QuestionOptionRow[];
 }
 
 interface FilterOptions {
   exams: { id: string; name: string }[];
   subjects: { id: string; name: string; examId: string }[];
   topics: { id: string; name: string; subjectId: string }[];
+  subTopics: { id: string; name: string; topicId: string }[];
+  importBatches: { id: string; label: string; createdAt: string }[];
+}
+
+/** Compact "Q+A+C" style indicator of which parts of a question carry an image. */
+function ImageIndicator({ question }: { question: Question }) {
+  const parts: string[] = [];
+  if (question.imageUrl) parts.push("Q");
+  for (const label of OPTION_LABELS) {
+    if (question.options.find((o) => o.label === label)?.imageUrl) parts.push(label);
+  }
+  if (parts.length === 0) {
+    return <span className="text-xs text-[var(--color-muted-foreground)]">—</span>;
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-foreground)]" title={`Has image: ${parts.join(", ")}`}>
+      <ImageIcon className="h-3.5 w-3.5 text-[var(--color-muted-foreground)]" aria-hidden />
+      {parts.join("+")}
+    </span>
+  );
 }
 
 export function AllQuestionsPanelClient({
@@ -47,6 +82,8 @@ export function AllQuestionsPanelClient({
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState<string>("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
 
   // Filters
   const [search, setSearch] = useState(initialFilters.search || "");
@@ -54,10 +91,16 @@ export function AllQuestionsPanelClient({
   const [examYear, setExamYear] = useState(initialFilters.examYear || "");
   const [subjectId, setSubjectId] = useState(initialFilters.subjectId || "");
   const [topicId, setTopicId] = useState(initialFilters.topicId || "");
+  const [subTopicId, setSubTopicId] = useState(initialFilters.subTopicId || "");
   const [difficulty, setDifficulty] = useState(initialFilters.difficulty || "");
   const [status, setStatus] = useState(initialFilters.status || "");
   const [source, setSource] = useState(initialFilters.source || "");
   const [isPyq, setIsPyq] = useState(initialFilters.isPyq || "");
+  const [hasImage, setHasImage] = useState(initialFilters.hasImage || "");
+  const [reviewRequired, setReviewRequired] = useState(initialFilters.reviewRequired || "");
+  const [importBatchId, setImportBatchId] = useState(initialFilters.importBatchId || "");
+  const [importedFrom, setImportedFrom] = useState(initialFilters.importedFrom || "");
+  const [importedTo, setImportedTo] = useState(initialFilters.importedTo || "");
 
   const totalPages = Math.ceil(total / LIMIT);
 
@@ -67,43 +110,72 @@ export function AllQuestionsPanelClient({
   // setState synchronously before its first await.
   const fetchKey = useMemo(
     () =>
-      JSON.stringify({ page, search, examId, examYear, subjectId, topicId, difficulty, status, source, isPyq, refreshNonce }),
-    [page, search, examId, examYear, subjectId, topicId, difficulty, status, source, isPyq, refreshNonce]
+      JSON.stringify({
+        page,
+        search,
+        examId,
+        examYear,
+        subjectId,
+        topicId,
+        subTopicId,
+        difficulty,
+        status,
+        source,
+        isPyq,
+        hasImage,
+        reviewRequired,
+        importBatchId,
+        importedFrom,
+        importedTo,
+        refreshNonce,
+      }),
+    [
+      page,
+      search,
+      examId,
+      examYear,
+      subjectId,
+      topicId,
+      subTopicId,
+      difficulty,
+      status,
+      source,
+      isPyq,
+      hasImage,
+      reviewRequired,
+      importBatchId,
+      importedFrom,
+      importedTo,
+      refreshNonce,
+    ]
   );
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const isLoading = loadedKey !== fetchKey;
 
+  function buildParams(f: Record<string, string | number>) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(f)) {
+      if (value !== "" && value !== undefined && value !== null) params.set(key, String(value));
+    }
+    return params;
+  }
+
   useEffect(() => {
-    const f = JSON.parse(fetchKey) as {
-      page: number;
-      search: string;
-      examId: string;
-      examYear: string;
-      subjectId: string;
-      topicId: string;
-      difficulty: string;
-      status: string;
-      source: string;
-      isPyq: string;
-    };
+    const f = JSON.parse(fetchKey) as Record<string, string | number>;
     let cancelled = false;
-    const params = new URLSearchParams({ page: String(f.page), limit: String(LIMIT) });
-    if (f.search) params.set("search", f.search);
-    if (f.examId) params.set("examId", f.examId);
-    if (f.examYear) params.set("examYear", f.examYear);
-    if (f.subjectId) params.set("subjectId", f.subjectId);
-    if (f.topicId) params.set("topicId", f.topicId);
-    if (f.difficulty) params.set("difficulty", f.difficulty);
-    if (f.status) params.set("status", f.status);
-    if (f.source) params.set("source", f.source);
-    if (f.isPyq) params.set("isPyq", f.isPyq);
+    const pageValue = f.page;
+    delete (f as Record<string, unknown>).refreshNonce;
+    delete (f as Record<string, unknown>).page;
+    const params = buildParams(f);
+    params.set("page", String(pageValue));
+    params.set("limit", String(LIMIT));
 
     fetch(`/api/admin/questions?${params}`)
       .then((response) => response.json())
       .then((data) => {
         if (cancelled) return;
-        setQuestions(data.questions);
-        setTotal(data.pagination.total);
+        setQuestions(data.questions ?? []);
+        setTotal(data.pagination?.total ?? 0);
       })
       .catch((error) => {
         console.error("Failed to fetch questions:", error);
@@ -135,45 +207,60 @@ export function AllQuestionsPanelClient({
     }
   };
 
+  /** Selects every question matching the current filters, not just the loaded page. */
+  const handleSelectAllFiltered = async () => {
+    const f = JSON.parse(fetchKey) as Record<string, string | number>;
+    delete (f as Record<string, unknown>).refreshNonce;
+    delete (f as Record<string, unknown>).page;
+    const params = buildParams(f);
+    params.set("idsOnly", "true");
+    try {
+      const res = await fetch(`/api/admin/questions?${params}`);
+      const data = await res.json();
+      setSelectedIds(new Set<string>(data.ids ?? []));
+      if (data.truncated) {
+        setBulkMessage("Selected the first 5000 matching questions (the filter matches more).");
+      }
+    } catch {
+      alert("Failed to select all filtered questions");
+    }
+  };
+
   const handleBulkAction = async () => {
     if (selectedIds.size === 0 || !bulkAction) return;
-
     const ids = Array.from(selectedIds);
 
+    if (bulkAction === "DELETE" && !confirm(`Delete ${ids.length} question(s)? Questions referenced by test attempts, saved bookmarks, or reports will be archived instead of deleted.`)) {
+      return;
+    }
+    if (bulkAction === "SET_REVIEW_REQUIRED" && !confirm(`Flag ${ids.length} question(s) as needing manual review?`)) {
+      return;
+    }
+
+    setBulkBusy(true);
+    setBulkMessage(null);
     try {
-      if (bulkAction === "delete") {
-        if (!confirm(`Delete ${ids.length} questions? This cannot be undone.`)) return;
+      const response = await fetch("/api/admin/questions/bulk-actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: bulkAction, ids }),
+      });
+      const data = await response.json();
 
-        const response = await fetch(`/api/admin/questions?ids=${ids.join(",")}`, {
-          method: "DELETE",
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          alert(error.error || "Failed to delete questions");
-          return;
-        }
-      } else {
-        // Bulk status change
-        const response = await fetch("/api/admin/questions", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids, status: bulkAction }),
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          alert(error.error || "Failed to update questions");
-          return;
-        }
+      if (!response.ok) {
+        alert(data.error || "Failed to perform bulk action");
+        return;
       }
 
+      setBulkMessage(data.message || `Done: ${bulkAction} applied to ${ids.length} question(s).`);
       setSelectedIds(new Set());
       setBulkAction("");
       setRefreshNonce((n) => n + 1);
     } catch (error) {
       console.error("Bulk action failed:", error);
       alert("Failed to perform bulk action");
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -183,10 +270,16 @@ export function AllQuestionsPanelClient({
     setExamYear("");
     setSubjectId("");
     setTopicId("");
+    setSubTopicId("");
     setDifficulty("");
     setStatus("");
     setSource("");
     setIsPyq("");
+    setHasImage("");
+    setReviewRequired("");
+    setImportBatchId("");
+    setImportedFrom("");
+    setImportedTo("");
     setPage(1);
   };
 
@@ -212,11 +305,11 @@ export function AllQuestionsPanelClient({
       {/* Filters */}
       <Card>
         <CardContent className="pt-5">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
             <div className="relative lg:col-span-2">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--color-muted-foreground)]" />
               <Input
-                placeholder="Search by text or code..."
+                placeholder="Search by text, or exact/prefix code..."
                 value={search}
                 onChange={(e) => {
                   setSearch(e.target.value);
@@ -232,6 +325,7 @@ export function AllQuestionsPanelClient({
                 setExamId(e.target.value);
                 setSubjectId("");
                 setTopicId("");
+                setSubTopicId("");
                 setPage(1);
               }}
               className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
@@ -259,6 +353,7 @@ export function AllQuestionsPanelClient({
               onChange={(e) => {
                 setSubjectId(e.target.value);
                 setTopicId("");
+                setSubTopicId("");
                 setPage(1);
               }}
               className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
@@ -277,6 +372,7 @@ export function AllQuestionsPanelClient({
               value={topicId}
               onChange={(e) => {
                 setTopicId(e.target.value);
+                setSubTopicId("");
                 setPage(1);
               }}
               className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
@@ -287,6 +383,24 @@ export function AllQuestionsPanelClient({
                 .map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
+                  </option>
+                ))}
+            </select>
+
+            <select
+              value={subTopicId}
+              onChange={(e) => {
+                setSubTopicId(e.target.value);
+                setPage(1);
+              }}
+              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
+            >
+              <option value="">All sub-topics</option>
+              {filterOptions.subTopics
+                .filter((st) => !topicId || st.topicId === topicId)
+                .map((st) => (
+                  <option key={st.id} value={st.id}>
+                    {st.name}
                   </option>
                 ))}
             </select>
@@ -345,6 +459,70 @@ export function AllQuestionsPanelClient({
               <option value="false">Non-PYQ only</option>
             </select>
 
+            <select
+              value={hasImage}
+              onChange={(e) => {
+                setHasImage(e.target.value);
+                setPage(1);
+              }}
+              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
+            >
+              <option value="">Has image: any</option>
+              <option value="true">Has an image</option>
+              <option value="false">No image</option>
+            </select>
+
+            <select
+              value={reviewRequired}
+              onChange={(e) => {
+                setReviewRequired(e.target.value);
+                setPage(1);
+              }}
+              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
+            >
+              <option value="">Review: any</option>
+              <option value="true">Needs review</option>
+              <option value="false">Not flagged</option>
+            </select>
+
+            <select
+              value={importBatchId}
+              onChange={(e) => {
+                setImportBatchId(e.target.value);
+                setPage(1);
+              }}
+              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm lg:col-span-2"
+            >
+              <option value="">All import batches</option>
+              {filterOptions.importBatches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label} — {new Date(b.createdAt).toLocaleDateString()}
+                </option>
+              ))}
+            </select>
+
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="date"
+                aria-label="Imported/created from"
+                value={importedFrom}
+                onChange={(e) => {
+                  setImportedFrom(e.target.value);
+                  setPage(1);
+                }}
+              />
+              <span className="text-xs text-[var(--color-muted-foreground)]">to</span>
+              <Input
+                type="date"
+                aria-label="Imported/created to"
+                value={importedTo}
+                onChange={(e) => {
+                  setImportedTo(e.target.value);
+                  setPage(1);
+                }}
+              />
+            </div>
+
             <Button onClick={handleResetFilters} variant="outline" size="sm">
               Reset Filters
             </Button>
@@ -353,27 +531,35 @@ export function AllQuestionsPanelClient({
       </Card>
 
       {/* Bulk Actions */}
-      {selectedIds.size > 0 && (
+      {(selectedIds.size > 0 || bulkMessage) && (
         <Card>
-          <CardContent className="flex items-center gap-3 pt-5">
-            <span className="text-sm font-medium">{selectedIds.size} selected</span>
-            <select
-              value={bulkAction}
-              onChange={(e) => setBulkAction(e.target.value)}
-              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
-            >
-              <option value="">Select action...</option>
-              <option value="DRAFT">Set to Draft</option>
-              <option value="PUBLISHED">Set to Published</option>
-              <option value="ARCHIVED">Set to Archived</option>
-              <option value="delete">Delete</option>
-            </select>
-            <Button onClick={handleBulkAction} disabled={!bulkAction} size="sm">
-              Apply
-            </Button>
-            <Button onClick={() => setSelectedIds(new Set())} variant="outline" size="sm">
-              Clear Selection
-            </Button>
+          <CardContent className="flex flex-col gap-3 pt-5">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm font-medium">{selectedIds.size} selected</span>
+              <Button onClick={handleSelectAllFiltered} variant="outline" size="sm">
+                Select All Filtered ({total})
+              </Button>
+              <select
+                value={bulkAction}
+                onChange={(e) => setBulkAction(e.target.value)}
+                disabled={selectedIds.size === 0}
+                className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
+              >
+                <option value="">Select action...</option>
+                <option value="PUBLISH">Publish</option>
+                <option value="DRAFT">Move to Draft</option>
+                <option value="ARCHIVE">Archive</option>
+                <option value="SET_REVIEW_REQUIRED">Set Review Required</option>
+                <option value="DELETE">Delete</option>
+              </select>
+              <Button onClick={handleBulkAction} disabled={!bulkAction || selectedIds.size === 0 || bulkBusy} size="sm">
+                {bulkBusy ? "Applying…" : "Apply"}
+              </Button>
+              <Button onClick={() => setSelectedIds(new Set())} variant="outline" size="sm">
+                Clear Selection
+              </Button>
+            </div>
+            {bulkMessage ? <p className="text-sm text-[var(--color-muted-foreground)]">{bulkMessage}</p> : null}
           </CardContent>
         </Card>
       )}
@@ -383,7 +569,7 @@ export function AllQuestionsPanelClient({
         <CardHeader>
           <CardTitle>Questions</CardTitle>
           <CardDescription>
-            {isLoading ? "Loading..." : `${total} total questions • Page ${page} of ${totalPages}`}
+            {isLoading ? "Loading..." : `${total} total questions • Page ${page} of ${totalPages || 1}`}
           </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
@@ -392,7 +578,7 @@ export function AllQuestionsPanelClient({
               {isLoading ? "Loading questions..." : "No questions match these filters."}
             </p>
           ) : (
-            <table className="w-full min-w-[900px] text-left text-sm">
+            <table className="w-full min-w-[1000px] text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
                   <th className="py-2 pr-4">
@@ -405,8 +591,10 @@ export function AllQuestionsPanelClient({
                   <th className="py-2 pr-4">Question</th>
                   <th className="py-2 pr-4">Exam / Subject</th>
                   <th className="py-2 pr-4">Year</th>
+                  <th className="py-2 pr-4">Image</th>
                   <th className="py-2 pr-4">Difficulty</th>
                   <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Review</th>
                   <th className="py-2 pr-4" />
                 </tr>
               </thead>
@@ -427,6 +615,7 @@ export function AllQuestionsPanelClient({
                       <span className="text-xs">
                         {q.subject.name}
                         {q.topic ? ` · ${q.topic.name}` : ""}
+                        {q.subTopic ? ` · ${q.subTopic.name}` : ""}
                       </span>
                     </td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
@@ -438,10 +627,16 @@ export function AllQuestionsPanelClient({
                       )}
                     </td>
                     <td className="py-2.5 pr-4">
+                      <ImageIndicator question={q} />
+                    </td>
+                    <td className="py-2.5 pr-4">
                       <Badge variant={DIFFICULTY_VARIANT[q.difficulty]}>{q.difficulty}</Badge>
                     </td>
                     <td className="py-2.5 pr-4">
                       <StatusSelect questionId={q.id} status={q.status} />
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      {q.reviewRequired ? <Badge variant="warning">Review</Badge> : null}
                     </td>
                     <td className="py-2.5 pr-4">
                       <Link

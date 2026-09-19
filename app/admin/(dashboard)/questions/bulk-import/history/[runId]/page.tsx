@@ -5,8 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Download } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { mergeRowData, declaredImageFilenames, matchRowImagesSync, type BulkImportRow as ParsedRowShape } from "@/lib/bulk-import";
+import { getImageFilenameIndex } from "@/lib/bulk-import-images";
 
 async function ImportDetailsContent({ runId, page }: { runId: string; page: number }) {
   const limit = 50;
@@ -15,9 +17,8 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
   const run = await prisma.bulkImportRun.findUnique({
     where: { id: runId },
     include: {
-      adminUser: {
-        select: { name: true, username: true },
-      },
+      adminUser: { select: { name: true, username: true } },
+      exam: { select: { name: true } },
     },
   });
 
@@ -25,7 +26,7 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
     notFound();
   }
 
-  const [rows, total] = await Promise.all([
+  const [rows, total, imageIndex] = await Promise.all([
     prisma.bulkImportRow.findMany({
       where: { runId },
       orderBy: { rowNumber: "asc" },
@@ -33,9 +34,10 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
       take: limit,
     }),
     prisma.bulkImportRow.count({ where: { runId } }),
+    getImageFilenameIndex(),
   ]);
 
-  const totalPages = Math.ceil(total / limit);
+  const totalPages = Math.ceil(total / limit) || 1;
 
   const STATUS_VARIANT = {
     PENDING: "neutral" as const,
@@ -44,22 +46,31 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
     REPLACED: "primary" as const,
     FAILED: "error" as const,
   };
+  const SEVERITY_VARIANT = { VALID: "success" as const, WARNING: "warning" as const, ERROR: "error" as const };
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="sm" asChild>
-          <Link href="/admin/questions/bulk-import/history">
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Back
-          </Link>
-        </Button>
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--color-foreground)]">Import Run Details</h1>
-          <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
-            Run #{run.id.slice(0, 8)} • {formatDistanceToNow(run.createdAt, { addSuffix: true })}
-          </p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/admin/questions/bulk-import/history">
+              <ArrowLeft className="h-4 w-4 mr-1" />
+              Back
+            </Link>
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold text-[var(--color-foreground)]">{run.label || "Import Run Details"}</h1>
+            <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
+              Run #{run.id.slice(0, 8)} • {formatDistanceToNow(run.createdAt, { addSuffix: true })}
+            </p>
+          </div>
         </div>
+        <Button variant="outline" size="sm" asChild>
+          <a href={`/api/admin/questions/bulk-import/runs/${runId}/error-report`}>
+            <Download className="h-4 w-4 mr-1" />
+            Error Report
+          </a>
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -73,6 +84,14 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
               <span className="text-sm font-medium">{run.filename}</span>
             </div>
             <div className="flex justify-between">
+              <span className="text-sm text-[var(--color-muted-foreground)]">Format:</span>
+              <span className="text-sm font-medium">{run.format ?? "—"}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-sm text-[var(--color-muted-foreground)]">Exam / Year:</span>
+              <span className="text-sm font-medium">{run.exam ? `${run.exam.name}${run.examYear ? ` ${run.examYear}` : ""}` : "—"}</span>
+            </div>
+            <div className="flex justify-between">
               <span className="text-sm text-[var(--color-muted-foreground)]">Imported by:</span>
               <span className="text-sm font-medium">{run.adminUser.name}</span>
             </div>
@@ -82,7 +101,7 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-[var(--color-muted-foreground)]">Status:</span>
-              <Badge variant={run.status === "COMPLETED" ? "success" : run.status === "FAILED" ? "error" : "warning"}>
+              <Badge variant={run.status === "IMPORTED" || run.status === "COMPLETED" ? "success" : run.status === "FAILED" ? "error" : "warning"}>
                 {run.status}
               </Badge>
             </div>
@@ -102,23 +121,15 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
             <CardTitle>Results</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="rounded-lg border border-[var(--color-border)] p-3">
-                <div className="text-2xl font-bold text-[var(--color-foreground)]">{run.totalRows}</div>
-                <div className="text-xs text-[var(--color-muted-foreground)]">Total Rows</div>
-              </div>
-              <div className="rounded-lg border border-[var(--color-border)] p-3">
-                <div className="text-2xl font-bold text-[var(--color-success)]">{run.successCount}</div>
-                <div className="text-xs text-[var(--color-muted-foreground)]">Created</div>
-              </div>
-              <div className="rounded-lg border border-[var(--color-border)] p-3">
-                <div className="text-2xl font-bold text-[var(--color-warning)]">{run.skippedCount}</div>
-                <div className="text-xs text-[var(--color-muted-foreground)]">Skipped</div>
-              </div>
-              <div className="rounded-lg border border-[var(--color-border)] p-3">
-                <div className="text-2xl font-bold text-[var(--color-error)]">{run.failedCount}</div>
-                <div className="text-xs text-[var(--color-muted-foreground)]">Failed</div>
-              </div>
+            <div className="grid grid-cols-3 gap-3">
+              <Stat label="Total Rows" value={run.totalRows} />
+              <Stat label="Warnings" value={run.warningRows} cls="text-[var(--color-warning)]" />
+              <Stat label="Review Required" value={run.reviewRequiredCount} cls="text-[var(--color-warning)]" />
+              <Stat label="Created" value={run.successCount} cls="text-[var(--color-success)]" />
+              <Stat label="Skipped" value={run.skippedCount} cls="text-[var(--color-warning)]" />
+              <Stat label="Replaced" value={run.replacedCount} />
+              <Stat label="Drafts" value={run.draftCount} />
+              <Stat label="Failed" value={run.failedCount} cls="text-[var(--color-error)]" />
             </div>
           </CardContent>
         </Card>
@@ -144,38 +155,74 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[800px] text-left text-sm">
+            <table className="w-full min-w-[1000px] text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
                   <th className="py-2 pr-4">Row</th>
-                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Outcome</th>
+                  <th className="py-2 pr-4">Validation</th>
                   <th className="py-2 pr-4">Question Code</th>
                   <th className="py-2 pr-4">Question</th>
-                  <th className="py-2 pr-4">Error</th>
+                  <th className="py-2 pr-4">Images</th>
+                  <th className="py-2 pr-4">Errors / Warnings</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="py-2.5 pr-4">{row.rowNumber}</td>
-                    <td className="py-2.5 pr-4">
-                      <Badge variant={STATUS_VARIANT[row.status]}>{row.status}</Badge>
-                    </td>
-                    <td className="py-2.5 pr-4">
-                      {row.questionCode ? (
-                        <span className="font-mono text-xs">{row.questionCode}</span>
-                      ) : (
-                        <span className="text-[var(--color-muted-foreground)]">—</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 pr-4 max-w-md truncate">
-                      {(row.rawData as { questionText?: string } | null)?.questionText || "—"}
-                    </td>
-                    <td className="py-2.5 pr-4 text-xs text-[var(--color-error)]">
-                      {row.errorMessage || "—"}
-                    </td>
-                  </tr>
-                ))}
+                {rows.map((row) => {
+                  const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
+                  const declared = declaredImageFilenames(merged);
+                  const imageMatches = matchRowImagesSync(merged, imageIndex);
+                  const errors = (row.errors as string[] | null) ?? [];
+                  const warnings = (row.warnings as string[] | null) ?? [];
+                  return (
+                    <tr key={row.id} className={`border-b border-[var(--color-border)] last:border-0 ${row.removedFromImport ? "opacity-50" : ""}`}>
+                      <td className="py-2.5 pr-4">{row.rowNumber}</td>
+                      <td className="py-2.5 pr-4">
+                        <Badge variant={STATUS_VARIANT[row.status]}>{row.status}</Badge>
+                        {row.removedFromImport && <Badge variant="neutral" className="ml-1">Removed</Badge>}
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <Badge variant={SEVERITY_VARIANT[row.severity]}>{row.severity}</Badge>
+                        {row.reviewRequired && <Badge variant="info" className="ml-1">Review</Badge>}
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        {row.questionCode ? (
+                          <span className="font-mono text-xs">{row.questionCode}</span>
+                        ) : (
+                          <span className="text-[var(--color-muted-foreground)]">—</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4 max-w-md truncate">{merged.questionText || "—"}</td>
+                      <td className="py-2.5 pr-4">
+                        {declared.length === 0 ? (
+                          <span className="text-[var(--color-muted-foreground)]">—</span>
+                        ) : (
+                          <div className="flex flex-col gap-0.5">
+                            {imageMatches.map((m) => (
+                              <Badge key={m.field} variant={m.status === "FOUND" ? "success" : "warning"}>
+                                {m.field}: {m.status}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4 text-xs">
+                        {errors.length + warnings.length === 0 ? (
+                          <span className="text-[var(--color-muted-foreground)]">{row.errorMessage || "—"}</span>
+                        ) : (
+                          <ul className="list-disc list-inside">
+                            {errors.map((e, i) => (
+                              <li key={`e-${i}`} className="text-[var(--color-error)]">{e}</li>
+                            ))}
+                            {warnings.map((w, i) => (
+                              <li key={`w-${i}`} className="text-[var(--color-warning)]">{w}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -201,6 +248,15 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function Stat({ label, value, cls }: { label: string; value: number; cls?: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] p-3">
+      <div className={`text-xl font-bold text-[var(--color-foreground)] ${cls ?? ""}`}>{value}</div>
+      <div className="text-xs text-[var(--color-muted-foreground)]">{label}</div>
     </div>
   );
 }

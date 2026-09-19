@@ -4,34 +4,52 @@ import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { formatDistanceToNow } from "date-fns";
+import type { Prisma } from "@prisma/client";
 
-async function ImportHistoryContent({ page }: { page: number }) {
+async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
   const limit = 20;
   const skip = (page - 1) * limit;
 
+  const where: Prisma.BulkImportRunWhereInput = q
+    ? {
+        OR: [
+          { id: { equals: q } },
+          { filename: { contains: q, mode: "insensitive" } },
+          { label: { contains: q, mode: "insensitive" } },
+          { exam: { name: { contains: q, mode: "insensitive" } } },
+        ],
+      }
+    : {};
+
   const [runs, total] = await Promise.all([
     prisma.bulkImportRun.findMany({
+      where,
       orderBy: { createdAt: "desc" },
       skip,
       take: limit,
       include: {
-        adminUser: {
-          select: { name: true, username: true },
-        },
+        adminUser: { select: { name: true, username: true } },
+        exam: { select: { name: true } },
       },
     }),
-    prisma.bulkImportRun.count(),
+    prisma.bulkImportRun.count({ where }),
   ]);
 
-  const totalPages = Math.ceil(total / limit);
+  const totalPages = Math.ceil(total / limit) || 1;
 
   const STATUS_VARIANT = {
     PENDING: "neutral" as const,
+    UPLOADED: "neutral" as const,
+    VALIDATING: "warning" as const,
+    READY: "neutral" as const,
     PROCESSING: "warning" as const,
     COMPLETED: "success" as const,
+    IMPORTED: "success" as const,
     FAILED: "error" as const,
     PARTIALLY_COMPLETED: "warning" as const,
+    PARTIALLY_IMPORTED: "warning" as const,
   };
 
   return (
@@ -50,27 +68,39 @@ async function ImportHistoryContent({ page }: { page: number }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Import Runs</CardTitle>
-          <CardDescription>{total} total runs</CardDescription>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle>Import Runs</CardTitle>
+              <CardDescription>{total} total runs</CardDescription>
+            </div>
+            <form className="flex gap-2" action="/admin/questions/bulk-import/history">
+              <Input name="q" defaultValue={q} placeholder="Search batch, filename, or exam..." className="w-64" />
+              <Button type="submit" variant="outline" size="sm">Search</Button>
+            </form>
+          </div>
         </CardHeader>
         <CardContent>
           {runs.length === 0 ? (
             <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">
-              No import runs yet. Start by{" "}
+              No import runs {q ? "match your search" : "yet"}.{" "}
               <Link href="/admin/questions/bulk-import" className="text-[var(--color-primary)] hover:underline">
-                importing questions
+                Start a new import
               </Link>
               .
             </p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-left text-sm">
+              <table className="w-full min-w-[1100px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
-                    <th className="py-2 pr-4">Run ID</th>
+                    <th className="py-2 pr-4">Batch</th>
                     <th className="py-2 pr-4">File</th>
+                    <th className="py-2 pr-4">Exam / Year</th>
                     <th className="py-2 pr-4">User</th>
                     <th className="py-2 pr-4">Total</th>
+                    <th className="py-2 pr-4">Warnings</th>
+                    <th className="py-2 pr-4">Drafts</th>
+                    <th className="py-2 pr-4">Review</th>
                     <th className="py-2 pr-4">Success</th>
                     <th className="py-2 pr-4">Failed</th>
                     <th className="py-2 pr-4">Status</th>
@@ -81,12 +111,19 @@ async function ImportHistoryContent({ page }: { page: number }) {
                 <tbody>
                   {runs.map((run) => (
                     <tr key={run.id} className="border-b border-[var(--color-border)] last:border-0">
-                      <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">
-                        {run.id.slice(0, 8)}
+                      <td className="py-2.5 pr-4">
+                        <div className="font-medium">{run.label || <span className="font-mono text-xs text-[var(--color-muted-foreground)]">{run.id.slice(0, 8)}</span>}</div>
+                        {run.format && <Badge variant="neutral">{run.format}</Badge>}
                       </td>
                       <td className="py-2.5 pr-4 max-w-xs truncate">{run.filename}</td>
+                      <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
+                        {run.exam ? `${run.exam.name}${run.examYear ? ` ${run.examYear}` : ""}` : "—"}
+                      </td>
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{run.adminUser.name}</td>
                       <td className="py-2.5 pr-4">{run.totalRows}</td>
+                      <td className="py-2.5 pr-4 text-[var(--color-warning)]">{run.warningRows}</td>
+                      <td className="py-2.5 pr-4">{run.draftCount}</td>
+                      <td className="py-2.5 pr-4 text-[var(--color-warning)]">{run.reviewRequiredCount}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-success)]">{run.successCount}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-error)]">{run.failedCount}</td>
                       <td className="py-2.5 pr-4">
@@ -118,12 +155,12 @@ async function ImportHistoryContent({ page }: { page: number }) {
               <div className="flex gap-2">
                 {page > 1 && (
                   <Button asChild variant="outline" size="sm">
-                    <Link href={`/admin/questions/bulk-import/history?page=${page - 1}`}>Previous</Link>
+                    <Link href={`/admin/questions/bulk-import/history?page=${page - 1}${q ? `&q=${encodeURIComponent(q)}` : ""}`}>Previous</Link>
                   </Button>
                 )}
                 {page < totalPages && (
                   <Button asChild variant="outline" size="sm">
-                    <Link href={`/admin/questions/bulk-import/history?page=${page + 1}`}>Next</Link>
+                    <Link href={`/admin/questions/bulk-import/history?page=${page + 1}${q ? `&q=${encodeURIComponent(q)}` : ""}`}>Next</Link>
                   </Button>
                 )}
               </div>
@@ -135,13 +172,14 @@ async function ImportHistoryContent({ page }: { page: number }) {
   );
 }
 
-export default async function ImportHistoryPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
-  const { page: pageParam } = await searchParams;
+export default async function ImportHistoryPage({ searchParams }: { searchParams: Promise<{ page?: string; q?: string }> }) {
+  const { page: pageParam, q: qParam } = await searchParams;
   const page = parseInt(pageParam || "1", 10);
+  const q = (qParam || "").trim();
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <ImportHistoryContent page={page} />
+      <ImportHistoryContent page={page} q={q} />
     </Suspense>
   );
 }

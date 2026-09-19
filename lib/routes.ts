@@ -66,7 +66,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "All Questions", route: "/admin/questions", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Add Question", route: "/admin/questions/add", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
   { pageName: "Bulk Import", route: "/admin/questions/bulk-import", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
-  { pageName: "Question Templates", route: "/admin/questions/templates", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "DRAFT" },
+  { pageName: "Question Templates", route: "/admin/questions/templates", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
   { pageName: "Question Reports", route: "/admin/questions/reports", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
   // Re-exports ../reports/page (same ReportedQuestion-backed triage UI) rather than a second, parallel one — see app/admin/(dashboard)/questions/queries/page.tsx.
   { pageName: "Question Queries", route: "/admin/questions/queries", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },

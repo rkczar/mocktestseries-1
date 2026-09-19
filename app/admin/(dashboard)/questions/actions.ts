@@ -10,24 +10,54 @@ import { allocateQuestionCode, questionCodeScope, resolveQuestionCodeInput } fro
 
 const OPTION_LABELS = ["A", "B", "C", "D"] as const;
 
-const questionSchema = z.object({
-  examId: z.string().min(1, "Select an exam."),
-  examYear: z.string().optional().transform(val => val ? parseInt(val, 10) : undefined),
-  subjectId: z.string().min(1, "Select a subject."),
-  topicId: z.string().optional(),
-  subTopicId: z.string().optional(),
-  previousYearPaperId: z.string().optional(),
-  source: z.nativeEnum(QuestionSource).optional(),
-  text: z.string().trim().min(3, "Question text is required."),
-  imageUrl: z.string().trim().optional(),
-  difficulty: z.nativeEnum(QuestionDifficulty),
-  status: z.nativeEnum(QuestionStatus),
-  optionA: z.string().trim().min(1, "Option A is required."),
-  optionB: z.string().trim().min(1, "Option B is required."),
-  optionC: z.string().trim().min(1, "Option C is required."),
-  optionD: z.string().trim().min(1, "Option D is required."),
-  correctOption: z.enum(OPTION_LABELS),
-});
+/**
+ * Options may be text-only, image-only, or both — never neither. The
+ * per-field `min(1)` requirement that used to force every option to have
+ * text was dropped in favor of the cross-field check in `.superRefine`
+ * below, now that QuestionOption.imageUrl is a real, user-facing field.
+ */
+const questionSchema = z
+  .object({
+    examId: z.string().min(1, "Select an exam."),
+    examYear: z.string().optional().transform(val => val ? parseInt(val, 10) : undefined),
+    subjectId: z.string().min(1, "Select a subject."),
+    topicId: z.string().optional(),
+    subTopicId: z.string().optional(),
+    previousYearPaperId: z.string().optional(),
+    source: z.nativeEnum(QuestionSource).optional(),
+    text: z.string().trim().min(3, "Question text is required."),
+    imageUrl: z.string().trim().optional().default(""),
+    difficulty: z.nativeEnum(QuestionDifficulty),
+    status: z.nativeEnum(QuestionStatus),
+    optionA: z.string().trim().optional().default(""),
+    optionAImageUrl: z.string().trim().optional().default(""),
+    optionB: z.string().trim().optional().default(""),
+    optionBImageUrl: z.string().trim().optional().default(""),
+    optionC: z.string().trim().optional().default(""),
+    optionCImageUrl: z.string().trim().optional().default(""),
+    optionD: z.string().trim().optional().default(""),
+    optionDImageUrl: z.string().trim().optional().default(""),
+    correctOption: z.enum(OPTION_LABELS),
+    reviewRequired: z.string().optional(),
+    reviewReason: z.string().trim().max(500).optional().default(""),
+  })
+  .superRefine((data, ctx) => {
+    const pairs: [(typeof OPTION_LABELS)[number], string, string][] = [
+      ["A", data.optionA, data.optionAImageUrl],
+      ["B", data.optionB, data.optionBImageUrl],
+      ["C", data.optionC, data.optionCImageUrl],
+      ["D", data.optionD, data.optionDImageUrl],
+    ];
+    for (const [label, text, imageUrl] of pairs) {
+      if (!text.trim() && !imageUrl.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Option ${label} needs text, an image, or both.`,
+          path: [`option${label}`],
+        });
+      }
+    }
+  });
 
 export interface QuestionFormState {
   error?: string;
@@ -57,11 +87,17 @@ function parseQuestionForm(formData: FormData) {
     imageUrl: formData.get("imageUrl") || undefined,
     difficulty: formData.get("difficulty"),
     status: formData.get("status"),
-    optionA: formData.get("optionA"),
-    optionB: formData.get("optionB"),
-    optionC: formData.get("optionC"),
-    optionD: formData.get("optionD"),
+    optionA: formData.get("optionA") || "",
+    optionAImageUrl: formData.get("optionAImageUrl") || "",
+    optionB: formData.get("optionB") || "",
+    optionBImageUrl: formData.get("optionBImageUrl") || "",
+    optionC: formData.get("optionC") || "",
+    optionCImageUrl: formData.get("optionCImageUrl") || "",
+    optionD: formData.get("optionD") || "",
+    optionDImageUrl: formData.get("optionDImageUrl") || "",
     correctOption: formData.get("correctOption"),
+    reviewRequired: formData.get("reviewRequired") || undefined,
+    reviewReason: formData.get("reviewReason") || undefined,
   });
 }
 
@@ -104,11 +140,11 @@ async function upsertOptions(
   questionId: string,
   data: z.infer<typeof questionSchema>
 ) {
-  const textByLabel: Record<(typeof OPTION_LABELS)[number], string> = {
-    A: data.optionA,
-    B: data.optionB,
-    C: data.optionC,
-    D: data.optionD,
+  const byLabel: Record<(typeof OPTION_LABELS)[number], { text: string; imageUrl: string | null }> = {
+    A: { text: data.optionA, imageUrl: data.optionAImageUrl || null },
+    B: { text: data.optionB, imageUrl: data.optionBImageUrl || null },
+    C: { text: data.optionC, imageUrl: data.optionCImageUrl || null },
+    D: { text: data.optionD, imageUrl: data.optionDImageUrl || null },
   };
 
   await db.questionOption.deleteMany({ where: { questionId } });
@@ -116,7 +152,8 @@ async function upsertOptions(
     data: OPTION_LABELS.map((label, order) => ({
       questionId,
       label,
-      text: textByLabel[label],
+      text: byLabel[label].text,
+      imageUrl: byLabel[label].imageUrl,
       isCorrect: data.correctOption === label,
       order,
     })),
@@ -131,11 +168,26 @@ export async function createQuestionAction(
   const parsed = parseQuestionForm(formData);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
 
-  const { examId, examYear, subjectId, topicId, subTopicId, previousYearPaperId, source, text, imageUrl, difficulty, status } =
-    parsed.data;
+  const {
+    examId,
+    examYear,
+    subjectId,
+    topicId,
+    subTopicId,
+    previousYearPaperId,
+    source,
+    text,
+    imageUrl,
+    difficulty,
+    status,
+    reviewRequired,
+    reviewReason,
+  } = parsed.data;
 
   const hierarchyError = await assertHierarchyConsistency(prisma, { examId, subjectId, topicId, subTopicId });
   if (hierarchyError) return { error: hierarchyError };
+
+  const isReviewRequired = reviewRequired === "on";
 
   await prisma.$transaction(async (tx) => {
     const { examCode, examYear: resolvedYear } = await resolveQuestionCodeInput(tx, {
@@ -163,6 +215,8 @@ export async function createQuestionAction(
         status,
         source: source || (previousYearPaperId ? QuestionSource.PYQ : QuestionSource.QUESTION_BANK),
         examYear: finalYear,
+        reviewRequired: isReviewRequired,
+        reviewReason: isReviewRequired ? reviewReason || null : null,
       },
     });
 
@@ -194,11 +248,26 @@ export async function updateQuestionAction(
   const parsed = parseQuestionForm(formData);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
 
-  const { examId, examYear, subjectId, topicId, subTopicId, previousYearPaperId, source, text, imageUrl, difficulty, status } =
-    parsed.data;
+  const {
+    examId,
+    examYear,
+    subjectId,
+    topicId,
+    subTopicId,
+    previousYearPaperId,
+    source,
+    text,
+    imageUrl,
+    difficulty,
+    status,
+    reviewRequired,
+    reviewReason,
+  } = parsed.data;
 
   const hierarchyError = await assertHierarchyConsistency(prisma, { examId, subjectId, topicId, subTopicId });
   if (hierarchyError) return { error: hierarchyError };
+
+  const isReviewRequired = reviewRequired === "on";
 
   await prisma.$transaction(async (tx) => {
     const existing = await tx.question.findUnique({
@@ -220,6 +289,8 @@ export async function updateQuestionAction(
         imageUrl: imageUrl || null,
         difficulty,
         status,
+        reviewRequired: isReviewRequired,
+        reviewReason: isReviewRequired ? reviewReason || null : null,
       },
     });
 

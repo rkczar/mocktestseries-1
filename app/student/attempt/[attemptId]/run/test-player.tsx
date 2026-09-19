@@ -199,6 +199,14 @@ export function TestPlayer({
                     />
                     <span className="text-sm text-[var(--color-foreground)]">
                       <span className="font-semibold">{opt.label}.</span> {opt.text}
+                      {opt.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={opt.imageUrl}
+                          alt=""
+                          className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                        />
+                      ) : null}
                     </span>
                   </label>
                 );
