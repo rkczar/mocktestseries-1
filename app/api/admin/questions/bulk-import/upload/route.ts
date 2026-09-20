@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
     const examId = (formData.get("examId") as string | null)?.trim() || null;
     const examYearRaw = (formData.get("examYear") as string | null)?.trim();
     const examYear = examYearRaw && /^\d{4}$/.test(examYearRaw) ? parseInt(examYearRaw, 10) : null;
+    const previousYearPaperId = (formData.get("previousYearPaperId") as string | null)?.trim() || null;
     const duplicateStrategyRaw = (formData.get("duplicateStrategy") as string | null)?.trim().toUpperCase();
     const duplicateStrategy = (
       duplicateStrategyRaw && VALID_STRATEGIES.includes(duplicateStrategyRaw) ? duplicateStrategyRaw : "SKIP"
@@ -30,6 +31,10 @@ export async function POST(request: NextRequest) {
 
     if (!file) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    }
+
+    if (!examId) {
+      return NextResponse.json({ error: "Select an Exam before uploading (Section 1: Bulk Import requires an Exam context)." }, { status: 400 });
     }
 
     // Validate file size (10MB max)
@@ -56,10 +61,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to parse file", details: parseErrors }, { status: 400 });
     }
 
-    if (examId) {
-      const exam = await prisma.exam.findUnique({ where: { id: examId }, select: { id: true } });
-      if (!exam) {
-        return NextResponse.json({ error: "Selected exam does not exist" }, { status: 400 });
+    const exam = await prisma.exam.findUnique({ where: { id: examId }, select: { id: true } });
+    if (!exam) {
+      return NextResponse.json({ error: "Selected exam does not exist" }, { status: 400 });
+    }
+
+    if (previousYearPaperId) {
+      const paper = await prisma.previousYearPaper.findUnique({ where: { id: previousYearPaperId }, select: { examId: true } });
+      if (!paper || paper.examId !== examId) {
+        return NextResponse.json({ error: "Selected Previous Year Paper does not belong to the selected Exam" }, { status: 400 });
       }
     }
 
@@ -72,6 +82,7 @@ export async function POST(request: NextRequest) {
           label,
           examId,
           examYear,
+          previousYearPaperId,
           totalRows: rows.length,
           duplicateStrategy,
           status: BulkImportStatus.UPLOADED,
@@ -98,7 +109,7 @@ export async function POST(request: NextRequest) {
         action: "BULK_IMPORT_UPLOADED",
         entityType: "BulkImportRun",
         entityId: run.id,
-        metadata: { filename: file.name, totalRows: rows.length, format, label, examId, examYear, duplicateStrategy },
+        metadata: { filename: file.name, totalRows: rows.length, format, label, examId, examYear, previousYearPaperId, duplicateStrategy },
       },
     });
 

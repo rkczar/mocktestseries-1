@@ -58,6 +58,39 @@ export async function bulkCreateTopicsAction(subjectId: string, namesText: strin
   return outcome;
 }
 
+const editTopicSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().trim().min(2, "Name must be at least 2 characters.").max(120),
+  order: z.coerce.number().int().min(0).max(100000).optional().default(0),
+});
+
+export interface EditTopicFormState {
+  error?: string;
+  success?: boolean;
+}
+
+export async function editTopicAction(_prev: EditTopicFormState, formData: FormData): Promise<EditTopicFormState> {
+  const session = await requirePermission(PERMISSIONS.EXAMS_MANAGE);
+  const parsed = editTopicSchema.safeParse({
+    id: formData.get("id"),
+    name: formData.get("name"),
+    order: formData.get("order"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+
+  const topic = await prisma.topic.update({
+    where: { id: parsed.data.id },
+    data: { name: parsed.data.name, order: parsed.data.order },
+  });
+
+  await prisma.auditLog.create({
+    data: { actorId: session.user.id, action: "TOPIC_UPDATED", entityType: "Topic", entityId: topic.id },
+  });
+
+  revalidateTopicPages();
+  return { success: true };
+}
+
 export async function deleteTopicAction(topicId: string) {
   const session = await requirePermission(PERMISSIONS.EXAMS_MANAGE);
 

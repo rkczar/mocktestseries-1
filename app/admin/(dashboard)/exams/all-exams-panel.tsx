@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { ExamForm } from "./exam-form";
 import { ActiveToggle } from "./active-toggle";
+import { EditExamDialog } from "./edit-exam-dialog";
+import { DeleteExamDialog } from "./delete-exam-dialog";
 
 export async function AllExamsPanel() {
   const exams = await prisma.exam.findMany({ orderBy: [{ order: "asc" }, { createdAt: "desc" }] });
@@ -38,6 +40,7 @@ export async function AllExamsPanel() {
                   <th className="py-2 pr-4">Year</th>
                   <th className="py-2 pr-4">Papers / Series</th>
                   <th className="py-2 pr-4">Active</th>
+                  <th className="py-2 pr-4" />
                 </tr>
               </thead>
               <tbody>
@@ -65,6 +68,12 @@ export async function AllExamsPanel() {
                     </td>
                     <td className="py-2.5 pr-4">
                       <ActiveToggle examId={exam.id} isActive={exam.isActive} />
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      <div className="flex items-center justify-end gap-1">
+                        <EditExamDialog exam={exam} />
+                        <DeleteExamDialog examId={exam.id} examName={exam.name} />
+                      </div>
                     </td>
                   </tr>
                 ))}

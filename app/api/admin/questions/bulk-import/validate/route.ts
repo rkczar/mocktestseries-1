@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
     });
 
     const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
+    const runExamContext = run.examId ? (lookups.exams.find((e) => e.id === run.examId) ?? null) : null;
 
     let validCount = 0;
     let invalidCount = 0;
@@ -69,7 +70,7 @@ export async function POST(request: NextRequest) {
     await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
       const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
       const [shapeParsed] = validateImportRows([merged]);
-      const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex);
+      const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
 
       if (resolved.severity === ImportRowSeverity.ERROR) invalidCount++;
       else validCount++;

@@ -20,6 +20,14 @@ interface ExamOption {
   year: number | null;
 }
 
+interface PaperOption {
+  id: string;
+  examId: string;
+  year: number;
+  title: string;
+  paperCode: string | null;
+}
+
 type RowFilter = "all" | "valid" | "warning" | "error" | "hasImage" | "missingImage" | "reviewRequired";
 
 interface RowData {
@@ -96,6 +104,8 @@ interface RunInfo {
   examId: string | null;
   exam: { id: string; name: string } | null;
   examYear: number | null;
+  previousYearPaperId: string | null;
+  previousYearPaper: { id: string; title: string } | null;
   status: string;
   duplicateStrategy: string;
   totalRows: number;
@@ -138,8 +148,8 @@ interface ColumnDef {
 const MANAGED_COLUMNS: ColumnDef[] = [
   { key: "questionCode", label: "Question Code", required: false },
   { key: "questionNumber", label: "Question Number", required: false },
-  { key: "exam", label: "Exam", required: true },
-  { key: "examYear", label: "Year", required: true },
+  { key: "exam", label: "Exam", required: false },
+  { key: "examYear", label: "Year", required: false },
   { key: "subject", label: "Subject", required: true },
   { key: "topic", label: "Topic", required: false },
   { key: "subTopic", label: "SubTopic", required: false },
@@ -148,9 +158,9 @@ const MANAGED_COLUMNS: ColumnDef[] = [
   { key: "optionB", label: "Option B", required: true },
   { key: "optionC", label: "Option C", required: true },
   { key: "optionD", label: "Option D", required: true },
-  { key: "correctAnswer", label: "Correct Answer", required: true },
+  { key: "correctAnswer", label: "Correct Answer", required: false },
   { key: "explanation", label: "Explanation", required: false },
-  { key: "difficulty", label: "Difficulty", required: true },
+  { key: "difficulty", label: "Difficulty", required: false },
   { key: "source", label: "Source", required: false },
   { key: "status", label: "Status", required: false },
   { key: "questionImageFilename", label: "Question Image Filename", required: false },
@@ -160,7 +170,7 @@ const MANAGED_COLUMNS: ColumnDef[] = [
   { key: "optionDImageFilename", label: "Option D Image Filename", required: false },
 ];
 
-export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
+export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; papers: PaperOption[] }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialRunId = searchParams.get("runId");
@@ -189,9 +199,18 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
   const [label, setLabel] = useState("");
   const [examId, setExamId] = useState("");
   const [examYear, setExamYear] = useState("");
+  const [previousYearPaperId, setPreviousYearPaperId] = useState("");
   const [duplicateStrategy, setDuplicateStrategy] = useState("SKIP");
   const [uploading, setUploading] = useState(false);
   const [validating, setValidating] = useState(false);
+
+  // --- Change Exam (after staging) --------------------------------------
+  const [showChangeExam, setShowChangeExam] = useState(false);
+  const [changeExamId, setChangeExamId] = useState("");
+  const [changingExam, setChangingExam] = useState(false);
+
+  const selectedExam = exams.find((e) => e.id === examId);
+  const papersForExam = papers.filter((p) => p.examId === examId);
 
   const loadRun = useCallback(
     async (id: string, opts?: { page?: number; filter?: RowFilter; pageSize?: PageSizeOption }) => {
@@ -237,15 +256,16 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
   };
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (!file || !examId) return;
     setUploading(true);
     setError(null);
     try {
       const formData = new FormData();
       formData.append("file", file);
       if (label) formData.append("label", label);
-      if (examId) formData.append("examId", examId);
+      formData.append("examId", examId);
       if (examYear) formData.append("examYear", examYear);
+      if (previousYearPaperId) formData.append("previousYearPaperId", previousYearPaperId);
       formData.append("duplicateStrategy", duplicateStrategy);
 
       const res = await fetch("/api/admin/questions/bulk-import/upload", { method: "POST", body: formData });
@@ -283,11 +303,33 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
     setLabel("");
     setExamId("");
     setExamYear("");
+    setPreviousYearPaperId("");
     setDuplicateStrategy("SKIP");
     setPageSizeOption("25");
     setApplyScope("selected");
     setColumnState({});
     router.replace("/admin/questions/bulk-import");
+  };
+
+  const handleChangeExam = async () => {
+    if (!runId || !changeExamId) return;
+    setChangingExam(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/questions/bulk-import/runs/${runId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ examId: changeExamId }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Failed to change Exam");
+      setShowChangeExam(false);
+      setNotice("Import Exam context changed — every staged row was re-validated against the new Exam.");
+      await loadRun(runId, { page, filter });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to change Exam");
+    } finally {
+      setChangingExam(false);
+    }
   };
 
   const toggleSelected = (id: string) => {
@@ -449,41 +491,96 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
       {!runId && (
         <Card>
           <CardHeader>
-            <CardTitle>Upload File</CardTitle>
-            <CardDescription>Select a CSV, XLS, or XLSX file containing questions to import.</CardDescription>
+            <CardTitle>Import Questions For</CardTitle>
+            <CardDescription>
+              Choose which Exam these questions belong to before uploading a file. Every existing Exam is listed — none are hardcoded.
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-[var(--color-foreground)]">Select Exam *</label>
+                <SelectNative
+                  value={examId}
+                  onChange={(e) => {
+                    setExamId(e.target.value);
+                    setPreviousYearPaperId("");
+                  }}
+                  className={!examId ? "border-[var(--color-warning)]" : undefined}
+                >
+                  <option value="">— Select an Exam —</option>
+                  {exams.map((exam) => (
+                    <option key={exam.id} value={exam.id}>
+                      {exam.name}
+                      {exam.year ? ` (${exam.year})` : ""}
+                    </option>
+                  ))}
+                </SelectNative>
+                {exams.length === 0 ? (
+                  <p className="text-xs text-[var(--color-error)]">No exams exist yet — create one under Exams &gt; All Exams first.</p>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-[var(--color-muted-foreground)]">Previous Year Paper (optional)</label>
+                <SelectNative
+                  value={previousYearPaperId}
+                  onChange={(e) => setPreviousYearPaperId(e.target.value)}
+                  disabled={!examId}
+                >
+                  <option value="">— Import to Question Bank only, link later —</option>
+                  {papersForExam.map((paper) => (
+                    <option key={paper.id} value={paper.id}>
+                      {paper.year} — {paper.title}
+                      {paper.paperCode ? ` (${paper.paperCode})` : ""}
+                    </option>
+                  ))}
+                </SelectNative>
+              </div>
+            </div>
+
+            {examId ? (
+              <Alert>
+                <AlertDescription className="text-sm">
+                  Importing into: <strong>{selectedExam?.name}</strong>
+                  {previousYearPaperId ? (
+                    <>
+                      {" "}
+                      → linked to paper{" "}
+                      <strong>{papersForExam.find((p) => p.id === previousYearPaperId)?.title}</strong>
+                    </>
+                  ) : null}
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>Select an Exam above to unlock file upload.</AlertDescription>
+              </Alert>
+            )}
+
             <label
               htmlFor="file-upload"
-              className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-border)] bg-[var(--color-muted)] p-8 transition hover:bg-[var(--color-surface)]"
+              className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-border)] bg-[var(--color-muted)] p-8 transition ${
+                examId ? "cursor-pointer hover:bg-[var(--color-surface)]" : "cursor-not-allowed opacity-50"
+              }`}
             >
               <FileSpreadsheet className="h-12 w-12 text-[var(--color-muted-foreground)] mb-3" />
               <span className="text-sm font-medium text-[var(--color-foreground)]">
                 {file ? file.name : "Click to upload or drag and drop"}
               </span>
               <span className="text-xs text-[var(--color-muted-foreground)] mt-1">CSV, XLS, XLSX (Max 10MB)</span>
-              <input id="file-upload" type="file" accept=".csv,.xls,.xlsx" onChange={handleFileSelect} className="hidden" />
+              <input id="file-upload" type="file" accept=".csv,.xls,.xlsx" onChange={handleFileSelect} className="hidden" disabled={!examId} />
             </label>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-[var(--color-muted-foreground)]">Batch label (optional)</label>
                 <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. NEET UG 2026 Code 12" />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-[var(--color-muted-foreground)]">Exam context (optional)</label>
-                <SelectNative value={examId} onChange={(e) => setExamId(e.target.value)}>
-                  <option value="">— None —</option>
-                  {exams.map((exam) => (
-                    <option key={exam.id} value={exam.id}>
-                      {exam.name}
-                    </option>
-                  ))}
-                </SelectNative>
-              </div>
-              <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-[var(--color-muted-foreground)]">Exam year (optional)</label>
-                <Input value={examYear} onChange={(e) => setExamYear(e.target.value)} placeholder="2026" />
+                <Input value={examYear} onChange={(e) => setExamYear(e.target.value)} placeholder={selectedExam?.year ? String(selectedExam.year) : "2026"} />
+                <span className="text-[10px] text-[var(--color-muted-foreground)]">Falls back to the selected Exam&apos;s year if left blank.</span>
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-[var(--color-muted-foreground)]">Duplicate strategy</label>
@@ -498,25 +595,29 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
             <div className="rounded-lg bg-[var(--color-muted)] p-4">
               <h4 className="text-sm font-medium mb-2">Columns recognized:</h4>
               <div className="grid grid-cols-2 gap-2 text-xs text-[var(--color-muted-foreground)] sm:grid-cols-3">
-                <div>Exam*</div>
-                <div>Exam Year*</div>
+                <div>Exam</div>
+                <div>Exam Year</div>
                 <div>Subject*</div>
                 <div>Topic</div>
                 <div>Sub-topic</div>
                 <div>Source</div>
                 <div>Question Text*</div>
                 <div>Option A-D*</div>
-                <div>Correct Answer*</div>
-                <div>Difficulty*</div>
+                <div>Correct Answer</div>
+                <div>Difficulty</div>
                 <div>Status</div>
                 <div>Question Code</div>
                 <div>Question Number</div>
                 <div>Question/Option Image Filename</div>
               </div>
-              <p className="text-xs text-[var(--color-muted-foreground)] mt-2">* required. Everything else is optional metadata — missing values become warnings, not errors.</p>
+              <p className="text-xs text-[var(--color-muted-foreground)] mt-2">
+                * has no default — a row missing it can&apos;t become a Question yet. Every other column is optional metadata: if it&apos;s
+                missing or you ignore it in Manage Columns, the row is still staged and imported, just saved as Draft / Review Required
+                instead of being silently Published. Exam/Exam Year default to the Exam selected above.
+              </p>
             </div>
 
-            <Button onClick={handleUpload} disabled={!file || uploading || validating}>
+            <Button onClick={handleUpload} disabled={!file || !examId || uploading || validating}>
               {uploading ? "Uploading..." : validating ? "Validating..." : "Upload & Validate"}
             </Button>
           </CardContent>
@@ -525,6 +626,66 @@ export function BulkImportWorkspace({ exams }: { exams: ExamOption[] }) {
 
       {runId && run && (
         <>
+          <Alert>
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span>
+                Importing into: <strong>{run.exam?.name ?? "No Exam selected"}</strong>
+                {run.previousYearPaper ? (
+                  <>
+                    {" "}
+                    → linked to paper <strong>{run.previousYearPaper.title}</strong>
+                  </>
+                ) : null}
+              </span>
+              <Button
+                size="compact"
+                variant="outline"
+                onClick={() => {
+                  setChangeExamId(run.examId ?? "");
+                  setShowChangeExam(true);
+                }}
+              >
+                Change Exam
+              </Button>
+            </AlertDescription>
+          </Alert>
+
+          {showChangeExam && (
+            <Dialog open onOpenChange={(open) => !open && setShowChangeExam(false)}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Change Import Exam</DialogTitle>
+                </DialogHeader>
+                <div className="flex flex-col gap-3">
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      This run already has {summary?.total ?? run.totalRows} staged row(s). Changing the Exam re-validates every row against
+                      the new Exam context — rows whose file Exam text doesn&apos;t match the new Exam will use the new Exam anyway, and any
+                      Exam-Year fallback will be recomputed.
+                    </AlertDescription>
+                  </Alert>
+                  <SelectNative value={changeExamId} onChange={(e) => setChangeExamId(e.target.value)}>
+                    <option value="">— Select an Exam —</option>
+                    {exams.map((exam) => (
+                      <option key={exam.id} value={exam.id}>
+                        {exam.name}
+                      </option>
+                    ))}
+                  </SelectNative>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setShowChangeExam(false)}>
+                      Cancel
+                    </Button>
+                    <Button onClick={handleChangeExam} disabled={!changeExamId || changingExam}>
+                      {changingExam ? "Changing…" : "Change Exam & Re-validate"}
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
+
           <Card>
             <CardHeader>
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1014,7 +1175,10 @@ function ColumnManagerDialog({
             <AlertDescription className="text-xs">
               Actions below apply to <strong>{scopeLabel}</strong> (change the scope from the toolbar before opening this dialog).
               &quot;Ignore Column&quot; excludes that field from this import only — it never changes the downloadable template, the database
-              schema, or existing questions.
+              schema, or existing questions. Every column can be ignored; columns marked <span className="text-[var(--color-error)]">*</span> have
+              no default, so a row missing one just can&apos;t become a Question yet (it stays visible under the Error filter) — everything else
+              (Exam, Year, Difficulty, Correct Answer, Status, …) safely defaults, and rows missing those are saved as Draft / Review Required
+              instead of being silently Published.
             </AlertDescription>
           </Alert>
 
@@ -1049,15 +1213,15 @@ function ColumnManagerDialog({
                   <Button size="compact" variant="outline" disabled={loading} onClick={() => onApply("CLEAR", col.key)}>
                     Clear All
                   </Button>
-                  {col.required ? (
-                    <span className="text-xs text-[var(--color-muted-foreground)]" title={`${col.label} is required to create a Question and cannot be ignored.`}>
-                      Required — cannot ignore
-                    </span>
-                  ) : (
-                    <Button size="compact" variant="outline" disabled={loading} onClick={() => onApply("IGNORE", col.key)}>
-                      Ignore Column
-                    </Button>
-                  )}
+                  <Button
+                    size="compact"
+                    variant="outline"
+                    disabled={loading}
+                    title={col.required ? `${col.label} has no default — rows missing it can't become a Question yet, but ignoring it never blocks staging or import.` : undefined}
+                    onClick={() => onApply("IGNORE", col.key)}
+                  >
+                    Ignore Column
+                  </Button>
                   <Button size="compact" variant="outline" disabled={loading || !mode} onClick={() => onApply("KEEP", col.key)}>
                     Keep Original
                   </Button>

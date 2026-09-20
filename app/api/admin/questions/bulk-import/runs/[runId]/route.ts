@@ -2,9 +2,33 @@ import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { mergeRowData, declaredImageFilenames, matchRowImagesSync, type BulkImportRow as ParsedRowShape } from "@/lib/bulk-import";
+import {
+  mergeRowData,
+  declaredImageFilenames,
+  matchRowImagesSync,
+  buildTaxonomyLookups,
+  resolveRow,
+  validateImportRows,
+  type BulkImportRow as ParsedRowShape,
+  type RunExamContext,
+} from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
-import { ImportRowSeverity, QuestionStatus, type BulkImportDuplicateStrategy } from "@prisma/client";
+import { recomputeRunCounts } from "@/lib/bulk-import-execute";
+import { ImportRowSeverity, QuestionStatus, type BulkImportDuplicateStrategy, type Prisma } from "@prisma/client";
+
+const CONCURRENCY = 15;
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      results[idx] = await fn(items[idx]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 export type RowFilter = "all" | "valid" | "warning" | "error" | "hasImage" | "missingImage" | "reviewRequired" | "removed";
 
@@ -21,7 +45,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     const run = await prisma.bulkImportRun.findUnique({
       where: { id: runId },
-      include: { adminUser: { select: { name: true, username: true } }, exam: { select: { id: true, name: true } } },
+      include: {
+        adminUser: { select: { name: true, username: true } },
+        exam: { select: { id: true, name: true } },
+        previousYearPaper: { select: { id: true, title: true } },
+      },
     });
     if (!run) {
       return NextResponse.json({ error: "Import run not found" }, { status: 404 });
@@ -121,6 +149,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         examId: run.examId,
         exam: run.exam,
         examYear: run.examYear,
+        previousYearPaperId: run.previousYearPaperId,
+        previousYearPaper: run.previousYearPaper,
         status: run.status,
         duplicateStrategy: run.duplicateStrategy,
         totalRows: run.totalRows,
@@ -165,5 +195,81 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   } catch (error) {
     console.error("GET /api/admin/questions/bulk-import/runs/[runId] error:", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to load import run" }, { status: 500 });
+  }
+}
+
+/**
+ * PATCH a run's import context — currently just its selected Exam (Section
+ * 1: "Allow changing the Exam before final import"). Every non-removed row
+ * is re-validated against the new Exam context in the same call, so the
+ * workspace never shows stale severities/warnings for the old Exam.
+ */
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ runId: string }> }) {
+  try {
+    const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
+    const { runId } = await params;
+
+    const run = await prisma.bulkImportRun.findUnique({ where: { id: runId } });
+    if (!run) {
+      return NextResponse.json({ error: "Import run not found" }, { status: 404 });
+    }
+
+    const body = await request.json();
+    const { examId } = body as { examId?: string };
+    if (!examId) {
+      return NextResponse.json({ error: "examId is required" }, { status: 400 });
+    }
+
+    const exam = await prisma.exam.findUnique({ where: { id: examId }, select: { id: true } });
+    if (!exam) {
+      return NextResponse.json({ error: "Selected exam does not exist" }, { status: 400 });
+    }
+
+    // A previously-selected Previous Year Paper that no longer belongs to
+    // the new Exam is cleared rather than left dangling on the wrong Exam.
+    const previousYearPaperId =
+      run.previousYearPaperId &&
+      (await prisma.previousYearPaper.findFirst({ where: { id: run.previousYearPaperId, examId }, select: { id: true } }))
+        ? run.previousYearPaperId
+        : null;
+
+    await prisma.bulkImportRun.update({ where: { id: runId }, data: { examId, previousYearPaperId } });
+
+    const rows = await prisma.bulkImportRow.findMany({ where: { runId, removedFromImport: false }, orderBy: { rowNumber: "asc" } });
+    const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
+    const runExamContext: RunExamContext | null = lookups.exams.find((e) => e.id === examId) ?? null;
+
+    await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
+      const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
+      const [shapeParsed] = validateImportRows([merged]);
+      const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
+      await prisma.bulkImportRow.update({
+        where: { id: row.id },
+        data: {
+          severity: resolved.severity,
+          errors: resolved.errors as unknown as Prisma.InputJsonValue,
+          warnings: resolved.warnings as unknown as Prisma.InputJsonValue,
+          errorMessage: resolved.errors.length > 0 ? resolved.errors.join(", ") : null,
+          reviewRequired: resolved.reviewRequired,
+        },
+      });
+    });
+
+    await recomputeRunCounts(runId);
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: session.user.id,
+        action: "BULK_IMPORT_EXAM_CHANGED",
+        entityType: "BulkImportRun",
+        entityId: runId,
+        metadata: { fromExamId: run.examId, toExamId: examId, rowCount: rows.length },
+      },
+    });
+
+    return NextResponse.json({ success: true, examId, revalidated: rows.length });
+  } catch (error) {
+    console.error("PATCH /api/admin/questions/bulk-import/runs/[runId] error:", error);
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to change Exam" }, { status: 500 });
   }
 }

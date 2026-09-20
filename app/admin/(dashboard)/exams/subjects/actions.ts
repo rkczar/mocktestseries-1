@@ -35,6 +35,37 @@ export async function createSubjectAction(_prev: SubjectFormState, formData: For
   return { success: true };
 }
 
+const editSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().trim().min(2, "Name must be at least 2 characters.").max(120),
+  order: z.coerce.number().int().min(0).max(100000).optional().default(0),
+});
+
+export async function editSubjectAction(_prev: SubjectFormState, formData: FormData): Promise<SubjectFormState> {
+  const session = await requirePermission(PERMISSIONS.EXAMS_MANAGE);
+  const parsed = editSchema.safeParse({
+    id: formData.get("id"),
+    name: formData.get("name"),
+    order: formData.get("order"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+
+  const subject = await prisma.subject.update({
+    where: { id: parsed.data.id },
+    data: { name: parsed.data.name, order: parsed.data.order },
+  });
+
+  await prisma.auditLog.create({
+    data: { actorId: session.user.id, action: "SUBJECT_UPDATED", entityType: "Subject", entityId: subject.id },
+  });
+
+  revalidatePath("/admin/exams/subjects");
+  revalidatePath("/admin/exams/topics");
+  revalidatePath("/admin/exams/syllabus");
+  revalidatePath("/student/exams/[examId]", "page");
+  return { success: true };
+}
+
 export async function deleteSubjectAction(subjectId: string) {
   const session = await requirePermission(PERMISSIONS.EXAMS_MANAGE);
 

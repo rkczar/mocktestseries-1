@@ -12,12 +12,13 @@ datasource db {
 
 // FULL_ADMIN is stored in the database as "ADMIN" (@map) — this is a pure
 // rename of the exported name, not a data migration. Per the RBAC redesign,
-// FULL_ADMIN is global read-only on the Question Bank specifically (see
-// DEFAULT_ROLE_PERMISSIONS in lib/permissions.ts); it is unchanged for every
-// other admin area (Website, Exams, Tests, Students, etc.).
+// FULL_ADMIN is global read-only on the Question Bank and the Exams domain
+// (Exams, Subjects, Topics, Syllabus, Previous Year Papers, Test Series —
+// see DEFAULT_ROLE_PERMISSIONS in lib/permissions.ts); it is unchanged for
+// every other admin area (Website, Tests, Students, etc.).
 enum RoleName {
   MASTER_ADMIN
-  FULL_ADMIN @map("ADMIN")
+  FULL_ADMIN   @map("ADMIN")
   TEACHER
 }
 
@@ -105,6 +106,11 @@ model Exam {
   name                String
   code                String    @unique
   year                Int?
+  // Canonical exam date shown on admin/public exam detail pages. Distinct
+  // from `year` (a plain calendar year label) and `upcomingDate` (only used
+  // for the homepage's "days left" countdown while isUpcoming is true) —
+  // this is the general-purpose "when this exam happens" field.
+  examDate            DateTime?
   description         String?
   isActive            Boolean   @default(true)
   isUpcoming          Boolean   @default(false)
@@ -169,12 +175,16 @@ model PreviousYearPaper {
   exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
   year      Int
   title     String
+  // Distinguishes multiple papers/sets within the same exam+year (e.g. "Code
+  // 12"). Optional — many exams only ever have one paper per year.
+  paperCode String?
   isActive  Boolean  @default(true)
   order     Int      @default(0)
   createdAt DateTime @default(now())
 
-  questions    Question[]
-  testAttempts TestAttempt[]
+  questions      Question[]
+  testAttempts   TestAttempt[]
+  bulkImportRuns BulkImportRun[]
 }
 
 model TestSeries {
@@ -1167,14 +1177,18 @@ enum BulkImportRowStatus {
   FAILED
 }
 
-/** Validation severity for a staged row, independent of its final processing BulkImportRowStatus. */
+/**
+ * Validation severity for a staged row, independent of its final processing BulkImportRowStatus.
+ */
 enum ImportRowSeverity {
   VALID
   WARNING
   ERROR
 }
 
-/** Structured format of the uploaded bulk-import source file. */
+/**
+ * Structured format of the uploaded bulk-import source file.
+ */
 enum ImportFileFormat {
   CSV
   XLS
@@ -1189,34 +1203,39 @@ enum BulkImportDuplicateStrategy {
 }
 
 model BulkImportRun {
-  id                String                      @id @default(cuid())
-  adminUserId       String
-  adminUser         AdminUser                   @relation(fields: [adminUserId], references: [id])
-  filename          String
-  format            ImportFileFormat?
+  id                  String                      @id @default(cuid())
+  adminUserId         String
+  adminUser           AdminUser                   @relation(fields: [adminUserId], references: [id])
+  filename            String
+  format              ImportFileFormat?
   // Human-readable batch identity, e.g. "NEET UG 2026 — Code 12". Optional
   // exam context lets Admin filter/select an entire uploaded file's
   // questions later from All Questions.
-  label             String?
-  examId            String?
-  exam              Exam?                       @relation(fields: [examId], references: [id], onDelete: SetNull)
-  examYear          Int?
-  totalRows         Int
-  validRows         Int                         @default(0)
-  invalidRows       Int                         @default(0)
-  warningRows       Int                         @default(0)
-  successCount      Int                         @default(0)
-  skippedCount      Int                         @default(0)
-  replacedCount     Int                         @default(0)
-  failedCount       Int                         @default(0)
-  draftCount        Int                         @default(0)
-  reviewRequiredCount Int                       @default(0)
-  duplicateStrategy BulkImportDuplicateStrategy
-  status            BulkImportStatus            @default(PENDING)
-  startedAt         DateTime                    @default(now())
-  completedAt       DateTime?
-  errorMessage      String?
-  createdAt         DateTime                    @default(now())
+  label               String?
+  examId              String?
+  exam                Exam?                       @relation(fields: [examId], references: [id], onDelete: SetNull)
+  examYear            Int?
+  // Optional Previous Year Paper the whole run should link its successfully
+  // imported questions to (Section 21). Never required — most imports go
+  // straight to the Question Bank and get linked to a paper later.
+  previousYearPaperId String?
+  previousYearPaper   PreviousYearPaper?          @relation(fields: [previousYearPaperId], references: [id], onDelete: SetNull)
+  totalRows           Int
+  validRows           Int                         @default(0)
+  invalidRows         Int                         @default(0)
+  warningRows         Int                         @default(0)
+  successCount        Int                         @default(0)
+  skippedCount        Int                         @default(0)
+  replacedCount       Int                         @default(0)
+  failedCount         Int                         @default(0)
+  draftCount          Int                         @default(0)
+  reviewRequiredCount Int                         @default(0)
+  duplicateStrategy   BulkImportDuplicateStrategy
+  status              BulkImportStatus            @default(PENDING)
+  startedAt           DateTime                    @default(now())
+  completedAt         DateTime?
+  errorMessage        String?
+  createdAt           DateTime                    @default(now())
 
   rows              BulkImportRow[]
   importedQuestions Question[]
@@ -1224,6 +1243,7 @@ model BulkImportRun {
   @@index([adminUserId, createdAt])
   @@index([status, createdAt])
   @@index([examId, examYear])
+  @@index([previousYearPaperId])
 }
 
 model BulkImportRow {

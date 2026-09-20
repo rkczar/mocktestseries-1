@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { TopicForm } from "./topic-form";
 import { TopicDeleteButton } from "./topic-delete-button";
+import { TopicEditDialog } from "./topic-edit-dialog";
 import { SubTopicsDialog } from "./sub-topics-dialog";
 import { BulkAddTopicsDialog } from "./bulk-add-topics-dialog";
 
@@ -10,9 +11,9 @@ export const metadata = { title: "Topics — Mock Test Series.in Admin" };
 export default async function TopicsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ subjectId?: string }>;
+  searchParams: Promise<{ examId?: string; subjectId?: string }>;
 }) {
-  const { subjectId } = await searchParams;
+  const { examId, subjectId } = await searchParams;
 
   const [exams, topics] = await Promise.all([
     prisma.exam.findMany({
@@ -20,7 +21,9 @@ export default async function TopicsPage({
       include: { subjects: { orderBy: { name: "asc" }, select: { id: true, name: true } } },
     }),
     prisma.topic.findMany({
-      where: { subjectId: subjectId || undefined },
+      // Section 13: never mix Topics from unrelated Exams in the normal view
+      // — a chosen Subject wins, otherwise scope to the current Exam context.
+      where: subjectId ? { subjectId } : examId ? { subject: { examId } } : {},
       orderBy: [{ subjectId: "asc" }, { order: "asc" }, { name: "asc" }],
       include: {
         subject: { include: { exam: true } },
@@ -81,8 +84,11 @@ export default async function TopicsPage({
                     <td className="py-2.5 pr-4">
                       <SubTopicsDialog topicId={t.id} topicName={t.name} initialSubTopics={t.subTopics} />
                     </td>
-                    <td className="py-2.5 pr-4 text-right">
-                      <TopicDeleteButton topicId={t.id} />
+                    <td className="py-2.5 pr-4">
+                      <div className="flex items-center justify-end gap-1">
+                        <TopicEditDialog id={t.id} name={t.name} order={t.order} />
+                        <TopicDeleteButton topicId={t.id} />
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -58,8 +58,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (shouldRevalidate) {
       const merged = mergeRowData(saved.rawData, saved.editedData) as ParsedRowShape;
       const [shapeParsed] = validateImportRows([merged]);
-      const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
-      const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex);
+      const [lookups, imageIndex, run] = await Promise.all([
+        buildTaxonomyLookups(prisma),
+        getImageFilenameIndex(),
+        prisma.bulkImportRun.findUnique({ where: { id: existing.runId }, select: { examId: true } }),
+      ]);
+      const runExamContext = run?.examId ? (lookups.exams.find((e) => e.id === run.examId) ?? null) : null;
+      const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
 
       const finalReviewRequired = explicitReviewRequired !== undefined ? explicitReviewRequired || resolved.reviewRequired : resolved.reviewRequired;
 

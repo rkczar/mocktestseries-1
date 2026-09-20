@@ -7,12 +7,13 @@ import type { RoleName } from "@prisma/client";
  * built out in Phase 11. MASTER_ADMIN always has every permission.
  *
  * FULL_ADMIN (database value "ADMIN", see RoleName in schema.prisma) is
- * global read-only specifically on the Question Bank: it retains every
- * other manage permission it previously had, but does not get
- * QUESTIONS_MANAGE. Server routes must keep gating every question
- * create/edit/delete/import/image/publish mutation behind
- * requirePermission(PERMISSIONS.QUESTIONS_MANAGE) — never rely on the admin
- * UI merely hiding a button.
+ * global read-only on both the Question Bank AND the Exams domain (Exams,
+ * Subjects, Topics, Syllabus, Previous Year Papers, Test Series): it
+ * retains every other manage permission it previously had, but does not
+ * get QUESTIONS_MANAGE or EXAMS_MANAGE. Server routes must keep gating
+ * every create/edit/delete/import/link/unlink mutation in those areas
+ * behind requirePermission(...) — never rely on the admin UI merely hiding
+ * a button.
  */
 export const PERMISSIONS = {
   WEBSITE_MANAGE: "website:manage",
@@ -33,13 +34,15 @@ export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
   MASTER_ADMIN: Object.values(PERMISSIONS),
   // FULL_ADMIN keeps every manage permission ADMIN previously had, minus
-  // QUESTIONS_MANAGE — it is view-only on the Question Bank (All Questions,
-  // Import History, Templates remain visible; add/edit/delete/import/
-  // publish/image mutations are blocked server-side).
+  // QUESTIONS_MANAGE and EXAMS_MANAGE — it is view-only on the Question Bank
+  // (All Questions, Import History, Templates remain visible; add/edit/
+  // delete/import/publish/image mutations are blocked server-side) and on
+  // the Exams domain (Exams, Subjects, Topics, Syllabus, Previous Year
+  // Papers, Test Series remain visible; create/edit/delete/rename/link/
+  // unlink mutations are blocked server-side).
   FULL_ADMIN: [
     PERMISSIONS.WEBSITE_MANAGE,
     PERMISSIONS.HOMEPAGE_PUBLISH,
-    PERMISSIONS.EXAMS_MANAGE,
     PERMISSIONS.TESTS_MANAGE,
     PERMISSIONS.CUSTOM_MODULES_MANAGE,
     PERMISSIONS.STUDENTS_MANAGE,

@@ -82,8 +82,24 @@ export interface ValidatedImportRow extends ParsedImportRow {
   resolvedData?: ResolvedRowData;
   unmapped: UnmappedTaxonomy[];
   reviewRequired: boolean;
+  /**
+   * True when a genuinely required-for-Publish field (currently: Correct
+   * Answer) was missing/invalid and got defaulted. The row can still be
+   * staged and imported, but never silently as PUBLISHED — the execute step
+   * forces it to DRAFT regardless of the row's declared/target status
+   * (Section 5: "BROKEN QUESTION AUTO-PUBLISHED = NO").
+   */
+  forceDraft: boolean;
   /** Per-declared-image-column FOUND/MISSING result, when an image index was supplied. */
   imageMatches?: RowImageMatch[];
+}
+
+/** Minimal Exam shape used as the Bulk Import run's selected Exam context (Section 1/2). */
+export interface RunExamContext {
+  id: string;
+  name: string;
+  code: string;
+  year: number | null;
 }
 
 export interface ImportValidationResult {
@@ -185,22 +201,24 @@ export const IMPORT_ROW_EDITABLE_KEYS: (keyof BulkImportRow)[] = [
 ];
 
 /**
- * Columns `validateImportRows` treats as blocking-required — without these a
- * Question genuinely cannot be created. "Ignore Column" refuses to remove
- * these from an import; "Clear All" is still allowed (it just surfaces a
- * per-row validation error, same as blanking the cell by hand would).
+ * Columns with no safe default: a Question's `text`/`optionA-D` are NOT NULL
+ * with no default in the schema, and `subjectId` is a required foreign key
+ * with nowhere safe to point it when unresolved. Every column — including
+ * these — can be Ignored in the Bulk Import workspace (Section 3); a row
+ * missing one of these simply cannot become a Question yet (it stays
+ * visible/editable in staging under the Error filter, never silently
+ * imported) until the admin supplies a value. Every other column
+ * (Exam/Year/Difficulty/Correct Answer/Status/etc.) has a safe default or
+ * can fall back to the Bulk Import run's selected Exam context, so ignoring
+ * those never blocks the row — see `resolveRow`.
  */
 export const REQUIRED_IMPORT_COLUMNS: (keyof BulkImportRow)[] = [
-  "exam",
-  "examYear",
   "subject",
   "questionText",
   "optionA",
   "optionB",
   "optionC",
   "optionD",
-  "correctAnswer",
-  "difficulty",
 ];
 
 function normalizeColumnName(header: string): string {
@@ -379,36 +397,44 @@ export function validateImportRows(rows: BulkImportRow[]): ParsedImportRow[] {
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    // Required fields — without these a Question genuinely cannot be created.
-    if (!row.exam) errors.push("Exam is required");
-    if (!row.examYear) errors.push("Exam Year is required");
-    else if (!/^\d{4}$/.test(row.examYear)) errors.push("Exam Year must be a 4-digit year");
-    if (!row.subject) errors.push("Subject is required");
+    // Exam is validated in resolveRow (it can fall back to the Bulk Import
+    // run's selected Exam context — Section 1/2), not here. Exam Year falls
+    // back to the resolved Exam's own `year` there too; a present-but-
+    // malformed value is still an ERROR here since that's bad data, not an
+    // intentionally-ignored column.
+    if (row.examYear && !/^\d{4}$/.test(row.examYear)) errors.push("Exam Year must be a 4-digit year");
+
+    // No safe default exists for these — a Question cannot be created
+    // without them (Subject has no fallback taxonomy; text/options are
+    // NOT NULL with no default in the schema).
+    if (!row.subject) errors.push("Subject is required (no default taxonomy exists to fall back to)");
     if (!row.questionText) errors.push("Question Text is required");
     if (!row.optionA) errors.push("Option A is required");
     if (!row.optionB) errors.push("Option B is required");
     if (!row.optionC) errors.push("Option C is required");
     if (!row.optionD) errors.push("Option D is required");
 
-    // Correct answer validation
+    // Correct Answer — missing/invalid never blocks staging or import, but
+    // (Section 5) the row can never be silently Published without one;
+    // resolveRow sets `forceDraft` so execute always saves it as Draft.
     if (!row.correctAnswer) {
-      errors.push("Correct Answer is required");
+      warnings.push("Correct Answer not provided — will be saved as Draft until a correct option is set");
     } else if (!["A", "B", "C", "D"].includes(row.correctAnswer)) {
-      errors.push("Correct Answer must be A, B, C, or D");
+      warnings.push(`Correct Answer "${row.correctAnswer}" is not A, B, C, or D — will be saved as Draft until fixed`);
     }
 
-    // Difficulty validation
+    // Difficulty — defaults to MEDIUM, never blocks.
     if (!row.difficulty) {
-      errors.push("Difficulty is required");
+      warnings.push("Difficulty not provided, will default to MEDIUM");
     } else if (!["EASY", "MEDIUM", "HARD"].includes(row.difficulty.toUpperCase())) {
-      errors.push("Difficulty must be EASY, MEDIUM, or HARD");
+      warnings.push(`Difficulty "${row.difficulty}" not recognized, will default to MEDIUM`);
     }
 
-    // Status validation — unsupported values are an ERROR; missing just defaults.
+    // Status — defaults to DRAFT, never blocks.
     if (!row.status) {
       warnings.push("Status not provided, will default to DRAFT");
     } else if (!["DRAFT", "PUBLISHED", "ARCHIVED"].includes(row.status.toUpperCase())) {
-      errors.push("Status must be DRAFT, PUBLISHED, or ARCHIVED");
+      warnings.push(`Status "${row.status}" not recognized, will default to DRAFT`);
     }
 
     // Optional metadata — missing is a WARNING, never blocks import (Topic/SubTopic
@@ -517,7 +543,8 @@ export async function resolveRow(
   db: ValidationDb,
   lookups: TaxonomyLookups,
   parsedRow: ParsedImportRow,
-  imageIndex?: Map<string, string>
+  imageIndex?: Map<string, string>,
+  runExamContext?: RunExamContext | null
 ): Promise<ValidatedImportRow> {
   const errors = [...parsedRow.errors];
   const warnings = [...parsedRow.warnings];
@@ -527,14 +554,37 @@ export async function resolveRow(
 
   if (parsedRow.severity === ImportRowSeverity.ERROR) {
     // Shape-level ERROR already blocks this row; skip DB round-trips.
-    return { ...parsedRow, errors, warnings, unmapped, reviewRequired, resolvedData: undefined };
+    return { ...parsedRow, errors, warnings, unmapped, reviewRequired, forceDraft: false, resolvedData: undefined };
   }
 
   const { examsByName, subjectsByExamAndName, topicsBySubjectAndName, subTopicsByTopicAndName, topics, subTopics, papers } = lookups;
 
-  const exam = data.exam ? examsByName.get(data.exam.toLowerCase()) : undefined;
+  // Exam: the file's Exam column, when it names an existing Exam, wins;
+  // otherwise fall back to the Bulk Import run's selected Exam context
+  // (Section 1/2). Never create a new Exam from arbitrary CSV text.
+  const fileExam = data.exam ? examsByName.get(data.exam.toLowerCase()) : undefined;
+  let exam = fileExam ?? runExamContext ?? undefined;
+  if (data.exam && fileExam && runExamContext && fileExam.id !== runExamContext.id) {
+    warnings.push(
+      `File specifies Exam "${fileExam.name}" but this import is scoped to "${runExamContext.name}" — using "${runExamContext.name}" for this row.`
+    );
+    exam = runExamContext;
+    reviewRequired = true;
+  } else if (data.exam && !fileExam && runExamContext) {
+    warnings.push(
+      `Exam "${data.exam}" does not match any existing Exam — using the selected import Exam "${runExamContext.name}" instead.`
+    );
+    exam = runExamContext;
+    reviewRequired = true;
+  } else if (!data.exam && runExamContext) {
+    warnings.push(`Exam not provided — using the selected import Exam "${runExamContext.name}".`);
+  }
   if (!exam) {
-    errors.push(`Exam "${data.exam}" not found`);
+    errors.push(
+      data.exam
+        ? `Exam "${data.exam}" not found and no Exam was selected for this import`
+        : "Exam is required — select an Exam for this import, or provide a matching Exam column value"
+    );
     return {
       ...parsedRow,
       severity: ImportRowSeverity.ERROR,
@@ -543,6 +593,7 @@ export async function resolveRow(
       warnings,
       unmapped,
       reviewRequired,
+      forceDraft: false,
       resolvedData: undefined,
     };
   }
@@ -603,9 +654,41 @@ export async function resolveRow(
     }
   }
 
-  const examYear = parseInt(data.examYear, 10);
-  const difficulty = data.difficulty.toUpperCase() as QuestionDifficulty;
-  const status = (data.status?.toUpperCase() || "DRAFT") as QuestionStatus;
+  // Exam Year: file value wins when it's a valid 4-digit year; otherwise
+  // fall back to the resolved Exam's own `year` (mirrors
+  // resolveQuestionCodeInput's existing PYQ-paper-then-Exam fallback in
+  // lib/question-code.ts). Only a genuine failure to resolve any year at
+  // all blocks the row — a canonical Question code needs one.
+  const fileExamYear = data.examYear && /^\d{4}$/.test(data.examYear) ? parseInt(data.examYear, 10) : undefined;
+  const examYear = fileExamYear ?? exam.year ?? undefined;
+  if (fileExamYear === undefined && examYear !== undefined) {
+    warnings.push(`Exam Year not provided — defaulted to "${exam.name}"'s year (${examYear}).`);
+  }
+  if (examYear === undefined) {
+    errors.push(`Exam Year is required and could not be defaulted (Exam "${exam.name}" has no Year set) — provide a Year or set one on the Exam.`);
+    return {
+      ...parsedRow,
+      severity: ImportRowSeverity.ERROR,
+      isValid: false,
+      errors,
+      warnings,
+      unmapped,
+      reviewRequired,
+      forceDraft: false,
+      resolvedData: undefined,
+    };
+  }
+
+  const rawDifficulty = data.difficulty?.toUpperCase();
+  const difficulty = (["EASY", "MEDIUM", "HARD"].includes(rawDifficulty ?? "") ? rawDifficulty : "MEDIUM") as QuestionDifficulty;
+
+  const rawStatus = data.status?.toUpperCase();
+  const status = (["DRAFT", "PUBLISHED", "ARCHIVED"].includes(rawStatus ?? "") ? rawStatus : "DRAFT") as QuestionStatus;
+
+  // Correct Answer — no valid A/B/C/D means no option can be marked correct,
+  // so this row can never be silently Published (Section 5).
+  const forceDraft = !["A", "B", "C", "D"].includes(data.correctAnswer?.toUpperCase() ?? "");
+  if (forceDraft) reviewRequired = true;
 
   // Resolve PYQ paper if source indicates it's a PYQ
   let previousYearPaperId: string | null = null;
@@ -695,6 +778,7 @@ export async function resolveRow(
     warnings,
     unmapped,
     reviewRequired,
+    forceDraft,
     imageMatches,
     resolvedData:
       severity === ImportRowSeverity.ERROR

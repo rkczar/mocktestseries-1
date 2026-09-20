@@ -6,6 +6,7 @@ import {
   BulkImportRowStatus,
   BulkImportStatus,
   ImportRowSeverity,
+  QuestionSource,
   QuestionStatus,
   type Prisma,
 } from "@prisma/client";
@@ -82,6 +83,7 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
   });
 
   const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
+  const runExamContext = run.examId ? (lookups.exams.find((e) => e.id === run.examId) ?? null) : null;
 
   let successCount = 0;
   let skippedCount = 0;
@@ -99,7 +101,7 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
   for (const row of rows) {
     const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
     const [shapeParsed] = validateImportRows([merged]);
-    const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex);
+    const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
 
     if (resolved.severity === ImportRowSeverity.ERROR) {
       if (onlyValid) continue; // leave untouched — user asked for valid rows only
@@ -149,6 +151,20 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
       reviewReason = reviewReason ?? "Auto-saved as Draft: a referenced image was missing at import time";
     }
 
+    // No valid Correct Answer means no option can be marked correct — never
+    // silently Publish a question with no right answer (Section 5), no
+    // matter what status the row/admin requested.
+    if (resolved.forceDraft) {
+      effectiveStatus = QuestionStatus.DRAFT;
+      reviewReason = reviewReason ?? "Auto-saved as Draft: no valid Correct Answer was provided";
+    }
+
+    // Section 21: when the run itself is scoped to a Previous Year Paper,
+    // link every successfully imported question to it (unless the row
+    // already resolved a more specific paper of its own).
+    const previousYearPaperId = rd.previousYearPaperId ?? run.previousYearPaperId ?? null;
+    const source = run.previousYearPaperId && !rd.previousYearPaperId ? QuestionSource.PYQ : rd.source;
+
     try {
       const outcome = await prisma.$transaction(async (tx) => {
         const dedupKey = runKey(rd.examId, rd.subjectId!, merged.questionText);
@@ -170,12 +186,12 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
                 subjectId: rd.subjectId!,
                 topicId: rd.topicId,
                 subTopicId: rd.subTopicId,
-                previousYearPaperId: rd.previousYearPaperId,
+                previousYearPaperId,
                 text: merged.questionText,
                 imageUrl: merged.image || null,
                 difficulty: rd.difficulty,
                 status: effectiveStatus,
-                source: rd.source,
+                source,
                 examYear: rd.examYear,
                 importBatchId: runId,
                 reviewRequired: resolved.reviewRequired,
@@ -206,12 +222,12 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
             subjectId: rd.subjectId!,
             topicId: rd.topicId,
             subTopicId: rd.subTopicId,
-            previousYearPaperId: rd.previousYearPaperId,
+            previousYearPaperId,
             text: merged.questionText,
             imageUrl: merged.image || null,
             difficulty: rd.difficulty,
             status: effectiveStatus,
-            source: rd.source,
+            source,
             examYear: rd.examYear,
             importBatchId: runId,
             reviewRequired: resolved.reviewRequired,

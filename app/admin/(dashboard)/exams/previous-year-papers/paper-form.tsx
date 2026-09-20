@@ -39,9 +39,13 @@ export function PaperForm({ exams, defaultExamId }: { exams: { id: string; name:
         <Label htmlFor="year">Year</Label>
         <Input id="year" name="year" type="number" required placeholder="2024" />
       </div>
-      <div className="flex flex-col gap-1.5 sm:col-span-2">
+      <div className="flex flex-col gap-1.5">
         <Label htmlFor="title">Title</Label>
         <Input id="title" name="title" required placeholder="RUHS Medical Officer 2024 Paper" />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="paperCode">Paper Code (optional)</Label>
+        <Input id="paperCode" name="paperCode" placeholder="e.g. Code 12" />
       </div>
       <div className="flex items-end sm:col-span-2 lg:col-span-4">
         <SubmitButton />

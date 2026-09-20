@@ -8,8 +8,8 @@ import {
   validateImportRows,
   mergeRowData,
   IMPORT_ROW_EDITABLE_KEYS,
-  REQUIRED_IMPORT_COLUMNS,
   type BulkImportRow as ParsedRowShape,
+  type RunExamContext,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
 import { executeBulkImport, recomputeRunCounts } from "@/lib/bulk-import-execute";
@@ -58,7 +58,8 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 async function applyColumnEdit(
   runId: string,
   rowIds: string[],
-  edit: (existing: Record<string, unknown>) => Record<string, unknown>
+  edit: (existing: Record<string, unknown>) => Record<string, unknown>,
+  runExamContext: RunExamContext | null
 ): Promise<number> {
   const rows = await prisma.bulkImportRow.findMany({ where: { id: { in: rowIds }, runId, removedFromImport: false } });
   const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
@@ -66,7 +67,7 @@ async function applyColumnEdit(
     const nextEdited = edit(((row.editedData as Record<string, unknown> | null) ?? {}) as Record<string, unknown>);
     const merged = mergeRowData(row.rawData, nextEdited) as ParsedRowShape;
     const [shapeParsed] = validateImportRows([merged]);
-    const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex);
+    const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
     await prisma.bulkImportRow.update({
       where: { id: row.id },
       data: {
@@ -113,18 +114,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       if (!column || !IMPORT_ROW_EDITABLE_KEYS.includes(column as keyof ParsedRowShape)) {
         return NextResponse.json({ error: "A valid column is required for this action" }, { status: 400 });
       }
-      if (action === "IGNORE_COLUMN" && REQUIRED_IMPORT_COLUMNS.includes(column as keyof ParsedRowShape)) {
-        return NextResponse.json(
-          { error: `"${column}" is required to create a Question and cannot be ignored. Use Clear All if you want to blank its values instead.` },
-          { status: 400 }
-        );
-      }
+      // Every uploaded column can be ignored (Section 3) — ignoring a column
+      // with no safe default just leaves affected rows unable to become a
+      // Question until fixed; it never blocks the action itself.
     }
 
     const targetRowIds =
       rowIds && rowIds.length > 0
         ? rowIds
         : (await prisma.bulkImportRow.findMany({ where: { runId, removedFromImport: false }, select: { id: true } })).map((r) => r.id);
+
+    const runExamContext: RunExamContext | null = run.examId
+      ? await prisma.exam.findUnique({ where: { id: run.examId }, select: { id: true, name: true, code: true, year: true } })
+      : null;
 
     let resultSummary: Record<string, number> = {};
 
@@ -161,7 +163,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
           const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
           const [shapeParsed] = validateImportRows([merged]);
-          const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex);
+          const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
           await prisma.bulkImportRow.update({
             where: { id: row.id },
             data: {
@@ -178,22 +180,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         break;
       }
       case "SET_COLUMN": {
-        const affected = await applyColumnEdit(runId, targetRowIds, (existing) => ({ ...existing, [column as string]: value ?? "" }));
+        const affected = await applyColumnEdit(runId, targetRowIds, (existing) => ({ ...existing, [column as string]: value ?? "" }), runExamContext);
         resultSummary = { affected };
         break;
       }
       case "CLEAR_COLUMN":
       case "IGNORE_COLUMN": {
-        const affected = await applyColumnEdit(runId, targetRowIds, (existing) => ({ ...existing, [column as string]: "" }));
+        const affected = await applyColumnEdit(runId, targetRowIds, (existing) => ({ ...existing, [column as string]: "" }), runExamContext);
         resultSummary = { affected };
         break;
       }
       case "KEEP_COLUMN": {
-        const affected = await applyColumnEdit(runId, targetRowIds, (existing) => {
-          const next = { ...existing };
-          delete next[column as string];
-          return next;
-        });
+        const affected = await applyColumnEdit(
+          runId,
+          targetRowIds,
+          (existing) => {
+            const next = { ...existing };
+            delete next[column as string];
+            return next;
+          },
+          runExamContext
+        );
         resultSummary = { affected };
         break;
       }

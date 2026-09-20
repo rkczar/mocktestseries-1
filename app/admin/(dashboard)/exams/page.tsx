@@ -34,7 +34,7 @@ export default async function ExamsControlCenter({
             content: (
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <SubjectsPage searchParams={Promise.resolve({ examId })} />
-                <TopicsPage searchParams={Promise.resolve({ subjectId })} />
+                <TopicsPage searchParams={Promise.resolve({ examId, subjectId })} />
               </div>
             ),
           },
