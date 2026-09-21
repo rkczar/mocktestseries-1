@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { RetryExplanationControl } from "./retry-explanation-control";
+import { RetryExplanationControl, RegenerateExplanationControl, MarkReviewedControl } from "./retry-explanation-control";
 
 export const metadata = { title: "AI Solutions — Mock Test Series.in Admin" };
 
@@ -17,7 +17,10 @@ export default async function AiSolutionsPage() {
   const explanations = await prisma.aIExplanation.findMany({
     orderBy: { updatedAt: "desc" },
     take: 100,
-    include: { question: { select: { code: true, text: true, exam: { select: { name: true } } } } },
+    include: {
+      question: { select: { code: true, text: true, exam: { select: { name: true } }, _count: { select: { aiVariants: true } } } },
+      adminReviewedBy: { select: { name: true } },
+    },
   });
 
   return (
@@ -47,6 +50,8 @@ export default async function AiSolutionsPage() {
                   <th className="py-2 pr-4">Question</th>
                   <th className="py-2 pr-4">Provider / Model</th>
                   <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Variants</th>
+                  <th className="py-2 pr-4">Reviewed</th>
                   <th className="py-2 pr-4">Updated</th>
                   <th className="py-2 pr-4" />
                 </tr>
@@ -60,8 +65,8 @@ export default async function AiSolutionsPage() {
                       <p className="text-[11px] text-[var(--color-muted-foreground)]">{e.question.exam.name}</p>
                     </td>
                     <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">
-                      {e.provider} / {e.model}
-                      {e.promptVersion ? <span className="block">v{e.promptVersion}</span> : null}
+                      {e.provider || "—"} / {e.model || "—"}
+                      <span className="block">v{e.version} · prompt {e.promptVersion}</span>
                     </td>
                     <td className="py-2.5 pr-4">
                       <Badge variant={STATUS_BADGE[e.status].variant}>{STATUS_BADGE[e.status].label}</Badge>
@@ -70,8 +75,27 @@ export default async function AiSolutionsPage() {
                       ) : null}
                       {e.retryCount > 0 ? <p className="text-[11px] text-[var(--color-muted-foreground)]">Retries: {e.retryCount}</p> : null}
                     </td>
+                    <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">{e.question._count.aiVariants}/5</td>
+                    <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">
+                      {e.adminReviewedAt ? (
+                        <>
+                          <Badge variant="success">Reviewed</Badge>
+                          <p className="mt-1">{e.adminReviewedBy?.name ?? "—"}</p>
+                        </>
+                      ) : e.status === "COMPLETED" ? (
+                        <Badge variant="neutral">Needs Review</Badge>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">{e.updatedAt.toLocaleString()}</td>
-                    <td className="py-2.5 pr-4">{e.status === "FAILED" ? <RetryExplanationControl questionId={e.questionId} /> : null}</td>
+                    <td className="py-2.5 pr-4">
+                      <div className="flex flex-col items-end gap-1.5">
+                        {e.status === "FAILED" ? <RetryExplanationControl questionId={e.questionId} /> : null}
+                        {e.status === "COMPLETED" ? <RegenerateExplanationControl questionId={e.questionId} /> : null}
+                        {e.status === "COMPLETED" && !e.adminReviewedAt ? <MarkReviewedControl questionId={e.questionId} /> : null}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>

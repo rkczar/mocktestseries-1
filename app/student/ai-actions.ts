@@ -1,8 +1,16 @@
 "use server";
 
+import { prisma } from "@/lib/prisma";
 import { requireStudent } from "@/lib/student-session";
-import { getOrCreateExplanation, AiNotConfiguredError, AiGenerationInProgressError } from "@/lib/ai-explanation";
-import { getStoredAiExplanation, isAiGenerationRateLimited, hasInProgressAttemptForQuestion, logActivity } from "@/lib/student-data";
+import { getOrCreateExplanation, AiNotConfiguredError, AiGenerationInProgressError, type ExplanationContent } from "@/lib/ai-explanation";
+import {
+  getStoredAiExplanation,
+  isAiGenerationRateLimited,
+  hasInProgressAttemptForQuestion,
+  logActivity,
+  checkAiAccessQuota,
+  logAiAccess,
+} from "@/lib/student-data";
 
 /**
  * Shared by every context that shows a question with an "Ask AI" button
@@ -19,6 +27,14 @@ export async function getExplanationAction(questionId: string) {
     return { ok: false as const, error: "Ask AI is available once you've submitted this test." };
   }
 
+  // Daily AI ACCESS quota (spec: student access ≠ provider call) — checked
+  // before cache/generation so an exhausted student never reaches the
+  // provider, and reopening an already-counted question today is always free.
+  const quota = await checkAiAccessQuota(student.id, questionId);
+  if (!quota.allowed) {
+    return { ok: false as const, error: "Daily AI limit reached." };
+  }
+
   const cached = await getStoredAiExplanation(questionId);
   const isNewGeneration = cached?.status !== "COMPLETED";
 
@@ -29,7 +45,25 @@ export async function getExplanationAction(questionId: string) {
   try {
     const explanation = await getOrCreateExplanation(questionId);
     if (isNewGeneration) await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId });
-    return { ok: true as const, content: explanation.content as Record<string, string> };
+    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: explanation.provider, model: explanation.model });
+
+    // Related practice questions (spec §6): existing AI01-05 variants for this
+    // canonical question, display-only here — publishing one into the real
+    // Question Bank is a separate, explicit admin action (lib/ai-variant.ts
+    // publishVariant), never automatic.
+    const relatedQuestions = await prisma.question.findMany({
+      where: { parentQuestionId: questionId, aiGenerationStatus: "COMPLETED" },
+      orderBy: { aiSlot: "asc" },
+      select: { id: true, code: true, text: true, aiVariantType: true },
+      take: 5,
+    });
+
+    return {
+      ok: true as const,
+      content: explanation.content as unknown as ExplanationContent,
+      remainingToday: quota.remainingToday,
+      relatedQuestions,
+    };
   } catch (error) {
     if (error instanceof AiNotConfiguredError) return { ok: false as const, error: error.message };
     if (error instanceof AiGenerationInProgressError) return { ok: false as const, error: error.message, retry: true as const };

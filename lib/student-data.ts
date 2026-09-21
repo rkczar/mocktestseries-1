@@ -11,7 +11,8 @@ import {
   StudentStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { toIstDateString } from "@/lib/ist-time";
+import { toIstDateString, istStartOfDay } from "@/lib/ist-time";
+import { getAiSettings } from "@/lib/ai-settings";
 import { attemptTitle } from "@/lib/attempt-title";
 
 /**
@@ -557,6 +558,51 @@ export async function isAiGenerationRateLimited(studentId: string): Promise<bool
     where: { studentId, activity: "AI_EXPLANATION_GENERATED", createdAt: { gte: new Date(Date.now() - AI_RATE_LIMIT_WINDOW_MS) } },
   });
   return count >= AI_RATE_LIMIT_MAX_NEW_GENERATIONS;
+}
+
+export interface AiAccessQuota {
+  allowed: boolean;
+  limit: number;
+  /** Distinct questions already counted against today's limit, BEFORE this check. Re-opening one of these costs nothing. */
+  usedToday: number;
+  remainingToday: number;
+  alreadyViewedToday: boolean;
+}
+
+/**
+ * Student-facing daily AI access entitlement (spec: "STUDENT AI ACCESS ≠
+ * PROVIDER API CALL"). Counts DISTINCT questions the student has opened
+ * Ask AI on today (IST), from the same StudentActivity log
+ * isAiGenerationRateLimited reads — re-opening an already-counted question
+ * is free; a new distinct question consumes one credit, whether served from
+ * cache or freshly generated. No real payment system exists yet, so every
+ * student is currently on the FREE plan; `paidDailyLimit` is wired through
+ * so a future entitlement check can slot in without touching this shape.
+ */
+export async function checkAiAccessQuota(studentId: string, questionId: string): Promise<AiAccessQuota> {
+  const settings = await getAiSettings();
+  const limit = settings.freeDailyLimit; // FREE plan only for now — see doc comment above
+  const todayStart = istStartOfDay(new Date());
+
+  const viewedToday = await prisma.studentActivity.findMany({
+    where: { studentId, activity: "AI_EXPLANATION_VIEWED", createdAt: { gte: todayStart } },
+    select: { metadata: true },
+  });
+  const distinctQuestionIds = new Set(
+    viewedToday.map((a) => (a.metadata as { questionId?: string } | null)?.questionId).filter((id): id is string => Boolean(id))
+  );
+  const alreadyViewedToday = distinctQuestionIds.has(questionId);
+  const usedToday = distinctQuestionIds.size;
+
+  if (limit === null || alreadyViewedToday || usedToday < limit) {
+    return { allowed: true, limit: limit ?? Infinity, usedToday, remainingToday: limit === null ? Infinity : Math.max(0, limit - usedToday - (alreadyViewedToday ? 0 : 1)), alreadyViewedToday };
+  }
+  return { allowed: false, limit, usedToday, remainingToday: 0, alreadyViewedToday: false };
+}
+
+/** Logs a successful Ask AI access (cached or freshly generated) — the quota ledger checkAiAccessQuota reads, and the "views" side of Admin AI Usage's views/cache-hits/provider-calls split. */
+export async function logAiAccess(studentId: string, questionId: string, opts: { cacheHit: boolean; provider: string; model: string }) {
+  await logActivity(studentId, "AI_EXPLANATION_VIEWED", { questionId, ...opts });
 }
 
 // ---------------------------------------------------------------------------

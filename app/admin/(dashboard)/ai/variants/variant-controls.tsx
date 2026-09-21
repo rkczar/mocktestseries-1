@@ -5,7 +5,7 @@ import { useFormStatus } from "react-dom";
 import type { AiVariantType } from "@prisma/client";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { generateVariantAction, retryVariantAction, type VariantActionState } from "./actions";
+import { generateVariantAction, retryVariantAction, publishVariantAction, type VariantActionState } from "./actions";
 
 function SubmitButton({ label, pendingLabel }: { label: string; pendingLabel: string }) {
   const { pending } = useFormStatus();
@@ -24,6 +24,23 @@ export function GenerateVariantControl({ parentQuestionId, variantType }: { pare
   return (
     <form action={formAction} className="flex flex-col gap-1.5">
       <SubmitButton label={`Generate ${variantType === "AI_SIMILAR" ? "Similar" : "Trap"}`} pendingLabel="Generating…" />
+      {state.error ? (
+        <p className="flex items-center gap-1 text-xs text-[var(--color-error)]">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden /> {state.error}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+export function PublishVariantControl({ variantId, parentQuestionId }: { variantId: string; parentQuestionId: string }) {
+  const [state, formAction] = useActionState<VariantActionState, FormData>(
+    publishVariantAction.bind(null, variantId, parentQuestionId),
+    {}
+  );
+  return (
+    <form action={formAction} className="flex flex-col gap-1.5">
+      <SubmitButton label="Publish to Question Bank" pendingLabel="Publishing…" />
       {state.error ? (
         <p className="flex items-center gap-1 text-xs text-[var(--color-error)]">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden /> {state.error}

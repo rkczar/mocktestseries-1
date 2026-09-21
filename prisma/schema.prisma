@@ -69,6 +69,7 @@ model AdminUser {
   createdLiveTests       LiveTest[]
   createdAnnouncements   Announcement[]
   assignedCommunications Communication[]
+  aiExplanationReviews   AIExplanation[]   @relation("AiExplanationReviewedBy")
 }
 
 model LoginAttempt {
@@ -1143,6 +1144,38 @@ model AIExplanation {
   errorMessage  String?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
+
+  // Versioning: this row is always the current/active version. An explicit
+  // admin Regenerate snapshots the outgoing content into AIExplanationVersion
+  // before overwriting, so `version` only ever moves forward and old content
+  // is never silently lost.
+  version           Int        @default(1)
+  adminReviewedAt   DateTime?
+  adminReviewedById String?
+  adminReviewedBy   AdminUser? @relation("AiExplanationReviewedBy", fields: [adminReviewedById], references: [id])
+
+  versions AIExplanationVersion[]
+}
+
+/**
+ * Append-only history of superseded AIExplanation content, written only when
+ * an admin explicitly regenerates an already-COMPLETED explanation (never on
+ * an ordinary first generation or a FAILED retry). Read-only from the app's
+ * perspective — nothing ever updates a row here.
+ */
+model AIExplanationVersion {
+  id            String        @id @default(cuid())
+  explanationId String
+  explanation   AIExplanation @relation(fields: [explanationId], references: [id], onDelete: Cascade)
+  version       Int
+  content       Json
+  model         String
+  provider      String
+  promptVersion String?
+  generatedAt   DateTime?
+  supersededAt  DateTime      @default(now())
+
+  @@index([explanationId, version])
 }
 
 // ---------------------------------------------------------------------------

@@ -342,24 +342,61 @@ async function probeMsg91Credentials(authKey: string): Promise<ProviderLastTest>
   }
 }
 
-/** Runs a live Test Connection for MSG91 using the currently stored credentials, and persists the result. */
+/**
+ * Runs a live Test Connection for MSG91 using the currently stored
+ * credentials, and persists the result.
+ *
+ * lib/otp.ts's requestOtp() picks its delivery path by what's configured:
+ * Widget ID present → the MSG91 Widget API (sendOtp/verifyOtp), which needs
+ * only authKey + widgetId and never touches Flow ID. Otherwise → the legacy
+ * Flow API, which needs Flow ID. Requiring Flow ID unconditionally here used
+ * to report a false failure for a widget-configured setup that
+ * requestOtp() would actually use successfully — this now checks the same
+ * branch requestOtp() does.
+ */
 export async function testMsg91Connection(): Promise<ProviderLastTest> {
-  const { authKey, flowId } = await getMsg91Credentials();
+  const { authKey, flowId, widgetId } = await getMsg91Credentials();
   if (!authKey) {
     const result: ProviderLastTest = { ok: false, message: "Auth Key is required.", at: new Date().toISOString() };
     await recordProviderTest("msg91", result);
     return result;
   }
-  if (!flowId) {
+
+  const balanceProbe = await probeMsg91Credentials(authKey);
+  if (!balanceProbe.ok) {
+    await recordProviderTest("msg91", balanceProbe);
+    return balanceProbe;
+  }
+
+  if (widgetId) {
+    // The Widget API path is what requestOtp() actually uses when widgetId is
+    // set — Flow ID is irrelevant here. There is no MSG91 endpoint to
+    // validate a Widget ID without sending a real OTP, so this confirms the
+    // Auth Key and reports which path is active rather than a false negative.
     const result: ProviderLastTest = {
-      ok: false,
-      message: "Auth Key is valid but no Flow ID is configured yet — OTP sending needs one.",
+      ok: true,
+      message: `Connection successful — Auth Key is valid. OTP delivery uses the Widget API (Widget ID ending …${widgetId.slice(-4)}); a live send is the only way to fully confirm delivery.`,
       at: new Date().toISOString(),
     };
     await recordProviderTest("msg91", result);
     return result;
   }
-  const result = await probeMsg91Credentials(authKey);
+
+  if (!flowId) {
+    const result: ProviderLastTest = {
+      ok: false,
+      message: "Auth Key is valid but neither a Widget ID nor a Flow ID is configured — OTP sending needs one of the two.",
+      at: new Date().toISOString(),
+    };
+    await recordProviderTest("msg91", result);
+    return result;
+  }
+
+  const result: ProviderLastTest = {
+    ok: true,
+    message: "Connection successful — Auth Key is valid. OTP delivery uses the Flow API.",
+    at: new Date().toISOString(),
+  };
   await recordProviderTest("msg91", result);
   return result;
 }

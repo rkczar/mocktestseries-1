@@ -42,6 +42,12 @@ export function toIstDateString(date: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
 
+/** The UTC instant of 00:00 IST on the calendar day containing `date` — the start of "today" by IST wall-clock, for daily-quota/limit windows. */
+export function istStartOfDay(date: Date): Date {
+  const istDate = toIstDateString(date);
+  return parseIstDateTimeLocal(`${istDate}T00:00`)!;
+}
+
 /** Human-readable IST display, e.g. "17 Sep 2026, 2:00 PM IST". */
 export function formatIst(date: Date): string {
   const formatted = new Intl.DateTimeFormat("en-IN", {

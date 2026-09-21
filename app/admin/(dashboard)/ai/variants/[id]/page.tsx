@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { AiSlot, AiVariantType } from "@prisma/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { GenerateVariantControl, RetryVariantControl } from "../variant-controls";
+import { GenerateVariantControl, RetryVariantControl, PublishVariantControl } from "../variant-controls";
 
 export const metadata = { title: "AI Variants — Mock Test Series.in Admin" };
 
@@ -81,6 +81,11 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
                   <Badge variant={STATUS_BADGE[variant?.aiGenerationStatus ?? "NONE"].variant}>
                     {STATUS_BADGE[variant?.aiGenerationStatus ?? "NONE"].label}
                   </Badge>
+                  {variant?.aiGenerationStatus === "COMPLETED" ? (
+                    <Badge variant={variant.status === "PUBLISHED" ? "success" : "neutral"}>
+                      {variant.status === "PUBLISHED" ? "Published to Question Bank" : "Draft — not in Question Bank"}
+                    </Badge>
+                  ) : null}
                 </div>
 
                 {!variant ? (
@@ -109,6 +114,9 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
                         </div>
                       ))}
                     </div>
+                    {variant.status !== "PUBLISHED" ? (
+                      <PublishVariantControl variantId={variant.id} parentQuestionId={parent.id} />
+                    ) : null}
                   </div>
                 ) : variant.aiGenerationStatus === "FAILED" ? (
                   <div className="flex flex-col gap-2">

@@ -1,24 +1,21 @@
 import "server-only";
 import { AiGenerationStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getGeminiApiKey, getGeminiConfig } from "@/lib/gemini-config";
+import { generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
+import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 
 /**
- * Ask AI explanations — see AGENTS.md / commit history: this reuses the
- * SAME Gemini provider configuration the admin already manages under
- * Settings → Authentication (lib/gemini-config.ts: encrypted key storage,
- * DB-first with an env bootstrap, a live connection test). An earlier
- * version of this file called Anthropic directly through an unrelated,
- * unconfigured `ANTHROPIC_API_KEY` env var — a second, dangling AI
- * pathway with no admin UI behind it. Consolidated onto Gemini so there is
- * exactly one AI provider surface in the app.
+ * Ask AI explanations. Generation itself goes through lib/ai-provider.ts
+ * (Gemini/OpenAI, active + fallback — see that module), never a provider
+ * SDK directly, so this file and the student UI stay provider-agnostic.
  */
 
-export class AiNotConfiguredError extends Error {}
+export { AiNotConfiguredError };
 export class AiGenerationInProgressError extends Error {}
+export class ExplanationNotReadyError extends Error {}
 
 /** Bump this whenever the prompt shape changes materially. Stored per explanation so old/new output is never silently mixed (Step 6/7.3). */
-export const EXPLANATION_PROMPT_VERSION = "explain-v1";
+export const EXPLANATION_PROMPT_VERSION = "explain-v2";
 
 /** A GENERATING/PENDING row older than this is assumed abandoned (crashed request, dead connection) and safe to reclaim. */
 export const STALE_GENERATION_MS = 2 * 60_000;
@@ -28,6 +25,17 @@ export interface QuestionForExplanation {
   text: string;
   options: { label: string; text: string }[];
   correctLabel: string;
+}
+
+/** Structured Ask AI content — see prisma AIExplanation.content and the student explanation panel. */
+export interface ExplanationContent {
+  concept: string;
+  optionAnalysis: Record<string, string>;
+  pointsToRemember: string[];
+  memoryTrick: string;
+  examinerTraps: string[];
+  trapWords: string[];
+  examinerVariation: string;
 }
 
 async function loadCanonicalQuestion(questionId: string): Promise<QuestionForExplanation> {
@@ -46,9 +54,29 @@ async function loadCanonicalQuestion(questionId: string): Promise<QuestionForExp
   };
 }
 
-function buildPrompt(question: QuestionForExplanation) {
+function buildPrompt(question: QuestionForExplanation, settings: AiSettings): string {
   const optionsText = question.options.map((o) => `${o.label}. ${o.text}`).join("\n");
-  return `You are an expert exam tutor helping a student understand a multiple-choice question.
+  const sections = ['- "concept": why the correct option is right (under 60 words)'];
+  if (settings.generateOptionAnalysis) {
+    sections.push(
+      '- "optionAnalysis": an object with one key per INCORRECT option label (e.g. "A", "C", "D" if B is correct), each value a short reason that option is wrong (under 40 words)'
+    );
+  }
+  if (settings.generatePointsToRemember) {
+    sections.push('- "pointsToRemember": an array of 2-5 short, exam-focused facts related to this question');
+  }
+  if (settings.generateMemoryTrick) {
+    sections.push('- "memoryTrick": a short mnemonic or memory aid (empty string if none is genuinely useful)');
+  }
+  if (settings.generateExaminerTraps) {
+    sections.push('- "examinerTraps": an array of 0-3 short descriptions of common mistakes examiners exploit on this topic');
+    sections.push(
+      '- "trapWords": an array of specific words this question (or close variants) hinges on, e.g. "except", "not", "most likely" — empty array if none are actually relevant'
+    );
+  }
+  sections.push('- "examinerVariation": one short sentence on how an examiner could plausibly change this question (empty string if not applicable)');
+
+  return `You are an expert exam tutor helping a student understand a multiple-choice question. The stored correct answer is canonical and must never be second-guessed in your explanation — if you believe it is wrong, still explain it as correct but note the discrepancy in "examinerVariation" prefixed with "CONFLICT:".
 
 Question:
 ${question.text}
@@ -59,48 +87,78 @@ ${optionsText}
 The correct answer is ${question.correctLabel}.
 
 Respond with ONLY a JSON object (no markdown fences) with these keys:
-- "whyCorrect": why the correct option is right (under 60 words)
-- "whyNot<Label>" for every incorrect option above (e.g. "whyNotA"), each under 40 words
-- "coreConcept": the underlying concept this question is testing, in one or two sentences
-- "memoryTrick": a short mnemonic or memory aid
+${sections.join("\n")}
 
-Keep the tone encouraging and exam-focused.`;
+Keep the tone encouraging and exam-focused. Never fabricate citations or references.`;
 }
 
-function parseExplanation(text: string): Record<string, string> {
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim());
+}
+
+/** Validates/repairs a provider response into ExplanationContent — never throws, always returns a usable (possibly sparse) object. Exported for scripts/tests. */
+export function validateExplanationContent(text: string): ExplanationContent {
+  const fallback: ExplanationContent = {
+    concept: "",
+    optionAnalysis: {},
+    pointsToRemember: [],
+    memoryTrick: "",
+    examinerTraps: [],
+    trapWords: [],
+    examinerVariation: "",
+  };
+  let parsed: unknown;
   try {
     const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      const parsed = JSON.parse(match[0]);
-      if (parsed && typeof parsed === "object") return parsed;
-    }
+    if (!match) return { ...fallback, concept: text.trim().slice(0, 500) || "No explanation could be generated." };
+    parsed = JSON.parse(match[0]);
   } catch {
-    // fall through to raw-text fallback below
+    return { ...fallback, concept: text.trim().slice(0, 500) || "No explanation could be generated." };
   }
-  return { whyCorrect: text.trim() || "No explanation could be generated." };
+  if (!parsed || typeof parsed !== "object") return fallback;
+  const obj = parsed as Record<string, unknown>;
+
+  const optionAnalysis: Record<string, string> = {};
+  if (obj.optionAnalysis && typeof obj.optionAnalysis === "object") {
+    for (const [label, value] of Object.entries(obj.optionAnalysis as Record<string, unknown>)) {
+      if (typeof value === "string" && value.trim()) optionAnalysis[label] = value.trim();
+    }
+  }
+
+  return {
+    concept: typeof obj.concept === "string" ? obj.concept.trim() : "",
+    optionAnalysis,
+    pointsToRemember: asStringArray(obj.pointsToRemember),
+    memoryTrick: typeof obj.memoryTrick === "string" ? obj.memoryTrick.trim() : "",
+    examinerTraps: asStringArray(obj.examinerTraps),
+    trapWords: asStringArray(obj.trapWords),
+    examinerVariation: typeof obj.examinerVariation === "string" ? obj.examinerVariation.trim() : "",
+  };
 }
 
-async function callGemini(question: QuestionForExplanation, apiKey: string, model: string): Promise<Record<string, string>> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: buildPrompt(question) }] }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 800 },
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(body.error?.message ? `Gemini rejected the request: ${body.error.message}` : `AI explanation request failed (${res.status}).`);
+async function runAndPersist(questionId: string, question: QuestionForExplanation, settings: AiSettings) {
+  try {
+    const result: AiGenerationResult = await generateWithAi(buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 900 });
+    const content = validateExplanationContent(result.text);
+    return await prisma.aIExplanation.update({
+      where: { questionId },
+      data: {
+        status: AiGenerationStatus.COMPLETED,
+        content: content as unknown as Prisma.InputJsonValue,
+        provider: result.provider,
+        model: result.model,
+        generatedAt: new Date(),
+        errorMessage: null,
+      },
+    });
+  } catch (error) {
+    await prisma.aIExplanation.update({
+      where: { questionId },
+      data: { status: AiGenerationStatus.FAILED, errorMessage: error instanceof Error ? error.message : "Generation failed." },
+    });
+    throw error;
   }
-
-  const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  return parseExplanation(text);
 }
 
 /**
@@ -122,33 +180,20 @@ export async function getOrCreateExplanation(questionId: string) {
   const existing = await prisma.aIExplanation.findUnique({ where: { questionId } });
   if (existing?.status === AiGenerationStatus.COMPLETED) return existing;
 
-  const geminiConfig = await getGeminiConfig();
-  if (!geminiConfig.configured) {
-    throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a Gemini API key under Settings → Authentication.");
+  // Checked BEFORE claiming: an unconfigured provider must refuse with no
+  // DB write at all (no network call attempted, no dangling GENERATING row).
+  if (!(await isAiGenerationConfigured())) {
+    throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }
 
+  const settings = await getAiSettings();
   const owned = await claimGeneration(questionId, existing);
   if (!owned) {
     throw new AiGenerationInProgressError("This explanation is being generated — please try again in a few seconds.");
   }
 
   const question = await loadCanonicalQuestion(questionId);
-  const apiKey = await getGeminiApiKey();
-  if (!apiKey) throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a Gemini API key under Settings → Authentication.");
-
-  try {
-    const content = await callGemini(question, apiKey, geminiConfig.model);
-    return await prisma.aIExplanation.update({
-      where: { questionId },
-      data: { status: AiGenerationStatus.COMPLETED, content: content as unknown as Prisma.InputJsonValue, generatedAt: new Date(), errorMessage: null },
-    });
-  } catch (error) {
-    await prisma.aIExplanation.update({
-      where: { questionId },
-      data: { status: AiGenerationStatus.FAILED, errorMessage: error instanceof Error ? error.message : "Generation failed." },
-    });
-    throw error;
-  }
+  return runAndPersist(questionId, question, settings);
 }
 
 /**
@@ -156,7 +201,7 @@ export async function getOrCreateExplanation(questionId: string) {
  * true iff this call won the claim. Exported (only) so
  * scripts/verify-ai-review.ts can exercise the exact concurrency/staleness
  * logic directly — including simulated concurrent races — without needing a
- * live Gemini call.
+ * live provider call.
  */
 export async function claimGeneration(
   questionId: string,
@@ -169,8 +214,8 @@ export async function claimGeneration(
           questionId,
           status: AiGenerationStatus.GENERATING,
           content: {} as unknown as Prisma.InputJsonValue,
-          model: (await getGeminiConfig()).model,
-          provider: "gemini",
+          model: "",
+          provider: "",
           promptVersion: EXPLANATION_PROMPT_VERSION,
         },
       });
@@ -191,4 +236,58 @@ export async function claimGeneration(
     data: { status: AiGenerationStatus.GENERATING, retryCount: { increment: 1 }, promptVersion: EXPLANATION_PROMPT_VERSION },
   });
   return claim.count === 1;
+}
+
+/**
+ * Explicit admin regeneration of an already-COMPLETED explanation (spec
+ * §11: "Regeneration MUST be an explicit Admin action. Do not regenerate
+ * merely because an Admin opens the page."). Unlike claimGeneration's
+ * stale-reclaim, this force-reclaims a healthy COMPLETED row — the outgoing
+ * content is snapshotted into AIExplanationVersion first so it is never
+ * silently lost, then `version` is incremented.
+ */
+export async function regenerateExplanation(questionId: string) {
+  const existing = await prisma.aIExplanation.findUnique({ where: { questionId } });
+  if (!existing) throw new ExplanationNotReadyError("No explanation exists yet for this question — use Generate instead.");
+
+  if (!(await isAiGenerationConfigured())) {
+    throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
+  }
+  if (existing.status === AiGenerationStatus.GENERATING) {
+    const isStale = Date.now() - existing.updatedAt.getTime() > STALE_GENERATION_MS;
+    if (!isStale) throw new AiGenerationInProgressError("This explanation is currently generating.");
+  }
+
+  const claim = await prisma.aIExplanation.updateMany({
+    where: { questionId, status: existing.status, updatedAt: existing.updatedAt },
+    data: { status: AiGenerationStatus.GENERATING, retryCount: { increment: 1 }, promptVersion: EXPLANATION_PROMPT_VERSION },
+  });
+  if (claim.count !== 1) throw new AiGenerationInProgressError("Another regeneration just started — please try again in a moment.");
+
+  if (existing.status === AiGenerationStatus.COMPLETED) {
+    await prisma.aIExplanationVersion.create({
+      data: {
+        explanationId: existing.id,
+        version: existing.version,
+        content: existing.content as Prisma.InputJsonValue,
+        model: existing.model,
+        provider: existing.provider,
+        promptVersion: existing.promptVersion,
+        generatedAt: existing.generatedAt,
+      },
+    });
+    await prisma.aIExplanation.update({ where: { questionId }, data: { version: { increment: 1 }, adminReviewedAt: null, adminReviewedById: null } });
+  }
+
+  const settings = await getAiSettings();
+  const question = await loadCanonicalQuestion(questionId);
+  return runAndPersist(questionId, question, settings);
+}
+
+/** Marks the current version of an explanation as admin-reviewed (spec §11/§12). */
+export async function markExplanationReviewed(questionId: string, adminUserId: string) {
+  return prisma.aIExplanation.update({
+    where: { questionId },
+    data: { adminReviewedAt: new Date(), adminReviewedById: adminUserId },
+  });
 }

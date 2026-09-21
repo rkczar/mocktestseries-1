@@ -1,13 +1,13 @@
 import "server-only";
 import { AiGenerationStatus, AiSlot, AiVariantType, Prisma, QuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getGeminiApiKey, getGeminiConfig } from "@/lib/gemini-config";
-import { AiNotConfiguredError } from "@/lib/ai-explanation";
+import { generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
 
 /**
  * AI-generated alternate practice questions (AI01–AI05) — see Step 7.1–7.3.
- * Reuses the same Gemini provider as lib/ai-explanation.ts (one AI surface
- * in the app). A variant's DB primary key is authoritative, as required;
+ * Generation goes through lib/ai-provider.ts (same provider abstraction as
+ * lib/ai-explanation.ts — one AI surface in the app). A variant's DB primary
+ * key is authoritative, as required;
  * `code` (`<parent code> AI0<n>`) is a human-readable label derived from it,
  * matching the existing Question-code convention (lib/question-code.ts)
  * without needing a new atomic counter — the slot itself is the sequence.
@@ -15,6 +15,7 @@ import { AiNotConfiguredError } from "@/lib/ai-explanation";
 
 export class MaxVariantsReachedError extends Error {}
 export class InvalidVariantSourceError extends Error {}
+export class VariantNotPublishableError extends Error {}
 
 export const VARIANT_PROMPT_VERSION = "variant-v1";
 const ALL_SLOTS: AiSlot[] = [AiSlot.AI01, AiSlot.AI02, AiSlot.AI03, AiSlot.AI04, AiSlot.AI05];
@@ -92,31 +93,12 @@ export function validateGenerated(raw: string): GeneratedVariant | null {
   return { text: obj.text.trim(), options };
 }
 
-async function callGemini(parent: ParentQuestion, variantType: AiVariantType, apiKey: string, model: string): Promise<string> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: buildPrompt(parent, variantType) }] }],
-        generationConfig: { temperature: 0.6, maxOutputTokens: 600 },
-      }),
-    }
-  );
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(body.error?.message ? `Gemini rejected the request: ${body.error.message}` : `AI variant request failed (${res.status}).`);
-  }
-  const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-  return data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-}
-
 /** Runs generation against an already-claimed (GENERATING) variant row, writing COMPLETED/FAILED in place. */
-async function runGeneration(variantId: string, parent: ParentQuestion, variantType: AiVariantType, apiKey: string, model: string) {
+async function runGeneration(variantId: string, parent: ParentQuestion, variantType: AiVariantType) {
+  let result: AiGenerationResult;
   try {
-    const raw = await callGemini(parent, variantType, apiKey, model);
-    const validated = validateGenerated(raw);
+    result = await generateWithAi(buildPrompt(parent, variantType), { temperature: 0.6, maxOutputTokens: 600 });
+    const validated = validateGenerated(result.text);
     if (!validated) {
       throw new Error("AI returned a malformed question (wrong option count, no single correct option, or empty/duplicate option text).");
     }
@@ -140,10 +122,16 @@ async function runGeneration(variantId: string, parent: ParentQuestion, variantT
         where: { id: variantId },
         data: {
           text: validated.text,
-          status: QuestionStatus.PUBLISHED, // only now, once validated — a failed generation never becomes usable (Step 7.2)
+          // Stays DRAFT (out of every PUBLISHED-only student/test-selection
+          // query) even once generation succeeds — an AI variant must not
+          // silently enter real mock tests. An admin explicitly promotes it
+          // via publishVariant() below.
+          status: QuestionStatus.DRAFT,
           aiGenerationStatus: AiGenerationStatus.COMPLETED,
           aiGeneratedAt: new Date(),
           aiErrorMessage: null,
+          aiProvider: result.provider,
+          aiModel: result.model,
         },
       }),
     ]);
@@ -175,10 +163,9 @@ export async function generateVariant(parentQuestionId: string, variantType: AiV
   if (!parent) throw new Error("Source question not found.");
   if (parent.parentQuestionId) throw new InvalidVariantSourceError("Cannot generate a variant of a variant — pick the canonical (parent) question.");
 
-  const geminiConfig = await getGeminiConfig();
-  if (!geminiConfig.configured) throw new AiNotConfiguredError("AI variants aren't configured yet. An admin needs to add a Gemini API key under Settings → Authentication.");
-  const apiKey = await getGeminiApiKey();
-  if (!apiKey) throw new AiNotConfiguredError("AI variants aren't configured yet. An admin needs to add a Gemini API key under Settings → Authentication.");
+  if (!(await isAiGenerationConfigured())) {
+    throw new AiNotConfiguredError("AI variants aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
+  }
 
   const existingSlots = new Set((await prisma.question.findMany({ where: { parentQuestionId }, select: { aiSlot: true } })).map((r) => r.aiSlot));
   const slot = ALL_SLOTS.find((s) => !existingSlots.has(s));
@@ -201,8 +188,8 @@ export async function generateVariant(parentQuestionId: string, variantType: AiV
         aiVariantType: variantType,
         aiSlot: slot,
         aiGenerationStatus: AiGenerationStatus.GENERATING,
-        aiProvider: "gemini",
-        aiModel: geminiConfig.model,
+        aiProvider: "",
+        aiModel: "",
         aiPromptVersion: VARIANT_PROMPT_VERSION,
       },
     });
@@ -214,7 +201,7 @@ export async function generateVariant(parentQuestionId: string, variantType: AiV
     throw error;
   }
 
-  return runGeneration(variantId, parent, variantType, apiKey, geminiConfig.model);
+  return runGeneration(variantId, parent, variantType);
 }
 
 /**
@@ -232,16 +219,32 @@ export async function retryFailedVariant(variantId: string) {
   const parent = await prisma.question.findUnique({ where: { id: variant.parentQuestionId }, include: { options: { orderBy: { order: "asc" } } } });
   if (!parent) throw new Error("Source question no longer exists.");
 
-  const geminiConfig = await getGeminiConfig();
-  if (!geminiConfig.configured) throw new AiNotConfiguredError("AI variants aren't configured yet. An admin needs to add a Gemini API key under Settings → Authentication.");
-  const apiKey = await getGeminiApiKey();
-  if (!apiKey) throw new AiNotConfiguredError("AI variants aren't configured yet. An admin needs to add a Gemini API key under Settings → Authentication.");
+  if (!(await isAiGenerationConfigured())) {
+    throw new AiNotConfiguredError("AI variants aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
+  }
 
   const claim = await prisma.question.updateMany({
     where: { id: variantId, aiGenerationStatus: AiGenerationStatus.FAILED },
-    data: { aiGenerationStatus: AiGenerationStatus.GENERATING, aiPromptVersion: VARIANT_PROMPT_VERSION, aiModel: geminiConfig.model },
+    data: { aiGenerationStatus: AiGenerationStatus.GENERATING, aiPromptVersion: VARIANT_PROMPT_VERSION },
   });
   if (claim.count !== 1) throw new Error("This variant is already being retried elsewhere.");
 
-  return runGeneration(variantId, parent, variant.aiVariantType, apiKey, geminiConfig.model);
+  return runGeneration(variantId, parent, variant.aiVariantType);
+}
+
+/**
+ * Promotes a COMPLETED, DRAFT AI variant into the real Question Bank
+ * (status → PUBLISHED), making it selectable into mock tests like any other
+ * bank question. This is the only path a variant can take to become
+ * student-facing — generation itself never publishes (see runGeneration).
+ */
+export async function publishVariant(variantId: string) {
+  const variant = await prisma.question.findUnique({ where: { id: variantId } });
+  if (!variant || !variant.parentQuestionId || !variant.aiVariantType) throw new InvalidVariantSourceError("Not an AI variant.");
+  if (variant.aiGenerationStatus !== AiGenerationStatus.COMPLETED) {
+    throw new VariantNotPublishableError("Only a successfully generated variant can be published.");
+  }
+  if (variant.status === QuestionStatus.PUBLISHED) return variant;
+
+  return prisma.question.update({ where: { id: variantId }, data: { status: QuestionStatus.PUBLISHED } });
 }
