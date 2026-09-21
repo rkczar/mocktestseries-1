@@ -2,7 +2,8 @@
 
 import { useActionState, useState, useRef, useEffect, type ReactNode, type CSSProperties } from "react";
 import { useFormStatus } from "react-dom";
-import { Eye, EyeOff, Loader2, GraduationCap } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeft, Eye, EyeOff, Loader2, GraduationCap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -365,6 +366,13 @@ export function LoginScreen({
 
   return (
     <div className="relative z-10 w-full" style={{ maxWidth: pageConfig.cardWidth }}>
+      <Link
+        href="/"
+        className="mb-4 inline-flex items-center gap-1.5 text-sm text-white/60 transition-colors hover:text-white"
+      >
+        <ArrowLeft className="h-4 w-4" aria-hidden /> Back to Home
+      </Link>
+
       <div className="mb-8 flex flex-col items-center gap-3 text-center">
         {pageConfig.branding.showLogo ? (
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500 text-white shadow-lg">
@@ -372,7 +380,7 @@ export function LoginScreen({
           </div>
         ) : null}
         <div>
-          <BrandLogo size="lg" href={null} className="justify-center text-white" />
+          <BrandLogo size="lg" href="/" className="justify-center text-white" />
           <p className="mt-1 text-base font-medium text-white/90">{pageConfig.branding.loginTitle}</p>
           {pageConfig.branding.subtitle ? <p className="text-sm text-white/50">{pageConfig.branding.subtitle}</p> : null}
         </div>

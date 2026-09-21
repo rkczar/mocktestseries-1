@@ -43,3 +43,5 @@ next-env.d.ts
 # tool-generated analysis/debug output (not part of the app)
 /graphify-out/
 /trace/
+/.claude/
+/.context/
