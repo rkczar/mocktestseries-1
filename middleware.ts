@@ -22,7 +22,7 @@ export default async function middleware(request: NextRequest) {
     const session = await adminAuth();
     if (!session?.user) {
       const loginUrl = new URL("/admin/login", request.nextUrl.origin);
-      loginUrl.searchParams.set("callbackUrl", pathname);
+      loginUrl.searchParams.set("callbackUrl", pathname + request.nextUrl.search);
       return NextResponse.redirect(loginUrl);
     }
     return NextResponse.next();
@@ -40,7 +40,11 @@ export default async function middleware(request: NextRequest) {
     });
     if (!token) {
       const loginUrl = new URL("/login", request.nextUrl.origin);
-      loginUrl.searchParams.set("callbackUrl", pathname);
+      // Preserve the full path + query (not just pathname) so a deep link
+      // into a specific resource (e.g. /student/attempt/resume?paper=<id>)
+      // survives the login round-trip instead of dropping which resource
+      // the visitor was trying to reach.
+      loginUrl.searchParams.set("callbackUrl", pathname + request.nextUrl.search);
       return NextResponse.redirect(loginUrl);
     }
     return NextResponse.next();

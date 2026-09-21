@@ -49,4 +49,20 @@ export const ADMIN_CONFIG_LINKS: AdminConfigLink[] = [
   // getExamDetailForStudent(), which reads the same Exam/Subject/Topic rows
   // this page manages (app/admin/(dashboard)/exams/syllabus/actions.ts).
   { from: "/admin/exams/syllabus", to: "/student/exams/[examId]", label: "Publishes exam syllabus" },
+
+  // app/admin/(dashboard)/exams/edit-exam-dialog.tsx writes Exam.publicPageEnabled/
+  // publicSlug/seoTitle/overview/faqItems/etc.; lib/exam-public.ts reads them
+  // for /exams/[slug] and its deep pages.
+  { from: "/admin/exams", to: "/exams/[slug]", label: "Publishes exam public page & SEO fields" },
+
+  // app/admin/(dashboard)/seo/actions.ts writes Setting["seo.settings"];
+  // lib/seo-settings.ts + lib/site-url.ts read it for every public page's
+  // metadata, canonical URL, and app/sitemap.ts / app/robots.ts.
+  { from: "/admin/seo", to: "/exams/[slug]", label: "Site-wide SEO defaults (title template, canonical base, indexability)" },
+  { from: "/admin/seo", to: "/", label: "Site-wide SEO defaults" },
+
+  // app/admin/(dashboard)/ai/settings/homepage-demo-picker.tsx writes
+  // ai.settings.homepageDemoQuestionIds; lib/homepage-ai-demo.ts reads it for
+  // the homepage "Ask AI in Action" section.
+  { from: "/admin/ai/settings", to: "/", label: "Curates the homepage AI Explanation Demo questions" },
 ];

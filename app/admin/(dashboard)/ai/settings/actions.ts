@@ -6,7 +6,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { saveGeminiConfig, testGeminiConnection, type ProviderLastTest } from "@/lib/gemini-config";
 import { saveOpenAiConfig, testOpenAiConnection } from "@/lib/openai-config";
-import { saveAiSettings, type AiSettingsUpdate } from "@/lib/ai-settings";
+import { saveAiSettings, type AiSettingsUpdate, HOMEPAGE_DEMO_MAX } from "@/lib/ai-settings";
 
 export interface SettingsFormState {
   error?: string;
@@ -92,12 +92,44 @@ export async function saveAiSettingsAction(_prev: SettingsFormState, formData: F
     generatePointsToRemember: formData.get("generatePointsToRemember") === "on",
     maxRelatedQuestions: Number.isFinite(maxRelatedRaw) ? Math.min(5, Math.max(0, Math.floor(maxRelatedRaw))) : 5,
     homepageDemoEnabled: formData.get("homepageDemoEnabled") === "on",
-    homepageDemoMaxQuestions: Number.isFinite(homepageDemoMaxRaw) && homepageDemoMaxRaw > 0 ? Math.floor(homepageDemoMaxRaw) : 12,
+    homepageDemoMaxQuestions:
+      Number.isFinite(homepageDemoMaxRaw) && homepageDemoMaxRaw > 0 ? Math.min(HOMEPAGE_DEMO_MAX, Math.floor(homepageDemoMaxRaw)) : HOMEPAGE_DEMO_MAX,
   };
 
   await saveAiSettings(update);
   await prisma.auditLog.create({ data: { actorId: session.user.id, action: "AI_SETTINGS_SAVED", entityType: "Setting", entityId: "ai.settings", metadata: update } });
 
   revalidateAiSurfaces();
+  revalidatePath("/");
+  return { success: true };
+}
+
+/**
+ * Admin-curated homepage "Ask AI in Action" question selection (Section on
+ * public exam SEO hub). Separate action from saveAiSettingsAction so the
+ * question picker can save independently of the general settings form.
+ * Server-side max-10 enforcement — never trust the client checkbox count.
+ */
+export async function saveHomepageDemoSelectionAction(_prev: SettingsFormState, formData: FormData): Promise<SettingsFormState> {
+  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
+
+  const ids = formData.getAll("questionId").map(String).filter(Boolean).slice(0, HOMEPAGE_DEMO_MAX);
+
+  if (ids.length > 0) {
+    const validCount = await prisma.aIExplanation.count({
+      where: { questionId: { in: ids }, status: "COMPLETED", adminReviewedAt: { not: null }, isStale: false },
+    });
+    if (validCount !== ids.length) {
+      return { error: "One or more selected questions no longer have an approved, reviewed AI explanation." };
+    }
+  }
+
+  await saveAiSettings({ homepageDemoQuestionIds: ids });
+  await prisma.auditLog.create({
+    data: { actorId: session.user.id, action: "HOMEPAGE_AI_DEMO_SELECTION_SAVED", entityType: "Setting", entityId: "ai.settings", metadata: { ids } },
+  });
+
+  revalidateAiSurfaces();
+  revalidatePath("/");
   return { success: true };
 }

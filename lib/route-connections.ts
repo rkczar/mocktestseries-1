@@ -65,6 +65,25 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
 
   // app/student/attempt/[attemptId]/result/page.tsx:69 — "Back to Dashboard" link.
   { from: "/student/attempt/[attemptId]/result", to: "/student/dashboard", source: "button", label: "Back to Dashboard" },
+
+  // Public exam SEO hub (/exams/[slug]/...) "Attempt Paper" / "Start Test" /
+  // "Practice" CTAs. Per-item hrefs are template literals
+  // (`/student/attempt/resume?paper=${p.id}`, `/student/subject-test/${exam.id}`)
+  // so the mechanical scanner can't see them — curated here since they're real.
+  { from: "/exams/[slug]", to: "/student/attempt/resume", source: "cta", label: "Attempt Paper / Start Preparing" },
+  { from: "/exams/[slug]/previous-year-papers", to: "/student/attempt/resume", source: "button", label: "Attempt Paper" },
+  { from: "/exams/[slug]/mock-tests", to: "/student/attempt/resume", source: "button", label: "Start Test" },
+  { from: "/exams/[slug]/syllabus", to: "/student/subject-test/[examId]", source: "button", label: "Practice by subject" },
+  { from: "/exams/[slug]/question-bank", to: "/student/subject-test/[examId]", source: "button", label: "Practice by subject" },
+  { from: "/exams/[slug]", to: "/student/subject-test/[examId]", source: "card", label: "Subject card" },
+
+  // app/student/attempt/resume/page.tsx — resumes into the canonical
+  // TestAttempt flow, same destination the authenticated student flow uses.
+  { from: "/student/attempt/resume", to: "/student/attempt/[attemptId]", source: "redirect", label: "Resumes into canonical TestAttempt" },
+
+  // middleware.ts redirects an unauthenticated /student/* request (including
+  // /student/attempt/resume) to /login with callbackUrl set.
+  { from: "/student/attempt/resume", to: "/login", source: "redirect", label: "Unauthenticated → login (callbackUrl preserved)" },
 ];
 
 /**

@@ -1,5 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { HOMEPAGE_DEMO_MAX } from "@/lib/ai-demo-constants";
+
+export { HOMEPAGE_DEMO_MAX };
 
 /**
  * Non-secret Ask AI configuration (provider selection, generation toggles,
@@ -33,7 +36,10 @@ export interface AiSettings {
   maxRelatedQuestions: number;
 
   homepageDemoEnabled: boolean;
+  /** Hard-capped at 10 everywhere this is read — used only as the auto-select fallback count when homepageDemoQuestionIds is empty. */
   homepageDemoMaxQuestions: number;
+  /** Admin-curated question ids for the homepage "Ask AI in Action" demo, in display order. Max 10 (enforced on save and on read). Empty = fall back to auto-selecting the most recently admin-reviewed eligible explanations. */
+  homepageDemoQuestionIds: string[];
 }
 
 interface StoredAiSettings extends Partial<AiSettings> {
@@ -52,7 +58,8 @@ const DEFAULTS: AiSettings = {
   generatePointsToRemember: true,
   maxRelatedQuestions: 5,
   homepageDemoEnabled: false,
-  homepageDemoMaxQuestions: 12,
+  homepageDemoMaxQuestions: 10,
+  homepageDemoQuestionIds: [],
 };
 
 let cache: { fetchedAt: number; value: AiSettings } | null = null;

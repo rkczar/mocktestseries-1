@@ -32,6 +32,10 @@ export const PERMISSIONS = {
   // Pages & Content) is MASTER_ADMIN-only per spec; FULL_ADMIN can still
   // view the page list, just not toggle it.
   PAGE_VISIBILITY_MANAGE: "page-visibility:manage",
+  // Site-wide SEO defaults (Admin -> SEO). Same MASTER_ADMIN-only pattern as
+  // PAGE_VISIBILITY_MANAGE above — FULL_ADMIN can view the page but every
+  // mutation is blocked server-side, not just hidden in the UI.
+  SEO_MANAGE: "seo:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

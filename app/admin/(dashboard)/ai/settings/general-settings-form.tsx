@@ -99,8 +99,11 @@ export function AiGeneralSettingsCard({ settings }: { settings: AiSettings }) {
               <Switch name="homepageDemoEnabled" defaultChecked={settings.homepageDemoEnabled} />
             </div>
             <div className="mt-2 flex flex-col gap-1.5">
-              <Label htmlFor="homepageDemoMaxQuestions">Maximum public demo questions</Label>
-              <Input id="homepageDemoMaxQuestions" name="homepageDemoMaxQuestions" type="number" min={1} defaultValue={settings.homepageDemoMaxQuestions} />
+              <Label htmlFor="homepageDemoMaxQuestions">Auto-select fallback count (used only when no questions are hand-picked below)</Label>
+              <Input id="homepageDemoMaxQuestions" name="homepageDemoMaxQuestions" type="number" min={1} max={10} defaultValue={settings.homepageDemoMaxQuestions} />
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                Hand-pick specific questions in &quot;Homepage AI Demo Questions&quot; below for full control — max 10 either way.
+              </p>
             </div>
           </div>
 

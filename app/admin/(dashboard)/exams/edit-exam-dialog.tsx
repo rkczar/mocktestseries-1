@@ -19,6 +19,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { editExamAction, type EditExamFormState } from "./actions";
+import { pairListToText } from "@/lib/homepage-field-codec";
 
 export interface EditableExam {
   id: string;
@@ -34,6 +35,20 @@ export interface EditableExam {
   durationMinutes: number | null;
   instructions: string | null;
   description: string | null;
+  publicPageEnabled: boolean;
+  publicSlug: string | null;
+  shortDescription: string | null;
+  overview: string | null;
+  conductingAuthority: string | null;
+  eligibility: string | null;
+  examPatternInfo: string | null;
+  totalQuestions: number | null;
+  totalMarks: number | null;
+  examMode: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  importantDates: unknown;
+  faqItems: unknown;
 }
 
 function toDateInputValue(value: Date | string | null): string {
@@ -57,6 +72,7 @@ export function EditExamDialog({ exam }: { exam: EditableExam }) {
   const [open, setOpen] = useState(false);
   const [isUpcoming, setIsUpcoming] = useState(exam.isUpcoming);
   const [isActive, setIsActive] = useState(exam.isActive);
+  const [publicPageEnabled, setPublicPageEnabled] = useState(exam.publicPageEnabled);
 
   useEffect(() => {
     if (state.success) setOpen(false);
@@ -153,6 +169,102 @@ export function EditExamDialog({ exam }: { exam: EditableExam }) {
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <Label htmlFor={`instructions-${exam.id}`}>Instructions</Label>
             <Textarea id={`instructions-${exam.id}`} name="instructions" defaultValue={exam.instructions ?? ""} rows={3} />
+          </div>
+
+          <div className="mt-2 flex flex-col gap-1 sm:col-span-2">
+            <p className="text-sm font-semibold text-[var(--color-foreground)]">Public Page &amp; SEO</p>
+            <p className="text-xs text-[var(--color-muted-foreground)]">
+              Controls the public marketing page at /exams/&lt;slug&gt;. Leave the public page off until real, verified content is
+              entered — never publish invented facts.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="flex items-center gap-2 text-sm text-[var(--color-foreground)]">
+              <Checkbox checked={publicPageEnabled} onCheckedChange={(v) => setPublicPageEnabled(v === true)} />
+              Public page enabled
+            </label>
+            <input type="hidden" name="publicPageEnabled" value={publicPageEnabled ? "true" : "false"} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`publicSlug-${exam.id}`}>Public URL slug</Label>
+            <Input
+              id={`publicSlug-${exam.id}`}
+              name="publicSlug"
+              defaultValue={exam.publicSlug ?? ""}
+              placeholder="rajasthan-medical-officer"
+              disabled={!publicPageEnabled}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label htmlFor={`shortDescription-${exam.id}`}>Short description (hero subheading)</Label>
+            <Input id={`shortDescription-${exam.id}`} name="shortDescription" defaultValue={exam.shortDescription ?? ""} maxLength={300} />
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label htmlFor={`overview-${exam.id}`}>Overview (About This Exam section)</Label>
+            <Textarea id={`overview-${exam.id}`} name="overview" defaultValue={exam.overview ?? ""} rows={4} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`conductingAuthority-${exam.id}`}>Conducting authority</Label>
+            <Input id={`conductingAuthority-${exam.id}`} name="conductingAuthority" defaultValue={exam.conductingAuthority ?? ""} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`examMode-${exam.id}`}>Exam mode (only if officially confirmed)</Label>
+            <Input id={`examMode-${exam.id}`} name="examMode" defaultValue={exam.examMode ?? ""} placeholder="e.g. Offline (OMR)" />
+          </div>
+
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label htmlFor={`eligibility-${exam.id}`}>Eligibility (only verified facts)</Label>
+            <Textarea id={`eligibility-${exam.id}`} name="eligibility" defaultValue={exam.eligibility ?? ""} rows={3} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`totalQuestions-${exam.id}`}>Total questions (only if officially confirmed)</Label>
+            <Input id={`totalQuestions-${exam.id}`} name="totalQuestions" type="number" min={0} defaultValue={exam.totalQuestions ?? ""} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`totalMarks-${exam.id}`}>Total marks (only if officially confirmed)</Label>
+            <Input id={`totalMarks-${exam.id}`} name="totalMarks" type="number" min={0} defaultValue={exam.totalMarks ?? ""} />
+          </div>
+
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label htmlFor={`examPatternInfo-${exam.id}`}>
+              Exam pattern notes — for historical/unconfirmed pattern details, label them as such in the text itself
+            </Label>
+            <Textarea id={`examPatternInfo-${exam.id}`} name="examPatternInfo" defaultValue={exam.examPatternInfo ?? ""} rows={4} />
+          </div>
+
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label htmlFor={`importantDatesText-${exam.id}`}>Important dates — only verified/official dates (one per line: Label | Date)</Label>
+            <Textarea
+              id={`importantDatesText-${exam.id}`}
+              name="importantDatesText"
+              defaultValue={pairListToText(exam.importantDates)}
+              rows={3}
+              placeholder="Notification Released | 13 August 2026"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label htmlFor={`faqItemsText-${exam.id}`}>FAQ (one per line: Question | Answer)</Label>
+            <Textarea
+              id={`faqItemsText-${exam.id}`}
+              name="faqItemsText"
+              defaultValue={pairListToText(exam.faqItems)}
+              rows={5}
+              placeholder="Who conducts this exam? | ..."
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`seoTitle-${exam.id}`}>SEO title (blank = default template)</Label>
+            <Input id={`seoTitle-${exam.id}`} name="seoTitle" defaultValue={exam.seoTitle ?? ""} maxLength={200} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`seoDescription-${exam.id}`}>SEO meta description (blank = site default)</Label>
+            <Input id={`seoDescription-${exam.id}`} name="seoDescription" defaultValue={exam.seoDescription ?? ""} maxLength={300} />
           </div>
 
           {state.error ? <p className="text-sm text-[var(--color-error)] sm:col-span-2">{state.error}</p> : null}

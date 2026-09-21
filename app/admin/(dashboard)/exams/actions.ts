@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
+import { textToPairList } from "@/lib/homepage-field-codec";
 
 const examSchema = z.object({
   name: z.string().min(2).max(200),
@@ -106,6 +107,29 @@ const editExamSchema = z.object({
   durationMinutes: z.coerce.number().int().min(1).max(1000).optional().or(z.literal("").transform(() => undefined)),
   instructions: z.string().max(5000).optional(),
   description: z.string().max(2000).optional(),
+
+  // Public exam landing page (/exams/[slug]) — see the
+  // 20260921120000_add_public_exam_page_and_page_visibility migration.
+  publicPageEnabled: z.coerce.boolean().optional().default(false),
+  publicSlug: z
+    .string()
+    .trim()
+    .max(120)
+    .regex(/^[a-z0-9-]*$/, "Lowercase letters, numbers, and hyphens only")
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  shortDescription: z.string().max(300).optional(),
+  overview: z.string().max(5000).optional(),
+  conductingAuthority: z.string().max(300).optional(),
+  eligibility: z.string().max(3000).optional(),
+  examPatternInfo: z.string().max(3000).optional(),
+  totalQuestions: z.coerce.number().int().min(0).max(2000).optional().or(z.literal("").transform(() => undefined)),
+  totalMarks: z.coerce.number().int().min(0).max(2000).optional().or(z.literal("").transform(() => undefined)),
+  examMode: z.string().max(100).optional(),
+  seoTitle: z.string().max(200).optional(),
+  seoDescription: z.string().max(300).optional(),
+  importantDatesText: z.string().max(3000).optional(),
+  faqItemsText: z.string().max(8000).optional(),
 });
 
 export interface EditExamFormState {
@@ -130,6 +154,20 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
     durationMinutes: formData.get("durationMinutes"),
     instructions: formData.get("instructions"),
     description: formData.get("description"),
+    publicPageEnabled: formData.get("publicPageEnabled") === "on" || formData.get("publicPageEnabled") === "true",
+    publicSlug: formData.get("publicSlug")?.toString().trim().toLowerCase(),
+    shortDescription: formData.get("shortDescription"),
+    overview: formData.get("overview"),
+    conductingAuthority: formData.get("conductingAuthority"),
+    eligibility: formData.get("eligibility"),
+    examPatternInfo: formData.get("examPatternInfo"),
+    totalQuestions: formData.get("totalQuestions"),
+    totalMarks: formData.get("totalMarks"),
+    examMode: formData.get("examMode"),
+    seoTitle: formData.get("seoTitle"),
+    seoDescription: formData.get("seoDescription"),
+    importantDatesText: formData.get("importantDatesText"),
+    faqItemsText: formData.get("faqItemsText"),
   });
 
   if (!parsed.success) {
@@ -142,6 +180,20 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
   if (existingByCode && existingByCode.id !== id) {
     return { error: "Another exam already uses this code." };
   }
+
+  if (data.publicPageEnabled && !data.publicSlug) {
+    return { error: "A public URL slug is required to enable the public page." };
+  }
+
+  if (data.publicSlug) {
+    const existingBySlug = await prisma.exam.findUnique({ where: { publicSlug: data.publicSlug }, select: { id: true } });
+    if (existingBySlug && existingBySlug.id !== id) {
+      return { error: "Another exam already uses this public URL slug." };
+    }
+  }
+
+  const importantDates = textToPairList(data.importantDatesText ?? "").map(([label, date]) => ({ label, date }));
+  const faqItems = textToPairList(data.faqItemsText ?? "").map(([question, answer]) => ({ question, answer }));
 
   const before = await prisma.exam.findUnique({ where: { id }, select: { name: true, code: true } });
   if (!before) return { error: "Exam not found." };
@@ -161,6 +213,20 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
       durationMinutes: data.durationMinutes ?? null,
       instructions: data.instructions || null,
       description: data.description || null,
+      publicPageEnabled: data.publicPageEnabled,
+      publicSlug: data.publicSlug ?? null,
+      shortDescription: data.shortDescription || null,
+      overview: data.overview || null,
+      conductingAuthority: data.conductingAuthority || null,
+      eligibility: data.eligibility || null,
+      examPatternInfo: data.examPatternInfo || null,
+      totalQuestions: data.totalQuestions ?? null,
+      totalMarks: data.totalMarks ?? null,
+      examMode: data.examMode || null,
+      seoTitle: data.seoTitle || null,
+      seoDescription: data.seoDescription || null,
+      importantDates,
+      faqItems,
     },
   });
 
@@ -178,6 +244,13 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
   revalidatePath("/admin");
   revalidatePath("/");
   revalidatePath("/student/exams/[examId]", "page");
+  revalidatePath("/exams");
+  revalidatePath("/exams/[slug]", "page");
+  revalidatePath("/exams/[slug]/syllabus", "page");
+  revalidatePath("/exams/[slug]/previous-year-papers", "page");
+  revalidatePath("/exams/[slug]/mock-tests", "page");
+  revalidatePath("/exams/[slug]/question-bank", "page");
+  revalidatePath("/exams/[slug]/exam-pattern", "page");
   return { success: true };
 }
 

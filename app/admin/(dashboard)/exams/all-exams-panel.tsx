@@ -39,6 +39,7 @@ export async function AllExamsPanel() {
                   <th className="py-2 pr-4">Code</th>
                   <th className="py-2 pr-4">Year</th>
                   <th className="py-2 pr-4">Papers / Series</th>
+                  <th className="py-2 pr-4">Public Page</th>
                   <th className="py-2 pr-4">Active</th>
                   <th className="py-2 pr-4" />
                 </tr>
@@ -65,6 +66,15 @@ export async function AllExamsPanel() {
                       >
                         Test Series
                       </Link>
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      {exam.publicPageEnabled && exam.publicSlug ? (
+                        <Link href={`/exams/${exam.publicSlug}`} target="_blank" className="text-[var(--color-primary)] hover:underline">
+                          <Badge variant="success">Live</Badge>
+                        </Link>
+                      ) : (
+                        <Badge variant="neutral">Off</Badge>
+                      )}
                     </td>
                     <td className="py-2.5 pr-4">
                       <ActiveToggle examId={exam.id} isActive={exam.isActive} />
