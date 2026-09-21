@@ -4,8 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { requireStudent } from "@/lib/student-session";
 import { getAiSettings } from "@/lib/ai-settings";
 import { getOrCreateExplanation, AiNotConfiguredError, AiGenerationInProgressError, type ExplanationContent } from "@/lib/ai-explanation";
+import { getOrCreateExplanationVariant } from "@/lib/ai-explanation-variants";
+import { EXPLANATION_VARIANTS } from "@/lib/ai-explanation-variants-catalog";
 import {
   getStoredAiExplanation,
+  getStoredAiExplanationVariant,
   isAiGenerationRateLimited,
   hasInProgressAttemptForQuestion,
   logActivity,
@@ -78,5 +81,51 @@ export async function getExplanationAction(questionId: string) {
     if (error instanceof AiNotConfiguredError) return { ok: false as const, error: error.message };
     if (error instanceof AiGenerationInProgressError) return { ok: false as const, error: error.message, retry: true as const };
     return { ok: false as const, error: error instanceof Error ? error.message : "Something went wrong generating the explanation." };
+  }
+}
+
+/**
+ * Alternate-tone "AI Variant" of the explanation above — same auth/in-progress
+ * -attempt/quota/rate-limit gates, reused verbatim, only the cache/generation
+ * target differs (lib/ai-explanation-variants.ts, keyed by question+variant
+ * instead of just question).
+ */
+export async function getExplanationVariantAction(questionId: string, variantId: string) {
+  const student = await requireStudent();
+
+  if (!EXPLANATION_VARIANTS.some((v) => v.id === variantId)) {
+    return { ok: false as const, error: "Unknown AI variant." };
+  }
+
+  if (await hasInProgressAttemptForQuestion(student.id, questionId)) {
+    return { ok: false as const, error: "Ask AI is available once you've submitted this test." };
+  }
+
+  const quota = await checkAiAccessQuota(student.id, questionId);
+  if (!quota.allowed) {
+    return { ok: false as const, error: "Daily AI limit reached." };
+  }
+
+  const cached = await getStoredAiExplanationVariant(questionId, variantId);
+  const isNewGeneration = cached?.status !== "COMPLETED";
+
+  if (isNewGeneration && (await isAiGenerationRateLimited(student.id))) {
+    return { ok: false as const, error: "You've requested a lot of new AI explanations recently — please wait a bit and try again." };
+  }
+
+  try {
+    const variant = await getOrCreateExplanationVariant(questionId, variantId);
+    if (isNewGeneration) await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId, variantId });
+    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: variant.provider, model: variant.model });
+
+    return {
+      ok: true as const,
+      content: variant.content as unknown as ExplanationContent,
+      remainingToday: quota.remainingToday,
+    };
+  } catch (error) {
+    if (error instanceof AiNotConfiguredError) return { ok: false as const, error: error.message };
+    if (error instanceof AiGenerationInProgressError) return { ok: false as const, error: error.message, retry: true as const };
+    return { ok: false as const, error: error instanceof Error ? error.message : "Something went wrong generating this variant." };
   }
 }

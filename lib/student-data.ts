@@ -543,6 +543,10 @@ export async function getStoredAiExplanation(questionId: string) {
   return prisma.aIExplanation.findUnique({ where: { questionId } });
 }
 
+export async function getStoredAiExplanationVariant(questionId: string, variantId: string) {
+  return prisma.aIExplanationVariant.findUnique({ where: { questionId_variantId: { questionId, variantId } } });
+}
+
 const AI_RATE_LIMIT_WINDOW_MS = 60 * 60_000;
 const AI_RATE_LIMIT_MAX_NEW_GENERATIONS = 30;
 

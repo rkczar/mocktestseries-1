@@ -16,7 +16,7 @@ import {
   CtaSection,
 } from "./sections";
 import type { HomepageSectionKey } from "@prisma/client";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 type Section = ResolvedHomepage["sections"][number];
 type SectionComponentProps = { content: Record<string, unknown>; resolved: Section["resolved"] };
@@ -53,18 +53,32 @@ export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
       ) : null}
 
       <main className="flex-1">
-        {bodySections.map((section) => {
-          const Component = SECTION_COMPONENTS[section.key];
-          if (!Component) return null;
-          return (
-            <Component
-              key={section.key}
-              content={section.content}
-              resolved={section.resolved}
-            />
-          );
-        })}
-        <AskAiDemoSection />
+        {(() => {
+          // "Try AI Now" is a major product demo, not a footnote — render it
+          // right after Featured Exam (falling back to right after Hero if
+          // Featured Exam is disabled/unconfigured, or at the very end as a
+          // last resort) instead of always trailing every other section.
+          const tryAiNowAfterKey = bodySections.some((s) => s.key === "FEATURED_EXAM")
+            ? "FEATURED_EXAM"
+            : bodySections.some((s) => s.key === "HERO")
+              ? "HERO"
+              : null;
+          let tryAiNowInserted = tryAiNowAfterKey === null;
+
+          const nodes: ReactNode[] = [];
+          for (const section of bodySections) {
+            const Component = SECTION_COMPONENTS[section.key];
+            if (Component) {
+              nodes.push(<Component key={section.key} content={section.content} resolved={section.resolved} />);
+            }
+            if (!tryAiNowInserted && section.key === tryAiNowAfterKey) {
+              nodes.push(<AskAiDemoSection key="try-ai-now" />);
+              tryAiNowInserted = true;
+            }
+          }
+          if (!tryAiNowInserted) nodes.push(<AskAiDemoSection key="try-ai-now" />);
+          return nodes;
+        })()}
       </main>
 
       {footer?.isEnabled !== false ? (

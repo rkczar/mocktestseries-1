@@ -680,6 +680,7 @@ model Question {
   reports               ReportedQuestion[]
   aiExplanation         AIExplanation?
   aiVariants            Question[]             @relation("AiQuestionVariants")
+  aiExplanationVariants AIExplanationVariant[]
 
   @@unique([parentQuestionId, aiSlot])
   @@index([examId, examYear])
@@ -1217,6 +1218,36 @@ model AIExplanation {
   isStale Boolean @default(false)
 
   versions AIExplanationVersion[]
+}
+
+/**
+ * Alternate-tone/style explanation for a question, distinct from the single
+ * default AIExplanation above — e.g. "Simpler Explanation" or "Step-by-Step
+ * Breakdown". A separate model (not a variant dimension bolted onto
+ * AIExplanation) so the default explanation's cache/versioning/staleness
+ * logic never has to account for a variant axis. `variantId` is one of a
+ * small fixed, code-defined catalog (see lib/ai-explanation-variants.ts) —
+ * never arbitrary client input — capped at 5 variants per question by that
+ * catalog's length, enforced again in code. Global per (question, variant)
+ * cache, generated once on first student request and reused by every
+ * student after that, mirroring AIExplanation's cache semantics exactly.
+ */
+model AIExplanationVariant {
+  id           String             @id @default(cuid())
+  questionId   String
+  question     Question           @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  variantId    String
+  content      Json
+  model        String
+  provider     String             @default("anthropic")
+  status       AiGenerationStatus @default(COMPLETED)
+  errorMessage String?
+  generatedAt  DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([questionId, variantId])
+  @@index([questionId])
 }
 
 /**
