@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Mail, MapPin } from "lucide-react";
 import { PublicPageShell, getPublicChrome } from "@/components/homepage/public-page-shell";
 import { getStudentSession } from "@/lib/student-session";
+import { requirePageVisible } from "@/lib/page-visibility";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { str } from "@/components/homepage/content-helpers";
 import { BRAND_NAME } from "@/lib/brand";
@@ -22,6 +23,7 @@ const SECTIONS = [
 ];
 
 export default async function ContactPage() {
+  await requirePageVisible("contact");
   const [{ footer, contactInfo }, session] = await Promise.all([getPublicChrome(), getStudentSession()]);
 
   const footerContent = (footer?.content as Record<string, unknown>) ?? {};

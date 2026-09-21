@@ -45,8 +45,9 @@ export async function getOrCreateDraft() {
       version: nextVersion,
       status: "DRAFT",
       seo: published?.seo ?? {
-        title: "Mock Test Series.in — RUHS Rajasthan Medical Officer Exam 2026",
-        metaDescription: "Mock tests, previous year papers, and AI-powered explanations for the RUHS Medical Officer Exam 2026.",
+        title: "MockTestSeries.in — Mock Tests, Previous Year Papers & AI Explanations",
+        metaDescription:
+          "Practice with full-length mock tests, previous year papers, and AI-powered explanations for RUHS Medical Officer, NEET UG, and more — all on one platform.",
       },
       sections: { create: sectionsData },
     },
@@ -77,9 +78,9 @@ export function getFallbackHomepage(): HomepageConfig & { sections: HomepageSect
     version: 0,
     status: "DRAFT",
     seo: {
-      title: "Mock Test Series.in — RUHS Rajasthan Medical Officer Exam 2026",
+      title: "MockTestSeries.in — Mock Tests, Previous Year Papers & AI Explanations",
       metaDescription:
-        "Mock tests, previous year papers, and AI-powered explanations for the RUHS Medical Officer Exam 2026.",
+        "Practice with full-length mock tests, previous year papers, and AI-powered explanations for RUHS Medical Officer, NEET UG, and more — all on one platform.",
     } as Prisma.JsonValue,
     publishedAt: null,
     createdBy: null,

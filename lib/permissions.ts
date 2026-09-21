@@ -27,6 +27,11 @@ export const PERMISSIONS = {
   STUDENTS_MANAGE: "students:manage",
   ANNOUNCEMENTS_MANAGE: "announcements:manage",
   COMMUNICATIONS_MANAGE: "communications:manage",
+  // Deliberately NOT given to FULL_ADMIN below, even though it already has
+  // WEBSITE_MANAGE — the public-page on/off switch (Admin -> Website ->
+  // Pages & Content) is MASTER_ADMIN-only per spec; FULL_ADMIN can still
+  // view the page list, just not toggle it.
+  PAGE_VISIBILITY_MANAGE: "page-visibility:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

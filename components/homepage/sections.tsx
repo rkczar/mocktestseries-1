@@ -414,7 +414,9 @@ export function UpcomingExamsSection({ content, resolved }: SectionProps) {
         {upcomingExams.map(({ exam, config, daysLeft }) => {
           const description = config.descriptionOverride || exam.description;
           const ctaText = config.ctaText || defaultCtaText;
-          const ctaHref = config.ctaHref || `/student/exams/${exam.id}`;
+          const ctaHref =
+            config.ctaHref ||
+            (exam.publicPageEnabled && exam.publicSlug ? `/exams/${exam.publicSlug}` : `/student/exams/${exam.id}`);
           return (
             <Card key={exam.id} className="flex flex-col gap-2 p-6">
               <p className="font-medium text-[var(--color-foreground)]">{exam.name}</p>

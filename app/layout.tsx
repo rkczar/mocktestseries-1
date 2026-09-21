@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Mock Test Series.in",
-  description: "RUHS Rajasthan Medical Officer Exam 2026 — mock tests, previous year papers, and AI-powered explanations.",
+  description: "Mock tests, previous year papers, and AI-powered explanations for RUHS Medical Officer, NEET UG, and more.",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {

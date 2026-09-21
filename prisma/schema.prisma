@@ -127,8 +127,35 @@ model Exam {
   // syllabus section entirely rather than showing an empty one.
   syllabusEnabled     Boolean   @default(false)
   syllabusDescription String?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+
+  // Public exam landing page (/exams, /exams/[slug]). Deliberately separate
+  // from `isActive` — an exam can stay fully operational in Admin/student
+  // systems while its public marketing page is hidden. Disabled by default;
+  // nothing here is populated automatically, only by an admin.
+  publicPageEnabled   Boolean @default(false)
+  publicSlug          String? @unique
+  shortDescription    String?
+  overview            String?
+  conductingAuthority String?
+  eligibility         String?
+  examPatternInfo     String?
+  // Structured pattern facts, kept separate from the free-text
+  // `examPatternInfo` so the public page can render them in a stat grid
+  // without parsing prose. Official exam-mode label (e.g. "Offline (OMR)",
+  // "Online (CBT)") — freeform rather than an enum since it's editorial.
+  totalQuestions      Int?
+  totalMarks          Int?
+  examMode            String?
+  // Array of { label: string, date: string } — kept as freeform Json rather
+  // than a table since it's small, editorial, and has no relational queries.
+  importantDates      Json?
+  // Array of { question: string, answer: string }.
+  faqItems            Json?
+  seoTitle            String?
+  seoDescription      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   subjects           Subject[]
   previousYearPapers PreviousYearPaper[]
@@ -257,6 +284,29 @@ model NavigationItem {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Public Page Visibility (Admin -> Website -> Website Content)
+// ---------------------------------------------------------------------------
+
+// One row per toggleable static public page (Homepage, Exam Directory,
+// Contact, Privacy, Terms, ...). Exam landing pages are NOT tracked here —
+// they use Exam.publicPageEnabled/publicSlug directly, since visibility
+// there is inherently a per-exam concept. Both are gated the same way:
+// MASTER_ADMIN mutates, FULL_ADMIN reads only (see lib/rbac.ts requireRole).
+// Turning a page off never deletes data — it only hides the route/nav/
+// sitemap entry; the underlying content is untouched and returns when
+// switched back on.
+model PageVisibility {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  label       String
+  route       String
+  isVisible   Boolean  @default(true)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------------------

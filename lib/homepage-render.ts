@@ -128,7 +128,14 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
           resolved.exam = exam && exam.isActive ? exam : null;
           if (resolved.exam) {
             resolved.examStats = await resolveExamStats(resolved.exam.id);
-            resolved.examRoute = `/student/exams/${resolved.exam.id}`;
+            // Prefer the public landing page once an exam has one — it's the
+            // right destination for an anonymous homepage visitor. Exams
+            // without a built/enabled public page (e.g. not yet launched)
+            // fall back to the student workspace, same as before.
+            resolved.examRoute =
+              resolved.exam.publicPageEnabled && resolved.exam.publicSlug
+                ? `/exams/${resolved.exam.publicSlug}`
+                : `/student/exams/${resolved.exam.id}`;
           }
         }
 
