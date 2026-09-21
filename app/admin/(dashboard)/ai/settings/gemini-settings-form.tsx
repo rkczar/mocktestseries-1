@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import type { GeminiPublicConfig } from "@/lib/gemini-config";
 import { saveGeminiConfigAction, testGeminiConnectionAction, type SettingsFormState, type TestConnectionState } from "./actions";
 import { SubmitButton, TestButton, StatusBadge, TestResult, SaveFeedback } from "./shared-controls";
+import { GeminiModelPoolCard } from "./gemini-model-pool-form";
 
 /**
  * Moved here from Settings → Authentication (where it sat oddly among
@@ -18,7 +19,7 @@ import { SubmitButton, TestButton, StatusBadge, TestResult, SaveFeedback } from 
  * configures. This key is what powers Ask AI explanations (lib/ai-explanation.ts)
  * and AI01–AI05 question variants (lib/ai-variant.ts).
  */
-export function GeminiCard({ gemini }: { gemini: GeminiPublicConfig }) {
+export function GeminiCard({ gemini, canManagePool }: { gemini: GeminiPublicConfig; canManagePool: boolean }) {
   const [saveState, saveAction] = useActionState<SettingsFormState, FormData>(saveGeminiConfigAction, {});
   const [testState, testAction] = useActionState<TestConnectionState, FormData>(testGeminiConnectionAction, {
     result: gemini.lastTest ?? undefined,
@@ -60,8 +61,12 @@ export function GeminiCard({ gemini }: { gemini: GeminiPublicConfig }) {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="gemini-model">Model</Label>
+            <Label htmlFor="gemini-model">Model (bootstrap only)</Label>
             <Input id="gemini-model" name="model" defaultValue={gemini.model} placeholder="gemini-flash-latest" />
+            <p className="text-xs text-[var(--color-muted-foreground)]">
+              Used only until a Model Pool is configured below — once a pool exists, Primary + Fallback there control which
+              model(s) generation actually uses.
+            </p>
           </div>
 
           <CardFooter className="flex-wrap items-center gap-3 p-0">
@@ -76,6 +81,10 @@ export function GeminiCard({ gemini }: { gemini: GeminiPublicConfig }) {
             <TestResult state={testState} />
           </div>
         </form>
+
+        <div className="mt-4 border-t border-[var(--color-border)] pt-4">
+          <GeminiModelPoolCard gemini={gemini} canManage={canManagePool} />
+        </div>
       </CardContent>
     </Card>
   );

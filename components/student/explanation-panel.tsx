@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getExplanationAction, getExplanationVariantAction } from "@/app/student/ai-actions";
@@ -14,7 +14,7 @@ type ExplanationResult = Awaited<ReturnType<typeof getExplanationAction>>;
 type SuccessResult = Extract<ExplanationResult, { ok: true }>;
 type VariantResult = Awaited<ReturnType<typeof getExplanationVariantAction>>;
 
-/** Shared by the default explanation and every AI Variant — same content shape, same rendering. */
+/** Shared by the default explanation and every AI Variant — same content shape, same rendering. Never repeats the A/B/C/D options block; that already lives in the question card above this area. */
 function ExplanationContentView({ content, extra }: { content: ExplanationContent; extra?: React.ReactNode }) {
   const optionEntries = Object.entries(content.optionAnalysis ?? {});
   return (
@@ -88,11 +88,22 @@ function ExplanationContentView({ content, extra }: { content: ExplanationConten
   );
 }
 
-export function ExplanationPanel({ questionId }: { questionId: string }) {
+/**
+ * All Ask AI + AI Variants state/logic in one hook, split into a `trigger`
+ * (a single button meant to sit inline with Save/Report/WhatsApp in the
+ * question header row) and a `panel` (the one highlighted AI area rendered
+ * directly under the question + correct answer — never a separate page or
+ * card). Both pieces share state so clicking the header trigger opens
+ * exactly the area described in the Review UI spec: default explanation on
+ * top, up to 5 variant tabs, whichever is selected rendered in that same
+ * area.
+ */
+export function useAskAi(questionId: string) {
   const [isPending, startTransition] = useTransition();
   const [result, setResult] = useState<SuccessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [waitingOnOther, setWaitingOnOther] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const attemptRef = useRef(0);
 
   // AI Variants: null = showing the default explanation above. Each fetched
@@ -100,7 +111,7 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
   // this session doesn't re-hit the server (the server itself is also a
   // permanent DB cache — this is just avoiding a redundant round trip).
   const [activeVariantId, setActiveVariantId] = useState<string | null>(null);
-  const [variantContents, setVariantContents] = useState<Record<string, ExplanationContent>>({});
+  const [variantContents, setVariantContents] = useState<Record<string, { content: ExplanationContent; isStale: boolean }>>({});
   const [variantPendingId, setVariantPendingId] = useState<string | null>(null);
   const [variantError, setVariantError] = useState<string | null>(null);
 
@@ -111,6 +122,7 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
       if (outcome.ok) {
         setResult(outcome);
         setWaitingOnOther(false);
+        setPanelOpen(true);
         return;
       }
       if (outcome.retry && attemptRef.current < AUTO_RETRY_DELAYS_MS.length) {
@@ -122,10 +134,15 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
       }
       setWaitingOnOther(false);
       setError(outcome.error);
+      setPanelOpen(true);
     });
   };
 
-  const handleClick = () => {
+  const handleTriggerClick = () => {
+    if (result) {
+      setPanelOpen((open) => !open);
+      return;
+    }
     attemptRef.current = 0;
     run();
   };
@@ -140,7 +157,7 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
       const outcome: VariantResult = await getExplanationVariantAction(questionId, variantId);
       setVariantPendingId(null);
       if (outcome.ok) {
-        setVariantContents((prev) => ({ ...prev, [variantId]: outcome.content }));
+        setVariantContents((prev) => ({ ...prev, [variantId]: { content: outcome.content, isStale: outcome.isStale ?? false } }));
         return;
       }
       setVariantError(outcome.error);
@@ -148,11 +165,27 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
     });
   };
 
-  if (result) {
-    const { content, remainingToday, relatedQuestions, isStale } = result;
-    const shownContent = activeVariantId ? variantContents[activeVariantId] : content;
+  const trigger = (
+    <Button type="button" variant="outline" size="sm" onClick={handleTriggerClick} disabled={isPending}>
+      {isPending ? (
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+      ) : result ? (
+        panelOpen ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />
+      ) : (
+        <Sparkles className="h-4 w-4" aria-hidden />
+      )}
+      {isPending ? (waitingOnOther ? "Generating…" : "Generating…") : result ? "Ask AI" : "Ask AI"}
+    </Button>
+  );
 
-    return (
+  let panel: React.ReactNode = null;
+  if (result && panelOpen) {
+    const { content, remainingToday, relatedQuestions, isStale } = result;
+    const activeVariant = activeVariantId ? variantContents[activeVariantId] : null;
+    const shownContent = activeVariant ? activeVariant.content : content;
+    const shownIsStale = activeVariant ? activeVariant.isStale : isStale;
+
+    panel = (
       <div className="mt-4 rounded-[var(--radius-card)] border border-[var(--color-info)]/30 bg-[var(--color-info)]/5 p-4">
         <div className="mb-2 flex items-center justify-between gap-2">
           <p className="flex items-center gap-1.5 text-sm font-semibold text-[var(--color-info)]">
@@ -163,7 +196,7 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
           ) : null}
         </div>
 
-        {isStale ? (
+        {shownIsStale ? (
           <p className="mb-2 text-xs text-[var(--color-warning)]">
             This question was updated after this explanation was generated — it may be outdated.
           </p>
@@ -171,7 +204,7 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
 
         {EXPLANATION_VARIANTS.length > 0 ? (
           <div className="mb-3 flex flex-wrap items-center gap-1.5">
-            <span className="text-xs font-medium text-[var(--color-muted-foreground)]">AI Variants:</span>
+            <span className="text-xs font-medium text-[var(--color-muted-foreground)]">Variants:</span>
             <button
               type="button"
               onClick={() => selectVariant(null)}
@@ -225,15 +258,24 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
         ) : null}
       </div>
     );
+  } else if (error && panelOpen) {
+    panel = (
+      <div className="mt-4 rounded-[var(--radius-card)] border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 p-4">
+        <p className="text-sm text-[var(--color-error)]">{error}</p>
+      </div>
+    );
   }
 
+  return { trigger, panel, isOpen: panelOpen };
+}
+
+/** Self-contained Ask AI (trigger + panel stacked) — used where the four-action header row isn't part of the layout (e.g. Saved Questions). Attempt Review composes the hook directly so Ask AI can sit inline with Save/Report/WhatsApp instead. */
+export function ExplanationPanel({ questionId }: { questionId: string }) {
+  const { trigger, panel } = useAskAi(questionId);
   return (
     <div className="mt-4">
-      <Button variant="outline" size="sm" onClick={handleClick} disabled={isPending}>
-        {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Sparkles className="h-4 w-4" aria-hidden />}
-        {isPending ? (waitingOnOther ? "Generating (someone else started this one)…" : "Generating…") : "Ask AI"}
-      </Button>
-      {error ? <p className="mt-2 text-sm text-[var(--color-error)]">{error}</p> : null}
+      {trigger}
+      {panel}
     </div>
   );
 }

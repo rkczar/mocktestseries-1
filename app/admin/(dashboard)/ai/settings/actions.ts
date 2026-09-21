@@ -4,7 +4,13 @@ import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { saveGeminiConfig, testGeminiConnection, type ProviderLastTest } from "@/lib/gemini-config";
+import {
+  saveGeminiConfig,
+  testGeminiConnection,
+  refreshAvailableGeminiModels,
+  saveGeminiModelPool,
+  type ProviderLastTest,
+} from "@/lib/gemini-config";
 import { saveOpenAiConfig, testOpenAiConnection } from "@/lib/openai-config";
 import { saveAiSettings, type AiSettingsUpdate, HOMEPAGE_DEMO_MAX } from "@/lib/ai-settings";
 
@@ -44,6 +50,68 @@ export async function testGeminiConnectionAction(): Promise<TestConnectionState>
   await prisma.auditLog.create({ data: { actorId: session.user.id, action: "API_GEMINI_TESTED", entityType: "Setting", entityId: "api.gemini", metadata: { ok: result.ok } } });
   revalidateAiSurfaces();
   return { result };
+}
+
+export interface RefreshModelsState {
+  error?: string;
+  count?: number;
+}
+
+/**
+ * Real, live models.list call against the configured Gemini API key — never
+ * a hardcoded/guessed model list. MASTER_ADMIN only (AI_MODEL_POOL_MANAGE);
+ * FULL_ADMIN can view the resulting pool but not trigger a refresh.
+ */
+export async function refreshGeminiModelsAction(): Promise<RefreshModelsState> {
+  const session = await requirePermission(PERMISSIONS.AI_MODEL_POOL_MANAGE);
+  try {
+    const models = await refreshAvailableGeminiModels();
+    await prisma.auditLog.create({
+      data: { actorId: session.user.id, action: "API_GEMINI_MODELS_REFRESHED", entityType: "Setting", entityId: "api.gemini", metadata: { count: models.length } },
+    });
+    revalidateAiSurfaces();
+    return { count: models.length };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not refresh the model list." };
+  }
+}
+
+/**
+ * MASTER_ADMIN sets which discovered models are enabled for the Ask AI
+ * pool, and the primary/fallback priority order a new (uncached) generation
+ * follows. lib/gemini-config.ts#saveGeminiModelPool re-validates every id
+ * against the last-refreshed compatible list server-side.
+ */
+export async function saveGeminiModelPoolAction(_prev: SettingsFormState, formData: FormData): Promise<SettingsFormState> {
+  const session = await requirePermission(PERMISSIONS.AI_MODEL_POOL_MANAGE);
+
+  const enabledModels = formData.getAll("enabledModels").map(String).filter(Boolean);
+  const primaryModel = String(formData.get("primaryModel") ?? "").trim();
+  const fallbackModels = [1, 2, 3, 4]
+    .map((n) => String(formData.get(`fallbackModel${n}`) ?? "").trim())
+    .filter((id) => id && id !== primaryModel);
+
+  if (!primaryModel) {
+    return { error: "Choose a primary model." };
+  }
+
+  try {
+    await saveGeminiModelPool({ enabledModels, primaryModel, fallbackModels });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not save the model pool." };
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      actorId: session.user.id,
+      action: "API_GEMINI_MODEL_POOL_SAVED",
+      entityType: "Setting",
+      entityId: "api.gemini",
+      metadata: { enabledModels, primaryModel, fallbackModels },
+    },
+  });
+  revalidateAiSurfaces();
+  return { success: true };
 }
 
 export async function saveOpenAiConfigAction(_prev: SettingsFormState, formData: FormData): Promise<SettingsFormState> {

@@ -331,9 +331,18 @@ export async function markExplanationReviewed(questionId: string, adminUserId: s
  * silently dropped or regenerated automatically); this only surfaces "AI
  * STALE" on Admin AI Solutions and excludes the row from the homepage demo
  * until an explicit admin Regenerate.
+ *
+ * Also flags every AI Variant cached for this question (lib/ai-explanation-
+ * variants.ts) the same way — a variant is keyed on (questionId, variantId),
+ * so a canonical text/options/answer change makes every existing variant
+ * response just as outdated as the default explanation.
  */
 export async function flagExplanationStaleIfExists(questionId: string): Promise<void> {
   await prisma.aIExplanation.updateMany({
+    where: { questionId, status: AiGenerationStatus.COMPLETED },
+    data: { isStale: true },
+  });
+  await prisma.aIExplanationVariant.updateMany({
     where: { questionId, status: AiGenerationStatus.COMPLETED },
     data: { isStale: true },
   });

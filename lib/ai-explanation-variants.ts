@@ -86,6 +86,10 @@ async function runAndPersist(questionId: string, variant: ExplanationVariantDef,
         model: result.model,
         generatedAt: new Date(),
         errorMessage: null,
+        // A fresh generation always reflects the question's current
+        // content, so any earlier staleness flag no longer applies (mirrors
+        // lib/ai-explanation.ts#runAndPersist).
+        isStale: false,
       },
     });
   } catch (error) {

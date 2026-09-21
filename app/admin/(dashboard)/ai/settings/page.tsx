@@ -18,6 +18,8 @@ export default async function AiSettingsPage() {
     return <RestrictedCard title="AI Settings" />;
   }
 
+  const canManagePool = session.user.permissions?.includes(PERMISSIONS.AI_MODEL_POOL_MANAGE) ?? false;
+
   const [gemini, openai, aiSettings, eligibleRows] = await Promise.all([
     getGeminiConfig(),
     getOpenAiConfig(),
@@ -51,7 +53,7 @@ export default async function AiSettingsPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <GeminiCard gemini={gemini} />
+        <GeminiCard gemini={gemini} canManagePool={canManagePool} />
         <OpenAiCard openai={openai} />
       </div>
 

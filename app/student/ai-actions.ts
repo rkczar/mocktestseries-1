@@ -122,6 +122,7 @@ export async function getExplanationVariantAction(questionId: string, variantId:
       ok: true as const,
       content: variant.content as unknown as ExplanationContent,
       remainingToday: quota.remainingToday,
+      isStale: variant.isStale,
     };
   } catch (error) {
     if (error instanceof AiNotConfiguredError) return { ok: false as const, error: error.message };

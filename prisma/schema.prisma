@@ -1246,6 +1246,14 @@ model AIExplanationVariant {
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
+  // Same staleness semantics as AIExplanation.isStale above: set true when
+  // the canonical Question's text/options/correct answer changes after this
+  // variant was generated (lib/ai-explanation.ts#flagExplanationStaleIfExists
+  // flags every variant row for the question alongside the default
+  // explanation). The cached content is still served as-is; this only
+  // surfaces a "may be outdated" notice to the student.
+  isStale Boolean @default(false)
+
   @@unique([questionId, variantId])
   @@index([questionId])
 }

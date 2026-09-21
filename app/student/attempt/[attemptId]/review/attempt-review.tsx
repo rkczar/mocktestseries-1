@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
-import { ExplanationPanel } from "@/components/student/explanation-panel";
+import { useAskAi } from "@/components/student/explanation-panel";
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 
@@ -44,23 +44,53 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between text-sm text-[var(--color-muted-foreground)]">
-        <span>
-          Question {index + 1} of {total}
-        </span>
-        <span
-          className={cn(
-            "rounded-full px-2.5 py-0.5 text-xs font-medium",
-            q.isCorrect === true && "bg-[var(--color-success)]/15 text-[var(--color-success)]",
-            q.isCorrect === false && "bg-[var(--color-error)]/15 text-[var(--color-error)]",
-            q.isCorrect === null && "bg-[var(--color-border)] text-[var(--color-muted-foreground)]"
-          )}
-        >
-          {q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered"}
-        </span>
+      {/* key resets ReviewQuestionCard's Ask AI state (useAskAi) whenever Prev/Next swaps to a different question — the old per-question <div key=...> boundary, now scoped to the card itself. */}
+      <ReviewQuestionCard key={q.attemptQuestionId} q={q} index={index} total={total} />
+
+      <div className="flex items-center justify-between gap-3">
+        <Button type="button" variant="outline" onClick={goPrev} disabled={index === 0}>
+          <ChevronLeft className="h-4 w-4" aria-hidden /> Previous
+        </Button>
+        <Button type="button" variant="outline" onClick={goNext} disabled={index === total - 1}>
+          Next <ChevronRight className="h-4 w-4" aria-hidden />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index: number; total: number }) {
+  const { trigger: askAiTrigger, panel: askAiPanel } = useAskAi(q.questionId);
+  const correctOption = q.snapshot.options.find((opt) => opt.label === q.snapshot.correctLabel);
+
+  return (
+    <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)]">
+      {/* Highlighted question header — Question N on the left, the four review actions grouped together on the right, wrapping cleanly on mobile. */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-info)]/5 px-5 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-[var(--color-foreground)]">
+            Question {index + 1} of {total}
+          </span>
+          <span
+            className={cn(
+              "rounded-full px-2.5 py-0.5 text-xs font-medium",
+              q.isCorrect === true && "bg-[var(--color-success)]/15 text-[var(--color-success)]",
+              q.isCorrect === false && "bg-[var(--color-error)]/15 text-[var(--color-error)]",
+              q.isCorrect === null && "bg-[var(--color-border)] text-[var(--color-muted-foreground)]"
+            )}
+          >
+            {q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered"}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <SaveQuestionButton initialSaved={q.saved} onToggle={q.saveAction} />
+          <ReportQuestionDialog onSubmit={q.reportAction} />
+          {q.shareText ? <WhatsAppShareButton text={q.shareText} /> : null}
+          {askAiTrigger}
+        </div>
       </div>
 
-      <div key={q.attemptQuestionId} className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
+      <div className="p-5">
         <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">{q.snapshot.text}</p>
         {q.snapshot.imageUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -105,22 +135,14 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
           })}
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <SaveQuestionButton initialSaved={q.saved} onToggle={q.saveAction} />
-          <ReportQuestionDialog onSubmit={q.reportAction} />
-          {q.shareText ? <WhatsAppShareButton text={q.shareText} /> : null}
-        </div>
+        {correctOption ? (
+          <p className="mt-3 text-sm font-medium text-[var(--color-success)]">
+            Correct Answer: {correctOption.label}. {correctOption.text}
+          </p>
+        ) : null}
 
-        <ExplanationPanel questionId={q.questionId} />
-      </div>
-
-      <div className="flex items-center justify-between gap-3">
-        <Button type="button" variant="outline" onClick={goPrev} disabled={index === 0}>
-          <ChevronLeft className="h-4 w-4" aria-hidden /> Previous
-        </Button>
-        <Button type="button" variant="outline" onClick={goNext} disabled={index === total - 1}>
-          Next <ChevronRight className="h-4 w-4" aria-hidden />
-        </Button>
+        {/* The one highlighted AI area — default explanation + up to 5 variant tabs, rendered by the same hook whose trigger sits in the header above. Never a separate page/card. */}
+        {askAiPanel}
       </div>
     </div>
   );

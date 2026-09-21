@@ -36,6 +36,11 @@ export const PERMISSIONS = {
   // PAGE_VISIBILITY_MANAGE above — FULL_ADMIN can view the page but every
   // mutation is blocked server-side, not just hidden in the UI.
   SEO_MANAGE: "seo:manage",
+  // Gemini Model Pool (Admin -> AI -> Settings): which models are enabled,
+  // and the primary/fallback priority order every new Ask AI/Variant
+  // generation follows. Same MASTER_ADMIN-only pattern as SEO_MANAGE above —
+  // FULL_ADMIN can view the pool and model-health table, not change them.
+  AI_MODEL_POOL_MANAGE: "ai-model-pool:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
