@@ -97,6 +97,30 @@ function asStringArray(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim());
 }
 
+/**
+ * True if the raw provider response looks like it was attempting a JSON
+ * object but got cut off or came out malformed — a real generation failure
+ * that must be retried, not a legitimate plain-prose answer worth keeping.
+ * Confirmed against a live provider response: a thinking-capable Gemini
+ * model can consume its whole maxOutputTokens budget on internal reasoning
+ * and return JSON truncated mid-string; without this check,
+ * validateExplanationContent's text-fallback below would silently dump that
+ * half-written JSON into "concept" and the row would be saved COMPLETED.
+ * Exported so runAndPersist can fail loudly (and become retryable) instead.
+ */
+export function isTruncatedOrMalformedJson(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return false; // no JSON attempted at all — a real plain-text fallback is fine
+  const match = trimmed.match(/\{[\s\S]*\}/);
+  if (!match) return true; // opens with `{` but never closes — truncated
+  try {
+    JSON.parse(match[0]);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 /** Validates/repairs a provider response into ExplanationContent — never throws, always returns a usable (possibly sparse) object. Exported for scripts/tests. */
 export function validateExplanationContent(text: string): ExplanationContent {
   const fallback: ExplanationContent = {
@@ -139,7 +163,10 @@ export function validateExplanationContent(text: string): ExplanationContent {
 
 async function runAndPersist(questionId: string, question: QuestionForExplanation, settings: AiSettings) {
   try {
-    const result: AiGenerationResult = await generateWithAi(buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 900 });
+    const result: AiGenerationResult = await generateWithAi(buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 1400 });
+    if (isTruncatedOrMalformedJson(result.text)) {
+      throw new Error("AI returned truncated or malformed JSON (likely hit the output token limit) — please retry.");
+    }
     const content = validateExplanationContent(result.text);
     return await prisma.aIExplanation.update({
       where: { questionId },
@@ -150,6 +177,9 @@ async function runAndPersist(questionId: string, question: QuestionForExplanatio
         model: result.model,
         generatedAt: new Date(),
         errorMessage: null,
+        // A fresh generation always reflects the question's current content,
+        // so any earlier staleness flag no longer applies.
+        isStale: false,
       },
     });
   } catch (error) {
@@ -289,5 +319,22 @@ export async function markExplanationReviewed(questionId: string, adminUserId: s
   return prisma.aIExplanation.update({
     where: { questionId },
     data: { adminReviewedAt: new Date(), adminReviewedById: adminUserId },
+  });
+}
+
+/**
+ * Flags an existing COMPLETED explanation as stale after the canonical
+ * Question's text/options/correct answer changed (spec §16 "cache
+ * staleness") — called from app/admin/(dashboard)/questions/actions.ts, only
+ * when it detects a material change. A no-op if no explanation exists yet
+ * for this question. The cached content is still served as-is (never
+ * silently dropped or regenerated automatically); this only surfaces "AI
+ * STALE" on Admin AI Solutions and excludes the row from the homepage demo
+ * until an explicit admin Regenerate.
+ */
+export async function flagExplanationStaleIfExists(questionId: string): Promise<void> {
+  await prisma.aIExplanation.updateMany({
+    where: { questionId, status: AiGenerationStatus.COMPLETED },
+    data: { isStale: true },
   });
 }

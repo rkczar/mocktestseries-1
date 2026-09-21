@@ -97,7 +97,7 @@ export function validateGenerated(raw: string): GeneratedVariant | null {
 async function runGeneration(variantId: string, parent: ParentQuestion, variantType: AiVariantType) {
   let result: AiGenerationResult;
   try {
-    result = await generateWithAi(buildPrompt(parent, variantType), { temperature: 0.6, maxOutputTokens: 600 });
+    result = await generateWithAi(buildPrompt(parent, variantType), { temperature: 0.6, maxOutputTokens: 900 });
     const validated = validateGenerated(result.text);
     if (!validated) {
       throw new Error("AI returned a malformed question (wrong option count, no single correct option, or empty/duplicate option text).");

@@ -1094,6 +1094,10 @@ model StudentActivity {
   createdAt DateTime @default(now())
 
   @@index([studentId, createdAt])
+  // Admin AI Usage aggregates across ALL students by `activity`
+  // (AI_EXPLANATION_VIEWED / AI_EXPLANATION_GENERATED) — this index keeps
+  // that query from scanning every StudentActivity row.
+  @@index([activity, createdAt])
 }
 
 enum ReportType {
@@ -1153,6 +1157,14 @@ model AIExplanation {
   adminReviewedAt   DateTime?
   adminReviewedById String?
   adminReviewedBy   AdminUser? @relation("AiExplanationReviewedBy", fields: [adminReviewedById], references: [id])
+
+  // Set true when the canonical Question's text/options/correct answer
+  // changes after this explanation was generated (see
+  // app/admin/(dashboard)/questions/actions.ts#flagStaleIfChanged). The
+  // cached content is still served (never silently dropped) but Admin AI
+  // Solutions surfaces "AI STALE" and the homepage demo excludes it until an
+  // explicit Regenerate. Cleared back to false whenever generation completes.
+  isStale Boolean @default(false)
 
   versions AIExplanationVersion[]
 }

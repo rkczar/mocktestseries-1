@@ -70,6 +70,11 @@ export default async function AiSolutionsPage() {
                     </td>
                     <td className="py-2.5 pr-4">
                       <Badge variant={STATUS_BADGE[e.status].variant}>{STATUS_BADGE[e.status].label}</Badge>
+                      {e.status === "COMPLETED" && e.isStale ? (
+                        <Badge variant="warning" className="ml-1">
+                          AI STALE
+                        </Badge>
+                      ) : null}
                       {e.status === "FAILED" && e.errorMessage ? (
                         <p className="mt-1 max-w-[220px] text-xs text-[var(--color-error)]">{e.errorMessage}</p>
                       ) : null}

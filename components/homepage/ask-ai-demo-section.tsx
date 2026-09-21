@@ -10,8 +10,10 @@ const SECTION_WRAP = "mx-auto w-full max-w-6xl px-4 py-14 sm:px-6 sm:py-20";
 /**
  * Public homepage preview of Ask AI. Anonymous visitors never trigger live
  * generation here — this only ever renders explanations that already exist
- * (status COMPLETED) AND that an admin has explicitly marked reviewed
- * (adminReviewedAt set, via the "Mark Reviewed" control on AI Solutions).
+ * (status COMPLETED), that an admin has explicitly marked reviewed
+ * (adminReviewedAt set, via the "Mark Reviewed" control on AI Solutions),
+ * and that haven't gone stale since (isStale false — see
+ * lib/ai-explanation.ts#flagExplanationStaleIfExists).
  * Count is admin-configurable (ai.settings.homepageDemoMaxQuestions) but
  * capped at 12 server-side regardless of what's stored.
  */
@@ -23,7 +25,7 @@ export async function AskAiDemoSection() {
   if (take === 0) return null;
 
   const rows = await prisma.aIExplanation.findMany({
-    where: { status: "COMPLETED", adminReviewedAt: { not: null } },
+    where: { status: "COMPLETED", adminReviewedAt: { not: null }, isStale: false },
     orderBy: { adminReviewedAt: "desc" },
     take,
     select: {

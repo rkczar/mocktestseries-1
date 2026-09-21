@@ -44,7 +44,7 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
   };
 
   if (result) {
-    const { content, remainingToday, relatedQuestions } = result;
+    const { content, remainingToday, relatedQuestions, isStale } = result;
     const optionEntries = Object.entries(content.optionAnalysis ?? {});
     return (
       <div className="mt-4 rounded-[var(--radius-card)] border border-[var(--color-info)]/30 bg-[var(--color-info)]/5 p-4">
@@ -56,6 +56,12 @@ export function ExplanationPanel({ questionId }: { questionId: string }) {
             <span className="text-xs text-[var(--color-muted-foreground)]">{remainingToday} Ask AI explanations remaining today</span>
           ) : null}
         </div>
+
+        {isStale ? (
+          <p className="mb-2 text-xs text-[var(--color-warning)]">
+            This question was updated after this explanation was generated — it may be outdated.
+          </p>
+        ) : null}
 
         <div className="flex flex-col gap-3 text-sm text-[var(--color-foreground)]">
           {content.concept ? (

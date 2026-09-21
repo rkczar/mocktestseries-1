@@ -70,6 +70,9 @@ export async function getExplanationAction(questionId: string) {
       content: explanation.content as unknown as ExplanationContent,
       remainingToday: quota.remainingToday,
       relatedQuestions,
+      // The question changed after this explanation was generated (spec:
+      // cache staleness) — still served, just flagged so the student knows.
+      isStale: explanation.isStale,
     };
   } catch (error) {
     if (error instanceof AiNotConfiguredError) return { ok: false as const, error: error.message };

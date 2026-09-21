@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { allocateQuestionCode, questionCodeScope, resolveQuestionCodeInput } from "@/lib/question-code";
+import { flagExplanationStaleIfExists } from "@/lib/ai-explanation";
 
 const OPTION_LABELS = ["A", "B", "C", "D"] as const;
 
@@ -160,6 +161,25 @@ async function upsertOptions(
   });
 }
 
+/** True if the question text or any option's text/correctness actually changed — see updateQuestionAction's cache-staleness flag. */
+function hasMaterialQuestionChange(
+  before: { text: string; options: { label: string; text: string; isCorrect: boolean }[] },
+  data: z.infer<typeof questionSchema>
+): boolean {
+  if (before.text.trim() !== data.text.trim()) return true;
+  const byLabel: Record<string, { text: string; isCorrect: boolean }> = {
+    A: { text: data.optionA, isCorrect: data.correctOption === "A" },
+    B: { text: data.optionB, isCorrect: data.correctOption === "B" },
+    C: { text: data.optionC, isCorrect: data.correctOption === "C" },
+    D: { text: data.optionD, isCorrect: data.correctOption === "D" },
+  };
+  if (before.options.length !== OPTION_LABELS.length) return true;
+  return before.options.some((o) => {
+    const next = byLabel[o.label];
+    return !next || next.text.trim() !== o.text.trim() || next.isCorrect !== o.isCorrect;
+  });
+}
+
 export async function createQuestionAction(
   _prev: QuestionFormState,
   formData: FormData
@@ -269,6 +289,16 @@ export async function updateQuestionAction(
 
   const isReviewRequired = reviewRequired === "on";
 
+  // Snapshot text/options BEFORE the update to detect a material change for
+  // the AI explanation cache-staleness flag (see flagExplanationStaleIfExists)
+  // — upsertOptions always deletes+recreates option rows on every save, so
+  // comparing DB state after the write can't tell "changed" from "rewritten
+  // unchanged".
+  const before = await prisma.question.findUnique({
+    where: { id: questionId },
+    select: { text: true, options: { select: { label: true, text: true, isCorrect: true }, orderBy: { label: "asc" } } },
+  });
+
   await prisma.$transaction(async (tx) => {
     const existing = await tx.question.findUnique({
       where: { id: questionId },
@@ -300,6 +330,10 @@ export async function updateQuestionAction(
       data: { actorId: session.user.id, action: "QUESTION_UPDATED", entityType: "Question", entityId: questionId },
     });
   });
+
+  if (before && hasMaterialQuestionChange(before, parsed.data)) {
+    await flagExplanationStaleIfExists(questionId);
+  }
 
   revalidatePath("/admin/questions");
   revalidatePath(`/admin/questions/add?id=${questionId}`);

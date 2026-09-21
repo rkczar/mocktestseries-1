@@ -61,7 +61,7 @@ export function GeminiCard({ gemini }: { gemini: GeminiPublicConfig }) {
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="gemini-model">Model</Label>
-            <Input id="gemini-model" name="model" defaultValue={gemini.model} placeholder="gemini-2.5-flash" />
+            <Input id="gemini-model" name="model" defaultValue={gemini.model} placeholder="gemini-flash-latest" />
           </div>
 
           <CardFooter className="flex-wrap items-center gap-3 p-0">

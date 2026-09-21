@@ -1,29 +1,11 @@
 import { ControlCenterTabs } from "@/components/admin/control-center-tabs";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { AiOverview } from "@/components/admin/ai/ai-overview";
 import SolutionsPage from "./solutions/page";
-import SolutionManagerPage from "./solution-manager/page";
 import VariantsPage from "./variants/page";
 import UsagePage from "./usage/page";
 import SettingsPage from "./settings/page";
 
 export const metadata = { title: "AI Solutions — Mock Test Series.in Admin" };
-
-function AiOverview() {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>AI Solutions</CardTitle>
-        <CardDescription>AI-generated explanations, question variants, and usage tracking.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <p className="text-sm text-[var(--color-muted-foreground)]">
-          Solutions lists every cached Ask AI explanation. Variants manages AI01–AI05 alternate practice questions.
-          Usage shows live counts by status. Configure the Gemini API key under the Settings tab.
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
 
 export default function AiControlCenter() {
   return (
@@ -31,7 +13,7 @@ export default function AiControlCenter() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">AI Solutions</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          Solutions, solution manager, question variants, usage, and settings.
+          Overview, solutions, question variants, usage, and settings.
         </p>
       </div>
 
@@ -40,7 +22,6 @@ export default function AiControlCenter() {
         tabs={[
           { value: "overview", label: "Overview", content: <AiOverview /> },
           { value: "solutions", label: "Solutions", content: <SolutionsPage /> },
-          { value: "solution-manager", label: "Solution Manager", content: <SolutionManagerPage /> },
           { value: "variants", label: "Variants", content: <VariantsPage /> },
           { value: "usage", label: "Usage", content: <UsagePage /> },
           { value: "settings", label: "Settings", content: <SettingsPage /> },

@@ -56,7 +56,7 @@ function toPublic(raw: StoredGemini): GeminiPublicConfig {
   const apiKeyConfigured = Boolean(decryptSecret(raw.apiKeyCipher) || envKey);
   return {
     enabled: raw.enabled ?? apiKeyConfigured,
-    model: raw.model ?? "gemini-2.5-flash",
+    model: raw.model ?? "gemini-flash-latest",
     apiKeyConfigured,
     configured: apiKeyConfigured,
     lastTest: raw.lastTest ?? null,

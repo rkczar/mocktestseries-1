@@ -53,7 +53,18 @@ async function callGemini(prompt: string, apiKey: string, model: string, opts: A
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: opts.temperature, maxOutputTokens: opts.maxOutputTokens },
+        generationConfig: {
+          temperature: opts.temperature,
+          maxOutputTokens: opts.maxOutputTokens,
+          // Newer Gemini models spend part of maxOutputTokens on internal
+          // "thinking" before writing the actual response — for a short
+          // structured-JSON task that reasoning is pure overhead, and left
+          // uncapped it was eating the whole token budget and truncating the
+          // JSON output mid-string (confirmed against a live account: a
+          // COMPLETED explanation whose "concept" field was literally a
+          // half-written JSON blob). Ignored by models that don't support it.
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       }),
     }
   );
