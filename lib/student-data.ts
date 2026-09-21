@@ -74,6 +74,12 @@ export async function getActiveExamsCatalog(studentId?: string) {
 // and, later, a first-class dimension for paid-access gating (Step 7.5).
 // ---------------------------------------------------------------------------
 
+/** Server-side enrollment gate for anything scoped to a student-selected Active Exam. */
+export async function isStudentEnrolledInExam(studentId: string, examId: string): Promise<boolean> {
+  const row = await prisma.studentExamEnrollment.findUnique({ where: { studentId_examId: { studentId, examId } } });
+  return row !== null;
+}
+
 export async function enrollInExam(studentId: string, examId: string) {
   await prisma.studentExamEnrollment.upsert({
     where: { studentId_examId: { studentId, examId } },
@@ -630,6 +636,35 @@ async function computeStudyStreak(studentId: string): Promise<number> {
   return streak;
 }
 
+/**
+ * Subjects belonging to one exam, each with its real PUBLISHED question count
+ * — one groupBy query for every subject's count, never N+1 per-subject
+ * queries. Backs both the Dashboard's "Subjects in <Active Exam>" section and
+ * the Test on the Go subject picker.
+ */
+export async function getExamSubjectsOverview(examId: string) {
+  const subjects = await prisma.subject.findMany({
+    where: { examId },
+    orderBy: [{ order: "asc" }, { name: "asc" }],
+    select: { id: true, name: true },
+  });
+  if (subjects.length === 0) return [];
+
+  const counts = await prisma.question.groupBy({
+    by: ["subjectId"],
+    where: { examId, subjectId: { in: subjects.map((s) => s.id) }, status: QuestionStatus.PUBLISHED },
+    _count: { _all: true },
+  });
+  const countBySubject = new Map(counts.map((c) => [c.subjectId, c._count._all]));
+
+  return subjects.map((s) => ({ id: s.id, name: s.name, questionCount: countBySubject.get(s.id) ?? 0 }));
+}
+
+/** Total saved questions for a student, optionally scoped to one exam. */
+export async function getSavedQuestionsCount(studentId: string, examId?: string) {
+  return prisma.savedQuestion.count({ where: { studentId, question: examId ? { examId } : undefined } });
+}
+
 export async function getDashboardMetrics(studentId: string) {
   const startOfTodayIst = parseIstDayStartAsUtc(new Date());
 
@@ -654,6 +689,7 @@ export async function getDashboardMetrics(studentId: string) {
     ]);
 
   const weakTopics = await getWeakTopics(studentId, 5);
+  const savedQuestionsCount = await getSavedQuestionsCount(studentId);
 
   return {
     mcqSolvedToday,
@@ -667,6 +703,64 @@ export async function getDashboardMetrics(studentId: string) {
     recentTest: recentAttempt ? { id: recentAttempt.id, title: attemptTitle(recentAttempt), score: recentAttempt.score, maxScore: recentAttempt.maxScore } : null,
     inProgress,
     weakTopics,
+    savedQuestionsCount,
+  };
+}
+
+/**
+ * Same shape as getDashboardMetrics, scoped to one Active Exam — every
+ * TestAttempt row carries a mandatory examId (schema.prisma), and Answer is
+ * scoped through its attempt relation, so every figure here reflects only
+ * this exam's own attempts/answers. Study streak is intentionally excluded —
+ * it's a daily-activity concept that doesn't fragment sensibly per exam, so
+ * the Dashboard keeps showing it as a single global, clearly-labelled tile.
+ */
+export async function getExamScopedDashboardMetrics(studentId: string, examId: string) {
+  const startOfTodayIst = parseIstDayStartAsUtc(new Date());
+
+  const [mcqSolvedToday, distinctAttemptedRows, testsCompleted, avgScoreAgg, recentAttempt, inProgress, exam] =
+    await Promise.all([
+      prisma.answer.count({
+        where: { studentId, status: { not: "UNANSWERED" }, answeredAt: { gte: startOfTodayIst }, attempt: { examId } },
+      }),
+      prisma.answer.findMany({
+        where: { studentId, status: { not: "UNANSWERED" }, attempt: { examId } },
+        select: { questionId: true },
+        distinct: ["questionId"],
+      }),
+      prisma.testAttempt.count({ where: { studentId, examId, status: AttemptStatus.SUBMITTED } }),
+      prisma.testAttempt.aggregate({ where: { studentId, examId, status: AttemptStatus.SUBMITTED }, _avg: { score: true } }),
+      prisma.testAttempt.findFirst({
+        where: { studentId, examId, status: AttemptStatus.SUBMITTED },
+        orderBy: { submittedAt: "desc" },
+        include: DASHBOARD_ATTEMPT_INCLUDE,
+      }),
+      prisma.testAttempt.findFirst({
+        where: { studentId, examId, status: AttemptStatus.IN_PROGRESS },
+        orderBy: { startedAt: "desc" },
+        include: DASHBOARD_ATTEMPT_INCLUDE,
+      }),
+      prisma.exam.findUnique({ where: { id: examId }, select: { id: true, name: true, isUpcoming: true, upcomingDate: true } }),
+    ]);
+
+  const weakTopics = await getWeakTopics(studentId, 5, 500, examId);
+  const savedQuestionsCount = await getSavedQuestionsCount(studentId, examId);
+
+  return {
+    examId,
+    examName: exam?.name ?? "",
+    mcqSolvedToday,
+    questionsAttempted: distinctAttemptedRows.length,
+    testsCompleted,
+    averageScore: avgScoreAgg._avg.score,
+    upcomingExam:
+      exam?.isUpcoming && exam.upcomingDate ? { id: exam.id, name: exam.name, daysLeft: daysUntil(exam.upcomingDate) } : null,
+    recentTest: recentAttempt
+      ? { id: recentAttempt.id, title: attemptTitle(recentAttempt), score: recentAttempt.score, maxScore: recentAttempt.maxScore }
+      : null,
+    inProgress,
+    weakTopics,
+    savedQuestionsCount,
   };
 }
 
@@ -706,9 +800,9 @@ export async function getUpcomingExamForStudent(studentId: string) {
  * query plus in-memory aggregation over at most `sampleSize` rows, not a
  * huge client-side dataset.
  */
-export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 500) {
+export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 500, examId?: string) {
   const wrongAnswers = await prisma.answer.findMany({
-    where: { studentId, isCorrect: false },
+    where: { studentId, isCorrect: false, attempt: examId ? { examId } : undefined },
     select: { questionId: true },
     orderBy: { id: "desc" },
     take: sampleSize,

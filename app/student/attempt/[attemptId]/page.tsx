@@ -8,6 +8,7 @@ import { attemptTitle, attemptInstructions } from "@/lib/attempt-title";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
+import { BackButton } from "@/components/student/back-button";
 
 export const metadata = { title: "Test Instructions — Mock Test Series.in" };
 
@@ -25,7 +26,10 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center gap-6 px-4 py-10 sm:px-6">
-      <AccessibilityControls className="justify-end" />
+      <div className="flex items-center justify-between gap-2">
+        <BackButton href="/student/dashboard" />
+        <AccessibilityControls />
+      </div>
       <div className="text-center">
         <h1 className="text-2xl font-semibold text-[var(--color-foreground)]">{title}</h1>
         <p className="mt-1 text-sm text-[var(--color-muted-foreground)]">{attempt.exam.name}</p>

@@ -3,17 +3,19 @@ import { AttemptStatus, TestType } from "@prisma/client";
 import { Clock } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
+import { prisma } from "@/lib/prisma";
+import { getWhatsAppShareConfig, renderWhatsAppShareText } from "@/lib/whatsapp-share-config";
 import { BackButton } from "@/components/student/back-button";
-import { SaveQuestionButton } from "@/components/student/save-question-button";
-import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
-import { ExplanationPanel } from "@/components/student/explanation-panel";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
-import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
+import { StudentShell } from "@/components/student/shell";
+import { AttemptReview, type ReviewQuestionView } from "./attempt-review";
 import { toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
 
 export const metadata = { title: "Review Answers — Mock Test Series.in" };
+
+const SITE_URL = process.env.NEXTAUTH_URL ?? "https://mocktestseries.in";
 
 export default async function AttemptReviewPage({ params }: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = await params;
@@ -27,116 +29,71 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
   // never itself expose it (Step 5.8).
   if (attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED") {
     return (
+      <StudentShell student={student}>
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+          <div className="flex items-center justify-between gap-2">
+            <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
+            <AccessibilityControls />
+          </div>
+          <Card>
+            <CardContent className="flex flex-col items-center gap-2 py-16 text-center">
+              <Clock className="h-8 w-8 text-[var(--color-muted-foreground)]" aria-hidden />
+              <p className="text-sm font-medium text-[var(--color-foreground)]">Answer review isn&apos;t available yet</p>
+              <p className="text-sm text-[var(--color-muted-foreground)]">
+                This is a Live Test — the answer key is released once results are published for everyone.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </StudentShell>
+    );
+  }
+
+  const questionIds = attempt.questions.map((tq) => tq.questionId);
+  const whatsappConfig = await getWhatsAppShareConfig();
+
+  const [savedIds, subjectByQuestionId] = await Promise.all([
+    getSavedQuestionIdSet(student.id, questionIds),
+    whatsappConfig.enabled
+      ? prisma.question
+          .findMany({ where: { id: { in: questionIds } }, select: { id: true, subject: { select: { name: true } } } })
+          .then((rows) => new Map(rows.map((r) => [r.id, r.subject.name])))
+      : Promise.resolve(new Map<string, string>()),
+  ]);
+
+  const questions: ReviewQuestionView[] = attempt.questions.map((tq) => {
+    const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
+    return {
+      attemptQuestionId: tq.id,
+      questionId: tq.questionId,
+      snapshot,
+      selected: tq.answer?.selectedOptionLabel ?? null,
+      isCorrect: tq.answer?.isCorrect ?? null,
+      saved: savedIds.has(tq.questionId),
+      shareText: whatsappConfig.enabled
+        ? renderWhatsAppShareText(whatsappConfig.template, {
+            exam: attempt.exam.name,
+            subject: subjectByQuestionId.get(tq.questionId) ?? "",
+            question: snapshot.text,
+            website_url: SITE_URL,
+          })
+        : null,
+      saveAction: toggleSaveQuestionAction.bind(null, tq.questionId),
+      reportAction: reportAttemptQuestionAction.bind(null, attemptId, tq.questionId),
+    };
+  });
+
+  return (
+    <StudentShell student={student}>
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
         <div className="flex items-center justify-between gap-2">
           <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
           <AccessibilityControls />
         </div>
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 py-16 text-center">
-            <Clock className="h-8 w-8 text-[var(--color-muted-foreground)]" aria-hidden />
-            <p className="text-sm font-medium text-[var(--color-foreground)]">Answer review isn&apos;t available yet</p>
-            <p className="text-sm text-[var(--color-muted-foreground)]">
-              This is a Live Test — the answer key is released once results are published for everyone.
-            </p>
-          </CardContent>
-        </Card>
+        <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Review Answers</h1>
+
+        <AttemptReview questions={questions} />
       </div>
-    );
-  }
-
-  const savedIds = await getSavedQuestionIdSet(
-    student.id,
-    attempt.questions.map((tq) => tq.questionId)
-  );
-
-  return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <div className="flex items-center justify-between gap-2">
-        <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
-        <AccessibilityControls />
-      </div>
-      <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Review Answers</h1>
-
-      <div className="flex flex-col gap-4">
-        {attempt.questions.map((tq, i) => {
-          const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
-          const selected = tq.answer?.selectedOptionLabel ?? null;
-          const isCorrect = tq.answer?.isCorrect ?? null;
-
-          return (
-            <div key={tq.id} className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-sm font-medium text-[var(--color-muted-foreground)]">Question {i + 1}</span>
-                <span
-                  className={cn(
-                    "rounded-full px-2.5 py-0.5 text-xs font-medium",
-                    isCorrect === true && "bg-[var(--color-success)]/15 text-[var(--color-success)]",
-                    isCorrect === false && "bg-[var(--color-error)]/15 text-[var(--color-error)]",
-                    isCorrect === null && "bg-[var(--color-border)] text-[var(--color-muted-foreground)]"
-                  )}
-                >
-                  {isCorrect === true ? "Correct" : isCorrect === false ? "Incorrect" : "Not Answered"}
-                </span>
-              </div>
-
-              <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">{snapshot.text}</p>
-              {snapshot.imageUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={snapshot.imageUrl}
-                  alt=""
-                  className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
-                />
-              ) : null}
-
-              <div className="mt-4 flex flex-col gap-2">
-                {snapshot.options.map((opt) => {
-                  const isSelected = selected === opt.label;
-                  const isAnswer = opt.label === snapshot.correctLabel;
-                  return (
-                    <div
-                      key={opt.label}
-                      className={cn(
-                        "rounded-[var(--radius-card)] border p-3 text-sm",
-                        isAnswer
-                          ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
-                          : isSelected
-                            ? "border-[var(--color-error)] bg-[var(--color-error)]/10"
-                            : "border-[var(--color-border)]"
-                      )}
-                    >
-                      <span className="font-semibold">{opt.label}.</span> {opt.text}
-                      {isAnswer ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
-                      {isSelected && !isAnswer ? (
-                        <span className="ml-2 text-xs font-medium text-[var(--color-error)]">Your answer</span>
-                      ) : null}
-                      {opt.imageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={opt.imageUrl}
-                          alt=""
-                          className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
-                        />
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="mt-4 flex gap-2">
-                <SaveQuestionButton
-                  initialSaved={savedIds.has(tq.questionId)}
-                  onToggle={toggleSaveQuestionAction.bind(null, tq.questionId)}
-                />
-                <ReportQuestionDialog onSubmit={reportAttemptQuestionAction.bind(null, attemptId, tq.questionId)} />
-              </div>
-
-              <ExplanationPanel questionId={tq.questionId} />
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    </StudentShell>
   );
 }

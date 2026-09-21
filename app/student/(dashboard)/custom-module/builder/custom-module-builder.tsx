@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useFormStatus } from "react-dom";
 import { AlertTriangle, ArrowRight, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
+import { QuestionCountPresets } from "@/components/student/question-count-presets";
 import { createCustomModuleAction, countCustomModuleQuestionsAction, getExamSetupAction, type CustomModuleBuilderState } from "./actions";
 
 const DIFFICULTIES = ["EASY", "MEDIUM", "HARD"] as const;
@@ -69,6 +70,10 @@ export function CustomModuleBuilder({
   const [durationMinutes, setDurationMinutes] = useState(20);
   const [available, setAvailable] = useState<number | null>(null);
   const [state, formAction] = useActionState<CustomModuleBuilderState, FormData>(createCustomModuleAction, {});
+  const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<{ signature: string; message: string } | null>(null);
+  const [confirmPending, startConfirmTransition] = useTransition();
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (!examId || examSetup?.id === examId) return;
@@ -115,8 +120,27 @@ export function CustomModuleBuilder({
 
   const countExceeds = available !== null && count > available;
 
+  // The "Only N available — Continue with N?" prompt is keyed to a signature
+  // of every filter that affects the pool, so changing anything after
+  // dismissing it makes the prompt reappear (derived during render — never a
+  // setState-in-effect) instead of staying hidden forever.
+  const filterSignature = JSON.stringify([examId, subjectId, topicId, subTopicId, year, source, attemptFilter, difficulty, count]);
+  const confirmDismissed = dismissedSignature === filterSignature;
+  const activeConfirmError = confirmError?.signature === filterSignature ? confirmError.message : null;
+
+  const handleContinueWithAvailable = () => {
+    if (!formRef.current || available === null) return;
+    setConfirmError(null);
+    const formData = new FormData(formRef.current);
+    formData.set("count", String(available));
+    startConfirmTransition(async () => {
+      const result = await createCustomModuleAction({}, formData);
+      if (result?.error) setConfirmError({ signature: filterSignature, message: result.error });
+    });
+  };
+
   return (
-    <form action={formAction} className="flex flex-col gap-6">
+    <form ref={formRef} action={formAction} className="flex flex-col gap-6">
       <Card>
         <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5 sm:col-span-2">
@@ -262,17 +286,8 @@ export function CustomModuleBuilder({
       <Card>
         <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="count">Question Count *</Label>
-            <Input
-              id="count"
-              name="count"
-              type="number"
-              min={1}
-              max={200}
-              value={count}
-              onChange={(e) => setCount(Math.max(1, Number(e.target.value)))}
-              required
-            />
+            <Label>Question Count *</Label>
+            <QuestionCountPresets count={count} onChange={setCount} inputName="count" />
             <p className="text-xs text-[var(--color-muted-foreground)]">
               {!examId
                 ? "Select an exam to see how many questions match."
@@ -281,7 +296,7 @@ export function CustomModuleBuilder({
                   : available === 0
                     ? "No questions match this selection."
                     : countExceeds
-                      ? <span className="text-[var(--color-error)]">Only {available} questions are available — lower the count.</span>
+                      ? <span className="text-[var(--color-warning)]">Only {available} questions are available for this selection.</span>
                       : `Up to ${available} questions are available for this selection.`}
             </p>
           </div>
@@ -318,7 +333,26 @@ export function CustomModuleBuilder({
             This module is private to you. The question set is fixed the moment you create it — refreshing or resuming
             never generates a new set.
           </p>
-          <SubmitButton />
+
+          {available === 0 ? null : countExceeds && !confirmDismissed ? (
+            <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 p-3">
+              <p className="text-sm text-[var(--color-foreground)]">
+                Only {available} question{available === 1 ? "" : "s"} {available === 1 ? "is" : "are"} currently available for
+                this selection. Would you like to continue with all {available}?
+              </p>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setDismissedSignature(filterSignature)}>
+                  Cancel
+                </Button>
+                <Button type="button" size="sm" disabled={confirmPending} onClick={handleContinueWithAvailable}>
+                  {confirmPending ? "Building module…" : `Continue with ${available}`}
+                </Button>
+              </div>
+              {activeConfirmError ? <p className="text-sm text-[var(--color-error)]">{activeConfirmError}</p> : null}
+            </div>
+          ) : (
+            <SubmitButton />
+          )}
         </CardContent>
       </Card>
     </form>

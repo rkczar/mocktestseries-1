@@ -4,7 +4,7 @@
  * test type is resolved here so display never drifts between pages.
  */
 
-interface TitleableAttempt {
+export interface TitleableAttempt {
   mockTest?: { title?: string | null } | null;
   customModule?: { title?: string | null } | null;
   previousYearPaper?: { title?: string | null; year?: number | null } | null;

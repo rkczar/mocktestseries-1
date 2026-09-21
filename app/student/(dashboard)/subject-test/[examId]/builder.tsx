@@ -46,12 +46,14 @@ export function SubjectTestBuilder({
   exam,
   subjects,
   years,
+  initialSubjectId,
 }: {
   exam: { id: string; name: string; instructions: string | null; durationMinutes: number | null };
   subjects: BuilderSubject[];
   years: number[];
+  initialSubjectId?: string;
 }) {
-  const [subjectId, setSubjectId] = useState(subjects[0]?.id ?? "");
+  const [subjectId, setSubjectId] = useState(initialSubjectId ?? subjects[0]?.id ?? "");
   const [year, setYear] = useState("");
   const [topicId, setTopicId] = useState("");
   const [subTopicId, setSubTopicId] = useState("");

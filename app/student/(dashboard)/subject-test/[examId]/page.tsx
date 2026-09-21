@@ -6,8 +6,15 @@ import { BackButton } from "@/components/student/back-button";
 
 export const metadata = { title: "Build Subject Test — Mock Test Series.in" };
 
-export default async function SubjectTestExamPage({ params }: { params: Promise<{ examId: string }> }) {
+export default async function SubjectTestExamPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ examId: string }>;
+  searchParams: Promise<{ subjectId?: string }>;
+}) {
   const { examId } = await params;
+  const { subjectId } = await searchParams;
   await requireStudent();
   const setup = await getSubjectTestSetup(examId);
   if (!setup) notFound();
@@ -29,6 +36,7 @@ export default async function SubjectTestExamPage({ params }: { params: Promise<
         }}
         subjects={setup.exam.subjects}
         years={setup.years}
+        initialSubjectId={subjectId && setup.exam.subjects.some((s) => s.id === subjectId) ? subjectId : undefined}
       />
     </div>
   );
