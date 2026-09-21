@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { requireStudent } from "@/lib/student-session";
+import { getAiSettings } from "@/lib/ai-settings";
 import { getOrCreateExplanation, AiNotConfiguredError, AiGenerationInProgressError, type ExplanationContent } from "@/lib/ai-explanation";
 import {
   getStoredAiExplanation,
@@ -50,13 +51,19 @@ export async function getExplanationAction(questionId: string) {
     // Related practice questions (spec §6): existing AI01-05 variants for this
     // canonical question, display-only here — publishing one into the real
     // Question Bank is a separate, explicit admin action (lib/ai-variant.ts
-    // publishVariant), never automatic.
-    const relatedQuestions = await prisma.question.findMany({
-      where: { parentQuestionId: questionId, aiGenerationStatus: "COMPLETED" },
-      orderBy: { aiSlot: "asc" },
-      select: { id: true, code: true, text: true, aiVariantType: true },
-      take: 5,
-    });
+    // publishVariant), never automatic. Count is admin-configurable
+    // (ai.settings.maxRelatedQuestions) but never exceeds 5 server-side,
+    // regardless of what's stored, since only 5 AI variant slots ever exist.
+    const { maxRelatedQuestions } = await getAiSettings();
+    const relatedTake = Math.min(5, Math.max(0, maxRelatedQuestions));
+    const relatedQuestions = relatedTake === 0
+      ? []
+      : await prisma.question.findMany({
+          where: { parentQuestionId: questionId, aiGenerationStatus: "COMPLETED" },
+          orderBy: { aiSlot: "asc" },
+          select: { id: true, code: true, text: true, aiVariantType: true },
+          take: relatedTake,
+        });
 
     return {
       ok: true as const,

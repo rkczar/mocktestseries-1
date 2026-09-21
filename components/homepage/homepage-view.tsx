@@ -1,6 +1,7 @@
 import type { ResolvedHomepage } from "@/lib/homepage-render";
 import { SiteHeader } from "./site-header";
 import { SiteFooter } from "./site-footer";
+import { AskAiDemoSection } from "./ask-ai-demo-section";
 import {
   HeroSection,
   FeaturedExamSection,
@@ -63,6 +64,7 @@ export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
             />
           );
         })}
+        <AskAiDemoSection />
       </main>
 
       {footer?.isEnabled !== false ? (
