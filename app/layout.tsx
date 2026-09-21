@@ -5,6 +5,7 @@ import "./globals.css";
 import { THEME_COOKIE, isTheme } from "@/lib/theme";
 import { TEXT_SIZE_COOKIE, isTextSize } from "@/lib/text-size";
 import { getAppearance, appearanceToCssVariables } from "@/lib/appearance";
+import { getSeoSettings } from "@/lib/seo-settings";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -29,6 +30,21 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   const textSize = isTextSize(textSizeCookie) ? textSizeCookie : "md";
 
   const appearance = await getAppearance();
+  const seo = await getSeoSettings();
+
+  const organizationJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: seo.siteName,
+    url: seo.canonicalBase,
+    ...(seo.defaultOgImage ? { logo: seo.defaultOgImage } : {}),
+  };
+  const websiteJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: seo.siteName,
+    url: seo.canonicalBase,
+  };
 
   return (
     <html
@@ -41,6 +57,8 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         <meta name="theme-color" content={theme === "light" ? "#fbfbfc" : "#0b0c0e"} />
         <style dangerouslySetInnerHTML={{ __html: appearanceToCssVariables(appearance) }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }} />
       </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
