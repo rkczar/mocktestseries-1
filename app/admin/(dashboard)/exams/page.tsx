@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ControlCenterTabs } from "@/components/admin/control-center-tabs";
 import { AllExamsPanel } from "./all-exams-panel";
 import SubjectsPage from "./subjects/page";
@@ -20,7 +21,11 @@ export default async function ExamsControlCenter({
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Exams</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          Exams, subjects & topics, syllabus, previous year papers, and test series.
+          Exams, subjects & topics, syllabus, previous year papers, and test series. Exam access / PYQ package pricing lives in{" "}
+          <Link href="/admin/payments?tab=products" className="text-[var(--color-primary)] hover:underline">
+            Payments → Products &amp; Pricing
+          </Link>
+          .
         </p>
       </div>
 

@@ -6,6 +6,18 @@ import { prisma } from "@/lib/prisma";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { getStorageSnapshot, formatBytes } from "@/lib/storage-stats";
+import { formatInr } from "@/lib/payments/money";
+
+/** Paid LIVE-environment order value since the 1st of the current IST month (TEST orders excluded). */
+async function getRevenueMtdPaise(): Promise<number> {
+  const ist = new Date(Date.now() + 5.5 * 3600_000);
+  const monthStart = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1) - 5.5 * 3600_000);
+  const r = await prisma.paymentOrder.aggregate({
+    where: { environment: "LIVE", status: { in: ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"] }, paidAt: { gte: monthStart } },
+    _sum: { amountPaise: true },
+  });
+  return r._sum.amountPaise ?? 0;
+}
 
 export const metadata = { title: "Dashboard — Mock Test Series.in Admin" };
 
@@ -45,6 +57,20 @@ const ACTION_LABELS: Record<string, string> = {
   API_GEMINI_TESTED: "tested the Gemini AI connection",
   API_RAZORPAY_SAVED: "updated Razorpay configuration",
   API_RAZORPAY_TESTED: "tested the Razorpay connection",
+  PAYMENT_MODE_CHANGED: "changed the payment mode",
+  PRODUCT_CREATED: "created a product",
+  PRODUCT_UPDATED: "updated product pricing",
+  COUPON_CREATED: "created a coupon",
+  COUPON_UPDATED: "updated a coupon",
+  COUPON_DEACTIVATED: "deactivated a coupon",
+  GATEWAY_CREDENTIALS_UPDATED: "updated Razorpay gateway settings",
+  GATEWAY_TESTED: "tested the Razorpay connection",
+  ENTITLEMENT_GRANTED: "granted student access",
+  ENTITLEMENT_REVOKED: "revoked student access",
+  REFUND_REQUESTED: "requested a refund",
+  INVOICE_SETTINGS_UPDATED: "updated invoice settings",
+  PAYMENT_POLICY_UPDATED: "updated the payment policy",
+  ORDER_RECONCILED: "reconciled an order",
 };
 
 function humanizeAction(action: string): string {
@@ -200,7 +226,7 @@ export default async function AdminDashboardPage() {
     recentDeletions,
     recentAuditLogs,
   } = await loadDashboardData();
-  const storage = await getStorageSnapshot();
+  const [storage, revenueMtdPaise] = await Promise.all([getStorageSnapshot(), getRevenueMtdPaise()]);
   const diskUsedPercent =
     storage.filesystem.totalBytes && storage.filesystem.usedBytes
       ? Math.round((storage.filesystem.usedBytes / storage.filesystem.totalBytes) * 100)
@@ -272,7 +298,9 @@ export default async function AdminDashboardPage() {
         <StatCard label="AI Explanations Generated" value={aiExplanationCount} />
         <StatCard label="Pending Question Reports" value={pendingReportCount} />
         <StatCard label="Deletion Requests" value={pendingDeletionCount} />
-        <StatCard label="Revenue (MTD)" value={0} connected={false} />
+        <Link href="/admin/payments?tab=revenue" className="contents">
+          <StatCard label="Revenue (MTD, LIVE)" value={formatInr(revenueMtdPaise)} />
+        </Link>
         <Link
           href="/admin/system?tab=storage"
           className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-foreground)_5%,transparent)]"

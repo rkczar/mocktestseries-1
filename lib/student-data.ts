@@ -131,7 +131,7 @@ export async function getExamDetailForStudent(examId: string) {
     prisma.grandTest.findMany({
       where: { examId, status: GrandTestStatus.PUBLISHED },
       orderBy: { order: "asc" },
-      select: { id: true, title: true, questionCount: true, durationMinutes: true },
+      select: { id: true, title: true, questionCount: true, durationMinutes: true, accessType: true },
     }),
   ]);
 

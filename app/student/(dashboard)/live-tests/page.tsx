@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BackButton } from "@/components/student/back-button";
+import { StartOrUnlock } from "@/components/student/start-or-unlock";
+import { loadAccessContext, evaluateContentAccess, type AccessContext } from "@/lib/payments/access";
 import { startLiveTestFromListAction } from "./actions";
 
 export const metadata = { title: "Live Tests — Mock Test Series.in" };
@@ -15,7 +17,10 @@ type Row = Awaited<ReturnType<typeof getLiveTestsForStudent>>["upcoming"][number
 
 export default async function StudentLiveTestsPage() {
   const student = await requireStudent();
-  const { upcoming, live, completed, resultsAvailable } = await getLiveTestsForStudent(student.id);
+  const [{ upcoming, live, completed, resultsAvailable }, ctx] = await Promise.all([
+    getLiveTestsForStudent(student.id),
+    loadAccessContext(student.id),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -32,7 +37,7 @@ export default async function StudentLiveTestsPage() {
         title="Live Now"
         rows={live}
         empty="No live test is running right now."
-        renderAction={(row) => <StartOrContinue row={row} />}
+        renderAction={(row) => <StartOrContinue row={row} ctx={ctx} />}
       />
 
       <Section
@@ -132,7 +137,7 @@ function Section({
   );
 }
 
-function StartOrContinue({ row }: { row: Row }) {
+function StartOrContinue({ row, ctx }: { row: Row; ctx: AccessContext }) {
   if (row.attempt?.status === "IN_PROGRESS") {
     return (
       <Button asChild size="sm">
@@ -147,11 +152,6 @@ function StartOrContinue({ row }: { row: Row }) {
       </Button>
     );
   }
-  return (
-    <form action={startLiveTestFromListAction.bind(null, row.liveTest.id)}>
-      <Button type="submit" size="sm">
-        Start
-      </Button>
-    </form>
-  );
+  const access = evaluateContentAccess(ctx, { kind: "LIVE_TEST", id: row.liveTest.id, examId: row.liveTest.examId, accessType: row.liveTest.accessType });
+  return <StartOrUnlock access={access} action={startLiveTestFromListAction.bind(null, row.liveTest.id)} />;
 }

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { getPaymentMode } from "@/lib/payments/settings";
 import { getRazorpayConfig } from "@/lib/razorpay-config";
 import { parsePaymentFilters } from "@/lib/payments/analytics";
+import { expireStaleOrders } from "@/lib/payments/orders";
 import { getPaymentsAccess, getFilterOptions } from "./_components/access";
 import { FilterBar } from "./_components/shared";
 import { OverviewPanel, OrdersPanel, TransactionsPanel, RevenuePanel } from "./_components/panels-core";
@@ -46,6 +47,10 @@ export default async function PaymentsControlCenter({ searchParams }: { searchPa
   const tab = TABS.some((t) => t.value === rawTab) ? rawTab : "overview";
   const filters = parsePaymentFilters(sp);
   const q = typeof sp.q === "string" ? sp.q.trim().slice(0, 60) || null : null;
+
+  // Housekeeping: unpaid orders past their TTL are expired and their coupon
+  // holds released (a late capture still fulfils — see recordTrustedPayment).
+  await expireStaleOrders();
 
   const [mode, rzp, options] = await Promise.all([getPaymentMode(), getRazorpayConfig(), FILTERED.has(tab) ? getFilterOptions() : null]);
 

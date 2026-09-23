@@ -6,6 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
 import { ExamSyllabus } from "@/components/student/exam-syllabus";
+import { StartOrUnlock } from "@/components/student/start-or-unlock";
+import { requireStudent } from "@/lib/student-session";
+import { loadAccessContext, evaluateContentAccess } from "@/lib/payments/access";
 import {
   startMockTestFromExamAction,
   startPaperFromExamAction,
@@ -21,6 +24,8 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
   if (!detail) notFound();
 
   const { exam, mockTests, customModules, grandTests } = detail;
+  const student = await requireStudent();
+  const ctx = await loadAccessContext(student.id);
 
   return (
     <div className="flex flex-col gap-6">
@@ -57,11 +62,7 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
                     {mt._count.questions} Qs · {mt.durationMinutes} min
                   </p>
                 </div>
-                <form action={startMockTestFromExamAction.bind(null, mt.id)}>
-                  <Button type="submit" size="sm">
-                    Start
-                  </Button>
-                </form>
+                <StartOrUnlock access={evaluateContentAccess(ctx, { kind: "MOCK_TEST", id: mt.id, examId: exam.id, testSeriesId: mt.testSeriesId, accessType: mt.accessType })} action={startMockTestFromExamAction.bind(null, mt.id)} />
               </div>
             ))
           )}
@@ -87,11 +88,7 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
                     {gt.questionCount} Qs · {gt.durationMinutes} min
                   </p>
                 </div>
-                <form action={startGrandTestFromExamAction.bind(null, gt.id)}>
-                  <Button type="submit" size="sm">
-                    Start
-                  </Button>
-                </form>
+                <StartOrUnlock access={evaluateContentAccess(ctx, { kind: "GRAND_TEST", id: gt.id, examId: exam.id, accessType: gt.accessType })} action={startGrandTestFromExamAction.bind(null, gt.id)} />
               </div>
             ))
           )}
@@ -115,11 +112,7 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
                   <p className="text-sm font-medium text-[var(--color-foreground)]">{p.title}</p>
                   <p className="text-xs text-[var(--color-muted-foreground)]">{p.year}</p>
                 </div>
-                <form action={startPaperFromExamAction.bind(null, p.id)}>
-                  <Button type="submit" size="sm">
-                    Start
-                  </Button>
-                </form>
+                <StartOrUnlock access={evaluateContentAccess(ctx, { kind: "PREVIOUS_YEAR_PAPER", id: p.id, examId: exam.id })} action={startPaperFromExamAction.bind(null, p.id)} />
               </div>
             ))
           )}
@@ -143,11 +136,7 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
                   <p className="text-sm font-medium text-[var(--color-foreground)]">{m.title}</p>
                   <p className="text-xs text-[var(--color-muted-foreground)]">{m._count.questions} Qs</p>
                 </div>
-                <form action={startCustomModuleFromExamAction.bind(null, m.id)}>
-                  <Button type="submit" size="sm">
-                    Start
-                  </Button>
-                </form>
+                <StartOrUnlock access={evaluateContentAccess(ctx, { kind: "CUSTOM_MODULE", id: m.id, examId: exam.id, accessType: m.accessType })} action={startCustomModuleFromExamAction.bind(null, m.id)} />
               </div>
             ))
           )}

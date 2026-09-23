@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
+import { ExamPricingStrip } from "@/components/public-exam/exam-pricing-strip";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -112,6 +113,8 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
           {exam.shortDescription ? (
             <p className="mt-4 max-w-2xl text-base text-[var(--color-muted-foreground)] sm:text-lg">{exam.shortDescription}</p>
           ) : null}
+
+          <ExamPricingStrip examId={exam.id} />
 
           <div className="mt-7 flex flex-wrap items-center gap-3">
             {isLoggedIn ? (
