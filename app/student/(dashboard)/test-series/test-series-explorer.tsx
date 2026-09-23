@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ClipboardList, Clock, ListChecks, Trophy, CalendarClock, PencilLine } from "lucide-react";
+import { ClipboardList, Clock, ListChecks, Trophy, CalendarClock, PencilLine, Lock } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,8 @@ export interface ExplorerTestRow {
   latestAttempt: { id: string; status: "IN_PROGRESS" | "SUBMITTED" | "ABANDONED" } | null;
   hasSubmittedAttempt: boolean;
   paperResourceId: string | null;
+  /** Server-evaluated entitlement lock (null = accessible). The start action re-checks regardless. */
+  lock: { status: "PAYMENT_REQUIRED" | "EXPIRED" | "NOT_AVAILABLE"; href: string | null } | null;
 }
 
 export interface ExplorerGroup {
@@ -145,7 +147,12 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
           </span>
         ) : null}
 
-        <div>
+        <div className="flex flex-wrap gap-1">
+          {row.lock ? (
+            <Badge variant="warning">
+              <Lock className="h-3 w-3" aria-hidden /> {row.lock.status === "EXPIRED" ? "Access expired" : "Premium"}
+            </Badge>
+          ) : null}
           <Badge
             variant={
               status === "UPCOMING" ? "info" : status === "IN_PROGRESS" ? "warning" : status === "COMPLETED" ? "success" : "primary"
@@ -185,6 +192,18 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
                 </form>
               ) : null}
             </>
+          ) : row.lock ? (
+            row.lock.href ? (
+              <Button asChild size="sm">
+                <Link href={row.lock.href}>
+                  <Lock className="h-3.5 w-3.5" aria-hidden /> {row.lock.status === "EXPIRED" ? "Renew Access" : "Unlock"}
+                </Link>
+              </Button>
+            ) : (
+              <Button size="sm" disabled>
+                <Lock className="h-3.5 w-3.5" aria-hidden /> Not available
+              </Button>
+            )
           ) : (
             <>
               <form action={startMockTestFromExamAction.bind(null, row.id)}>

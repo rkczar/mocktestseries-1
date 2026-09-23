@@ -1,6 +1,7 @@
 import { requireStudent } from "@/lib/student-session";
 import { getScheduledMockTestsForStudent } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
+import { loadAccessContext, evaluateContentAccess, paywallHref } from "@/lib/payments/access";
 import { BackButton } from "@/components/student/back-button";
 import { TestSeriesExplorer, type ExplorerGroup } from "./test-series-explorer";
 
@@ -16,6 +17,15 @@ export default async function TestSeriesPage() {
     select: { id: true, mockTestId: true },
   });
   const paperResourceByMockTest = new Map(paperResources.map((r) => [r.mockTestId, r.id]));
+  const accessCtx = await loadAccessContext(student.id);
+  const lockFor = (mt: { id: string; examId: string; testSeriesId: string | null; accessType: "FREE" | "PAID" }) => {
+    const a = evaluateContentAccess(accessCtx, { kind: "MOCK_TEST", id: mt.id, examId: mt.examId, testSeriesId: mt.testSeriesId, accessType: mt.accessType });
+    if (a.allowed) return null;
+    return {
+      status: a.status as "PAYMENT_REQUIRED" | "EXPIRED" | "NOT_AVAILABLE",
+      href: a.status === "NOT_AVAILABLE" || a.purchasesPaused ? null : paywallHref(a),
+    };
+  };
 
   const explorerGroups: ExplorerGroup[] = groups.map((g) => ({
     seriesId: g.series?.id ?? null,
@@ -34,6 +44,7 @@ export default async function TestSeriesPage() {
       latestAttempt: row.latestAttempt,
       hasSubmittedAttempt: row.hasSubmittedAttempt,
       paperResourceId: paperResourceByMockTest.get(row.mockTest.id) ?? null,
+      lock: lockFor(row.mockTest),
     })),
   }));
 

@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
-import { getRazorpayConfig } from "@/lib/razorpay-config";
 import { getAdminSession } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { RestrictedCard } from "@/components/admin/restricted-card";
 import { Card, CardContent } from "@/components/ui/card";
-import { GoogleOAuthCard, Msg91Card, RazorpayCard, LoginMethodsCard } from "./auth-settings-form";
+import { GoogleOAuthCard, Msg91Card, LoginMethodsCard } from "./auth-settings-form";
 import { ApiLogsCard, SecurityAuditCard } from "./audit-panels";
 
 export const metadata = { title: "API Management — Mock Test Series.in Admin" };
@@ -19,9 +18,8 @@ export default async function ApiManagementPage() {
     return <RestrictedCard title="API Management" />;
   }
 
-  const [config, razorpay, logs] = await Promise.all([
+  const [config, logs] = await Promise.all([
     getAuthProviderConfig(),
-    getRazorpayConfig(),
     prisma.auditLog.findMany({
       where: { entityId: { in: AUDIT_ENTITY_IDS } },
       include: { actor: { select: { name: true } } },
@@ -35,7 +33,7 @@ export default async function ApiManagementPage() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">API Management</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          Configure Google Sign-In, Phone OTP/SMS, and Razorpay from one place. Secrets are encrypted at rest and
+          Configure Google Sign-In and Phone OTP/SMS from one place. Secrets are encrypted at rest and
           never shown again after saving — only a configured/connected status is displayed here.
         </p>
       </div>
@@ -46,6 +44,10 @@ export default async function ApiManagementPage() {
           <Link href="/admin/ai/settings" className="text-[var(--color-primary)] hover:underline">
             AI → Settings
           </Link>
+          . Razorpay credentials moved to{" "}
+          <Link href="/admin/payments?tab=gateway" className="text-[var(--color-primary)] hover:underline">
+            Payments → Gateway Settings
+          </Link>
           .
         </CardContent>
       </Card>
@@ -53,7 +55,6 @@ export default async function ApiManagementPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <GoogleOAuthCard google={config.google} />
         <Msg91Card msg91={config.msg91} />
-        <RazorpayCard razorpay={razorpay} />
       </div>
 
       <LoginMethodsCard config={config} />

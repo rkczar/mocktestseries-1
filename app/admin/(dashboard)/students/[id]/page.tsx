@@ -5,6 +5,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { NameCorrectionDialog } from "./name-correction-dialog";
+import { StudentPaymentProfile } from "@/app/admin/(dashboard)/payments/_components/student-payment-profile";
 
 export const metadata = { title: "Student — Mock Test Series.in Admin" };
 
@@ -141,6 +142,8 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
           )}
         </CardContent>
       </Card>
+
+      <StudentPaymentProfile studentId={student.id} />
     </div>
   );
 }

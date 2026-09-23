@@ -33,6 +33,13 @@ export default async function TestSeriesPage({
           Manage scheduled Test Series — their Mock Tests, release schedule, and resources. Open a series to manage
           its tests.
         </p>
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          Pricing (FREE/PAID, MRP, sale, access duration) is set in one place:{" "}
+          <Link href="/admin/payments?tab=products" className="text-[var(--color-primary)] hover:underline">
+            Payments → Products &amp; Pricing
+          </Link>
+          .
+        </p>
       </div>
 
       <Card>

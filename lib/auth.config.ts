@@ -27,7 +27,12 @@ export const authConfig = {
       if (session.user) {
         if (token.sub) session.user.id = token.sub;
         session.user.role = token.role as string | undefined;
-        session.user.permissions = token.permissions as PermissionKey[] | undefined;
+        // Derive from the role on every request (not only the value frozen
+        // into the JWT at sign-in) so newly added permission keys apply to
+        // already-signed-in admins without forcing a re-login.
+        const role = token.role as keyof typeof DEFAULT_ROLE_PERMISSIONS | undefined;
+        session.user.permissions =
+          (role && DEFAULT_ROLE_PERMISSIONS[role]) || (token.permissions as PermissionKey[] | undefined);
       }
       return session;
     },

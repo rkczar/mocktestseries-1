@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import type { QuestionDifficulty, QuestionSource } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
+import { startOrPaywall } from "@/lib/payments/paywall";
 import { prisma } from "@/lib/prisma";
 import { startCustomModuleAttempt, startSharedCustomModuleAttempt } from "@/lib/test-attempt";
 import { ensureCustomModuleShareToken, getSubjectTestSetup } from "@/lib/student-data";
@@ -153,6 +154,6 @@ export async function shareCustomModuleAction(moduleId: string): Promise<{ token
 
 export async function startSharedCustomModuleAction(shareToken: string) {
   const student = await requireStudent();
-  const attempt = await startSharedCustomModuleAttempt(student.id, shareToken);
+  const attempt = await startOrPaywall(() => startSharedCustomModuleAttempt(student.id, shareToken));
   redirect(`/student/attempt/${attempt.id}`);
 }

@@ -171,6 +171,7 @@ model Exam {
   announcements      Announcement[]
   bulkImportRuns     BulkImportRun[]
   testResources      TestResource[]
+  products           Product[]
 }
 
 model Subject {
@@ -243,6 +244,7 @@ model TestSeries {
 
   mockTests MockTest[]
   resources TestResource[]
+  products  Product[]
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +467,12 @@ model Student {
   notificationStates      StudentNotificationState[]
   announcementRecipientOf AnnouncementRecipient[]
   communications          Communication[]
+
+  entitlements      StudentEntitlement[]
+  couponRedemptions CouponRedemption[]
+  paymentOrders     PaymentOrder[]
+  payments          Payment[]
+  invoices          Invoice[]
 
   @@index([status])
 }
@@ -778,6 +786,8 @@ model MockTest {
   announcements Announcement[]
   resources     TestResource[]
 
+  products Product[]
+
   @@index([examId, status])
   @@index([testSeriesId, availableFrom])
 }
@@ -973,6 +983,8 @@ model GrandTest {
   testAttempts  TestAttempt[]
   announcements Announcement[]
 
+  products Product[]
+
   @@index([examId, status])
 }
 
@@ -1044,6 +1056,8 @@ model LiveTest {
   questions     LiveTestQuestion[]
   testAttempts  TestAttempt[]
   announcements Announcement[]
+
+  products Product[]
 
   @@index([status, startAt])
   @@index([examId, status])
@@ -1709,4 +1723,409 @@ model Communication {
   @@index([status])
   @@index([email])
   @@index([ipAddress, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Commerce — Products, Pricing, Coupons, Orders, Payments, Entitlements,
+// Invoices, Refunds, Webhooks (Razorpay Standard Checkout).
+//
+// Money is ALWAYS integer paise — never Float. Every price shown to or
+// charged from a student is recomputed server-side from Product/Coupon rows
+// (lib/payments/pricing.ts); the browser only ever sends identifiers.
+//
+// Access control is the Entitlement layer (lib/payments/access.ts), not
+// Payment rows: a captured payment grants a StudentEntitlement, and every
+// protected TestAttempt start checks entitlements — never payments directly.
+// The global FREE / PAID / MAINTENANCE switch lives in Setting
+// `payments.mode` (lib/payments/settings.ts) so it is Admin-controlled with
+// no deploy, and flipping it never deletes historical commerce rows.
+// ---------------------------------------------------------------------------
+
+enum ProductType {
+  EXAM_ACCESS
+  TEST_SERIES
+  MOCK_TEST
+  GRAND_TEST
+  LIVE_TEST
+  PYQ_PACKAGE
+}
+
+enum AccessDurationType {
+  DAYS
+  FIXED_DATE
+  LIFETIME
+}
+
+enum SaleDiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+model Product {
+  id                 String             @id @default(cuid())
+  code               String             @unique
+  name               String
+  description        String?
+  productType        ProductType
+  // What the product unlocks. EXAM_ACCESS / PYQ_PACKAGE use examId alone;
+  // TEST_SERIES / MOCK_TEST / GRAND_TEST / LIVE_TEST also set their entity id.
+  examId             String?
+  exam               Exam?              @relation(fields: [examId], references: [id], onDelete: SetNull)
+  testSeriesId       String?
+  testSeries         TestSeries?        @relation(fields: [testSeriesId], references: [id], onDelete: SetNull)
+  mockTestId         String?
+  mockTest           MockTest?          @relation(fields: [mockTestId], references: [id], onDelete: SetNull)
+  grandTestId        String?
+  grandTest          GrandTest?         @relation(fields: [grandTestId], references: [id], onDelete: SetNull)
+  liveTestId         String?
+  liveTest           LiveTest?          @relation(fields: [liveTestId], references: [id], onDelete: SetNull)
+  accessType         AccessType         @default(FREE)
+  isActive           Boolean            @default(true)
+  isVisible          Boolean            @default(true)
+  purchaseEnabled    Boolean            @default(true)
+  currency           String             @default("INR")
+  mrpPaise           Int                @default(0)
+  sellingPricePaise  Int                @default(0)
+  // Time-boxed sale on top of sellingPricePaise ("Deal ends in ...").
+  saleEnabled        Boolean            @default(false)
+  saleDiscountType   SaleDiscountType?
+  // PERCENTAGE: whole percent 1..100. FIXED_AMOUNT: paise.
+  saleDiscountValue  Int?
+  saleStartAt        DateTime?
+  saleEndAt          DateTime?
+  accessDurationType AccessDurationType @default(DAYS)
+  accessDays         Int?
+  accessExpiresAt    DateTime?
+  order              Int                @default(0)
+  createdByAdminId   String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  entitlements StudentEntitlement[]
+  orders       PaymentOrder[]
+
+  @@index([productType, isActive])
+  @@index([examId])
+  @@index([testSeriesId])
+  @@index([mockTestId])
+  @@index([grandTestId])
+  @@index([liveTestId])
+}
+
+enum EntitlementSource {
+  FREE
+  PURCHASE
+  COUPON
+  ADMIN_GRANT
+  PROMOTION
+}
+
+enum EntitlementStatus {
+  ACTIVE
+  REVOKED
+}
+
+// Expiry is derived from expiresAt vs server time — status only records
+// explicit revocation, so no cron is needed to "expire" rows.
+model StudentEntitlement {
+  id               String            @id @default(cuid())
+  studentId        String
+  student          Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product           @relation(fields: [productId], references: [id])
+  source           EntitlementSource
+  status           EntitlementStatus @default(ACTIVE)
+  startsAt         DateTime
+  expiresAt        DateTime?
+  // One entitlement per order, enforced by the DB — duplicate verify /
+  // webhook / reconcile calls can never grant twice.
+  orderId          String?           @unique
+  order            PaymentOrder?     @relation(fields: [orderId], references: [id])
+  grantedByAdminId String?
+  reason           String?
+  revokedAt        DateTime?
+  revokedByAdminId String?
+  revokeReason     String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([studentId, productId, status])
+  @@index([productId])
+  @@index([expiresAt])
+}
+
+enum CouponDiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_ACCESS
+}
+
+model Coupon {
+  id                String             @id @default(cuid())
+  // Stored upper-case; lookups normalise input the same way.
+  code              String             @unique
+  displayName       String?
+  description       String?
+  isActive          Boolean            @default(true)
+  validFrom         DateTime?
+  validUntil        DateTime?
+  discountType      CouponDiscountType
+  // PERCENTAGE: whole percent 1..100. FIXED_AMOUNT: paise. FREE_ACCESS: ignored.
+  discountValue     Int                @default(0)
+  maxDiscountPaise  Int?
+  minOrderPaise     Int?
+  totalUsageLimit   Int?
+  perStudentLimit   Int?
+  newStudentOnly    Boolean            @default(false)
+  // Empty array = no restriction on that dimension.
+  productIds        String[]           @default([])
+  examIds           String[]           @default([])
+  testSeriesIds     String[]           @default([])
+  // Attribution foundation (a full referral program can hang off these).
+  source            String?
+  campaign          String?
+  referrerName      String?
+  referrerCode      String?
+  referrerStudentId String?
+  referrerAdminId   String?
+  notes             String?
+  createdByAdminId  String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  redemptions CouponRedemption[]
+  orders      PaymentOrder[]
+
+  @@index([isActive])
+}
+
+enum CouponRedemptionStatus {
+  RESERVED
+  CONSUMED
+  RELEASED
+}
+
+model CouponRedemption {
+  id            String                 @id @default(cuid())
+  couponId      String
+  coupon        Coupon                 @relation(fields: [couponId], references: [id])
+  studentId     String
+  student       Student                @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  orderId       String                 @unique
+  order         PaymentOrder           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status        CouponRedemptionStatus @default(RESERVED)
+  discountPaise Int
+  reservedUntil DateTime?
+  consumedAt    DateTime?
+  createdAt     DateTime               @default(now())
+
+  @@index([couponId, status])
+  @@index([couponId, studentId, status])
+}
+
+enum PaymentEnvironment {
+  TEST
+  LIVE
+}
+
+enum PaymentGateway {
+  RAZORPAY
+  INTERNAL
+}
+
+enum OrderStatus {
+  CREATED
+  GATEWAY_ORDER_CREATED
+  PAYMENT_PENDING
+  PAID
+  FAILED
+  CANCELLED
+  EXPIRED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+model PaymentOrder {
+  id                  String             @id @default(cuid())
+  orderNumber         String             @unique
+  studentId           String
+  student             Student            @relation(fields: [studentId], references: [id])
+  productId           String
+  product             Product            @relation(fields: [productId], references: [id])
+  status              OrderStatus        @default(CREATED)
+  gateway             PaymentGateway
+  environment         PaymentEnvironment
+  currency            String             @default("INR")
+  mrpPaise            Int
+  sellingPricePaise   Int
+  saleDiscountPaise   Int                @default(0)
+  couponId            String?
+  coupon              Coupon?            @relation(fields: [couponId], references: [id])
+  couponCode          String?
+  couponDiscountPaise Int                @default(0)
+  amountPaise         Int
+  // Frozen product/pricing facts at order time (name, access duration...).
+  productSnapshot     Json
+  gatewayOrderId      String?            @unique
+  receipt             String             @unique
+  // Non-null only while the order is open: `${studentId}:${productId}`.
+  // The UNIQUE index makes "one open order per student+product" hold
+  // across every PM2 worker, so double-click / two tabs reuse one order.
+  openKey             String?            @unique
+  failureReason       String?
+  expiresAt           DateTime?
+  paidAt              DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  payments         Payment[]
+  entitlement      StudentEntitlement?
+  couponRedemption CouponRedemption?
+  invoice          Invoice?
+  refunds          Refund[]
+
+  @@index([studentId, createdAt])
+  @@index([status, environment, createdAt])
+  @@index([productId])
+  @@index([couponId])
+}
+
+enum PaymentStatus {
+  CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentVerifiedVia {
+  CHECKOUT_SIGNATURE
+  WEBHOOK
+  RECONCILIATION
+}
+
+model Payment {
+  id                 String              @id @default(cuid())
+  orderId            String
+  order              PaymentOrder        @relation(fields: [orderId], references: [id])
+  studentId          String
+  student            Student             @relation(fields: [studentId], references: [id])
+  gateway            PaymentGateway
+  environment        PaymentEnvironment
+  gatewayPaymentId   String              @unique
+  status             PaymentStatus       @default(CREATED)
+  amountPaise        Int
+  currency           String              @default("INR")
+  // Safe method label only ("upi", "card", "netbanking"...) — never card
+  // numbers, VPA, CVV or OTPs.
+  method             String?
+  verifiedVia        PaymentVerifiedVia?
+  refundedPaise      Int                 @default(0)
+  failureCode        String?
+  failureDescription String?
+  capturedAt         DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  refunds Refund[]
+
+  @@index([orderId])
+  @@index([studentId, createdAt])
+  @@index([status, environment, createdAt])
+}
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum RefundAccessPolicy {
+  REVOKE_IMMEDIATELY
+  RETAIN_UNTIL_DATE
+  RETAIN
+}
+
+model Refund {
+  id                 String             @id @default(cuid())
+  paymentId          String
+  payment            Payment            @relation(fields: [paymentId], references: [id])
+  orderId            String
+  order              PaymentOrder       @relation(fields: [orderId], references: [id])
+  gatewayRefundId    String?            @unique
+  amountPaise        Int
+  status             RefundStatus       @default(REQUESTED)
+  reason             String?
+  accessPolicy       RefundAccessPolicy @default(RETAIN)
+  retainUntil        DateTime?
+  requestedByAdminId String?
+  failureReason      String?
+  processedAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([paymentId])
+  @@index([status])
+}
+
+model Invoice {
+  id            String             @id @default(cuid())
+  invoiceNumber String             @unique
+  orderId       String             @unique
+  order         PaymentOrder       @relation(fields: [orderId], references: [id])
+  studentId     String
+  student       Student            @relation(fields: [studentId], references: [id])
+  environment   PaymentEnvironment
+  totalPaise    Int
+  currency      String             @default("INR")
+  // Immutable snapshot: seller, customer, lines, tax, totals, payment ref.
+  snapshot      Json
+  issuedAt      DateTime           @default(now())
+
+  @@index([studentId, issuedAt])
+}
+
+// Atomic per-series counter for invoice numbers (key = prefix + FY).
+model InvoiceCounter {
+  key   String @id
+  value Int    @default(0)
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+model PaymentWebhookEvent {
+  id            String              @id @default(cuid())
+  provider      PaymentGateway      @default(RAZORPAY)
+  // Razorpay's x-razorpay-event-id header — the dedup key.
+  eventId       String              @unique
+  eventType     String
+  environment   PaymentEnvironment?
+  status        WebhookEventStatus  @default(RECEIVED)
+  orderId       String?
+  paymentId     String?
+  errorCategory String?
+  // Safe subset only (ids, status, amount) — never the raw payload.
+  summary       Json?
+  receivedAt    DateTime            @default(now())
+  processedAt   DateTime?
+
+  @@index([eventType, receivedAt])
+  @@index([orderId])
+}
+
+// DB-backed sliding-window rate limit shared by every PM2 worker.
+model PaymentRateLimitHit {
+  id        String   @id @default(cuid())
+  bucket    String
+  key       String
+  createdAt DateTime @default(now())
+
+  @@index([bucket, key, createdAt])
 }

@@ -32,6 +32,32 @@ export interface RouteConnection {
 }
 
 export const ROUTE_CONNECTIONS: RouteConnection[] = [
+  // --- Commerce / Razorpay (lib/payments/*) ---------------------------------
+  // Admin Payment Control Center tabs (?tab=products|coupons|orders|
+  // transactions|subscriptions|invoices|gateway|webhooks|reconciliation) link
+  // into these editors/detail pages (app/admin/(dashboard)/payments/_components).
+  { from: "/admin/payments", to: "/admin/payments/products/[id]", source: "card", label: "Products & Pricing (canonical price source)" },
+  { from: "/admin/payments", to: "/admin/payments/coupons/[id]", source: "card", label: "Coupons" },
+  { from: "/admin/payments", to: "/admin/payments/orders/[id]", source: "card", label: "Orders / Transactions / Refunds / Reconciliation" },
+  { from: "/admin/payments", to: "/admin/students/[id]", source: "card", label: "Entitlements → student payment profile" },
+  { from: "/admin/payments/orders/[id]", to: "/admin/payments", source: "form", label: "Razorpay Refund API + refund.* webhook / Reconcile (server re-read)" },
+  { from: "/admin/students/[id]", to: "/admin/payments/orders/[id]", source: "card", label: "Payments & Access: grant/revoke entitlement, purchase history" },
+  // Pricing set in Admin is what the student checkout shows (server-computed).
+  { from: "/admin/payments/products/[id]", to: "/student/checkout/[code]", source: "admin-config", label: "Server-side price / sale / access duration" },
+  { from: "/admin/payments/coupons/[id]", to: "/student/checkout/[code]", source: "admin-config", label: "Server-side coupon validation" },
+  // Student checkout flow (app/student/(dashboard)/checkout/*).
+  { from: "/student/plans", to: "/student/checkout/[code]", source: "card", label: "View & Buy" },
+  { from: "/student/checkout/[code]", to: "/student/checkout/result/[orderId]", source: "form", label: "Razorpay: Create Order → Checkout → Verify signature (server)" },
+  { from: "/student/checkout/result/[orderId]", to: "/student/subscriptions", source: "button", label: "Entitlement active (webhook/reconcile restores if callback lost)" },
+  { from: "/student/checkout/result/[orderId]", to: "/student/payments", source: "button", label: "Invoice" },
+  { from: "/student/subscriptions", to: "/student/checkout/[code]", source: "button", label: "Renew" },
+  { from: "/student/dashboard", to: "/student/subscriptions", source: "card", label: "Active subscription / expiry warning" },
+  // Test Access Gate (lib/payments/access.ts via lib/test-attempt.ts start*):
+  // a denied start redirects to the unlocking product's checkout.
+  { from: "/student/test-series", to: "/student/checkout/[code]", source: "button", label: "Test Access Gate: Unlock / Renew" },
+  { from: "/student/exams/[examId]", to: "/student/checkout/[code]", source: "redirect", label: "Test Access Gate: PAYMENT_REQUIRED" },
+  { from: "/student/attempt/[attemptId]/run", to: "/student/checkout/[code]", source: "button", label: "Test Access Gate: locked attempt" },
+
   // Note: /login -> /student/dashboard on successful sign-in is already
   // captured by the tree edge (Student Dashboard's parentRoute is /login in
   // lib/routes.ts), so it's intentionally not duplicated here.

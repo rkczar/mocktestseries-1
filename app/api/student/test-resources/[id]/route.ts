@@ -7,6 +7,7 @@ import { requireStudent, StudentUnauthorizedError } from "@/lib/student-session"
 import { isMockTestAvailable } from "@/lib/mock-test-schedule";
 import { canAccessTestResource } from "@/lib/test-resources-access";
 import { resolveTestResourcePath } from "@/lib/test-resources";
+import { getContentAccess, accessDeniedMessage } from "@/lib/payments/access";
 
 /**
  * The only enforcement point for TestResource downloads — every request re-
@@ -40,9 +41,24 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (resource.mockTestId) {
     const mockTest = await prisma.mockTest.findUnique({
       where: { id: resource.mockTestId },
-      select: { status: true, availableFrom: true },
+      select: { status: true, availableFrom: true, examId: true, testSeriesId: true, accessType: true },
     });
     mockTestAvailable = mockTest ? isMockTestAvailable(mockTest) : false;
+
+    // Paper/Solution PDFs of a paid mock test are protected content: the
+    // same entitlement gate as starting the test (OMR sheets are not).
+    if (studentId && mockTest && resource.type !== "OMR_TEMPLATE") {
+      const access = await getContentAccess(studentId, {
+        kind: "MOCK_TEST",
+        id: resource.mockTestId,
+        examId: mockTest.examId,
+        testSeriesId: mockTest.testSeriesId,
+        accessType: mockTest.accessType,
+      });
+      if (!access.allowed) {
+        return NextResponse.json({ error: accessDeniedMessage(access), access: access.status }, { status: 402 });
+      }
+    }
 
     if (studentId) {
       const submitted = await prisma.testAttempt.findFirst({

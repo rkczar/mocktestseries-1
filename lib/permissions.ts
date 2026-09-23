@@ -53,6 +53,13 @@ export const PERMISSIONS = {
   // create/edit/publish/schedule/resource mutations move onto this new key
   // instead of TESTS_MANAGE.
   TEST_SERIES_MANAGE: "test-series:manage",
+  // Payments Control Center (Admin -> Payments). PAYMENTS_VIEW is global
+  // read access (MASTER_ADMIN + FULL_ADMIN); PAYMENTS_MANAGE — payment mode,
+  // pricing, coupons, gateway credentials, entitlement grant/revoke,
+  // refunds, reconciliation repair, invoice settings — is MASTER_ADMIN-only,
+  // enforced server-side on every mutation.
+  PAYMENTS_VIEW: "payments:view",
+  PAYMENTS_MANAGE: "payments:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -74,6 +81,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.STUDENTS_MANAGE,
     PERMISSIONS.ANNOUNCEMENTS_MANAGE,
     PERMISSIONS.COMMUNICATIONS_MANAGE,
+    PERMISSIONS.PAYMENTS_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };

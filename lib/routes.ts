@@ -105,10 +105,18 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Teachers", route: "/admin/users/teachers", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin/users/admins", status: "DRAFT" },
   { pageName: "Permissions", route: "/admin/users/permissions", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin/users/admins", status: "DRAFT" },
 
-  // Payments (Phase 11)
-  { pageName: "Transactions", route: "/admin/payments/transactions", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
-  { pageName: "Orders", route: "/admin/payments/orders", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments/transactions", status: "DRAFT" },
-  { pageName: "Revenue", route: "/admin/payments/revenue", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments/transactions", status: "DRAFT" },
+  // Payments — Payment Control Center (Razorpay Standard Checkout,
+  // products/pricing, coupons, entitlements, invoices, refunds). Orders /
+  // Transactions / Revenue are deep-link redirects into Control Center tabs.
+  { pageName: "Payments Control Center", route: "/admin/payments", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+  { pageName: "Transactions", route: "/admin/payments/transactions", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
+  { pageName: "Orders", route: "/admin/payments/orders", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
+  { pageName: "Order Detail", route: "/admin/payments/orders/[id]", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments/orders", status: "CONNECTED" },
+  { pageName: "Revenue", route: "/admin/payments/revenue", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
+  { pageName: "Product / Pricing Editor", route: "/admin/payments/products/[id]", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
+  { pageName: "New Product", route: "/admin/payments/products/new", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
+  { pageName: "Coupon Editor", route: "/admin/payments/coupons/[id]", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
+  { pageName: "New Coupon", route: "/admin/payments/coupons/new", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
 
   // Settings
   { pageName: "General Settings", route: "/admin/settings/general", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
@@ -131,6 +139,11 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "History", route: "/student/history", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
   { pageName: "Saved Questions", route: "/student/saved", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
   { pageName: "My Profile", route: "/student/profile", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+  { pageName: "Plans & Pricing", route: "/student/plans", module: "Student Commerce", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+  { pageName: "Checkout", route: "/student/checkout/[code]", module: "Student Commerce", userType: "STUDENT", authRequired: true, parentRoute: "/student/plans", status: "CONNECTED" },
+  { pageName: "Payment Status", route: "/student/checkout/result/[orderId]", module: "Student Commerce", userType: "STUDENT", authRequired: true, parentRoute: "/student/checkout/[code]", status: "CONNECTED" },
+  { pageName: "My Subscriptions", route: "/student/subscriptions", module: "Student Commerce", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
+  { pageName: "Payments & Invoices", route: "/student/payments", module: "Student Commerce", userType: "STUDENT", authRequired: true, parentRoute: "/student/dashboard", status: "CONNECTED" },
 
   // Test-taking flow
   { pageName: "Attempt Instructions", route: "/student/attempt/[attemptId]", module: "Test Flow", userType: "STUDENT", authRequired: true, parentRoute: "/student/exams", status: "CONNECTED" },

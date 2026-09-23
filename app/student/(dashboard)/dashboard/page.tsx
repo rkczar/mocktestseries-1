@@ -14,6 +14,7 @@ import { ACTIVE_EXAM_COOKIE } from "@/lib/active-exam";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { SubscriptionStatusCard } from "@/components/student/subscription-status-card";
 import { ActiveExamDashboard } from "./active-exam-dashboard";
 import { toDashboardMetricsView } from "./metrics-view";
 
@@ -91,6 +92,8 @@ export default async function StudentDashboardPage() {
           ))}
         </div>
       ) : null}
+
+      <SubscriptionStatusCard studentId={student.id} />
 
       <ActiveExamDashboard
         enrolledExams={enrolledExams.map((e) => ({ id: e.id, name: e.name }))}

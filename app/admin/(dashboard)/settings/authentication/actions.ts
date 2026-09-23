@@ -10,7 +10,6 @@ import {
   testMsg91Connection,
   type ProviderLastTest,
 } from "@/lib/auth-provider-config";
-import { saveRazorpayConfig, testRazorpayConnection, type RazorpayMode } from "@/lib/razorpay-config";
 
 export interface SettingsFormState {
   error?: string;
@@ -107,31 +106,5 @@ export async function testMsg91ConnectionAction(): Promise<TestConnectionState> 
   const result = await testMsg91Connection();
   await logAudit(session.user.id, "AUTH_PROVIDER_MSG91_TESTED", "auth.providers", { ok: result.ok });
   revalidateAuthSurfaces();
-  return { result };
-}
-
-export async function saveRazorpayConfigAction(
-  _prev: SettingsFormState,
-  formData: FormData
-): Promise<SettingsFormState> {
-  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
-
-  const enabled = formData.get("enabled") === "on";
-  const mode = (String(formData.get("mode") ?? "test") === "live" ? "live" : "test") as RazorpayMode;
-  const keyId = String(formData.get("keyId") ?? "").trim();
-  const keySecret = String(formData.get("keySecret") ?? "").trim();
-
-  await saveRazorpayConfig({ enabled, mode, keyId, keySecret: keySecret || undefined });
-  await logAudit(session.user.id, "API_RAZORPAY_SAVED", "api.razorpay", { enabled });
-
-  revalidatePath("/admin/settings/authentication");
-  return { success: true };
-}
-
-export async function testRazorpayConnectionAction(): Promise<TestConnectionState> {
-  const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
-  const result = await testRazorpayConnection();
-  await logAudit(session.user.id, "API_RAZORPAY_TESTED", "api.razorpay", { ok: result.ok });
-  revalidatePath("/admin/settings/authentication");
   return { result };
 }

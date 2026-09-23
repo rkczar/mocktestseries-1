@@ -17,6 +17,7 @@ import { isExpired, elapsedSecondsFor, remainingSecondsFor, type ServerTimedAtte
 import { deriveLiveTestState } from "@/lib/live-test";
 import { isMockTestAvailable } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
+import { assertContentAccess } from "@/lib/payments/access";
 
 export { remainingSecondsFor, InsufficientQuestionsError };
 export type { QuestionSelectionFilters } from "@/lib/question-selection";
@@ -162,6 +163,11 @@ async function findResumableAttempt(studentId: string, where: Record<string, unk
  * keeps today's unrestricted-retake behavior.
  */
 export async function startMockTestAttempt(studentId: string, mockTestId: string, entryMode: AttemptEntryMode = AttemptEntryMode.ONLINE) {
+  // Payment/entitlement gate runs BEFORE resume too, so an attempt started
+  // while the content was free can't be resumed once it requires payment.
+  const gate = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { examId: true, testSeriesId: true, accessType: true } });
+  if (gate) await assertContentAccess(studentId, { kind: "MOCK_TEST", id: mockTestId, ...gate });
+
   const resumable = await findResumableAttempt(studentId, { mockTestId });
   if (resumable) return resumable;
 
@@ -213,6 +219,12 @@ type CustomModuleWithQuestions = Awaited<
 >;
 
 async function startFromCustomModuleRow(studentId: string, customModule: CustomModuleWithQuestions) {
+  await assertContentAccess(studentId, {
+    kind: "CUSTOM_MODULE",
+    id: customModule.id,
+    examId: customModule.examId,
+    accessType: customModule.accessType,
+  });
   const resumable = await findResumableAttempt(studentId, { customModuleId: customModule.id });
   if (resumable) return resumable;
 
@@ -269,6 +281,9 @@ export async function startSharedCustomModuleAttempt(studentId: string, shareTok
  * blueprint is resolved once at publish, never per-student and never here.
  */
 export async function startGrandTestAttempt(studentId: string, grandTestId: string) {
+  const gate = await prisma.grandTest.findUnique({ where: { id: grandTestId }, select: { examId: true, accessType: true } });
+  if (gate) await assertContentAccess(studentId, { kind: "GRAND_TEST", id: grandTestId, ...gate });
+
   const resumable = await findResumableAttempt(studentId, { grandTestId });
   if (resumable) return resumable;
 
@@ -300,6 +315,9 @@ export async function startGrandTestAttempt(studentId: string, grandTestId: stri
  * is enforced by lib/attempt-timing.ts via `liveTest.endAt` on every read.
  */
 export async function startLiveTestAttempt(studentId: string, liveTestId: string) {
+  const gate = await prisma.liveTest.findUnique({ where: { id: liveTestId }, select: { examId: true, accessType: true } });
+  if (gate) await assertContentAccess(studentId, { kind: "LIVE_TEST", id: liveTestId, ...gate });
+
   const resumable = await findResumableAttempt(studentId, { liveTestId });
   if (resumable) return resumable;
 
@@ -328,6 +346,9 @@ export async function startLiveTestAttempt(studentId: string, liveTestId: string
 }
 
 export async function startPreviousYearPaperAttempt(studentId: string, paperId: string) {
+  const gate = await prisma.previousYearPaper.findUnique({ where: { id: paperId }, select: { examId: true } });
+  if (gate) await assertContentAccess(studentId, { kind: "PREVIOUS_YEAR_PAPER", id: paperId, examId: gate.examId });
+
   const resumable = await findResumableAttempt(studentId, { previousYearPaperId: paperId });
   if (resumable) return resumable;
 
@@ -368,6 +389,8 @@ export interface SubjectTestSelection extends QuestionSelectionFilters {
  * for the server-side window (see lib/attempt-timing.ts).
  */
 export async function startSubjectTestAttempt(studentId: string, selection: SubjectTestSelection) {
+  if (selection.examId) await assertContentAccess(studentId, { kind: "SUBJECT_TEST", id: null, examId: selection.examId });
+
   const resumable = await findResumableAttempt(studentId, { testType: TestType.SUBJECT_TEST, subjectId: selection.subjectId });
   if (resumable) return resumable;
   if (!selection.subjectId) throw new Error("A subject is required to start a subject test.");

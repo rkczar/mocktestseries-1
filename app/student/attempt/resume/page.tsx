@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { requireStudent } from "@/lib/student-session";
+import { startOrPaywall } from "@/lib/payments/paywall";
 import { startPreviousYearPaperAttempt, startMockTestAttempt } from "@/lib/test-attempt";
 
 /**
@@ -24,12 +25,12 @@ export default async function ResumeAttemptPage({
   const student = await requireStudent();
 
   if (paper) {
-    const attempt = await startPreviousYearPaperAttempt(student.id, paper);
+    const attempt = await startOrPaywall(() => startPreviousYearPaperAttempt(student.id, paper));
     redirect(`/student/attempt/${attempt.id}`);
   }
 
   if (mockTest) {
-    const attempt = await startMockTestAttempt(student.id, mockTest);
+    const attempt = await startOrPaywall(() => startMockTestAttempt(student.id, mockTest));
     redirect(`/student/attempt/${attempt.id}`);
   }
 
