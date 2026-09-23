@@ -14,6 +14,7 @@ import {
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
 import { getStudentSession } from "@/lib/student-session";
+import { prisma } from "@/lib/prisma";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,12 +45,16 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
   const exam = await getPublicExamBySlug(slug);
   if (!exam) notFound();
 
-  const [stats, subjects, papers, siteUrl, session] = await Promise.all([
+  const [stats, subjects, papers, siteUrl, session, omrResource] = await Promise.all([
     getExamPublicStats(exam.id),
     getExamSubjectsWithCounts(exam.id),
     getExamPapers(exam.id),
     getSiteUrl(),
     getStudentSession(),
+    prisma.testResource.findFirst({
+      where: { type: "OMR_TEMPLATE", isActive: true, examId: exam.id, mockTestId: null },
+      select: { id: true },
+    }),
   ]);
 
   const faqItems = parseFaqItems(exam.faqItems);
@@ -125,6 +130,11 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
             {papers.length > 0 ? (
               <Button asChild variant="outline" size="lg">
                 <Link href={`/exams/${exam.publicSlug}/previous-year-papers`}>Explore Previous Year Papers</Link>
+              </Button>
+            ) : null}
+            {omrResource ? (
+              <Button asChild variant="outline" size="lg">
+                <a href={`/api/student/test-resources/${omrResource.id}`}>Download OMR Sheet</a>
               </Button>
             ) : null}
             {!isLoggedIn ? (

@@ -20,9 +20,13 @@ function SubmitButton() {
 export function MockTestForm({
   exams,
   testSeries,
+  defaultExamId,
+  defaultTestSeriesId,
 }: {
   exams: { id: string; name: string }[];
   testSeries: { id: string; name: string; examId: string }[];
+  defaultExamId?: string;
+  defaultTestSeriesId?: string;
 }) {
   const [state, formAction] = useActionState<MockTestFormState, FormData>(createMockTestAction, {});
   const formRef = useRef<HTMLFormElement>(null);
@@ -35,7 +39,7 @@ export function MockTestForm({
     <form ref={formRef} action={formAction} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="examId">Exam</Label>
-        <SelectNative id="examId" name="examId" required defaultValue="">
+        <SelectNative id="examId" name="examId" required defaultValue={defaultExamId ?? ""}>
           <option value="" disabled>
             Select exam
           </option>
@@ -48,7 +52,7 @@ export function MockTestForm({
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="testSeriesId">Test Series (optional)</Label>
-        <SelectNative id="testSeriesId" name="testSeriesId" defaultValue="">
+        <SelectNative id="testSeriesId" name="testSeriesId" defaultValue={defaultTestSeriesId ?? ""}>
           <option value="">Standalone mock test</option>
           {testSeries.map((s) => (
             <option key={s.id} value={s.id}>
@@ -74,6 +78,17 @@ export function MockTestForm({
         <SelectNative id="accessType" name="accessType" defaultValue="FREE">
           <option value="FREE">Free</option>
           <option value="PAID">Paid</option>
+        </SelectNative>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="availableFrom">Available From (IST, optional)</Label>
+        <Input id="availableFrom" name="availableFrom" type="datetime-local" />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="attemptPolicy">Attempt Policy</Label>
+        <SelectNative id="attemptPolicy" name="attemptPolicy" defaultValue="MULTIPLE_PRACTICE">
+          <option value="MULTIPLE_PRACTICE">Multiple Practice Attempts</option>
+          <option value="SINGLE_ATTEMPT">Single Attempt</option>
         </SelectNative>
       </div>
       <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3">

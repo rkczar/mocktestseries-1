@@ -254,6 +254,7 @@ async function main() {
 
     const st1Questions = await prisma.testAttemptQuestion.findMany({
       where: { attemptId: st1.id },
+      orderBy: { order: "asc" },
     });
     check("exactly the requested count was frozen", st1Questions.length === 3);
     const st1QuestionRows = await prisma.question.findMany({

@@ -44,13 +44,13 @@ export default function TestsControlCenter() {
         tabs={[
           { value: "all", label: "All Tests", content: <AllTestsPanel /> },
           { value: "builder", label: "Create Test", content: <BuilderPage /> },
-          { value: "mock", label: "Mock Tests", content: <MockTestsPage /> },
+          { value: "mock", label: "Mock Tests", content: <MockTestsPage searchParams={Promise.resolve({})} /> },
           { value: "custom-modules", label: "Custom Modules", content: <CustomModulesPage /> },
           { value: "grand", label: "Grand Tests", content: <GrandTestsPage /> },
           { value: "custom", label: "Custom Tests", content: <CustomTestsPage /> },
           { value: "random", label: "Random Tests", content: <RandomTestsPage /> },
           { value: "live", label: "Live Tests", content: <LiveTestsPage /> },
-          { value: "scheduled", label: "Scheduled Tests", content: <ScheduledTestsPage /> },
+          { value: "scheduled", label: "Scheduled Tests", content: <ScheduledTestsPage searchParams={Promise.resolve({})} /> },
         ]}
       />
     </div>

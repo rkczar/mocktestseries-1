@@ -7,7 +7,12 @@ import { MockTestStatusSelect } from "./status-select";
 
 export const metadata = { title: "Mock Tests — Mock Test Series.in Admin" };
 
-export default async function MockTestsPage() {
+export default async function MockTestsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ examId?: string; testSeriesId?: string }>;
+}) {
+  const { examId, testSeriesId } = await searchParams;
   const [exams, testSeries, mockTests] = await Promise.all([
     prisma.exam.findMany({ orderBy: { order: "asc" }, select: { id: true, name: true } }),
     prisma.testSeries.findMany({ select: { id: true, name: true, examId: true } }),
@@ -34,7 +39,7 @@ export default async function MockTestsPage() {
           {exams.length === 0 ? (
             <p className="text-sm text-[var(--color-muted-foreground)]">Create an exam first (Admin → Exams).</p>
           ) : (
-            <MockTestForm exams={exams} testSeries={testSeries} />
+            <MockTestForm exams={exams} testSeries={testSeries} defaultExamId={examId} defaultTestSeriesId={testSeriesId} />
           )}
         </CardContent>
       </Card>

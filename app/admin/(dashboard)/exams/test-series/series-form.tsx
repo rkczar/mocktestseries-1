@@ -47,6 +47,14 @@ export function SeriesForm({ exams, defaultExamId }: { exams: { id: string; name
         <Label htmlFor="description">Description</Label>
         <Input id="description" name="description" placeholder="Optional" />
       </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="status">Status</Label>
+        <SelectNative id="status" name="status" defaultValue="DRAFT">
+          <option value="DRAFT">Draft</option>
+          <option value="PUBLISHED">Published</option>
+          <option value="ARCHIVED">Archived</option>
+        </SelectNative>
+      </div>
       <div className="flex items-end sm:col-span-2 lg:col-span-4">
         <SubmitButton />
         {state.error ? <p className="ml-3 text-sm text-[var(--color-error)]">{state.error}</p> : null}

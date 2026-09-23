@@ -2,7 +2,13 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { Megaphone } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
-import { getDashboardMetrics, getEnrolledExams, getExamScopedDashboardMetrics, getExamSubjectsOverview } from "@/lib/student-data";
+import {
+  getDashboardMetrics,
+  getEnrolledExams,
+  getExamScopedDashboardMetrics,
+  getExamSubjectsOverview,
+  getNextScheduledTestForStudent,
+} from "@/lib/student-data";
 import { getVisibleAnnouncementsForStudent } from "@/lib/notifications";
 import { ACTIVE_EXAM_COOKIE } from "@/lib/active-exam";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,11 +36,24 @@ export default async function StudentDashboardPage() {
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const [rawExamMetrics, subjects] = activeExamId
-    ? await Promise.all([getExamScopedDashboardMetrics(student.id, activeExamId), getExamSubjectsOverview(activeExamId)])
-    : [null, []];
+  const [rawExamMetrics, subjects, nextTest] = activeExamId
+    ? await Promise.all([
+        getExamScopedDashboardMetrics(student.id, activeExamId),
+        getExamSubjectsOverview(activeExamId),
+        getNextScheduledTestForStudent(student.id, activeExamId),
+      ])
+    : [null, [], await getNextScheduledTestForStudent(student.id)];
 
   const initialMetrics = toDashboardMetricsView(rawExamMetrics ?? globalMetrics);
+  const nextTestCard = nextTest
+    ? {
+        mockTestId: nextTest.mockTest.id,
+        title: nextTest.mockTest.title,
+        examName: nextTest.mockTest.exam.name,
+        availability: nextTest.availability as "UPCOMING" | "AVAILABLE",
+        availableFrom: nextTest.mockTest.availableFrom ? nextTest.mockTest.availableFrom.toISOString() : null,
+      }
+    : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -79,6 +98,7 @@ export default async function StudentDashboardPage() {
         initialMetrics={initialMetrics}
         initialSubjects={subjects}
         studyStreak={globalMetrics.studyStreak}
+        nextTest={nextTestCard}
       />
     </div>
   );

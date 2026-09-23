@@ -142,7 +142,17 @@ export async function getExamDetailForStudent(examId: string) {
 // Test Series / Mock Tests
 // ---------------------------------------------------------------------------
 
-export async function getPublishedMockTestsForStudent(studentId: string) {
+/**
+ * Scheduled Mock Test Series hub data. Buckets every PUBLISHED MockTest into
+ * UPCOMING/AVAILABLE by DERIVED release state (lib/mock-test-schedule.ts),
+ * never the raw persisted fields alone — the same "compute from server time"
+ * discipline lib/live-test.ts already uses. A test with no availableFrom is
+ * always AVAILABLE (legacy behavior preserved). Grouped by TestSeries for
+ * the hub page; standalone tests are returned under a null-series group.
+ */
+export async function getScheduledMockTestsForStudent(studentId: string) {
+  const { deriveMockTestAvailability } = await import("@/lib/mock-test-schedule");
+
   const mockTests = await prisma.mockTest.findMany({
     where: { status: MockTestStatus.PUBLISHED },
     orderBy: [{ order: "asc" }, { createdAt: "desc" }],
@@ -156,23 +166,65 @@ export async function getPublishedMockTestsForStudent(studentId: string) {
   });
   const bestByMockTest = new Map(bestAttempts.map((b) => [b.mockTestId, b._max.score]));
 
-  const latestAttempts = await prisma.testAttempt.findMany({
+  const attempts = await prisma.testAttempt.findMany({
     where: { studentId, sourceType: AttemptSourceType.MOCK_TEST },
     orderBy: { startedAt: "desc" },
     select: { mockTestId: true, id: true, status: true },
   });
   const latestByMockTest = new Map<string, { id: string; status: AttemptStatus }>();
-  for (const a of latestAttempts) {
-    if (a.mockTestId && !latestByMockTest.has(a.mockTestId)) {
-      latestByMockTest.set(a.mockTestId, { id: a.id, status: a.status });
-    }
+  const submittedMockTestIds = new Set<string>();
+  for (const a of attempts) {
+    if (!a.mockTestId) continue;
+    if (!latestByMockTest.has(a.mockTestId)) latestByMockTest.set(a.mockTestId, { id: a.id, status: a.status });
+    if (a.status === AttemptStatus.SUBMITTED) submittedMockTestIds.add(a.mockTestId);
   }
 
-  return mockTests.map((mt) => ({
-    mockTest: mt,
-    bestScore: bestByMockTest.get(mt.id) ?? null,
-    latestAttempt: latestByMockTest.get(mt.id) ?? null,
+  const now = new Date();
+  const rows = mockTests.map((mockTest) => ({
+    mockTest,
+    availability: deriveMockTestAvailability(mockTest, now),
+    bestScore: bestByMockTest.get(mockTest.id) ?? null,
+    latestAttempt: latestByMockTest.get(mockTest.id) ?? null,
+    hasSubmittedAttempt: submittedMockTestIds.has(mockTest.id),
   }));
+
+  const groupMap = new Map<string, { series: (typeof mockTests)[number]["testSeries"]; tests: typeof rows }>();
+  for (const row of rows) {
+    const key = row.mockTest.testSeriesId ?? "__standalone__";
+    if (!groupMap.has(key)) groupMap.set(key, { series: row.mockTest.testSeries, tests: [] });
+    groupMap.get(key)!.tests.push(row);
+  }
+
+  return { groups: Array.from(groupMap.values()), all: rows };
+}
+
+export type ScheduledMockTestRow = Awaited<ReturnType<typeof getScheduledMockTestsForStudent>>["all"][number];
+
+/**
+ * Picks the single test to surface on the Dashboard's "Next Test" card:
+ * an AVAILABLE test the student hasn't submitted yet (soonest by
+ * availableFrom, nulls first since they've been open longest), else the
+ * soonest UPCOMING test. Optionally scoped to one exam. Display-only — the
+ * actual gate is startMockTestAttempt's server-side isMockTestAvailable
+ * check, not anything derived here.
+ */
+export async function getNextScheduledTestForStudent(studentId: string, examId?: string | null) {
+  const { all } = await getScheduledMockTestsForStudent(studentId);
+  const candidates = examId ? all.filter((row) => row.mockTest.examId === examId) : all;
+
+  const byAvailableFromAsc = (a: ScheduledMockTestRow, b: ScheduledMockTestRow) => {
+    const at = a.mockTest.availableFrom?.getTime() ?? 0;
+    const bt = b.mockTest.availableFrom?.getTime() ?? 0;
+    return at - bt;
+  };
+
+  const available = candidates
+    .filter((row) => row.availability === "AVAILABLE" && !row.hasSubmittedAttempt)
+    .sort(byAvailableFromAsc);
+  if (available.length > 0) return available[0];
+
+  const upcoming = candidates.filter((row) => row.availability === "UPCOMING").sort(byAvailableFromAsc);
+  return upcoming[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------

@@ -70,6 +70,7 @@ model AdminUser {
   createdAnnouncements   Announcement[]
   assignedCommunications Communication[]
   aiExplanationReviews   AIExplanation[]   @relation("AiExplanationReviewedBy")
+  createdTestResources   TestResource[]
 }
 
 model LoginAttempt {
@@ -169,6 +170,7 @@ model Exam {
   enrollments        StudentExamEnrollment[]
   announcements      Announcement[]
   bulkImportRuns     BulkImportRun[]
+  testResources      TestResource[]
 }
 
 model Subject {
@@ -215,18 +217,32 @@ model PreviousYearPaper {
   bulkImportRuns BulkImportRun[]
 }
 
+enum TestSeriesStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
 model TestSeries {
-  id          String   @id @default(cuid())
-  examId      String
-  exam        Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
-  name        String
-  description String?
-  testCount   Int      @default(0)
-  isActive    Boolean  @default(true)
-  order       Int      @default(0)
-  createdAt   DateTime @default(now())
+  id            String           @id @default(cuid())
+  examId        String
+  exam          Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
+  name          String
+  description   String?
+  instructions  String?
+  coverImageUrl String?
+  testCount     Int              @default(0)
+  isActive      Boolean          @default(true)
+  // Lifecycle status (Test Series Control Center). Distinct from `isActive`,
+  // which remains the existing homepage/quick-toggle flag — status governs
+  // whether the series appears at all in the admin Control Center's
+  // Published/Upcoming/Available counts and student-facing hub.
+  status        TestSeriesStatus @default(DRAFT)
+  order         Int              @default(0)
+  createdAt     DateTime         @default(now())
 
   mockTests MockTest[]
+  resources TestResource[]
 }
 
 // ---------------------------------------------------------------------------
@@ -721,6 +737,11 @@ enum AccessType {
   PAID
 }
 
+enum AttemptPolicy {
+  SINGLE_ATTEMPT
+  MULTIPLE_PRACTICE
+}
+
 model MockTest {
   id              String         @id @default(cuid())
   examId          String
@@ -734,6 +755,20 @@ model MockTest {
   instructions    String?
   accessType      AccessType     @default(FREE)
   status          MockTestStatus @default(DRAFT)
+  // Scheduled release time. Null preserves today's behavior exactly — a
+  // PUBLISHED test with no availableFrom is available immediately, so every
+  // existing MockTest row is unaffected by this column's addition. Once set,
+  // the test is UPCOMING/locked before this instant and AVAILABLE at and
+  // after it, indefinitely (see lib/mock-test-schedule.ts) — there is no
+  // availableUntil; Scheduled Mock Tests never auto-close, unlike LiveTest.
+  availableFrom   DateTime?
+  // Governs whether a student may submit this test more than once. Default
+  // MULTIPLE_PRACTICE matches today's actual behavior (nothing currently
+  // stops a retake) — only the leaderboard, via TestAttempt.isLeaderboardAttempt,
+  // distinguishes a student's first submission from later practice retakes.
+  attemptPolicy   AttemptPolicy  @default(MULTIPLE_PRACTICE)
+  // Reused as "Test Number" — the test's display/sort position within its
+  // Test Series (already existed for general ordering; no new field needed).
   order           Int            @default(0)
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
@@ -741,8 +776,10 @@ model MockTest {
   questions     MockTestQuestion[]
   testAttempts  TestAttempt[]
   announcements Announcement[]
+  resources     TestResource[]
 
   @@index([examId, status])
+  @@index([testSeriesId, availableFrom])
 }
 
 model MockTestQuestion {
@@ -754,6 +791,69 @@ model MockTestQuestion {
   order      Int      @default(0)
 
   @@unique([mockTestId, questionId])
+}
+
+// ---------------------------------------------------------------------------
+// Test Resources — Paper PDF / Solution PDF / OMR templates.
+//
+// One reusable model rather than one-off hardcoded files: a Paper/Solution
+// PDF is always mockTestId-scoped (1:1 per test), while an OMR template can
+// be assigned at any of mockTestId / testSeriesId / examId, or left fully
+// global (all three null) so the same "OMR — 100 Questions" resource is
+// reusable across the Student Dashboard, Test Series, an individual Mock
+// Test, and the Public Exam Page without duplicating the file. Resolution
+// order when looking up "which resource applies here" is
+// mockTestId -> testSeriesId -> examId -> global (see lib/test-resources-access.ts).
+// ---------------------------------------------------------------------------
+
+enum TestResourceType {
+  PAPER_PDF
+  SOLUTION_PDF
+  OMR_TEMPLATE
+}
+
+// Governs when a PAPER_PDF/SOLUTION_PDF becomes downloadable. Enforced only
+// server-side in the download route (lib/test-resources-access.ts) — never
+// inferred from a client "unlocked" flag. Ignored (treated as always
+// visible-if-isActive) for OMR_TEMPLATE resources, which carry no exam
+// secrecy concern.
+enum ResourceReleasePolicy {
+  AFTER_AVAILABLE_FROM
+  AFTER_SUBMISSION
+  CUSTOM_DATE
+  DISABLED
+}
+
+model TestResource {
+  id               String                @id @default(cuid())
+  type             TestResourceType
+  title            String
+  fileUrl          String
+  mimeType         String
+  fileSizeBytes    Int
+  // OMR templates only, e.g. 100/150/180/200 — the question count the sheet
+  // is laid out for.
+  questionCount    Int?
+  isActive         Boolean               @default(true)
+  order            Int                   @default(0)
+  releasePolicy    ResourceReleasePolicy @default(AFTER_AVAILABLE_FROM)
+  // Only consulted when releasePolicy = CUSTOM_DATE.
+  releaseAt        DateTime?
+  examId           String?
+  exam             Exam?                 @relation(fields: [examId], references: [id], onDelete: SetNull)
+  testSeriesId     String?
+  testSeries       TestSeries?           @relation(fields: [testSeriesId], references: [id], onDelete: SetNull)
+  mockTestId       String?
+  mockTest         MockTest?             @relation(fields: [mockTestId], references: [id], onDelete: SetNull)
+  createdByAdminId String?
+  createdByAdmin   AdminUser?            @relation(fields: [createdByAdminId], references: [id])
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@index([type, isActive])
+  @@index([mockTestId, type])
+  @@index([testSeriesId, type])
+  @@index([examId, type])
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,6 +1102,11 @@ enum AttemptStatus {
   ABANDONED
 }
 
+enum AttemptEntryMode {
+  ONLINE
+  OFFLINE_OMR_ENTRY
+}
+
 enum AnswerStatus {
   UNANSWERED
   ANSWERED
@@ -1010,47 +1115,60 @@ enum AnswerStatus {
 }
 
 model TestAttempt {
-  id                  String             @id @default(cuid())
-  studentId           String
-  student             Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  sourceType          AttemptSourceType
-  testType            TestType           @default(FULL_MOCK)
-  examId              String
-  exam                Exam               @relation(fields: [examId], references: [id])
-  mockTestId          String?
-  mockTest            MockTest?          @relation(fields: [mockTestId], references: [id])
-  previousYearPaperId String?
-  previousYearPaper   PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id])
-  customModuleId      String?
-  customModule        CustomModule?      @relation(fields: [customModuleId], references: [id])
+  id                   String             @id @default(cuid())
+  studentId            String
+  student              Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  sourceType           AttemptSourceType
+  testType             TestType           @default(FULL_MOCK)
+  examId               String
+  exam                 Exam               @relation(fields: [examId], references: [id])
+  mockTestId           String?
+  mockTest             MockTest?          @relation(fields: [mockTestId], references: [id])
+  previousYearPaperId  String?
+  previousYearPaper    PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id])
+  customModuleId       String?
+  customModule         CustomModule?      @relation(fields: [customModuleId], references: [id])
   // Subject-test linkage (recorded so resume/analytics know the selection).
-  subjectId           String?
-  subject             Subject?           @relation(fields: [subjectId], references: [id])
-  topicIds            Json?
+  subjectId            String?
+  subject              Subject?           @relation(fields: [subjectId], references: [id])
+  topicIds             Json?
   // The exact filters a student chose when the attempt was generated, kept so
   // the attempt is self-describing and resume never needs to re-resolve the
   // question set (the set itself is frozen in TestAttemptQuestion). Shape:
   // { year?: number; source?: QuestionSource; difficulty?: QuestionDifficulty[];
   //   subTopicIds?: string[] }. All types may populate it in a later step.
-  selection           Json?
+  selection            Json?
   // Grand / Live test linkage.
-  grandTestId         String?
-  grandTest           GrandTest?         @relation(fields: [grandTestId], references: [id])
-  liveTestId          String?
-  liveTest            LiveTest?          @relation(fields: [liveTestId], references: [id])
-  status              AttemptStatus      @default(IN_PROGRESS)
-  durationMinutes     Int
-  negativeMarking     Float              @default(0)
-  totalQuestions      Int
-  correctCount        Int?
-  incorrectCount      Int?
-  unansweredCount     Int?
-  score               Float?
-  maxScore            Float?
-  timeTakenSeconds    Int?
-  startedAt           DateTime           @default(now())
-  submittedAt         DateTime?
-  createdAt           DateTime           @default(now())
+  grandTestId          String?
+  grandTest            GrandTest?         @relation(fields: [grandTestId], references: [id])
+  liveTestId           String?
+  liveTest             LiveTest?          @relation(fields: [liveTestId], references: [id])
+  status               AttemptStatus      @default(IN_PROGRESS)
+  durationMinutes      Int
+  negativeMarking      Float              @default(0)
+  totalQuestions       Int
+  correctCount         Int?
+  incorrectCount       Int?
+  unansweredCount      Int?
+  score                Float?
+  maxScore             Float?
+  timeTakenSeconds     Int?
+  // How this attempt's answers were captured. ONLINE (default) is the
+  // existing in-browser test player. OFFLINE_OMR_ENTRY marks an attempt
+  // created for the Offline OMR Answer Entry flow (student printed the
+  // Paper PDF + OMR, then keys in answers afterward) — it still runs through
+  // the exact same createAttemptFromQuestions/saveAnswer/submitAttempt path,
+  // this field only labels the source for UI/audit purposes.
+  entryMode            AttemptEntryMode   @default(ONLINE)
+  // Set exactly once, on the first attempt for a given (studentId, mockTestId)
+  // pair to reach SUBMITTED. Never recomputed and never a rank — it only
+  // classifies which attempt counts for the leaderboard, so retakes under
+  // AttemptPolicy.MULTIPLE_PRACTICE never displace a student's original
+  // leaderboard position. See lib/leaderboard.ts.
+  isLeaderboardAttempt Boolean            @default(false)
+  startedAt            DateTime           @default(now())
+  submittedAt          DateTime?
+  createdAt            DateTime           @default(now())
 
   questions TestAttemptQuestion[]
   answers   Answer[]
@@ -1066,6 +1184,7 @@ model TestAttempt {
   @@index([subjectId])
   @@index([grandTestId])
   @@index([liveTestId])
+  @@index([mockTestId, isLeaderboardAttempt, status])
 }
 
 model TestAttemptQuestion {

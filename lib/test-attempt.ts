@@ -1,6 +1,7 @@
 import "server-only";
 import {
   AnswerStatus,
+  AttemptEntryMode,
   AttemptSourceType,
   AttemptStatus,
   CustomModuleStatus,
@@ -14,6 +15,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/student-data";
 import { isExpired, elapsedSecondsFor, remainingSecondsFor, type ServerTimedAttempt } from "@/lib/attempt-timing";
 import { deriveLiveTestState } from "@/lib/live-test";
+import { isMockTestAvailable } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
 
 export { remainingSecondsFor, InsufficientQuestionsError };
@@ -90,6 +92,7 @@ async function createAttemptFromQuestions(params: {
   durationMinutes: number;
   negativeMarking: number;
   questions: QuestionWithOptions[];
+  entryMode?: AttemptEntryMode;
 }) {
   if (params.questions.length === 0) {
     throw new Error("This test has no questions yet. Please try again later.");
@@ -112,6 +115,7 @@ async function createAttemptFromQuestions(params: {
       durationMinutes: params.durationMinutes,
       negativeMarking: params.negativeMarking,
       totalQuestions: params.questions.length,
+      entryMode: params.entryMode ?? AttemptEntryMode.ONLINE,
     },
   });
 
@@ -147,7 +151,17 @@ async function findResumableAttempt(studentId: string, where: Record<string, unk
   });
 }
 
-export async function startMockTestAttempt(studentId: string, mockTestId: string) {
+/**
+ * Starts (or resumes) a Mock Test attempt. `availableFrom` is enforced here,
+ * server-side, as the ONLY gate — no TestAttempt/TestAttemptQuestion row
+ * (hence no question payload) can be created before this check passes, so
+ * there is no direct-URL or early-access bypass to defend against downstream
+ * (see lib/mock-test-schedule.ts#isMockTestAvailable). `attemptPolicy`
+ * SINGLE_ATTEMPT additionally blocks a fresh start once a prior SUBMITTED
+ * attempt exists for this student+test; MULTIPLE_PRACTICE (the default)
+ * keeps today's unrestricted-retake behavior.
+ */
+export async function startMockTestAttempt(studentId: string, mockTestId: string, entryMode: AttemptEntryMode = AttemptEntryMode.ONLINE) {
   const resumable = await findResumableAttempt(studentId, { mockTestId });
   if (resumable) return resumable;
 
@@ -156,6 +170,15 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
     include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
   });
   if (!mockTest) throw new Error("This mock test is not available.");
+  if (!isMockTestAvailable(mockTest)) throw new Error("This test is not available yet.");
+
+  if (mockTest.attemptPolicy === "SINGLE_ATTEMPT") {
+    const priorSubmission = await prisma.testAttempt.findFirst({
+      where: { studentId, mockTestId, status: AttemptStatus.SUBMITTED },
+      select: { id: true },
+    });
+    if (priorSubmission) throw new Error("You have already attempted this test. Retakes are not allowed.");
+  }
 
   return createAttemptFromQuestions({
     studentId,
@@ -165,7 +188,20 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
     durationMinutes: mockTest.durationMinutes,
     negativeMarking: mockTest.negativeMarking,
     questions: mockTest.questions.map((mq) => mq.question as unknown as QuestionWithOptions),
+    entryMode,
   });
+}
+
+/**
+ * Offline OMR Answer Entry (spec Phase 3): a student who printed the Paper
+ * PDF + OMR sheet and answered on paper can key the answers in afterward.
+ * This is NOT a separate scoring path — it's the exact same
+ * createAttemptFromQuestions/saveAnswer/submitAttempt pipeline as
+ * startMockTestAttempt, just tagged with entryMode so the UI can show an
+ * answer-only entry screen instead of the question player.
+ */
+export async function startOfflineOmrEntryAttempt(studentId: string, mockTestId: string) {
+  return startMockTestAttempt(studentId, mockTestId, AttemptEntryMode.OFFLINE_OMR_ENTRY);
 }
 
 const CUSTOM_MODULE_QUESTIONS_INCLUDE = {
@@ -444,6 +480,22 @@ export async function submitAttempt(attemptId: string, studentId: string) {
   // answers could not have been changed after effectiveEnd, so capping is honest.
   const timeTakenSeconds = elapsedSecondsFor(toServerTimedAttempt(attempt));
 
+  // Leaderboard eligibility: set exactly once, on this student's first
+  // SUBMITTED attempt for this Mock Test — never recomputed afterward, so a
+  // later practice retake (attemptPolicy MULTIPLE_PRACTICE) can never
+  // displace it. A single student's submissions are inherently serial (one
+  // browser, one in-flight submit at a time via the IN_PROGRESS uniqueness
+  // findResumableAttempt already enforces), so a plain existence check here
+  // is sufficient without extra locking.
+  let isLeaderboardAttempt = false;
+  if (attempt.sourceType === AttemptSourceType.MOCK_TEST && attempt.mockTestId) {
+    const priorLeaderboardAttempt = await prisma.testAttempt.findFirst({
+      where: { studentId, mockTestId: attempt.mockTestId, status: AttemptStatus.SUBMITTED, isLeaderboardAttempt: true },
+      select: { id: true },
+    });
+    isLeaderboardAttempt = !priorLeaderboardAttempt;
+  }
+
   await prisma.$transaction([
     ...updates,
     prisma.testAttempt.update({
@@ -457,6 +509,7 @@ export async function submitAttempt(attemptId: string, studentId: string) {
         score,
         maxScore,
         timeTakenSeconds,
+        isLeaderboardAttempt,
       },
     }),
   ]);

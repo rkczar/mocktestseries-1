@@ -58,6 +58,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Manage Exams", route: "/admin/exams", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Previous Year Papers", route: "/admin/exams/previous-year-papers", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
   { pageName: "Test Series", route: "/admin/exams/test-series", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
+  { pageName: "Test Series Control Center", route: "/admin/exams/test-series/[id]", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams/test-series", status: "CONNECTED" },
   { pageName: "Subjects", route: "/admin/exams/subjects", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
   { pageName: "Topics", route: "/admin/exams/topics", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
   { pageName: "Syllabus", route: "/admin/exams/syllabus", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },
@@ -77,7 +78,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Random Tests", route: "/admin/tests/random", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
   { pageName: "Custom Tests", route: "/admin/tests/custom", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
   { pageName: "Live Tests", route: "/admin/tests/live", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "CONNECTED" },
-  { pageName: "Scheduled Tests", route: "/admin/tests/scheduled", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
+  { pageName: "Scheduled Tests", route: "/admin/tests/scheduled", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "CONNECTED" },
 
   // Custom Modules — canonical admin-owned system consumed by the Student Custom Module page
   { pageName: "Custom Modules", route: "/admin/custom-modules", module: "Custom Modules", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },

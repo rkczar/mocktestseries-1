@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   GraduationCap,
@@ -19,11 +19,14 @@ import {
   BarChart3,
   Bookmark,
   BookOpenCheck,
+  FileText,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ACTIVE_EXAM_COOKIE } from "@/lib/active-exam";
+import { formatIst } from "@/lib/ist-time";
 import { getActiveExamDashboardDataAction } from "./actions";
 import { TestOnTheGo } from "./test-on-the-go";
 import type { DashboardMetricsView } from "./metrics-view";
@@ -31,12 +34,48 @@ import type { DashboardMetricsView } from "./metrics-view";
 const QUICK_LINKS = [
   { label: "My Exams", href: "/student/exams", icon: GraduationCap, description: "Browse exams, subjects and papers" },
   { label: "Subject Test", href: "/student/subject-test", icon: BookOpen, description: "Practice by subject" },
-  { label: "Test Series", href: "/student/test-series", icon: ClipboardList, description: "Published mock tests" },
+  { label: "Test Series", href: "/student/test-series", icon: ClipboardList, description: "Scheduled mock tests" },
+  { label: "Test Schedule", href: "/student/test-series", icon: CalendarClock, description: "See upcoming release dates" },
   { label: "Live Tests", href: "/student/live-tests", icon: Radio, description: "Scheduled tests, taken together" },
+  { label: "Practice with OMR", href: "/student/omr", icon: FileText, description: "Simulate the pen-and-paper exam" },
   { label: "Custom Module", href: "/student/custom-module", icon: ListChecks, description: "Focused practice sets" },
   { label: "Analytics", href: "/student/analytics", icon: BarChart3, description: "Your performance breakdown" },
   { label: "History", href: "/student/history", icon: HistoryIcon, description: "Your past attempts" },
 ];
+
+interface NextTestCard {
+  mockTestId: string;
+  title: string;
+  examName: string;
+  availability: "UPCOMING" | "AVAILABLE";
+  availableFrom: string | null; // ISO
+}
+
+/** Display-only countdown — startMockTestAttempt's server-side check is the real gate regardless of what this shows. */
+function Countdown({ target }: { target: Date }) {
+  const [label, setLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    const tick = () => {
+      const diffMs = target.getTime() - Date.now();
+      if (diffMs <= 0) {
+        setLabel(null);
+        return;
+      }
+      const totalMinutes = Math.floor(diffMs / 60000);
+      const days = Math.floor(totalMinutes / (60 * 24));
+      const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+      const minutes = totalMinutes % 60;
+      setLabel(days > 0 ? `${days}d ${hours}h` : hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`);
+    };
+    tick();
+    const interval = setInterval(tick, 30_000);
+    return () => clearInterval(interval);
+  }, [target]);
+
+  if (!label) return null;
+  return <p className="text-xs text-[var(--color-muted-foreground)]">Starts in: {label}</p>;
+}
 
 interface ExamOption {
   id: string;
@@ -60,16 +99,19 @@ export function ActiveExamDashboard({
   initialMetrics,
   initialSubjects,
   studyStreak,
+  nextTest: initialNextTest,
 }: {
   enrolledExams: ExamOption[];
   initialActiveExamId: string | null;
   initialMetrics: DashboardMetricsView;
   initialSubjects: SubjectOverview[];
   studyStreak: number;
+  nextTest: NextTestCard | null;
 }) {
   const [activeExamId, setActiveExamId] = useState(initialActiveExamId);
   const [metrics, setMetrics] = useState(initialMetrics);
   const [subjects, setSubjects] = useState(initialSubjects);
+  const [nextTest, setNextTest] = useState(initialNextTest);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -85,6 +127,7 @@ export function ActiveExamDashboard({
         setActiveExamId(examId);
         setMetrics(data.metrics);
         setSubjects(data.subjects);
+        setNextTest(data.nextTest);
       } catch (error) {
         setSwitchError(error instanceof Error ? error.message : "Could not switch exams.");
       }
@@ -144,6 +187,35 @@ export function ActiveExamDashboard({
             <Button asChild>
               <Link href={`/student/attempt/${metrics.inProgress.id}/run`}>
                 Continue <ArrowRight className="h-4 w-4" aria-hidden />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {nextTest ? (
+        <Card>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]">
+                Test Schedule · Next Test
+              </p>
+              <p className="text-sm font-medium text-[var(--color-foreground)]">{nextTest.title}</p>
+              <p className="text-xs text-[var(--color-muted-foreground)]">{nextTest.examName}</p>
+              {nextTest.availability === "AVAILABLE" ? (
+                <Badge variant="success" className="mt-1 w-fit">
+                  Available Now
+                </Badge>
+              ) : nextTest.availableFrom ? (
+                <>
+                  <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">{formatIst(new Date(nextTest.availableFrom))}</p>
+                  <Countdown target={new Date(nextTest.availableFrom)} />
+                </>
+              ) : null}
+            </div>
+            <Button asChild variant={nextTest.availability === "AVAILABLE" ? "primary" : "outline"}>
+              <Link href="/student/test-series">
+                {nextTest.availability === "AVAILABLE" ? "Start Test" : "View Full Schedule"}
               </Link>
             </Button>
           </CardContent>

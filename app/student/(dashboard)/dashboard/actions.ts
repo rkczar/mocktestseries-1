@@ -5,6 +5,7 @@ import { requireStudent } from "@/lib/student-session";
 import {
   getExamScopedDashboardMetrics,
   getExamSubjectsOverview,
+  getNextScheduledTestForStudent,
   isStudentEnrolledInExam,
 } from "@/lib/student-data";
 import { startSubjectTestAttempt, type SubjectTestSelection } from "@/lib/test-attempt";
@@ -26,11 +27,21 @@ export async function getActiveExamDashboardDataAction(examId: string) {
   const enrolled = await isStudentEnrolledInExam(student.id, examId);
   if (!enrolled) throw new Error("You are not enrolled in this exam.");
 
-  const [rawMetrics, subjects] = await Promise.all([
+  const [rawMetrics, subjects, nextTestRow] = await Promise.all([
     getExamScopedDashboardMetrics(student.id, examId),
     getExamSubjectsOverview(examId),
+    getNextScheduledTestForStudent(student.id, examId),
   ]);
-  return { metrics: toDashboardMetricsView(rawMetrics), subjects };
+  const nextTest = nextTestRow
+    ? {
+        mockTestId: nextTestRow.mockTest.id,
+        title: nextTestRow.mockTest.title,
+        examName: nextTestRow.mockTest.exam.name,
+        availability: nextTestRow.availability,
+        availableFrom: nextTestRow.mockTest.availableFrom ? nextTestRow.mockTest.availableFrom.toISOString() : null,
+      }
+    : null;
+  return { metrics: toDashboardMetricsView(rawMetrics), subjects, nextTest };
 }
 
 function str(formData: FormData, key: string): string {

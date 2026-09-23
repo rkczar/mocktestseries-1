@@ -15,6 +15,8 @@ const QUICK_ACTIONS = [
   { label: "Create exam", href: "/admin/exams" },
   { label: "Add question", href: "/admin/questions/add" },
   { label: "Create mock test", href: "/admin/tests/mock" },
+  { label: "Manage test series", href: "/admin/exams/test-series" },
+  { label: "Manage schedule", href: "/admin/tests/scheduled" },
   { label: "Send announcement", href: "/admin/website/announcements" },
   { label: "View deletion requests", href: "/admin/students/deletion-requests" },
   { label: "Manage AI solutions", href: "/admin/ai/solution-manager" },
@@ -62,12 +64,16 @@ function timeAgo(date: Date): string {
 
 /** Kept outside the component: computing "now" is an impure call components/hooks must not make directly during render. */
 async function loadDashboardData() {
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   const [
     examCount,
     activeExamCount,
     testSeriesCount,
+    activeTestSeriesCount,
     pypCount,
     studentCount,
     activeStudentCount,
@@ -77,6 +83,11 @@ async function loadDashboardData() {
     attemptCount,
     mockTestCount,
     liveMockTestCount,
+    availableTestCount,
+    upcomingTestCount,
+    nextScheduledTest,
+    attemptsTodayCount,
+    recentSubmissionCount,
     aiExplanationCount,
     pendingReportCount,
     pendingDeletionCount,
@@ -88,6 +99,7 @@ async function loadDashboardData() {
     prisma.exam.count(),
     prisma.exam.count({ where: { isActive: true } }),
     prisma.testSeries.count(),
+    prisma.testSeries.count({ where: { status: "PUBLISHED" } }),
     prisma.previousYearPaper.count(),
     prisma.student.count(),
     prisma.student.count({ where: { lastLoginAt: { gte: sevenDaysAgo } } }),
@@ -97,6 +109,17 @@ async function loadDashboardData() {
     prisma.testAttempt.count(),
     prisma.mockTest.count(),
     prisma.mockTest.count({ where: { status: MockTestStatus.PUBLISHED } }),
+    prisma.mockTest.count({
+      where: { status: MockTestStatus.PUBLISHED, OR: [{ availableFrom: null }, { availableFrom: { lte: now } }] },
+    }),
+    prisma.mockTest.count({ where: { status: MockTestStatus.PUBLISHED, availableFrom: { gt: now } } }),
+    prisma.mockTest.findFirst({
+      where: { status: MockTestStatus.PUBLISHED, availableFrom: { gt: now } },
+      orderBy: { availableFrom: "asc" },
+      select: { title: true, availableFrom: true },
+    }),
+    prisma.testAttempt.count({ where: { startedAt: { gte: startOfToday } } }),
+    prisma.testAttempt.count({ where: { status: "SUBMITTED", submittedAt: { gte: oneDayAgo } } }),
     prisma.aIExplanation.count(),
     prisma.reportedQuestion.count({ where: { status: ReportStatus.OPEN } }),
     prisma.deletionRequest.count({ where: { status: DeletionRequestStatus.PENDING } }),
@@ -124,6 +147,7 @@ async function loadDashboardData() {
     examCount,
     activeExamCount,
     testSeriesCount,
+    activeTestSeriesCount,
     pypCount,
     studentCount,
     activeStudentCount,
@@ -133,6 +157,11 @@ async function loadDashboardData() {
     attemptCount,
     mockTestCount,
     liveMockTestCount,
+    availableTestCount,
+    upcomingTestCount,
+    nextScheduledTest,
+    attemptsTodayCount,
+    recentSubmissionCount,
     aiExplanationCount,
     pendingReportCount,
     pendingDeletionCount,
@@ -148,6 +177,7 @@ export default async function AdminDashboardPage() {
     examCount,
     activeExamCount,
     testSeriesCount,
+    activeTestSeriesCount,
     pypCount,
     studentCount,
     activeStudentCount,
@@ -157,6 +187,11 @@ export default async function AdminDashboardPage() {
     attemptCount,
     mockTestCount,
     liveMockTestCount,
+    availableTestCount,
+    upcomingTestCount,
+    nextScheduledTest,
+    attemptsTodayCount,
+    recentSubmissionCount,
     aiExplanationCount,
     pendingReportCount,
     pendingDeletionCount,
@@ -222,9 +257,15 @@ export default async function AdminDashboardPage() {
         <StatCard label="Total Exams" value={examCount} />
         <StatCard label="Active Exams" value={activeExamCount} />
         <StatCard label="Test Series" value={testSeriesCount} />
+        <StatCard label="Active Test Series" value={activeTestSeriesCount} />
         <StatCard label="Previous Year Papers" value={pypCount} />
         <StatCard label="Mock Tests" value={mockTestCount} />
         <StatCard label="Live Mock Tests" value={liveMockTestCount} />
+        <StatCard label="Available Tests" value={availableTestCount} />
+        <StatCard label="Upcoming Tests" value={upcomingTestCount} />
+        <StatCard label="Next Scheduled Test" value={nextScheduledTest ? nextScheduledTest.title : "—"} />
+        <StatCard label="Attempts Today" value={attemptsTodayCount} />
+        <StatCard label="Submissions (24h)" value={recentSubmissionCount} />
         <StatCard label="Total Questions" value={questionCount} />
         <StatCard label="Draft Questions" value={draftQuestionCount} />
         <StatCard label="Tests Attempted" value={attemptCount} />

@@ -10,10 +10,13 @@ import type { RoleName } from "@prisma/client";
  * global read-only on both the Question Bank AND the Exams domain (Exams,
  * Subjects, Topics, Syllabus, Previous Year Papers, Test Series): it
  * retains every other manage permission it previously had, but does not
- * get QUESTIONS_MANAGE or EXAMS_MANAGE. Server routes must keep gating
- * every create/edit/delete/import/link/unlink mutation in those areas
- * behind requirePermission(...) — never rely on the admin UI merely hiding
- * a button.
+ * get QUESTIONS_MANAGE or EXAMS_MANAGE. It is also read-only on the Test
+ * Series Control Center (Test Series, Mock Test Builder, Schedule Manager,
+ * Resources) — it does not get TEST_SERIES_MANAGE, even though it still
+ * holds TESTS_MANAGE for the unrelated, unchanged Live Test feature. Server
+ * routes must keep gating every create/edit/delete/import/link/unlink
+ * mutation in those areas behind requirePermission(...) — never rely on the
+ * admin UI merely hiding a button.
  */
 export const PERMISSIONS = {
   WEBSITE_MANAGE: "website:manage",
@@ -41,6 +44,15 @@ export const PERMISSIONS = {
   // generation follows. Same MASTER_ADMIN-only pattern as SEO_MANAGE above —
   // FULL_ADMIN can view the pool and model-health table, not change them.
   AI_MODEL_POOL_MANAGE: "ai-model-pool:manage",
+  // Test Series Control Center (Test Series, Mock Test Builder, Schedule
+  // Manager, Resources — Paper/Solution PDF + OMR templates). Same
+  // MASTER_ADMIN-only pattern as SEO_MANAGE/AI_MODEL_POOL_MANAGE above.
+  // Deliberately NOT TESTS_MANAGE (which FULL_ADMIN already holds, and which
+  // Live Test keeps using unchanged) — the Scheduled Mock Test Series spec
+  // requires FULL_ADMIN to be read-only here specifically, so Mock Test
+  // create/edit/publish/schedule/resource mutations move onto this new key
+  // instead of TESTS_MANAGE.
+  TEST_SERIES_MANAGE: "test-series:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
