@@ -2129,3 +2129,73 @@ model PaymentRateLimitHit {
 
   @@index([bucket, key, createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// Backup & Disaster Recovery Center (Admin -> Backup). Lightweight metadata
+// only — archive contents, passphrases and credentials are never stored.
+// Backup files themselves live on disk under allowlisted roots
+// (lib/backup/roots.ts); filesystem discovery works even without a row here.
+// ---------------------------------------------------------------------------
+
+enum BackupKind {
+  FULL
+  CLEAN
+  DATABASE
+}
+
+enum BackupJobStatus {
+  RUNNING
+  READY
+  DOWNLOADED
+  SAVED
+  FAILED
+  EXPIRED
+  DELETED
+}
+
+model BackupJob {
+  id               String          @id @default(cuid())
+  kind             BackupKind
+  status           BackupJobStatus @default(RUNNING)
+  // Non-null only while RUNNING — the UNIQUE index is the cross-worker lock
+  // allowing one backup generation at a time on this VPS.
+  lockKey          String?         @unique
+  saveOnVps        Boolean         @default(false)
+  fileName         String?
+  sizeBytes        BigInt?
+  sha256           String?
+  // Safe summary of manifest components (no secrets, no contents).
+  summary          Json?
+  error            String?
+  createdByAdminId String?
+  createdAt        DateTime        @default(now())
+  finishedAt       DateTime?
+  downloadedAt     DateTime?
+  deletedAt        DateTime?
+  storageFreed     BigInt?
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+enum BackupVerifyStatus {
+  VALID
+  LEGACY_VERIFIED
+  LEGACY_UNVERIFIED
+  INVALID
+  CORRUPT
+  INCOMPATIBLE
+}
+
+// Cached verification result per discovered artifact, invalidated when the
+// file's size/mtime changes.
+model BackupArtifactCheck {
+  artifactId String             @id
+  fileName   String
+  sizeBytes  BigInt
+  mtimeMs    BigInt
+  status     BackupVerifyStatus
+  detail     String?
+  sha256     String?
+  checkedAt  DateTime           @default(now())
+}

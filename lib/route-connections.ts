@@ -32,6 +32,17 @@ export interface RouteConnection {
 }
 
 export const ROUTE_CONNECTIONS: RouteConnection[] = [
+  // --- Backup & Disaster Recovery (lib/backup/*) ---------------------------
+  // What a Full DR backup captures (lib/backup/package.ts): the complete
+  // PostgreSQL dump (every admin module's data), persistent assets, source,
+  // and secrets as an encrypted recovery payload. Downloads stream to the
+  // administrator's device (/api/admin/backup/jobs/[id]/download).
+  { from: "/admin/backup", to: "/admin/payments", source: "internal", label: "PostgreSQL → Backup: commerce state (products, coupons, orders, payments, entitlements, invoices)" },
+  { from: "/admin/backup", to: "/admin/questions", source: "internal", label: "PostgreSQL + Persistent Assets → Backup: question bank + question images" },
+  { from: "/admin/backup", to: "/admin/website", source: "internal", label: "Website Settings → Backup: homepage, appearance, SEO, page visibility" },
+  { from: "/admin/backup", to: "/admin/settings/authentication", source: "internal", label: "Secrets → Encrypted Recovery Payload (FULL backups only)" },
+  { from: "/admin/backup", to: "/admin/system", source: "internal", label: "Release Store → Release Manager (safe old-release cleanup) · VPS storage breakdown" },
+
   // --- Commerce / Razorpay (lib/payments/*) ---------------------------------
   // Admin Payment Control Center tabs (?tab=products|coupons|orders|
   // transactions|subscriptions|invoices|gateway|webhooks|reconciliation) link

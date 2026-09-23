@@ -60,6 +60,13 @@ export const PERMISSIONS = {
   // enforced server-side on every mutation.
   PAYMENTS_VIEW: "payments:view",
   PAYMENTS_MANAGE: "payments:manage",
+  // Backup & Disaster Recovery Center (Admin -> Backup). BACKUP_VIEW is
+  // global read access to storage/backup/release inventory, history and
+  // verification status (MASTER_ADMIN + FULL_ADMIN). BACKUP_MANAGE — create,
+  // download, verify, delete, cleanup, release deletion, restore — is
+  // MASTER_ADMIN-only and enforced server-side on every action/route.
+  BACKUP_VIEW: "backup:view",
+  BACKUP_MANAGE: "backup:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -82,6 +89,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.ANNOUNCEMENTS_MANAGE,
     PERMISSIONS.COMMUNICATIONS_MANAGE,
     PERMISSIONS.PAYMENTS_VIEW,
+    PERMISSIONS.BACKUP_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };
