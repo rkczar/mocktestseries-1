@@ -4,7 +4,7 @@ import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings } from "@/lib/seo-settings";
 import { getPageVisibilityMap } from "@/lib/page-visibility";
 
-const DEEP_PAGES = ["syllabus", "previous-year-papers", "mock-tests", "question-bank", "exam-pattern"];
+const DEEP_PAGES = ["syllabus", "previous-year-papers", "mock-test-series", "question-bank", "exam-pattern"];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const [seo, siteUrl, visibility] = await Promise.all([getSeoSettings(), getSiteUrl(), getPageVisibilityMap()]);

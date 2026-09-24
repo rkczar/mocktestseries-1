@@ -8,6 +8,8 @@ import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
 import { Card, CardContent } from "@/components/ui/card";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
+import { MockSeriesPromo } from "@/components/public-exam/mock-series-promo";
+import { getExamMockSeriesSummary } from "@/lib/mock-series";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -29,6 +31,7 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
   const { slug } = await params;
   const exam = await getPublicExamBySlug(slug);
   if (!exam) notFound();
+  const mockSeriesSummary = await getExamMockSeriesSummary(exam);
 
   const siteUrl = await getSiteUrl();
 
@@ -95,6 +98,9 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
             Exam pattern details haven&apos;t been published yet for {exam.name}.
           </p>
         ) : null}
+        <div className="mt-10">
+          <MockSeriesPromo summary={mockSeriesSummary} blurb="Practise under this pattern: timed mocks with per-test question count, duration and negative marking shown upfront." />
+        </div>
       </div>
     </PublicPageShell>
   );

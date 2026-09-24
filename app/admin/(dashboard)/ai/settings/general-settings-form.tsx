@@ -67,7 +67,7 @@ export function AiGeneralSettingsCard({ settings }: { settings: AiSettings }) {
               <Switch name="paidUnlimited" defaultChecked={settings.paidDailyLimit === null} />
             </div>
             <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
-              No paid subscription system exists yet — every student is currently served the Free limit. This is ready for a future paid entitlement without rebuilding Ask AI.
+              Enforced server-side: students with an active entitlement to a PAID product (Payments → Products) get the Paid limit; everyone else gets the Free limit. Ask AI, Examiner Traps and AI Trap questions share this one quota.
             </p>
           </div>
 

@@ -9,6 +9,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
+import { MockSeriesPromo } from "@/components/public-exam/mock-series-promo";
+import { getExamMockSeriesSummary } from "@/lib/mock-series";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -30,6 +32,7 @@ export default async function ExamQuestionBankPage({ params }: { params: Promise
   const { slug } = await params;
   const exam = await getPublicExamBySlug(slug);
   if (!exam) notFound();
+  const mockSeriesSummary = await getExamMockSeriesSummary(exam);
 
   const [subjects, stats, siteUrl] = await Promise.all([
     getExamSubjectsWithCounts(exam.id),
@@ -82,6 +85,9 @@ export default async function ExamQuestionBankPage({ params }: { params: Promise
             ))}
           </div>
         )}
+        <div className="mt-10">
+          <MockSeriesPromo summary={mockSeriesSummary} blurb="Put topic practice to the test with full, timed mocks drawn from the same subject and topic taxonomy." />
+        </div>
       </div>
     </PublicPageShell>
   );

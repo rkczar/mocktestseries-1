@@ -37,15 +37,19 @@ export function SeriesForm({ exams, defaultExamId }: { exams: { id: string; name
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="name">Series Name</Label>
-        <Input id="name" name="name" required placeholder="50 Mock Tests" />
+        <Input id="name" name="name" required placeholder="RUHS Medical Officer 2026 Mock Test Series" />
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="testCount">Number of Tests</Label>
-        <Input id="testCount" name="testCount" type="number" defaultValue={0} />
+        <Label htmlFor="testCount">Planned mocks</Label>
+        <Input id="testCount" name="testCount" type="number" min={0} defaultValue={50} />
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="description">Description</Label>
         <Input id="description" name="description" placeholder="Optional" />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="slug">Slug (optional)</Label>
+        <Input id="slug" name="slug" placeholder="ruhs-mo-2026-mock-test-series" />
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="status">Status</Label>

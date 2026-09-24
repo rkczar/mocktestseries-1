@@ -5,6 +5,8 @@ import { deriveMockTestAvailability } from "@/lib/mock-test-schedule";
 import { ScheduleTable } from "./schedule-table";
 import { ScheduleImportWorkspace } from "./schedule-import-workspace";
 
+const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject-wise" } as const;
+
 export const metadata = { title: "Schedule Manager — Mock Test Series.in Admin" };
 
 export default async function ScheduledTestsPage({
@@ -25,13 +27,25 @@ export default async function ScheduledTestsPage({
     ? await prisma.mockTest.findMany({
         where: { testSeriesId: selectedSeries.id },
         orderBy: { order: "asc" },
-        select: { id: true, title: true, order: true, status: true, availableFrom: true, durationMinutes: true },
+        select: {
+          id: true,
+          title: true,
+          order: true,
+          status: true,
+          availableFrom: true,
+          durationMinutes: true,
+          accessType: true,
+          coverageType: true,
+          _count: { select: { questions: true } },
+        },
       })
     : [];
 
-  const rows = mockTests.map((mt) => ({
+  const rows = mockTests.map(({ _count, coverageType, ...mt }) => ({
     ...mt,
     availability: deriveMockTestAvailability(mt),
+    questionCount: _count.questions,
+    coverageLabel: COVERAGE_LABELS[coverageType],
   }));
 
   return (

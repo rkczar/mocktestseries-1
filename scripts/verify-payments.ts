@@ -141,7 +141,10 @@ async function main() {
   });
   const series = await prisma.testSeries.create({ data: { examId: exam.id, name: `Pay Series ${sfx}`, status: "PUBLISHED" } });
   const paidTest = await prisma.mockTest.create({
-    data: { examId: exam.id, testSeriesId: series.id, title: "Paid Mock", durationMinutes: 30, status: MockTestStatus.PUBLISHED, questions: { create: [{ questionId: q.id, order: 0 }] } },
+    data: { examId: exam.id, testSeriesId: series.id, title: "Paid Mock", durationMinutes: 30, status: MockTestStatus.PUBLISHED, accessType: "PAID", questions: { create: [{ questionId: q.id, order: 0 }] } },
+  });
+  const sampleTest = await prisma.mockTest.create({
+    data: { examId: exam.id, testSeriesId: series.id, title: "Free Sample Mock", durationMinutes: 30, status: MockTestStatus.PUBLISHED, accessType: "FREE", questions: { create: [{ questionId: q.id, order: 0 }] } },
   });
   const freeTest = await prisma.mockTest.create({
     data: { examId: exam.id, title: "Free Mock", durationMinutes: 30, status: MockTestStatus.PUBLISHED, questions: { create: [{ questionId: q.id, order: 0 }] } },
@@ -188,6 +191,7 @@ async function main() {
   const resumeDenied = await rejects(() => startMockTestAttempt(A.id, paidTest.id));
   check("Attempt started in FREE mode can't be resumed after switch to PAID", resumeDenied instanceof PaymentRequiredError);
   check("Uncovered content stays free in PAID mode", Boolean((await startMockTestAttempt(B.id, freeTest.id)).id));
+  check("Mock marked FREE inside a paid series is a free sample", Boolean((await startMockTestAttempt(B.id, sampleTest.id)).id));
   check("PYQ not covered by a TEST_SERIES product stays free", Boolean((await startPreviousYearPaperAttempt(B.id, paper.id)).id));
   const legacyPaid = await prisma.mockTest.create({ data: { examId: exam.id, title: "Legacy paid", durationMinutes: 10, status: MockTestStatus.PUBLISHED, accessType: "PAID", questions: { create: [{ questionId: q.id }] } } });
   const legacy = await getContentAccess(B.id, { kind: "MOCK_TEST", id: legacyPaid.id, examId: exam.id, accessType: "PAID" });

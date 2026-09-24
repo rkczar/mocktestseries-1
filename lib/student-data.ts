@@ -1,4 +1,5 @@
 import "server-only";
+import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import {
   AttemptSourceType,
   AttemptStatus,
@@ -118,7 +119,7 @@ export async function getExamDetailForStudent(examId: string) {
 
   const [mockTests, customModules, grandTests] = await Promise.all([
     prisma.mockTest.findMany({
-      where: { examId, status: MockTestStatus.PUBLISHED },
+      where: { examId, ...LIVE_MOCK_TEST_WHERE },
       orderBy: { order: "asc" },
       include: { _count: { select: { questions: true } } },
     }),
@@ -153,7 +154,7 @@ export async function getScheduledMockTestsForStudent(studentId: string) {
   const { deriveMockTestAvailability } = await import("@/lib/mock-test-schedule");
 
   const mockTests = await prisma.mockTest.findMany({
-    where: { status: MockTestStatus.PUBLISHED },
+    where: LIVE_MOCK_TEST_WHERE,
     orderBy: [{ order: "asc" }, { createdAt: "desc" }],
     include: { exam: true, testSeries: true, _count: { select: { questions: true } } },
   });
@@ -615,6 +616,20 @@ export async function isAiGenerationRateLimited(studentId: string): Promise<bool
   return count >= AI_RATE_LIMIT_MAX_NEW_GENERATIONS;
 }
 
+/** Active (started, unexpired, unrevoked) entitlement to any active PAID product — the "Complete / paid plan" test for AI quotas. */
+export async function hasPaidAiPlan(studentId: string, now: Date = new Date()): Promise<boolean> {
+  const count = await prisma.studentEntitlement.count({
+    where: {
+      studentId,
+      status: "ACTIVE",
+      startsAt: { lte: now },
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      product: { accessType: "PAID", isActive: true },
+    },
+  });
+  return count > 0;
+}
+
 export interface AiAccessQuota {
   allowed: boolean;
   limit: number;
@@ -630,13 +645,15 @@ export interface AiAccessQuota {
  * Ask AI on today (IST), from the same StudentActivity log
  * isAiGenerationRateLimited reads — re-opening an already-counted question
  * is free; a new distinct question consumes one credit, whether served from
- * cache or freshly generated. No real payment system exists yet, so every
- * student is currently on the FREE plan; `paidDailyLimit` is wired through
- * so a future entitlement check can slot in without touching this shape.
+ * cache or freshly generated. Plan is decided server-side from the
+ * entitlement DB (hasPaidAiPlan): a student holding any active entitlement
+ * to a PAID product gets `paidDailyLimit` (null = unlimited), everyone else
+ * `freeDailyLimit`. AI Explanations, Examiner Traps and AI Trap/Similar
+ * questions are all served through this one quota.
  */
 export async function checkAiAccessQuota(studentId: string, questionId: string): Promise<AiAccessQuota> {
-  const settings = await getAiSettings();
-  const limit = settings.freeDailyLimit; // FREE plan only for now — see doc comment above
+  const [settings, paidPlan] = await Promise.all([getAiSettings(), hasPaidAiPlan(studentId)]);
+  const limit = paidPlan ? settings.paidDailyLimit : settings.freeDailyLimit;
   const todayStart = istStartOfDay(new Date());
 
   const viewedToday = await prisma.studentActivity.findMany({

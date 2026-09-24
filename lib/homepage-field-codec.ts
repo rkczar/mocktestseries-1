@@ -17,6 +17,7 @@ export type StatDynamicKey =
   | "registeredStudents"
   | "activeStudents"
   | "mockTestsAttempted"
+  | "mockTestsPublished"
   | "previousYearPapers";
 
 export interface StatMetric {
@@ -44,6 +45,7 @@ export const STAT_DATA_SOURCE_LABELS: Record<StatDynamicKey, string> = {
   registeredStudents: "Registered Students",
   activeStudents: "Active Students",
   mockTestsAttempted: "Submitted Mock Test Attempts",
+  mockTestsPublished: "Published Mock Tests",
   previousYearPapers: "Active Previous Year Papers",
 };
 

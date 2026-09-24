@@ -1,4 +1,5 @@
 import "server-only";
+import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import type { StatDynamicKey } from "@/lib/homepage-field-codec";
@@ -19,6 +20,7 @@ async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot> {
     activeStudents,
     mockTestsAttempted,
     previousYearPapers,
+    mockTestsPublished,
   ] = await Promise.all([
     prisma.answer.count({ where: { status: { in: ["ANSWERED", "ANSWERED_AND_MARKED"] } } }),
     prisma.aIExplanation.count(),
@@ -29,6 +31,7 @@ async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot> {
     prisma.student.count({ where: { status: "ACTIVE" } }),
     prisma.testAttempt.count({ where: { sourceType: "MOCK_TEST", status: "SUBMITTED" } }),
     prisma.previousYearPaper.count({ where: { isActive: true } }),
+    prisma.mockTest.count({ where: LIVE_MOCK_TEST_WHERE }),
   ]);
 
   return {
@@ -42,6 +45,7 @@ async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot> {
       activeStudents,
       mockTestsAttempted,
       previousYearPapers,
+      mockTestsPublished,
     },
     computedAt: new Date().toISOString(),
   };

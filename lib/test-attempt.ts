@@ -6,7 +6,6 @@ import {
   AttemptStatus,
   CustomModuleStatus,
   GrandTestStatus,
-  MockTestStatus,
   QuestionStatus,
   TestType,
   type Prisma,
@@ -15,7 +14,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/student-data";
 import { isExpired, elapsedSecondsFor, remainingSecondsFor, type ServerTimedAttempt } from "@/lib/attempt-timing";
 import { deriveLiveTestState } from "@/lib/live-test";
-import { isMockTestAvailable } from "@/lib/mock-test-schedule";
+import { isMockTestAvailable, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
 import { assertContentAccess } from "@/lib/payments/access";
 
@@ -172,7 +171,8 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
   if (resumable) return resumable;
 
   const mockTest = await prisma.mockTest.findFirst({
-    where: { id: mockTestId, status: MockTestStatus.PUBLISHED },
+    // A published mock inside an unpublished (draft/archived) series is not live.
+    where: { id: mockTestId, ...LIVE_MOCK_TEST_WHERE },
     include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
   });
   if (!mockTest) throw new Error("This mock test is not available.");

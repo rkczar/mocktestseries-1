@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { revalidatePath } from "next/cache";
+import { revalidateMockSeriesSurfaces } from "@/lib/mock-series-revalidate";
 import type { MockTestStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
@@ -43,10 +43,7 @@ export async function updateScheduleRowAction(
     },
   });
 
-  revalidatePath("/admin/tests/scheduled");
-  revalidatePath("/admin/tests/mock");
-  revalidatePath("/student/test-series");
-  revalidatePath("/student/dashboard");
+  revalidateMockSeriesSurfaces();
   return { success: true };
 }
 
@@ -244,11 +241,7 @@ export async function confirmScheduleImportAction(
     },
   });
 
-  revalidatePath("/admin/tests/scheduled");
-  revalidatePath("/admin/tests/mock");
-  revalidatePath(`/admin/exams/test-series/${testSeriesId}`);
-  revalidatePath("/student/test-series");
-  revalidatePath("/student/dashboard");
+  revalidateMockSeriesSurfaces();
 
   return { applied: created + updated, created, updated };
 }

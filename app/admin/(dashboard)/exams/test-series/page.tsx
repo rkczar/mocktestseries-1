@@ -17,6 +17,7 @@ export default async function TestSeriesPage({
   const [exams, seriesList] = await Promise.all([
     prisma.exam.findMany({ orderBy: { name: "asc" } }),
     prisma.testSeries.findMany({
+      where: examId ? { examId } : undefined,
       include: {
         exam: true,
         mockTests: { select: { status: true, availableFrom: true } },
@@ -52,7 +53,17 @@ export default async function TestSeriesPage({
       <Card>
         <CardHeader>
           <CardTitle>All Test Series</CardTitle>
-          <CardDescription>{seriesList.length} series</CardDescription>
+          <CardDescription>
+            {seriesList.length} series
+            {examId ? (
+              <>
+                {" "}for {exams.find((e) => e.id === examId)?.name ?? "this exam"} ·{" "}
+                <Link href="/admin/exams?tab=test-series" className="text-[var(--color-primary)] hover:underline">
+                  show all exams
+                </Link>
+              </>
+            ) : null}
+          </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {seriesList.length === 0 ? (
@@ -63,7 +74,7 @@ export default async function TestSeriesPage({
                 <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
                   <th className="py-2 pr-4">Name</th>
                   <th className="py-2 pr-4">Exam</th>
-                  <th className="py-2 pr-4">Published / Available / Upcoming</th>
+                  <th className="py-2 pr-4">Planned · Published / Available / Upcoming</th>
                   <th className="py-2 pr-4">Status</th>
                   <th className="py-2 pr-4">Active</th>
                   <th className="py-2 pr-4" />
@@ -85,7 +96,7 @@ export default async function TestSeriesPage({
                       </td>
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{series.exam.name}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
-                        {published} / {available} / {upcoming}
+                        {series.testCount} · {published} / {available} / {upcoming}
                       </td>
                       <td className="py-2.5 pr-4">
                         <SeriesStatusSelect id={series.id} status={series.status} />

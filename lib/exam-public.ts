@@ -1,4 +1,5 @@
 import "server-only";
+import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { prisma } from "@/lib/prisma";
 
 /**
@@ -37,7 +38,7 @@ export async function getExamPublicStats(examId: string): Promise<ExamPublicStat
     prisma.topic.count({ where: { subject: { examId } } }),
     prisma.question.count({ where: { examId, status: "PUBLISHED" } }),
     prisma.previousYearPaper.count({ where: { examId, isActive: true } }),
-    prisma.mockTest.count({ where: { examId, status: "PUBLISHED" } }),
+    prisma.mockTest.count({ where: { examId, ...LIVE_MOCK_TEST_WHERE } }),
     prisma.aIExplanation.count({ where: { status: "COMPLETED", question: { examId, status: "PUBLISHED" } } }),
   ]);
   return { subjects, topics, questions, papers, mockTests, aiExplanations };
@@ -86,29 +87,6 @@ export async function getExamPapers(examId: string): Promise<PublicPaper[]> {
     title: p.title,
     paperCode: p.paperCode,
     questionCount: p._count.questions,
-  }));
-}
-
-export interface PublicMockTest {
-  id: string;
-  title: string;
-  description: string | null;
-  durationMinutes: number;
-  questionCount: number;
-}
-
-export async function getExamMockTests(examId: string): Promise<PublicMockTest[]> {
-  const tests = await prisma.mockTest.findMany({
-    where: { examId, status: "PUBLISHED" },
-    orderBy: { order: "asc" },
-    include: { _count: { select: { questions: true } } },
-  });
-  return tests.map((t) => ({
-    id: t.id,
-    title: t.title,
-    description: t.description,
-    durationMinutes: t.durationMinutes,
-    questionCount: t._count.questions,
   }));
 }
 

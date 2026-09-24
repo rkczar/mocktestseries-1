@@ -33,3 +33,13 @@ export function isMockTestAvailable(mockTest: MockTestScheduleRow, now: Date = n
 export function deriveMockTestAvailability(mockTest: MockTestScheduleRow, now: Date = new Date()): MockTestAvailability {
   return isMockTestAvailable(mockTest, now) ? "AVAILABLE" : "UPCOMING";
 }
+
+/**
+ * Prisma filter for mocks that are LIVE to students/public: the test is
+ * PUBLISHED and it is either standalone or inside a PUBLISHED Test Series.
+ * One definition so every listing, count and the start gate agree.
+ */
+export const LIVE_MOCK_TEST_WHERE = {
+  status: "PUBLISHED" as const,
+  OR: [{ testSeriesId: null }, { testSeries: { status: "PUBLISHED" as const } }],
+};

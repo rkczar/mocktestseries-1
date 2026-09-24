@@ -20,7 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
-import { ExamPricingStrip } from "@/components/public-exam/exam-pricing-strip";
+import { MockSeriesPromo, OfferPrice } from "@/components/public-exam/mock-series-promo";
+import { getExamMockSeriesSummary } from "@/lib/mock-series";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -46,7 +47,7 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
   const exam = await getPublicExamBySlug(slug);
   if (!exam) notFound();
 
-  const [stats, subjects, papers, siteUrl, session, omrResource] = await Promise.all([
+  const [stats, subjects, papers, siteUrl, session, omrResource, mockSeriesSummary] = await Promise.all([
     getExamPublicStats(exam.id),
     getExamSubjectsWithCounts(exam.id),
     getExamPapers(exam.id),
@@ -56,7 +57,9 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
       where: { type: "OMR_TEMPLATE", isActive: true, examId: exam.id, mockTestId: null },
       select: { id: true },
     }),
+    getExamMockSeriesSummary(exam),
   ]);
+  const seriesHref = mockSeriesSummary.mockSeries ? mockSeriesSummary.href : null;
 
   const faqItems = parseFaqItems(exam.faqItems);
   const importantDates = parseImportantDates(exam.importantDates);
@@ -114,7 +117,11 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
             <p className="mt-4 max-w-2xl text-base text-[var(--color-muted-foreground)] sm:text-lg">{exam.shortDescription}</p>
           ) : null}
 
-          <ExamPricingStrip examId={exam.id} />
+          {seriesHref ? (
+            <div className="mt-5">
+              <OfferPrice offer={mockSeriesSummary.offer} />
+            </div>
+          ) : null}
 
           <div className="mt-7 flex flex-wrap items-center gap-3">
             {isLoggedIn ? (
@@ -130,6 +137,11 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
                 <Link href="/login">Start Preparing →</Link>
               </Button>
             )}
+            {seriesHref ? (
+              <Button asChild variant="outline" size="lg">
+                <Link href={seriesHref}>View Mock Test Series</Link>
+              </Button>
+            ) : null}
             {papers.length > 0 ? (
               <Button asChild variant="outline" size="lg">
                 <Link href={`/exams/${exam.publicSlug}/previous-year-papers`}>Explore Previous Year Papers</Link>
@@ -165,9 +177,14 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
       </div>
 
       <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
+        <MockSeriesPromo
+          summary={mockSeriesSummary}
+          blurb="Scheduled, exam-pattern mocks with stated syllabus coverage, instant results, question-by-question review and AI explanations."
+        />
+
         {/* EXAM AT A GLANCE */}
         {patternFacts.length > 0 || exam.eligibility ? (
-          <section>
+          <section className="mt-12">
             <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Exam at a Glance</h2>
             <p className="mt-1 text-sm text-[var(--color-muted-foreground)]">
               Facts an admin has verified for this exam. Anything not confirmed for the current cycle is labeled below rather than

@@ -3,14 +3,14 @@ import { cn } from "@/lib/utils";
 
 export interface ExamSubNavProps {
   slug: string;
-  active: "overview" | "syllabus" | "previous-year-papers" | "mock-tests" | "question-bank" | "exam-pattern";
+  active: "overview" | "syllabus" | "previous-year-papers" | "mock-test-series" | "question-bank" | "exam-pattern";
 }
 
 const TABS: { key: ExamSubNavProps["active"]; label: string; href: (slug: string) => string }[] = [
   { key: "overview", label: "Overview", href: (s) => `/exams/${s}` },
+  { key: "mock-test-series", label: "Mock Test Series", href: (s) => `/exams/${s}/mock-test-series` },
   { key: "syllabus", label: "Syllabus", href: (s) => `/exams/${s}/syllabus` },
   { key: "previous-year-papers", label: "Previous Year Papers", href: (s) => `/exams/${s}/previous-year-papers` },
-  { key: "mock-tests", label: "Mock Tests", href: (s) => `/exams/${s}/mock-tests` },
   { key: "question-bank", label: "Question Bank", href: (s) => `/exams/${s}/question-bank` },
   { key: "exam-pattern", label: "Exam Pattern", href: (s) => `/exams/${s}/exam-pattern` },
 ];

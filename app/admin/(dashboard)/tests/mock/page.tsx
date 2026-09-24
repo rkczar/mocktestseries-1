@@ -18,7 +18,7 @@ export default async function MockTestsPage({
     prisma.testSeries.findMany({ select: { id: true, name: true, examId: true } }),
     prisma.mockTest.findMany({
       orderBy: { createdAt: "desc" },
-      include: { exam: true, _count: { select: { questions: true, testAttempts: true } } },
+      include: { exam: true, testSeries: { select: { id: true, name: true } }, _count: { select: { questions: true, testAttempts: true } } },
     }),
   ]);
 
@@ -27,7 +27,11 @@ export default async function MockTestsPage({
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Mock Tests</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          Powers Student → Test Series. Add questions and publish from a mock test&apos;s detail page.
+          All Mock Tests across every series. The main workflow is{" "}
+          <Link href="/admin/exams/test-series" className="text-[var(--color-primary)] hover:underline">
+            Exams → Test Series → [series] → Mock Tests
+          </Link>
+          , which pre-fills the exam, series, next Test Number and syllabus coverage. This page is kept for standalone tests.
         </p>
       </div>
 
@@ -57,7 +61,7 @@ export default async function MockTestsPage({
               <thead>
                 <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
                   <th className="py-2 pr-4">Title</th>
-                  <th className="py-2 pr-4">Exam</th>
+                  <th className="py-2 pr-4">Series / Exam</th>
                   <th className="py-2 pr-4">Questions</th>
                   <th className="py-2 pr-4">Attempts</th>
                   <th className="py-2 pr-4">Status</th>
@@ -68,7 +72,16 @@ export default async function MockTestsPage({
                 {mockTests.map((mt) => (
                   <tr key={mt.id} className="border-b border-[var(--color-border)] last:border-0">
                     <td className="py-2.5 pr-4 font-medium text-[var(--color-foreground)]">{mt.title}</td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{mt.exam.name}</td>
+                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
+                      {mt.testSeries ? (
+                        <Link href={`/admin/exams/test-series/${mt.testSeries.id}`} className="hover:underline">
+                          {mt.testSeries.name} · #{mt.order}
+                        </Link>
+                      ) : (
+                        "Standalone"
+                      )}
+                      <span className="block text-xs">{mt.exam.name}</span>
+                    </td>
                     <td className="py-2.5 pr-4">
                       <Badge variant={mt._count.questions > 0 ? "success" : "warning"}>{mt._count.questions}</Badge>
                     </td>
@@ -78,7 +91,7 @@ export default async function MockTestsPage({
                     </td>
                     <td className="py-2.5 pr-4">
                       <Link href={`/admin/tests/mock/${mt.id}`} className="text-[var(--color-primary)] hover:underline">
-                        Manage Questions
+                        Edit
                       </Link>
                     </td>
                   </tr>

@@ -3,7 +3,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { buildGraph, type DiagramEntry } from "@/lib/diagram-graph";
 import { buildDiagramSource } from "@/lib/diagram-source";
 import { scanGlobalNavLinks } from "@/lib/global-nav-links";
-import { studentFlowNodeIds, adminFlowNodeIds, publicFlowNodeIds, fullJourneyFlowNodeIds } from "@/lib/curated-flows";
+import { studentFlowNodeIds, adminFlowNodeIds, publicFlowNodeIds, fullJourneyFlowNodeIds, mockSeriesFunnelNodeIds } from "@/lib/curated-flows";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { RegistryTable } from "./registry-table";
 import { BrokenPagesTable } from "./broken-pages-table";
@@ -52,6 +52,7 @@ export default async function WebsiteDiagramPage() {
           <TabsTrigger value="overview">Site Map</TabsTrigger>
           <TabsTrigger value="journey">Full Journey</TabsTrigger>
           <TabsTrigger value="student">Student Flow</TabsTrigger>
+          <TabsTrigger value="mock-series">Mock Series Funnel</TabsTrigger>
           <TabsTrigger value="admin">Admin Flow</TabsTrigger>
           <TabsTrigger value="public">Public Flow</TabsTrigger>
           <TabsTrigger value="broken">Broken &amp; Disconnected</TabsTrigger>
@@ -79,6 +80,16 @@ export default async function WebsiteDiagramPage() {
             fixedNodeIds={studentFlowNodeIds()}
             flowErrors={flowErrors}
             caption="The canonical student journey — every step is a real, currently-connected page."
+          />
+        </TabsContent>
+
+        <TabsContent value="mock-series">
+          <GraphView
+            graph={graph}
+            variant="fixed"
+            fixedNodeIds={mockSeriesFunnelNodeIds()}
+            flowErrors={flowErrors}
+            caption="Homepage / Exam Catalog / Header / Footer → Exam Hub → Mock Test Series (↔ PYQ, Syllabus, Exam Pattern, Question Bank) → Free or Product → Checkout → Payment Verification → Entitlement → Student Test Series → Attempt → Result → Review / Ask AI / Analytics."
           />
         </TabsContent>
 

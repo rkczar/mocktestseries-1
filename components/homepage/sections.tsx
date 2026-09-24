@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { ResolvedHomepage } from "@/lib/homepage-render";
 import { str, pairs, stepList } from "./content-helpers";
 import { getStatIcon } from "@/lib/homepage-icons";
+import { OfferPrice } from "@/components/public-exam/mock-series-promo";
 
 type SectionProps = {
   content: Record<string, unknown>;
@@ -197,6 +198,11 @@ export function FeaturedExamSection({ content, resolved }: SectionProps) {
                 <Link href={secondaryCtaHref}>{secondaryCtaText}</Link>
               </Button>
             ) : null}
+            {resolved.mockSeries?.href ? (
+              <Button asChild size="default" variant="outline" className="w-fit">
+                <Link href={resolved.mockSeries.href}>View Mock Test Series</Link>
+              </Button>
+            ) : null}
           </div>
         </CardContent>
       </Card>
@@ -206,11 +212,44 @@ export function FeaturedExamSection({ content, resolved }: SectionProps) {
 
 export function MockTestPromotionSection({ content, resolved }: SectionProps) {
   const badge = str(content, "badge");
-  const numberMode = str(content, "numberMode", "LIVE");
+  // "" (never set in the editor) means the default, LIVE.
+  const numberMode = str(content, "numberMode") || "LIVE";
   const heading = str(content, "heading");
   const description = str(content, "description");
   const ctaText = str(content, "ctaText");
   const ctaHref = str(content, "ctaHref");
+  const series = resolved.mockSeries;
+
+  // A published canonical Mock Test Series drives this section with REAL
+  // data: planned vs available counts, the Product's server-computed price,
+  // and the canonical landing page — so the homepage offer can never drift
+  // from the Exam Hub / series page / checkout.
+  if (series?.mockSeries && series.href) {
+    const s = series.mockSeries;
+    return (
+      <section className="border-y border-[var(--color-border)] bg-[var(--color-surface)]">
+        <div className={`${SECTION_WRAP} flex flex-col items-center gap-4 text-center`}>
+          {badge ? (
+            <Badge variant="warning" className="uppercase">
+              {badge}
+            </Badge>
+          ) : null}
+          <p className="text-5xl tabular-nums leading-none text-[var(--color-foreground)] sm:text-6xl" style={{ fontFamily: "var(--font-mono)" }}>
+            {s.planned || s.published}
+          </p>
+          <p className="text-sm text-[var(--color-muted-foreground)]">
+            {s.planned > 0 ? "Mock Tests Planned" : "Mock Tests"} · <span className="font-semibold text-[var(--color-foreground)]">{s.available}</span> available now
+          </p>
+          <h2 className="text-xl text-[var(--color-foreground)] sm:text-2xl">{heading || s.series.name}</h2>
+          {description ? <p className="max-w-xl text-[var(--color-muted-foreground)]">{description}</p> : null}
+          <OfferPrice offer={series.offer} />
+          <Button asChild size="default" variant="primary">
+            <Link href={series.href}>{ctaText || "View Mock Test Series"}</Link>
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   // LIVE counts come from the database. When there are zero published tests,
   // promoting a number is a lie — the whole section hides until real data or
@@ -450,8 +489,11 @@ export function TestSeriesSection({ content, resolved }: SectionProps) {
   const ctaText = str(content, "ctaText");
   const series = resolved.testSeries ?? [];
   const featuredTests = resolved.featuredTests ?? [];
+  const canonical = resolved.mockSeries?.mockSeries && resolved.mockSeries.href ? resolved.mockSeries : null;
+  // The canonical series is shown unless the admin explicitly picked it.
+  const showCanonical = canonical && !series.some((s) => s.id === canonical.mockSeries!.series.id);
 
-  if (series.length === 0 && featuredTests.length === 0) return null;
+  if (series.length === 0 && featuredTests.length === 0 && !showCanonical) return null;
 
   return (
     <section id="test-series" className="border-t border-[var(--color-border)] bg-[var(--color-surface)]">
@@ -461,6 +503,25 @@ export function TestSeriesSection({ content, resolved }: SectionProps) {
           {description ? <p className="max-w-2xl text-[var(--color-muted-foreground)]">{description}</p> : null}
         </div>
 
+        {showCanonical ? (
+          <Card className="mt-8 flex flex-col gap-3 p-6 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2">
+              <p className="font-medium text-[var(--color-foreground)]">{canonical!.mockSeries!.series.name}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {canonical!.mockSeries!.planned > 0 ? <Badge variant="neutral">{canonical!.mockSeries!.planned} planned</Badge> : null}
+                <Badge variant="success">{canonical!.mockSeries!.available} available now</Badge>
+                <Badge variant="neutral">{canonical!.examName}</Badge>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2 sm:items-end">
+              <OfferPrice offer={canonical!.offer} />
+              <Button asChild size="sm" variant="primary" className="w-fit">
+                <Link href={canonical!.href!}>{ctaText || "View Mock Test Series"}</Link>
+              </Button>
+            </div>
+          </Card>
+        ) : null}
+
         {series.length > 0 ? (
           <div className="mt-8 grid gap-4 sm:grid-cols-2 md:grid-cols-3">
             {series.map((s) => (
@@ -469,7 +530,7 @@ export function TestSeriesSection({ content, resolved }: SectionProps) {
                 {s.description ? <p className="text-sm text-[var(--color-muted-foreground)]">{s.description}</p> : null}
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="success" className="w-fit">
-                    {s.testCount} test{s.testCount === 1 ? "" : "s"}
+                    {s.testCount} planned
                   </Badge>
                   <Badge variant="neutral" className="w-fit">
                     {s.exam.name}

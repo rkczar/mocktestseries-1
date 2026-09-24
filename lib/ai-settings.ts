@@ -26,7 +26,7 @@ export interface AiSettings {
 
   /** Daily count of DISTINCT questions a FREE-plan student may Ask AI on. Admin-editable, never hardcoded elsewhere. */
   freeDailyLimit: number;
-  /** null = unlimited. No real payment/subscription system exists yet (see getStudentAiEntitlement) — this is the ceiling a future paid plan would use. */
+  /** null = unlimited. Applies to students with an active PAID-product entitlement (lib/student-data.ts#hasPaidAiPlan). */
   paidDailyLimit: number | null;
 
   generateOptionAnalysis: boolean;

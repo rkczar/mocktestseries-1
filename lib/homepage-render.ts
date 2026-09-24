@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import type { HomepageConfig, HomepageSection, Exam, PreviousYearPaper, TestSeries, MockTest } from "@prisma/client";
 import {
   normalizeStatMetrics,
@@ -10,6 +11,7 @@ import {
 } from "@/lib/homepage-field-codec";
 import { getHomepageStatistics } from "@/lib/homepage-statistics";
 import { BRAND_NAME } from "@/lib/brand";
+import { getExamMockSeriesSummary, type ExamMockSeriesSummary } from "@/lib/mock-series";
 
 export interface ResolvedStatValue {
   label: string;
@@ -71,6 +73,8 @@ export interface ResolvedHomepage {
       testSeries?: (TestSeries & { exam: { name: string } })[];
       featuredTests?: ResolvedFeaturedTest[];
       liveMockTestCount?: number;
+      /** Canonical Mock Test Series (lib/mock-series.ts) — real counts, product price, landing URL. */
+      mockSeries?: (ExamMockSeriesSummary & { examName: string }) | null;
       statValues?: ResolvedStatValue[];
       heroPanel?: ResolvedHeroPanel;
       copyrightLine?: string;
@@ -90,7 +94,15 @@ async function resolveExamStats(examId: string): Promise<ResolvedExamStats> {
   const [exam, aiExplanations] = await Promise.all([
     prisma.exam.findUnique({
       where: { id: examId },
-      include: { _count: { select: { mockTests: true, previousYearPapers: true, questions: true } } },
+      include: {
+        _count: {
+          select: {
+            mockTests: { where: { status: "PUBLISHED" } },
+            previousYearPapers: { where: { isActive: true } },
+            questions: { where: { status: "PUBLISHED" } },
+          },
+        },
+      },
     }),
     prisma.aIExplanation.count({ where: { question: { examId } } }),
   ]);
@@ -113,7 +125,38 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
   // Single shared live-stats snapshot for every section that needs platform
   // totals (statistics cards, hero panel LIVE mode, hero supporting stats).
   const platformStats = getHomepageStatistics();
-  const liveMockTestCountPromise = prisma.mockTest.count({ where: { status: "PUBLISHED" } });
+  const liveMockTestCountPromise = prisma.mockTest.count({ where: LIVE_MOCK_TEST_WHERE });
+  // One lazily-resolved canonical series per exam, shared by every section
+  // that promotes it (Featured Exam, Mock Test Promotion, Test Series).
+  const seriesByExam = new Map<string, Promise<(ExamMockSeriesSummary & { examName: string }) | null>>();
+  const seriesFor = (examId: string) => {
+    if (!seriesByExam.has(examId)) {
+      seriesByExam.set(
+        examId,
+        prisma.exam.findUnique({ where: { id: examId } }).then(async (exam) => {
+          if (!exam || !exam.isActive) return null;
+          const summary = await getExamMockSeriesSummary(exam);
+          return summary.mockSeries ? { ...summary, examName: exam.name } : null;
+        })
+      );
+    }
+    return seriesByExam.get(examId)!;
+  };
+  // Default promoted series when a section has no exam reference: the
+  // featured exam's, else the first public exam that has a published series.
+  const featuredExamRef = config.sections.find((s) => s.key === "FEATURED_EXAM")?.references as Record<string, unknown> | null;
+  const primarySeries = async () => {
+    if (typeof featuredExamRef?.examId === "string") {
+      const hit = await seriesFor(featuredExamRef.examId);
+      if (hit) return hit;
+    }
+    const first = await prisma.testSeries.findFirst({
+      where: { status: "PUBLISHED", exam: { isActive: true, publicPageEnabled: true } },
+      orderBy: [{ exam: { order: "asc" } }, { order: "asc" }, { createdAt: "asc" }],
+      select: { examId: true },
+    });
+    return first ? seriesFor(first.examId) : null;
+  };
 
   const sections = await Promise.all(
     config.sections
@@ -136,6 +179,7 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
               resolved.exam.publicPageEnabled && resolved.exam.publicSlug
                 ? `/exams/${resolved.exam.publicSlug}`
                 : `/student/exams/${resolved.exam.id}`;
+            resolved.mockSeries = await seriesFor(resolved.exam.id);
           }
         }
 
@@ -169,6 +213,7 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
 
         if (section.key === "MOCK_TEST_PROMOTION") {
           resolved.liveMockTestCount = await liveMockTestCountPromise;
+          resolved.mockSeries = await primarySeries();
         }
 
         if (section.key === "UPCOMING_EXAMS") {
@@ -208,9 +253,13 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
           resolved.paperExamId = examId ?? null;
         }
 
+        if (section.key === "TEST_SERIES") {
+          resolved.mockSeries = await primarySeries();
+        }
+
         if (section.key === "TEST_SERIES" && Array.isArray(references.testSeriesIds)) {
           resolved.testSeries = await prisma.testSeries.findMany({
-            where: { id: { in: references.testSeriesIds as string[] }, isActive: true },
+            where: { id: { in: references.testSeriesIds as string[] }, isActive: true, status: "PUBLISHED" },
             orderBy: { order: "asc" },
             include: { exam: { select: { name: true } } },
           });
@@ -225,13 +274,13 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
           const rows: { mockTest: MockTest; questionCount: number; examName: string }[] = [];
           if (showLiveTests) {
             const baseQuery = {
-              where: { status: "PUBLISHED" as const },
+              where: LIVE_MOCK_TEST_WHERE,
               include: { _count: { select: { questions: true } }, exam: { select: { id: true, name: true } } },
               orderBy: { createdAt: "desc" as const },
               take: Math.max(maxTests, explicitTestIds.length),
             };
             if (explicitTestIds.length > 0) {
-              const explicit = await prisma.mockTest.findMany({ ...baseQuery, where: { id: { in: explicitTestIds }, status: "PUBLISHED" } });
+              const explicit = await prisma.mockTest.findMany({ ...baseQuery, where: { id: { in: explicitTestIds }, ...LIVE_MOCK_TEST_WHERE } });
               const byId = new Map(explicit.map((t) => [t.id, t]));
               explicitTestIds.forEach((id) => {
                 const t = byId.get(id);
@@ -241,7 +290,7 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
               const remaining = maxTests - rows.length;
               if (remaining > 0) {
                 const extra = await prisma.mockTest.findMany({
-                  where: { status: "PUBLISHED", id: { notIn: explicitTestIds } },
+                  where: { ...LIVE_MOCK_TEST_WHERE, id: { notIn: explicitTestIds } },
                   include: { _count: { select: { questions: true } }, exam: { select: { id: true, name: true } } },
                   orderBy: { createdAt: "desc" },
                   take: remaining,

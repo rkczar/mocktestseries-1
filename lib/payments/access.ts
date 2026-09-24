@@ -139,6 +139,12 @@ export function evaluateContentAccess(ctx: AccessContext, c: ContentDescriptor):
 
   const covering = ctx.products.filter((p) => productCovers(p, c));
   if (covering.some((p) => p.accessType === "FREE")) return { ...base, status: "FREE_ACCESS", allowed: true };
+  // A mock the admin marked FREE is a free sample even inside a paid series /
+  // exam pass (Admin → Test Series → Mock → Access). Only a product sold for
+  // that exact mock overrides it.
+  if (c.kind === "MOCK_TEST" && c.accessType === "FREE" && !covering.some((p) => p.productType === "MOCK_TEST")) {
+    return { ...base, status: "FREE_ACCESS", allowed: true };
+  }
   const paid = covering.filter((p) => p.accessType === "PAID");
   if (paid.length === 0 && c.accessType !== "PAID") return { ...base, status: "FREE_ACCESS", allowed: true };
 

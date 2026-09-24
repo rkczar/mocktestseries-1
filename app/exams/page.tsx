@@ -4,6 +4,7 @@ import { BookOpen, FileText, HelpCircle, Layers } from "lucide-react";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { requirePageVisible } from "@/lib/page-visibility";
 import { getPublicExamList, getExamPublicStats } from "@/lib/exam-public";
+import { getExamMockSeries } from "@/lib/mock-series";
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
 import { Card, CardContent } from "@/components/ui/card";
@@ -27,6 +28,7 @@ export default async function ExamsDirectoryPage() {
   await requirePageVisible("exams-directory");
   const [exams, siteUrl] = await Promise.all([getPublicExamList(), getSiteUrl()]);
   const statsByExam = new Map(await Promise.all(exams.map(async (e) => [e.id, await getExamPublicStats(e.id)] as const)));
+  const seriesByExam = new Map(await Promise.all(exams.map(async (e) => [e.id, await getExamMockSeries(e.id)] as const)));
 
   return (
     <PublicPageShell>
@@ -69,6 +71,13 @@ export default async function ExamsDirectoryPage() {
                             <FileText className="h-3.5 w-3.5" aria-hidden /> {stats.papers} PYQ Papers
                           </span>
                         </div>
+                      ) : null}
+                      {seriesByExam.get(exam.id) ? (
+                        <p className="text-xs font-medium text-[var(--color-primary)]">
+                          Mock Test Series
+                          {seriesByExam.get(exam.id)!.planned > 0 ? ` · ${seriesByExam.get(exam.id)!.planned} planned` : ""} ·{" "}
+                          {seriesByExam.get(exam.id)!.available} available now
+                        </p>
                       ) : null}
                     </CardContent>
                   </Card>

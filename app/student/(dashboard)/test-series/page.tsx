@@ -5,6 +5,8 @@ import { loadAccessContext, evaluateContentAccess, paywallHref } from "@/lib/pay
 import { BackButton } from "@/components/student/back-button";
 import { TestSeriesExplorer, type ExplorerGroup } from "./test-series-explorer";
 
+const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject-wise" } as const;
+
 export const metadata = { title: "Test Series — Mock Test Series.in" };
 
 export default async function TestSeriesPage() {
@@ -34,6 +36,8 @@ export default async function TestSeriesPage() {
     tests: g.tests.map((row) => ({
       id: row.mockTest.id,
       title: row.mockTest.title,
+      testNumber: row.mockTest.testSeriesId ? row.mockTest.order : null,
+      coverageLabel: COVERAGE_LABELS[row.mockTest.coverageType],
       examName: row.mockTest.exam.name,
       questionCount: row.mockTest._count.questions,
       durationMinutes: row.mockTest.durationMinutes,

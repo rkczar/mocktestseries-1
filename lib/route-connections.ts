@@ -132,10 +132,40 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   // so the mechanical scanner can't see them — curated here since they're real.
   { from: "/exams/[slug]", to: "/student/attempt/resume", source: "cta", label: "Attempt Paper / Start Preparing" },
   { from: "/exams/[slug]/previous-year-papers", to: "/student/attempt/resume", source: "button", label: "Attempt Paper" },
-  { from: "/exams/[slug]/mock-tests", to: "/student/attempt/resume", source: "button", label: "Start Test" },
   { from: "/exams/[slug]/syllabus", to: "/student/subject-test/[examId]", source: "button", label: "Practice by subject" },
   { from: "/exams/[slug]/question-bank", to: "/student/subject-test/[examId]", source: "button", label: "Practice by subject" },
   { from: "/exams/[slug]", to: "/student/subject-test/[examId]", source: "card", label: "Subject card" },
+
+  // --- Mock Test Series funnel (lib/mock-series.ts is the single source) ----
+  // Canonical public page /exams/[slug]/mock-test-series (the old
+  // /exams/[slug]/mock-tests 301s there via next.config.ts). Every price,
+  // count and CTA below is computed from the canonical TestSeries + Product.
+  { from: "/", to: "/exams/[slug]/mock-test-series", source: "cta", label: "Homepage offer: Mock Test Promotion / Test Series / Featured Exam → View Mock Test Series (real counts + Product price)" },
+  { from: "/", to: "/exams/[slug]/mock-test-series", source: "header", label: "Header / Footer links (Admin → Website → Homepage → Header/Footer)" },
+  { from: "/exams", to: "/exams/[slug]", source: "card", label: "Exam catalog card (shows series planned/available)" },
+  { from: "/exams/[slug]", to: "/exams/[slug]/mock-test-series", source: "cta", label: "View Mock Test Series (hero, sub-nav, series card)" },
+  { from: "/exams/[slug]/mock-test-series", to: "/exams/[slug]", source: "internal", label: "Breadcrumb / Related: Exam overview" },
+  { from: "/exams/[slug]/mock-test-series", to: "/exams/[slug]/previous-year-papers", source: "internal", label: "PYQ section / Related" },
+  { from: "/exams/[slug]/mock-test-series", to: "/exams/[slug]/syllabus", source: "internal", label: "Syllabus Coverage / Related" },
+  { from: "/exams/[slug]/mock-test-series", to: "/exams/[slug]/exam-pattern", source: "internal", label: "Related: Exam pattern" },
+  { from: "/exams/[slug]/mock-test-series", to: "/exams/[slug]/question-bank", source: "internal", label: "Related: Question bank" },
+  { from: "/exams/[slug]/previous-year-papers", to: "/exams/[slug]/mock-test-series", source: "card", label: "Mock Test Series card" },
+  { from: "/exams/[slug]/syllabus", to: "/exams/[slug]/mock-test-series", source: "card", label: "Mock Test Series card" },
+  { from: "/exams/[slug]/exam-pattern", to: "/exams/[slug]/mock-test-series", source: "card", label: "Mock Test Series card" },
+  { from: "/exams/[slug]/question-bank", to: "/exams/[slug]/mock-test-series", source: "card", label: "Mock Test Series card" },
+  { from: "/exams/[slug]/mock-test-series", to: "/login", source: "cta", label: "Start Free / Unlock (logged out, callbackUrl → checkout or Test Series)" },
+  { from: "/exams/[slug]/mock-test-series", to: "/student/checkout/[code]", source: "cta", label: "Unlock Complete Series (PAID mode, not yet entitled)" },
+  { from: "/exams/[slug]/mock-test-series", to: "/student/test-series", source: "cta", label: "Open Test Series (entitled, or FREE mode)" },
+  { from: "/exams/[slug]/mock-test-series", to: "/student/attempt/resume", source: "button", label: "Start Mock (released mocks)" },
+  { from: "/student/checkout/result/[orderId]", to: "/student/test-series", source: "button", label: "Entitlement → Student Test Series (Open Product)" },
+  { from: "/student/test-series", to: "/student/attempt/[attemptId]", source: "button", label: "Start / Resume Mock (Test Access Gate enforced server-side)" },
+  { from: "/student/dashboard", to: "/student/analytics", source: "card", label: "Performance Analytics (after Result / Review / Ask AI — daily AI quota by plan)" },
+  // Admin side of the same series.
+  { from: "/admin/exams/test-series/[id]", to: "/admin/tests/mock/[id]", source: "button", label: "Mock Tests → Edit (details, coverage, questions, schedule, resources, publish)" },
+  { from: "/admin/exams/test-series/[id]", to: "/admin/tests/scheduled", source: "button", label: "Schedule → Bulk Schedule Upload" },
+  { from: "/admin/exams/test-series/[id]", to: "/admin/payments/products/[id]", source: "button", label: "Pricing & Access → Edit price" },
+  { from: "/admin/tests/mock/[id]", to: "/exams/[slug]/mock-test-series", source: "admin-config", label: "Published mocks → public schedule" },
+  { from: "/admin/payments/products/[id]", to: "/exams/[slug]/mock-test-series", source: "admin-config", label: "Price / MRP / sale → homepage, Exam Hub, series page (one source)" },
 
   // app/student/attempt/resume/page.tsx — resumes into the canonical
   // TestAttempt flow, same destination the authenticated student flow uses.
@@ -152,6 +182,29 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
  * narrative ordering, not a discovery, so it stays honest about what's
  * actually built today.
  */
+/** Homepage → Exam Hub → Mock Test Series → checkout → entitlement → attempt → review (Website Diagram "Mock Series Funnel" tab). */
+export const MOCK_SERIES_FUNNEL_FLOW: string[] = [
+  "/",
+  "/exams",
+  "/exams/[slug]",
+  "/exams/[slug]/mock-test-series",
+  "/exams/[slug]/previous-year-papers",
+  "/exams/[slug]/syllabus",
+  "/exams/[slug]/exam-pattern",
+  "/exams/[slug]/question-bank",
+  "/login",
+  "/student/plans",
+  "/admin/payments/products/[id]",
+  "/student/checkout/[code]",
+  "/student/checkout/result/[orderId]",
+  "/student/test-series",
+  "/student/attempt/[attemptId]",
+  "/student/attempt/[attemptId]/run",
+  "/student/attempt/[attemptId]/result",
+  "/student/attempt/[attemptId]/review",
+  "/student/analytics",
+];
+
 export const STUDENT_JOURNEY_FLOW: string[] = [
   "/",
   "/login",

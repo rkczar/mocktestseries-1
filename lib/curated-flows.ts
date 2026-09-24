@@ -1,5 +1,5 @@
 import { ADMIN_NAV } from "./admin-nav";
-import { STUDENT_JOURNEY_FLOW } from "./route-connections";
+import { STUDENT_JOURNEY_FLOW, MOCK_SERIES_FUNNEL_FLOW } from "./route-connections";
 import type { DiagramEntry } from "./diagram-graph";
 
 /** Node-id subsets for the curated flow tabs. Real edges between these nodes come from the merged graph — this only picks which nodes are in frame. */
@@ -36,4 +36,9 @@ export function fullJourneyFlowNodeIds(): string[] {
     "/admin",
     ...STUDENT_JOURNEY_FLOW,
   ];
+}
+
+/** Public exam hub → Mock Test Series → Product → Checkout → Entitlement → Student Test Series → Attempt → Result → Review. */
+export function mockSeriesFunnelNodeIds(): string[] {
+  return MOCK_SERIES_FUNNEL_FLOW;
 }

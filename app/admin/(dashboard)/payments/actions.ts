@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { revalidateMockSeriesSurfaces } from "@/lib/mock-series-revalidate";
 import { z } from "zod";
 import {
   AccessDurationType,
@@ -90,7 +91,9 @@ function int(fd: FormData, k: string, label: string, min: number, max: number): 
 
 function revalidatePayments() {
   revalidatePath("/admin/payments", "layout");
-  revalidatePath("/student/plans");
+  // Product price/sale/mode feed the canonical Mock Test Series offer on the
+  // homepage, Exam Hub, series page and deep pages (lib/mock-series.ts).
+  revalidateMockSeriesSurfaces();
 }
 
 // ---------------------------------------------------------------------------

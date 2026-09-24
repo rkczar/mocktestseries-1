@@ -248,7 +248,7 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
   revalidatePath("/exams/[slug]", "page");
   revalidatePath("/exams/[slug]/syllabus", "page");
   revalidatePath("/exams/[slug]/previous-year-papers", "page");
-  revalidatePath("/exams/[slug]/mock-tests", "page");
+  revalidatePath("/exams/[slug]/mock-test-series", "page");
   revalidatePath("/exams/[slug]/question-bank", "page");
   revalidatePath("/exams/[slug]/exam-pattern", "page");
   return { success: true };

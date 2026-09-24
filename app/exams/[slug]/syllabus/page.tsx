@@ -9,6 +9,8 @@ import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
+import { MockSeriesPromo } from "@/components/public-exam/mock-series-promo";
+import { getExamMockSeriesSummary } from "@/lib/mock-series";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -30,6 +32,7 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
   const { slug } = await params;
   const exam = await getPublicExamBySlug(slug);
   if (!exam) notFound();
+  const mockSeriesSummary = await getExamMockSeriesSummary(exam);
 
   const [subjects, siteUrl] = await Promise.all([
     prisma.subject.findMany({
@@ -105,6 +108,9 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
             ))}
           </div>
         )}
+        <div className="mt-10">
+          <MockSeriesPromo summary={mockSeriesSummary} blurb="Each mock states exactly which subjects and topics it covers, so you can match practice to this syllabus." />
+        </div>
       </div>
     </PublicPageShell>
   );

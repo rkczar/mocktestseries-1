@@ -232,7 +232,14 @@ model TestSeries {
   description   String?
   instructions  String?
   coverImageUrl String?
+  // PLANNED number of Mock Tests in the series (e.g. 50) — a target the
+  // public page shows as "50 Mock Tests Planned", never as available. Real
+  // published/available counts are always derived from MockTest rows.
   testCount     Int              @default(0)
+  // Public URL segment for the series landing page. The canonical exam
+  // series (the one whose slug is "mock-test-series") is served at
+  // /exams/[examSlug]/mock-test-series — see lib/mock-series.ts.
+  slug          String?          @unique
   isActive      Boolean          @default(true)
   // Lifecycle status (Test Series Control Center). Distinct from `isActive`,
   // which remains the existing homepage/quick-toggle flag — status governs
@@ -757,6 +764,12 @@ enum AccessType {
   PAID
 }
 
+enum MockCoverageType {
+  FULL_SYLLABUS
+  PARTIAL_SYLLABUS
+  SUBJECT_WISE
+}
+
 enum AttemptPolicy {
   SINGLE_ATTEMPT
   MULTIPLE_PRACTICE
@@ -787,6 +800,15 @@ model MockTest {
   // stops a retake) — only the leaderboard, via TestAttempt.isLeaderboardAttempt,
   // distinguishes a student's first submission from later practice retakes.
   attemptPolicy   AttemptPolicy  @default(MULTIPLE_PRACTICE)
+  // What the test covers, shown on public/student cards. FULL_SYLLABUS needs
+  // no selection; PARTIAL_SYLLABUS / SUBJECT_WISE list the real Subject /
+  // Topic ids the admin picked (plain id arrays: display-only metadata, no
+  // relational queries, and a deleted subject simply drops out on render).
+  coverageType       MockCoverageType @default(FULL_SYLLABUS)
+  coverageSubjectIds String[]         @default([])
+  coverageTopicIds   String[]         @default([])
+  // Admin's intended question count ("Selected X / Target Y"). Null = no target.
+  targetQuestionCount Int?
   // Reused as "Test Number" — the test's display/sort position within its
   // Test Series (already existed for general ordering; no new field needed).
   order           Int            @default(0)

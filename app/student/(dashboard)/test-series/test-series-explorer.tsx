@@ -15,6 +15,8 @@ type Availability = "UPCOMING" | "AVAILABLE";
 export interface ExplorerTestRow {
   id: string;
   title: string;
+  testNumber: number | null;
+  coverageLabel: string;
   examName: string;
   questionCount: number;
   durationMinutes: number;
@@ -123,8 +125,11 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
     <Card className="flex flex-col">
       <CardContent className="flex flex-1 flex-col gap-3 pt-5">
         <div>
+          {row.testNumber ? <p className="text-[11px] font-semibold text-[var(--color-muted-foreground)]">Mock {row.testNumber}</p> : null}
           <p className="font-medium text-[var(--color-foreground)]">{row.title}</p>
-          <p className="text-xs text-[var(--color-muted-foreground)]">{row.examName}</p>
+          <p className="text-xs text-[var(--color-muted-foreground)]">
+            {row.examName} · {row.coverageLabel}
+          </p>
         </div>
 
         <div className="flex flex-wrap gap-3 text-xs text-[var(--color-muted-foreground)]">
