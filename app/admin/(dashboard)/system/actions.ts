@@ -10,7 +10,6 @@ export async function rescanStorageAction() {
   await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
   await getStorageSnapshot({ forceRefresh: true });
   revalidatePath("/admin/system");
-  revalidatePath("/admin");
 }
 
 /** Read-only: re-reads local git state and the production release/pm2 status. Never mutates the repo. */

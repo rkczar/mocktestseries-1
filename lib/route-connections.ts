@@ -41,7 +41,13 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/admin/backup", to: "/admin/questions", source: "internal", label: "PostgreSQL + Persistent Assets → Backup: question bank + question images" },
   { from: "/admin/backup", to: "/admin/website", source: "internal", label: "Website Settings → Backup: homepage, appearance, SEO, page visibility" },
   { from: "/admin/backup", to: "/admin/settings/authentication", source: "internal", label: "Secrets → Encrypted Recovery Payload (FULL backups only)" },
-  { from: "/admin/backup", to: "/admin/system", source: "internal", label: "Release Store → Release Manager (safe old-release cleanup) · VPS storage breakdown" },
+  { from: "/admin/backup", to: "/admin/system", source: "internal", label: "Canonical Storage Analysis (Actual App Source · Current/Rollback/Old Releases · Database · Uploads · Backups · Cache/Temp) — shared with System → Storage" },
+  // Backup Center structure (one page, tabs): Storage Breakdown · Retention
+  // (Current — Protected, Previous N — Protected, Older — Cleanup Candidate) ·
+  // Backup Retention · Release Cleanup · Backup Cleanup · Verification · Restore.
+  // app/admin/(dashboard)/page.tsx — the dashboard's VPS Storage card
+  // (Used / Available / Release / Backup / Reclaimable) links to Manage Storage.
+  { from: "/admin", to: "/admin/backup", source: "card", label: "VPS Storage → Manage Storage" },
 
   // --- Commerce / Razorpay (lib/payments/*) ---------------------------------
   // Admin Payment Control Center tabs (?tab=products|coupons|orders|
@@ -76,6 +82,11 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   // app/admin/login/actions.ts:22 — signIn("credentials", { redirectTo:
   // callbackUrl.startsWith("/admin") ? callbackUrl : "/admin" }).
   { from: "/admin/login", to: "/admin", source: "redirect", label: "Successful sign-in" },
+  // middleware.ts — every unauthenticated /admin/* request is redirected to
+  // /admin/login (?callbackUrl=…). This is the login page's real entry point;
+  // without it the page looked like it had "no incoming links" and was
+  // misreported as Broken even though the auth flow works.
+  { from: "/admin", to: "/admin/login", source: "redirect", label: "Unauthenticated admin request (middleware)" },
 
   // /privacy and /terms are thin redirects (app/privacy/page.tsx,
   // app/terms/page.tsx) into the combined /contact page's anchored sections.

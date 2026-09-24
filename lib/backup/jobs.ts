@@ -123,6 +123,7 @@ export async function startBackupJob(opts: {
             latestMigration: manifest.database.latestMigration,
             tables: manifest.database.tableCount,
             components: manifest.components.map((c) => c.path),
+            componentBytes: manifest.components.map((c) => ({ path: c.path, kind: c.kind, bytes: c.bytes })),
             secretsIncluded: manifest.secrets.included,
             excludedTableData: manifest.database.excludedTableData,
             assetFiles: manifest.persistentAssets.reduce((s, a) => s + a.fileCount, 0),

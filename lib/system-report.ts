@@ -669,7 +669,12 @@ export function renderSystemReportMarkdown(data: SystemReportData): string {
   const { graph, entries, counts } = data;
   const liveCount = graph.nodes.filter((n) => resolveDisplayStatus({ status: n.status, deprecated: n.deprecated, missing: n.missing, isolated: n.isolated, noIncoming: n.noIncoming }).key === "WORKING").length;
   const draftCount = graph.nodes.filter((n) => n.status === "DRAFT" && !n.deprecated).length;
-  const brokenCount = graph.brokenEdges.length + graph.nodes.filter((n) => n.missing).length;
+  // Same classifier as the per-route Status lines (resolveDisplayStatus), so the
+  // summary can never disagree with the detailed route data.
+  const brokenCount = graph.nodes.filter((n) => {
+    const key = resolveDisplayStatus({ status: n.status, deprecated: n.deprecated, missing: n.missing, isolated: n.isolated, noIncoming: n.noIncoming }).key;
+    return key === "BROKEN" || key === "MISSING";
+  }).length;
   const redirectCount = graph.edges.filter((e) => e.source === "redirect").length;
   const publicCount = graph.nodes.filter((n) => n.userType === "PUBLIC").length;
   const studentCount = graph.nodes.filter((n) => n.userType === "STUDENT").length;
@@ -692,6 +697,7 @@ export function renderSystemReportMarkdown(data: SystemReportData): string {
     `- Live Routes: ${liveCount}`,
     `- Draft Routes: ${draftCount}`,
     `- Broken Routes: ${brokenCount}`,
+    `- Broken Connections: ${graph.brokenEdges.length}`,
     `- Redirect Routes: ${redirectCount}`,
     `- Public Pages: ${publicCount}`,
     `- Student Pages: ${studentCount}`,

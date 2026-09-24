@@ -118,9 +118,12 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Coupon Editor", route: "/admin/payments/coupons/[id]", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
   { pageName: "New Coupon", route: "/admin/payments/coupons/new", module: "Payments", userType: "ADMIN", authRequired: true, parentRoute: "/admin/payments", status: "CONNECTED" },
 
-  // Backup & Disaster Recovery Center (tabs: Overview/Storage Breakdown,
-  // Create Backup (Full DR / Clean Portable / Database Only), VPS Backups,
-  // Releases, Verify, Restore, History) — one page, lib/backup/*.
+  // Backup & Disaster Recovery Center (tabs: Overview — Storage Health +
+  // Storage Breakdown + Actual App Source, Create Backup (Full DR / Clean
+  // Portable / Database Only), VPS Backups (+ Backup Cleanup), Releases
+  // (+ Release Cleanup), Retention (Current + N rollback; N verified backups
+  // per type; auto cleanup OFF by default), Verify, Restore, History) — one
+  // page, lib/backup/*.
   { pageName: "Backup & Disaster Recovery", route: "/admin/backup", module: "Backup", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
 
   // Settings

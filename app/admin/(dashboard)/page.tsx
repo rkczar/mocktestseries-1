@@ -302,7 +302,7 @@ export default async function AdminDashboardPage() {
           <StatCard label="Revenue (MTD, LIVE)" value={formatInr(revenueMtdPaise)} />
         </Link>
         <Link
-          href="/admin/system?tab=storage"
+          href="/admin/backup"
           className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-foreground)_5%,transparent)]"
         >
           <CardHeader className="flex-row items-center justify-between gap-2 pb-1">
@@ -326,6 +326,17 @@ export default async function AdminDashboardPage() {
                 </span>
               ) : null}
             </p>
+            <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-[var(--color-muted-foreground)]">
+              <dt>Available</dt>
+              <dd className="text-right text-[var(--color-foreground)]">{formatBytes(storage.filesystem.availBytes)}</dd>
+              <dt>Release storage</dt>
+              <dd className="text-right text-[var(--color-foreground)]">{formatBytes(storage.view.releases.all)}</dd>
+              <dt>Backup storage</dt>
+              <dd className="text-right text-[var(--color-foreground)]">{formatBytes(storage.view.backups.total)}</dd>
+              <dt>Reclaimable</dt>
+              <dd className="text-right text-[var(--color-foreground)]">{formatBytes(storage.view.releases.reclaimable + storage.view.backups.reclaimable)}</dd>
+            </dl>
+            <p className="mt-2 text-xs text-[var(--color-primary)]">Manage Storage →</p>
           </CardContent>
         </Link>
       </div>

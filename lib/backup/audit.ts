@@ -16,14 +16,16 @@ export type BackupAuditAction =
   | "RESTORE_STARTED"
   | "RESTORE_COMPLETED"
   | "RESTORE_FAILED"
-  | "BACKUP_TEMP_CLEANUP";
+  | "BACKUP_TEMP_CLEANUP"
+  | "RETENTION_AUTO_CLEANUP"
+  | "RETENTION_SETTINGS_CHANGED";
 
-export const BACKUP_AUDIT_ENTITY_TYPES = ["BackupJob", "BackupArtifact", "Release", "Restore"];
+export const BACKUP_AUDIT_ENTITY_TYPES = ["BackupJob", "BackupArtifact", "Release", "Restore", "BackupRetention"];
 
 export async function logBackupAudit(
   actorId: string | undefined,
   action: BackupAuditAction,
-  entityType: "BackupJob" | "BackupArtifact" | "Release" | "Restore",
+  entityType: "BackupJob" | "BackupArtifact" | "Release" | "Restore" | "BackupRetention",
   entityId: string | null,
   metadata?: Record<string, unknown>
 ) {

@@ -39,7 +39,7 @@ async function main() {
   const { listArtifacts, autoVerifyCheap, deleteArtifact, resolveArtifact, verifyArtifact } = await import("../lib/backup/discovery");
   const { planBackupCleanup } = await import("../lib/backup/cleanup");
   const { listReleases, planReleaseCleanup, deleteRelease } = await import("../lib/backup/releases");
-  const { getStorageBreakdown } = await import("../lib/backup/storage");
+  const { buildStorageView, refreshStorageSnapshot, releaseSizeMap } = await import("../lib/backup/storage");
   const { rehearseRestore, restoreProduction } = await import("../lib/backup/restore");
   const { fileDownloadStream } = await import("../lib/backup/stream");
   const { snapshotFacts, CLEAN_EXCLUDED_TABLE_DATA } = await import("../lib/backup/package");
@@ -266,7 +266,10 @@ async function main() {
     check("resolveInsideRoot rejects ../, absolute, dotfiles", (await rejects(() => resolveInsideRoot(R.nightlyDb, "../x.dump", { pattern: /.*/, expect: "file" }))) instanceof UnsafePathError && (await rejects(() => resolveInsideRoot(R.nightlyDb, "/etc/passwd", { pattern: /.*/, expect: "file" }))) instanceof UnsafePathError && (await rejects(() => resolveInsideRoot(R.nightlyDb, ".env", { pattern: /.*/, expect: "file" }))) instanceof UnsafePathError);
     check("resolveInsideRoot rejects a symlink inside the root", (await rejects(() => resolveInsideRoot(R.nightlyDb, "mocktestseries-20990101T000000Z.dump", { pattern: /.*/, expect: "file" }))) instanceof UnsafePathError);
     let freed = 0;
-    for (const c of plan.candidates) freed += (await deleteArtifact(R, c.id, protectedSet)).bytes;
+    for (const c of plan.candidates) {
+      const d = await deleteArtifact(R, c.id, protectedSet);
+      if (d.status === "DELETED") freed += d.bytes;
+    }
     const after = await listArtifacts(R);
     check("Bulk cleanup deleted only fixture candidates", plan.candidates.every((c) => !after.some((a) => a.id === c.id)) && freed === plan.reclaimableBytes);
     check("Protected, unknown and legacy files survived", plan.protectedIds.every((id) => after.some((a) => a.id === id)) && after.some((a) => a.name === "notes.txt") && after.some((a) => a.category === "Legacy Backup"));
@@ -274,7 +277,8 @@ async function main() {
 
     // ---- 7. Releases -------------------------------------------------------
     console.log("\n7. Release discovery / protection / cleanup");
-    const { releases, currentSha } = await listReleases(R, { forceSizes: true, includePm2: false });
+    const snap = await refreshStorageSnapshot(R);
+    const { releases, currentSha } = await listReleases(R, { sizes: releaseSizeMap(snap), includePm2: false });
     const by = (sha: string) => releases.find((r) => r.sha === sha)!;
     check("Current release detected via symlink", currentSha === headSha && by(headSha).status === "CURRENT");
     check("Newest previous built release is ROLLBACK", by(rollbackSha).status === "ROLLBACK");
@@ -292,8 +296,8 @@ async function main() {
     check("Real production release untouched", Boolean(await stat(`${PRODUCTION_ROOTS.releases}/${prodSha}/.next/BUILD_ID`).catch(() => null)));
     const realReleases = await listReleases(PRODUCTION_ROOTS);
     check("Real current release is CURRENT/protected in the real inventory", realReleases.releases.find((r) => r.sha === prodSha)?.status === "CURRENT");
-    const storage = await getStorageBreakdown(R, await listArtifacts(R), (await listReleases(R, { includePm2: false })).releases, true);
-    check("Storage breakdown separates BACKUP / RELEASE / APPLICATION / OTHER", ["BACKUP", "RELEASE", "APPLICATION", "OTHER"].every((g) => storage.rows.some((r) => r.group === g)));
+    const storage = await buildStorageView(R, { snapshot: await refreshStorageSnapshot(R), releases: (await listReleases(R, { includePm2: false })).releases, artifacts: await listArtifacts(R), releaseReclaimable: 0, backupReclaimable: 0 });
+    check("Storage breakdown separates releases / backups / database / other", ["releases", "backups", "database", "other"].every((k) => storage.partition.some((r) => r.key === k)));
 
     // ---- 8. Temp cleanup ----------------------------------------------------
     console.log("\n8. Temp cleanup");

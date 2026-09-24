@@ -113,7 +113,7 @@ export async function listArtifacts(roots: BackupRoots): Promise<Artifact[]> {
       format: "rsync mirror (directory)",
       kind: "MIRROR",
       recognized: true,
-      sizeBytes: (await duBytes(roots.uploadsMirror)) ?? 0,
+      sizeBytes: (await duBytes(roots.uploadsMirror, 15_000)) ?? 0,
       mtime: mirrorSt.mtime,
       verification: null,
       verificationDetail: null,
@@ -189,13 +189,20 @@ export function isVerified(a: Pick<Artifact, "verification">): boolean {
   return a.verification === "VALID";
 }
 
-/** Deletes ONE recognized, deletable artifact after re-resolving it safely. */
-export async function deleteArtifact(roots: BackupRoots, id: string, protectedIds: Set<string> = new Set()): Promise<{ name: string; bytes: number }> {
+/**
+ * Deletes ONE recognized, deletable artifact after re-resolving it safely.
+ * An id that no longer resolves returns NOT_FOUND (idempotent — the opaque id
+ * binds to one root + file name, so a replayed delete can't hit anything else).
+ */
+export async function deleteArtifact(roots: BackupRoots, id: string, protectedIds: Set<string> = new Set()): Promise<{ status: "DELETED"; name: string; bytes: number } | { status: "NOT_FOUND" }> {
+  if (!/^[0-9a-f]{32}$/.test(id)) throw new ArtifactNotFoundError("Invalid id");
+  const listed = (await listArtifacts(roots)).find((x) => x.id === id);
+  if (!listed) return { status: "NOT_FOUND" };
   const { artifact, file } = await resolveArtifact(roots, id);
   if (!artifact.deletable) throw new ArtifactNotFoundError(artifact.protectedReason ?? "This backup cannot be deleted here.");
   if (protectedIds.has(id)) throw new ArtifactNotFoundError("This is the protected latest verified backup.");
   const st = await lstat(file);
   await rm(file, { force: false });
   await prisma.backupArtifactCheck.deleteMany({ where: { artifactId: id } });
-  return { name: artifact.name, bytes: st.size };
+  return { status: "DELETED", name: artifact.name, bytes: st.size };
 }

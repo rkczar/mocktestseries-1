@@ -441,3 +441,30 @@ export function buildInventory(kind: BackupKindName): BackupManifest["inventory"
 export function createPrivateWriteStream(file: string) {
   return createWriteStream(file, { mode: 0o600, flags: "wx" });
 }
+
+export interface ComponentSizes {
+  database: number;
+  source: number;
+  assets: number;
+  encryptedConfig: number;
+  other: number;
+  archive: number | null;
+}
+
+/** Groups a package's manifest components into the sizes shown in the Backup Center. */
+export function groupComponentSizes(components: Pick<ManifestComponent, "kind" | "bytes">[], archiveBytes: number | null): ComponentSizes {
+  const by = (k: ManifestComponent["kind"][]) => components.filter((c) => k.includes(c.kind)).reduce((s, c) => s + c.bytes, 0);
+  return { database: by(["database"]), source: by(["source"]), assets: by(["assets"]), encryptedConfig: by(["secrets"]), other: by(["config", "docs"]), archive: archiveBytes };
+}
+
+/** Reads only manifest.json out of a package (first tar member; bounded time and output). */
+export async function readPackageManifest(file: string): Promise<BackupManifest | null> {
+  const r = await run("tar", ["--occurrence=1", "-xOf", file, "manifest.json"], { timeoutMs: 20_000, maxStdout: 8 * 1024 * 1024 }).catch(() => null);
+  if (!r || r.code !== 0) return null;
+  try {
+    const m = JSON.parse(r.stdout) as BackupManifest;
+    return m.format === BACKUP_FORMAT && Array.isArray(m.components) ? m : null;
+  } catch {
+    return null;
+  }
+}

@@ -100,8 +100,8 @@ export function sha256File(file: string): Promise<string> {
   });
 }
 
-export async function duBytes(target: string): Promise<number | null> {
-  const r = await run("du", ["-sb", target]).catch(() => null);
+export async function duBytes(target: string, timeoutMs = 120_000): Promise<number | null> {
+  const r = await run("du", ["-sb", target], { timeoutMs }).catch(() => null);
   if (!r || r.code !== 0) {
     // du exits 1 on partial permission errors but still prints a total.
     const n = Number.parseInt((r?.stdout ?? "").split("\t")[0] ?? "", 10);
