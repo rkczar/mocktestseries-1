@@ -67,10 +67,16 @@ type SnapshotSource = {
   passwordHash: string | null;
   createdAt: Date;
   oauthAccounts: { provider: string }[];
+  examEnrollments: { exam: { name: string } }[];
+  entitlements: { product: { name: string } }[];
 };
 
 /** Relations identitySnapshot() needs — include this wherever a SnapshotSource is loaded. */
-const SNAPSHOT_INCLUDE = { oauthAccounts: { select: { provider: true } } } as const;
+const SNAPSHOT_INCLUDE = {
+  oauthAccounts: { select: { provider: true } },
+  examEnrollments: { select: { exam: { select: { name: true } } } },
+  entitlements: { select: { product: { select: { name: true } } } },
+} as const;
 
 /**
  * The retained deletion audit record: who the student was, how to contact
@@ -91,6 +97,8 @@ function identitySnapshot(s: SnapshotSource) {
     phoneSnapshot: s.mobile,
     authMethodsSnapshot: [...methods].sort(),
     studentCreatedAtSnapshot: s.createdAt,
+    enrolledExamsSnapshot: s.examEnrollments.map((e) => e.exam.name).sort(),
+    purchasedProductsSnapshot: [...new Set(s.entitlements.map((e) => e.product.name))].sort(),
     emailMaskedSnapshot: maskEmail(s.email),
     phoneMaskedSnapshot: maskPhone(s.mobile),
   };

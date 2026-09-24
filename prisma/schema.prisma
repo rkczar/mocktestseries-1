@@ -575,6 +575,9 @@ model DeletionRequest {
   /// e.g. ["CREDENTIALS","GOOGLE","OTP"] — which login methods the account used.
   authMethodsSnapshot         String[]  @default([])
   studentCreatedAtSnapshot    DateTime?
+  /// Courses at deletion: enrolled exam names and purchased product names.
+  enrolledExamsSnapshot       String[]  @default([])
+  purchasedProductsSnapshot   String[]  @default([])
   /// Original Student.id — a non-login historical reference only.
   studentDbIdSnapshot         String?
   // Masked forms, kept for rows approved before raw contact was retained.

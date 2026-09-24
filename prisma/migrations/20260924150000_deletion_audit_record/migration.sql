@@ -13,7 +13,9 @@ ALTER TABLE "DeletionRequest"
   ADD COLUMN "phoneSnapshot" TEXT,
   ADD COLUMN "authMethodsSnapshot" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
   ADD COLUMN "studentCreatedAtSnapshot" TIMESTAMP(3),
-  ADD COLUMN "studentDbIdSnapshot" TEXT;
+  ADD COLUMN "studentDbIdSnapshot" TEXT,
+  ADD COLUMN "enrolledExamsSnapshot" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  ADD COLUMN "purchasedProductsSnapshot" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 
 -- The record must outlive the Student row: if a Student row is ever hard-
 -- deleted, the request keeps its snapshot and only loses the live link.
@@ -34,6 +36,17 @@ UPDATE "DeletionRequest" dr SET
   "studentDbIdSnapshot" = s."id",
   "studentCreatedAtSnapshot" = s."createdAt"
 FROM "Student" s WHERE s."id" = dr."studentId";
+
+-- Courses survive approval (enrollments and entitlements stay on the
+-- anonymized Student row), so they are backfilled for every row.
+UPDATE "DeletionRequest" dr SET
+  "enrolledExamsSnapshot" = COALESCE((
+    SELECT array_agg(e."name" ORDER BY e."name") FROM "StudentExamEnrollment" se
+    JOIN "Exam" e ON e."id" = se."examId" WHERE se."studentId" = dr."studentId"), ARRAY[]::TEXT[]),
+  "purchasedProductsSnapshot" = COALESCE((
+    SELECT array_agg(DISTINCT p."name") FROM "StudentEntitlement" se
+    JOIN "Product" p ON p."id" = se."productId" WHERE se."studentId" = dr."studentId"), ARRAY[]::TEXT[])
+WHERE dr."studentId" IS NOT NULL;
 
 UPDATE "DeletionRequest" dr SET
   "emailSnapshot" = s."email",

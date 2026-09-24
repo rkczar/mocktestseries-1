@@ -87,6 +87,8 @@ export default async function DeletionRecordPage({ params }: { params: Promise<{
               <Row k="Student ID" v={<span className="font-mono">{r.code ?? "—"}</span>} />
               <Row k="Email" v={r.email ?? r.emailMasked} />
               <Row k="Mobile" v={r.phone ?? r.phoneMasked} />
+              <Row k="Enrolled exams" v={r.enrolledExams.length ? r.enrolledExams.join(", ") : null} />
+              <Row k="Purchased" v={r.purchasedProducts.length ? r.purchasedProducts.join(", ") : null} />
               <Row k="Login methods" v={r.authMethods.length ? r.authMethods.join(", ") : null} />
               <Row k="Account created" v={r.accountCreatedAt ? formatIst(r.accountCreatedAt) : null} />
               <Row k="Internal record ID" v={<span className="font-mono text-xs">{r.originalStudentDbId ?? "—"}</span>} />

@@ -18,6 +18,8 @@ export interface DeletionHistoryRow {
   phone: string | null;
   /** Approved before raw contact was retained — email/phone above are masked. */
   contactMaskedOnly: boolean;
+  /** Enrolled exams, then purchased products marked "(purchased)". */
+  courses: string[];
   requestedAt: string;
   /** IST calendar date, YYYY-MM-DD — for the date filter. */
   requestedDate: string;
@@ -42,7 +44,7 @@ export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistor
       if (from && r.requestedDate < from) return false;
       if (to && r.requestedDate > to) return false;
       if (!q) return true;
-      if ([r.name, r.code, r.email].some((v) => v?.toLowerCase().includes(q))) return true;
+      if ([r.name, r.code, r.email, ...r.courses].some((v) => v?.toLowerCase().includes(q))) return true;
       return qDigits.length >= 3 && Boolean(r.phone?.replace(/\D/g, "").includes(qDigits));
     });
   }, [rows, query, status, from, to]);
@@ -56,7 +58,7 @@ export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistor
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr]">
         <Input
           type="search"
-          placeholder="Search name, Student ID, email or phone"
+          placeholder="Search name, Student ID, email, phone or course"
           aria-label="Search deletion requests"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -75,11 +77,12 @@ export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistor
         <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">No requests match these filters.</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-left text-sm">
+          <table className="w-full min-w-[1120px] text-left text-sm">
             <thead>
               <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
                 <th className="py-2 pr-4">Student</th>
                 <th className="py-2 pr-4">Contact</th>
+                <th className="py-2 pr-4">Course</th>
                 <th className="py-2 pr-4">Request</th>
                 <th className="py-2 pr-4">Status</th>
                 <th className="py-2 pr-4">Review</th>
@@ -97,6 +100,9 @@ export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistor
                     <div className="break-all">{r.email ?? "—"}</div>
                     <div className="font-mono">{r.phone ?? "—"}</div>
                     {r.contactMaskedOnly ? <div className="mt-1 italic">Masked (deleted before full retention)</div> : null}
+                  </td>
+                  <td className="max-w-[14rem] py-2.5 pr-4 text-xs text-[var(--color-foreground)]">
+                    {r.courses.length ? r.courses.map((c) => <div key={c}>{c}</div>) : <span className="text-[var(--color-muted-foreground)]">—</span>}
                   </td>
                   <td className="max-w-xs py-2.5 pr-4 text-[var(--color-muted-foreground)]">
                     <div className="text-[var(--color-foreground)]">{r.reason || "No reason given"}</div>

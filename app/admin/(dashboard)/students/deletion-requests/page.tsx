@@ -33,6 +33,7 @@ export default async function DeletionRequestsPage() {
     email: r.email ?? (r.contactMaskedOnly ? r.emailMasked : null),
     phone: r.phone ?? (r.contactMaskedOnly ? r.phoneMasked : null),
     contactMaskedOnly: r.contactMaskedOnly,
+    courses: [...r.enrolledExams, ...r.purchasedProducts.map((p) => `${p} (purchased)`)],
     requestedAt: formatIst(r.requestedAt),
     requestedDate: toIstDateString(r.requestedAt),
     reviewedAt: r.reviewedAt ? formatIst(r.reviewedAt) : null,

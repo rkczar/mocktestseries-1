@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
  *   name, student code, email, phone  — identify which person deleted which
  *                                       account (support, disputes, fraud)
  *   login methods, account created at — understand the account that existed
+ *   enrolled exams, purchased products — which courses the account had
  *   reason, requested/reviewed at, reviewer — the deletion decision itself
  *   original Student.id               — join to retained anonymous attempt /
  *                                       payment / invoice rows (never a login)
@@ -38,9 +39,22 @@ const SELECT = {
   phoneMaskedSnapshot: true,
   authMethodsSnapshot: true,
   studentCreatedAtSnapshot: true,
+  enrolledExamsSnapshot: true,
+  purchasedProductsSnapshot: true,
   reviewedByAdminNameSnapshot: true,
   reviewedByAdmin: { select: { name: true } },
-  student: { select: { studentId: true, name: true, email: true, mobile: true, status: true } },
+  student: {
+    select: {
+      studentId: true,
+      name: true,
+      email: true,
+      mobile: true,
+      status: true,
+      // Kept on the anonymized row, so still readable for pre-snapshot records.
+      examEnrollments: { select: { exam: { select: { name: true } } } },
+      entitlements: { select: { product: { select: { name: true } } } },
+    },
+  },
 } as const;
 
 type Row = NonNullable<Awaited<ReturnType<typeof findOne>>>;
@@ -72,6 +86,12 @@ function toRecord(r: Row) {
     emailMasked: r.emailMaskedSnapshot,
     phoneMasked: r.phoneMaskedSnapshot,
     authMethods: r.authMethodsSnapshot,
+    enrolledExams: r.enrolledExamsSnapshot.length
+      ? r.enrolledExamsSnapshot
+      : (r.student?.examEnrollments.map((e) => e.exam.name).sort() ?? []),
+    purchasedProducts: r.purchasedProductsSnapshot.length
+      ? r.purchasedProductsSnapshot
+      : [...new Set(r.student?.entitlements.map((e) => e.product.name) ?? [])].sort(),
     accountCreatedAt: r.studentCreatedAtSnapshot,
     originalStudentDbId: r.studentDbIdSnapshot ?? r.studentId,
     liveStudentStatus: r.student?.status ?? null,
