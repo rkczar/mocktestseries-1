@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getAdminSession } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { formatIst, toIstDateString } from "@/lib/ist-time";
@@ -33,12 +34,15 @@ export default async function DeletionRequestsPage() {
     email: r.email ?? (r.contactMaskedOnly ? r.emailMasked : null),
     phone: r.phone ?? (r.contactMaskedOnly ? r.phoneMasked : null),
     contactMaskedOnly: r.contactMaskedOnly,
+    identityUnavailable: r.identityUnavailable,
     courses: [...r.enrolledExams, ...r.purchasedProducts.map((p) => `${p} (purchased)`)],
     requestedAt: formatIst(r.requestedAt),
     requestedDate: toIstDateString(r.requestedAt),
     reviewedAt: r.reviewedAt ? formatIst(r.reviewedAt) : null,
     reviewer: r.reviewer,
   }));
+  const pending = rows.filter((r) => r.status === "PENDING");
+  const completed = rows.filter((r) => r.status !== "PENDING");
 
   return (
     <div className="flex flex-col gap-6">
@@ -55,11 +59,36 @@ export default async function DeletionRequestsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Deletion History</CardTitle>
-          <CardDescription>{rows.length} total</CardDescription>
+          <CardTitle>Pending Requests</CardTitle>
+          <CardDescription>{pending.length} awaiting review</CardDescription>
         </CardHeader>
         <CardContent>
-          <DeletionHistoryTable rows={rows} canReview={canReview} />
+          <DeletionHistoryTable
+            rows={pending}
+            canReview={canReview}
+            statuses={["PENDING"]}
+            emptyText="No pending deletion requests."
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Completed / Deletion History</CardTitle>
+          <CardDescription>
+            {completed.length} reviewed · approved deletions are also listed under{" "}
+            <Link href="/admin/students/deleted" className="text-[var(--color-primary)] hover:underline">
+              Deleted Students
+            </Link>
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DeletionHistoryTable
+            rows={completed}
+            canReview={false}
+            statuses={["APPROVED", "REJECTED"]}
+            emptyText="No reviewed requests yet."
+          />
         </CardContent>
       </Card>
     </div>

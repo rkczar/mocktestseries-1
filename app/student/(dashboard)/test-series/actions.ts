@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { startOrPaywall } from "@/lib/payments/paywall";
 import { startOfflineOmrEntryAttempt } from "@/lib/test-attempt";
 
@@ -13,7 +13,7 @@ import { startOfflineOmrEntryAttempt } from "@/lib/test-attempt";
  * question player.
  */
 export async function startOfflineOmrEntryFromTestSeriesAction(mockTestId: string) {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const attempt = await startOrPaywall(() => startOfflineOmrEntryAttempt(student.id, mockTestId));
   redirect(`/student/attempt/${attempt.id}/omr-entry`);
 }

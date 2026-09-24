@@ -81,6 +81,8 @@ function toRecord(r: Row) {
     code: r.studentCodeSnapshot ?? r.student?.studentId ?? null,
     email,
     phone,
+    /** Approved before any identity was retained: no name, email or phone survives (not even masked). */
+    identityUnavailable: !r.studentNameSnapshot && !live && !email && !phone && !r.emailMaskedSnapshot && !r.phoneMaskedSnapshot,
     /** True when raw contact was never captured (approved before retention) and only a masked form exists. */
     contactMaskedOnly: !email && !phone && Boolean(r.emailMaskedSnapshot || r.phoneMaskedSnapshot),
     emailMasked: r.emailMaskedSnapshot,
@@ -105,21 +107,36 @@ export async function listDeletionRecords(): Promise<DeletionRecord[]> {
   return rows.map(toRecord);
 }
 
+/**
+ * Deleted Students: one entry per APPROVED request — i.e. per deleted
+ * account, so a person who deleted, re-registered and deleted again has two
+ * independent entries. Same records as listDeletionRecords(), no second store.
+ */
+export async function listDeletedStudentRecords(): Promise<DeletionRecord[]> {
+  const rows = await prisma.deletionRequest.findMany({
+    where: { status: DeletionRequestStatus.APPROVED },
+    orderBy: { reviewedAt: "desc" },
+    select: SELECT,
+  });
+  return rows.map(toRecord);
+}
+
 /** One record plus what actually happened to the account and its history. */
 export async function getDeletionRecordDetail(id: string) {
   const row = await findOne(id);
   if (!row) return null;
   const record = toRecord(row);
   const dbId = record.originalStudentDbId;
-  const [attempts, orders, payments, invoices, entitlements] = dbId
+  const [attempts, orders, payments, invoices, entitlements, enrollments] = dbId
     ? await Promise.all([
         prisma.testAttempt.count({ where: { studentId: dbId } }),
         prisma.paymentOrder.count({ where: { studentId: dbId } }),
         prisma.payment.count({ where: { studentId: dbId } }),
         prisma.invoice.count({ where: { studentId: dbId } }),
         prisma.studentEntitlement.count({ where: { studentId: dbId } }),
+        prisma.studentExamEnrollment.count({ where: { studentId: dbId } }),
       ])
-    : [0, 0, 0, 0, 0];
+    : [0, 0, 0, 0, 0, 0];
 
   const status = record.liveStudentStatus;
   const approved = record.status === DeletionRequestStatus.APPROVED;
@@ -132,6 +149,7 @@ export async function getDeletionRecordDetail(id: string) {
       attemptsRetained: attempts,
       paymentRecordsRetained: { orders, payments, invoices },
       entitlementsRetained: entitlements,
+      enrollmentsRetained: enrollments,
     },
   };
 }

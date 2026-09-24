@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { startSubjectTestAttempt, type SubjectTestSelection } from "@/lib/test-attempt";
 import {
   countPublishedQuestions,
@@ -34,7 +34,7 @@ export async function startSubjectTestAction(
   _prevState: SubjectTestFormState,
   formData: FormData
 ): Promise<SubjectTestFormState> {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
 
   const examId = str(formData, "examId");
   const subjectId = str(formData, "subjectId");
@@ -75,6 +75,6 @@ export async function startSubjectTestAction(
 
 /** Live "how many questions are in scope" count for the builder screen. */
 export async function countAvailableQuestionsAction(filters: QuestionSelectionFilters): Promise<number> {
-  await requireStudent();
+  await requireStudentOrLogin();
   return countPublishedQuestions(filters);
 }

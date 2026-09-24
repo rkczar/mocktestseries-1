@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getAiSettings } from "@/lib/ai-settings";
 import { getOrCreateExplanation, AiNotConfiguredError, AiGenerationInProgressError, type ExplanationContent } from "@/lib/ai-explanation";
 import { getOrCreateExplanationVariant } from "@/lib/ai-explanation-variants";
@@ -22,7 +22,7 @@ import {
  * not per attempt or per page, so one action serves all of them.
  */
 export async function getExplanationAction(questionId: string) {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
 
   // Neither caller carries an attemptId, so this is the one place that can
   // catch "this question belongs to a test I'm still taking" regardless of
@@ -91,7 +91,7 @@ export async function getExplanationAction(questionId: string) {
  * instead of just question).
  */
 export async function getExplanationVariantAction(questionId: string, variantId: string) {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
 
   if (!EXPLANATION_VARIANTS.some((v) => v.id === variantId)) {
     return { ok: false as const, error: "Unknown AI variant." };

@@ -38,14 +38,25 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
 
   const latestDeletionRequest = student.deletionRequests[0];
   const session = await getAdminSession();
-  const canCorrectName = Boolean(session?.user?.permissions?.includes(PERMISSIONS.STUDENTS_MANAGE));
+  const deleted = student.status === "DELETED";
+  const canCorrectName = !deleted && Boolean(session?.user?.permissions?.includes(PERMISSIONS.STUDENTS_MANAGE));
+  // A deleted row is anonymized; its person is named by the retained deletion
+  // audit record, shown only to admins allowed to see that record.
+  const canViewDeletion = Boolean(session?.user?.permissions?.includes(PERMISSIONS.STUDENT_DELETION_VIEW));
+  const displayName =
+    deleted && latestDeletionRequest?.status === "APPROVED"
+      ? canViewDeletion
+        ? (latestDeletionRequest.studentNameSnapshot ?? "Historical identity unavailable")
+        : "Account Deleted"
+      : student.name;
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{student.name}</h1>
+          <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{displayName}</h1>
           <p className="text-sm text-[var(--color-muted-foreground)] font-mono">{student.studentId}</p>
+          {deleted ? <Badge variant="error" className="mt-1">Account Deleted</Badge> : null}
         </div>
         {canCorrectName ? <NameCorrectionDialog studentId={student.id} name={student.name} /> : null}
       </div>
@@ -77,7 +88,9 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
           </div>
           <div>
             <p className="text-xs uppercase text-[var(--color-muted-foreground)]">Status</p>
-            <Badge variant={student.status === "ACTIVE" ? "success" : "warning"}>{student.status.replace(/_/g, " ")}</Badge>
+            <Badge variant={student.status === "ACTIVE" ? "success" : deleted ? "error" : "warning"}>
+              {deleted ? "Account Deleted" : student.status.replace(/_/g, " ")}
+            </Badge>
           </div>
         </CardContent>
       </Card>

@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 
 const STATUS_VARIANT = { PENDING: "warning", APPROVED: "error", REJECTED: "neutral" } as const;
 const STATUS_LABEL = { PENDING: "Pending", APPROVED: "Approved", REJECTED: "Rejected" } as const;
+const METHOD_LABEL: Record<string, string> = { CREDENTIALS: "Password", GOOGLE: "Google", OTP: "Phone" };
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -66,13 +67,18 @@ export default async function DeletionRecordPage({ params }: { params: Promise<{
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link href="/admin/students/deletion-requests" className="text-sm text-[var(--color-primary)] hover:underline">
-            ← Deletion Requests
+          <Link
+            href={approved ? "/admin/students/deleted" : "/admin/students/deletion-requests"}
+            className="text-sm text-[var(--color-primary)] hover:underline"
+          >
+            ← {approved ? "Deleted Students" : "Deletion Requests"}
           </Link>
-          <h1 className="mt-1 text-xl font-semibold text-[var(--color-foreground)]">{r.name ?? "Name not captured"}</h1>
+          <h1 className="mt-1 text-xl font-semibold text-[var(--color-foreground)]">
+            {r.name ?? (r.identityUnavailable ? "Historical identity unavailable" : "Name not captured")}
+          </h1>
           <p className="font-mono text-sm text-[var(--color-muted-foreground)]">{r.code ?? "—"}</p>
         </div>
-        <Badge variant={STATUS_VARIANT[r.status]}>{STATUS_LABEL[r.status]}</Badge>
+        <Badge variant={STATUS_VARIANT[r.status]}>{approved ? "Account Deleted" : STATUS_LABEL[r.status]}</Badge>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -87,12 +93,18 @@ export default async function DeletionRecordPage({ params }: { params: Promise<{
               <Row k="Student ID" v={<span className="font-mono">{r.code ?? "—"}</span>} />
               <Row k="Email" v={r.email ?? r.emailMasked} />
               <Row k="Mobile" v={r.phone ?? r.phoneMasked} />
-              <Row k="Enrolled exams" v={r.enrolledExams.length ? r.enrolledExams.join(", ") : null} />
-              <Row k="Purchased" v={r.purchasedProducts.length ? r.purchasedProducts.join(", ") : null} />
-              <Row k="Login methods" v={r.authMethods.length ? r.authMethods.join(", ") : null} />
               <Row k="Account created" v={r.accountCreatedAt ? formatIst(r.accountCreatedAt) : null} />
+              <Row k="Login methods" v={r.authMethods.length ? r.authMethods.map((m) => METHOD_LABEL[m] ?? m).join(", ") : null} />
+              <Row k="Enrolled exams" v={r.enrolledExams.length ? r.enrolledExams.join(", ") : null} />
+              <Row k="Purchased products" v={r.purchasedProducts.length ? r.purchasedProducts.join(", ") : null} />
               <Row k="Internal record ID" v={<span className="font-mono text-xs">{r.originalStudentDbId ?? "—"}</span>} />
             </dl>
+            {r.identityUnavailable ? (
+              <p className="mt-3 text-xs italic text-[var(--color-muted-foreground)]">
+                Historical identity unavailable: this account was deleted before identity retention existed and no
+                name, email or phone was kept. Only the Student ID remains.
+              </p>
+            ) : null}
             {r.contactMaskedOnly ? (
               <p className="mt-3 text-xs italic text-[var(--color-muted-foreground)]">
                 This account was deleted before full contact retention was introduced; only a masked email/phone was
@@ -112,7 +124,7 @@ export default async function DeletionRecordPage({ params }: { params: Promise<{
               <Row k="Requested at" v={formatIst(r.requestedAt)} />
               <Row k={r.status === "REJECTED" ? "Rejected at" : "Approved at"} v={r.reviewedAt ? formatIst(r.reviewedAt) : null} />
               <Row k="Reviewed by" v={r.reviewedAt ? (r.reviewer ?? "unknown admin") : null} />
-              <Row k="Status" v={STATUS_LABEL[r.status]} />
+              <Row k="Status" v={approved ? "Approved — Account Deleted" : STATUS_LABEL[r.status]} />
               {r.notes ? <Row k="Notes" v={r.notes} /> : null}
               <Row k="Record ID" v={<span className="font-mono text-xs">{r.id}</span>} />
             </dl>
@@ -141,8 +153,10 @@ export default async function DeletionRecordPage({ params }: { params: Promise<{
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-[auto_1fr] items-center gap-x-6 gap-y-2 text-sm">
+            <Row k="Account deleted" v={<YesNo yes={approved} />} />
             <Row k="Active account" v={<YesNo yes={outcome.activeAccount} />} />
             <Row k="Authentication revoked" v={<YesNo yes={outcome.authRevoked} />} />
+            <Row k="Sessions revoked" v={<YesNo yes={outcome.authRevoked} />} />
             <Row
               k="Test attempt records retained"
               v={
@@ -153,7 +167,27 @@ export default async function DeletionRecordPage({ params }: { params: Promise<{
               }
             />
             <Row
-              k="Payment records retained"
+              k="Courses / enrollments retained"
+              v={
+                <span className="flex items-center gap-2">
+                  <YesNo yes={outcome.enrollmentsRetained > 0} />
+                  <span className="text-[var(--color-muted-foreground)]">{outcome.enrollmentsRetained} enrollments</span>
+                </span>
+              }
+            />
+            <Row
+              k="Purchased products retained"
+              v={
+                <span className="flex items-center gap-2">
+                  <YesNo yes={outcome.entitlementsRetained > 0} />
+                  <span className="text-[var(--color-muted-foreground)]">
+                    {outcome.entitlementsRetained} entitlement records{approved ? " (historical, unusable)" : ""}
+                  </span>
+                </span>
+              }
+            />
+            <Row
+              k="Payment / audit records retained"
               v={
                 <span className="flex items-center gap-2">
                   <YesNo yes={paymentTotal > 0} />

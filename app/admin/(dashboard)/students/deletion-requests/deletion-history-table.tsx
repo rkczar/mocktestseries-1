@@ -18,6 +18,8 @@ export interface DeletionHistoryRow {
   phone: string | null;
   /** Approved before raw contact was retained — email/phone above are masked. */
   contactMaskedOnly: boolean;
+  /** Approved before any identity was retained — nothing to show but the Student ID. */
+  identityUnavailable: boolean;
   /** Enrolled exams, then purchased products marked "(purchased)". */
   courses: string[];
   requestedAt: string;
@@ -30,7 +32,18 @@ export interface DeletionHistoryRow {
 const STATUS_VARIANT = { PENDING: "warning", APPROVED: "error", REJECTED: "neutral" } as const;
 const STATUS_LABEL = { PENDING: "Pending", APPROVED: "Approved", REJECTED: "Rejected" } as const;
 
-export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistoryRow[]; canReview: boolean }) {
+export function DeletionHistoryTable({
+  rows,
+  canReview,
+  statuses = ["PENDING", "APPROVED", "REJECTED"],
+  emptyText = "No deletion requests.",
+}: {
+  rows: DeletionHistoryRow[];
+  canReview: boolean;
+  /** Statuses offered by the filter — hidden when there is only one. */
+  statuses?: DeletionHistoryRow["status"][];
+  emptyText?: string;
+}) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"" | DeletionHistoryRow["status"]>("");
   const [from, setFrom] = useState("");
@@ -50,7 +63,7 @@ export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistor
   }, [rows, query, status, from, to]);
 
   if (rows.length === 0) {
-    return <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">No deletion requests.</p>;
+    return <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">{emptyText}</p>;
   }
 
   return (
@@ -63,12 +76,18 @@ export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistor
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <SelectNative aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
-          <option value="">All statuses</option>
-          <option value="PENDING">Pending</option>
-          <option value="APPROVED">Approved</option>
-          <option value="REJECTED">Rejected</option>
-        </SelectNative>
+        {statuses.length > 1 ? (
+          <SelectNative aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
+            <option value="">All statuses</option>
+            {statuses.map((s) => (
+              <option key={s} value={s}>
+                {STATUS_LABEL[s]}
+              </option>
+            ))}
+          </SelectNative>
+        ) : (
+          <div className="hidden lg:block" />
+        )}
         <Input type="date" aria-label="Requested from" value={from} onChange={(e) => setFrom(e.target.value)} />
         <Input type="date" aria-label="Requested to" value={to} onChange={(e) => setTo(e.target.value)} />
       </div>
@@ -93,13 +112,17 @@ export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistor
               {filtered.map((r) => (
                 <tr key={r.id} className="border-b border-[var(--color-border)] align-top last:border-0">
                   <td className="py-2.5 pr-4 text-[var(--color-foreground)]">
-                    {r.name ?? <span className="italic text-[var(--color-muted-foreground)]">Name not captured</span>}
+                    {r.name ?? (
+                      <span className="italic text-[var(--color-muted-foreground)]">
+                        {r.identityUnavailable ? "Historical identity unavailable" : "Name not captured"}
+                      </span>
+                    )}
                     <div className="font-mono text-xs text-[var(--color-muted-foreground)]">{r.code ?? "—"}</div>
                   </td>
                   <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">
                     <div className="break-all">{r.email ?? "—"}</div>
                     <div className="font-mono">{r.phone ?? "—"}</div>
-                    {r.contactMaskedOnly ? <div className="mt-1 italic">Masked (deleted before full retention)</div> : null}
+                    {r.contactMaskedOnly ? <div className="mt-1 italic">Full contact unavailable (deleted before full retention)</div> : null}
                   </td>
                   <td className="max-w-[14rem] py-2.5 pr-4 text-xs text-[var(--color-foreground)]">
                     {r.courses.length ? r.courses.map((c) => <div key={c}>{c}</div>) : <span className="text-[var(--color-muted-foreground)]">—</span>}
@@ -111,6 +134,9 @@ export function DeletionHistoryTable({ rows, canReview }: { rows: DeletionHistor
                   </td>
                   <td className="py-2.5 pr-4">
                     <Badge variant={STATUS_VARIANT[r.status]}>{STATUS_LABEL[r.status]}</Badge>
+                    {r.status === "APPROVED" ? (
+                      <div className="mt-1 whitespace-nowrap text-xs font-medium text-[var(--color-muted-foreground)]">Account Deleted</div>
+                    ) : null}
                   </td>
                   <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">
                     {r.reviewedAt ? (

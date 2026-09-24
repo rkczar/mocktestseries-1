@@ -50,16 +50,19 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/admin", to: "/admin/backup", source: "card", label: "VPS Storage → Manage Storage" },
 
   // --- Student account deletion lifecycle (lib/student-lifecycle.ts) -------
-  // Profile -> Delete Account files one PENDING DeletionRequest (identity
-  // snapshot, masked contact). MASTER_ADMIN reviews it; Reject leaves the
-  // account active, Approve snapshots -> anonymizes -> releases email/phone/
-  // Google link -> revokes every session (jwt callback re-checks status),
-  // keeping anonymous attempt/payment history. The old session lands on
-  // /login; the same email/phone/Google may register a NEW student later.
-  { from: "/student/profile", to: "/admin/students/deletion-requests", source: "form", label: "Delete Account → Deletion Request (PENDING, identity snapshot)" },
-  { from: "/admin/students/deletion-requests", to: "/student/profile", source: "internal", label: "Reject → student remains active" },
-  { from: "/admin/students/deletion-requests", to: "/login", source: "redirect", label: "Approve → Anonymization + Auth Revocation → old session forced to Login" },
-  { from: "/login", to: "/student/dashboard", source: "form", label: "Same email/phone/Google after deletion → New Registration → New Student Identity" },
+  // Profile -> Delete Account files one PENDING DeletionRequest. MASTER_ADMIN
+  // reviews it (FULL_ADMIN is read-only); Reject leaves the account active.
+  // Approve, in one transaction: identity audit snapshot (name, Student ID,
+  // full email/phone, login methods) + course/product snapshot -> releases
+  // email/phone/Google link -> status DELETED, which revokes every session
+  // (jwt callback re-checks status on each auth(); pages/actions -> /login,
+  // APIs -> 401). The record then appears under Deleted Students. The same
+  // email/phone/Google may register later as a NEW student with a new ID.
+  { from: "/student/profile", to: "/admin/students/deletion-requests", source: "form", label: "Delete Account → Deletion Request (PENDING)" },
+  { from: "/admin/students/deletion-requests", to: "/student/profile", source: "internal", label: "Reject → Student remains Active" },
+  { from: "/admin/students/deletion-requests", to: "/admin/students/deleted", source: "internal", label: "Approve → Identity Audit Snapshot → Course/Product Snapshot → Auth Revocation → Account Deleted → Deleted Students History" },
+  { from: "/admin/students/deletion-requests", to: "/login", source: "redirect", label: "Approve → Old Session → Login" },
+  { from: "/login", to: "/student/dashboard", source: "form", label: "Same Email / Phone / Google → New Student Registration → New Student ID" },
 
   // --- Commerce / Razorpay (lib/payments/*) ---------------------------------
   // Admin Payment Control Center tabs (?tab=products|coupons|orders|

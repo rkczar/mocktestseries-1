@@ -1,7 +1,8 @@
 "use server";
 
 import { z } from "zod";
-import { requireStudent } from "@/lib/student-session";
+import { redirect } from "next/navigation";
+import { requireStudent, StudentUnauthorizedError } from "@/lib/student-session";
 import { enforcePaymentRateLimit, PaymentRateLimitError } from "@/lib/payments/rate-limit";
 import {
   CheckoutError,
@@ -24,6 +25,8 @@ import {
 type ActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 function toError(e: unknown): { ok: false; error: string } {
+  // Revoked session (account deleted while checkout was open) -> /login.
+  if (e instanceof StudentUnauthorizedError) redirect("/login");
   if (e instanceof CheckoutError || e instanceof PaymentRateLimitError) return { ok: false, error: e.message };
   return { ok: false, error: "Something went wrong. Please try again." };
 }

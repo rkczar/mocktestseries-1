@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { studentSignOut } from "@/lib/auth-student";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { markAnnouncementRead, markAllAnnouncementsRead } from "@/lib/notifications";
 
 export async function studentLogoutAction() {
@@ -10,13 +10,13 @@ export async function studentLogoutAction() {
 }
 
 export async function markAnnouncementReadAction(announcementId: string) {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   await markAnnouncementRead(student.id, announcementId);
   revalidatePath("/student/dashboard");
 }
 
 export async function markAllAnnouncementsReadAction() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   await markAllAnnouncementsRead(student.id);
   revalidatePath("/student/dashboard");
 }

@@ -1,11 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import argon2 from "argon2";
 import { StudentAuthProvider } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireStudent, StudentUnauthorizedError } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { updateStudentProfile, requestAccountDeletion } from "@/lib/student-data";
 import { DeletionLifecycleError } from "@/lib/student-lifecycle";
 
@@ -23,7 +22,7 @@ export interface ProfileActionState {
  * either; only `bio` is ever forwarded to updateStudentProfile.
  */
 export async function updateProfileAction(_prev: ProfileActionState, formData: FormData): Promise<ProfileActionState> {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const bio = String(formData.get("bio") ?? "").trim();
 
   await updateStudentProfile(student.id, { bio });
@@ -32,7 +31,7 @@ export async function updateProfileAction(_prev: ProfileActionState, formData: F
 }
 
 export async function changePasswordAction(_prev: ProfileActionState, formData: FormData): Promise<ProfileActionState> {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const currentPassword = String(formData.get("currentPassword") ?? "");
   const newPassword = String(formData.get("newPassword") ?? "");
   const confirmPassword = String(formData.get("confirmPassword") ?? "");
@@ -54,14 +53,8 @@ export async function changePasswordAction(_prev: ProfileActionState, formData: 
 }
 
 export async function requestDeletionAction(_prev: ProfileActionState, formData: FormData): Promise<ProfileActionState> {
-  let student;
-  try {
-    student = await requireStudent();
-  } catch (error) {
-    // A revoked (e.g. already-deleted) session lands on login, never on a second request.
-    if (error instanceof StudentUnauthorizedError) redirect("/login");
-    throw error;
-  }
+  // A revoked (e.g. already-deleted) session lands on login, never on a second request.
+  const student = await requireStudentOrLogin();
   const reason = String(formData.get("reason") ?? "").trim();
 
   try {

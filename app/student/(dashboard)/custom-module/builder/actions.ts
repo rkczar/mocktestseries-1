@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import type { QuestionDifficulty, QuestionSource } from "@prisma/client";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { startOrPaywall } from "@/lib/payments/paywall";
 import { prisma } from "@/lib/prisma";
 import { startCustomModuleAttempt, startSharedCustomModuleAttempt } from "@/lib/test-attempt";
@@ -41,7 +41,7 @@ export async function createCustomModuleAction(
   _prevState: CustomModuleBuilderState,
   formData: FormData
 ): Promise<CustomModuleBuilderState> {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
 
   const examId = str(formData, "examId");
   if (!examId) return { error: "Exam is required." };
@@ -129,13 +129,13 @@ function buildModuleTitle(filters: QuestionSelectionFilters): string {
 
 /** Live "how many questions are in scope" count for the builder screen. */
 export async function countCustomModuleQuestionsAction(filters: QuestionSelectionFilters): Promise<number> {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   return countPublishedQuestions({ ...filters, studentId: student.id });
 }
 
 /** Subject/topic/sub-topic tree + available years for the exam the student just picked. */
 export async function getExamSetupAction(examId: string) {
-  await requireStudent();
+  await requireStudentOrLogin();
   const setup = await getSubjectTestSetup(examId);
   if (!setup) return null;
   return { subjects: setup.exam.subjects, years: setup.years };
@@ -143,7 +143,7 @@ export async function getExamSetupAction(examId: string) {
 
 /** Generates (if needed) and returns the student's share link token for one of their own modules. */
 export async function shareCustomModuleAction(moduleId: string): Promise<{ token: string } | { error: string }> {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   try {
     const token = await ensureCustomModuleShareToken(moduleId, student.id);
     return { token };
@@ -153,7 +153,7 @@ export async function shareCustomModuleAction(moduleId: string): Promise<{ token
 }
 
 export async function startSharedCustomModuleAction(shareToken: string) {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const attempt = await startOrPaywall(() => startSharedCustomModuleAttempt(student.id, shareToken));
   redirect(`/student/attempt/${attempt.id}`);
 }

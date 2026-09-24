@@ -90,6 +90,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Test History", route: "/admin/students/history", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
   { pageName: "Attempted Questions", route: "/admin/students/attempted", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
   { pageName: "Deletion Requests", route: "/admin/students/deletion-requests", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
+  { pageName: "Deleted Students", route: "/admin/students/deleted", module: "Students", userType: "ADMIN", authRequired: true, parentRoute: "/admin/students", status: "CONNECTED" },
 
   // AI (Phase 10) — Solutions, Variants, Usage and Settings all ship real implementations
   // now; only the Solution Manager landing page is still an honest stub.

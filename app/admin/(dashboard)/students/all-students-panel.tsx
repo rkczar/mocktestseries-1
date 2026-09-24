@@ -26,7 +26,7 @@ export async function AllStudentsPanel() {
       <CardHeader>
         <CardTitle>Students</CardTitle>
         <CardDescription>
-          {students.length} shown (max 200) · deleted accounts are listed under Deletion Requests
+          {students.length} shown (max 200) · deleted accounts are listed under Deleted Students
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto">

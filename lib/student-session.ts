@@ -1,4 +1,5 @@
 import "server-only";
+import { redirect } from "next/navigation";
 import { studentServerAuth } from "@/lib/auth-student";
 
 export class StudentUnauthorizedError extends Error {
@@ -31,4 +32,19 @@ export async function requireStudent() {
     email: session.user.email ?? null,
     authProvider: session.user.authProvider,
   };
+}
+
+/**
+ * requireStudent() for Server Actions: a revoked session (account deleted or
+ * suspended while a tab was open — see the jwt callback in
+ * lib/auth-student.ts) navigates the client to /login instead of surfacing a
+ * generic action error. Route handlers keep requireStudent() and answer 401.
+ */
+export async function requireStudentOrLogin() {
+  try {
+    return await requireStudent();
+  } catch (error) {
+    if (error instanceof StudentUnauthorizedError) redirect("/login");
+    throw error;
+  }
 }

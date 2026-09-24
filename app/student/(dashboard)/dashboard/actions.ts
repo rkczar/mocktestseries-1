@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import {
   getExamScopedDashboardMetrics,
   getExamSubjectsOverview,
@@ -23,7 +23,7 @@ export interface TestOnTheGoFormState {
  * the student isn't enrolled in.
  */
 export async function getActiveExamDashboardDataAction(examId: string) {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const enrolled = await isStudentEnrolledInExam(student.id, examId);
   if (!enrolled) throw new Error("You are not enrolled in this exam.");
 
@@ -62,7 +62,7 @@ export async function startTestOnTheGoAction(
   _prevState: TestOnTheGoFormState,
   formData: FormData
 ): Promise<TestOnTheGoFormState> {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
 
   const examId = str(formData, "examId");
   const subjectId = str(formData, "subjectId");

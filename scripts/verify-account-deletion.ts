@@ -207,6 +207,18 @@ await t("record outlives a hard-deleted Student row (FK SET NULL)", async () => 
   assert.equal(r.studentId, null); assert.equal(r.studentNameSnapshot, "Temp Tina"); assert.equal(r.studentDbIdSnapshot, tmp.id);
   assert.equal((await H.listDeletionRecords()).find((x) => x.id === req.id)?.email, `tina.${RUN}@example.com`);
 });
+await t("Deleted Students: one full, unmasked entry per deleted account", async () => {
+  const deleted = (await H.listDeletedStudentRecords()).filter((x) => x.email === EMAIL || x.phone === MOBILE);
+  assert.ok(deleted.length >= 2, "each delete/re-register cycle is its own entry");
+  assert.ok(deleted.every((x) => x.status === "APPROVED" && !x.identityUnavailable && !x.contactMaskedOnly));
+  assert.ok(!deleted.some((x) => x.id === firstReq.id), "rejected request is not a deleted account");
+  const first = deleted.find((x) => x.id === secondReq.id)!;
+  assert.equal(first.name, "Ramesh Kumar"); assert.equal(first.code, code);
+  assert.equal(first.email, EMAIL); assert.equal(first.phone, MOBILE);
+  assert.equal(first.reviewer, "Master Tester"); assert.ok(first.reviewedAt);
+  if (product) assert.deepEqual(first.purchasedProducts, ["Test Product"]);
+  assert.deepEqual(first.authMethods, ["CREDENTIALS", "GOOGLE"]);
+});
 await t("P/Q/R RBAC: FULL_ADMIN lacks approve key, MASTER_ADMIN has it", async () => {
   assert.equal(DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN.includes(PERMISSIONS.STUDENT_DELETION_MANAGE), false);
   assert.equal(DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN.includes(PERMISSIONS.STUDENTS_MANAGE), true);
