@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getAdminSession } from "@/lib/rbac";
@@ -90,6 +91,14 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
             Status: <Badge variant="warning">{latestDeletionRequest.status}</Badge> · Requested{" "}
             {latestDeletionRequest.requestedAt.toLocaleString()}
             {latestDeletionRequest.reason ? <p className="mt-2">Reason: {latestDeletionRequest.reason}</p> : null}
+            <p className="mt-2">
+              <Link
+                href={`/admin/students/deletion-requests/${latestDeletionRequest.id}`}
+                className="text-[var(--color-primary)] hover:underline"
+              >
+                View deletion record
+              </Link>
+            </p>
           </CardContent>
         </Card>
       ) : null}

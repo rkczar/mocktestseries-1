@@ -72,6 +72,11 @@ export const PERMISSIONS = {
   // FULL_ADMIN keeps STUDENTS_MANAGE (and can view the queue) but every
   // approve/reject is refused server-side without this key.
   STUDENT_DELETION_MANAGE: "student-deletion:manage",
+  // Read the retained deletion audit records (Admin -> Students -> Deletion
+  // Requests + detail view), which hold a deleted student's real name,
+  // email and phone. MASTER_ADMIN + FULL_ADMIN (global read-only); TEACHER
+  // is refused server-side and never receives the contact data.
+  STUDENT_DELETION_VIEW: "student-deletion:view",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -95,6 +100,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.COMMUNICATIONS_MANAGE,
     PERMISSIONS.PAYMENTS_VIEW,
     PERMISSIONS.BACKUP_VIEW,
+    PERMISSIONS.STUDENT_DELETION_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };

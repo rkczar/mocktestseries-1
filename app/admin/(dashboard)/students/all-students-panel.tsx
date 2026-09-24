@@ -11,7 +11,11 @@ const STATUS_VARIANT = {
 } as const;
 
 export async function AllStudentsPanel() {
+  // Approved deletions leave an anonymized "Deleted Student" row behind for
+  // retained attempt/payment history; it is not an active student. Who it
+  // was lives in the deletion audit record (Deletion Requests tab).
   const students = await prisma.student.findMany({
+    where: { status: { not: "DELETED" } },
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { testAttempts: true } } },
     take: 200,
@@ -21,7 +25,9 @@ export async function AllStudentsPanel() {
     <Card>
       <CardHeader>
         <CardTitle>Students</CardTitle>
-        <CardDescription>{students.length} shown (max 200)</CardDescription>
+        <CardDescription>
+          {students.length} shown (max 200) · deleted accounts are listed under Deletion Requests
+        </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         {students.length === 0 ? (

@@ -158,7 +158,12 @@ export function DeleteAccountDialog({ alreadyRequested }: { alreadyRequested: bo
         <DialogHeader>
           <DialogTitle>Request Account Deletion</DialogTitle>
           <DialogDescription>
-            An Admin will review your request. You can keep using your account while it is pending; once approved, your personal data is anonymized and you are signed out on every device.
+            An Admin will review your request. You can keep using your account while it is pending. Once approved, you
+            are signed out on every device and your active account and profile are deleted — you can sign up again
+            later, but as a new account without your old tests or purchases. We keep a limited record of the deletion
+            (your name, Student ID, email, phone and the reason you give) and past test and payment records where
+            needed for security, fraud prevention, transaction and legal records, and audit. Your password and login
+            codes are never kept.
           </DialogDescription>
         </DialogHeader>
         <form action={formAction} className="flex flex-col gap-3">

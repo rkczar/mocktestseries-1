@@ -9,7 +9,9 @@ import { nextStudentId } from "@/lib/student-id";
  *
  *   ACTIVE -> request -> DELETION_REQUESTED (+ one PENDING DeletionRequest)
  *     reject  -> ACTIVE again
- *     approve -> DELETED: identity snapshot taken, PII anonymized, every
+ *     approve -> DELETED: deletion audit record finalized (name, code,
+ *                contact, auth methods — never credentials), PII on the
+ *                Student row anonymized, every
  *                login identifier (email, mobile, password, Google link)
  *                released, all sessions revoked.
  *
@@ -22,6 +24,12 @@ import { nextStudentId } from "@/lib/student-id";
  *
  * DELETED is not a ban: nothing here keeps a deny-list of the old email,
  * phone or Google account. SUSPENDED remains the only blocking status.
+ *
+ * The DeletionRequest audit record (lib/deletion-history.ts) retains the
+ * real name/code/email/phone for authorized Admins. It is history, not an
+ * identity: no authentication or registration path may ever query it, so a
+ * retained email/phone is never treated as "taken". Each delete/re-register
+ * cycle produces its own independent record.
  */
 
 /** Statuses that may hold a session / sign in. A pending deletion is still a live account. */
@@ -49,13 +57,40 @@ export class DeletionLifecycleError extends Error {
 
 export const DELETED_STUDENT_NAME = "Deleted Student";
 
-type SnapshotSource = { studentId: string; name: string; email: string | null; mobile: string | null };
+type SnapshotSource = {
+  id: string;
+  studentId: string;
+  name: string;
+  email: string | null;
+  mobile: string | null;
+  authProvider: StudentAuthProvider;
+  passwordHash: string | null;
+  createdAt: Date;
+  oauthAccounts: { provider: string }[];
+};
 
-/** Minimum audit identity — masked contact only, never credentials or tokens. */
+/** Relations identitySnapshot() needs — include this wherever a SnapshotSource is loaded. */
+const SNAPSHOT_INCLUDE = { oauthAccounts: { select: { provider: true } } } as const;
+
+/**
+ * The retained deletion audit record: who the student was, how to contact
+ * them, how they signed in. This is an explicit allow-list — a credential
+ * (passwordHash), OTP, OAuth token or session value can never reach the
+ * record because nothing here copies one. `passwordHash` is only tested for
+ * presence to record that "CREDENTIALS" was a login method.
+ */
 function identitySnapshot(s: SnapshotSource) {
+  const methods = new Set<string>([s.authProvider]);
+  if (s.passwordHash) methods.add(StudentAuthProvider.CREDENTIALS);
+  for (const o of s.oauthAccounts) methods.add(o.provider);
   return {
+    studentDbIdSnapshot: s.id,
     studentCodeSnapshot: s.studentId,
     studentNameSnapshot: s.name,
+    emailSnapshot: s.email,
+    phoneSnapshot: s.mobile,
+    authMethodsSnapshot: [...methods].sort(),
+    studentCreatedAtSnapshot: s.createdAt,
     emailMaskedSnapshot: maskEmail(s.email),
     phoneMaskedSnapshot: maskPhone(s.mobile),
   };
@@ -73,7 +108,7 @@ function isUniqueViolation(error: unknown) {
 export async function createDeletionRequest(studentDbId: string, reason: string | undefined) {
   try {
     return await prisma.$transaction(async (tx) => {
-      const student = await tx.student.findUnique({ where: { id: studentDbId } });
+      const student = await tx.student.findUnique({ where: { id: studentDbId }, include: SNAPSHOT_INCLUDE });
       if (!student || !isStudentAuthEligible(student.status)) {
         throw new DeletionLifecycleError("This account is no longer active.");
       }
@@ -113,37 +148,41 @@ type AdminActor = { id: string; name: string | null | undefined };
 
 /**
  * Approve = one transaction. The PENDING -> APPROVED claim is a conditional
- * update, so a double-click / two admins racing resolves to exactly one
- * approval (the loser's WHERE re-evaluates to 0 rows after the row lock is
- * released). Any failure rolls back everything — the request is never left
- * APPROVED with a still-usable account.
+ * update that also writes the final audit snapshot, so a double-click / two
+ * admins racing resolves to exactly one approval (the loser's WHERE
+ * re-evaluates to 0 rows after the row lock is released), and the snapshot
+ * is written while the row is still PENDING — after that the
+ * DeletionRequest_audit_guard trigger makes the record immutable. Any
+ * failure rolls back everything — the request is never left APPROVED with
+ * a still-usable account.
  */
 export async function approveStudentDeletion(requestId: string, admin: AdminActor) {
   return prisma.$transaction(async (tx) => {
-    const now = new Date();
+    const request = await tx.deletionRequest.findUnique({
+      where: { id: requestId },
+      include: { student: { include: SNAPSHOT_INCLUDE } },
+    });
+    if (!request || request.status !== DeletionRequestStatus.PENDING) {
+      throw new DeletionLifecycleError("This request is no longer pending.");
+    }
+    const student = request.student;
+    if (!student || student.status === StudentStatus.DELETED) {
+      throw new DeletionLifecycleError("This account has already been deleted.");
+    }
+
+    // 1. Claim + snapshot BEFORE anonymizing (fresh values — the student may
+    //    have changed contact details since filing).
     const claimed = await tx.deletionRequest.updateMany({
       where: { id: requestId, status: DeletionRequestStatus.PENDING },
       data: {
+        ...identitySnapshot(student),
         status: DeletionRequestStatus.APPROVED,
-        reviewedAt: now,
+        reviewedAt: new Date(),
         reviewedByAdminId: admin.id,
         reviewedByAdminNameSnapshot: admin.name ?? null,
       },
     });
     if (claimed.count === 0) throw new DeletionLifecycleError("This request is no longer pending.");
-
-    const request = await tx.deletionRequest.findUniqueOrThrow({
-      where: { id: requestId },
-      include: { student: true },
-    });
-    const student = request.student;
-    if (student.status === StudentStatus.DELETED) {
-      throw new DeletionLifecycleError("This account has already been deleted.");
-    }
-
-    // 1. Snapshot BEFORE anonymizing (fresh values — the student may have
-    //    changed contact details since filing).
-    await tx.deletionRequest.update({ where: { id: requestId }, data: identitySnapshot(student) });
 
     // 2. Release the Google identity. A leftover StudentOAuthAccount row is
     //    what made a later Google sign-in resolve to the DELETED student and
@@ -213,7 +252,7 @@ export async function rejectStudentDeletion(requestId: string, admin: AdminActor
       where: { id: requestId },
       select: { studentId: true, studentCodeSnapshot: true },
     });
-    await tx.student.updateMany({
+    if (request.studentId) await tx.student.updateMany({
       where: { id: request.studentId, status: StudentStatus.DELETION_REQUESTED },
       data: { status: StudentStatus.ACTIVE },
     });

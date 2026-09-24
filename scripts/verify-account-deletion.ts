@@ -1,10 +1,12 @@
 /**
  * Verifies the student account-deletion lifecycle (lib/student-lifecycle.ts):
  * one pending request, reject -> active, concurrent approval executes once,
- * identity snapshot survives anonymization (masked contact only), email/
+ * the retained deletion audit record (real name/code/email/phone, never a
+ * credential) survives anonymization and is immutable once closed, email/
  * phone/Google released for a NEW account, legacy stale Google links no
  * longer resolve to a DELETED student, SUSPENDED stays blocked, nothing is
- * re-attached to the new account, and approve is MASTER_ADMIN-only.
+ * re-attached to the new account, a second delete/re-register cycle gets
+ * its own independent record, and approve is MASTER_ADMIN-only.
  *
  * DESTRUCTIVE (approves deletions) — refuses to run unless DATABASE_URL
  * points at a local database whose name contains "test". Session revocation
@@ -21,6 +23,7 @@ if (!/@(127\.0\.0\.1|localhost)(:\d+)?\/[^?]*test/.test(url)) {
 }
 const { prisma } = await import("@/lib/prisma");
 const L = await import("@/lib/student-lifecycle");
+const H = await import("@/lib/deletion-history");
 const { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } = await import("@/lib/permissions");
 const { nextStudentId } = await import("@/lib/student-id");
 
@@ -49,13 +52,17 @@ const product = await prisma.product.create({ data: { code: "VERIFY-DEL-" + Date
 if (product) await prisma.studentEntitlement.create({ data: { studentId: old.id, productId: product.id, source: "ADMIN_GRANT", startsAt: new Date() } as never });
 
 let firstReq: { id: string };
-await t("A request -> PENDING + snapshot masked", async () => {
+await t("A request -> PENDING + full audit snapshot", async () => {
   firstReq = await L.createDeletionRequest(old.id, "No longer using account");
   const r = await prisma.deletionRequest.findUniqueOrThrow({ where: { id: firstReq.id } });
   assert.equal(r.status, "PENDING");
   assert.equal(r.emailMaskedSnapshot, "ra***@example.com");
   assert.equal(r.phoneMaskedSnapshot, "98******21");
   assert.equal(r.studentNameSnapshot, "Ramesh Kumar");
+  assert.equal(r.emailSnapshot, EMAIL); assert.equal(r.phoneSnapshot, MOBILE);
+  assert.deepEqual(r.authMethodsSnapshot, ["CREDENTIALS", "GOOGLE"]);
+  assert.equal(r.studentDbIdSnapshot, old.id);
+  assert.equal(r.studentCreatedAtSnapshot?.getTime(), old.createdAt.getTime());
   assert.equal((await prisma.student.findUniqueOrThrow({ where: { id: old.id } })).status, "DELETION_REQUESTED");
 });
 await t("B second pending rejected (sequential + concurrent)", async () => {
@@ -99,14 +106,39 @@ await t("F/G old session identity no longer auth-eligible", async () => {
 await t("H deleted identity cannot file another request", async () => {
   await assert.rejects(L.createDeletionRequest(old.id, "again"), L.DeletionLifecycleError);
 });
-await t("O snapshot survives anonymization", async () => {
+let approvedRecordBefore = "";
+await t("4-11 audit record survives anonymization with real identity", async () => {
   const r = await prisma.deletionRequest.findUniqueOrThrow({ where: { id: secondReq.id } });
   assert.equal(r.status, "APPROVED");
   assert.equal(r.studentNameSnapshot, "Ramesh Kumar"); assert.equal(r.studentCodeSnapshot, code);
-  assert.equal(r.emailMaskedSnapshot, "ra***@example.com"); assert.equal(r.phoneMaskedSnapshot, "98******21");
-  assert.equal(r.reviewedByAdminNameSnapshot, "Master Tester");
+  assert.equal(r.emailSnapshot, EMAIL); assert.equal(r.phoneSnapshot, MOBILE);
+  assert.equal(r.reason, "Still want deletion");
+  assert.ok(r.requestedAt && r.reviewedAt);
+  assert.equal(r.reviewedByAdminNameSnapshot, "Master Tester"); assert.equal(r.reviewedByAdminId, admin.id);
+  approvedRecordBefore = JSON.stringify(r);
+  // What the Admin page renders (lib/deletion-history.ts) — never "Deleted Student".
+  const listed = (await H.listDeletionRecords()).find((x) => x.id === secondReq.id)!;
+  assert.equal(listed.name, "Ramesh Kumar"); assert.equal(listed.email, EMAIL); assert.equal(listed.phone, MOBILE);
+  assert.equal(listed.reviewer, "Master Tester");
+});
+await t("18 no password/hash/OTP/token in the audit record or audit log", async () => {
+  const r = await prisma.deletionRequest.findUniqueOrThrow({ where: { id: secondReq.id } });
   const raw = JSON.stringify(r);
-  assert.ok(!raw.includes(EMAIL) && !raw.includes(MOBILE.slice(3)) && !raw.includes("argon"));
+  assert.ok(!raw.includes("argon") && !/password|token|otp|secret/i.test(Object.keys(r).join(",")), raw);
+  const audits = await prisma.auditLog.findMany({ where: { OR: [{ entityId: secondReq.id }, { entityId: old.id }] } });
+  assert.ok(!JSON.stringify(audits).includes("argon"));
+});
+await t("closed record is immutable (update + delete refused by DB trigger)", async () => {
+  await assert.rejects(prisma.deletionRequest.update({ where: { id: secondReq.id }, data: { emailSnapshot: "x@y.z" } }), /closed audit record/);
+  await assert.rejects(prisma.deletionRequest.update({ where: { id: secondReq.id }, data: { status: "PENDING" } }), /closed audit record/);
+  await assert.rejects(prisma.deletionRequest.delete({ where: { id: secondReq.id } }), /cannot be deleted/);
+  await assert.rejects(prisma.deletionRequest.update({ where: { id: firstReq.id }, data: { reason: "edited" } }), /closed audit record/);
+  assert.equal(JSON.stringify(await prisma.deletionRequest.findUniqueOrThrow({ where: { id: secondReq.id } })), approvedRecordBefore);
+});
+await t("detail outcome: inactive, auth revoked, history retained", async () => {
+  const d = (await H.getDeletionRecordDetail(secondReq.id))!;
+  assert.equal(d.outcome.activeAccount, false); assert.equal(d.outcome.authRevoked, true);
+  if (product) assert.equal(d.outcome.entitlementsRetained, 1);
 });
 let googleNew: { id: string; studentId: string } | undefined;
 await t("I Google re-registration -> NEW account", async () => {
@@ -147,10 +179,41 @@ await t("L/M/N new accounts own nothing from the old one; old history retained",
   assert.equal(await prisma.studentActivity.count({ where: { studentId: old.id, activity: "LOGIN" } }), 1);
   if (product) assert.equal(await prisma.studentEntitlement.count({ where: { studentId: old.id } }), 1);
 });
+await t("12 audit record never makes the email 'occupied' (auth reads Student only)", async () => {
+  // The retained record holds EMAIL, yet the password-registration duplicate
+  // guard only consults Student — which no longer has it on a DELETED row.
+  assert.equal(await prisma.deletionRequest.count({ where: { emailSnapshot: EMAIL } }) >= 1, true);
+  assert.equal(await prisma.student.count({ where: { status: "DELETED", email: EMAIL } }), 0);
+});
+await t("15-17 + multi-cycle: re-registered account deleted again -> 2nd independent record", async () => {
+  const again = await L.createDeletionRequest(googleNew!.id, "Deleting again");
+  await L.approveStudentDeletion(again.id, admin);
+  const both = await prisma.deletionRequest.findMany({ where: { emailSnapshot: EMAIL, status: "APPROVED" }, orderBy: { requestedAt: "asc" } });
+  assert.equal(both.length, 2);
+  assert.deepEqual(both.map((b) => b.studentCodeSnapshot), [code, googleNew!.studentId]);
+  assert.notEqual(both[0].studentDbIdSnapshot, both[1].studentDbIdSnapshot);
+  assert.deepEqual(both[1].authMethodsSnapshot, ["GOOGLE"]);
+  assert.equal(JSON.stringify(await prisma.deletionRequest.findUniqueOrThrow({ where: { id: secondReq.id } })), approvedRecordBefore);
+  // And the same Google identity can come back a third time as yet another account.
+  const third = await L.resolveGoogleStudent({ providerAccountId: GOOGLE_ID, email: EMAIL, name: "Ramesh Kumar", picture: null });
+  assert.ok(third?.created && third.student.id !== old.id && third.student.id !== googleNew!.id);
+});
+await t("record outlives a hard-deleted Student row (FK SET NULL)", async () => {
+  const tmp = await prisma.student.create({ data: { studentId: await nextStudentId(), name: "Temp Tina", email: `tina.${RUN}@example.com`, authProvider: "CREDENTIALS" } });
+  const req = await L.createDeletionRequest(tmp.id, "tmp");
+  await L.approveStudentDeletion(req.id, admin);
+  await prisma.student.delete({ where: { id: tmp.id } });
+  const r = await prisma.deletionRequest.findUniqueOrThrow({ where: { id: req.id } });
+  assert.equal(r.studentId, null); assert.equal(r.studentNameSnapshot, "Temp Tina"); assert.equal(r.studentDbIdSnapshot, tmp.id);
+  assert.equal((await H.listDeletionRecords()).find((x) => x.id === req.id)?.email, `tina.${RUN}@example.com`);
+});
 await t("P/Q/R RBAC: FULL_ADMIN lacks approve key, MASTER_ADMIN has it", async () => {
   assert.equal(DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN.includes(PERMISSIONS.STUDENT_DELETION_MANAGE), false);
   assert.equal(DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN.includes(PERMISSIONS.STUDENTS_MANAGE), true);
   assert.equal(DEFAULT_ROLE_PERMISSIONS.MASTER_ADMIN.includes(PERMISSIONS.STUDENT_DELETION_MANAGE), true);
+  assert.equal(DEFAULT_ROLE_PERMISSIONS.MASTER_ADMIN.includes(PERMISSIONS.STUDENT_DELETION_VIEW), true);
+  assert.equal(DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN.includes(PERMISSIONS.STUDENT_DELETION_VIEW), true);
+  assert.equal(DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.STUDENT_DELETION_VIEW), false);
 });
 
 for (const [n, ok, err] of results) console.log(`${ok ? "PASS" : "FAIL"}  ${n}${err ? "  -> " + err : ""}`);

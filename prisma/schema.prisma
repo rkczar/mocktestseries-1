@@ -546,8 +546,10 @@ model StudentLoginAttempt {
 
 model DeletionRequest {
   id                String                @id @default(cuid())
-  studentId         String
-  student           Student               @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // Live link to the account while it exists. Nullable + SetNull so the
+  // retained audit record outlives a Student row that is ever hard-deleted.
+  studentId         String?
+  student           Student?              @relation(fields: [studentId], references: [id], onDelete: SetNull)
   reason            String?
   status            DeletionRequestStatus @default(PENDING)
   requestedAt       DateTime              @default(now())
@@ -556,19 +558,33 @@ model DeletionRequest {
   reviewedByAdmin   AdminUser?            @relation(fields: [reviewedByAdminId], references: [id])
   notes             String?
 
-  // Immutable deletion-time audit snapshot (lib/student-lifecycle.ts). Taken
-  // when the request is created and re-taken inside the approval transaction
+  // DELETION AUDIT SNAPSHOT (lib/student-lifecycle.ts) — a deliberately
+  // retained historical record, not a leftover account. Taken when the
+  // request is filed and re-taken in the same UPDATE that approves it,
   // BEFORE the Student row is anonymized, so Admin history never depends on
-  // the live Student relation. Contact fields are MASKED on write — the raw
-  // email/phone is never copied here, and no credential/token ever is.
+  // the live Student relation. Holds real contact details for authorized
+  // Admins (STUDENT_DELETION_VIEW) but NEVER a password/hash, OTP, OAuth
+  // token or session secret. Authentication code must never read this
+  // model: a retained email/phone is not "occupied" and re-registration
+  // creates a NEW Student. Closed (non-PENDING) rows are immutable — the
+  // DB trigger DeletionRequest_audit_guard rejects edits and deletes.
   studentCodeSnapshot         String?
   studentNameSnapshot         String?
+  emailSnapshot               String?
+  phoneSnapshot               String?
+  /// e.g. ["CREDENTIALS","GOOGLE","OTP"] — which login methods the account used.
+  authMethodsSnapshot         String[]  @default([])
+  studentCreatedAtSnapshot    DateTime?
+  /// Original Student.id — a non-login historical reference only.
+  studentDbIdSnapshot         String?
+  // Masked forms, kept for rows approved before raw contact was retained.
   emailMaskedSnapshot         String?
   phoneMaskedSnapshot         String?
   reviewedByAdminNameSnapshot String?
 
   @@index([status])
   @@index([studentId, status])
+  @@index([requestedAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -776,44 +792,44 @@ enum AttemptPolicy {
 }
 
 model MockTest {
-  id              String         @id @default(cuid())
-  examId          String
-  exam            Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
-  testSeriesId    String?
-  testSeries      TestSeries?    @relation(fields: [testSeriesId], references: [id])
-  title           String
-  description     String?
-  durationMinutes Int
-  negativeMarking Float          @default(0)
-  instructions    String?
-  accessType      AccessType     @default(FREE)
-  status          MockTestStatus @default(DRAFT)
+  id                  String           @id @default(cuid())
+  examId              String
+  exam                Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
+  testSeriesId        String?
+  testSeries          TestSeries?      @relation(fields: [testSeriesId], references: [id])
+  title               String
+  description         String?
+  durationMinutes     Int
+  negativeMarking     Float            @default(0)
+  instructions        String?
+  accessType          AccessType       @default(FREE)
+  status              MockTestStatus   @default(DRAFT)
   // Scheduled release time. Null preserves today's behavior exactly — a
   // PUBLISHED test with no availableFrom is available immediately, so every
   // existing MockTest row is unaffected by this column's addition. Once set,
   // the test is UPCOMING/locked before this instant and AVAILABLE at and
   // after it, indefinitely (see lib/mock-test-schedule.ts) — there is no
   // availableUntil; Scheduled Mock Tests never auto-close, unlike LiveTest.
-  availableFrom   DateTime?
+  availableFrom       DateTime?
   // Governs whether a student may submit this test more than once. Default
   // MULTIPLE_PRACTICE matches today's actual behavior (nothing currently
   // stops a retake) — only the leaderboard, via TestAttempt.isLeaderboardAttempt,
   // distinguishes a student's first submission from later practice retakes.
-  attemptPolicy   AttemptPolicy  @default(MULTIPLE_PRACTICE)
+  attemptPolicy       AttemptPolicy    @default(MULTIPLE_PRACTICE)
   // What the test covers, shown on public/student cards. FULL_SYLLABUS needs
   // no selection; PARTIAL_SYLLABUS / SUBJECT_WISE list the real Subject /
   // Topic ids the admin picked (plain id arrays: display-only metadata, no
   // relational queries, and a deleted subject simply drops out on render).
-  coverageType       MockCoverageType @default(FULL_SYLLABUS)
-  coverageSubjectIds String[]         @default([])
-  coverageTopicIds   String[]         @default([])
+  coverageType        MockCoverageType @default(FULL_SYLLABUS)
+  coverageSubjectIds  String[]         @default([])
+  coverageTopicIds    String[]         @default([])
   // Admin's intended question count ("Selected X / Target Y"). Null = no target.
   targetQuestionCount Int?
   // Reused as "Test Number" — the test's display/sort position within its
   // Test Series (already existed for general ordering; no new field needed).
-  order           Int            @default(0)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  order               Int              @default(0)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
 
   questions     MockTestQuestion[]
   testAttempts  TestAttempt[]

@@ -64,6 +64,7 @@ async function reviewDeletion(
     throw error;
   }
   revalidatePath("/admin/students/deletion-requests");
+  revalidatePath("/admin/students/deletion-requests/[id]", "page");
   revalidatePath("/admin/students");
   return { ok: true };
 }

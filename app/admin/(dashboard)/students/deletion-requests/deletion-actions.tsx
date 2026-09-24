@@ -18,7 +18,6 @@ interface Props {
   requestId: string;
   name: string;
   code: string;
-  /** Already masked server-side. */
   contact: string;
 }
 
@@ -69,9 +68,9 @@ export function DeletionActions({ requestId, name, code, contact }: Props) {
               <dd className="font-mono text-[var(--color-foreground)]">{contact}</dd>
             </dl>
             <p className="text-sm text-[var(--color-muted-foreground)]">
-              This will anonymize the student&apos;s personal account data and revoke all active sessions. Attempt and
-              payment records are kept anonymously. The student may create a new account later using the same
-              email/phone.
+              This signs the student out everywhere and anonymizes the active account. A permanent deletion record
+              (name, Student ID, email, phone, reason) is kept for Admin audit; attempt and payment records stay on the
+              anonymized account. The same email/phone/Google account can register again as a new student.
             </p>
             {error ? <p className="text-sm text-[var(--color-error)]">{error}</p> : null}
             <DialogFooter>

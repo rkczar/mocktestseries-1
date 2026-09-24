@@ -161,7 +161,7 @@ async function loadDashboardData() {
     }),
     prisma.deletionRequest.findMany({
       where: { status: DeletionRequestStatus.PENDING },
-      include: { student: { select: { name: true } } },
+      select: { id: true, requestedAt: true, studentNameSnapshot: true, studentCodeSnapshot: true },
       orderBy: { requestedAt: "desc" },
       take: 2,
     }),
@@ -246,9 +246,9 @@ export default async function AdminDashboardPage() {
     ...recentDeletions.map((d) => ({
       key: `deletion:${d.id}`,
       badge: "DELETION" as const,
-      text: `Account deletion request from ${d.student.name}`,
+      text: `Account deletion request from ${d.studentNameSnapshot ?? d.studentCodeSnapshot ?? "a student"}`,
       at: d.requestedAt,
-      href: "/admin/students/deletion-requests",
+      href: `/admin/students/deletion-requests/${d.id}`,
     })),
     ...(draftQuestionCount > 0
       ? [
