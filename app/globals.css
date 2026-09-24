@@ -173,3 +173,90 @@ h1, h2, h3, h4, h5, h6 {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
+
+/* ---------------------------------------------------------------------- */
+/* AI explanation typography — the single style for every structured Ask  */
+/* AI explanation (components/student/explanation-content.tsx). Cue tones  */
+/* are the brand tokens mixed toward --color-foreground, so label text     */
+/* darkens on Day and lightens on Dark/Eye-Saver and keeps readable        */
+/* contrast whatever colours an admin sets. Body copy stays neutral.       */
+/* ---------------------------------------------------------------------- */
+.ai-expl {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  min-width: 0;
+  font-size: var(--text-question);
+  line-height: var(--text-question--line-height);
+  color: var(--color-foreground);
+  overflow-wrap: anywhere;
+}
+.ai-expl [data-tone] {
+  --cue: var(--color-muted-foreground);
+  --cue-ink: color-mix(in srgb, var(--cue) 60%, var(--color-foreground));
+}
+.ai-expl [data-tone="success"],
+.ai-expl [data-tone="positive"] {
+  --cue: var(--color-success);
+}
+.ai-expl [data-tone="warning"] {
+  --cue: var(--color-warning);
+}
+.ai-expl [data-tone="primary"] {
+  --cue: var(--color-primary);
+}
+.ai-expl [data-tone="secondary"] {
+  --cue: var(--color-secondary);
+}
+.ai-expl [data-tone="neutral"] {
+  --cue-ink: var(--color-foreground);
+}
+.ai-expl-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.ai-expl-section[data-callout] {
+  border-left: 3px solid color-mix(in srgb, var(--cue) 70%, transparent);
+  background: color-mix(in srgb, var(--cue) 7%, transparent);
+  border-radius: 0 var(--radius-badge) var(--radius-badge) 0;
+  padding: 0.5rem 0.75rem;
+}
+.ai-expl-heading {
+  font-family: var(--font-heading);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  font-weight: 650;
+  letter-spacing: 0.005em;
+  color: var(--cue-ink);
+  text-wrap: pretty;
+}
+.ai-expl-inline-label {
+  font-weight: 650;
+  color: var(--cue-ink);
+}
+.ai-expl-strong {
+  font-weight: 650;
+  color: var(--color-foreground);
+}
+.ai-expl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-left: 1.25rem;
+}
+.ai-expl-list li::marker {
+  color: var(--color-muted-foreground);
+}
+.ai-expl-options {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.625rem;
+  row-gap: 0.375rem;
+}
+.ai-expl-option-label {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-foreground);
+  min-width: 1.25rem;
+}

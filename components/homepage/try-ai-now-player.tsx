@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { AiDemoQuestion } from "@/lib/homepage-ai-demo";
+import { ExplanationContentView } from "@/components/student/explanation-content";
 
 /**
  * Anonymous homepage "Try AI Now" mini test. All state (answers, current
@@ -79,7 +80,6 @@ export function TryAiNowPlayer({ questions }: { questions: AiDemoQuestion[] }) {
 
   const selected = answers[question.questionId] ?? null;
   const revealed = Boolean(selected);
-  const optionEntries = Object.entries(question.content.optionAnalysis ?? {});
 
   const goTo = (index: number) => {
     if (index < 0 || index >= total) return;
@@ -145,55 +145,15 @@ export function TryAiNowPlayer({ questions }: { questions: AiDemoQuestion[] }) {
             <Sparkles className="h-4 w-4" aria-hidden /> AI Explanation
           </p>
 
-          {question.content.concept ? (
-            <p>
-              <span className="font-medium">Why the correct option is correct: </span>
-              {question.content.concept}
-            </p>
-          ) : null}
-
-          {optionEntries.length > 0 ? (
-            <div>
-              <p className="font-medium">Why the other options are incorrect</p>
-              <div className="mt-1 flex flex-col gap-1">
-                {optionEntries.map(([label, text]) => (
-                  <p key={label}>
-                    <span className="font-medium">{label} — </span>
-                    {text}
-                  </p>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {question.content.pointsToRemember?.length ? (
-            <div>
-              <p className="font-medium">Important points</p>
-              <ul className="mt-1 list-disc pl-5">
-                {question.content.pointsToRemember.map((point, i) => (
-                  <li key={i}>{point}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          {question.content.memoryTrick ? (
-            <p>
-              <span className="font-medium">Memory trick: </span>
-              {question.content.memoryTrick}
-            </p>
-          ) : null}
-
-          {question.content.examinerTraps?.length ? (
-            <div>
-              <p className="font-medium">Examiner trap</p>
-              <ul className="mt-1 list-disc pl-5">
-                {question.content.examinerTraps.map((trap, i) => (
-                  <li key={i}>{trap}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
+          <ExplanationContentView
+            content={{ ...question.content, trapWords: [], examinerVariation: "" }}
+            labels={{
+              concept: "Why the correct option is correct",
+              optionAnalysis: "Why the other options are incorrect",
+              pointsToRemember: "Important points",
+              examinerTraps: "Examiner trap",
+            }}
+          />
         </div>
       ) : (
         <p className="mt-4 text-xs text-[var(--color-muted-foreground)]">Select an option to see the AI explanation.</p>
