@@ -1,10 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { DeletionRequestStatus, StudentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
+import { approveStudentDeletion, rejectStudentDeletion, DeletionLifecycleError } from "@/lib/student-lifecycle";
 
 export interface StudentNameActionState {
   error?: string;
@@ -46,64 +46,33 @@ export async function correctStudentNameAction(
   return { success: "Name updated." };
 }
 
-export async function approveDeletionRequestAction(requestId: string) {
-  const session = await requirePermission(PERMISSIONS.STUDENTS_MANAGE);
+export interface DeletionReviewResult {
+  ok: boolean;
+  error?: string;
+}
 
-  const request = await prisma.deletionRequest.findUniqueOrThrow({ where: { id: requestId } });
-
-  await prisma.$transaction([
-    prisma.student.update({
-      where: { id: request.studentId },
-      data: {
-        name: "Deleted Student",
-        email: null,
-        mobile: null,
-        passwordHash: null,
-        status: StudentStatus.DELETED,
-      },
-    }),
-    prisma.deletionRequest.update({
-      where: { id: requestId },
-      data: { status: DeletionRequestStatus.APPROVED, reviewedAt: new Date(), reviewedByAdminId: session.user.id },
-    }),
-  ]);
-
-  await prisma.auditLog.create({
-    data: {
-      actorId: session.user.id,
-      action: "STUDENT_DELETION_APPROVED",
-      entityType: "Student",
-      entityId: request.studentId,
-    },
-  });
-
+async function reviewDeletion(
+  requestId: string,
+  run: (requestId: string, admin: { id: string; name: string | null | undefined }) => Promise<unknown>
+): Promise<DeletionReviewResult> {
+  const session = await requirePermission(PERMISSIONS.STUDENT_DELETION_MANAGE);
+  if (!session.user.id) throw new UnauthorizedError("Not signed in");
+  try {
+    await run(requestId, { id: session.user.id, name: session.user.name });
+  } catch (error) {
+    if (error instanceof DeletionLifecycleError) return { ok: false, error: error.message };
+    throw error;
+  }
   revalidatePath("/admin/students/deletion-requests");
   revalidatePath("/admin/students");
+  return { ok: true };
+}
+
+/** MASTER_ADMIN-only; the whole lifecycle lives in lib/student-lifecycle.ts. */
+export async function approveDeletionRequestAction(requestId: string) {
+  return reviewDeletion(requestId, approveStudentDeletion);
 }
 
 export async function rejectDeletionRequestAction(requestId: string) {
-  const session = await requirePermission(PERMISSIONS.STUDENTS_MANAGE);
-  const existing = await prisma.deletionRequest.findUniqueOrThrow({ where: { id: requestId } });
-
-  const [request] = await prisma.$transaction([
-    prisma.deletionRequest.update({
-      where: { id: requestId },
-      data: { status: DeletionRequestStatus.REJECTED, reviewedAt: new Date(), reviewedByAdminId: session.user.id },
-    }),
-    prisma.student.updateMany({
-      where: { id: existing.studentId, status: StudentStatus.DELETION_REQUESTED },
-      data: { status: StudentStatus.ACTIVE },
-    }),
-  ]);
-
-  await prisma.auditLog.create({
-    data: {
-      actorId: session.user.id,
-      action: "STUDENT_DELETION_REJECTED",
-      entityType: "Student",
-      entityId: request.studentId,
-    },
-  });
-
-  revalidatePath("/admin/students/deletion-requests");
+  return reviewDeletion(requestId, rejectStudentDeletion);
 }

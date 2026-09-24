@@ -549,7 +549,19 @@ model DeletionRequest {
   reviewedByAdmin   AdminUser?            @relation(fields: [reviewedByAdminId], references: [id])
   notes             String?
 
+  // Immutable deletion-time audit snapshot (lib/student-lifecycle.ts). Taken
+  // when the request is created and re-taken inside the approval transaction
+  // BEFORE the Student row is anonymized, so Admin history never depends on
+  // the live Student relation. Contact fields are MASKED on write — the raw
+  // email/phone is never copied here, and no credential/token ever is.
+  studentCodeSnapshot         String?
+  studentNameSnapshot         String?
+  emailMaskedSnapshot         String?
+  phoneMaskedSnapshot         String?
+  reviewedByAdminNameSnapshot String?
+
   @@index([status])
+  @@index([studentId, status])
 }
 
 // ---------------------------------------------------------------------------

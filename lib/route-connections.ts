@@ -49,6 +49,18 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   // (Used / Available / Release / Backup / Reclaimable) links to Manage Storage.
   { from: "/admin", to: "/admin/backup", source: "card", label: "VPS Storage → Manage Storage" },
 
+  // --- Student account deletion lifecycle (lib/student-lifecycle.ts) -------
+  // Profile -> Delete Account files one PENDING DeletionRequest (identity
+  // snapshot, masked contact). MASTER_ADMIN reviews it; Reject leaves the
+  // account active, Approve snapshots -> anonymizes -> releases email/phone/
+  // Google link -> revokes every session (jwt callback re-checks status),
+  // keeping anonymous attempt/payment history. The old session lands on
+  // /login; the same email/phone/Google may register a NEW student later.
+  { from: "/student/profile", to: "/admin/students/deletion-requests", source: "form", label: "Delete Account → Deletion Request (PENDING, identity snapshot)" },
+  { from: "/admin/students/deletion-requests", to: "/student/profile", source: "internal", label: "Reject → student remains active" },
+  { from: "/admin/students/deletion-requests", to: "/login", source: "redirect", label: "Approve → Anonymization + Auth Revocation → old session forced to Login" },
+  { from: "/login", to: "/student/dashboard", source: "form", label: "Same email/phone/Google after deletion → New Registration → New Student Identity" },
+
   // --- Commerce / Razorpay (lib/payments/*) ---------------------------------
   // Admin Payment Control Center tabs (?tab=products|coupons|orders|
   // transactions|subscriptions|invoices|gateway|webhooks|reconciliation) link

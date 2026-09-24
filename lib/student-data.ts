@@ -3,17 +3,16 @@ import {
   AttemptSourceType,
   AttemptStatus,
   CustomModuleStatus,
-  DeletionRequestStatus,
   GrandTestStatus,
   MockTestStatus,
   QuestionStatus,
   ReportType,
-  StudentStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { toIstDateString, istStartOfDay } from "@/lib/ist-time";
 import { getAiSettings } from "@/lib/ai-settings";
 import { attemptTitle } from "@/lib/attempt-title";
+import { createDeletionRequest } from "@/lib/student-lifecycle";
 
 /**
  * Every function here takes the authenticated studentId as a required
@@ -681,24 +680,21 @@ export async function updateStudentProfile(studentId: string, data: { bio: strin
   await logActivity(studentId, "PROFILE_UPDATED");
 }
 
-/** Idempotent — returns the existing pending request instead of creating a duplicate. */
+/**
+ * Delegates to the canonical lifecycle (lib/student-lifecycle.ts). Throws
+ * DeletionLifecycleError if a request is already pending or the account is
+ * no longer active — a duplicate is rejected, never silently merged.
+ */
 export async function requestAccountDeletion(studentId: string, reason: string | undefined) {
-  const existing = await prisma.deletionRequest.findFirst({
-    where: { studentId, status: DeletionRequestStatus.PENDING },
-  });
-  if (existing) return existing;
-
-  const [request] = await prisma.$transaction([
-    prisma.deletionRequest.create({ data: { studentId, reason: reason || null } }),
-    prisma.student.update({ where: { id: studentId }, data: { status: StudentStatus.DELETION_REQUESTED } }),
-  ]);
-  await logActivity(studentId, "DELETION_REQUESTED");
-  return request;
+  return createDeletionRequest(studentId, reason);
 }
 
-export async function getPendingDeletionRequest(studentId: string) {
+/** Most recent request of any status — lets the profile show PENDING or a past REJECTED outcome. */
+export async function getLatestDeletionRequest(studentId: string) {
   return prisma.deletionRequest.findFirst({
-    where: { studentId, status: DeletionRequestStatus.PENDING },
+    where: { studentId },
+    orderBy: { requestedAt: "desc" },
+    select: { status: true, requestedAt: true, reviewedAt: true },
   });
 }
 

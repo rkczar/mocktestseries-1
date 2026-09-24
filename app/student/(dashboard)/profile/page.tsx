@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import { User, Mail, Phone, Calendar, ShieldCheck, LogOut } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
-import { getStudentProfile, getPendingDeletionRequest } from "@/lib/student-data";
+import { getStudentProfile, getLatestDeletionRequest } from "@/lib/student-data";
+import { formatIst } from "@/lib/ist-time";
 import { studentLogoutAction } from "@/app/student/(dashboard)/actions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,10 +19,12 @@ const PROVIDER_LABEL: Record<string, string> = {
 
 export default async function StudentProfilePage() {
   const student = await requireStudent();
-  const [profile, pendingDeletion] = await Promise.all([
+  const [profile, latestDeletion] = await Promise.all([
     getStudentProfile(student.id),
-    getPendingDeletionRequest(student.id),
+    getLatestDeletionRequest(student.id),
   ]);
+  const pendingDeletion = latestDeletion?.status === "PENDING" ? latestDeletion : null;
+  const rejectedDeletion = latestDeletion?.status === "REJECTED" ? latestDeletion : null;
   if (!profile) notFound();
 
   return (
@@ -78,7 +81,15 @@ export default async function StudentProfilePage() {
         <Card className="border-[var(--color-warning)]/40">
           <CardContent className="pt-5 text-sm text-[var(--color-warning)]">
             Your account deletion request is pending Admin review. Requested on{" "}
-            {pendingDeletion.requestedAt.toLocaleDateString()}.
+            {formatIst(pendingDeletion.requestedAt)}.
+          </CardContent>
+        </Card>
+      ) : rejectedDeletion ? (
+        <Card>
+          <CardContent className="pt-5 text-sm text-[var(--color-muted-foreground)]">
+            Your previous account deletion request was declined
+            {rejectedDeletion.reviewedAt ? ` on ${formatIst(rejectedDeletion.reviewedAt)}` : ""}. Your account remains
+            active — you can submit a new request below if you still want your account deleted.
           </CardContent>
         </Card>
       ) : null}

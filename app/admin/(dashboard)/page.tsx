@@ -46,6 +46,9 @@ const ACTION_LABELS: Record<string, string> = {
   HOMEPAGE_SEO_UPDATED: "updated homepage SEO",
   STUDENT_DELETION_APPROVED: "approved a student deletion request",
   STUDENT_DELETION_REJECTED: "rejected a student deletion request",
+  STUDENT_DELETION_REQUESTED: "requested account deletion",
+  STUDENT_IDENTITY_ANONYMIZED: "anonymized a deleted student's identity",
+  STUDENT_AUTH_REVOKED: "revoked a deleted student's sessions",
   ADMIN_USER_CREATED: "created an admin user",
   APPEARANCE_CHANGED: "changed the site appearance",
   AUTH_PROVIDER_GOOGLE_SAVED: "updated Google Sign-In configuration",
@@ -406,7 +409,7 @@ export default async function AdminDashboardPage() {
                 {recentAuditLogs.map((log) => (
                   <div key={log.id} className="py-2.5 text-sm">
                     <p className="text-[var(--color-foreground)]">
-                      <span className="font-medium">{log.actor?.name ?? "Unknown admin"}</span> {humanizeAction(log.action)}
+                      <span className="font-medium">{log.actor?.name ?? (log.action === "STUDENT_DELETION_REQUESTED" ? "A student" : "Unknown admin")}</span> {humanizeAction(log.action)}
                     </p>
                     <p className="text-xs text-[var(--color-muted-foreground)]">{timeAgo(log.createdAt)}</p>
                   </div>

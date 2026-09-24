@@ -67,6 +67,11 @@ export const PERMISSIONS = {
   // MASTER_ADMIN-only and enforced server-side on every action/route.
   BACKUP_VIEW: "backup:view",
   BACKUP_MANAGE: "backup:manage",
+  // Approve/reject student account-deletion requests (Admin -> Students ->
+  // Deletion Requests). Destructive and irreversible, so MASTER_ADMIN-only:
+  // FULL_ADMIN keeps STUDENTS_MANAGE (and can view the queue) but every
+  // approve/reject is refused server-side without this key.
+  STUDENT_DELETION_MANAGE: "student-deletion:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

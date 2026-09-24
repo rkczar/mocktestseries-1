@@ -3,12 +3,13 @@ import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import argon2 from "argon2";
 import { headers } from "next/headers";
-import { OtpPurpose, StudentAuthProvider, StudentStatus } from "@prisma/client";
+import { OtpPurpose, StudentAuthProvider } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { studentAuthConfig } from "@/lib/auth-student.config";
 import { nextStudentId } from "@/lib/student-id";
 import { verifyOtp, OtpError } from "@/lib/otp";
 import { getAuthProviderConfig, getGoogleCredentials } from "@/lib/auth-provider-config";
+import { getStudentAuthStatus, isStudentAuthEligible, resolveGoogleStudent } from "@/lib/student-lifecycle";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
@@ -76,7 +77,7 @@ export const {
         });
 
         let success = false;
-        if (student?.passwordHash && student.status === StudentStatus.ACTIVE) {
+        if (student?.passwordHash && isStudentAuthEligible(student.status)) {
           success = await argon2.verify(student.passwordHash, password).catch(() => false);
         }
 
@@ -169,7 +170,7 @@ export const {
         }
 
         const student = await prisma.student.findUnique({ where: { mobile } });
-        if (!student || student.status !== StudentStatus.ACTIVE) {
+        if (!student || !isStudentAuthEligible(student.status)) {
           await prisma.studentLoginAttempt.create({
             data: { identifier: mobile, ipAddress, success: false, method: attemptMethod, studentId: student?.id },
           });
@@ -199,6 +200,23 @@ export const {
   ],
   callbacks: {
     ...studentAuthConfig.callbacks,
+    /**
+     * Server-side session revocation. Student sessions are stateless JWTs,
+     * so a deleted/suspended account's cookie would otherwise stay valid
+     * until expiry. Every auth() call (pages, Server Actions, route
+     * handlers — requireStudent() goes through here) re-checks the Student
+     * row; returning null makes Auth.js treat the request as signed out and
+     * clear the cookie wherever it can write one. Skipped on the sign-in
+     * call itself (`user` set), which just authenticated against the DB.
+     */
+    async jwt(params) {
+      const token = await studentAuthConfig.callbacks.jwt(params);
+      if (params.user) return token;
+      const studentDbId = token.studentDbId as string | undefined;
+      if (!studentDbId) return null;
+      const status = await getStudentAuthStatus(studentDbId);
+      return isStudentAuthEligible(status) ? token : null;
+    },
     async signIn({ user, account, profile }) {
       if (account?.provider !== "google") return true;
 
@@ -214,52 +232,26 @@ export const {
       const providerAccountId = account.providerAccountId;
       const email = profile?.email?.toLowerCase();
 
-      const existingLink = await prisma.studentOAuthAccount.findUnique({
-        where: { provider_providerAccountId: { provider: "GOOGLE", providerAccountId } },
-        include: { student: true },
+      const resolved = await resolveGoogleStudent({
+        providerAccountId,
+        email,
+        name: profile?.name ?? null,
+        picture: typeof profile?.picture === "string" ? profile.picture : null,
       });
+      if (!resolved) return false;
+      const { student } = resolved;
 
-      let student = existingLink?.student ?? null;
-
-      if (!student && email) {
-        student = await prisma.student.findUnique({ where: { email } });
-        if (student) {
-          await prisma.studentOAuthAccount.create({
-            data: { studentId: student.id, provider: "GOOGLE", providerAccountId, email },
-          });
-        }
-      }
-
-      if (!student) {
-        if (!email) return false;
-        const studentId = await nextStudentId();
-        student = await prisma.student.create({
-          data: { studentId, name: profile?.name ?? "Student", email, authProvider: StudentAuthProvider.GOOGLE },
-        });
-        await prisma.studentProfile.create({
-          data: {
-            studentId: student.id,
-            photoUrl: typeof profile?.picture === "string" ? profile.picture : undefined,
-          },
-        });
-        await prisma.studentOAuthAccount.create({
-          data: { studentId: student.id, provider: "GOOGLE", providerAccountId, email },
-        });
-        await prisma.studentActivity.create({
-          data: { studentId: student.id, activity: "REGISTERED", metadata: { method: "google" } },
-        });
-      } else {
-        await prisma.student.update({ where: { id: student.id }, data: { lastLoginAt: new Date() } });
-        await prisma.studentActivity.create({
-          data: { studentId: student.id, activity: "LOGIN", metadata: { method: "google" } },
-        });
-      }
-
-      if (student.status !== StudentStatus.ACTIVE) {
+      if (!isStudentAuthEligible(student.status)) {
         await prisma.studentLoginAttempt.create({
           data: { identifier: email ?? "unknown", ipAddress, success: false, method: "GOOGLE", studentId: student.id },
         });
         return false;
+      }
+      if (!resolved.created) {
+        await prisma.student.update({ where: { id: student.id }, data: { lastLoginAt: new Date() } });
+        await prisma.studentActivity.create({
+          data: { studentId: student.id, activity: "LOGIN", metadata: { method: "google" } },
+        });
       }
 
       await prisma.studentLoginAttempt.create({

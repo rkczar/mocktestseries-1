@@ -158,7 +158,7 @@ export function DeleteAccountDialog({ alreadyRequested }: { alreadyRequested: bo
         <DialogHeader>
           <DialogTitle>Request Account Deletion</DialogTitle>
           <DialogDescription>
-            An Admin will review your request. Your account will be locked while it is pending.
+            An Admin will review your request. You can keep using your account while it is pending; once approved, your personal data is anonymized and you are signed out on every device.
           </DialogDescription>
         </DialogHeader>
         <form action={formAction} className="flex flex-col gap-3">
