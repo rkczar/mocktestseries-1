@@ -5,10 +5,10 @@ import { useFormStatus } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { toIstDateTimeLocalValue } from "@/lib/ist-time";
+import { formatIst, toIstDateTimeLocalValue } from "@/lib/ist-time";
 import { updateScheduleRowAction, type ScheduleRowFormState } from "./actions";
 import type { MockTestStatus } from "@prisma/client";
-import type { MockTestAvailability } from "@/lib/mock-test-schedule";
+import { AVAILABILITY_LABELS, type MockTestAvailability } from "@/lib/mock-test-schedule";
 
 interface Row {
   id: string;
@@ -16,6 +16,7 @@ interface Row {
   order: number;
   status: MockTestStatus;
   availableFrom: Date | null;
+  availableUntil?: Date | null;
   durationMinutes: number;
   availability: MockTestAvailability;
   coverageLabel?: string;
@@ -23,16 +24,16 @@ interface Row {
   accessType?: "FREE" | "PAID";
 }
 
-function SaveButton() {
+function SaveButton({ disabled }: { disabled: boolean }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" variant="outline" disabled={pending}>
+    <Button type="submit" variant="outline" disabled={pending || disabled}>
       {pending ? "Saving…" : "Save"}
     </Button>
   );
 }
 
-function ScheduleRow({ row }: { row: Row }) {
+function ScheduleRow({ row, readOnly }: { row: Row; readOnly: boolean }) {
   const action = updateScheduleRowAction.bind(null, row.id);
   const [state, formAction] = useActionState<ScheduleRowFormState, FormData>(action, {});
 
@@ -55,12 +56,26 @@ function ScheduleRow({ row }: { row: Row }) {
         </td>
       ) : null}
       <td className="py-2 pr-4">
-        <Badge variant={row.status !== "PUBLISHED" ? "warning" : row.availability === "AVAILABLE" ? "success" : "info"}>
-          {row.status !== "PUBLISHED" ? row.status : row.availability}
+        <Badge
+          variant={
+            row.status !== "PUBLISHED"
+              ? "warning"
+              : row.availability === "AVAILABLE"
+                ? "success"
+                : row.availability === "LIVE_NOW"
+                  ? "warning"
+                  : row.availability === "CLOSED"
+                    ? "neutral"
+                    : "info"
+          }
+        >
+          {row.status !== "PUBLISHED" ? row.status : AVAILABILITY_LABELS[row.availability]}
         </Badge>
+        {row.availableUntil ? <span className="block text-[11px] text-[var(--color-muted-foreground)]">Window ends {formatIst(row.availableUntil)}</span> : null}
       </td>
       <td className="py-2 pr-4">
         <form action={formAction} className="flex flex-wrap items-center gap-2">
+          <fieldset className="contents" disabled={readOnly}>
           <Input
             name="availableFrom"
             type="datetime-local"
@@ -72,7 +87,8 @@ function ScheduleRow({ row }: { row: Row }) {
             <input type="checkbox" name="publish" defaultChecked={row.status === "PUBLISHED"} />
             Published
           </label>
-          <SaveButton />
+          </fieldset>
+          <SaveButton disabled={readOnly} />
           {state.error ? <span className="text-xs text-[var(--color-error)]">{state.error}</span> : null}
           {state.success ? <span className="text-xs text-[var(--color-success)]">Saved</span> : null}
         </form>
@@ -81,7 +97,7 @@ function ScheduleRow({ row }: { row: Row }) {
   );
 }
 
-export function ScheduleTable({ rows }: { rows: Row[] }) {
+export function ScheduleTable({ rows, readOnly = false }: { rows: Row[]; readOnly?: boolean }) {
   if (rows.length === 0) {
     return <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">No tests in this series yet.</p>;
   }
@@ -99,7 +115,7 @@ export function ScheduleTable({ rows }: { rows: Row[] }) {
       </thead>
       <tbody>
         {rows.map((row) => (
-          <ScheduleRow key={row.id} row={row} />
+          <ScheduleRow key={row.id} row={row} readOnly={readOnly} />
         ))}
       </tbody>
     </table>

@@ -7,6 +7,8 @@ import { getOwnedAttempt } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import { prisma } from "@/lib/prisma";
 import { getMockTestLeaderboard } from "@/lib/leaderboard";
+import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
+import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
@@ -26,6 +28,37 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
   if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);
 
   const title = attemptTitle(attempt);
+
+  // Mock Test result release (server-side): until the configured release
+  // instant, the student sees only that the submission was recorded — no
+  // score, breakdown, leaderboard, answer key or Review link.
+  if (attempt.testType === TestType.FULL_MOCK && attempt.mockTest && !isMockResultReleased(attempt.mockTest)) {
+    const releaseAt = mockResultReleaseInstant(attempt.mockTest);
+    return (
+      <StudentShell student={student}>
+        <div className="mx-auto flex w-full max-w-2xl flex-col justify-center gap-6 px-4 py-10 sm:px-6">
+          <div className="text-center">
+            <Clock className="mx-auto h-10 w-10 text-[var(--color-primary)]" aria-hidden />
+            <h1 className="mt-2 text-2xl font-semibold text-[var(--color-foreground)]">{title}</h1>
+            <p className="text-sm text-[var(--color-muted-foreground)]">Test submitted successfully</p>
+          </div>
+          <Card>
+            <CardContent className="flex flex-col items-center gap-2 py-10 text-center">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-primary)]">Result Pending</p>
+              <p className="text-sm text-[var(--color-foreground)]">
+                Your answers are saved. Your score, answer review and Ask AI unlock
+                {releaseAt ? <> on <strong>{formatIst(releaseAt)} IST</strong></> : " soon"}.
+              </p>
+            </CardContent>
+          </Card>
+          <Button asChild variant="outline">
+            <Link href="/student/dashboard">Back to Dashboard</Link>
+          </Button>
+        </div>
+      </StudentShell>
+    );
+  }
+
   const reviewLocked = attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED";
 
   const percentage = attempt.maxScore ? Math.max(0, Math.round(((attempt.score ?? 0) / attempt.maxScore) * 100)) : 0;
@@ -48,7 +81,7 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
         where: { id: { in: questionIds } },
         select: { id: true, subject: { select: { name: true } }, topic: { select: { name: true } } },
       }),
-      getMockTestLeaderboard(attempt.mockTestId, student.id),
+      attempt.mockTest?.leaderboardEnabled === false ? Promise.resolve(null) : getMockTestLeaderboard(attempt.mockTestId, student.id),
       prisma.testResource.findFirst({
         where: { type: "PAPER_PDF", isActive: true, mockTestId: attempt.mockTestId },
         select: { id: true },

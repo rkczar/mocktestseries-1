@@ -49,6 +49,19 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         adminUser: { select: { name: true, username: true } },
         exam: { select: { id: true, name: true } },
         previousYearPaper: { select: { id: true, title: true } },
+        mockTest: {
+          select: {
+            id: true,
+            title: true,
+            order: true,
+            status: true,
+            availableFrom: true,
+            availableUntil: true,
+            targetQuestionCount: true,
+            testSeries: { select: { name: true } },
+            _count: { select: { questions: true } },
+          },
+        },
       },
     });
     if (!run) {
@@ -135,9 +148,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           acc.newQuestions++;
         }
         if (e.effectiveStatus === QuestionStatus.DRAFT) acc.drafts++;
+        // Mock Test target preview: every still-pending non-error row
+        // resolves to a canonical Question id (new, replaced, or the
+        // existing duplicate kept by SKIP) and is attached in row order.
+        if (e.row.status === "PENDING" && e.row.severity !== ImportRowSeverity.ERROR) acc.toAttach++;
         return acc;
       },
-      { total: 0, valid: 0, warnings: 0, errors: 0, duplicates: 0, newQuestions: 0, updates: 0, drafts: 0, skipped: 0, hasImages: 0, missingImages: 0, reviewRequired: 0 }
+      { total: 0, valid: 0, warnings: 0, errors: 0, duplicates: 0, newQuestions: 0, updates: 0, drafts: 0, skipped: 0, hasImages: 0, missingImages: 0, reviewRequired: 0, toAttach: 0 }
     );
 
     return NextResponse.json({
@@ -151,6 +168,22 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         examYear: run.examYear,
         previousYearPaperId: run.previousYearPaperId,
         previousYearPaper: run.previousYearPaper,
+        importSource: run.importSource,
+        attachedCount: run.attachedCount,
+        mockTestId: run.mockTestId,
+        mockTest: run.mockTest
+          ? {
+              id: run.mockTest.id,
+              title: run.mockTest.title,
+              order: run.mockTest.order,
+              status: run.mockTest.status,
+              seriesName: run.mockTest.testSeries?.name ?? null,
+              availableFrom: run.mockTest.availableFrom,
+              availableUntil: run.mockTest.availableUntil,
+              expected: run.mockTest.targetQuestionCount,
+              current: run.mockTest._count.questions,
+            }
+          : null,
         status: run.status,
         duplicateStrategy: run.duplicateStrategy,
         totalRows: run.totalRows,
@@ -233,7 +266,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         ? run.previousYearPaperId
         : null;
 
-    await prisma.bulkImportRun.update({ where: { id: runId }, data: { examId, previousYearPaperId } });
+    // Same rule for a Mock Test target: questions never attach across exams,
+    // so a target of another exam is dropped (import continues as Question
+    // Bank only) — the admin re-picks a target of the new exam if wanted.
+    const mockTestId =
+      run.mockTestId && (await prisma.mockTest.findFirst({ where: { id: run.mockTestId, examId }, select: { id: true } })) ? run.mockTestId : null;
+
+    await prisma.bulkImportRun.update({ where: { id: runId }, data: { examId, previousYearPaperId, mockTestId } });
 
     const rows = await prisma.bulkImportRow.findMany({ where: { runId, removedFromImport: false }, orderBy: { rowNumber: "asc" } });
     const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
@@ -263,7 +302,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         action: "BULK_IMPORT_EXAM_CHANGED",
         entityType: "BulkImportRun",
         entityId: runId,
-        metadata: { fromExamId: run.examId, toExamId: examId, rowCount: rows.length },
+        metadata: { fromExamId: run.examId, toExamId: examId, rowCount: rows.length, mockTargetCleared: Boolean(run.mockTestId && !mockTestId) },
       },
     });
 

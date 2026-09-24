@@ -10,7 +10,7 @@ import { formatIst } from "@/lib/ist-time";
 import { startMockTestFromExamAction } from "@/app/student/(dashboard)/exams/[examId]/actions";
 import { startOfflineOmrEntryFromTestSeriesAction } from "./actions";
 
-type Availability = "UPCOMING" | "AVAILABLE";
+type Availability = "UPCOMING" | "AVAILABLE" | "LIVE_NOW" | "CLOSED";
 
 export interface ExplorerTestRow {
   id: string;
@@ -21,7 +21,12 @@ export interface ExplorerTestRow {
   questionCount: number;
   durationMinutes: number;
   availableFrom: string | null; // ISO string
+  /** Fixed Window end (ISO), null when the test never closes. */
+  availableUntil: string | null;
   availability: Availability;
+  /** Server-evaluated: the student has submitted but the result release time hasn't passed. */
+  resultPending: boolean;
+  resultReleaseAt: string | null;
   attemptPolicy: "SINGLE_ATTEMPT" | "MULTIPLE_PRACTICE";
   bestScore: number | null;
   latestAttempt: { id: string; status: "IN_PROGRESS" | "SUBMITTED" | "ABANDONED" } | null;
@@ -38,13 +43,22 @@ export interface ExplorerGroup {
   tests: ExplorerTestRow[];
 }
 
-type DisplayStatus = "IN_PROGRESS" | "COMPLETED" | "UPCOMING" | "AVAILABLE";
+type DisplayStatus = "IN_PROGRESS" | "COMPLETED" | "RESULT_PENDING" | "UPCOMING" | "AVAILABLE" | "LIVE_NOW" | "CLOSED";
+
+const STATUS_LABELS: Record<DisplayStatus, string> = {
+  IN_PROGRESS: "In Progress",
+  COMPLETED: "Result Available",
+  RESULT_PENDING: "Result Pending",
+  UPCOMING: "Upcoming",
+  AVAILABLE: "Available",
+  LIVE_NOW: "Live Now",
+  CLOSED: "Closed",
+};
 
 function displayStatusOf(row: ExplorerTestRow): DisplayStatus {
   if (row.latestAttempt?.status === "IN_PROGRESS") return "IN_PROGRESS";
-  if (row.hasSubmittedAttempt) return "COMPLETED";
-  if (row.availability === "UPCOMING") return "UPCOMING";
-  return "AVAILABLE";
+  if (row.hasSubmittedAttempt) return row.resultPending ? "RESULT_PENDING" : "COMPLETED";
+  return row.availability;
 }
 
 const TABS: { key: "ALL" | DisplayStatus; label: string }[] = [
@@ -64,7 +78,8 @@ export function TestSeriesExplorer({ groups }: { groups: ExplorerGroup[] }) {
         tests: g.tests.filter((row) => {
           const status = displayStatusOf(row);
           if (tab === "ALL") return true;
-          if (tab === "AVAILABLE") return status === "AVAILABLE" || status === "IN_PROGRESS";
+          if (tab === "AVAILABLE") return status === "AVAILABLE" || status === "LIVE_NOW" || status === "IN_PROGRESS";
+          if (tab === "COMPLETED") return status === "COMPLETED" || status === "RESULT_PENDING";
           return status === tab;
         }),
       }))
@@ -148,7 +163,12 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
 
         {row.availableFrom ? (
           <span className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
-            <CalendarClock className="h-3.5 w-3.5" aria-hidden /> Scheduled: {formatIst(new Date(row.availableFrom))}
+            <CalendarClock className="h-3.5 w-3.5" aria-hidden /> {row.availableUntil ? "Opens" : "Scheduled"}: {formatIst(new Date(row.availableFrom))}
+          </span>
+        ) : null}
+        {row.availableUntil ? (
+          <span className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
+            <CalendarClock className="h-3.5 w-3.5" aria-hidden /> {status === "CLOSED" ? "Closed" : "Ends"}: {formatIst(new Date(row.availableUntil))}
           </span>
         ) : null}
 
@@ -160,10 +180,18 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
           ) : null}
           <Badge
             variant={
-              status === "UPCOMING" ? "info" : status === "IN_PROGRESS" ? "warning" : status === "COMPLETED" ? "success" : "primary"
+              status === "UPCOMING" || status === "RESULT_PENDING"
+                ? "info"
+                : status === "IN_PROGRESS" || status === "LIVE_NOW"
+                  ? "warning"
+                  : status === "COMPLETED"
+                    ? "success"
+                    : status === "CLOSED"
+                      ? "neutral"
+                      : "primary"
             }
           >
-            {status === "IN_PROGRESS" ? "In Progress" : status.charAt(0) + status.slice(1).toLowerCase()}
+            {STATUS_LABELS[status]}
           </Badge>
         </div>
 
@@ -171,6 +199,16 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
           {status === "UPCOMING" ? (
             <Button size="sm" disabled>
               Available {row.availableFrom ? formatIst(new Date(row.availableFrom)) : "soon"}
+            </Button>
+          ) : status === "CLOSED" ? (
+            <Button size="sm" disabled>
+              Window closed
+            </Button>
+          ) : status === "RESULT_PENDING" && row.latestAttempt ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/student/attempt/${row.latestAttempt.id}/result`}>
+                Result {row.resultReleaseAt ? `on ${formatIst(new Date(row.resultReleaseAt))}` : "pending"}
+              </Link>
             </Button>
           ) : status === "IN_PROGRESS" && row.latestAttempt ? (
             <Button asChild size="sm">
@@ -189,7 +227,7 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
                   <a href={`/api/student/test-resources/${row.paperResourceId}`}>Download Paper</a>
                 </Button>
               ) : null}
-              {row.attemptPolicy === "MULTIPLE_PRACTICE" ? (
+              {row.attemptPolicy === "MULTIPLE_PRACTICE" && (row.availability === "AVAILABLE" || row.availability === "LIVE_NOW") ? (
                 <form action={startMockTestFromExamAction.bind(null, row.id)}>
                   <Button type="submit" size="sm">
                     Practice Again

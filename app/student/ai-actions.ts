@@ -11,6 +11,7 @@ import {
   getStoredAiExplanationVariant,
   isAiGenerationRateLimited,
   hasInProgressAttemptForQuestion,
+  hasUnreleasedResultForQuestion,
   logActivity,
   checkAiAccessQuota,
   logAiAccess,
@@ -29,6 +30,9 @@ export async function getExplanationAction(questionId: string) {
   // which surface asked — blocks both a fresh generation and a cache read.
   if (await hasInProgressAttemptForQuestion(student.id, questionId)) {
     return { ok: false as const, error: "Ask AI is available once you've submitted this test." };
+  }
+  if (await hasUnreleasedResultForQuestion(student.id, questionId)) {
+    return { ok: false as const, error: "Ask AI unlocks when this test's result is released." };
   }
 
   // Daily AI ACCESS quota (spec: student access ≠ provider call) — checked
@@ -99,6 +103,9 @@ export async function getExplanationVariantAction(questionId: string, variantId:
 
   if (await hasInProgressAttemptForQuestion(student.id, questionId)) {
     return { ok: false as const, error: "Ask AI is available once you've submitted this test." };
+  }
+  if (await hasUnreleasedResultForQuestion(student.id, questionId)) {
+    return { ok: false as const, error: "Ask AI unlocks when this test's result is released." };
   }
 
   const quota = await checkAiAccessQuota(student.id, questionId);

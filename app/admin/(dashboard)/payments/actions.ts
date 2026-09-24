@@ -132,6 +132,13 @@ export async function saveProductAction(_prev: FormState, fd: FormData): Promise
     const saleEnabled = bool(fd, "saleEnabled");
     const saleTypeRaw = optStr(fd, "saleDiscountType", 20);
     const saleDiscountType = saleTypeRaw ? z.nativeEnum(SaleDiscountType).parse(saleTypeRaw) : null;
+    // Grand Test / Live Test are retired product types (Mock Test is the one
+    // canonical admin-created test). Existing legacy products keep saving;
+    // nothing new can be created as, or switched to, one of them.
+    if (productType === "GRAND_TEST" || productType === "LIVE_TEST") {
+      const existing = id ? await prisma.product.findUnique({ where: { id }, select: { productType: true } }) : null;
+      if (existing?.productType !== productType) return { error: "Grand Test and Live Test are retired — sell a Mock Test or Test Series instead." };
+    }
     const code = str(fd, "code").toLowerCase();
     if (!PRODUCT_CODE_RE.test(code)) return { error: "Code must be 3-64 lowercase letters, digits or hyphens (used in the checkout URL)." };
     const name = str(fd, "name").slice(0, 150);

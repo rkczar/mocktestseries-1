@@ -794,6 +794,16 @@ enum AttemptPolicy {
   MULTIPLE_PRACTICE
 }
 
+// When a submitted Mock Test attempt's score, answer key, Review and Ask AI
+// unlock for the student. Enforced server-side (lib/mock-test-schedule.ts
+// #isMockResultReleased). IMMEDIATE is today's behavior, so every existing
+// row is unaffected by this column's addition.
+enum MockResultRelease {
+  IMMEDIATE
+  AFTER_WINDOW
+  CUSTOM_DATE
+}
+
 model MockTest {
   id                  String           @id @default(cuid())
   examId              String
@@ -814,6 +824,18 @@ model MockTest {
   // after it, indefinitely (see lib/mock-test-schedule.ts) — there is no
   // availableUntil; Scheduled Mock Tests never auto-close, unlike LiveTest.
   availableFrom       DateTime?
+  // Fixed-window end (replaces the retired Live Test product). Null = the
+  // test never closes (Available Now / Scheduled Release). When set, the
+  // test is LIVE NOW between availableFrom and availableUntil, CLOSED after
+  // it — no new attempts — and an in-progress attempt's effective end is
+  // capped at it (lib/attempt-timing.ts). Availability mode is DERIVED from
+  // these two columns, never stored, so it can't disagree with them.
+  availableUntil      DateTime?
+  resultReleaseMode   MockResultRelease @default(IMMEDIATE)
+  // Only consulted when resultReleaseMode = CUSTOM_DATE.
+  resultReleaseAt     DateTime?
+  // Whether the result page shows this test's leaderboard (lib/leaderboard.ts).
+  leaderboardEnabled  Boolean          @default(true)
   // Governs whether a student may submit this test more than once. Default
   // MULTIPLE_PRACTICE matches today's actual behavior (nothing currently
   // stops a retake) — only the leaderboard, via TestAttempt.isLeaderboardAttempt,
@@ -838,6 +860,7 @@ model MockTest {
   testAttempts  TestAttempt[]
   announcements Announcement[]
   resources     TestResource[]
+  bulkImportRuns BulkImportRun[]
 
   products Product[]
 
@@ -1516,6 +1539,15 @@ enum ImportFileFormat {
   DOCX
 }
 
+/**
+ * Where a bulk import was launched from: the Question Bank's own Bulk Import
+ * page, or a Mock Test's Questions step (same engine, pre-set context).
+ */
+enum BulkImportSource {
+  QUESTION_BANK
+  MOCK_TEST
+}
+
 enum BulkImportDuplicateStrategy {
   SKIP
   REPLACE
@@ -1540,6 +1572,15 @@ model BulkImportRun {
   // straight to the Question Bank and get linked to a paper later.
   previousYearPaperId String?
   previousYearPaper   PreviousYearPaper?          @relation(fields: [previousYearPaperId], references: [id], onDelete: SetNull)
+  // Optional Mock Test target: every row that resolves to a canonical
+  // Question (created, replaced, or an existing duplicate kept by SKIP) is
+  // attached to this test in spreadsheet row order, appended after its
+  // current questions, in the same per-row transaction that writes the
+  // Question (lib/bulk-import-execute.ts). Must share the run's examId.
+  mockTestId          String?
+  mockTest            MockTest?                   @relation(fields: [mockTestId], references: [id], onDelete: SetNull)
+  importSource        BulkImportSource            @default(QUESTION_BANK)
+  attachedCount       Int                         @default(0)
   totalRows           Int
   validRows           Int                         @default(0)
   invalidRows         Int                         @default(0)
@@ -1564,6 +1605,7 @@ model BulkImportRun {
   @@index([status, createdAt])
   @@index([examId, examYear])
   @@index([previousYearPaperId])
+  @@index([mockTestId])
 }
 
 model BulkImportRow {

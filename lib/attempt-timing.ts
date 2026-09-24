@@ -37,12 +37,14 @@ export interface ServerTimedAttempt {
   startedAt: Date;
   durationMinutes: number;
   /**
-   * Live Test only: the test's global end time, shared by every student.
+   * The test's global window end, shared by every student: a Fixed Window
+   * Mock Test's availableUntil (or a legacy Live Test's endAt — the field
+   * name predates Mock Test windows and is kept for script compatibility).
    * When present, it caps the by-duration end so a student who joins late
    * never gets their full duration past the global window — e.g. a
-   * 2:00–3:00 PM Live Test with a 60-minute student duration, joined at
-   * 2:40 PM, ends at 3:00 PM, not 3:40 PM. Undefined/null for every other
-   * test type, which is a no-op (unbounded cap).
+   * 2:00–3:00 PM window with a 60-minute duration, joined at 2:40 PM, ends
+   * at 3:00 PM, not 3:40 PM. Undefined/null for every other test, which is
+   * a no-op (unbounded cap).
    */
   liveTestEndAt?: Date | null;
 }

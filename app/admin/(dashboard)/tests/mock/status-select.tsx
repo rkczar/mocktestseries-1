@@ -5,7 +5,7 @@ import { SelectNative } from "@/components/ui/select-native";
 import { setMockTestStatusAction } from "./actions";
 import type { MockTestStatus } from "@prisma/client";
 
-export function MockTestStatusSelect({ mockTestId, status }: { mockTestId: string; status: MockTestStatus }) {
+export function MockTestStatusSelect({ mockTestId, status, readOnly = false }: { mockTestId: string; status: MockTestStatus; readOnly?: boolean }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -13,7 +13,7 @@ export function MockTestStatusSelect({ mockTestId, status }: { mockTestId: strin
     <span className="inline-flex flex-col gap-1">
       <SelectNative
         value={status}
-        disabled={pending}
+        disabled={pending || readOnly}
         onChange={(e) => {
           const next = e.target.value as MockTestStatus;
           setError(null);

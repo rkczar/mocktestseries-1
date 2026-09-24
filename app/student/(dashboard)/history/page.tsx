@@ -4,6 +4,7 @@ import { History as HistoryIcon } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { getStudentAttemptHistory } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
+import { isMockResultReleased } from "@/lib/mock-test-schedule";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -100,7 +101,7 @@ export default async function StudentHistoryPage({
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{a.exam.name}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{a.startedAt.toLocaleDateString()}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-foreground)]">
-                        {a.status === "SUBMITTED" ? `${a.score?.toFixed(1)} / ${a.maxScore}` : "—"}
+                        {a.status !== "SUBMITTED" ? "—" : a.mockTest && !isMockResultReleased(a.mockTest) ? "Result pending" : `${a.score?.toFixed(1)} / ${a.maxScore}`}
                       </td>
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{minutesTaken ? `${minutesTaken} min` : "—"}</td>
                       <td className="py-2.5 pr-4">

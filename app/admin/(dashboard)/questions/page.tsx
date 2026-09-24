@@ -31,7 +31,7 @@ export default async function QuestionsControlCenter({
         tabs={[
           { value: "all", label: "All Questions", content: <AllQuestionsPanel examId={examId} status={status} /> },
           { value: "add", label: "Add Question", content: <AddQuestionPage searchParams={Promise.resolve({ id })} /> },
-          { value: "bulk-import", label: "Bulk Import", content: <BulkImportPage /> },
+          { value: "bulk-import", label: "Bulk Import", content: <BulkImportPage searchParams={Promise.resolve({})} /> },
           { value: "queries", label: "Queries", content: <QueriesPage /> },
           { value: "reports", label: "Reports", content: <QuestionReportsPage /> },
           {

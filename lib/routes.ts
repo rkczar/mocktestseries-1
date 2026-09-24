@@ -72,13 +72,23 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   // Re-exports ../reports/page (same ReportedQuestion-backed triage UI) rather than a second, parallel one — see app/admin/(dashboard)/questions/queries/page.tsx.
   { pageName: "Question Queries", route: "/admin/questions/queries", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },
 
-  // Tests (Phase 9 — Mock Tests ships real in this slice)
-  { pageName: "Test Builder", route: "/admin/tests/builder", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
-  { pageName: "Mock Tests", route: "/admin/tests/mock", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "CONNECTED" },
-  { pageName: "Random Tests", route: "/admin/tests/random", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
-  { pageName: "Custom Tests", route: "/admin/tests/custom", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "DRAFT" },
-  { pageName: "Live Tests", route: "/admin/tests/live", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "CONNECTED" },
-  { pageName: "Scheduled Tests", route: "/admin/tests/scheduled", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/builder", status: "CONNECTED" },
+  // Tests — final architecture: All Tests · Mock Tests · Scheduled Tests ·
+  // Custom Modules. Mock Test is the one canonical admin-created test (one
+  // editor: Basic Details → Coverage → Questions → Schedule → Access/Result
+  // → Publish). Grand / Custom / Random / Live Test and the generic Test
+  // Builder are retired: their routes remain only as permanent redirects to
+  // the Mock Test workflow (listed in lib/deprecated-routes.ts).
+  { pageName: "Tests", route: "/admin/tests", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+  { pageName: "Mock Tests", route: "/admin/tests/mock", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests", status: "CONNECTED" },
+  { pageName: "Create Mock Test", route: "/admin/tests/mock/new", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/mock", status: "CONNECTED" },
+  { pageName: "Mock Test Editor", route: "/admin/tests/mock/[id]", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/mock", status: "CONNECTED" },
+  { pageName: "Mock Test Preview", route: "/admin/tests/mock/[id]/preview", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests/mock/[id]", status: "CONNECTED" },
+  { pageName: "Scheduled Tests", route: "/admin/tests/scheduled", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests", status: "CONNECTED" },
+  { pageName: "Test Builder (retired → Mock Tests)", route: "/admin/tests/builder", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests", status: "CONNECTED" },
+  { pageName: "Random Tests (retired → Mock Tests)", route: "/admin/tests/random", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests", status: "CONNECTED" },
+  { pageName: "Custom Tests (retired → Mock Tests)", route: "/admin/tests/custom", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests", status: "CONNECTED" },
+  { pageName: "Live Tests (retired → Mock Tests)", route: "/admin/tests/live", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests", status: "CONNECTED" },
+  { pageName: "Grand Tests (retired → Mock Tests)", route: "/admin/tests/grand", module: "Tests", userType: "ADMIN", authRequired: true, parentRoute: "/admin/tests", status: "CONNECTED" },
 
   // Custom Modules — canonical admin-owned system consumed by the Student Custom Module page
   { pageName: "Custom Modules", route: "/admin/custom-modules", module: "Custom Modules", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },

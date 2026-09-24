@@ -14,7 +14,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/student-data";
 import { isExpired, elapsedSecondsFor, remainingSecondsFor, type ServerTimedAttempt } from "@/lib/attempt-timing";
 import { deriveLiveTestState } from "@/lib/live-test";
-import { isMockTestAvailable, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
+import { deriveMockTestAvailability, isMockTestAvailable, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
 import { assertContentAccess } from "@/lib/payments/access";
 
@@ -49,13 +49,20 @@ const TEST_TYPE_BY_SOURCE: Record<AttemptSourceType, TestType> = {
   [AttemptSourceType.LIVE_TEST]: TestType.LIVE_TEST,
 };
 
-/** Builds the shape lib/attempt-timing.ts needs, threading a Live Test's global endAt through as the cap. */
+/**
+ * Builds the shape lib/attempt-timing.ts needs, threading the test's global
+ * window end through as the cap: a legacy Live Test's endAt, or a Fixed
+ * Window Mock Test's availableUntil (whichever applies — an attempt belongs
+ * to at most one of them).
+ */
 export function toServerTimedAttempt(attempt: {
   startedAt: Date;
   durationMinutes: number;
   liveTest?: { endAt: Date } | null;
+  mockTest?: { availableUntil: Date | null } | null;
 }): ServerTimedAttempt {
-  return { startedAt: attempt.startedAt, durationMinutes: attempt.durationMinutes, liveTestEndAt: attempt.liveTest?.endAt ?? null };
+  const windowEnd = attempt.liveTest?.endAt ?? attempt.mockTest?.availableUntil ?? null;
+  return { startedAt: attempt.startedAt, durationMinutes: attempt.durationMinutes, liveTestEndAt: windowEnd };
 }
 
 function toSnapshot(question: QuestionWithOptions): QuestionSnapshot {
@@ -173,10 +180,25 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
   const mockTest = await prisma.mockTest.findFirst({
     // A published mock inside an unpublished (draft/archived) series is not live.
     where: { id: mockTestId, ...LIVE_MOCK_TEST_WHERE },
-    include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
+    // Only PUBLISHED questions reach students: a bulk import may attach rows
+    // it auto-saved as Draft (missing image / no correct answer), which stay
+    // reserved in the test's order until an admin reviews and publishes them.
+    include: {
+      questions: {
+        where: { question: { status: QuestionStatus.PUBLISHED } },
+        orderBy: { order: "asc" },
+        include: { question: { include: { options: true } } },
+      },
+    },
   });
   if (!mockTest) throw new Error("This mock test is not available.");
-  if (!isMockTestAvailable(mockTest)) throw new Error("This test is not available yet.");
+  if (!isMockTestAvailable(mockTest)) {
+    throw new Error(
+      deriveMockTestAvailability(mockTest) === "CLOSED"
+        ? "This test window has closed. New attempts are no longer accepted."
+        : "This test is not available yet."
+    );
+  }
 
   if (mockTest.attemptPolicy === "SINGLE_ATTEMPT") {
     const priorSubmission = await prisma.testAttempt.findFirst({
@@ -437,7 +459,7 @@ export async function saveAnswer(
 ) {
   const attempt = await prisma.testAttempt.findFirst({
     where: { id: attemptId, studentId, status: AttemptStatus.IN_PROGRESS },
-    include: { liveTest: { select: { endAt: true } } },
+    include: { liveTest: { select: { endAt: true } }, mockTest: { select: { availableUntil: true } } },
   });
   if (!attempt) throw new Error("This attempt is not available for editing.");
 
@@ -465,7 +487,11 @@ export async function saveAnswer(
 export async function submitAttempt(attemptId: string, studentId: string) {
   const attempt = await prisma.testAttempt.findFirst({
     where: { id: attemptId, studentId },
-    include: { questions: { include: { answer: true } }, liveTest: { select: { endAt: true } } },
+    include: {
+      questions: { include: { answer: true } },
+      liveTest: { select: { endAt: true } },
+      mockTest: { select: { availableUntil: true } },
+    },
   });
   if (!attempt) throw new Error("Attempt not found.");
   if (attempt.status === AttemptStatus.SUBMITTED) return attempt;
@@ -561,6 +587,7 @@ export async function finalizeIfExpired(attempt: {
   startedAt: Date;
   durationMinutes: number;
   liveTest?: { endAt: Date } | null;
+  mockTest?: { availableUntil: Date | null } | null;
 }): Promise<boolean> {
   if (attempt.status !== AttemptStatus.IN_PROGRESS) return false;
   if (!isExpired(toServerTimedAttempt(attempt))) return false;
@@ -580,7 +607,15 @@ export async function finalizeIfExpired(attempt: {
 export async function reconcileExpiredAttempts(filter: { liveTestId?: string } = {}): Promise<number> {
   const candidates = await prisma.testAttempt.findMany({
     where: { status: AttemptStatus.IN_PROGRESS, ...filter },
-    select: { id: true, studentId: true, status: true, startedAt: true, durationMinutes: true, liveTest: { select: { endAt: true } } },
+    select: {
+      id: true,
+      studentId: true,
+      status: true,
+      startedAt: true,
+      durationMinutes: true,
+      liveTest: { select: { endAt: true } },
+      mockTest: { select: { availableUntil: true } },
+    },
   });
   let finalized = 0;
   for (const attempt of candidates) {

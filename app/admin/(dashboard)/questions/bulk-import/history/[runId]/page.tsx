@@ -19,6 +19,8 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
     include: {
       adminUser: { select: { name: true, username: true } },
       exam: { select: { name: true } },
+      previousYearPaper: { select: { title: true } },
+      mockTest: { select: { id: true, title: true, order: true } },
     },
   });
 
@@ -92,12 +94,34 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
               <span className="text-sm font-medium">{run.exam ? `${run.exam.name}${run.examYear ? ` ${run.examYear}` : ""}` : "—"}</span>
             </div>
             <div className="flex justify-between">
+              <span className="text-sm text-[var(--color-muted-foreground)]">Import source:</span>
+              <span className="text-sm font-medium">{run.importSource === "MOCK_TEST" ? "Mock Test" : "Question Bank"}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-sm text-[var(--color-muted-foreground)]">Target:</span>
+              <span className="text-right text-sm font-medium">
+                {run.mockTest ? (
+                  <Link href={`/admin/tests/mock/${run.mockTest.id}#questions`} className="text-[var(--color-primary)] hover:underline">
+                    Mock {run.mockTest.order}: {run.mockTest.title}
+                  </Link>
+                ) : run.previousYearPaper ? (
+                  `Previous Year Paper: ${run.previousYearPaper.title}`
+                ) : (
+                  "Question Bank only"
+                )}
+              </span>
+            </div>
+            <div className="flex justify-between">
               <span className="text-sm text-[var(--color-muted-foreground)]">Imported by:</span>
               <span className="text-sm font-medium">{run.adminUser.name}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-[var(--color-muted-foreground)]">Strategy:</span>
               <span className="text-sm font-medium">{run.duplicateStrategy}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-sm text-[var(--color-muted-foreground)]">Imported at:</span>
+              <span className="text-sm font-medium">{run.createdAt.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST</span>
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-[var(--color-muted-foreground)]">Status:</span>
@@ -130,6 +154,7 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
               <Stat label="Replaced" value={run.replacedCount} />
               <Stat label="Drafts" value={run.draftCount} />
               <Stat label="Failed" value={run.failedCount} cls="text-[var(--color-error)]" />
+              {run.mockTestId ? <Stat label="Attached to Mock Test" value={run.attachedCount} cls="text-[var(--color-success)]" /> : null}
             </div>
           </CardContent>
         </Card>

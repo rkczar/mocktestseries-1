@@ -3,7 +3,7 @@ import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { BulkImportStatus } from "@prisma/client";
-import { executeBulkImport } from "@/lib/bulk-import-execute";
+import { executeBulkImport, MockTargetError } from "@/lib/bulk-import-execute";
 
 /**
  * Final "Import Questions" step: operates on an ALREADY-PERSISTED run+rows
@@ -19,8 +19,8 @@ export async function POST(request: NextRequest) {
   try {
     const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
 
-    const body = await request.json();
-    runId = (body as { runId?: string }).runId;
+    const body = (await request.json()) as { runId?: string; allowExceedTarget?: boolean };
+    runId = body.runId;
 
     if (!runId) {
       return NextResponse.json({ error: "runId is required" }, { status: 400 });
@@ -31,7 +31,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Import run not found" }, { status: 404 });
     }
 
-    const result = await executeBulkImport({ runId, adminUserId: session.user.id! });
+    if (run.mockTestId) await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+
+    const result = await executeBulkImport({ runId, adminUserId: session.user.id!, allowExceedTarget: body.allowExceedTarget === true });
 
     return NextResponse.json({
       success: true,
@@ -44,8 +46,16 @@ export async function POST(request: NextRequest) {
       draftCount: result.draftCount,
       reviewRequiredCount: result.reviewRequiredCount,
       status: result.status,
+      mockTestId: result.mockTestId,
+      attachedNow: result.attachedNow,
+      attachedCount: result.attachedCount,
     });
   } catch (error) {
+    // A refused Mock Test target is a pre-flight rejection: nothing was
+    // written, so the run must stay READY (not be marked FAILED).
+    if (error instanceof MockTargetError) {
+      return NextResponse.json({ error: error.message, code: error.code, details: error.details }, { status: 409 });
+    }
     console.error("POST /api/admin/questions/bulk-import/import error:", error);
 
     if (runId) {

@@ -28,6 +28,12 @@ export async function updateScheduleRowAction(
   if (!Number.isFinite(durationMinutes) || durationMinutes < 1) return { error: "Invalid duration." };
   const availableFrom = availableFromRaw ? parseIstDateTimeLocal(availableFromRaw) : null;
   if (availableFromRaw && !availableFrom) return { error: "Invalid available-from date/time." };
+  // A Fixed Window test keeps its end here; its start must stay before it.
+  const existing = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { availableUntil: true } });
+  if (!existing) return { error: "Mock test not found." };
+  if (existing.availableUntil && (!availableFrom || availableFrom.getTime() >= existing.availableUntil.getTime())) {
+    return { error: "This is a Fixed Window test — its start must be set and before the window end (edit the window in the Mock Test editor)." };
+  }
 
   await prisma.mockTest.update({
     where: { id: mockTestId },

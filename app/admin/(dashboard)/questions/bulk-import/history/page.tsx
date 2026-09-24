@@ -19,6 +19,7 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
           { filename: { contains: q, mode: "insensitive" } },
           { label: { contains: q, mode: "insensitive" } },
           { exam: { name: { contains: q, mode: "insensitive" } } },
+          { mockTest: { title: { contains: q, mode: "insensitive" } } },
         ],
       }
     : {};
@@ -32,6 +33,8 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
       include: {
         adminUser: { select: { name: true, username: true } },
         exam: { select: { name: true } },
+        previousYearPaper: { select: { title: true } },
+        mockTest: { select: { id: true, title: true, order: true } },
       },
     }),
     prisma.bulkImportRun.count({ where }),
@@ -96,6 +99,7 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
                     <th className="py-2 pr-4">Batch</th>
                     <th className="py-2 pr-4">File</th>
                     <th className="py-2 pr-4">Exam / Year</th>
+                    <th className="py-2 pr-4">Source / Target</th>
                     <th className="py-2 pr-4">User</th>
                     <th className="py-2 pr-4">Total</th>
                     <th className="py-2 pr-4">Warnings</th>
@@ -103,6 +107,8 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
                     <th className="py-2 pr-4">Review</th>
                     <th className="py-2 pr-4">Success</th>
                     <th className="py-2 pr-4">Failed</th>
+                    <th className="py-2 pr-4">Duplicates</th>
+                    <th className="py-2 pr-4">Attached</th>
                     <th className="py-2 pr-4">Status</th>
                     <th className="py-2 pr-4">Date</th>
                     <th className="py-2 pr-4" />
@@ -119,6 +125,20 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
                         {run.exam ? `${run.exam.name}${run.examYear ? ` ${run.examYear}` : ""}` : "—"}
                       </td>
+                      <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">
+                        {run.importSource === "MOCK_TEST" ? "Mock Test" : "Question Bank"}
+                        <span className="block text-[var(--color-foreground)]">
+                          {run.mockTest ? (
+                            <Link href={`/admin/tests/mock/${run.mockTest.id}#questions`} className="hover:underline">
+                              → Mock {run.mockTest.order}: {run.mockTest.title}
+                            </Link>
+                          ) : run.previousYearPaper ? (
+                            `→ PYQ: ${run.previousYearPaper.title}`
+                          ) : (
+                            "→ Question Bank only"
+                          )}
+                        </span>
+                      </td>
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{run.adminUser.name}</td>
                       <td className="py-2.5 pr-4">{run.totalRows}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-warning)]">{run.warningRows}</td>
@@ -126,6 +146,8 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
                       <td className="py-2.5 pr-4 text-[var(--color-warning)]">{run.reviewRequiredCount}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-success)]">{run.successCount}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-error)]">{run.failedCount}</td>
+                      <td className="py-2.5 pr-4">{run.skippedCount + run.replacedCount}</td>
+                      <td className="py-2.5 pr-4">{run.mockTestId ? run.attachedCount : "—"}</td>
                       <td className="py-2.5 pr-4">
                         <Badge variant={STATUS_VARIANT[run.status]}>{run.status}</Badge>
                       </td>

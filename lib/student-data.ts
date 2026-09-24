@@ -4,10 +4,11 @@ import {
   AttemptSourceType,
   AttemptStatus,
   CustomModuleStatus,
-  GrandTestStatus,
+  MockResultRelease,
   MockTestStatus,
   QuestionStatus,
   ReportType,
+  type Prisma,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { toIstDateString, istStartOfDay } from "@/lib/ist-time";
@@ -117,25 +118,20 @@ export async function getExamDetailForStudent(examId: string) {
   });
   if (!exam) return null;
 
-  const [mockTests, customModules, grandTests] = await Promise.all([
+  const [mockTests, customModules] = await Promise.all([
     prisma.mockTest.findMany({
       where: { examId, ...LIVE_MOCK_TEST_WHERE },
       orderBy: { order: "asc" },
-      include: { _count: { select: { questions: true } } },
+      include: { _count: { select: { questions: { where: { question: { status: QuestionStatus.PUBLISHED } } } } } },
     }),
     prisma.customModule.findMany({
       where: { examId, status: { in: VISIBLE_CUSTOM_MODULE_STATUSES } },
       orderBy: { order: "asc" },
       include: { _count: { select: { questions: true } } },
     }),
-    prisma.grandTest.findMany({
-      where: { examId, status: GrandTestStatus.PUBLISHED },
-      orderBy: { order: "asc" },
-      select: { id: true, title: true, questionCount: true, durationMinutes: true, accessType: true },
-    }),
   ]);
 
-  return { exam, mockTests, customModules, grandTests };
+  return { exam, mockTests, customModules };
 }
 
 // ---------------------------------------------------------------------------
@@ -156,12 +152,14 @@ export async function getScheduledMockTestsForStudent(studentId: string) {
   const mockTests = await prisma.mockTest.findMany({
     where: LIVE_MOCK_TEST_WHERE,
     orderBy: [{ order: "asc" }, { createdAt: "desc" }],
-    include: { exam: true, testSeries: true, _count: { select: { questions: true } } },
+    // Students only ever receive PUBLISHED questions (startMockTestAttempt),
+    // so the count they see is that number, not the admin's attached total.
+    include: { exam: true, testSeries: true, _count: { select: { questions: { where: { question: { status: QuestionStatus.PUBLISHED } } } } } },
   });
 
   const bestAttempts = await prisma.testAttempt.groupBy({
     by: ["mockTestId"],
-    where: { studentId, sourceType: AttemptSourceType.MOCK_TEST, status: AttemptStatus.SUBMITTED },
+    where: { studentId, sourceType: AttemptSourceType.MOCK_TEST, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() },
     _max: { score: true },
   });
   const bestByMockTest = new Map(bestAttempts.map((b) => [b.mockTestId, b._max.score]));
@@ -219,7 +217,7 @@ export async function getNextScheduledTestForStudent(studentId: string, examId?:
   };
 
   const available = candidates
-    .filter((row) => row.availability === "AVAILABLE" && !row.hasSubmittedAttempt)
+    .filter((row) => (row.availability === "AVAILABLE" || row.availability === "LIVE_NOW") && !row.hasSubmittedAttempt)
     .sort(byAvailableFromAsc);
   if (available.length > 0) return available[0];
 
@@ -331,63 +329,6 @@ export async function ensureCustomModuleShareToken(moduleId: string, studentId: 
   const token = crypto.randomUUID().replace(/-/g, "");
   await prisma.customModule.update({ where: { id: moduleId }, data: { shareToken: token } });
   return token;
-}
-
-// ---------------------------------------------------------------------------
-// Live Tests
-// ---------------------------------------------------------------------------
-
-/**
- * Every Live Test that's been locked (SCHEDULED or later — never a DRAFT
- * still being configured), bucketed into the four student-facing sections
- * by DERIVED state, not the raw persisted status (see lib/live-test.ts).
- * CANCELLED tests are omitted entirely — nothing useful for a student to do
- * with one.
- */
-export async function getLiveTestsForStudent(studentId: string) {
-  const { deriveLiveTestState } = await import("@/lib/live-test");
-
-  const liveTests = await prisma.liveTest.findMany({
-    // CANCELLED excluded here (not just in the JS bucketing below) so a long
-    // history of cancelled tests never inflates this query.
-    where: { status: { notIn: ["DRAFT", "CANCELLED"] } },
-    orderBy: { startAt: "desc" },
-    take: 200,
-    include: { exam: true },
-  });
-
-  const attempts = await prisma.testAttempt.findMany({
-    where: { studentId, sourceType: AttemptSourceType.LIVE_TEST, liveTestId: { in: liveTests.map((l) => l.id) } },
-    select: { liveTestId: true, id: true, status: true, score: true, maxScore: true },
-  });
-  const attemptByLiveTest = new Map(attempts.map((a) => [a.liveTestId, a]));
-
-  const now = new Date();
-  const upcoming: typeof liveTests = [];
-  const live: typeof liveTests = [];
-  const completed: typeof liveTests = [];
-  const resultsAvailable: typeof liveTests = [];
-
-  for (const lt of liveTests) {
-    const state = deriveLiveTestState(lt, now);
-    if (state === "CANCELLED") continue;
-    if (state === "SCHEDULED") upcoming.push(lt);
-    else if (state === "LIVE") live.push(lt);
-    else if (state === "RESULT_PUBLISHED") resultsAvailable.push(lt);
-    else completed.push(lt); // ENDED, result not yet published
-  }
-
-  const withAttempt = (rows: typeof liveTests) => rows.map((lt) => ({ liveTest: lt, attempt: attemptByLiveTest.get(lt.id) ?? null }));
-
-  return {
-    // The base query is ordered by startAt DESC (so the take:200 cap can
-    // never truncate away future/live tests — see above); Upcoming/Live read
-    // more naturally soonest-first, so those two are reversed for display.
-    upcoming: withAttempt(upcoming.reverse()),
-    live: withAttempt(live.reverse()),
-    completed: withAttempt(completed),
-    resultsAvailable: withAttempt(resultsAvailable),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +452,46 @@ export async function getOwnedAttempt(attemptId: string, studentId: string) {
     return getOwnedAttempt(attemptId, studentId);
   }
   return attempt;
+}
+
+/**
+ * Prisma `where` fragment excluding SUBMITTED Mock Test attempts whose
+ * result is not yet released (lib/mock-test-schedule.ts#isMockResultReleased,
+ * expressed as a query). Spread into every student-facing score aggregate
+ * (dashboard averages, analytics, weak topics, best score) so a held result
+ * can't leak through a derived number before its release time. Attempts
+ * with no Mock Test are unaffected.
+ */
+export function resultReleasedAttemptWhere(now: Date = new Date()) {
+  return {
+    NOT: {
+      mockTest: {
+        is: {
+          OR: [
+            { resultReleaseMode: MockResultRelease.CUSTOM_DATE, resultReleaseAt: { gt: now } },
+            { resultReleaseMode: MockResultRelease.AFTER_WINDOW, availableUntil: { gt: now } },
+          ],
+        },
+      },
+    },
+  } satisfies Prisma.TestAttemptWhereInput;
+}
+
+/**
+ * True if this student has a SUBMITTED Mock Test attempt containing this
+ * question whose result is still held. Ask AI is keyed by question (not
+ * attempt), so like hasInProgressAttemptForQuestion below this is the one
+ * check every surface shares.
+ */
+export async function hasUnreleasedResultForQuestion(studentId: string, questionId: string, now: Date = new Date()): Promise<boolean> {
+  const held = await prisma.testAttemptQuestion.findFirst({
+    where: {
+      questionId,
+      attempt: { studentId, status: AttemptStatus.SUBMITTED, mockTest: resultReleasedAttemptWhere(now).NOT.mockTest },
+    },
+    select: { id: true },
+  });
+  return held !== null;
 }
 
 /**
@@ -787,10 +768,10 @@ export async function getDashboardMetrics(studentId: string) {
     await Promise.all([
       prisma.answer.count({ where: { studentId, status: { not: "UNANSWERED" }, answeredAt: { gte: startOfTodayIst } } }),
       prisma.answer.findMany({ where: { studentId, status: { not: "UNANSWERED" } }, select: { questionId: true }, distinct: ["questionId"] }),
-      prisma.testAttempt.count({ where: { studentId, status: AttemptStatus.SUBMITTED } }),
-      prisma.testAttempt.aggregate({ where: { studentId, status: AttemptStatus.SUBMITTED }, _avg: { score: true } }),
+      prisma.testAttempt.count({ where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() } }),
+      prisma.testAttempt.aggregate({ where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() }, _avg: { score: true } }),
       prisma.testAttempt.findFirst({
-        where: { studentId, status: AttemptStatus.SUBMITTED },
+        where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() },
         orderBy: { submittedAt: "desc" },
         include: DASHBOARD_ATTEMPT_INCLUDE,
       }),
@@ -843,10 +824,10 @@ export async function getExamScopedDashboardMetrics(studentId: string, examId: s
         select: { questionId: true },
         distinct: ["questionId"],
       }),
-      prisma.testAttempt.count({ where: { studentId, examId, status: AttemptStatus.SUBMITTED } }),
-      prisma.testAttempt.aggregate({ where: { studentId, examId, status: AttemptStatus.SUBMITTED }, _avg: { score: true } }),
+      prisma.testAttempt.count({ where: { studentId, examId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() } }),
+      prisma.testAttempt.aggregate({ where: { studentId, examId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() }, _avg: { score: true } }),
       prisma.testAttempt.findFirst({
-        where: { studentId, examId, status: AttemptStatus.SUBMITTED },
+        where: { studentId, examId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() },
         orderBy: { submittedAt: "desc" },
         include: DASHBOARD_ATTEMPT_INCLUDE,
       }),
@@ -917,7 +898,7 @@ export async function getUpcomingExamForStudent(studentId: string) {
  */
 export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 500, examId?: string) {
   const wrongAnswers = await prisma.answer.findMany({
-    where: { studentId, isCorrect: false, attempt: examId ? { examId } : undefined },
+    where: { studentId, isCorrect: false, attempt: { ...(examId ? { examId } : {}), ...resultReleasedAttemptWhere() } },
     select: { questionId: true },
     orderBy: { id: "desc" },
     take: sampleSize,
@@ -955,18 +936,18 @@ export async function getStudentAnalytics(studentId: string) {
     prisma.answer.groupBy({ by: ["status"], where: { studentId }, _count: { _all: true } }),
     prisma.testAttempt.groupBy({
       by: ["examId"],
-      where: { studentId, status: AttemptStatus.SUBMITTED },
+      where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() },
       _avg: { score: true },
       _count: { _all: true },
     }),
     prisma.testAttempt.groupBy({
       by: ["subjectId"],
-      where: { studentId, status: AttemptStatus.SUBMITTED, subjectId: { not: null } },
+      where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere(), subjectId: { not: null } },
       _avg: { score: true },
       _count: { _all: true },
     }),
     prisma.testAttempt.findMany({
-      where: { studentId, status: AttemptStatus.SUBMITTED },
+      where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() },
       orderBy: { submittedAt: "desc" },
       take: 100, // most recent 100 — a long test history shouldn't ship an unbounded list to the client
       select: { submittedAt: true, score: true, maxScore: true, testType: true },

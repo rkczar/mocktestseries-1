@@ -11,7 +11,9 @@ import { getPaymentMode } from "@/lib/payments/settings";
 import { getCanonicalSeriesRow, mockSeriesPath } from "@/lib/mock-series";
 import { SeriesStatusSelect } from "../series-status-select";
 import { SeriesSettingsForm } from "../series-settings-form";
-import { MockTestForm } from "../../../tests/mock/mock-test-form";
+import { MockTestTable, toMockTestTableRow } from "@/components/admin/mock-test-table";
+import { hasPermission } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
 import { ScheduleTable } from "../../../tests/scheduled/schedule-table";
 
 export const metadata = { title: "Test Series — Mock Test Series.in Admin" };
@@ -52,6 +54,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
   });
   if (!series) notFound();
 
+  const canManage = await hasPermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const mockIds = series.mockTests.map((m) => m.id);
   const [subjects, products, mode, canonical, attemptAgg, studentsAgg, examOmr, globalOmr, pdfCount] = await Promise.all([
     prisma.subject.findMany({
@@ -75,7 +78,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
 
   const now = new Date();
   const published = series.mockTests.filter((m) => m.status === "PUBLISHED");
-  const available = published.filter((m) => deriveMockTestAvailability(m, now) === "AVAILABLE").length;
+  const available = published.filter((m) => ["AVAILABLE", "LIVE_NOW"].includes(deriveMockTestAvailability(m, now))).length;
   const drafts = series.mockTests.filter((m) => m.status === "DRAFT").length;
   const nextNumber = (series.mockTests.reduce((max, m) => Math.max(max, m.order), 0) || 0) + 1;
   const isCanonical = canonical?.id === series.id;
@@ -94,6 +97,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
     order: m.order,
     status: m.status,
     availableFrom: m.availableFrom,
+    availableUntil: m.availableUntil,
     durationMinutes: m.durationMinutes,
     availability: deriveMockTestAvailability(m, now),
     coverageLabel: COVERAGE_LABELS[m.coverageType],
@@ -117,12 +121,14 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
           </div>
           <div className="flex items-center gap-2">
             <SeriesStatusSelect id={series.id} status={series.status} />
-            <a
-              href="#mock-tests"
-              className="rounded-[var(--radius-button)] border border-[var(--color-primary)] bg-[var(--color-primary)]/10 px-3 py-1.5 text-sm text-[var(--color-primary)] hover:bg-[var(--color-primary)]/20"
-            >
-              Add Mock Test
-            </a>
+            {canManage ? (
+              <Link
+                href={`/admin/tests/mock/new?testSeriesId=${series.id}`}
+                className="rounded-[var(--radius-button)] border border-[var(--color-primary)] bg-[var(--color-primary)]/10 px-3 py-1.5 text-sm text-[var(--color-primary)] hover:bg-[var(--color-primary)]/20"
+              >
+                Add Mock Test
+              </Link>
+            ) : null}
           </div>
         </div>
         <nav aria-label="Series sections" className="scrollbar-none -mx-1 flex gap-1 overflow-x-auto">
@@ -155,7 +161,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
           <Tile label="Created" value={series.mockTests.length} />
           <Tile label="Published" value={published.length} />
           <Tile label="Available now" value={available} />
-          <Tile label="Upcoming" value={published.length - available} />
+          <Tile label="Upcoming" value={published.filter((m) => deriveMockTestAvailability(m, now) === "UPCOMING").length} />
           <Tile label="Remaining to plan" value={Math.max(0, series.testCount - series.mockTests.length)} />
         </CardContent>
       </Card>
@@ -164,79 +170,36 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
       <Card id="mock-tests" className="scroll-mt-20">
         <CardHeader>
           <CardTitle>Mock Tests</CardTitle>
-          <CardDescription>Ordered by Test Number. Open a test to assign questions, coverage, schedule and resources.</CardDescription>
+          <CardDescription>
+            Ordered by Test Number. Each opens the one Mock Test editor — Manage Questions / Bulk Import Questions go straight to its Questions step.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
           <div className="overflow-x-auto">
             {series.mockTests.length === 0 ? (
-              <p className="py-6 text-center text-sm text-[var(--color-muted-foreground)]">No tests yet — add the first one below.</p>
+              <p className="py-6 text-center text-sm text-[var(--color-muted-foreground)]">No tests yet — add the first one.</p>
             ) : (
-              <table className="w-full min-w-[760px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
-                    <th className="py-2 pr-4">No.</th>
-                    <th className="py-2 pr-4">Title / Coverage</th>
-                    <th className="py-2 pr-4">Questions</th>
-                    <th className="py-2 pr-4">Access</th>
-                    <th className="py-2 pr-4">Status</th>
-                    <th className="py-2 pr-4">Attempts</th>
-                    <th className="py-2 pr-4" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {series.mockTests.map((mt) => {
-                    const availability = deriveMockTestAvailability(mt, now);
-                    return (
-                      <tr key={mt.id} className="border-b border-[var(--color-border)] last:border-0">
-                        <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{mt.order}</td>
-                        <td className="py-2.5 pr-4">
-                          <span className="font-medium text-[var(--color-foreground)]">{mt.title}</span>
-                          <span className="block text-xs text-[var(--color-muted-foreground)]">
-                            {COVERAGE_LABELS[mt.coverageType]}
-                            {mt.coverageType !== "FULL_SYLLABUS"
-                              ? `: ${[...mt.coverageSubjectIds.map((s) => subjectName.get(s)), ...mt.coverageTopicIds.map((t) => topicName.get(t))].filter(Boolean).join(", ") || "—"}`
-                              : ""}
-                          </span>
-                        </td>
-                        <td className="py-2.5 pr-4">
-                          <Badge variant={mt._count.questions === 0 ? "warning" : mt.targetQuestionCount && mt._count.questions !== mt.targetQuestionCount ? "info" : "success"}>
-                            {mt._count.questions}
-                            {mt.targetQuestionCount ? ` / ${mt.targetQuestionCount}` : ""}
-                          </Badge>
-                        </td>
-                        <td className="py-2.5 pr-4">
-                          <Badge variant={mt.accessType === "FREE" ? "primary" : "neutral"}>{mt.accessType}</Badge>
-                        </td>
-                        <td className="py-2.5 pr-4">
-                          <Badge variant={mt.status !== "PUBLISHED" ? "warning" : availability === "AVAILABLE" ? "success" : "info"}>
-                            {mt.status === "PUBLISHED" ? availability : mt.status}
-                          </Badge>
-                        </td>
-                        <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{mt._count.testAttempts}</td>
-                        <td className="py-2.5 pr-4">
-                          <Link href={`/admin/tests/mock/${mt.id}`} className="text-[var(--color-primary)] hover:underline">
-                            Edit
-                          </Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <MockTestTable
+                showSeries={false}
+                canManage={canManage}
+                rows={series.mockTests.map((mt) => ({
+                  ...toMockTestTableRow({ ...mt, exam: series.exam, testSeries: series }),
+                  coverageText:
+                    mt.coverageType !== "FULL_SYLLABUS"
+                      ? [...mt.coverageSubjectIds.map((s) => subjectName.get(s)), ...mt.coverageTopicIds.map((t) => topicName.get(t))].filter(Boolean).join(", ") || "—"
+                      : undefined,
+                }))}
+              />
             )}
           </div>
-          <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-4">
-            <p className="mb-4 text-sm font-medium text-[var(--color-foreground)]">Add Mock Test #{nextNumber}</p>
-            <MockTestForm
-              exams={[]}
-              testSeries={[]}
-              lockToSeries
-              defaultExamId={series.examId}
-              defaultTestSeriesId={series.id}
-              subjects={subjects}
-              nextTestNumber={nextNumber}
-            />
-          </div>
+          {canManage ? (
+            <Link
+              href={`/admin/tests/mock/new?testSeriesId=${series.id}`}
+              className="w-fit rounded-[var(--radius-button)] border border-[var(--color-primary)] bg-[var(--color-primary)]/10 px-3 py-1.5 text-sm text-[var(--color-primary)] hover:bg-[var(--color-primary)]/20"
+            >
+              + Add Mock Test #{nextNumber}
+            </Link>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -245,7 +208,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
         <CardHeader>
           <CardTitle>Schedule</CardTitle>
           <CardDescription>
-            Release date per test (IST). Locked before, available at and after release — indefinitely. Bulk CSV scheduling for all{" "}
+            Release date per test (IST). Locked before release; Fixed Window tests also close at their end (set in each test&apos;s editor). Bulk CSV scheduling for all{" "}
             {series.testCount || "planned"} mocks:{" "}
             <Link href={`/admin/tests/scheduled?testSeriesId=${series.id}`} className="text-[var(--color-primary)] hover:underline">
               Schedule Manager → Bulk Schedule Upload
@@ -254,7 +217,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
           </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          <ScheduleTable rows={scheduleRows} />
+          <ScheduleTable rows={scheduleRows} readOnly={!canManage} />
         </CardContent>
       </Card>
 

@@ -29,3 +29,13 @@ export async function requirePermission(permission: PermissionKey) {
   }
   return session;
 }
+
+/**
+ * Non-throwing check for Server Components deciding whether to render
+ * mutation controls (e.g. FULL_ADMIN sees Mock Tests read-only). Display
+ * only — every Server Action/route still enforces requirePermission itself.
+ */
+export async function hasPermission(permission: PermissionKey): Promise<boolean> {
+  const session = await getAdminSession();
+  return Boolean(session?.user?.permissions?.includes(permission));
+}

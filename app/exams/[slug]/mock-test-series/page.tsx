@@ -12,6 +12,7 @@ import { getStudentSession } from "@/lib/student-session";
 import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { AVAILABILITY_LABELS } from "@/lib/mock-test-schedule";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
@@ -556,13 +557,15 @@ function Related({ href, icon, title }: { href: string; icon: React.ReactNode; t
 }
 
 function ScheduleRow({ test: t }: { test: PublicSeriesTest }) {
-  const available = t.availability === "AVAILABLE";
+  const available = t.availability === "AVAILABLE" || t.availability === "LIVE_NOW";
   return (
     <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-2">
           {t.testNumber > 0 ? <span className="text-xs font-semibold text-[var(--color-muted-foreground)]">Mock {t.testNumber}</span> : null}
-          <Badge variant={available ? "success" : "info"}>{available ? "Available" : "Upcoming"}</Badge>
+          <Badge variant={t.availability === "LIVE_NOW" ? "warning" : available ? "success" : t.availability === "CLOSED" ? "neutral" : "info"}>
+            {AVAILABILITY_LABELS[t.availability]}
+          </Badge>
           <Badge variant={t.accessType === "FREE" ? "primary" : "neutral"}>{t.accessType === "FREE" ? "Free" : "Complete Series"}</Badge>
         </div>
         <p className="font-medium text-[var(--color-foreground)]">{t.title}</p>
@@ -578,8 +581,13 @@ function ScheduleRow({ test: t }: { test: PublicSeriesTest }) {
             <Clock className="h-3.5 w-3.5" aria-hidden /> {t.durationMinutes} min
           </span>
           <span className="flex items-center gap-1">
-            <CalendarClock className="h-3.5 w-3.5" aria-hidden /> {t.availableFrom ? `${available ? "Released" : "Releases"} ${formatIst(t.availableFrom)}` : "Available now"}
+            <CalendarClock className="h-3.5 w-3.5" aria-hidden /> {t.availableFrom ? `${t.availability === "UPCOMING" ? "Releases" : "Released"} ${formatIst(t.availableFrom)}` : "Available now"}
           </span>
+          {t.availableUntil ? (
+            <span className="flex items-center gap-1">
+              <CalendarClock className="h-3.5 w-3.5" aria-hidden /> {t.availability === "CLOSED" ? "Closed" : "Ends"} {formatIst(t.availableUntil)}
+            </span>
+          ) : null}
         </div>
       </div>
       {available ? (

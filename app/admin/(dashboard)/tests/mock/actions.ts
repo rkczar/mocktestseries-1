@@ -2,31 +2,30 @@
 
 import { z } from "zod";
 import { redirect } from "next/navigation";
-import type { AttemptPolicy, MockTestStatus } from "@prisma/client";
+import type { MockResultRelease, MockTestStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { parseIstDateTimeLocal } from "@/lib/ist-time";
 import { revalidateMockSeriesSurfaces } from "@/lib/mock-series-revalidate";
+import { validateMockSchedule, type MockAvailabilityMode } from "@/lib/mock-test-schedule";
 
-// Mock Test Builder mutations are gated by TEST_SERIES_MANAGE (MASTER_ADMIN
-// only), not TESTS_MANAGE — Mock Tests are now part of the Test Series
-// Control Center, which is spec'd as MASTER_ADMIN-mutate / FULL_ADMIN-read-
-// only. Live Test keeps using TESTS_MANAGE unchanged; it's a separate
-// feature (see lib/permissions.ts).
+// Every Mock Test mutation is gated by TEST_SERIES_MANAGE (MASTER_ADMIN
+// only). FULL_ADMIN can open every page read-only; each action below
+// refuses it server-side regardless of what the UI shows.
 
 const optionalInt = z
   .union([z.literal(""), z.coerce.number().int().min(0).max(10000)])
   .optional()
   .transform((v) => (v === "" || v === undefined ? null : v));
 
+/** Step 1 (Basic Details) + Step 2 (Coverage). Access lives in Step 5. */
 const detailsSchema = z.object({
   title: z.string().trim().min(2, "Title is required."),
   description: z.string().trim().optional(),
   durationMinutes: z.coerce.number().int().min(1, "Duration must be at least 1 minute."),
   negativeMarking: z.coerce.number().min(0).max(1),
   instructions: z.string().trim().optional(),
-  accessType: z.enum(["FREE", "PAID"]),
   order: optionalInt,
   targetQuestionCount: optionalInt,
   coverageType: z.enum(["FULL_SYLLABUS", "PARTIAL_SYLLABUS", "SUBJECT_WISE"]).default("FULL_SYLLABUS"),
@@ -35,8 +34,7 @@ const detailsSchema = z.object({
 const mockTestSchema = detailsSchema.extend({
   examId: z.string().min(1, "Select an exam."),
   testSeriesId: z.string().optional(),
-  availableFrom: z.string().optional(),
-  attemptPolicy: z.enum(["SINGLE_ATTEMPT", "MULTIPLE_PRACTICE"]).default("MULTIPLE_PRACTICE"),
+  accessType: z.enum(["FREE", "PAID"]),
 });
 
 function readDetails(formData: FormData) {
@@ -46,7 +44,6 @@ function readDetails(formData: FormData) {
     durationMinutes: formData.get("durationMinutes"),
     negativeMarking: formData.get("negativeMarking"),
     instructions: formData.get("instructions") || undefined,
-    accessType: formData.get("accessType"),
     order: formData.get("order") ?? undefined,
     targetQuestionCount: formData.get("targetQuestionCount") ?? undefined,
     coverageType: formData.get("coverageType") || undefined,
@@ -72,24 +69,27 @@ export interface MockTestFormState {
   success?: boolean;
 }
 
+/**
+ * The single create path for a Mock Test, whether reached from Admin → Tests
+ * → Mock Tests → Create Mock Test or from a Test Series' "Add Mock Test" —
+ * both land on /admin/tests/mock/new. Creates a DRAFT and opens its editor
+ * at Step 3 (Questions).
+ */
 export async function createMockTestAction(_prev: MockTestFormState, formData: FormData): Promise<MockTestFormState> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const parsed = mockTestSchema.safeParse({
     ...readDetails(formData),
     examId: formData.get("examId"),
     testSeriesId: formData.get("testSeriesId") || undefined,
-    availableFrom: formData.get("availableFrom") || undefined,
-    attemptPolicy: formData.get("attemptPolicy") || undefined,
+    accessType: formData.get("accessType") || "PAID",
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
 
-  const { testSeriesId, availableFrom, order, ...rest } = parsed.data;
+  const { testSeriesId, order, ...rest } = parsed.data;
   if (testSeriesId) {
     const series = await prisma.testSeries.findUnique({ where: { id: testSeriesId }, select: { examId: true } });
     if (!series || series.examId !== rest.examId) return { error: "That Test Series belongs to a different exam." };
   }
-  const availableFromDate = availableFrom ? parseIstDateTimeLocal(availableFrom) : null;
-  if (availableFrom && !availableFromDate) return { error: "Invalid available-from date/time." };
 
   // Default Test Number = next free number in the series.
   let testNumber = order;
@@ -102,7 +102,7 @@ export async function createMockTestAction(_prev: MockTestFormState, formData: F
 
   const coverage = await readCoverage(formData, rest.examId, rest.coverageType);
   const mockTest = await prisma.mockTest.create({
-    data: { ...rest, ...coverage, order: testNumber, testSeriesId: testSeriesId || null, availableFrom: availableFromDate },
+    data: { ...rest, ...coverage, order: testNumber, testSeriesId: testSeriesId || null },
   });
 
   await prisma.auditLog.create({
@@ -110,11 +110,10 @@ export async function createMockTestAction(_prev: MockTestFormState, formData: F
   });
 
   revalidateMockSeriesSurfaces();
-  // Straight into the new test's editor, where questions are assigned.
-  redirect(`/admin/tests/mock/${mockTest.id}?created=1`);
+  redirect(`/admin/tests/mock/${mockTest.id}?created=1#questions`);
 }
 
-/** Edits a Mock Test's details + coverage from its detail page. Publication is changed separately (setMockTestStatusAction). */
+/** Step 1 + Step 2: details and coverage. */
 export async function updateMockTestDetailsAction(mockTestId: string, _prev: MockTestFormState, formData: FormData): Promise<MockTestFormState> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const parsed = detailsSchema.safeParse(readDetails(formData));
@@ -129,17 +128,22 @@ export async function updateMockTestDetailsAction(mockTestId: string, _prev: Moc
     data: { ...rest, ...coverage, order: order ?? existing.order, description: rest.description ?? null, instructions: rest.instructions ?? null },
   });
   await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "MOCK_TEST_UPDATED", entityType: "MockTest", entityId: mockTestId, metadata: { coverageType: rest.coverageType, accessType: rest.accessType } },
+    data: { actorId: session.user.id, action: "MOCK_TEST_UPDATED", entityType: "MockTest", entityId: mockTestId, metadata: { coverageType: rest.coverageType } },
   });
   revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`);
   return { success: true };
 }
 
+/**
+ * Step 6: publish/unpublish/archive. Publishing needs at least one
+ * PUBLISHED question — students are only ever served published questions,
+ * so a test holding only Draft imports would still be empty to them.
+ */
 export async function setMockTestStatusAction(mockTestId: string, status: MockTestStatus): Promise<{ error?: string }> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   if (status === "PUBLISHED") {
-    const count = await prisma.mockTestQuestion.count({ where: { mockTestId } });
-    if (count === 0) return { error: "Add questions before publishing — an empty test can't be attempted." };
+    const count = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { status: "PUBLISHED" } } });
+    if (count === 0) return { error: "Add at least one published question before publishing — an empty test can't be attempted." };
   }
   await prisma.mockTest.update({ where: { id: mockTestId }, data: { status } });
   await prisma.auditLog.create({
@@ -160,29 +164,51 @@ export interface ScheduleFormState {
   success?: boolean;
 }
 
-/** Edits a Mock Test's release schedule + attempt policy from the detail page (Schedule & Policy card). */
-export async function updateMockTestScheduleAction(
-  mockTestId: string,
-  _prev: ScheduleFormState,
-  formData: FormData
-): Promise<ScheduleFormState> {
-  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
-  const availableFromRaw = (formData.get("availableFrom") as string | null) || "";
-  const attemptPolicy = formData.get("attemptPolicy") as AttemptPolicy;
-  if (attemptPolicy !== "SINGLE_ATTEMPT" && attemptPolicy !== "MULTIPLE_PRACTICE") {
-    return { error: "Invalid attempt policy." };
-  }
-  const availableFrom = availableFromRaw ? parseIstDateTimeLocal(availableFromRaw) : null;
-  if (availableFromRaw && !availableFrom) return { error: "Invalid available-from date/time." };
+const AVAILABILITY_MODES: MockAvailabilityMode[] = ["AVAILABLE_NOW", "SCHEDULED_RELEASE", "FIXED_WINDOW"];
+const RESULT_MODES: MockResultRelease[] = ["IMMEDIATE", "AFTER_WINDOW", "CUSTOM_DATE"];
 
-  await prisma.mockTest.update({ where: { id: mockTestId }, data: { availableFrom, attemptPolicy } });
+function readIst(formData: FormData, key: string): { value: Date | null; invalid: boolean } {
+  const raw = ((formData.get(key) as string | null) ?? "").trim();
+  if (!raw) return { value: null, invalid: false };
+  const value = parseIstDateTimeLocal(raw);
+  return { value, invalid: value === null };
+}
+
+/**
+ * Step 4: availability mode. The mode is not stored — it is expressed
+ * entirely through availableFrom/availableUntil (see
+ * lib/mock-test-schedule.ts), so Available Now clears both and Scheduled
+ * Release clears the end. A result release of "after window closes" is only
+ * valid with a Fixed Window; switching away from one refuses rather than
+ * silently leaving results locked on a window that no longer exists.
+ */
+export async function updateMockTestScheduleAction(mockTestId: string, _prev: ScheduleFormState, formData: FormData): Promise<ScheduleFormState> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const mode = formData.get("availabilityMode") as MockAvailabilityMode;
+  if (!AVAILABILITY_MODES.includes(mode)) return { error: "Choose an availability mode." };
+  const from = readIst(formData, "availableFrom");
+  const until = readIst(formData, "availableUntil");
+  if (from.invalid || until.invalid) return { error: "Invalid date/time." };
+
+  const existing = await prisma.mockTest.findUnique({
+    where: { id: mockTestId },
+    select: { resultReleaseMode: true, resultReleaseAt: true },
+  });
+  if (!existing) return { error: "Mock test not found." };
+
+  const availableFrom = mode === "AVAILABLE_NOW" ? null : from.value;
+  const availableUntil = mode === "FIXED_WINDOW" ? until.value : null;
+  const error = validateMockSchedule({ mode, availableFrom, availableUntil, ...existing });
+  if (error) return { error };
+
+  await prisma.mockTest.update({ where: { id: mockTestId }, data: { availableFrom, availableUntil } });
   await prisma.auditLog.create({
     data: {
       actorId: session.user.id,
       action: "MOCK_TEST_SCHEDULE_UPDATED",
       entityType: "MockTest",
       entityId: mockTestId,
-      metadata: { availableFrom, attemptPolicy },
+      metadata: { mode, availableFrom, availableUntil },
     },
   });
 
@@ -190,49 +216,148 @@ export async function updateMockTestScheduleAction(
   return { success: true };
 }
 
-export interface QuestionSyncState {
-  error?: string;
-  success?: boolean;
-  count?: number;
-}
-
-/**
- * Replaces the test's ordered question list. `questionIds` arrive in display
- * order (the picker's reorder controls); only PUBLISHED questions of the
- * test's own exam are accepted, so a crafted form can't attach anything else.
- */
-export async function syncMockTestQuestionsAction(mockTestId: string, _prev: QuestionSyncState, formData: FormData): Promise<QuestionSyncState> {
+/** Step 5: FREE/PAID access, attempt policy, result release and leaderboard. */
+export async function updateMockTestAccessAction(mockTestId: string, _prev: ScheduleFormState, formData: FormData): Promise<ScheduleFormState> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
-  const mockTest = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { examId: true, status: true } });
-  if (!mockTest) return { error: "Mock test not found." };
-  const posted = [...new Set(formData.getAll("questionIds").map(String))];
-  const valid = await prisma.question.findMany({
-    where: { id: { in: posted }, examId: mockTest.examId, status: "PUBLISHED" },
-    select: { id: true },
+  const accessType = formData.get("accessType");
+  const attemptPolicy = formData.get("attemptPolicy");
+  const resultReleaseMode = formData.get("resultReleaseMode") as MockResultRelease;
+  if (accessType !== "FREE" && accessType !== "PAID") return { error: "Invalid access type." };
+  if (attemptPolicy !== "SINGLE_ATTEMPT" && attemptPolicy !== "MULTIPLE_PRACTICE") return { error: "Invalid attempt policy." };
+  if (!RESULT_MODES.includes(resultReleaseMode)) return { error: "Choose when results are released." };
+  const releaseAt = readIst(formData, "resultReleaseAt");
+  if (releaseAt.invalid) return { error: "Invalid result release date/time." };
+
+  const existing = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { availableFrom: true, availableUntil: true } });
+  if (!existing) return { error: "Mock test not found." };
+  const resultReleaseAt = resultReleaseMode === "CUSTOM_DATE" ? releaseAt.value : null;
+  const mode: MockAvailabilityMode = existing.availableUntil ? "FIXED_WINDOW" : existing.availableFrom ? "SCHEDULED_RELEASE" : "AVAILABLE_NOW";
+  const error = validateMockSchedule({ mode, ...existing, resultReleaseMode, resultReleaseAt });
+  if (error) return { error };
+
+  const leaderboardEnabled = formData.get("leaderboardEnabled") === "on";
+  await prisma.mockTest.update({
+    where: { id: mockTestId },
+    data: { accessType, attemptPolicy, resultReleaseMode, resultReleaseAt, leaderboardEnabled },
   });
-  const ok = new Set(valid.map((q) => q.id));
-  const questionIds = posted.filter((id) => ok.has(id));
-  if (mockTest.status === "PUBLISHED" && questionIds.length === 0) {
-    return { error: "A published test must keep at least one question. Unpublish it first to clear all questions." };
-  }
-
-  await prisma.$transaction([
-    prisma.mockTestQuestion.deleteMany({ where: { mockTestId } }),
-    prisma.mockTestQuestion.createMany({
-      data: questionIds.map((questionId, order) => ({ mockTestId, questionId, order })),
-    }),
-  ]);
-
   await prisma.auditLog.create({
     data: {
       actorId: session.user.id,
-      action: "MOCK_TEST_QUESTIONS_UPDATED",
+      action: "MOCK_TEST_ACCESS_UPDATED",
       entityType: "MockTest",
       entityId: mockTestId,
-      metadata: { count: questionIds.length, rejected: posted.length - questionIds.length },
+      metadata: { accessType, attemptPolicy, resultReleaseMode, resultReleaseAt, leaderboardEnabled },
     },
   });
-
   revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`);
-  return { success: true, count: questionIds.length };
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Step 3 — Questions. Every assignment references a canonical Question Bank
+// row (MockTestQuestion is only {mockTestId, questionId, order}); nothing
+// here ever copies question content. Each action re-reads the current
+// assignment server-side and rewrites a dense 0..n-1 order, so concurrent
+// edits and stale client lists can never produce duplicate slots.
+// ---------------------------------------------------------------------------
+
+export interface QuestionOpResult {
+  error?: string;
+  added?: number;
+  skipped?: number;
+}
+
+const idList = z.array(z.string().min(1).max(64)).max(2000);
+
+async function loadAssignment(mockTestId: string) {
+  const mockTest = await prisma.mockTest.findUnique({
+    where: { id: mockTestId },
+    select: { id: true, examId: true, status: true, questions: { orderBy: { order: "asc" }, select: { questionId: true } } },
+  });
+  return mockTest ? { ...mockTest, ids: mockTest.questions.map((q) => q.questionId) } : null;
+}
+
+/** Replaces the whole ordered assignment in one transaction. */
+async function writeAssignment(mockTestId: string, ids: string[]) {
+  await prisma.$transaction([
+    prisma.mockTestQuestion.deleteMany({ where: { mockTestId } }),
+    prisma.mockTestQuestion.createMany({ data: ids.map((questionId, order) => ({ mockTestId, questionId, order })) }),
+  ]);
+}
+
+async function audit(actorId: string | undefined, mockTestId: string, op: string, metadata: Record<string, unknown>) {
+  await prisma.auditLog.create({
+    data: { actorId, action: "MOCK_TEST_QUESTIONS_UPDATED", entityType: "MockTest", entityId: mockTestId, metadata: { op, ...metadata } },
+  });
+  revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`);
+}
+
+/** Only non-archived questions of the test's own exam can be attached (Question.examId == MockTest.examId). */
+async function sameExamIds(examId: string, ids: string[]) {
+  const rows = await prisma.question.findMany({ where: { id: { in: ids }, examId, status: { not: "ARCHIVED" } }, select: { id: true } });
+  const ok = new Set(rows.map((r) => r.id));
+  return ids.filter((id) => ok.has(id));
+}
+
+/** Add From Question Bank: appends in the order given, skipping anything already in the test. */
+export async function addMockTestQuestionsAction(mockTestId: string, questionIds: string[]): Promise<QuestionOpResult> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const parsed = idList.safeParse(questionIds);
+  if (!parsed.success) return { error: "Invalid selection." };
+  const current = await loadAssignment(mockTestId);
+  if (!current) return { error: "Mock test not found." };
+  const have = new Set(current.ids);
+  const wanted = [...new Set(parsed.data)].filter((id) => !have.has(id));
+  const valid = await sameExamIds(current.examId, wanted);
+  if (valid.length > 0) await writeAssignment(mockTestId, [...current.ids, ...valid]);
+  await audit(session.user.id, mockTestId, "ADD", { added: valid.length, rejected: wanted.length - valid.length });
+  return { added: valid.length, skipped: parsed.data.length - valid.length };
+}
+
+export async function removeMockTestQuestionsAction(mockTestId: string, questionIds: string[]): Promise<QuestionOpResult> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const parsed = idList.safeParse(questionIds);
+  if (!parsed.success) return { error: "Invalid selection." };
+  const current = await loadAssignment(mockTestId);
+  if (!current) return { error: "Mock test not found." };
+  const drop = new Set(parsed.data);
+  const next = current.ids.filter((id) => !drop.has(id));
+  if (current.status === "PUBLISHED" && next.length === 0) {
+    return { error: "A published test must keep at least one question. Unpublish it first to remove every question." };
+  }
+  await writeAssignment(mockTestId, next);
+  await audit(session.user.id, mockTestId, "REMOVE", { removed: current.ids.length - next.length });
+  return {};
+}
+
+/** Reorder: the posted list must be exactly the current set (no adds/drops smuggled through a reorder). */
+export async function reorderMockTestQuestionsAction(mockTestId: string, orderedIds: string[]): Promise<QuestionOpResult> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const parsed = idList.safeParse(orderedIds);
+  if (!parsed.success) return { error: "Invalid order." };
+  const current = await loadAssignment(mockTestId);
+  if (!current) return { error: "Mock test not found." };
+  const posted = parsed.data;
+  const same = posted.length === current.ids.length && new Set(posted).size === posted.length && posted.every((id) => current.ids.includes(id));
+  if (!same) return { error: "The question list changed since you loaded it — reload and try again." };
+  await writeAssignment(mockTestId, posted);
+  await audit(session.user.id, mockTestId, "REORDER", { count: posted.length });
+  return {};
+}
+
+/** Replace: swaps one question for another in the same slot. */
+export async function replaceMockTestQuestionAction(mockTestId: string, oldId: string, newId: string): Promise<QuestionOpResult> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const current = await loadAssignment(mockTestId);
+  if (!current) return { error: "Mock test not found." };
+  const slot = current.ids.indexOf(oldId);
+  if (slot === -1) return { error: "That question is no longer in this test — reload and try again." };
+  if (current.ids.includes(newId)) return { error: "The replacement is already in this test." };
+  const [valid] = await sameExamIds(current.examId, [newId]);
+  if (!valid) return { error: "The replacement must be a non-archived question from this test's exam." };
+  const next = [...current.ids];
+  next[slot] = newId;
+  await writeAssignment(mockTestId, next);
+  await audit(session.user.id, mockTestId, "REPLACE", { oldId, newId, slot: slot + 1 });
+  return {};
 }

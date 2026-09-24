@@ -1,7 +1,8 @@
-import { StubPage } from "@/components/admin/stub-page";
+import { permanentRedirect } from "next/navigation";
 
-export const metadata = { title: "Custom Tests — Mock Test Series.in Admin" };
-
+// Retired: Mock Test is the one canonical admin-created test (scheduling,
+// fixed windows and result release live in its editor). Old links and
+// bookmarks land on the Mock Test workflow instead of a 404.
 export default function Page() {
-  return <StubPage title="Custom Tests" phase="Phase 9" />;
+  permanentRedirect("/admin/tests?tab=mock");
 }

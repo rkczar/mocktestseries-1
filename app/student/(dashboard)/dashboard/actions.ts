@@ -39,6 +39,7 @@ export async function getActiveExamDashboardDataAction(examId: string) {
         examName: nextTestRow.mockTest.exam.name,
         availability: nextTestRow.availability,
         availableFrom: nextTestRow.mockTest.availableFrom ? nextTestRow.mockTest.availableFrom.toISOString() : null,
+        availableUntil: nextTestRow.mockTest.availableUntil ? nextTestRow.mockTest.availableUntil.toISOString() : null,
       }
     : null;
   return { metrics: toDashboardMetricsView(rawMetrics), subjects, nextTest };

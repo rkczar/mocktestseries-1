@@ -168,6 +168,31 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/admin/exams/test-series/[id]", to: "/admin/tests/scheduled", source: "button", label: "Schedule → Bulk Schedule Upload" },
   { from: "/admin/exams/test-series/[id]", to: "/admin/payments/products/[id]", source: "button", label: "Pricing & Access → Edit price" },
   { from: "/admin/tests/mock/[id]", to: "/exams/[slug]/mock-test-series", source: "admin-config", label: "Published mocks → public schedule" },
+
+  // --- Consolidated Admin Tests architecture --------------------------------
+  // Test Series → Mock Test → Questions (Question Bank / Bulk Import) →
+  // Schedule → Access/Result → Publish → Student Attempt → Result → Review.
+  // Bulk import hrefs carry ?examId=&target=MOCK_TEST&mockTestId= so the one
+  // Question Bank importer opens with the Exam and target Mock Test set.
+  { from: "/admin/tests", to: "/admin/tests/mock/new", source: "button", label: "+ Create Mock Test" },
+  { from: "/admin/tests", to: "/admin/tests/mock/[id]", source: "button", label: "All Tests → Edit / Manage Questions" },
+  { from: "/admin/tests/mock", to: "/admin/tests/mock/new", source: "button", label: "+ Create Mock Test" },
+  { from: "/admin/tests/mock", to: "/admin/tests/mock/[id]", source: "button", label: "Edit / Manage Questions / Preview" },
+  { from: "/admin/exams/test-series/[id]", to: "/admin/tests/mock/new", source: "button", label: "Add Mock Test (same canonical editor)" },
+  { from: "/admin/tests/mock/new", to: "/admin/tests/mock/[id]", source: "redirect", label: "Save Draft → Step 3 Questions" },
+  { from: "/admin/tests/mock/[id]", to: "/admin/questions/bulk-import", source: "button", label: "Questions → Bulk Import Questions (exam + target preselected)" },
+  { from: "/admin/exams/test-series/[id]", to: "/admin/questions/bulk-import", source: "button", label: "Mock row → Bulk Import Questions" },
+  { from: "/admin/questions/bulk-import", to: "/admin/tests/mock/[id]", source: "redirect", label: "Import Target = Mock Test → Question Bank → attach → return to Mock Test Questions" },
+  { from: "/admin/tests/mock/[id]", to: "/admin/tests/mock/[id]/preview", source: "button", label: "Preview (student view, published questions in order)" },
+  { from: "/admin/tests/scheduled", to: "/admin/tests/mock/[id]", source: "button", label: "Scheduled / fixed-window mock → Edit schedule" },
+  { from: "/admin/tests/mock/[id]", to: "/student/test-series", source: "admin-config", label: "Published mock → Student Test Series (Upcoming / Live Now / Closed)" },
+  // Retired product routes — permanent redirects, kept so old links never 404.
+  { from: "/admin/tests/grand", to: "/admin/tests", source: "redirect", label: "Retired Grand Test → Mock Tests" },
+  { from: "/admin/tests/live", to: "/admin/tests", source: "redirect", label: "Retired Live Test → Mock Tests" },
+  { from: "/admin/tests/custom", to: "/admin/tests", source: "redirect", label: "Retired Custom Test → Mock Tests" },
+  { from: "/admin/tests/random", to: "/admin/tests", source: "redirect", label: "Retired Random Test → Mock Tests" },
+  { from: "/admin/tests/builder", to: "/admin/tests", source: "redirect", label: "Retired Test Builder → Mock Tests" },
+  { from: "/student/live-tests", to: "/student/test-series", source: "redirect", label: "Retired Live Tests → Test Series" },
   { from: "/admin/payments/products/[id]", to: "/exams/[slug]/mock-test-series", source: "admin-config", label: "Price / MRP / sale → homepage, Exam Hub, series page (one source)" },
 
   // app/student/attempt/resume/page.tsx — resumes into the canonical

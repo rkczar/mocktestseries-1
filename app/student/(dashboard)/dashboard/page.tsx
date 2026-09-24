@@ -51,8 +51,9 @@ export default async function StudentDashboardPage() {
         mockTestId: nextTest.mockTest.id,
         title: nextTest.mockTest.title,
         examName: nextTest.mockTest.exam.name,
-        availability: nextTest.availability as "UPCOMING" | "AVAILABLE",
+        availability: nextTest.availability,
         availableFrom: nextTest.mockTest.availableFrom ? nextTest.mockTest.availableFrom.toISOString() : null,
+        availableUntil: nextTest.mockTest.availableUntil ? nextTest.mockTest.availableUntil.toISOString() : null,
       }
     : null;
 

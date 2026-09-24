@@ -4,6 +4,8 @@ import { Clock } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
+import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
+import { formatIst } from "@/lib/ist-time";
 import { getWhatsAppShareConfig, renderWhatsAppShareText } from "@/lib/whatsapp-share-config";
 import { BackButton } from "@/components/student/back-button";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
@@ -27,7 +29,9 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
   // Live Test: the answer key (correct option, per-option explanation) stays
   // hidden until the admin explicitly publishes results — a submission must
   // never itself expose it (Step 5.8).
-  if (attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED") {
+  const heldMockResult = attempt.testType === TestType.FULL_MOCK && attempt.mockTest && !isMockResultReleased(attempt.mockTest);
+  if (heldMockResult || (attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED")) {
+    const releaseAt = heldMockResult && attempt.mockTest ? mockResultReleaseInstant(attempt.mockTest) : null;
     return (
       <StudentShell student={student}>
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
@@ -40,7 +44,9 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
               <Clock className="h-8 w-8 text-[var(--color-muted-foreground)]" aria-hidden />
               <p className="text-sm font-medium text-[var(--color-foreground)]">Answer review isn&apos;t available yet</p>
               <p className="text-sm text-[var(--color-muted-foreground)]">
-                This is a Live Test — the answer key is released once results are published for everyone.
+                {releaseAt
+                  ? `The answer key is released on ${formatIst(releaseAt)} IST.`
+                  : "The answer key is released once results are published for everyone."}
               </p>
             </CardContent>
           </Card>

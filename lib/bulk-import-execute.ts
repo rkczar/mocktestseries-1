@@ -44,6 +44,81 @@ export interface ExecuteImportOptions {
   rowIds?: string[];
   /** When true, only rows that resolve to VALID severity are attempted; others are left untouched (not marked FAILED). */
   onlyValid?: boolean;
+  /** Mock Test target only: the admin explicitly accepted exceeding the test's expected question count. */
+  allowExceedTarget?: boolean;
+}
+
+/** Thrown before anything is written when a Mock Test target can't accept this import as-is. */
+export class MockTargetError extends Error {
+  constructor(
+    message: string,
+    readonly code: "TARGET_MISSING" | "EXAM_MISMATCH" | "EXCEEDS_EXPECTED",
+    readonly details?: Record<string, number>
+  ) {
+    super(message);
+    this.name = "MockTargetError";
+  }
+}
+
+/**
+ * Pre-flight for a run whose target is a Mock Test: the test must still
+ * exist and share the run's exam, and — unless the admin explicitly
+ * accepted it — the projected total (current questions + rows about to be
+ * attempted) must not exceed the test's expected question count. The
+ * projection is an upper bound (a SKIP duplicate already in the test adds
+ * nothing), so it can only over-warn, never under-warn.
+ */
+export async function checkMockTarget(
+  run: { mockTestId: string | null; examId: string | null },
+  scope: { runId: string; rowIds?: string[]; onlyValid?: boolean; allowExceedTarget?: boolean }
+) {
+  if (!run.mockTestId) return null;
+  const mockTest = await prisma.mockTest.findUnique({
+    where: { id: run.mockTestId },
+    select: { id: true, examId: true, targetQuestionCount: true, _count: { select: { questions: true } } },
+  });
+  if (!mockTest) throw new MockTargetError("The target Mock Test no longer exists — choose another target.", "TARGET_MISSING");
+  if (mockTest.examId !== run.examId) {
+    throw new MockTargetError("The target Mock Test belongs to a different exam than this import.", "EXAM_MISMATCH");
+  }
+  const incoming = await prisma.bulkImportRow.count({
+    where: {
+      runId: scope.runId,
+      removedFromImport: false,
+      status: BulkImportRowStatus.PENDING,
+      severity: scope.onlyValid ? ImportRowSeverity.VALID : { not: ImportRowSeverity.ERROR },
+      ...(scope.rowIds ? { id: { in: scope.rowIds } } : {}),
+    },
+  });
+  const current = mockTest._count.questions;
+  const expected = mockTest.targetQuestionCount;
+  if (expected !== null && current + incoming > expected && !scope.allowExceedTarget) {
+    throw new MockTargetError(
+      `This import would take the Mock Test to up to ${current + incoming} questions, above its expected ${expected}. Confirm to exceed, or remove rows.`,
+      "EXCEEDS_EXPECTED",
+      { current, incoming, expected, projected: current + incoming }
+    );
+  }
+  return mockTest;
+}
+
+/**
+ * Deterministic reconciliation of a Mock Test run: attachedCount is always
+ * recomputed from what actually exists — rows that produced a canonical
+ * Question id AND whose Question is assigned to the target test — never
+ * from an in-memory tally, so a crash mid-run can't leave it wrong.
+ */
+export async function reconcileMockAttachment(runId: string): Promise<number> {
+  const run = await prisma.bulkImportRun.findUnique({ where: { id: runId }, select: { mockTestId: true } });
+  if (!run?.mockTestId) return 0;
+  const rows = await prisma.bulkImportRow.findMany({
+    where: { runId, questionId: { not: null }, status: { in: [BulkImportRowStatus.SUCCESS, BulkImportRowStatus.SKIPPED, BulkImportRowStatus.REPLACED] } },
+    select: { questionId: true },
+  });
+  const ids = [...new Set(rows.map((r) => r.questionId!))];
+  const attachedCount = ids.length === 0 ? 0 : await prisma.mockTestQuestion.count({ where: { mockTestId: run.mockTestId, questionId: { in: ids } } });
+  await prisma.bulkImportRun.update({ where: { id: runId }, data: { attachedCount } });
+  return attachedCount;
 }
 
 export interface ExecuteImportResult {
@@ -56,6 +131,11 @@ export interface ExecuteImportResult {
   draftCount: number;
   reviewRequiredCount: number;
   status: BulkImportStatus;
+  /** Mock Test target only: questions newly assigned by this call. */
+  attachedNow: number;
+  /** Mock Test target only: reconciled total of this run's questions now in the test. */
+  attachedCount: number;
+  mockTestId: string | null;
 }
 
 /**
@@ -67,10 +147,12 @@ export interface ExecuteImportResult {
  * the "Import Valid Only" bulk action so they share identical semantics.
  */
 export async function executeBulkImport(options: ExecuteImportOptions): Promise<ExecuteImportResult> {
-  const { runId, adminUserId, rowIds, onlyValid } = options;
+  const { runId, adminUserId, rowIds, onlyValid, allowExceedTarget } = options;
 
   const run = await prisma.bulkImportRun.findUnique({ where: { id: runId } });
   if (!run) throw new Error("Import run not found");
+  // Mock Test target: validated up front, before any row is written.
+  const mockTarget = await checkMockTarget(run, { runId, rowIds, onlyValid, allowExceedTarget });
 
   const rows = await prisma.bulkImportRow.findMany({
     where: {
@@ -91,6 +173,32 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
   let failedCount = 0;
   let draftCount = 0;
   let reviewRequiredCount = 0;
+  let attachedNow = 0;
+
+  /**
+   * Attaches one resolved canonical Question to the target Mock Test inside
+   * the row's own transaction, appended after the test's current last slot
+   * — rows are processed in rowNumber order, so spreadsheet order becomes
+   * test order. Already-assigned questions are left in place (never a
+   * duplicate assignment; @@unique([mockTestId, questionId]) backs this),
+   * and a question of another exam is refused, which rolls the whole row
+   * back rather than leaving a written Question without its assignment.
+   */
+  const attachInTx = async (tx: Prisma.TransactionClient, questionId: string): Promise<boolean> => {
+    if (!mockTarget) return false;
+    const question = await tx.question.findUnique({ where: { id: questionId }, select: { examId: true } });
+    if (question?.examId !== mockTarget.examId) {
+      throw new Error("Resolved question belongs to a different exam than the target Mock Test — not imported or attached.");
+    }
+    const existing = await tx.mockTestQuestion.findUnique({
+      where: { mockTestId_questionId: { mockTestId: mockTarget.id, questionId } },
+      select: { id: true },
+    });
+    if (existing) return false;
+    const last = await tx.mockTestQuestion.aggregate({ where: { mockTestId: mockTarget.id }, _max: { order: true } });
+    await tx.mockTestQuestion.create({ data: { mockTestId: mockTarget.id, questionId, order: (last._max.order ?? -1) + 1 } });
+    return true;
+  };
 
   // Dedups identical questions created earlier IN THIS SAME invocation — the
   // persisted duplicate check only knows about questions that existed before
@@ -175,8 +283,11 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
         if (isDuplicate && duplicateQuestionId) {
           if (run.duplicateStrategy === BulkImportDuplicateStrategy.SKIP) {
             const existing = await tx.question.findUnique({ where: { id: duplicateQuestionId }, select: { code: true } });
+            // SKIP keeps the existing canonical Question — that is the id a
+            // Mock Test target receives (no new row, no duplicate content).
+            const attached = await attachInTx(tx, duplicateQuestionId);
             seenInRun.set(dedupKey, { id: duplicateQuestionId, code: existing?.code ?? "" });
-            return { kind: "SKIPPED" as const, questionId: duplicateQuestionId, questionCode: existing?.code ?? null };
+            return { kind: "SKIPPED" as const, questionId: duplicateQuestionId, questionCode: existing?.code ?? null, attached };
           }
           if (run.duplicateStrategy === BulkImportDuplicateStrategy.REPLACE) {
             const updated = await tx.question.update({
@@ -208,8 +319,9 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
                 order,
               })),
             });
+            const attached = await attachInTx(tx, updated.id);
             seenInRun.set(dedupKey, { id: updated.id, code: updated.code });
-            return { kind: "REPLACED" as const, questionId: updated.id, questionCode: updated.code };
+            return { kind: "REPLACED" as const, questionId: updated.id, questionCode: updated.code, attached };
           }
           // ADD_AS_NEW falls through to create below.
         }
@@ -243,10 +355,15 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
             order,
           })),
         });
+        // Attach before remembering the id: if attaching throws, the row's
+        // transaction (and its new Question) rolls back, and no later row
+        // may reuse an id that was never committed.
+        const attached = await attachInTx(tx, created.id);
         seenInRun.set(dedupKey, { id: created.id, code: created.code });
-        return { kind: "SUCCESS" as const, questionId: created.id, questionCode: created.code };
+        return { kind: "SUCCESS" as const, questionId: created.id, questionCode: created.code, attached };
       });
 
+      if (outcome.attached) attachedNow++;
       if (outcome.kind === "SUCCESS") successCount++;
       else if (outcome.kind === "SKIPPED") skippedCount++;
       else if (outcome.kind === "REPLACED") replacedCount++;
@@ -308,17 +425,30 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
     },
   });
 
+  const attachedCount = mockTarget ? await reconcileMockAttachment(runId) : 0;
+
   await prisma.auditLog.create({
     data: {
       actorId: adminUserId,
       action: onlyValid ? "BULK_IMPORT_VALID_ONLY" : "BULK_IMPORT_COMPLETED",
       entityType: "BulkImportRun",
       entityId: runId,
-      metadata: { successCount, skippedCount, replacedCount, failedCount, draftCount, reviewRequiredCount },
+      metadata: {
+        successCount,
+        skippedCount,
+        replacedCount,
+        failedCount,
+        draftCount,
+        reviewRequiredCount,
+        ...(mockTarget ? { mockTestId: mockTarget.id, attachedNow, attachedCount } : {}),
+      },
     },
   });
 
   return {
+    attachedNow,
+    attachedCount,
+    mockTestId: mockTarget?.id ?? null,
     runId,
     attempted: rows.length,
     successCount,

@@ -9,7 +9,6 @@ import {
   History as HistoryIcon,
   ArrowRight,
   BookOpen,
-  Radio,
   Flame,
   CheckCircle2,
   ListTodo,
@@ -36,7 +35,6 @@ const QUICK_LINKS = [
   { label: "Subject Test", href: "/student/subject-test", icon: BookOpen, description: "Practice by subject" },
   { label: "Test Series", href: "/student/test-series", icon: ClipboardList, description: "Scheduled mock tests" },
   { label: "Test Schedule", href: "/student/test-series", icon: CalendarClock, description: "See upcoming release dates" },
-  { label: "Live Tests", href: "/student/live-tests", icon: Radio, description: "Scheduled tests, taken together" },
   { label: "Practice with OMR", href: "/student/omr", icon: FileText, description: "Simulate the pen-and-paper exam" },
   { label: "Custom Module", href: "/student/custom-module", icon: ListChecks, description: "Focused practice sets" },
   { label: "Analytics", href: "/student/analytics", icon: BarChart3, description: "Your performance breakdown" },
@@ -47,8 +45,9 @@ interface NextTestCard {
   mockTestId: string;
   title: string;
   examName: string;
-  availability: "UPCOMING" | "AVAILABLE";
+  availability: "UPCOMING" | "AVAILABLE" | "LIVE_NOW" | "CLOSED";
   availableFrom: string | null; // ISO
+  availableUntil: string | null; // ISO — Fixed Window end
 }
 
 /** Display-only countdown — startMockTestAttempt's server-side check is the real gate regardless of what this shows. */
@@ -202,7 +201,11 @@ export function ActiveExamDashboard({
               </p>
               <p className="text-sm font-medium text-[var(--color-foreground)]">{nextTest.title}</p>
               <p className="text-xs text-[var(--color-muted-foreground)]">{nextTest.examName}</p>
-              {nextTest.availability === "AVAILABLE" ? (
+              {nextTest.availability === "LIVE_NOW" ? (
+                <Badge variant="warning" className="mt-1 w-fit">
+                  Live Now{nextTest.availableUntil ? ` · Ends ${formatIst(new Date(nextTest.availableUntil))}` : ""}
+                </Badge>
+              ) : nextTest.availability === "AVAILABLE" ? (
                 <Badge variant="success" className="mt-1 w-fit">
                   Available Now
                 </Badge>
@@ -213,9 +216,9 @@ export function ActiveExamDashboard({
                 </>
               ) : null}
             </div>
-            <Button asChild variant={nextTest.availability === "AVAILABLE" ? "primary" : "outline"}>
+            <Button asChild variant={nextTest.availability !== "UPCOMING" ? "primary" : "outline"}>
               <Link href="/student/test-series">
-                {nextTest.availability === "AVAILABLE" ? "Start Test" : "View Full Schedule"}
+                {nextTest.availability !== "UPCOMING" ? "Start Test" : "View Full Schedule"}
               </Link>
             </Button>
           </CardContent>

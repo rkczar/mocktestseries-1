@@ -1,4 +1,5 @@
 import { requireStudent } from "@/lib/student-session";
+import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
 import { getScheduledMockTestsForStudent } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
 import { loadAccessContext, evaluateContentAccess, paywallHref } from "@/lib/payments/access";
@@ -42,7 +43,10 @@ export default async function TestSeriesPage() {
       questionCount: row.mockTest._count.questions,
       durationMinutes: row.mockTest.durationMinutes,
       availableFrom: row.mockTest.availableFrom ? row.mockTest.availableFrom.toISOString() : null,
+      availableUntil: row.mockTest.availableUntil ? row.mockTest.availableUntil.toISOString() : null,
       availability: row.availability,
+      resultPending: row.hasSubmittedAttempt && !isMockResultReleased(row.mockTest),
+      resultReleaseAt: mockResultReleaseInstant(row.mockTest)?.toISOString() ?? null,
       attemptPolicy: row.mockTest.attemptPolicy,
       bestScore: row.bestScore,
       latestAttempt: row.latestAttempt,

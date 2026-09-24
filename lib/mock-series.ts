@@ -37,6 +37,8 @@ export interface PublicSeriesTest {
   durationMinutes: number;
   negativeMarking: number;
   availableFrom: Date | null;
+  /** Fixed Window end; null when the test never closes. */
+  availableUntil: Date | null;
   availability: MockTestAvailability;
   accessType: "FREE" | "PAID";
 }
@@ -76,12 +78,13 @@ export async function getExamMockSeries(examId: string, now: Date = new Date()):
       durationMinutes: true,
       negativeMarking: true,
       availableFrom: true,
+      availableUntil: true,
       accessType: true,
       status: true,
       coverageType: true,
       coverageSubjectIds: true,
       coverageTopicIds: true,
-      _count: { select: { questions: true } },
+      _count: { select: { questions: { where: { question: { status: "PUBLISHED" } } } } },
     },
   });
 
@@ -113,20 +116,22 @@ export async function getExamMockSeries(examId: string, now: Date = new Date()):
       durationMinutes: m.durationMinutes,
       negativeMarking: m.negativeMarking,
       availableFrom: m.availableFrom,
+      availableUntil: m.availableUntil,
       availability: deriveMockTestAvailability(m, now),
       accessType: m.accessType,
     };
   });
 
-  const available = tests.filter((t) => t.availability === "AVAILABLE").length;
+  const isOpen = (t: PublicSeriesTest) => t.availability === "AVAILABLE" || t.availability === "LIVE_NOW";
+  const available = tests.filter(isOpen).length;
   return {
     series: { id: series.id, name: series.name, description: series.description, instructions: series.instructions, examId: series.examId },
     // Never report fewer planned than actually published.
     planned: Math.max(series.testCount, tests.length),
     published: tests.length,
     available,
-    upcoming: tests.length - available,
-    freeAvailable: tests.filter((t) => t.availability === "AVAILABLE" && t.accessType === "FREE").length,
+    upcoming: tests.filter((t) => t.availability === "UPCOMING").length,
+    freeAvailable: tests.filter((t) => isOpen(t) && t.accessType === "FREE").length,
     tests,
   };
 }

@@ -29,9 +29,10 @@ const textareaClass =
   "w-full rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]";
 
 /**
- * Shared Mock Test fields (create + edit): Test Number, title, duration,
- * marking, FREE/PAID, target question count, description, instructions, and
- * syllabus coverage picked from the exam's real Subject/Topic taxonomy.
+ * Shared Mock Test fields (create + edit) — Step 1 Basic Details (Test
+ * Number, title, duration, marking, expected question count, description,
+ * instructions) and Step 2 Coverage, picked from the exam's real
+ * Subject/Topic taxonomy. FREE/PAID access is Step 5, not here.
  */
 export function MockTestFields({ v = {}, subjects }: { v?: MockTestFieldValues; subjects: CoverageSubject[] }) {
   const [coverageType, setCoverageType] = useState(v.coverageType ?? "FULL_SYLLABUS");
@@ -58,14 +59,7 @@ export function MockTestFields({ v = {}, subjects }: { v?: MockTestFieldValues; 
         <p className="text-[11px] text-[var(--color-muted-foreground)]">Each correct answer scores 1 mark; total marks = number of questions.</p>
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="accessType">Access</Label>
-        <SelectNative id="accessType" name="accessType" defaultValue={v.accessType ?? "PAID"}>
-          <option value="FREE">FREE — anyone signed in</option>
-          <option value="PAID">PAID — Complete Series entitlement</option>
-        </SelectNative>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="targetQuestionCount">Target question count</Label>
+        <Label htmlFor="targetQuestionCount">Expected question count</Label>
         <Input id="targetQuestionCount" name="targetQuestionCount" type="number" min={0} defaultValue={v.targetQuestionCount ?? ""} placeholder="e.g. 100" />
       </div>
       <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3">
@@ -77,8 +71,11 @@ export function MockTestFields({ v = {}, subjects }: { v?: MockTestFieldValues; 
         <textarea id="instructions" name="instructions" rows={2} defaultValue={v.instructions ?? ""} className={textareaClass} />
       </div>
 
-      <fieldset className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-4 sm:col-span-2 lg:col-span-3">
-        <legend className="px-1 text-sm font-medium text-[var(--color-foreground)]">Syllabus coverage</legend>
+      <fieldset id="coverage" className="flex scroll-mt-24 flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-4 sm:col-span-2 lg:col-span-3">
+        <legend className="px-1 text-sm font-medium text-[var(--color-foreground)]">Step 2 — Syllabus / Coverage</legend>
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          Picked from the exam&apos;s own Subject → Topic taxonomy (Sub-topics and questions sit beneath these in the Question Bank).
+        </p>
         <SelectNative
           name="coverageType"
           value={coverageType}

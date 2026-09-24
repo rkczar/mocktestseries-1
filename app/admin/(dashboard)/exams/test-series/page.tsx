@@ -84,7 +84,7 @@ export default async function TestSeriesPage({
                 {seriesList.map((series) => {
                   const published = series.mockTests.filter((t) => t.status === "PUBLISHED").length;
                   const available = series.mockTests.filter(
-                    (t) => t.status === "PUBLISHED" && deriveMockTestAvailability(t) === "AVAILABLE"
+                    (t) => t.status === "PUBLISHED" && ["AVAILABLE", "LIVE_NOW"].includes(deriveMockTestAvailability(t))
                   ).length;
                   const upcoming = published - available;
                   return (

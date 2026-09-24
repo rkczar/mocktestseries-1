@@ -12,7 +12,7 @@ import {
   type RunExamContext,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
-import { executeBulkImport, recomputeRunCounts } from "@/lib/bulk-import-execute";
+import { MockTargetError, executeBulkImport, recomputeRunCounts } from "@/lib/bulk-import-execute";
 import { QuestionStatus } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 
@@ -205,13 +205,22 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         break;
       }
       case "IMPORT_VALID_ONLY": {
-        const result = await executeBulkImport({ runId, adminUserId: session.user.id!, rowIds: targetRowIds, onlyValid: true });
+        if (run.mockTestId) await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+        const result = await executeBulkImport({
+          runId,
+          adminUserId: session.user.id!,
+          rowIds: targetRowIds,
+          onlyValid: true,
+          allowExceedTarget: (body as { allowExceedTarget?: boolean }).allowExceedTarget === true,
+        });
         resultSummary = {
           affected: result.attempted,
           successCount: result.successCount,
           skippedCount: result.skippedCount,
           replacedCount: result.replacedCount,
           failedCount: result.failedCount,
+          attachedNow: result.attachedNow,
+          attachedCount: result.attachedCount,
         };
         break;
       }
@@ -229,6 +238,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     return NextResponse.json({ success: true, action, ...resultSummary });
   } catch (error) {
+    if (error instanceof MockTargetError) {
+      return NextResponse.json({ error: error.message, code: error.code, details: error.details }, { status: 409 });
+    }
     console.error("POST /api/admin/questions/bulk-import/runs/[runId]/bulk-actions error:", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Bulk action failed" }, { status: 500 });
   }

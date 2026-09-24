@@ -28,6 +28,30 @@ interface PaperOption {
   paperCode: string | null;
 }
 
+/** A Mock Test offered as an Import Target (only those of the selected Exam are listed). */
+export interface MockTargetOption {
+  id: string;
+  examId: string;
+  order: number;
+  title: string;
+  status: string;
+  seriesName: string | null;
+  questionCount: number;
+  expected: number | null;
+  /** Human schedule/state, e.g. "Upcoming · 15 Oct 2026, 10:00 AM". */
+  scheduleLabel: string;
+}
+
+export type ImportTarget = "QUESTION_BANK" | "PREVIOUS_YEAR_PAPER" | "MOCK_TEST";
+
+export interface ImportContext {
+  examId: string;
+  target: ImportTarget;
+  mockTestId: string;
+  /** Launched from Mock Test → Questions → Bulk Import (exam + target locked, return there afterwards). */
+  fromMock: boolean;
+}
+
 type RowFilter = "all" | "valid" | "warning" | "error" | "hasImage" | "missingImage" | "reviewRequired";
 
 interface RowData {
@@ -94,6 +118,7 @@ interface RunSummary {
   hasImages: number;
   missingImages: number;
   reviewRequired: number;
+  toAttach: number;
 }
 
 interface RunInfo {
@@ -106,6 +131,18 @@ interface RunInfo {
   examYear: number | null;
   previousYearPaperId: string | null;
   previousYearPaper: { id: string; title: string } | null;
+  importSource: "QUESTION_BANK" | "MOCK_TEST";
+  attachedCount: number;
+  mockTestId: string | null;
+  mockTest: {
+    id: string;
+    title: string;
+    order: number;
+    status: string;
+    seriesName: string | null;
+    expected: number | null;
+    current: number;
+  } | null;
   status: string;
   duplicateStrategy: string;
   totalRows: number;
@@ -170,7 +207,20 @@ const MANAGED_COLUMNS: ColumnDef[] = [
   { key: "optionDImageFilename", label: "Option D Image Filename", required: false },
 ];
 
-export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; papers: PaperOption[] }) {
+export function BulkImportWorkspace({
+  exams,
+  papers,
+  mockTests,
+  canTargetMock,
+  initial,
+}: {
+  exams: ExamOption[];
+  papers: PaperOption[];
+  mockTests: MockTargetOption[];
+  /** TEST_SERIES_MANAGE — attaching to a Mock Test is a Test Series mutation. */
+  canTargetMock: boolean;
+  initial: ImportContext;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialRunId = searchParams.get("runId");
@@ -192,14 +242,26 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingRow, setEditingRow] = useState<StagedRow | null>(null);
-  const [importResult, setImportResult] = useState<{ successCount: number; skippedCount: number; replacedCount: number; failedCount: number; status: string } | null>(null);
+  const [importResult, setImportResult] = useState<{
+    successCount: number;
+    skippedCount: number;
+    replacedCount: number;
+    failedCount: number;
+    status: string;
+    mockTestId?: string | null;
+    attachedNow?: number;
+    attachedCount?: number;
+  } | null>(null);
+  const [allowExceedTarget, setAllowExceedTarget] = useState(false);
 
   // --- Upload form state -----------------------------------------------
   const [file, setFile] = useState<File | null>(null);
   const [label, setLabel] = useState("");
-  const [examId, setExamId] = useState("");
+  const [examId, setExamId] = useState(initial.examId);
   const [examYear, setExamYear] = useState("");
   const [previousYearPaperId, setPreviousYearPaperId] = useState("");
+  const [importTarget, setImportTarget] = useState<ImportTarget>(initial.target);
+  const [mockTestId, setMockTestId] = useState(initial.mockTestId);
   const [duplicateStrategy, setDuplicateStrategy] = useState("SKIP");
   const [uploading, setUploading] = useState(false);
   const [validating, setValidating] = useState(false);
@@ -211,6 +273,12 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
 
   const selectedExam = exams.find((e) => e.id === examId);
   const papersForExam = papers.filter((p) => p.examId === examId);
+  // Exam-scoped: only Mock Tests of the selected Exam are ever offered
+  // (the upload route re-checks Question.examId == MockTest.examId).
+  const mocksForExam = mockTests.filter((m) => m.examId === examId);
+  const selectedMock = mocksForExam.find((m) => m.id === mockTestId) ?? null;
+  const targetIncomplete =
+    (importTarget === "PREVIOUS_YEAR_PAPER" && !previousYearPaperId) || (importTarget === "MOCK_TEST" && !selectedMock);
 
   const loadRun = useCallback(
     async (id: string, opts?: { page?: number; filter?: RowFilter; pageSize?: PageSizeOption }) => {
@@ -256,7 +324,7 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
   };
 
   const handleUpload = async () => {
-    if (!file || !examId) return;
+    if (!file || !examId || targetIncomplete) return;
     setUploading(true);
     setError(null);
     try {
@@ -265,7 +333,11 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
       if (label) formData.append("label", label);
       formData.append("examId", examId);
       if (examYear) formData.append("examYear", examYear);
-      if (previousYearPaperId) formData.append("previousYearPaperId", previousYearPaperId);
+      if (importTarget === "PREVIOUS_YEAR_PAPER" && previousYearPaperId) formData.append("previousYearPaperId", previousYearPaperId);
+      if (importTarget === "MOCK_TEST" && selectedMock) {
+        formData.append("mockTestId", selectedMock.id);
+        formData.append("importSource", initial.fromMock ? "MOCK_TEST" : "QUESTION_BANK");
+      }
       formData.append("duplicateStrategy", duplicateStrategy);
 
       const res = await fetch("/api/admin/questions/bulk-import/upload", { method: "POST", body: formData });
@@ -282,7 +354,7 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
       if (!validateRes.ok) throw new Error((await validateRes.json()).error || "Validation failed");
 
       setRunId(data.runId);
-      router.replace(`/admin/questions/bulk-import?runId=${data.runId}`);
+      router.replace(`/admin/questions/bulk-import?runId=${data.runId}${initial.fromMock ? `&${mockContextQuery(initial)}` : ""}`);
       setPage(1);
       setFilter("all");
     } catch (err) {
@@ -301,14 +373,17 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
     setImportResult(null);
     setFile(null);
     setLabel("");
-    setExamId("");
+    setExamId(initial.fromMock ? initial.examId : "");
     setExamYear("");
     setPreviousYearPaperId("");
+    setImportTarget(initial.fromMock ? "MOCK_TEST" : "QUESTION_BANK");
+    setMockTestId(initial.fromMock ? initial.mockTestId : "");
+    setAllowExceedTarget(false);
     setDuplicateStrategy("SKIP");
     setPageSizeOption("25");
     setApplyScope("selected");
     setColumnState({});
-    router.replace("/admin/questions/bulk-import");
+    router.replace(initial.fromMock ? `/admin/questions/bulk-import?${mockContextQuery(initial)}` : "/admin/questions/bulk-import");
   };
 
   const handleChangeExam = async () => {
@@ -365,7 +440,7 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
       const res = await fetch(`/api/admin/questions/bulk-import/runs/${runId}/bulk-actions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, rowIds: rowIds ?? scopedRowIds() }),
+        body: JSON.stringify({ action, rowIds: rowIds ?? scopedRowIds(), allowExceedTarget }),
       });
       if (!res.ok) throw new Error((await res.json()).error || "Bulk action failed");
       const data = await res.json();
@@ -430,11 +505,17 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
       const res = await fetch("/api/admin/questions/bulk-import/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId }),
+        body: JSON.stringify({ runId, allowExceedTarget }),
       });
       if (!res.ok) throw new Error((await res.json()).error || "Import failed");
       const data = await res.json();
       setImportResult(data);
+      // Launched from a Mock Test: a clean import goes straight back to that
+      // test's Questions step, where every attached question is listed.
+      if (initial.fromMock && data.mockTestId && data.failedCount === 0) {
+        router.push(`/admin/tests/mock/${data.mockTestId}?imported=${runId}#questions`);
+        return;
+      }
       await loadRun(runId, { page, filter });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Import failed");
@@ -502,9 +583,11 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
                 <label className="text-xs font-medium text-[var(--color-foreground)]">Select Exam *</label>
                 <SelectNative
                   value={examId}
+                  disabled={initial.fromMock}
                   onChange={(e) => {
                     setExamId(e.target.value);
                     setPreviousYearPaperId("");
+                    setMockTestId("");
                   }}
                   className={!examId ? "border-[var(--color-warning)]" : undefined}
                 >
@@ -520,29 +603,93 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
                   <p className="text-xs text-[var(--color-error)]">No exams exist yet — create one under Exams &gt; All Exams first.</p>
                 ) : null}
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-[var(--color-muted-foreground)]">Previous Year Paper (optional)</label>
-                <SelectNative
-                  value={previousYearPaperId}
-                  onChange={(e) => setPreviousYearPaperId(e.target.value)}
-                  disabled={!examId}
-                >
-                  <option value="">— Import to Question Bank only, link later —</option>
-                  {papersForExam.map((paper) => (
-                    <option key={paper.id} value={paper.id}>
-                      {paper.year} — {paper.title}
-                      {paper.paperCode ? ` (${paper.paperCode})` : ""}
-                    </option>
-                  ))}
-                </SelectNative>
-              </div>
+              {initial.fromMock ? (
+                <p className="self-end text-xs text-[var(--color-muted-foreground)]">
+                  Opened from the Mock Test — Exam and Target are fixed.{" "}
+                  <Link href="/admin/questions/bulk-import" className="text-[var(--color-primary)] hover:underline">
+                    Use a different target
+                  </Link>
+                </p>
+              ) : null}
             </div>
+
+            {examId ? (
+              <fieldset className="flex flex-col gap-3 rounded-lg border border-[var(--color-border)] p-3" disabled={initial.fromMock}>
+                <legend className="px-1 text-xs font-medium text-[var(--color-foreground)]">Import Target</legend>
+                <div className="flex flex-wrap gap-4 text-sm">
+                  {(
+                    [
+                      ["QUESTION_BANK", "Question Bank Only"],
+                      ["PREVIOUS_YEAR_PAPER", "Previous Year Paper"],
+                      ["MOCK_TEST", "Mock Test"],
+                    ] as [ImportTarget, string][]
+                  ).map(([value, text]) => (
+                    <label key={value} className={`flex items-center gap-2 ${value === "MOCK_TEST" && !canTargetMock ? "opacity-50" : ""}`}>
+                      <input
+                        type="radio"
+                        name="importTarget"
+                        value={value}
+                        checked={importTarget === value}
+                        disabled={value === "MOCK_TEST" && !canTargetMock}
+                        onChange={() => setImportTarget(value)}
+                      />
+                      {text}
+                    </label>
+                  ))}
+                </div>
+                {importTarget === "PREVIOUS_YEAR_PAPER" ? (
+                  <SelectNative value={previousYearPaperId} onChange={(e) => setPreviousYearPaperId(e.target.value)}>
+                    <option value="">— Select a Previous Year Paper —</option>
+                    {papersForExam.map((paper) => (
+                      <option key={paper.id} value={paper.id}>
+                        {paper.year} — {paper.title}
+                        {paper.paperCode ? ` (${paper.paperCode})` : ""}
+                      </option>
+                    ))}
+                  </SelectNative>
+                ) : null}
+                {importTarget === "MOCK_TEST" ? (
+                  mocksForExam.length === 0 ? (
+                    <p className="text-xs text-[var(--color-muted-foreground)]">
+                      This exam has no Mock Tests yet.{" "}
+                      <Link href="/admin/tests/mock/new" className="text-[var(--color-primary)] hover:underline">
+                        Create one
+                      </Link>{" "}
+                      first.
+                    </p>
+                  ) : (
+                    <SelectNative value={mockTestId} onChange={(e) => setMockTestId(e.target.value)} aria-label="Target Mock Test">
+                      <option value="">— Select a Mock Test of {selectedExam?.name} —</option>
+                      {mocksForExam.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {`Mock Test ${String(m.order).padStart(2, "0")} — ${m.title} — ${m.questionCount}${m.expected !== null ? `/${m.expected}` : ""} Questions — ${m.status === "PUBLISHED" ? m.scheduleLabel : m.status}${m.seriesName ? ` · ${m.seriesName}` : ""}`}
+                        </option>
+                      ))}
+                    </SelectNative>
+                  )
+                ) : null}
+                <p className="text-[11px] text-[var(--color-muted-foreground)]">
+                  {importTarget === "QUESTION_BANK"
+                    ? "Questions are imported into the Question Bank only — link them to a paper or test later."
+                    : importTarget === "PREVIOUS_YEAR_PAPER"
+                      ? "Questions are imported into the Question Bank and linked to the selected paper as PYQs."
+                      : "Questions are imported into the canonical Question Bank, then attached to the selected Mock Test in spreadsheet row order, after its existing questions. Your file doesn't need a Mock Test column."}
+                </p>
+              </fieldset>
+            ) : null}
 
             {examId ? (
               <Alert>
                 <AlertDescription className="text-sm">
                   Importing into: <strong>{selectedExam?.name}</strong>
-                  {previousYearPaperId ? (
+                  {importTarget === "MOCK_TEST" && selectedMock ? (
+                    <>
+                      {" "}
+                      → attach to <strong>{selectedMock.title}</strong> ({selectedMock.questionCount}
+                      {selectedMock.expected !== null ? ` / ${selectedMock.expected}` : ""} questions now)
+                    </>
+                  ) : null}
+                  {importTarget === "PREVIOUS_YEAR_PAPER" && previousYearPaperId ? (
                     <>
                       {" "}
                       → linked to paper{" "}
@@ -617,7 +764,7 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
               </p>
             </div>
 
-            <Button onClick={handleUpload} disabled={!file || !examId || uploading || validating}>
+            <Button onClick={handleUpload} disabled={!file || !examId || targetIncomplete || uploading || validating}>
               {uploading ? "Uploading..." : validating ? "Validating..." : "Upload & Validate"}
             </Button>
           </CardContent>
@@ -630,6 +777,12 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
             <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-sm">
               <span>
                 Importing into: <strong>{run.exam?.name ?? "No Exam selected"}</strong>
+                {run.mockTest ? (
+                  <>
+                    {" "}
+                    → attach to Mock Test <strong>{run.mockTest.title}</strong>
+                  </>
+                ) : null}
                 {run.previousYearPaper ? (
                   <>
                     {" "}
@@ -730,15 +883,26 @@ export function BulkImportWorkspace({ exams, papers }: { exams: ExamOption[]; pa
             </CardContent>
           </Card>
 
+          {run.mockTest && summary ? <MockImportPreview run={run} summary={summary} allowExceed={allowExceedTarget} onAllowExceed={setAllowExceedTarget} /> : null}
+
           {importResult && (
             <Alert variant={importResult.failedCount > 0 ? "destructive" : "default"}>
               <CheckCircle className="h-4 w-4" />
               <AlertDescription>
                 Import finished ({importResult.status}): {importResult.successCount} created, {importResult.skippedCount} skipped,{" "}
-                {importResult.replacedCount} replaced, {importResult.failedCount} failed.{" "}
+                {importResult.replacedCount} replaced, {importResult.failedCount} failed.
+                {importResult.mockTestId ? ` ${importResult.attachedNow ?? 0} newly attached to the Mock Test (${importResult.attachedCount ?? 0} of this file's questions are now in it).` : ""}{" "}
                 <Link href={`/admin/questions/bulk-import/history/${runId}`} className="underline">
                   View details
                 </Link>
+                {importResult.mockTestId ? (
+                  <>
+                    {" · "}
+                    <Link href={`/admin/tests/mock/${importResult.mockTestId}?imported=${runId}#questions`} className="font-medium underline">
+                      Return to Mock Test Questions
+                    </Link>
+                  </>
+                ) : null}
               </AlertDescription>
             </Alert>
           )}
@@ -1117,6 +1281,85 @@ function RowEditDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function mockContextQuery(ctx: ImportContext): string {
+  return `examId=${ctx.examId}&target=MOCK_TEST&mockTestId=${ctx.mockTestId}&from=mock`;
+}
+
+/**
+ * Pre-import preview for a Mock Test target: what will be imported into the
+ * canonical Question Bank, what will be attached, and the projected test
+ * size. Exceeding the expected count needs an explicit confirmation, which
+ * the server re-checks (409 without it) — nothing is written until then.
+ */
+function MockImportPreview({
+  run,
+  summary,
+  allowExceed,
+  onAllowExceed,
+}: {
+  run: RunInfo;
+  summary: RunSummary;
+  allowExceed: boolean;
+  onAllowExceed: (v: boolean) => void;
+}) {
+  const mock = run.mockTest!;
+  const projected = mock.current + summary.toAttach;
+  const exceeds = mock.expected !== null && projected > mock.expected;
+  const tiles: [string, string | number][] = [
+    ["File Name", run.filename],
+    ["Rows Detected", summary.total],
+    ["Valid Questions", summary.valid + summary.warnings],
+    ["Invalid Questions", summary.errors],
+    ["Duplicates", summary.duplicates],
+    ["Questions to Import", summary.newQuestions + summary.updates],
+    ["Questions to Attach", summary.toAttach],
+    ["Target Exam", run.exam?.name ?? "—"],
+    ["Target Mock Test", `Mock ${mock.order} — ${mock.title}`],
+    ["Current Mock Test Questions", mock.expected !== null ? `${mock.current} / ${mock.expected}` : mock.current],
+    ["Expected Mock Test Questions", mock.expected ?? "Not set"],
+    ["Projected Total After Import", mock.expected !== null ? `${projected} / ${mock.expected}` : projected],
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Import Preview — Mock Test Target</CardTitle>
+        <CardDescription>
+          Valid rows become canonical Question Bank questions, then are attached to this test in row order after its existing {mock.current}. Duplicates
+          follow the “{run.duplicateStrategy.replace(/_/g, " ").toLowerCase()}” strategy — a skipped duplicate attaches the existing question, never a
+          copy. Invalid rows are never attached.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {tiles.map(([k, v]) => (
+            <div key={k} className="rounded-lg border border-[var(--color-border)] p-3">
+              <div className="truncate text-sm font-semibold text-[var(--color-foreground)]" title={String(v)}>
+                {v}
+              </div>
+              <div className="text-xs text-[var(--color-muted-foreground)]">{k}</div>
+            </div>
+          ))}
+        </div>
+        {exceeds ? (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription className="flex flex-col gap-2">
+              <span>
+                Expected {mock.expected}, current {mock.current}, importing up to {summary.toAttach} → projected <strong>{projected}</strong> (
+                {projected - mock.expected!} over). Remove rows, raise the expected count in the Mock Test, or confirm below.
+              </span>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={allowExceed} onChange={(e) => onAllowExceed(e.target.checked)} />
+                I understand — import and exceed the expected question count
+              </label>
+            </AlertDescription>
+          </Alert>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 

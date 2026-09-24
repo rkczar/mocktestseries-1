@@ -24,6 +24,13 @@ export async function POST(request: NextRequest) {
     const examYearRaw = (formData.get("examYear") as string | null)?.trim();
     const examYear = examYearRaw && /^\d{4}$/.test(examYearRaw) ? parseInt(examYearRaw, 10) : null;
     const previousYearPaperId = (formData.get("previousYearPaperId") as string | null)?.trim() || null;
+    // Optional Mock Test target (Import Target = Mock Test). Attaching
+    // questions to a test is a Test Series mutation, so it additionally
+    // needs TEST_SERIES_MANAGE — QUESTIONS_MANAGE alone (e.g. TEACHER) can
+    // still import to the Question Bank / a Previous Year Paper.
+    const mockTestId = (formData.get("mockTestId") as string | null)?.trim() || null;
+    const importSource = formData.get("importSource") === "MOCK_TEST" ? "MOCK_TEST" : "QUESTION_BANK";
+    if (mockTestId) await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
     const duplicateStrategyRaw = (formData.get("duplicateStrategy") as string | null)?.trim().toUpperCase();
     const duplicateStrategy = (
       duplicateStrategyRaw && VALID_STRATEGIES.includes(duplicateStrategyRaw) ? duplicateStrategyRaw : "SKIP"
@@ -73,6 +80,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (mockTestId) {
+      if (previousYearPaperId) {
+        return NextResponse.json({ error: "Choose one Import Target — a Previous Year Paper or a Mock Test, not both." }, { status: 400 });
+      }
+      const mockTest = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { examId: true } });
+      // Server-side guarantee that questions never attach across exams:
+      // Question.examId (= the run's exam) must equal MockTest.examId.
+      if (!mockTest || mockTest.examId !== examId) {
+        return NextResponse.json({ error: "Selected Mock Test does not belong to the selected Exam" }, { status: 400 });
+      }
+    }
+
     const run = await prisma.$transaction(async (tx) => {
       const created = await tx.bulkImportRun.create({
         data: {
@@ -83,6 +102,8 @@ export async function POST(request: NextRequest) {
           examId,
           examYear,
           previousYearPaperId,
+          mockTestId,
+          importSource: mockTestId ? importSource : "QUESTION_BANK",
           totalRows: rows.length,
           duplicateStrategy,
           status: BulkImportStatus.UPLOADED,
@@ -109,7 +130,7 @@ export async function POST(request: NextRequest) {
         action: "BULK_IMPORT_UPLOADED",
         entityType: "BulkImportRun",
         entityId: run.id,
-        metadata: { filename: file.name, totalRows: rows.length, format, label, examId, examYear, previousYearPaperId, duplicateStrategy },
+        metadata: { filename: file.name, totalRows: rows.length, format, label, examId, examYear, previousYearPaperId, mockTestId, importSource, duplicateStrategy },
       },
     });
 

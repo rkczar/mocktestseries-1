@@ -21,6 +21,9 @@ function F({ label, name, children, hint }: { label: string; name: string; child
   );
 }
 
+/** Retired product types — only shown when editing a legacy product already of that type. */
+const RETIRED_PRODUCT_TYPES: string[] = ["GRAND_TEST", "LIVE_TEST"];
+
 /**
  * Product/pricing editor. All price math is re-validated server-side
  * (validatePricingConfig) — this form only collects rupee strings.
@@ -50,7 +53,9 @@ export async function ProductForm({ product, readOnly }: { product: Product | nu
       </div>
       <F label="Product type" name="productType" hint="What kind of content this unlocks.">
         <SelectNative id="p-productType" name="productType" defaultValue={p?.productType ?? "TEST_SERIES"}>
-          {Object.entries(PRODUCT_TYPE_LABELS).map(([k, v]) => (
+          {Object.entries(PRODUCT_TYPE_LABELS)
+            .filter(([k]) => !RETIRED_PRODUCT_TYPES.includes(k) || p?.productType === k)
+            .map(([k, v]) => (
             <option key={k} value={k}>
               {v}
             </option>
@@ -87,26 +92,30 @@ export async function ProductForm({ product, readOnly }: { product: Product | nu
           ))}
         </SelectNative>
       </F>
-      <F label="Grand Test (Grand Test type)" name="grandTestId">
-        <SelectNative id="p-grandTestId" name="grandTestId" defaultValue={p?.grandTestId ?? ""}>
-          <option value="">—</option>
-          {grands.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.title} · {m.exam.name}
-            </option>
-          ))}
-        </SelectNative>
-      </F>
-      <F label="Live Test (Live Test type)" name="liveTestId">
-        <SelectNative id="p-liveTestId" name="liveTestId" defaultValue={p?.liveTestId ?? ""}>
-          <option value="">—</option>
-          {lives.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.title} · {m.exam.name}
-            </option>
-          ))}
-        </SelectNative>
-      </F>
+      {p?.productType === "GRAND_TEST" ? (
+        <F label="Grand Test (legacy Grand Test type)" name="grandTestId">
+          <SelectNative id="p-grandTestId" name="grandTestId" defaultValue={p?.grandTestId ?? ""}>
+            <option value="">—</option>
+            {grands.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.title} · {m.exam.name}
+              </option>
+            ))}
+          </SelectNative>
+        </F>
+      ) : null}
+      {p?.productType === "LIVE_TEST" ? (
+        <F label="Live Test (legacy Live Test type)" name="liveTestId">
+          <SelectNative id="p-liveTestId" name="liveTestId" defaultValue={p?.liveTestId ?? ""}>
+            <option value="">—</option>
+            {lives.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.title} · {m.exam.name}
+              </option>
+            ))}
+          </SelectNative>
+        </F>
+      ) : null}
 
       <div className="md:col-span-2 border-t border-[var(--color-border)] pt-3 text-sm font-medium">Pricing</div>
       <F label="Access type" name="accessType" hint="FREE keeps covered content open even in PAID mode.">
