@@ -73,6 +73,21 @@ export async function toggleAdminUserActiveAction(userId: string, isActive: bool
   if (session.user.id === userId && !isActive) {
     throw new Error("You cannot deactivate your own account.");
   }
-  await prisma.adminUser.update({ where: { id: userId }, data: { isActive } });
+  // Never leave the platform without an active owner. Checked and applied in
+  // one serializable transaction so two concurrent deactivations of the last
+  // two MASTER_ADMINs can't both pass.
+  await prisma.$transaction(
+    async (tx) => {
+      if (!isActive) {
+        const target = await tx.adminUser.findUnique({ where: { id: userId }, select: { isActive: true, role: { select: { name: true } } } });
+        if (target?.isActive && target.role.name === "MASTER_ADMIN") {
+          const activeOwners = await tx.adminUser.count({ where: { isActive: true, role: { name: "MASTER_ADMIN" } } });
+          if (activeOwners <= 1) throw new Error("You cannot deactivate the last active Master Admin.");
+        }
+      }
+      await tx.adminUser.update({ where: { id: userId }, data: { isActive } });
+    },
+    { isolationLevel: "Serializable" }
+  );
   revalidatePath("/admin/users/admins");
 }

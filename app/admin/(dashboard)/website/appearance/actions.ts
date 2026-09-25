@@ -5,8 +5,22 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
+import {
+  BUTTON_RADIUS_OPTIONS,
+  CARD_RADIUS_OPTIONS,
+  FONT_STACK_MAX_LENGTH,
+  HEX_COLOR_RE,
+  SHADOW_OPTIONS,
+  isValidFontStack,
+} from "@/lib/appearance";
 
-const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a hex color like #0F4C81");
+const hex = z.string().regex(HEX_COLOR_RE, "Must be a hex color like #0F4C81");
+// Font stacks are free text in the form but must be a plain CSS font-family
+// list (lib/appearance.ts#isValidFontStack) — they are emitted into <head>.
+const fontStack = z
+  .string()
+  .max(FONT_STACK_MAX_LENGTH)
+  .refine(isValidFontStack, "Font stack may only list font names (letters, digits, spaces, hyphens, quotes) or var(--…), separated by commas.");
 
 const schema = z.object({
   primary: hex,
@@ -16,11 +30,11 @@ const schema = z.object({
   error: hex,
   warning: hex,
   info: hex,
-  headingFont: z.string().min(2).max(300),
-  bodyFont: z.string().min(2).max(300),
-  buttonRadius: z.string().min(1).max(20),
-  cardRadius: z.string().min(1).max(20),
-  shadowIntensity: z.enum(["none", "sm", "md"]),
+  headingFont: fontStack,
+  bodyFont: fontStack,
+  buttonRadius: z.enum(BUTTON_RADIUS_OPTIONS),
+  cardRadius: z.enum(CARD_RADIUS_OPTIONS),
+  shadowIntensity: z.enum(SHADOW_OPTIONS),
 });
 
 export interface AppearanceFormState {

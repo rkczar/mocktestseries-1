@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleRazorpayWebhook } from "@/lib/payments/webhooks";
 import { enforcePaymentRateLimit, PaymentRateLimitError } from "@/lib/payments/rate-limit";
+import { clientIpFromHeaders } from "@/lib/client-ip";
 
 /**
  * Razorpay webhook endpoint (configure in Razorpay Dashboard → Webhooks:
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 const MAX_BODY_BYTES = 256 * 1024;
 
 export async function POST(request: NextRequest) {
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const ip = clientIpFromHeaders(request.headers);
   try {
     await enforcePaymentRateLimit("webhook", ip);
   } catch (e) {

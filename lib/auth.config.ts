@@ -9,7 +9,10 @@ import { DEFAULT_ROLE_PERMISSIONS, type PermissionKey } from "@/lib/permissions"
  * lives in lib/auth.ts and is only ever imported from Node.js runtime code.
  */
 export const authConfig = {
-  session: { strategy: "jwt" },
+  // Admin sessions last 12 h (not Auth.js's 30-day default). The account is
+  // additionally re-validated against the database on every request
+  // (lib/rbac.ts#getAdminSession), so this only bounds a stolen cookie.
+  session: { strategy: "jwt", maxAge: 12 * 60 * 60 },
   pages: { signIn: "/admin/login" },
   trustHost: true,
   providers: [],

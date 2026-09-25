@@ -1,8 +1,8 @@
 import "server-only";
 import crypto from "node:crypto";
-import { headers } from "next/headers";
 import { CommunicationType, type CommunicationStatus, type GrowWithUsInterest } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getClientIp } from "@/lib/client-ip";
 
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_MAX_SUBMISSIONS = 5;
@@ -12,15 +12,8 @@ const REFERENCE_PREFIX: Record<CommunicationType, string> = {
   [CommunicationType.GROW_WITH_US]: "GW",
 };
 
-/** Best-effort client IP, same idiom as lib/auth.ts / lib/auth-student.ts. */
-export async function requestIp(): Promise<string> {
-  try {
-    const h = await headers();
-    return h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-  } catch {
-    return "unknown";
-  }
-}
+/** Trusted client IP — see lib/client-ip.ts (the one resolver every rate limit uses). */
+export const requestIp = getClientIp;
 
 /**
  * DB-backed rate limit, mirroring the StudentLoginAttempt pattern

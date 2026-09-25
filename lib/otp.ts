@@ -5,6 +5,7 @@ import type { OtpPurpose } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendSms } from "@/lib/sms";
 import { getSmsProviderName, getMsg91Credentials } from "@/lib/auth-provider-config";
+import { assertOtpSendAllowed, AuthRateLimitError, TOO_MANY_ATTEMPTS_MESSAGE } from "@/lib/auth-rate-limit";
 
 const OTP_LENGTH = 6;
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -54,8 +55,22 @@ async function msg91WidgetRequest(
   return data;
 }
 
-/** Requests a fresh OTP for `mobile`, enforcing resend cooldown + a send-rate cap. */
+/**
+ * Requests a fresh OTP for `mobile`, enforcing the central send caps
+ * (per-IP, per-mobile daily, global provider ceiling — lib/auth-rate-limit.ts)
+ * plus this purpose's resend cooldown and 15-minute per-mobile cap.
+ * `ipAddress` must come from lib/client-ip.ts.
+ */
 export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress: string) {
+  try {
+    await assertOtpSendAllowed(mobile, ipAddress);
+  } catch (error) {
+    // Same wording as the per-mobile cap below, so callers (and the
+    // password-reset anti-enumeration path) treat every cap identically.
+    if (error instanceof AuthRateLimitError) throw new OtpError(TOO_MANY_ATTEMPTS_MESSAGE);
+    throw error;
+  }
+
   const windowStart = new Date(Date.now() - SEND_WINDOW_MS);
   const recentSends = await prisma.otpRequest.count({
     where: { mobile, purpose, createdAt: { gte: windowStart } },
@@ -131,6 +146,12 @@ export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress:
   return { devCode: process.env.NODE_ENV !== "production" && isDevProvider ? code : undefined };
 }
 
+/** Single use: only one concurrent verification can consume a code. */
+async function consumeOrThrow(id: string) {
+  const consumed = await prisma.otpRequest.updateMany({ where: { id, consumedAt: null }, data: { consumedAt: new Date() } });
+  if (consumed.count !== 1) throw new OtpError("This code has already been used. Please request a new one.");
+}
+
 /** Verifies and consumes the most recent unconsumed OTP for `mobile`/`purpose`. Throws OtpError on failure. */
 export async function verifyOtp(mobile: string, purpose: OtpPurpose, code: string): Promise<void> {
   const record = await prisma.otpRequest.findFirst({
@@ -140,7 +161,14 @@ export async function verifyOtp(mobile: string, purpose: OtpPurpose, code: strin
 
   if (!record) throw new OtpError("No pending verification code for this number. Please request a new one.");
   if (record.expiresAt < new Date()) throw new OtpError("This code has expired. Please request a new one.");
-  if (record.attempts >= record.maxAttempts) {
+  // Atomically claim one of the code's attempts BEFORE checking it, so
+  // parallel guesses can never exceed maxAttempts (a read-then-increment
+  // would let concurrent requests all pass the check).
+  const claimed = await prisma.otpRequest.updateMany({
+    where: { id: record.id, consumedAt: null, attempts: { lt: record.maxAttempts } },
+    data: { attempts: { increment: 1 } },
+  });
+  if (claimed.count !== 1) {
     throw new OtpError("Too many incorrect attempts. Please request a new code.");
   }
 
@@ -181,19 +209,17 @@ export async function verifyOtp(mobile: string, purpose: OtpPurpose, code: strin
     }
 
     if (!verified) {
-      await prisma.otpRequest.update({ where: { id: record.id }, data: { attempts: { increment: 1 } } });
       throw new OtpError("Incorrect code.");
     }
 
-    await prisma.otpRequest.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+    await consumeOrThrow(record.id);
     return;
   }
 
   const valid = await argon2.verify(record.otpHash, code).catch(() => false);
   if (!valid) {
-    await prisma.otpRequest.update({ where: { id: record.id }, data: { attempts: { increment: 1 } } });
     throw new OtpError("Incorrect code.");
   }
 
-  await prisma.otpRequest.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+  await consumeOrThrow(record.id);
 }

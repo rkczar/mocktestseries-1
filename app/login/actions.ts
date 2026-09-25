@@ -1,6 +1,5 @@
 "use server";
 
-import { headers } from "next/headers";
 import { AuthError } from "next-auth";
 import { z } from "zod";
 import argon2 from "argon2";
@@ -10,6 +9,7 @@ import { studentSignIn } from "@/lib/auth-student";
 import { nextStudentId } from "@/lib/student-id";
 import { requestOtp, OtpError } from "@/lib/otp";
 import { safeStudentCallback } from "@/lib/student-callback";
+import { getClientIp } from "@/lib/client-ip";
 import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
 import {
   requestPasswordReset,
@@ -29,10 +29,7 @@ export interface AuthFormState {
 
 const safeCallback = safeStudentCallback;
 
-async function clientIp() {
-  const h = await headers();
-  return h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-}
+const clientIp = getClientIp;
 
 function unwrapAuthError(error: unknown, fallback: string): string {
   if (error instanceof AuthError) {
@@ -207,7 +204,7 @@ export async function verifyPasswordResetCodeAction(
   const code = String(formData.get("code") ?? "").trim();
   if (!code) return { step: "code", identifier, error: "Enter the verification code." };
   try {
-    const token = await verifyPasswordResetCode(identifier, code);
+    const token = await verifyPasswordResetCode(identifier, code, await clientIp());
     return { step: "password", identifier, token };
   } catch (error) {
     if (error instanceof PasswordResetError) return { step: "code", identifier, error: error.message };

@@ -25,7 +25,7 @@ function formatDate(d: Date): string {
 
 export default async function CommunicationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await getAdminSession();
-  if (!session?.user?.permissions?.includes(PERMISSIONS.COMMUNICATIONS_MANAGE)) {
+  if (!session?.user?.permissions?.includes(PERMISSIONS.COMMUNICATIONS_VIEW)) {
     return <RestrictedCard title="Communication" />;
   }
 

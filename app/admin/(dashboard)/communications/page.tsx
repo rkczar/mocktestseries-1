@@ -9,7 +9,7 @@ export const metadata = { title: "Communications — Mock Test Series.in Admin" 
 
 export default async function CommunicationsPage() {
   const session = await getAdminSession();
-  if (!session?.user?.permissions?.includes(PERMISSIONS.COMMUNICATIONS_MANAGE)) {
+  if (!session?.user?.permissions?.includes(PERMISSIONS.COMMUNICATIONS_VIEW)) {
     return <RestrictedCard title="Communications" />;
   }
 

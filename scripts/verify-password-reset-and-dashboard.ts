@@ -84,12 +84,12 @@ async function main() {
     await prisma.otpRequest.create({
       data: { mobile: mobileA, purpose: OtpPurpose.RESET_PASSWORD, otpHash: await argon2.hash("123456"), expiresAt: new Date(Date.now() + 5 * 60_000), ipAddress: IP },
     });
-    check("wrong code rejected", await rejects(() => verifyPasswordResetCode(a.email!, "000000")));
-    check("unknown identifier + code rejected (generic)", await rejects(() => verifyPasswordResetCode(`nobody-${tag}@example.invalid`, "123456")));
-    const token = await verifyPasswordResetCode(a.studentId.toLowerCase(), "123456"); // by User ID, any case
+    check("wrong code rejected", await rejects(() => verifyPasswordResetCode(a.email!, "000000", "203.0.113.9")));
+    check("unknown identifier + code rejected (generic)", await rejects(() => verifyPasswordResetCode(`nobody-${tag}@example.invalid`, "123456", "203.0.113.9")));
+    const token = await verifyPasswordResetCode(a.studentId.toLowerCase(), "123456", "203.0.113.9"); // by User ID, any case
     check("correct code (via User ID) → token", typeof token === "string" && token.length >= 40);
     check("token stored hashed only", (await prisma.passwordResetToken.count({ where: { studentId: a.id, tokenHash: token } })) === 0);
-    check("OTP single-use", await rejects(() => verifyPasswordResetCode(a.email!, "123456")));
+    check("OTP single-use", await rejects(() => verifyPasswordResetCode(a.email!, "123456", "203.0.113.9")));
     check("password < 8 chars rejected", await rejects(() => resetPasswordWithToken(token, "short")));
     await resetPasswordWithToken(token, "NewPass-456");
     const after = await prisma.student.findUniqueOrThrow({ where: { id: a.id } });

@@ -7,16 +7,10 @@ import type { RoleName } from "@prisma/client";
  * built out in Phase 11. MASTER_ADMIN always has every permission.
  *
  * FULL_ADMIN (database value "ADMIN", see RoleName in schema.prisma) is
- * global read-only on both the Question Bank AND the Exams domain (Exams,
- * Subjects, Topics, Syllabus, Previous Year Papers, Test Series): it
- * retains every other manage permission it previously had, but does not
- * get QUESTIONS_MANAGE or EXAMS_MANAGE. It is also read-only on the Test
- * Series Control Center (Test Series, Mock Test Builder, Schedule Manager,
- * Resources) — it does not get TEST_SERIES_MANAGE, even though it still
- * holds TESTS_MANAGE for the unrelated, unchanged Live Test feature. Server
- * routes must keep gating every create/edit/delete/import/link/unlink
- * mutation in those areas behind requirePermission(...) — never rely on the
- * admin UI merely hiding a button.
+ * GLOBAL READ-ONLY: it holds no manage/publish key at all, only the *_VIEW
+ * keys below (see DEFAULT_ROLE_PERMISSIONS). Server routes must keep gating
+ * every create/edit/delete/import/publish/link/unlink mutation behind
+ * requirePermission(...) — never rely on the admin UI merely hiding a button.
  */
 export const PERMISSIONS = {
   WEBSITE_MANAGE: "website:manage",
@@ -30,6 +24,9 @@ export const PERMISSIONS = {
   STUDENTS_MANAGE: "students:manage",
   ANNOUNCEMENTS_MANAGE: "announcements:manage",
   COMMUNICATIONS_MANAGE: "communications:manage",
+  // Read access to the Communications inbox/detail (MASTER_ADMIN + FULL_ADMIN).
+  // Status/notes/assignment changes stay on COMMUNICATIONS_MANAGE.
+  COMMUNICATIONS_VIEW: "communications:view",
   // Deliberately NOT given to FULL_ADMIN below, even though it already has
   // WEBSITE_MANAGE — the public-page on/off switch (Admin -> Website ->
   // Pages & Content) is MASTER_ADMIN-only per spec; FULL_ADMIN can still
@@ -83,24 +80,17 @@ export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
   MASTER_ADMIN: Object.values(PERMISSIONS),
-  // FULL_ADMIN keeps every manage permission ADMIN previously had, minus
-  // QUESTIONS_MANAGE and EXAMS_MANAGE — it is view-only on the Question Bank
-  // (All Questions, Import History, Templates remain visible; add/edit/
-  // delete/import/publish/image mutations are blocked server-side) and on
-  // the Exams domain (Exams, Subjects, Topics, Syllabus, Previous Year
-  // Papers, Test Series remain visible; create/edit/delete/rename/link/
-  // unlink mutations are blocked server-side).
+  // FULL_ADMIN is GLOBAL READ-ONLY: it may open every Admin page, record,
+  // report, status and history view, but holds NO manage/publish key, so
+  // every mutation (requirePermission on each Server Action / route) is
+  // refused server-side. Only *_VIEW keys, for the few surfaces whose read
+  // access is itself restricted (payments, backup inventory, deletion audit
+  // records, communications inbox).
   FULL_ADMIN: [
-    PERMISSIONS.WEBSITE_MANAGE,
-    PERMISSIONS.HOMEPAGE_PUBLISH,
-    PERMISSIONS.TESTS_MANAGE,
-    PERMISSIONS.CUSTOM_MODULES_MANAGE,
-    PERMISSIONS.STUDENTS_MANAGE,
-    PERMISSIONS.ANNOUNCEMENTS_MANAGE,
-    PERMISSIONS.COMMUNICATIONS_MANAGE,
     PERMISSIONS.PAYMENTS_VIEW,
     PERMISSIONS.BACKUP_VIEW,
     PERMISSIONS.STUDENT_DELETION_VIEW,
+    PERMISSIONS.COMMUNICATIONS_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };

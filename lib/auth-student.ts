@@ -2,7 +2,6 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import argon2 from "argon2";
-import { headers } from "next/headers";
 import { OtpPurpose, StudentAuthProvider } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { studentAuthConfig } from "@/lib/auth-student.config";
@@ -11,6 +10,8 @@ import { verifyOtp, OtpError } from "@/lib/otp";
 import { getAuthProviderConfig, getGoogleCredentials } from "@/lib/auth-provider-config";
 import { getStudentAuthStatus, isStudentAuthEligible, resolveGoogleStudent } from "@/lib/student-lifecycle";
 import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
+import { clientIpFromHeaders, getClientIp } from "@/lib/client-ip";
+import { assertStudentPasswordLoginAllowed, assertOtpVerifyAllowed } from "@/lib/auth-rate-limit";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
@@ -19,15 +20,6 @@ function normalizeMobile(mobile: string) {
   return mobile.trim().replace(/[^\d+]/g, "");
 }
 
-/** Best-effort client IP for the OAuth signIn callback, which gets no request object. */
-async function requestIp(): Promise<string> {
-  try {
-    const h = await headers();
-    return h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-  } catch {
-    return "unknown";
-  }
-}
 
 export const {
   handlers,
@@ -59,7 +51,7 @@ export const {
       async authorize(credentials, request) {
         const identifier = String(credentials?.identifier ?? "").trim().toLowerCase();
         const password = String(credentials?.password ?? "");
-        const ipAddress = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+        const ipAddress = clientIpFromHeaders(request.headers);
         if (!identifier || !password) return null;
         if (!providerConfig.passwordEnabled) {
           throw new Error("Password login is currently disabled.");
@@ -72,6 +64,7 @@ export const {
         if (recentAttempts >= MAX_ATTEMPTS_IN_WINDOW) {
           throw new Error("Too many login attempts. Please try again later.");
         }
+        await assertStudentPasswordLoginAllowed(identifier, ipAddress);
 
         // The form is labelled "User ID or Email" — User IDs are stored upper-case (MTS-000123).
         const student = await prisma.student.findFirst({
@@ -117,7 +110,7 @@ export const {
         const mobile = normalizeMobile(String(credentials?.mobile ?? ""));
         const code = String(credentials?.code ?? "");
         const mode = String(credentials?.mode ?? "login");
-        const ipAddress = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+        const ipAddress = clientIpFromHeaders(request.headers);
         if (!mobile || !code) return null;
         if (!providerConfig.otpEnabled) {
           throw new Error("Mobile OTP login is currently disabled.");
@@ -129,6 +122,7 @@ export const {
         const purpose = mode === "register" ? OtpPurpose.REGISTER : OtpPurpose.LOGIN;
         const attemptMethod = mode === "register" ? "CREATE_ACCOUNT" : "PHONE_OTP";
 
+        await assertOtpVerifyAllowed(ipAddress);
         try {
           await verifyOtp(mobile, purpose, code);
         } catch (error) {
@@ -223,7 +217,7 @@ export const {
     async signIn({ user, account, profile }) {
       if (account?.provider !== "google") return true;
 
-      const ipAddress = await requestIp();
+      const ipAddress = await getClientIp();
 
       if (!providerConfig.google.enabled) {
         await prisma.studentLoginAttempt.create({

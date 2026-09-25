@@ -3,6 +3,8 @@ import Credentials from "next-auth/providers/credentials";
 import argon2 from "argon2";
 import { prisma } from "@/lib/prisma";
 import { authConfig } from "@/lib/auth.config";
+import { clientIpFromHeaders } from "@/lib/client-ip";
+import { isAdminLoginBlocked } from "@/lib/auth-rate-limit";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
@@ -18,8 +20,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       async authorize(credentials, request) {
         const username = String(credentials?.username ?? "").trim().toLowerCase();
         const password = String(credentials?.password ?? "");
-        const ipAddress =
-          request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+        const ipAddress = clientIpFromHeaders(request.headers);
 
         if (!username || !password) return null;
 
@@ -27,7 +28,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const recentAttempts = await prisma.loginAttempt.count({
           where: { username, ipAddress, createdAt: { gte: windowStart } },
         });
-        if (recentAttempts >= MAX_ATTEMPTS_IN_WINDOW) {
+        if (recentAttempts >= MAX_ATTEMPTS_IN_WINDOW || (await isAdminLoginBlocked(username, ipAddress))) {
           throw new Error("TooManyAttempts");
         }
 

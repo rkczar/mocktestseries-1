@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requestOtp, verifyOtp, OtpError } from "@/lib/otp";
 import { isStudentAuthEligible } from "@/lib/student-lifecycle";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
+import { assertOtpVerifyAllowed, AuthRateLimitError } from "@/lib/auth-rate-limit";
 
 /**
  * Student Forgot Password — the one reset path, built on the existing phone
@@ -97,15 +98,42 @@ export async function requestPasswordReset(identifier: string, ipAddress: string
   }
 }
 
-/** Step 2. Verifies the code and returns a one-time reset token (plaintext only to the caller). */
-export async function verifyPasswordResetCode(identifier: string, code: string): Promise<string> {
+/**
+ * Step 2. Verifies the code and returns a one-time reset token (plaintext
+ * only to the caller). `ipAddress` (lib/client-ip.ts) feeds the shared
+ * per-IP OTP-verify failure cap; every failure — including an identifier
+ * that matches no account — is recorded the same way, so the cap applies
+ * uniformly and reveals nothing.
+ */
+export async function verifyPasswordResetCode(identifier: string, code: string, ipAddress: string): Promise<string> {
+  try {
+    await assertOtpVerifyAllowed(ipAddress);
+  } catch (error) {
+    if (error instanceof AuthRateLimitError) throw new PasswordResetError(error.message);
+    throw error;
+  }
+  const recordFailure = (studentId?: string) =>
+    prisma.studentLoginAttempt.create({
+      data: {
+        identifier: identifier.trim().toLowerCase().slice(0, 200),
+        ipAddress,
+        success: false,
+        method: "PASSWORD_RESET_VERIFY",
+        studentId,
+      },
+    });
+
   const student = await findStudentByIdentifier(identifier);
-  if (!student || !/^\d{4,8}$/.test(code.trim())) throw new PasswordResetError(GENERIC_VERIFY_ERROR);
+  if (!student || !/^\d{4,8}$/.test(code.trim())) {
+    await recordFailure(student?.id);
+    throw new PasswordResetError(GENERIC_VERIFY_ERROR);
+  }
 
   try {
     await verifyOtp(student.mobile, OtpPurpose.RESET_PASSWORD, code.trim());
   } catch (error) {
     if (error instanceof OtpError) {
+      await recordFailure(student.id);
       throw new PasswordResetError(/too many/i.test(error.message) ? error.message : GENERIC_VERIFY_ERROR);
     }
     throw error;
