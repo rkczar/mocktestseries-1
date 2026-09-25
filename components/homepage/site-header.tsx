@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { TextSizeControl } from "@/components/theme/text-size-control";
 import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { GrowWithUsButton } from "./grow-with-us";
@@ -41,6 +42,7 @@ export function SiteHeader({
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {growWithUsEnabled ? <GrowWithUsButton className="hidden sm:inline-flex" /> : null}
           <ThemeToggle />
+          <TextSizeControl />
           {loginButtonVisible ? (
             <Button asChild size="sm" variant="secondary" className="hidden sm:inline-flex">
               <Link href={loginHref}>{loginButtonText}</Link>
