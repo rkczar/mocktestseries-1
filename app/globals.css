@@ -49,15 +49,15 @@
 }
 
 /* Structural / per-mode tokens (Day / Night / Eye-Saver). Not admin-       */
-/* configurable. Night is the default register: a strictly NEUTRAL          */
-/* near-black canvas (equal R=G=B — no warm/brown or blue cast under the    */
-/* admin brand color's tints) with slightly lifted charcoal cards.          */
+/* configurable. Night is the default register: a PURE BLACK canvas        */
+/* (#000, no warm/brown or blue cast under the admin brand color's tints)  */
+/* with slightly lifted neutral charcoal cards.                             */
 /* Day is the normal light site. Eye-Saver is a BLACK & WHITE reading mode  */
 /* — pure black canvas, white text, gray surfaces/borders, brand colors     */
 /* neutralized (see below). Night keeps brand/semantic color; Eye-Saver not. */
 :root,
 :root[data-theme="dark"] {
-  --color-background: #0a0a0a;
+  --color-background: #000000;
   --color-surface: #141414;
   --color-card: #171717;
   --color-foreground: #f5f5f5;
