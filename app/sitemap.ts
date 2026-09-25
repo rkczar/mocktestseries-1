@@ -4,6 +4,9 @@ import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings } from "@/lib/seo-settings";
 import { getPageVisibilityMap } from "@/lib/page-visibility";
 
+// Regenerate hourly so exams published/unpublished in Admin appear without a redeploy.
+export const revalidate = 3600;
+
 const DEEP_PAGES = ["syllabus", "previous-year-papers", "mock-test-series", "question-bank", "exam-pattern"];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
