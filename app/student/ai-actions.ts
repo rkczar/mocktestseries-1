@@ -1,6 +1,5 @@
 "use server";
 
-import { prisma } from "@/lib/prisma";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { getOrCreateExplanation, AiNotConfiguredError, AiGenerationInProgressError, type ExplanationContent } from "@/lib/ai-explanation";
 import { getOrCreateExplanationVariant } from "@/lib/ai-explanation-variants";
@@ -10,12 +9,32 @@ import {
   getStoredAiExplanation,
   getStoredAiExplanationVariant,
   isAiGenerationRateLimited,
-  hasInProgressAttemptForQuestion,
-  hasUnreleasedResultForQuestion,
+  getAnswerRevealStatus,
+  type AnswerRevealStatus,
   logActivity,
   checkAiAccessQuota,
   logAiAccess,
 } from "@/lib/student-data";
+
+const LOCKED_MESSAGES: Record<Exclude<AnswerRevealStatus, "REVEALABLE">, string> = {
+  IN_PROGRESS: "Ask AI is available once you've submitted this test.",
+  RESULT_HELD: "Ask AI unlocks when this test's result is released.",
+  NO_ACCESS: "Ask AI is available for questions from your submitted tests.",
+};
+
+/**
+ * Every Ask AI surface serves answer-revealing content, so each one goes
+ * through the canonical answer-reveal rule (lib/student-data.ts
+ * #getAnswerRevealStatus): the question must be in one of this student's
+ * SUBMITTED attempts with a released answer key, and in no running or held
+ * attempt. Any other question id — never attempted, draft, paid, another
+ * test's — is refused before cache reads or provider calls.
+ */
+async function answerLockMessage(studentId: string, questionId: unknown): Promise<string | null> {
+  if (typeof questionId !== "string" || questionId.length === 0 || questionId.length > 64) return LOCKED_MESSAGES.NO_ACCESS;
+  const status = await getAnswerRevealStatus(studentId, questionId);
+  return status === "REVEALABLE" ? null : LOCKED_MESSAGES[status];
+}
 
 /**
  * Shared by every context that shows a question with an "Ask AI" button
@@ -26,14 +45,10 @@ export async function getExplanationAction(questionId: string) {
   const student = await requireStudentOrLogin();
 
   // Neither caller carries an attemptId, so this is the one place that can
-  // catch "this question belongs to a test I'm still taking" regardless of
-  // which surface asked — blocks both a fresh generation and a cache read.
-  if (await hasInProgressAttemptForQuestion(student.id, questionId)) {
-    return { ok: false as const, error: "Ask AI is available once you've submitted this test." };
-  }
-  if (await hasUnreleasedResultForQuestion(student.id, questionId)) {
-    return { ok: false as const, error: "Ask AI unlocks when this test's result is released." };
-  }
+  // catch an unreviewed, still-running or held question regardless of which
+  // surface asked — blocks both a fresh generation and a cache read.
+  const locked = await answerLockMessage(student.id, questionId);
+  if (locked) return { ok: false as const, error: locked };
 
   // Daily AI ACCESS quota (spec: student access ≠ provider call) — checked
   // before cache/generation so an exhausted student never reaches the
@@ -83,12 +98,8 @@ export async function getExplanationVariantAction(questionId: string, variantId:
     return { ok: false as const, error: "Unknown AI variant." };
   }
 
-  if (await hasInProgressAttemptForQuestion(student.id, questionId)) {
-    return { ok: false as const, error: "Ask AI is available once you've submitted this test." };
-  }
-  if (await hasUnreleasedResultForQuestion(student.id, questionId)) {
-    return { ok: false as const, error: "Ask AI unlocks when this test's result is released." };
-  }
+  const locked = await answerLockMessage(student.id, questionId);
+  if (locked) return { ok: false as const, error: locked };
 
   const quota = await checkAiAccessQuota(student.id, questionId);
   if (!quota.allowed) {
@@ -136,21 +147,10 @@ export async function getQuestionVariantsAction(questionId: string) {
     return { ok: false as const, error: "Unknown question." };
   }
 
-  // Reachable only from a surface the student legitimately reviews: a
-  // question from one of their SUBMITTED attempts, or one they saved.
-  const [reviewed, saved] = await Promise.all([
-    prisma.testAttemptQuestion.findFirst({ where: { questionId, attempt: { studentId: student.id, status: "SUBMITTED" } }, select: { id: true } }),
-    prisma.savedQuestion.findUnique({ where: { studentId_questionId: { studentId: student.id, questionId } }, select: { id: true } }),
-  ]);
-  if (!reviewed && !saved) {
-    return { ok: false as const, error: "AI Question Variants are available for questions from your submitted tests." };
-  }
-  if (await hasInProgressAttemptForQuestion(student.id, questionId)) {
-    return { ok: false as const, error: "Ask AI is available once you've submitted this test." };
-  }
-  if (await hasUnreleasedResultForQuestion(student.id, questionId)) {
-    return { ok: false as const, error: "Ask AI unlocks when this test's result is released." };
-  }
+  // Reachable only for a question the student legitimately reviews (the
+  // canonical answer-reveal rule — saved-only or never-attempted ids fail).
+  const locked = await answerLockMessage(student.id, questionId);
+  if (locked) return { ok: false as const, error: locked };
 
   const quota = await checkAiAccessQuota(student.id, questionId);
   if (!quota.allowed) {

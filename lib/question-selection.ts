@@ -5,6 +5,7 @@ import {
   type QuestionOption,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getAnswerRevealableQuestionIds } from "@/lib/student-data";
 
 /**
  * Shared, server-side question-selection service.
@@ -138,9 +139,14 @@ function toQuestionWhere(filters: QuestionSelectionFilters) {
 async function applyAttemptFilter(where: ReturnType<typeof toQuestionWhere>, filters: QuestionSelectionFilters) {
   if (!filters.studentId || !filters.attemptFilter) return where;
 
+  // SAVED / INCORRECT draw on the student's own attempts, so they are limited
+  // to questions whose answers are already revealable to them — otherwise a
+  // question saved mid-test (or from a held result) could be re-taken in a
+  // Custom Module and its answer key read on that module's Review.
   if (filters.attemptFilter === "SAVED") {
     const rows = await prisma.savedQuestion.findMany({ where: { studentId: filters.studentId }, select: { questionId: true } });
-    return { ...where, id: { in: rows.map((r) => r.questionId) } };
+    const revealable = await getAnswerRevealableQuestionIds(filters.studentId, rows.map((r) => r.questionId));
+    return { ...where, id: { in: [...revealable] } };
   }
   if (filters.attemptFilter === "INCORRECT") {
     const rows = await prisma.answer.findMany({
@@ -148,7 +154,8 @@ async function applyAttemptFilter(where: ReturnType<typeof toQuestionWhere>, fil
       select: { questionId: true },
       distinct: ["questionId"],
     });
-    return { ...where, id: { in: rows.map((r) => r.questionId) } };
+    const revealable = await getAnswerRevealableQuestionIds(filters.studentId, rows.map((r) => r.questionId));
+    return { ...where, id: { in: [...revealable] } };
   }
   // UNATTEMPTED: exclude every question the student has ever answered/marked (any non-UNANSWERED status).
   const rows = await prisma.answer.findMany({

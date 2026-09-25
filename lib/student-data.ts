@@ -1,5 +1,5 @@
 import "server-only";
-import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
+import { LIVE_MOCK_TEST_WHERE, isMockResultReleased, type MockResultReleaseRow } from "@/lib/mock-test-schedule";
 import {
   AttemptSourceType,
   AttemptStatus,
@@ -8,6 +8,7 @@ import {
   MockTestStatus,
   QuestionStatus,
   ReportType,
+  TestType,
   type Prisma,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -510,49 +511,168 @@ export function resultReleasedAttemptWhere(now: Date = new Date()) {
 }
 
 /**
- * True if this student has a SUBMITTED Mock Test attempt containing this
- * question whose result is still held. Ask AI is keyed by question (not
- * attempt), so like hasInProgressAttemptForQuestion below this is the one
- * check every surface shares.
+ * The attempt-level answer-key hold, exactly as the Review page applies it: a
+ * Full Mock whose result release instant hasn't passed, or a legacy Live Test
+ * whose results aren't published. Pure — the one definition every
+ * question-keyed surface below derives from.
  */
-export async function hasUnreleasedResultForQuestion(studentId: string, questionId: string, now: Date = new Date()): Promise<boolean> {
-  const held = await prisma.testAttemptQuestion.findFirst({
-    where: {
-      questionId,
-      attempt: { studentId, status: AttemptStatus.SUBMITTED, mockTest: resultReleasedAttemptWhere(now).NOT.mockTest },
-    },
-    select: { id: true },
-  });
-  return held !== null;
+export function isAttemptAnswerKeyHeld(
+  attempt: {
+    testType: TestType;
+    mockTest?: MockResultReleaseRow | null;
+    liveTest?: { status: string } | null;
+  },
+  now: Date = new Date()
+): boolean {
+  if (attempt.testType === TestType.FULL_MOCK && attempt.mockTest && !isMockResultReleased(attempt.mockTest, now)) return true;
+  if (attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED") return true;
+  return false;
 }
 
 /**
- * True if this student currently has an IN_PROGRESS attempt that includes
- * this question. Ask AI (lib/ai-explanation.ts via app/student/ai-actions.ts)
- * is shared by both the (post-submission) Review page and Saved Questions —
- * neither of which carries an attemptId — so this is the one check that
- * correctly blocks getting the AI explanation for a question that's part of
- * a test the student is still actively taking, regardless of which surface
- * they request it from (a student can Save a question mid-attempt, then open
- * Saved Questions in another tab).
+ * Why a question's answer may or may not be shown to this student:
+ *  - REVEALABLE  — it is in one of their SUBMITTED attempts whose answer key is released,
+ *                  and in no IN_PROGRESS or still-held attempt of theirs.
+ *  - IN_PROGRESS — it is part of a test they are still taking.
+ *  - RESULT_HELD — it is in a submitted test whose result isn't released yet.
+ *  - NO_ACCESS   — they never legitimately reviewed it (no submitted attempt contains it).
  */
-export async function hasInProgressAttemptForQuestion(studentId: string, questionId: string): Promise<boolean> {
-  const blocking = await prisma.testAttemptQuestion.findFirst({
-    where: { questionId, attempt: { studentId, status: AttemptStatus.IN_PROGRESS } },
-    select: { id: true },
+export type AnswerRevealStatus = "REVEALABLE" | "IN_PROGRESS" | "RESULT_HELD" | "NO_ACCESS";
+
+/**
+ * Canonical answer-reveal rule for every question-keyed surface that has no
+ * attemptId of its own — Saved Questions, Ask AI (explanations, explanation
+ * variants, AI Question Variants) and the SAVED/INCORRECT practice filters.
+ * Correct answers, isCorrect flags and explanations for a question are only
+ * ever served when this returns REVEALABLE; it mirrors the Review page's
+ * gate (isAttemptAnswerKeyHeld) so no surface can unlock earlier than Review.
+ */
+export async function getAnswerRevealStatuses(
+  studentId: string,
+  questionIds: string[],
+  now: Date = new Date()
+): Promise<Map<string, AnswerRevealStatus>> {
+  const statuses = new Map<string, AnswerRevealStatus>(questionIds.map((id) => [id, "NO_ACCESS"]));
+  if (questionIds.length === 0) return statuses;
+
+  const rows = await prisma.testAttemptQuestion.findMany({
+    where: {
+      questionId: { in: questionIds },
+      attempt: { studentId, status: { in: [AttemptStatus.IN_PROGRESS, AttemptStatus.SUBMITTED] } },
+    },
+    select: {
+      questionId: true,
+      attempt: {
+        select: {
+          status: true,
+          testType: true,
+          mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true } },
+          liveTest: { select: { status: true } },
+        },
+      },
+    },
   });
-  return blocking !== null;
+
+  // Any blocking attempt wins over a released one: a question retaken in a
+  // new, still-running test must stay locked until that test is over too.
+  const RANK: Record<AnswerRevealStatus, number> = { NO_ACCESS: 0, REVEALABLE: 1, RESULT_HELD: 2, IN_PROGRESS: 3 };
+  for (const row of rows) {
+    const next: AnswerRevealStatus =
+      row.attempt.status === AttemptStatus.IN_PROGRESS
+        ? "IN_PROGRESS"
+        : isAttemptAnswerKeyHeld(row.attempt, now)
+          ? "RESULT_HELD"
+          : "REVEALABLE";
+    if (RANK[next] > RANK[statuses.get(row.questionId) ?? "NO_ACCESS"]) statuses.set(row.questionId, next);
+  }
+  return statuses;
+}
+
+export async function getAnswerRevealStatus(studentId: string, questionId: string, now: Date = new Date()): Promise<AnswerRevealStatus> {
+  return (await getAnswerRevealStatuses(studentId, [questionId], now)).get(questionId) ?? "NO_ACCESS";
+}
+
+/** Subset of `questionIds` whose answers this student may see (REVEALABLE). */
+export async function getAnswerRevealableQuestionIds(studentId: string, questionIds: string[], now: Date = new Date()): Promise<Set<string>> {
+  const statuses = await getAnswerRevealStatuses(studentId, questionIds, now);
+  return new Set([...statuses].filter(([, s]) => s === "REVEALABLE").map(([id]) => id));
+}
+
+/** True if this student has a SUBMITTED attempt containing this question whose answer key is still held. */
+export async function hasUnreleasedResultForQuestion(studentId: string, questionId: string, now: Date = new Date()): Promise<boolean> {
+  return (await getAnswerRevealStatus(studentId, questionId, now)) === "RESULT_HELD";
+}
+
+/** True if this student currently has an IN_PROGRESS attempt that includes this question. */
+export async function hasInProgressAttemptForQuestion(studentId: string, questionId: string): Promise<boolean> {
+  return (await getAnswerRevealStatus(studentId, questionId)) === "IN_PROGRESS";
 }
 
 // ---------------------------------------------------------------------------
 // Saved Questions
 // ---------------------------------------------------------------------------
 
-export async function getSavedQuestions(studentId: string) {
-  return prisma.savedQuestion.findMany({
+export interface SavedQuestionView {
+  id: string;
+  code: string;
+  text: string;
+  imageUrl: string | null;
+  examName: string;
+  subjectName: string | null;
+  topicName: string | null;
+  /** False while the answer key is locked (see getAnswerRevealStatuses) — options then carry no isCorrect at all. */
+  answerRevealed: boolean;
+  lockReason: Exclude<AnswerRevealStatus, "REVEALABLE"> | null;
+  options: { label: string; text: string; imageUrl: string | null; isCorrect?: boolean }[];
+}
+
+/**
+ * Saved Questions, serialized for the student. The answer key (isCorrect) is
+ * attached ONLY for questions whose answers are REVEALABLE to this student;
+ * for anything saved during a running test, from a held result, or never
+ * legitimately reviewed, the field is absent from the data itself — never
+ * merely hidden by the page.
+ */
+export async function getSavedQuestions(studentId: string): Promise<SavedQuestionView[]> {
+  const rows = await prisma.savedQuestion.findMany({
     where: { studentId },
     orderBy: { createdAt: "desc" },
-    include: { question: { include: { exam: true, subject: true, topic: true, options: true } } },
+    select: {
+      question: {
+        select: {
+          id: true,
+          code: true,
+          text: true,
+          imageUrl: true,
+          exam: { select: { name: true } },
+          subject: { select: { name: true } },
+          topic: { select: { name: true } },
+          options: { orderBy: { order: "asc" }, select: { label: true, text: true, imageUrl: true, isCorrect: true } },
+        },
+      },
+    },
+  });
+  const statuses = await getAnswerRevealStatuses(studentId, rows.map((r) => r.question.id));
+
+  return rows.map(({ question: q }) => {
+    const status = statuses.get(q.id) ?? "NO_ACCESS";
+    const answerRevealed = status === "REVEALABLE";
+    return {
+      id: q.id,
+      code: q.code,
+      text: q.text,
+      imageUrl: q.imageUrl,
+      examName: q.exam.name,
+      subjectName: q.subject?.name ?? null,
+      topicName: q.topic?.name ?? null,
+      answerRevealed,
+      lockReason: answerRevealed ? null : status as Exclude<AnswerRevealStatus, "REVEALABLE">,
+      options: q.options.map((o) =>
+        answerRevealed
+          ? { label: o.label, text: o.text, imageUrl: o.imageUrl, isCorrect: o.isCorrect }
+          : { label: o.label, text: o.text, imageUrl: o.imageUrl }
+      ),
+    };
   });
 }
 
@@ -571,12 +691,26 @@ export async function getSavedQuestionIdSet(studentId: string, questionIds: stri
   return new Set(rows.map((r) => r.questionId));
 }
 
+/**
+ * Save/unsave. Unsaving is always allowed; saving is allowed only for a
+ * question in one of this student's own attempts (the test player and
+ * Review are the only save surfaces) — including a still-running one, so
+ * bookmarking mid-test keeps working. An arbitrary questionId is refused.
+ */
 export async function toggleSavedQuestion(studentId: string, questionId: string) {
+  if (typeof questionId !== "string" || questionId.length === 0 || questionId.length > 64) {
+    throw new Error("Unknown question.");
+  }
   const existing = await prisma.savedQuestion.findUnique({ where: { studentId_questionId: { studentId, questionId } } });
   if (existing) {
     await prisma.savedQuestion.delete({ where: { id: existing.id } });
     return false;
   }
+  const inOwnAttempt = await prisma.testAttemptQuestion.findFirst({
+    where: { questionId, attempt: { studentId } },
+    select: { id: true },
+  });
+  if (!inOwnAttempt) throw new Error("Only questions from your own tests can be saved.");
   await prisma.savedQuestion.create({ data: { studentId, questionId } });
   await logActivity(studentId, "QUESTION_SAVED", { questionId });
   return true;

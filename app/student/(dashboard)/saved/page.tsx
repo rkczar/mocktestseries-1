@@ -31,11 +31,11 @@ export default async function SavedQuestionsPage() {
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
-          {saved.map(({ question: q }) => (
+          {saved.map((q) => (
             <div key={q.id} className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs text-[var(--color-muted-foreground)]">
-                  {q.exam.name} {q.subject ? `· ${q.subject.name}` : ""} {q.topic ? `· ${q.topic.name}` : ""}
+                  {q.examName} {q.subjectName ? `· ${q.subjectName}` : ""} {q.topicName ? `· ${q.topicName}` : ""}
                 </span>
                 <span className="font-mono text-xs text-[var(--color-muted-foreground)]">{q.code}</span>
               </div>
@@ -79,7 +79,17 @@ export default async function SavedQuestionsPage() {
                 <ReportQuestionDialog onSubmit={reportSavedQuestionAction.bind(null, q.id)} />
               </div>
 
-              <ExplanationPanel questionId={q.id} />
+              {q.answerRevealed ? (
+                <ExplanationPanel questionId={q.id} />
+              ) : (
+                <p className="mt-4 text-xs text-[var(--color-muted-foreground)]">
+                  {q.lockReason === "IN_PROGRESS"
+                    ? "Answer and explanation unlock after you submit this test."
+                    : q.lockReason === "RESULT_HELD"
+                      ? "Answer and explanation unlock when this test's result is released."
+                      : "Answer and explanation are available for questions from your submitted tests."}
+                </p>
+              )}
             </div>
           ))}
         </div>
