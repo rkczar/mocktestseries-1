@@ -18,6 +18,7 @@ import { SubscriptionStatusCard } from "@/components/student/subscription-status
 import { ActiveExamDashboard } from "./active-exam-dashboard";
 import { toDashboardMetricsView } from "./metrics-view";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
+import { ensureDefaultExamEnrollment } from "@/lib/default-enrollment";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
@@ -26,11 +27,21 @@ export default async function StudentDashboardPage() {
   const cookieStore = await cookies();
   const requestedExamId = cookieStore.get(ACTIVE_EXAM_COOKIE)?.value;
 
-  const [globalMetrics, dashboardAnnouncements, enrolledExams] = await Promise.all([
+  const [globalMetrics, dashboardAnnouncements, initialEnrolledExams] = await Promise.all([
     getDashboardMetrics(student.id),
     getVisibleAnnouncementsForStudent(student.id, { dashboardOnly: true, limit: 5 }),
     getEnrolledExams(student.id),
   ]);
+
+  // Safety net for default enrollment (sign-up paths enroll first): a student
+  // with no ACTIVE-exam enrollment is enrolled into the default exam here,
+  // idempotently. Already-enrolled students never reach this write. When no
+  // default exam exists, the existing "Browse Exams" prompt is shown instead.
+  let enrolledExams = initialEnrolledExams;
+  if (!enrolledExams.some((e) => e.isActive)) {
+    const outcome = await ensureDefaultExamEnrollment(student.id);
+    if (outcome.status === "ENROLLED") enrolledExams = await getEnrolledExams(student.id);
+  }
 
   // If only one Exam is enrolled it's auto-selected; if multiple, the cookie
   // (last switch, if it's still one of this student's enrollments) wins;
@@ -70,42 +81,49 @@ export default async function StudentDashboardPage() {
         </p>
       </div>
 
-      {dashboardAnnouncements.length > 0 ? (
-        <div className="flex flex-col gap-3">
-          {dashboardAnnouncements.map((a) => (
-            <Card key={a.id} className={a.priority === "IMPORTANT" ? "border-[var(--color-warning)]/50" : undefined}>
-              <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
-                <div className="flex items-start gap-3">
-                  <Megaphone className="mt-0.5 h-5 w-5 shrink-0 text-[var(--color-primary)]" aria-hidden />
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-[var(--color-foreground)]">{a.title}</p>
-                      {a.priority === "IMPORTANT" ? <Badge variant="warning">Important</Badge> : null}
-                    </div>
-                    <p className="text-sm text-[var(--color-muted-foreground)]">{a.message}</p>
-                  </div>
-                </div>
-                {a.ctaRoute && a.ctaLabel ? (
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={a.ctaRoute}>{a.ctaLabel}</Link>
-                  </Button>
-                ) : null}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : null}
-
-      <SubscriptionStatusCard studentId={student.id} />
-
       <ActiveExamDashboard
-        enrolledExams={enrolledExams.map((e) => ({ id: e.id, name: e.name }))}
+        enrolledExams={enrolledExams.map((e) => ({
+          id: e.id,
+          name: e.name,
+          examDate: (e.examDate ?? e.upcomingDate)?.toISOString() ?? null,
+        }))}
         initialActiveExamId={activeExamId}
         initialMetrics={initialMetrics}
         initialSubjects={subjects}
         studyStreak={globalMetrics.studyStreak}
         nextTest={nextTestCard}
         omrResourceId={omrSheet?.id ?? null}
+        notices={
+          <>
+            {dashboardAnnouncements.length > 0 ? (
+              <div className="flex flex-col gap-3">
+                {dashboardAnnouncements.map((a) => (
+                  <Card key={a.id} className={a.priority === "IMPORTANT" ? "border-[var(--color-warning)]/50" : undefined}>
+                    <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
+                      <div className="flex items-start gap-3">
+                        <Megaphone className="mt-0.5 h-5 w-5 shrink-0 text-[var(--color-primary)]" aria-hidden />
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-[var(--color-foreground)]">{a.title}</p>
+                            {a.priority === "IMPORTANT" ? <Badge variant="warning">Important</Badge> : null}
+                          </div>
+                          <p className="text-sm text-[var(--color-muted-foreground)]">{a.message}</p>
+                        </div>
+                      </div>
+                      {a.ctaRoute && a.ctaLabel ? (
+                        <Button asChild size="sm" variant="outline">
+                          <Link href={a.ctaRoute}>{a.ctaLabel}</Link>
+                        </Button>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : null}
+
+            <SubscriptionStatusCard studentId={student.id} />
+          </>
+        }
       />
     </div>
   );

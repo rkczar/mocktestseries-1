@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { resolveDefaultExam, setConfiguredDefaultExamId } from "@/lib/default-enrollment";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { textToPairList } from "@/lib/homepage-field-codec";
@@ -198,6 +199,11 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
   const before = await prisma.exam.findUnique({ where: { id }, select: { name: true, code: true } });
   if (!before) return { error: "Exam not found." };
 
+  const wantsDefault = formData.get("isDefaultEnrollment") === "true";
+  if (wantsDefault && !data.isActive) {
+    return { error: "Only an active exam can be the default exam for new students." };
+  }
+
   const exam = await prisma.exam.update({
     where: { id },
     data: {
@@ -229,6 +235,11 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
       faqItems,
     },
   });
+
+  // Default-enrollment exam lives in the Setting table (one exam at most).
+  const currentDefault = await resolveDefaultExam();
+  if (wantsDefault && currentDefault?.id !== exam.id) await setConfiguredDefaultExamId(exam.id);
+  if (!wantsDefault && currentDefault?.id === exam.id) await setConfiguredDefaultExamId(null);
 
   await prisma.auditLog.create({
     data: {

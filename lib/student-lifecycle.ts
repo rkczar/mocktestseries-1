@@ -2,6 +2,7 @@ import { DeletionRequestStatus, Prisma, StudentAuthProvider, StudentStatus } fro
 import { prisma } from "@/lib/prisma";
 import { maskEmail, maskPhone } from "@/lib/pii-mask";
 import { nextStudentId } from "@/lib/student-id";
+import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
 
 /**
  * Student account lifecycle — the single implementation of account-deletion
@@ -331,5 +332,6 @@ export async function resolveGoogleStudent(input: {
   await prisma.studentActivity.create({
     data: { studentId: created.id, activity: "REGISTERED", metadata: { method: "google" } },
   });
+  await ensureDefaultExamEnrollmentSafely(created.id);
   return { student: created, created: true };
 }

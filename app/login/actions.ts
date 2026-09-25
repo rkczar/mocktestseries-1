@@ -10,6 +10,7 @@ import { studentSignIn } from "@/lib/auth-student";
 import { nextStudentId } from "@/lib/student-id";
 import { requestOtp, OtpError } from "@/lib/otp";
 import { safeStudentCallback } from "@/lib/student-callback";
+import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
 
 export interface AuthFormState {
   error?: string;
@@ -97,6 +98,7 @@ export async function registerWithPasswordAction(
   await prisma.studentActivity.create({
     data: { studentId: student.id, activity: "REGISTERED", metadata: { method: "password" } },
   });
+  await ensureDefaultExamEnrollmentSafely(student.id);
 
   try {
     await studentSignIn("password", { identifier: email, password, redirectTo: callbackUrl });

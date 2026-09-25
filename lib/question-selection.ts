@@ -57,6 +57,16 @@ export interface QuestionSelectionFilters {
 /** A selection request: eligible pool constrained by filters, then `count` drawn. */
 export interface QuestionSelectionRequest extends QuestionSelectionFilters {
   count: number;
+  /**
+   * Student-built practice (Subject Test / Test on the Go): when the pool is
+   * smaller than `count`, draw the whole pool instead of failing — the
+   * effective size is min(count, available), derived here from the real
+   * pool, never from a client-supplied number. An empty pool still throws
+   * (NoQuestionsAvailableError) so no empty attempt is ever created.
+   * Admin-defined tests (Mock/Grand/etc.) leave this off and keep the strict
+   * InsufficientQuestionsError contract.
+   */
+  allowFewer?: boolean;
 }
 
 export class InsufficientQuestionsError extends Error {
@@ -71,6 +81,13 @@ export class InsufficientQuestionsError extends Error {
     this.name = "InsufficientQuestionsError";
     this.requested = requested;
     this.available = available;
+  }
+}
+
+export class NoQuestionsAvailableError extends Error {
+  constructor() {
+    super("No questions are currently available for this subject.");
+    this.name = "NoQuestionsAvailableError";
   }
 }
 
@@ -194,7 +211,9 @@ export async function assertValidOwnershipChain(filters: QuestionSelectionFilter
  * so exam isolation holds by construction. The draw is random and the set is
  * returned in its selection order — callers persist it verbatim and must
  * never reshuffle. Throws InsufficientQuestionsError when the PUBLISHED pool
- * is smaller than `count`.
+ * is smaller than `count` (unless `allowFewer`, which draws the whole pool).
+ * Ids are distinct by construction (a slice of the shuffled unique pool), so
+ * a small pool never produces repeated questions.
  */
 export async function selectPublishedQuestions(
   request: QuestionSelectionRequest
@@ -204,9 +223,12 @@ export async function selectPublishedQuestions(
 
   const where = await buildQuestionWhere(request);
   const available = await prisma.question.count({ where });
-  if (available < request.count) {
+  if (request.allowFewer) {
+    if (available === 0) throw new NoQuestionsAvailableError();
+  } else if (available < request.count) {
     throw new InsufficientQuestionsError(request.count, available);
   }
+  const effectiveCount = Math.min(request.count, available);
 
   const pool = await prisma.question.findMany({
     where,
@@ -215,7 +237,7 @@ export async function selectPublishedQuestions(
   });
 
   const shuffled = shuffle(pool);
-  const picked = shuffled.slice(0, request.count).map((q) => q.id);
+  const picked = shuffled.slice(0, effectiveCount).map((q) => q.id);
 
   const questions = await prisma.question.findMany({
     where: { id: { in: picked } },

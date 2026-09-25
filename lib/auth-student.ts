@@ -10,6 +10,7 @@ import { nextStudentId } from "@/lib/student-id";
 import { verifyOtp, OtpError } from "@/lib/otp";
 import { getAuthProviderConfig, getGoogleCredentials } from "@/lib/auth-provider-config";
 import { getStudentAuthStatus, isStudentAuthEligible, resolveGoogleStudent } from "@/lib/student-lifecycle";
+import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
@@ -156,6 +157,7 @@ export const {
           await prisma.studentActivity.create({
             data: { studentId: student.id, activity: "REGISTERED", metadata: { method: "otp" } },
           });
+          await ensureDefaultExamEnrollmentSafely(student.id);
           await prisma.studentLoginAttempt.create({
             data: { identifier: mobile, ipAddress, success: true, method: attemptMethod, studentId: student.id },
           });

@@ -9,7 +9,7 @@ import {
   isStudentEnrolledInExam,
 } from "@/lib/student-data";
 import { startSubjectTestAttempt, type SubjectTestSelection } from "@/lib/test-attempt";
-import { InsufficientQuestionsError } from "@/lib/question-selection";
+import { InsufficientQuestionsError, NoQuestionsAvailableError } from "@/lib/question-selection";
 import { toDashboardMetricsView } from "./metrics-view";
 
 export interface TestOnTheGoFormState {
@@ -82,13 +82,14 @@ export async function startTestOnTheGoAction(
     subjectId,
     count,
     durationMinutes: count, // 1 question = 1 minute, always — never asked for (Section 5)
+    minutesPerQuestion: 1, // …of the questions actually drawn, when fewer than `count` exist
   };
 
   let attempt: Awaited<ReturnType<typeof startSubjectTestAttempt>>;
   try {
     attempt = await startSubjectTestAttempt(student.id, selection);
   } catch (error) {
-    if (error instanceof InsufficientQuestionsError) return { error: error.message };
+    if (error instanceof InsufficientQuestionsError || error instanceof NoQuestionsAvailableError) return { error: error.message };
     return { error: error instanceof Error ? error.message : "Something went wrong starting the test." };
   }
   redirect(`/student/attempt/${attempt.id}`);

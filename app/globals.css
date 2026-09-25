@@ -31,9 +31,13 @@
   --text-scale: 1;
 }
 
-/* Student "Text Size" accessibility control (Day/Dark/Eye-Saver independent — */
+/* Student "Text Size" accessibility control (Day/Night/Eye-Saver independent — */
 /* set on <html> alongside, but never coupled to, [data-theme]). Values match */
-/* the product spec: Small ~90%, Default 100%, Large ~112.5%, Extra Large 125%.*/
+/* the product spec: Very Small 85%, Small 90%, Default 100%, Large 112.5%,   */
+/* Extra Large 125%. Very Small keeps text-xs at ~10px and body at ~13.6px.   */
+:root[data-text-size="xs"] {
+  --text-scale: 0.85;
+}
 :root[data-text-size="sm"] {
   --text-scale: 0.9;
 }
@@ -45,17 +49,19 @@
 }
 
 /* Structural / per-mode tokens (Day / Night / Eye-Saver). Not admin-       */
-/* configurable. Night is the default register: near-black canvas,         */
-/* off-white pill as the one non-chromatic primary action. Day and         */
-/* Eye-Saver translate the same roles rather than inverting mechanically.  */
+/* configurable. Night is the default register: a strictly NEUTRAL          */
+/* near-black canvas (equal R=G=B — no warm/brown or blue cast under the    */
+/* admin brand color's tints) with slightly lifted charcoal cards.          */
+/* Day is the normal light site. Eye-Saver is a light MONOCHROME reading    */
+/* mode — white/gray/black only, brand colors neutralized (see below).      */
 :root,
 :root[data-theme="dark"] {
-  --color-background: #0b0c0e;
-  --color-surface: #131416;
-  --color-card: #131416;
-  --color-foreground: #ffffff;
-  --color-muted-foreground: #9aa1ac;
-  --color-border: rgba(255, 255, 255, 0.1);
+  --color-background: #0a0a0a;
+  --color-surface: #141414;
+  --color-card: #171717;
+  --color-foreground: #f5f5f5;
+  --color-muted-foreground: #a3a3a3;
+  --color-border: rgba(255, 255, 255, 0.12);
   --color-action-fill: #f2f2f2;
   --color-action-ink: #1a1a1a;
   --shadow-card:
@@ -82,19 +88,28 @@
 }
 
 :root[data-theme="eyesaver"] {
-  --color-background: #000000;
-  --color-surface: #0a0a0a;
-  --color-card: #0a0a0a;
-  --color-foreground: #ffffff;
-  --color-muted-foreground: #b3b3b3;
-  --color-border: rgba(255, 255, 255, 0.12);
-  --color-action-fill: #f2f2f2;
-  --color-action-ink: #111111;
-  --shadow-card:
-    0 1px 2px rgba(0, 0, 0, 0.6),
-    0 20px 48px -16px rgba(0, 0, 0, 0.8),
-    0 0 0 1px rgba(255, 255, 255, 0.08);
-  color-scheme: dark;
+  --color-background: #ffffff;
+  --color-surface: #f5f5f5;
+  --color-card: #ffffff;
+  --color-foreground: #111111;
+  --color-muted-foreground: #525252;
+  --color-border: #c7c7c7;
+  --color-action-fill: #111111;
+  --color-action-ink: #ffffff;
+  /* Brand/semantic colors go grayscale. Beats the admin Appearance inline  */
+  /* :root{--color-primary} by specificity. Selected/current states stay    */
+  /* identifiable through black fills, borders and weight, not hue. Correct */
+  /* vs wrong keep one muted, accessible green/red pair — Result/Review are */
+  /* ambiguous without it — which is the only color left in this mode.     */
+  --color-primary: #111111;
+  --color-secondary: #404040;
+  --color-accent: #262626;
+  --color-info: #262626;
+  --color-warning: #737373;
+  --color-success: #166534;
+  --color-error: #b91c1c;
+  --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  color-scheme: light;
 }
 
 @theme inline {

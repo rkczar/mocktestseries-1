@@ -6,9 +6,13 @@ import { ExamForm } from "./exam-form";
 import { ActiveToggle } from "./active-toggle";
 import { EditExamDialog } from "./edit-exam-dialog";
 import { DeleteExamDialog } from "./delete-exam-dialog";
+import { resolveDefaultExam } from "@/lib/default-enrollment";
 
 export async function AllExamsPanel() {
-  const exams = await prisma.exam.findMany({ orderBy: [{ order: "asc" }, { createdAt: "desc" }] });
+  const [exams, defaultExam] = await Promise.all([
+    prisma.exam.findMany({ orderBy: [{ order: "asc" }, { createdAt: "desc" }] }),
+    resolveDefaultExam(),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -81,7 +85,7 @@ export async function AllExamsPanel() {
                     </td>
                     <td className="py-2.5 pr-4">
                       <div className="flex items-center justify-end gap-1">
-                        <EditExamDialog exam={exam} />
+                        <EditExamDialog exam={{ ...exam, isDefaultEnrollment: exam.id === defaultExam?.id }} />
                         <DeleteExamDialog examId={exam.id} examName={exam.name} />
                       </div>
                     </td>

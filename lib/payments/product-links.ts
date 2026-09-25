@@ -5,9 +5,9 @@ export function productHref(p: { productType: ProductType; examId: string | null
   switch (p.productType) {
     case "TEST_SERIES":
     case "MOCK_TEST":
-      return "/student/test-series";
+    // Live Tests are retired — fixed-window Mock Tests live in Test Series.
     case "LIVE_TEST":
-      return "/student/live-tests";
+      return "/student/test-series";
     default:
       return p.examId ? `/student/exams/${p.examId}` : "/student/exams";
   }

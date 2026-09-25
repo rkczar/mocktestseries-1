@@ -6,6 +6,7 @@ import { startSubjectTestAttempt, type SubjectTestSelection } from "@/lib/test-a
 import {
   countPublishedQuestions,
   InsufficientQuestionsError,
+  NoQuestionsAvailableError,
   type QuestionSelectionFilters,
 } from "@/lib/question-selection";
 
@@ -27,8 +28,9 @@ function optionalInt(raw: string): number | undefined {
 /**
  * Start a subject test from the builder form. Every filter is re-read from the
  * server and every value is re-validated here — the client can only ever
- * submit filter choices, never question ids. The definitive "enough questions"
- * check happens inside startSubjectTestAttempt via selectPublishedQuestions.
+ * submit filter choices, never question ids. The effective question count
+ * (min(requested, eligible pool)) and the empty-pool refusal are both decided
+ * inside startSubjectTestAttempt via selectPublishedQuestions — never here.
  */
 export async function startSubjectTestAction(
   _prevState: SubjectTestFormState,
@@ -67,7 +69,7 @@ export async function startSubjectTestAction(
   try {
     attempt = await startSubjectTestAttempt(student.id, selection);
   } catch (error) {
-    if (error instanceof InsufficientQuestionsError) return { error: error.message };
+    if (error instanceof InsufficientQuestionsError || error instanceof NoQuestionsAvailableError) return { error: error.message };
     return { error: error instanceof Error ? error.message : "Something went wrong starting the test." };
   }
   redirect(`/student/attempt/${attempt.id}`);

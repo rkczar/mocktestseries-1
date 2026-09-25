@@ -30,6 +30,8 @@ export interface EditableExam {
   isUpcoming: boolean;
   upcomingDate: Date | string | null;
   isActive: boolean;
+  /** Whether this exam is the one new students are auto-enrolled into (lib/default-enrollment.ts). */
+  isDefaultEnrollment: boolean;
   order: number;
   negativeMarking: number | null;
   durationMinutes: number | null;
@@ -72,6 +74,7 @@ export function EditExamDialog({ exam }: { exam: EditableExam }) {
   const [open, setOpen] = useState(false);
   const [isUpcoming, setIsUpcoming] = useState(exam.isUpcoming);
   const [isActive, setIsActive] = useState(exam.isActive);
+  const [isDefaultEnrollment, setIsDefaultEnrollment] = useState(exam.isDefaultEnrollment);
   const [publicPageEnabled, setPublicPageEnabled] = useState(exam.publicPageEnabled);
 
   useEffect(() => {
@@ -142,6 +145,11 @@ export function EditExamDialog({ exam }: { exam: EditableExam }) {
               Active
             </label>
             <input type="hidden" name="isActive" value={isActive ? "true" : "false"} />
+            <label className="flex items-center gap-2 text-sm text-[var(--color-foreground)]">
+              <Checkbox checked={isDefaultEnrollment} onCheckedChange={(v) => setIsDefaultEnrollment(v === true)} />
+              Default exam for new students
+            </label>
+            <input type="hidden" name="isDefaultEnrollment" value={isDefaultEnrollment ? "true" : "false"} />
           </div>
 
           <div className="flex flex-col gap-1.5">

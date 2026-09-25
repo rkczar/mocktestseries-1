@@ -31,15 +31,22 @@ import { TestOnTheGo } from "./test-on-the-go";
 import type { DashboardMetricsView } from "./metrics-view";
 import { OmrPracticeCard } from "@/components/omr/omr-practice-card";
 
-const QUICK_LINKS = [
-  { label: "My Exams", href: "/student/exams", icon: GraduationCap, description: "Browse exams, subjects and papers" },
+// Primary study/test actions — shown right after Performance Summary and
+// Your Active Exam. Test Schedule shares Test Series' route (the schedule
+// lives there), so links are keyed by label, not href.
+const PRACTICE_LINKS = [
   { label: "Subject Test", href: "/student/subject-test", icon: BookOpen, description: "Practice by subject" },
   { label: "Test Series", href: "/student/test-series", icon: ClipboardList, description: "Scheduled mock tests" },
   { label: "Test Schedule", href: "/student/test-series", icon: CalendarClock, description: "See upcoming release dates" },
-  { label: "Practice with OMR", href: "/student/omr", icon: FileText, description: "Simulate the pen-and-paper exam" },
   { label: "Custom Module", href: "/student/custom-module", icon: ListChecks, description: "Focused practice sets" },
+];
+
+// Progress & tools — lower on the page.
+const TOOL_LINKS = [
   { label: "Analytics", href: "/student/analytics", icon: BarChart3, description: "Your performance breakdown" },
   { label: "History", href: "/student/history", icon: HistoryIcon, description: "Your past attempts" },
+  { label: "My Exams", href: "/student/exams", icon: GraduationCap, description: "Browse exams, subjects and papers" },
+  { label: "Practice with OMR", href: "/student/omr", icon: FileText, description: "Simulate the pen-and-paper exam" },
 ];
 
 interface NextTestCard {
@@ -80,6 +87,7 @@ function Countdown({ target }: { target: Date }) {
 interface ExamOption {
   id: string;
   name: string;
+  examDate: string | null; // ISO — Exam.examDate (or upcomingDate), shown only when set
 }
 
 interface SubjectOverview {
@@ -101,6 +109,7 @@ export function ActiveExamDashboard({
   studyStreak,
   nextTest: initialNextTest,
   omrResourceId = null,
+  notices = null,
 }: {
   enrolledExams: ExamOption[];
   initialActiveExamId: string | null;
@@ -109,6 +118,8 @@ export function ActiveExamDashboard({
   studyStreak: number;
   nextTest: NextTestCard | null;
   omrResourceId?: string | null;
+  /** Server-rendered announcements / subscription status, placed after Your Active Exam. */
+  notices?: React.ReactNode;
 }) {
   const [activeExamId, setActiveExamId] = useState(initialActiveExamId);
   const [metrics, setMetrics] = useState(initialMetrics);
@@ -136,36 +147,80 @@ export function ActiveExamDashboard({
     });
   };
 
+  const examDate = activeExam?.examDate ? new Date(activeExam.examDate) : null;
+
   return (
     <div className="flex flex-col gap-6">
-      {enrolledExams.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium text-[var(--color-foreground)]">Your Exams</p>
-          <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
-            {enrolledExams.map((exam) => (
-              <button
-                key={exam.id}
-                type="button"
-                onClick={() => handleSwitch(exam.id)}
-                disabled={isPending}
-                className={cn(
-                  "shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition-colors",
-                  exam.id === activeExamId
-                    ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
-                    : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
-                )}
-              >
-                {exam.name}
-              </button>
-            ))}
-          </div>
-          {activeExam ? (
-            <p className="text-xs text-[var(--color-muted-foreground)]">
-              Active Exam: <span className="font-medium text-[var(--color-foreground)]">{activeExam.name}</span>
-            </p>
-          ) : null}
-          {switchError ? <p className="text-xs text-[var(--color-error)]">{switchError}</p> : null}
+      {/* 1. Performance Summary — the student's own numbers come first. */}
+      <section aria-labelledby="performance-summary" className="flex flex-col gap-3">
+        <h2 id="performance-summary" className="text-sm font-semibold text-[var(--color-foreground)]">
+          Performance Summary{activeExam ? <span className="font-normal text-[var(--color-muted-foreground)]"> · {activeExam.name}</span> : null}
+        </h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <MetricTile icon={<CheckCircle2 className="h-5 w-5 text-[var(--color-success)]" aria-hidden />} label="MCQs Solved Today" value={metrics.mcqSolvedToday} />
+          <MetricTile icon={<ListTodo className="h-5 w-5 text-[var(--color-primary)]" aria-hidden />} label="Questions Attempted" value={metrics.questionsAttempted} />
+          <MetricTile icon={<Trophy className="h-5 w-5 text-[var(--color-accent)]" aria-hidden />} label="Tests Completed" value={metrics.testsCompleted} />
+          <MetricTile icon={<Flame className="h-5 w-5 text-[var(--color-warning)]" aria-hidden />} label="Study Streak (All Exams)" value={`${studyStreak}d`} />
+          <MetricTile
+            icon={<BarChart3 className="h-5 w-5 text-[var(--color-info)]" aria-hidden />}
+            label="Average Score"
+            value={metrics.averageScore !== null ? metrics.averageScore.toFixed(1) : "—"}
+          />
         </div>
+      </section>
+
+      {/* 2. Your Active Exam */}
+      {enrolledExams.length > 0 ? (
+        <Card className="border-[var(--color-primary)]/40">
+          <CardContent className="flex flex-col gap-4 pt-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]">Your Active Exam</p>
+                <p className="text-lg font-semibold text-[var(--color-foreground)]">{activeExam?.name ?? "Select an exam"}</p>
+                <p className="text-xs text-[var(--color-muted-foreground)]">
+                  {[
+                    examDate ? `Exam date: ${formatIst(examDate).split(",")[0]}` : null,
+                    subjects.length > 0 ? `${subjects.length} subject${subjects.length === 1 ? "" : "s"}` : null,
+                    subjects.length > 0 ? `${subjects.reduce((n, s) => n + s.questionCount, 0)} practice questions` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              </div>
+              {metrics.upcomingExam?.daysLeft != null ? (
+                <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-2 text-center">
+                  <p className="text-lg font-semibold text-[var(--color-foreground)]">{metrics.upcomingExam.daysLeft}d</p>
+                  <p className="text-[11px] text-[var(--color-muted-foreground)]">to exam</p>
+                </div>
+              ) : null}
+            </div>
+            {enrolledExams.length > 1 ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs text-[var(--color-muted-foreground)]">Switch exam</p>
+                <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
+                  {enrolledExams.map((exam) => (
+                    <button
+                      key={exam.id}
+                      type="button"
+                      onClick={() => handleSwitch(exam.id)}
+                      disabled={isPending}
+                      aria-pressed={exam.id === activeExamId}
+                      className={cn(
+                        "shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition-colors",
+                        exam.id === activeExamId
+                          ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
+                          : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+                      )}
+                    >
+                      {exam.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {switchError ? <p className="text-xs text-[var(--color-error)]">{switchError}</p> : null}
+          </CardContent>
+        </Card>
       ) : (
         <Card>
           <CardContent className="flex flex-wrap items-center justify-between gap-3 py-5">
@@ -220,7 +275,7 @@ export function ActiveExamDashboard({
               ) : null}
             </div>
             <Button asChild variant={nextTest.availability !== "UPCOMING" ? "primary" : "outline"}>
-              <Link href="/student/test-series">
+              <Link href={nextTest.availability !== "UPCOMING" ? `/student/test-series/${nextTest.mockTestId}` : "/student/test-series"}>
                 {nextTest.availability !== "UPCOMING" ? "Start Test" : "View Full Schedule"}
               </Link>
             </Button>
@@ -228,40 +283,31 @@ export function ActiveExamDashboard({
         </Card>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <MetricTile icon={<CheckCircle2 className="h-5 w-5 text-[var(--color-success)]" aria-hidden />} label="MCQs Solved Today" value={metrics.mcqSolvedToday} />
-        <MetricTile icon={<ListTodo className="h-5 w-5 text-[var(--color-primary)]" aria-hidden />} label="Questions Attempted" value={metrics.questionsAttempted} />
-        <MetricTile icon={<Trophy className="h-5 w-5 text-[var(--color-accent)]" aria-hidden />} label="Tests Completed" value={metrics.testsCompleted} />
-        <MetricTile icon={<Flame className="h-5 w-5 text-[var(--color-warning)]" aria-hidden />} label="Study Streak (All Exams)" value={`${studyStreak}d`} />
-        <MetricTile
-          icon={<BarChart3 className="h-5 w-5 text-[var(--color-info)]" aria-hidden />}
-          label="Average Score"
-          value={metrics.averageScore !== null ? metrics.averageScore.toFixed(1) : "—"}
-        />
-        <MetricTile
-          icon={<CalendarClock className="h-5 w-5 text-[var(--color-muted-foreground)]" aria-hidden />}
-          label={metrics.upcomingExam ? metrics.upcomingExam.name : "Upcoming Exam"}
-          value={metrics.upcomingExam ? `${metrics.upcomingExam.daysLeft}d left` : "—"}
-        />
-      </div>
+      {notices}
 
-      {omrResourceId ? <OmrPracticeCard resourceId={omrResourceId} context="dashboard" /> : null}
+      {/* 3. Start Practicing — primary study/test actions */}
+      <section aria-labelledby="start-practicing" className="flex flex-col gap-3">
+        <h2 id="start-practicing" className="text-sm font-semibold text-[var(--color-foreground)]">
+          Start Practicing
+        </h2>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {PRACTICE_LINKS.map((link) => (
+            <QuickLinkCard key={link.label} {...link} />
+          ))}
+        </div>
+      </section>
+
+      {/* 4. Practice Resources — the canonical branded OMR sheet */}
+      {omrResourceId ? (
+        <section aria-labelledby="practice-resources" className="flex flex-col gap-3">
+          <h2 id="practice-resources" className="text-sm font-semibold text-[var(--color-foreground)]">
+            Practice Resources
+          </h2>
+          <OmrPracticeCard resourceId={omrResourceId} context="dashboard" />
+        </section>
+      ) : null}
 
       {activeExamId && subjects.length > 0 ? <TestOnTheGo examId={activeExamId} subjects={subjects} /> : null}
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
-        {QUICK_LINKS.map((link) => (
-          <Link key={link.href} href={link.href}>
-            <Card className="h-full transition-shadow hover:shadow-md">
-              <CardContent className="flex flex-col gap-2 pt-5">
-                <link.icon className="h-6 w-6 text-[var(--color-primary)]" aria-hidden />
-                <p className="font-medium text-[var(--color-foreground)]">{link.label}</p>
-                <p className="text-sm text-[var(--color-muted-foreground)]">{link.description}</p>
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
-      </div>
 
       {activeExamId && subjects.length > 0 ? (
         <div className="flex flex-col gap-3">
@@ -283,53 +329,40 @@ export function ActiveExamDashboard({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Test</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {metrics.recentTest ? (
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-[var(--color-foreground)]">{metrics.recentTest.title}</p>
-                  <p className="text-sm text-[var(--color-muted-foreground)]">
-                    {metrics.recentTest.score?.toFixed(1) ?? "—"} / {metrics.recentTest.maxScore}
-                  </p>
-                </div>
-                <Button asChild size="sm" variant="outline">
-                  <Link href={`/student/attempt/${metrics.recentTest.id}/result`}>View</Link>
-                </Button>
-              </div>
-            ) : (
-              <p className="text-sm text-[var(--color-muted-foreground)]">No completed tests yet.</p>
-            )}
-          </CardContent>
-        </Card>
+      {/* 5. Your Progress & Tools */}
+      <section aria-labelledby="progress-tools" className="flex flex-col gap-3">
+        <h2 id="progress-tools" className="text-sm font-semibold text-[var(--color-foreground)]">
+          Your Progress &amp; Tools
+        </h2>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {TOOL_LINKS.map((link) => (
+            <QuickLinkCard key={link.label} {...link} />
+          ))}
+        </div>
+      </section>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-[var(--color-warning)]" aria-hidden /> Weak Topics
-            </CardTitle>
-            <CardDescription>Where you&apos;ve gotten the most questions wrong recently</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {metrics.weakTopics.length === 0 ? (
-              <p className="text-sm text-[var(--color-muted-foreground)]">Not enough data yet — keep practicing.</p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {metrics.weakTopics.map((t) => (
-                  <div key={t.topicId} className="flex items-center justify-between text-sm">
-                    <span className="text-[var(--color-foreground)]">{t.name}</span>
-                    <span className="text-[var(--color-muted-foreground)]">{t.incorrectCount} wrong</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-[var(--color-warning)]" aria-hidden /> Weak Topics
+          </CardTitle>
+          <CardDescription>Where you&apos;ve gotten the most questions wrong recently</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {metrics.weakTopics.length === 0 ? (
+            <p className="text-sm text-[var(--color-muted-foreground)]">Not enough data yet — keep practicing.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {metrics.weakTopics.map((t) => (
+                <div key={t.topicId} className="flex items-center justify-between text-sm">
+                  <span className="text-[var(--color-foreground)]">{t.name}</span>
+                  <span className="text-[var(--color-muted-foreground)]">{t.incorrectCount} wrong</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Link href="/student/saved">
         <Card className="transition-shadow hover:shadow-md">
@@ -349,7 +382,46 @@ export function ActiveExamDashboard({
           </CardContent>
         </Card>
       </Link>
+
+      {/* 6. Recent Tests — unchanged card, placed last */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Test</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {metrics.recentTest ? (
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-[var(--color-foreground)]">{metrics.recentTest.title}</p>
+                <p className="text-sm text-[var(--color-muted-foreground)]">
+                  {metrics.recentTest.score?.toFixed(1) ?? "—"} / {metrics.recentTest.maxScore}
+                </p>
+              </div>
+              <Button asChild size="sm" variant="outline">
+                <Link href={`/student/attempt/${metrics.recentTest.id}/result`}>View</Link>
+              </Button>
+            </div>
+          ) : (
+            <p className="text-sm text-[var(--color-muted-foreground)]">No completed tests yet.</p>
+          )}
+        </CardContent>
+      </Card>
+
     </div>
+  );
+}
+
+function QuickLinkCard({ label, href, icon: Icon, description }: (typeof PRACTICE_LINKS)[number]) {
+  return (
+    <Link href={href}>
+      <Card className="h-full transition-shadow hover:shadow-md">
+        <CardContent className="flex flex-col gap-2 pt-5">
+          <Icon className="h-6 w-6 text-[var(--color-primary)]" aria-hidden />
+          <p className="font-medium text-[var(--color-foreground)]">{label}</p>
+          <p className="text-sm text-[var(--color-muted-foreground)]">{description}</p>
+        </CardContent>
+      </Card>
+    </Link>
   );
 }
 

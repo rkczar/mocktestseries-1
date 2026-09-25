@@ -199,6 +199,38 @@ export async function getScheduledMockTestsForStudent(studentId: string) {
 export type ScheduledMockTestRow = Awaited<ReturnType<typeof getScheduledMockTestsForStudent>>["all"][number];
 
 /**
+ * One LIVE mock test for the student's Mock Test Details / Instructions page
+ * (/student/test-series/[mockTestId]) — the step BEFORE any TestAttempt
+ * exists, so reading instructions never burns the attempt timer. Same
+ * visibility (LIVE_MOCK_TEST_WHERE) and PUBLISHED-question count as the Test
+ * Series list; the start gate itself stays startMockTestAttempt.
+ */
+export async function getMockTestDetailForStudent(studentId: string, mockTestId: string) {
+  const { deriveMockTestAvailability } = await import("@/lib/mock-test-schedule");
+  const mockTest = await prisma.mockTest.findFirst({
+    where: { id: mockTestId, ...LIVE_MOCK_TEST_WHERE },
+    include: {
+      exam: { select: { id: true, name: true, instructions: true } },
+      testSeries: { select: { id: true, name: true, instructions: true } },
+      _count: { select: { questions: { where: { question: { status: QuestionStatus.PUBLISHED } } } } },
+    },
+  });
+  if (!mockTest) return null;
+
+  const attempts = await prisma.testAttempt.findMany({
+    where: { studentId, mockTestId, sourceType: AttemptSourceType.MOCK_TEST },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, status: true, entryMode: true },
+  });
+  return {
+    mockTest,
+    availability: deriveMockTestAvailability(mockTest),
+    inProgressAttempt: attempts.find((a) => a.status === AttemptStatus.IN_PROGRESS) ?? null,
+    latestSubmittedAttempt: attempts.find((a) => a.status === AttemptStatus.SUBMITTED) ?? null,
+  };
+}
+
+/**
  * Picks the single test to surface on the Dashboard's "Next Test" card:
  * an AVAILABLE test the student hasn't submitted yet (soonest by
  * availableFrom, nulls first since they've been open longest), else the

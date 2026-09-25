@@ -53,17 +53,27 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
           {mockTests.length === 0 ? (
             <p className="py-4 text-sm text-[var(--color-muted-foreground)]">No mock tests published yet.</p>
           ) : (
-            mockTests.map((mt) => (
-              <div key={mt.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
-                <div>
-                  <p className="text-sm font-medium text-[var(--color-foreground)]">{mt.title}</p>
-                  <p className="text-xs text-[var(--color-muted-foreground)]">
-                    {mt._count.questions} Qs · {mt.durationMinutes} min
-                  </p>
+            mockTests.map((mt) => {
+              const access = evaluateContentAccess(ctx, { kind: "MOCK_TEST", id: mt.id, examId: exam.id, testSeriesId: mt.testSeriesId, accessType: mt.accessType });
+              return (
+                <div key={mt.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                  <div>
+                    <p className="text-sm font-medium text-[var(--color-foreground)]">{mt.title}</p>
+                    <p className="text-xs text-[var(--color-muted-foreground)]">
+                      {mt._count.questions} Qs · {mt.durationMinutes} min
+                    </p>
+                  </div>
+                  {/* Mock Tests open their Details / Instructions page first; the attempt starts there. */}
+                  {access.allowed ? (
+                    <Button asChild size="sm">
+                      <Link href={`/student/test-series/${mt.id}`}>View &amp; Start</Link>
+                    </Button>
+                  ) : (
+                    <StartOrUnlock access={access} action={startMockTestFromExamAction.bind(null, mt.id)} />
+                  )}
                 </div>
-                <StartOrUnlock access={evaluateContentAccess(ctx, { kind: "MOCK_TEST", id: mt.id, examId: exam.id, testSeriesId: mt.testSeriesId, accessType: mt.accessType })} action={startMockTestFromExamAction.bind(null, mt.id)} />
-              </div>
-            ))
+              );
+            })
           )}
         </CardContent>
       </Card>

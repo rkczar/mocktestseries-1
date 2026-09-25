@@ -398,7 +398,10 @@ export async function startPreviousYearPaperAttempt(studentId: string, paperId: 
 
 export interface SubjectTestSelection extends QuestionSelectionFilters {
   durationMinutes: number;
+  /** Requested size. The attempt uses min(count, eligible pool) — see selectPublishedQuestions#allowFewer. */
   count: number;
+  /** Test on the Go: 1 question = 1 minute, so the duration follows the EFFECTIVE count, not the requested one. */
+  minutesPerQuestion?: number;
 }
 
 /**
@@ -427,6 +430,7 @@ export async function startSubjectTestAttempt(studentId: string, selection: Subj
     source: selection.source,
     difficulty: selection.difficulty,
     count: selection.count,
+    allowFewer: true,
   });
 
   const subject = await prisma.subject.findUnique({ where: { id: selection.subjectId }, select: { name: true } });
@@ -444,7 +448,7 @@ export async function startSubjectTestAttempt(studentId: string, selection: Subj
       subTopicIds: selection.subTopicId ? [selection.subTopicId] : null,
       subjects: [{ id: selection.subjectId, name: subject?.name ?? null }],
     },
-    durationMinutes: selection.durationMinutes,
+    durationMinutes: selection.minutesPerQuestion ? questions.length * selection.minutesPerQuestion : selection.durationMinutes,
     negativeMarking: 0,
     questions: questions as unknown as QuestionWithOptions[],
   });

@@ -36,6 +36,35 @@ interface QuestionState {
 
 type Status = "current" | "answered-marked" | "marked" | "answered" | "visited" | "not-visited";
 
+/**
+ * Answers whose autosave failed, kept per attempt in sessionStorage so a
+ * reload can replay them. The realistic failure is deploy skew: a page loaded
+ * before a release still calls the previous build's Server Action ids, which
+ * the new server answers with 404 ("Failed to find Server Action"). Only a
+ * reload fetches the new ids — previously the failure was swallowed and the
+ * answer silently lost. The server still validates every replayed save
+ * (ownership, IN_PROGRESS, time window).
+ */
+type PendingAnswers = Record<string, { selected: string | null; marked: boolean }>;
+const pendingKey = (attemptId: string) => `mts-pending-answers:${attemptId}`;
+
+function readPending(attemptId: string): PendingAnswers {
+  try {
+    return JSON.parse(window.sessionStorage.getItem(pendingKey(attemptId)) ?? "{}") as PendingAnswers;
+  } catch {
+    return {};
+  }
+}
+
+function writePending(attemptId: string, pending: PendingAnswers) {
+  try {
+    if (Object.keys(pending).length === 0) window.sessionStorage.removeItem(pendingKey(attemptId));
+    else window.sessionStorage.setItem(pendingKey(attemptId), JSON.stringify(pending));
+  } catch {
+    // storage unavailable — the on-screen warning still tells the student to reload
+  }
+}
+
 const STATUS_STYLES: Record<Status, string> = {
   current: "bg-[var(--color-primary)] text-white ring-2 ring-offset-2 ring-[var(--color-primary)]",
   "answered-marked": "bg-[var(--color-info)] text-white",
@@ -66,12 +95,20 @@ export function TestPlayer({
     )
   );
   const submittedRef = useRef(false);
+  const [syncProblem, setSyncProblem] = useState<"save" | "submit" | null>(null);
 
   const doSubmit = useCallback(() => {
     if (submittedRef.current) return;
     submittedRef.current = true;
-    startTransition(() => {
-      submitAttemptAction(attemptId);
+    startTransition(async () => {
+      try {
+        await submitAttemptAction(attemptId);
+      } catch {
+        // A successful submit navigates away (redirect); reaching here means the
+        // request itself failed (e.g. deploy skew) — let the student retry after reload.
+        submittedRef.current = false;
+        setSyncProblem("submit");
+      }
     });
   }, [attemptId]);
 
@@ -86,12 +123,44 @@ export function TestPlayer({
 
   const persist = useCallback(
     (questionId: string, selected: string | null, marked: boolean) => {
-      startTransition(() => {
-        saveAnswerAction(attemptId, questionId, selected, marked).catch(() => {});
+      startTransition(async () => {
+        try {
+          await saveAnswerAction(attemptId, questionId, selected, marked);
+          const pending = readPending(attemptId);
+          if (questionId in pending) {
+            delete pending[questionId];
+            writePending(attemptId, pending);
+          }
+        } catch {
+          writePending(attemptId, { ...readPending(attemptId), [questionId]: { selected, marked } });
+          setSyncProblem("save");
+        }
       });
     },
     [attemptId]
   );
+
+  // After a reload, replay answers whose save failed on the previous page
+  // load; each one appears in the palette once the server has accepted it.
+  useEffect(() => {
+    const pending = readPending(attemptId);
+    const entries = Object.entries(pending).filter(([questionId]) => questions.some((q) => q.questionId === questionId));
+    if (entries.length === 0) return;
+    startTransition(async () => {
+      for (const [questionId, answer] of entries) {
+        try {
+          await saveAnswerAction(attemptId, questionId, answer.selected, answer.marked);
+        } catch {
+          setSyncProblem("save");
+          return;
+        }
+        const rest = readPending(attemptId);
+        delete rest[questionId];
+        writePending(attemptId, rest);
+        setStates((prev) => ({ ...prev, [questionId]: { ...prev[questionId], ...answer, visited: true } }));
+      }
+    });
+  }, [attemptId, questions]);
 
   const updateState = (questionId: string, patch: Partial<Pick<QuestionState, "selected" | "marked">>) => {
     setStates((prev) => {
@@ -147,14 +216,28 @@ export function TestPlayer({
         </div>
       </header>
 
+      {syncProblem ? (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-warning)]/50 bg-[var(--color-warning)]/10 px-4 py-3 sm:px-6">
+          <p className="flex items-center gap-2 text-sm text-[var(--color-foreground)]">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden />
+            {syncProblem === "submit"
+              ? "Your test could not be submitted — the website was just updated. Reload, then submit again. Your saved answers are kept."
+              : "Your latest answer could not be saved — the website was just updated. Reload to sync; your answers on this device are kept."}
+          </p>
+          <Button size="sm" onClick={() => window.location.reload()}>
+            Reload &amp; Sync
+          </Button>
+        </div>
+      ) : null}
+
       <div className="grid flex-1 grid-cols-1 gap-4 p-4 sm:px-6 lg:grid-cols-[1fr_280px]">
         <div className="flex flex-col gap-4">
           <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
-            <div className="mb-4 flex items-center justify-between">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-medium text-[var(--color-muted-foreground)]">
                 Question {current + 1} of {questions.length}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-[var(--color-border)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-foreground)]">
                   {question.difficulty}
                 </span>
@@ -215,7 +298,7 @@ export function TestPlayer({
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => goTo(current - 1)} disabled={current === 0}>
                 <ChevronLeft className="h-4 w-4" aria-hidden /> Previous
               </Button>
@@ -223,7 +306,7 @@ export function TestPlayer({
                 Clear Response
               </Button>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
                 onClick={() => {

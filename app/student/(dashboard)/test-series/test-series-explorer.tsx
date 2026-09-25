@@ -7,7 +7,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatIst } from "@/lib/ist-time";
-import { startMockTestFromExamAction } from "@/app/student/(dashboard)/exams/[examId]/actions";
 import { startOfflineOmrEntryFromTestSeriesAction } from "./actions";
 
 type Availability = "UPCOMING" | "AVAILABLE" | "LIVE_NOW" | "CLOSED";
@@ -141,7 +140,9 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
       <CardContent className="flex flex-1 flex-col gap-3 pt-5">
         <div>
           {row.testNumber ? <p className="text-[11px] font-semibold text-[var(--color-muted-foreground)]">Mock {row.testNumber}</p> : null}
-          <p className="font-medium text-[var(--color-foreground)]">{row.title}</p>
+          <Link href={`/student/test-series/${row.id}`} className="font-medium text-[var(--color-foreground)] hover:underline">
+            {row.title}
+          </Link>
           <p className="text-xs text-[var(--color-muted-foreground)]">
             {row.examName} · {row.coverageLabel}
           </p>
@@ -228,11 +229,9 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
                 </Button>
               ) : null}
               {row.attemptPolicy === "MULTIPLE_PRACTICE" && (row.availability === "AVAILABLE" || row.availability === "LIVE_NOW") ? (
-                <form action={startMockTestFromExamAction.bind(null, row.id)}>
-                  <Button type="submit" size="sm">
-                    Practice Again
-                  </Button>
-                </form>
+                <Button asChild size="sm">
+                  <Link href={`/student/test-series/${row.id}`}>Practice Again</Link>
+                </Button>
               ) : null}
             </>
           ) : row.lock ? (
@@ -249,11 +248,9 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
             )
           ) : (
             <>
-              <form action={startMockTestFromExamAction.bind(null, row.id)}>
-                <Button type="submit" size="sm">
-                  Start Test
-                </Button>
-              </form>
+              <Button asChild size="sm">
+                <Link href={`/student/test-series/${row.id}`}>Start Test</Link>
+              </Button>
               <form action={startOfflineOmrEntryFromTestSeriesAction.bind(null, row.id)}>
                 <Button type="submit" size="sm" variant="outline">
                   <PencilLine className="h-3.5 w-3.5" aria-hidden /> Enter OMR Answers

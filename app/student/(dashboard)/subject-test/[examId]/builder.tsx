@@ -5,9 +5,9 @@ import { useFormStatus } from "react-dom";
 import { AlertTriangle, ArrowRight, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
+import { QuestionCountInput } from "@/components/student/question-count-presets";
 import { startSubjectTestAction, countAvailableQuestionsAction, type SubjectTestFormState } from "../actions";
 
 interface BuilderSubTopic {
@@ -27,10 +27,10 @@ interface BuilderSubject {
   topics: BuilderTopic[];
 }
 
-function SubmitButton() {
+function SubmitButton({ disabled }: { disabled?: boolean }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" size="lg" disabled={pending} className="w-full">
+    <Button type="submit" size="lg" disabled={pending || disabled} className="w-full">
       {pending ? (
         "Building test…"
       ) : (
@@ -97,6 +97,8 @@ export function SubjectTestBuilder({
 
   const effectiveAvailable = subjectId ? available : null;
   const countExceeds = effectiveAvailable !== null && count > effectiveAvailable;
+  // Display only: the server re-derives min(requested, eligible pool) itself.
+  const willUse = effectiveAvailable === null ? count : Math.min(count, effectiveAvailable);
 
   if (subjects.length === 0) {
     return (
@@ -193,38 +195,19 @@ export function SubjectTestBuilder({
         <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="count">Question Count *</Label>
-            <Input
-              id="count"
-              name="count"
-              type="number"
-              min={1}
-              value={count}
-              onChange={(e) => setCount(Math.max(1, Number(e.target.value)))}
-              required
-            />
+            <QuestionCountInput id="count" name="count" count={count} onChange={setCount} max={500} />
             <p className="text-xs text-[var(--color-muted-foreground)]">
               {effectiveAvailable === null
                 ? "Checking how many questions are available…"
                 : effectiveAvailable === 0
-                  ? "No published questions match this selection."
-                  : countExceeds
-                    ? <span className="text-[var(--color-error)]">Only {effectiveAvailable} questions are available — lower the count.</span>
-                    : `Up to ${effectiveAvailable} questions are available for this selection.`}
+                  ? "No questions are currently available for this subject."
+                  : `${effectiveAvailable} question${effectiveAvailable === 1 ? " is" : "s are"} available for this selection.`}
             </p>
           </div>
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="durationMinutes">Duration (minutes) *</Label>
-            <Input
-              id="durationMinutes"
-              name="durationMinutes"
-              type="number"
-              min={1}
-              max={300}
-              value={durationMinutes}
-              onChange={(e) => setDurationMinutes(Math.max(1, Number(e.target.value)))}
-              required
-            />
+            <QuestionCountInput id="durationMinutes" name="durationMinutes" count={durationMinutes} onChange={setDurationMinutes} max={300} />
             <p className="text-xs text-[var(--color-muted-foreground)]">
               The timer is enforced server-side and ends automatically.
             </p>
@@ -234,6 +217,31 @@ export function SubjectTestBuilder({
 
       <Card className="border-[var(--color-primary)]/40">
         <CardContent className="flex flex-col gap-3 pt-5">
+          {effectiveAvailable !== null && effectiveAvailable > 0 ? (
+            <dl className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-2">
+                <dt className="text-xs text-[var(--color-muted-foreground)]">Requested</dt>
+                <dd className="font-semibold text-[var(--color-foreground)]">{count}</dd>
+              </div>
+              <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-2">
+                <dt className="text-xs text-[var(--color-muted-foreground)]">Available</dt>
+                <dd className="font-semibold text-[var(--color-foreground)]">{effectiveAvailable}</dd>
+              </div>
+              <div className="rounded-[var(--radius-card)] border border-[var(--color-primary)]/50 p-2">
+                <dt className="text-xs text-[var(--color-muted-foreground)]">Test Will Use</dt>
+                <dd className="font-semibold text-[var(--color-foreground)]">{willUse}</dd>
+              </div>
+            </dl>
+          ) : null}
+          {countExceeds && effectiveAvailable ? (
+            <p className="text-sm text-[var(--color-foreground)]">
+              {effectiveAvailable} question{effectiveAvailable === 1 ? " is" : "s are"} currently available. This test will include
+              all {effectiveAvailable}.
+            </p>
+          ) : null}
+          {effectiveAvailable === 0 ? (
+            <p className="text-sm text-[var(--color-muted-foreground)]">No questions are currently available for this subject.</p>
+          ) : null}
           {currentSubject && !currentSubTopic && effectiveAvailable !== null && effectiveAvailable > 0 ? (
             <p className="text-sm text-[var(--color-muted-foreground)]">
               You will answer <span className="font-semibold text-[var(--color-foreground)]">{Math.min(count, effectiveAvailable)}</span>{" "}
@@ -252,7 +260,7 @@ export function SubjectTestBuilder({
             No negative marking for subject tests. If you already have a subject test in progress for this subject, opening
             it again resumes that attempt with your exact previous set of questions.
           </p>
-          <SubmitButton />
+          <SubmitButton disabled={effectiveAvailable === 0} />
         </CardContent>
       </Card>
 
