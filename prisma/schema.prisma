@@ -431,6 +431,7 @@ enum OAuthProviderName {
 enum OtpPurpose {
   LOGIN
   REGISTER
+  RESET_PASSWORD
 }
 
 enum DeletionRequestStatus {
@@ -474,6 +475,7 @@ model Student {
   notificationStates      StudentNotificationState[]
   announcementRecipientOf AnnouncementRecipient[]
   communications          Communication[]
+  passwordResetTokens     PasswordResetToken[]
 
   entitlements      StudentEntitlement[]
   couponRedemptions CouponRedemption[]
@@ -528,6 +530,24 @@ model OtpRequest {
   createdAt   DateTime   @default(now())
 
   @@index([mobile, purpose, createdAt])
+}
+
+/**
+ * Forgot Password: issued only after the student proves control of the
+ * account's registered mobile via a RESET_PASSWORD OtpRequest. Only the
+ * SHA-256 of the random token is stored; it is short-lived and single-use
+ * (usedAt), and every other open token for the student is voided on reset.
+ */
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  studentId String
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([studentId])
 }
 
 model StudentLoginAttempt {
@@ -1747,6 +1767,8 @@ model StudentNotificationState {
   announcementId String
   announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
   readAt         DateTime?
+  /// Student closed the Dashboard card (X). Per-student only; the Announcement itself is untouched.
+  dismissedAt    DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 

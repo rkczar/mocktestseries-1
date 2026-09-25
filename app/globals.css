@@ -52,8 +52,9 @@
 /* configurable. Night is the default register: a strictly NEUTRAL          */
 /* near-black canvas (equal R=G=B — no warm/brown or blue cast under the    */
 /* admin brand color's tints) with slightly lifted charcoal cards.          */
-/* Day is the normal light site. Eye-Saver is a light MONOCHROME reading    */
-/* mode — white/gray/black only, brand colors neutralized (see below).      */
+/* Day is the normal light site. Eye-Saver is a BLACK & WHITE reading mode  */
+/* — pure black canvas, white text, gray surfaces/borders, brand colors     */
+/* neutralized (see below). Night keeps brand/semantic color; Eye-Saver not. */
 :root,
 :root[data-theme="dark"] {
   --color-background: #0a0a0a;
@@ -88,28 +89,44 @@
 }
 
 :root[data-theme="eyesaver"] {
-  --color-background: #ffffff;
-  --color-surface: #f5f5f5;
-  --color-card: #ffffff;
-  --color-foreground: #111111;
-  --color-muted-foreground: #525252;
-  --color-border: #c7c7c7;
-  --color-action-fill: #111111;
-  --color-action-ink: #ffffff;
+  --color-background: #000000;
+  --color-surface: #050505;
+  --color-card: #0a0a0a;
+  --color-foreground: #ffffff;
+  --color-muted-foreground: #c4c4c4;
+  --color-border: #4a4a4a;
+  --color-action-fill: #ffffff;
+  --color-action-ink: #000000;
   /* Brand/semantic colors go grayscale. Beats the admin Appearance inline  */
   /* :root{--color-primary} by specificity. Selected/current states stay    */
-  /* identifiable through black fills, borders and weight, not hue. Correct */
-  /* vs wrong keep one muted, accessible green/red pair — Result/Review are */
-  /* ambiguous without it — which is the only color left in this mode.     */
-  --color-primary: #111111;
-  --color-secondary: #404040;
-  --color-accent: #262626;
-  --color-info: #262626;
-  --color-warning: #737373;
-  --color-success: #166534;
-  --color-error: #b91c1c;
-  --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.08);
-  color-scheme: light;
+  /* identifiable through white fills, gray borders and weight, not hue.    */
+  /* Correct vs wrong keep one muted, desaturated green/red pair — Result/  */
+  /* Review are ambiguous without it — the only color left in this mode.   */
+  --color-primary: #ffffff;
+  --color-secondary: #d4d4d4;
+  --color-accent: #e5e5e5;
+  --color-info: #d4d4d4;
+  --color-warning: #a3a3a3;
+  --color-success: #8cc4a0;
+  --color-error: #e0a0a0;
+  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  color-scheme: dark;
+}
+
+/* Eye Saver fills are light (white/gray), so the "text-white on a solid     */
+/* token fill" pattern (selected chips, palette cells, badges) flips to      */
+/* black ink here instead of every component learning about the mode.      */
+:root[data-theme="eyesaver"]
+  .text-white:is(
+    .bg-\[var\(--color-primary\)\],
+    .bg-\[var\(--color-secondary\)\],
+    .bg-\[var\(--color-accent\)\],
+    .bg-\[var\(--color-info\)\],
+    .bg-\[var\(--color-warning\)\],
+    .bg-\[var\(--color-success\)\],
+    .bg-\[var\(--color-error\)\]
+  ) {
+  color: #000000;
 }
 
 @theme inline {

@@ -16,7 +16,11 @@ import {
   sendMobileOtpAction,
   verifyMobileOtpAction,
   googleSignInAction,
+  requestPasswordResetAction,
+  verifyPasswordResetCodeAction,
+  resetPasswordAction,
   type AuthFormState,
+  type ResetFormState,
 } from "./actions";
 
 function SubmitButton({
@@ -76,7 +80,15 @@ function Divider() {
   );
 }
 
-function PasswordLoginForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
+function PasswordLoginForm({
+  callbackUrl,
+  buttonStyle,
+  onForgot,
+}: {
+  callbackUrl: string;
+  buttonStyle?: CSSProperties;
+  onForgot: () => void;
+}) {
   const [state, formAction] = useActionState<AuthFormState, FormData>(loginWithPasswordAction, {});
   const [show, setShow] = useState(false);
 
@@ -90,9 +102,9 @@ function PasswordLoginForm({ callbackUrl, buttonStyle }: { callbackUrl: string; 
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="password">Password</Label>
-          <span className="text-xs text-[var(--color-muted-foreground)]" title="Password reset via email will be available once an email provider is configured.">
-            Forgot?
-          </span>
+          <button type="button" onClick={onForgot} className="text-xs text-indigo-400 hover:underline">
+            Forgot Password?
+          </button>
         </div>
         <div className="relative">
           <Input
@@ -177,15 +189,15 @@ function OtpBoxInput({ autoSubmit }: { autoSubmit: () => void }) {
   }, []);
 
   function setDigit(index: number, value: string) {
-    setDigits((prev) => {
-      const next = [...prev];
-      next[index] = value;
-      if (next.every((d) => d.length === 1)) {
-        // Let the DOM update (hidden input value) before submitting.
-        setTimeout(autoSubmit, 0);
-      }
-      return next;
-    });
+    // Side effect kept out of the state updater: updaters may run twice
+    // (StrictMode), which would submit the code twice.
+    const next = [...digits];
+    next[index] = value;
+    setDigits(next);
+    if (next.every((d) => d.length === 1)) {
+      // Let the DOM update (hidden input value) before submitting.
+      setTimeout(autoSubmit, 0);
+    }
   }
 
   return (
@@ -339,6 +351,156 @@ function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; butt
   );
 }
 
+/**
+ * Forgot Password — identifier → code sent to the account's registered mobile
+ * (existing phone OTP infrastructure) → New / Confirm password → back to Sign In.
+ * The step-1 answer is identical whether or not the identifier has an account.
+ */
+function ForgotPasswordFlow({
+  buttonStyle,
+  onBack,
+  onRestart,
+}: {
+  buttonStyle?: CSSProperties;
+  onBack: () => void;
+  onRestart: () => void;
+}) {
+  const [requestState, requestAction] = useActionState<ResetFormState, FormData>(requestPasswordResetAction, {});
+  const [resendState, resendAction] = useActionState<ResetFormState, FormData>(requestPasswordResetAction, {});
+  const [verifyState, verifyAction] = useActionState<ResetFormState, FormData>(verifyPasswordResetCodeAction, {});
+  const [resetState, resetAction] = useActionState<ResetFormState, FormData>(resetPasswordAction, {});
+  const [show, setShow] = useState(false);
+  // Once verification issues a token it sticks: a late duplicate verify
+  // response ("code already used") must not bounce the student back a step.
+  const [issuedToken, setIssuedToken] = useState<string | null>(null);
+  if (verifyState.token && verifyState.token !== issuedToken) setIssuedToken(verifyState.token);
+  const verifyFormRef = useRef<HTMLFormElement>(null);
+  const resendFormRef = useRef<HTMLFormElement>(null);
+
+  const backLink = (
+    <button type="button" onClick={onBack} className="text-center text-sm text-indigo-400 hover:underline">
+      Back to Sign In
+    </button>
+  );
+
+  if (resetState.step === "done") {
+    return (
+      <div className="flex flex-col gap-4">
+        <p className="text-sm font-medium text-white">Password reset successful</p>
+        <p className="text-sm text-white/60">You can now sign in with your new password.</p>
+        <Button type="button" size="lg" className="w-full" style={buttonStyle} onClick={onBack}>
+          Return to Login
+        </Button>
+      </div>
+    );
+  }
+
+  const token = resetState.token ?? issuedToken;
+  if (token && resetState.error && resetState.step === undefined) {
+    // Token expired / already used — the only way forward is a fresh code.
+    return (
+      <div className="flex flex-col gap-4">
+        <ErrorBanner message={resetState.error} />
+        <Button type="button" size="lg" className="w-full" style={buttonStyle} onClick={onRestart}>
+          Start Again
+        </Button>
+        {backLink}
+      </div>
+    );
+  }
+
+  if (token) {
+    return (
+      <form action={resetAction} className="flex flex-col gap-4" noValidate>
+        <p className="text-sm font-medium text-white">Set a new password</p>
+        <input type="hidden" name="token" value={token} />
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="reset-password">New Password</Label>
+          <div className="relative">
+            <Input
+              id="reset-password"
+              name="password"
+              type={show ? "text" : "password"}
+              autoComplete="new-password"
+              required
+              minLength={8}
+              className="pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShow((s) => !s)}
+              aria-label={show ? "Hide password" : "Show password"}
+              className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+            >
+              {show ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />}
+            </button>
+          </div>
+          <p className="text-xs text-white/40">At least 8 characters.</p>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="reset-confirm">Confirm New Password</Label>
+          <Input id="reset-confirm" name="confirmPassword" type={show ? "text" : "password"} autoComplete="new-password" required />
+        </div>
+        <ErrorBanner message={resetState.error} />
+        <SubmitButton pendingLabel="Saving…" style={buttonStyle}>
+          Reset Password
+        </SubmitButton>
+        {backLink}
+      </form>
+    );
+  }
+
+  const sent = resendState.step === "code" ? resendState : requestState;
+  if (sent.step === "code" && sent.identifier) {
+    return (
+      <>
+        <form ref={resendFormRef} action={resendAction} className="hidden">
+          <input type="hidden" name="identifier" value={sent.identifier} />
+        </form>
+        <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
+          <p className="text-sm font-medium text-white">Verify it&apos;s you</p>
+          <input type="hidden" name="identifier" value={sent.identifier} />
+          <p className="text-sm text-white/60">
+            If an account matches <span className="font-medium text-white">{sent.identifier}</span> and has a registered mobile
+            number, we&apos;ve sent a verification code to that number.
+          </p>
+          {sent.devCode ? (
+            <p className="rounded-[var(--radius-button)] border border-dashed border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-muted-foreground)]">
+              Dev mode — no SMS provider configured. Your code is <span className="font-mono font-semibold">{sent.devCode}</span>.
+            </p>
+          ) : null}
+          <OtpBoxInput autoSubmit={() => verifyFormRef.current?.requestSubmit()} />
+          <ErrorBanner message={verifyState.error ?? resendState.error} />
+          <ResendCountdown onResend={() => resendFormRef.current?.requestSubmit()} />
+          <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
+            Verify Code
+          </SubmitButton>
+          {backLink}
+        </form>
+      </>
+    );
+  }
+
+  return (
+    <form action={requestAction} className="flex flex-col gap-4" noValidate>
+      <p className="text-sm font-medium text-white">Forgot Password</p>
+      <p className="text-sm text-white/60">
+        Enter your User ID, email or mobile number. We&apos;ll send a verification code to the mobile number registered on your
+        account.
+      </p>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="reset-identifier">User ID, Email or Mobile</Label>
+        <Input id="reset-identifier" name="identifier" type="text" autoComplete="username" required />
+      </div>
+      <ErrorBanner message={requestState.error} />
+      <SubmitButton pendingLabel="Sending code…" style={buttonStyle}>
+        Send Verification Code
+      </SubmitButton>
+      {backLink}
+    </form>
+  );
+}
+
 export function LoginScreen({
   callbackUrl,
   defaultMode,
@@ -357,7 +519,8 @@ export function LoginScreen({
   const showOtp = providerConfig.otpEnabled;
   const showRegister = providerConfig.registerEnabled;
 
-  const [mode, setMode] = useState<"signin" | "register">(defaultMode);
+  const [mode, setMode] = useState<"signin" | "register" | "forgot">(defaultMode);
+  const [forgotKey, setForgotKey] = useState(0);
   const [method, setMethod] = useState<"password" | "otp">(showPassword ? defaultMethod : "otp");
 
   const buttonStyle: CSSProperties = {};
@@ -390,7 +553,14 @@ export function LoginScreen({
         className="border p-6 shadow-2xl"
         style={{ borderColor: pageConfig.background.border, borderRadius: pageConfig.cardRadius, background: "rgba(255,255,255,0.03)" }}
       >
-        {mode === "register" ? (
+        {mode === "forgot" ? (
+          <ForgotPasswordFlow
+            key={forgotKey}
+            buttonStyle={buttonStyle}
+            onBack={() => setMode("signin")}
+            onRestart={() => setForgotKey((k) => k + 1)}
+          />
+        ) : mode === "register" ? (
           <div className="flex flex-col gap-4">
             <p className="text-sm font-medium text-white">Create Account</p>
             <PasswordRegisterForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} />
@@ -436,7 +606,7 @@ export function LoginScreen({
               </div>
             ) : null}
 
-            {showPassword && method === "password" ? <PasswordLoginForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} /> : null}
+            {showPassword && method === "password" ? <PasswordLoginForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} onForgot={() => setMode("forgot")} /> : null}
             {showOtp && method === "otp" ? <MobileOtpForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} /> : null}
             {!showPassword && !showOtp && !showGoogle ? (
               <p className="text-center text-sm text-white/50">

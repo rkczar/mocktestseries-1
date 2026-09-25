@@ -236,10 +236,10 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
 ];
 
 /**
- * Non-page endpoints drawn as their own diagram node. Only one today: the
- * canonical Practice OMR download (app/api/student/test-resources/[id], which
- * brands every OMR_TEMPLATE via lib/omr-sheet.ts). There is exactly one OMR
- * generator, so there is exactly one node — every OMR CTA points at it.
+ * Non-page nodes drawn as their own diagram node: the canonical Practice OMR
+ * download (app/api/student/test-resources/[id], which brands every
+ * OMR_TEMPLATE via lib/omr-sheet.ts — exactly one generator, so every OMR CTA
+ * points at it), plus in-page flows that have no URL of their own (`#` nodes).
  */
 export const RESOURCE_NODES = [
   {
@@ -247,7 +247,30 @@ export const RESOURCE_NODES = [
     pageName: "Canonical OMR Generator → Branded OMR PDF (MockTestSeries.in link · watermark · website link · Instagram link)",
     module: "Practice Resources",
   },
+  {
+    // app/login/login-screen.tsx ForgotPasswordFlow + lib/password-reset.ts.
+    route: "/login#forgot-password",
+    pageName: "Forgot Password → Verify (Phone OTP to registered mobile) → Reset Password (New + Confirm) → Login",
+    module: "Student Auth",
+  },
+  {
+    // app/student/(dashboard)/dashboard/dashboard-announcements.tsx — StudentNotificationState.dismissedAt.
+    route: "/student/dashboard#announcements",
+    pageName: "Dashboard Announcement (✕ Per-student Dismiss, persisted — Admin announcement untouched)",
+    module: "Student Dashboard",
+  },
 ] as const;
+
+ROUTE_CONNECTIONS.push(
+  { from: "/login", to: "/login#forgot-password", source: "button", label: "Password login → Forgot Password?" },
+  { from: "/login#forgot-password", to: "/login", source: "form", label: "Password reset successful → Return to Login (new password)" },
+  {
+    from: "/student/dashboard",
+    to: "/student/dashboard#announcements",
+    source: "card",
+    label: "Welcome → Announcement → Active Examination → Performance Summary → Progress & Tools → Practice / Tests → Recent Tests",
+  },
+);
 
 const OMR_GENERATOR = RESOURCE_NODES[0].route;
 ROUTE_CONNECTIONS.push(

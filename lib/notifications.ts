@@ -59,7 +59,8 @@ export async function getVisibleAnnouncementsForStudent(
     where: {
       ...audienceWhere,
       status: "PUBLISHED",
-      ...(dashboardOnly ? { showOnDashboard: true } : {}),
+      // Dashboard cards the student closed (X) stay hidden for that student only.
+      ...(dashboardOnly ? { showOnDashboard: true, reads: { none: { studentId, dismissedAt: { not: null } } } } : {}),
     },
     include: { reads: { where: { studentId }, select: { readAt: true } } },
     orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
@@ -91,6 +92,33 @@ export async function markAnnouncementRead(studentId: string, announcementId: st
     update: { readAt: new Date() },
     create: { studentId, announcementId, readAt: new Date() },
   });
+}
+
+/**
+ * Per-student Dashboard dismissal. Only this student's StudentNotificationState
+ * row changes — the Announcement and every other student's view are untouched.
+ * Dismissing also counts as reading it. Returns false if the announcement isn't
+ * one this student can currently see.
+ */
+export async function dismissAnnouncementForStudent(studentId: string, announcementId: string): Promise<boolean> {
+  const audienceWhere = await candidateAnnouncementsWhere(studentId);
+  const row = await prisma.announcement.findFirst({
+    where: { AND: [audienceWhere, { id: announcementId, status: "PUBLISHED" }] },
+    select: { id: true, status: true, publishAt: true, expiresAt: true },
+  });
+  if (!row || !isAnnouncementVisible(row, new Date())) return false;
+
+  const now = new Date();
+  const existing = await prisma.studentNotificationState.findUnique({
+    where: { studentId_announcementId: { studentId, announcementId } },
+    select: { readAt: true },
+  });
+  await prisma.studentNotificationState.upsert({
+    where: { studentId_announcementId: { studentId, announcementId } },
+    update: { dismissedAt: now, ...(existing?.readAt ? {} : { readAt: now }) },
+    create: { studentId, announcementId, readAt: now, dismissedAt: now },
+  });
+  return true;
 }
 
 export async function markAllAnnouncementsRead(studentId: string): Promise<void> {

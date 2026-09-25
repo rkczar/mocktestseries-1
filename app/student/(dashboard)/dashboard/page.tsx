@@ -1,6 +1,4 @@
-import Link from "next/link";
 import { cookies } from "next/headers";
-import { Megaphone } from "lucide-react";
 import { requireStudent } from "@/lib/student-session";
 import {
   getDashboardMetrics,
@@ -11,11 +9,9 @@ import {
 } from "@/lib/student-data";
 import { getVisibleAnnouncementsForStudent } from "@/lib/notifications";
 import { ACTIVE_EXAM_COOKIE } from "@/lib/active-exam";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { SubscriptionStatusCard } from "@/components/student/subscription-status-card";
 import { ActiveExamDashboard } from "./active-exam-dashboard";
+import { DashboardAnnouncements } from "./dashboard-announcements";
 import { toDashboardMetricsView } from "./metrics-view";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 import { ensureDefaultExamEnrollment } from "@/lib/default-enrollment";
@@ -93,37 +89,19 @@ export default async function StudentDashboardPage() {
         studyStreak={globalMetrics.studyStreak}
         nextTest={nextTestCard}
         omrResourceId={omrSheet?.id ?? null}
-        notices={
-          <>
-            {dashboardAnnouncements.length > 0 ? (
-              <div className="flex flex-col gap-3">
-                {dashboardAnnouncements.map((a) => (
-                  <Card key={a.id} className={a.priority === "IMPORTANT" ? "border-[var(--color-warning)]/50" : undefined}>
-                    <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
-                      <div className="flex items-start gap-3">
-                        <Megaphone className="mt-0.5 h-5 w-5 shrink-0 text-[var(--color-primary)]" aria-hidden />
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium text-[var(--color-foreground)]">{a.title}</p>
-                            {a.priority === "IMPORTANT" ? <Badge variant="warning">Important</Badge> : null}
-                          </div>
-                          <p className="text-sm text-[var(--color-muted-foreground)]">{a.message}</p>
-                        </div>
-                      </div>
-                      {a.ctaRoute && a.ctaLabel ? (
-                        <Button asChild size="sm" variant="outline">
-                          <Link href={a.ctaRoute}>{a.ctaLabel}</Link>
-                        </Button>
-                      ) : null}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            ) : null}
-
-            <SubscriptionStatusCard studentId={student.id} />
-          </>
+        announcements={
+          <DashboardAnnouncements
+            announcements={dashboardAnnouncements.map((a) => ({
+              id: a.id,
+              title: a.title,
+              message: a.message,
+              priority: a.priority,
+              ctaLabel: a.ctaLabel,
+              ctaRoute: a.ctaRoute,
+            }))}
+          />
         }
+        footer={<SubscriptionStatusCard studentId={student.id} />}
       />
     </div>
   );

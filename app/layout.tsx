@@ -55,7 +55,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
-        <meta name="theme-color" content={theme === "light" ? "#fbfbfc" : theme === "eyesaver" ? "#ffffff" : "#0a0a0a"} />
+        <meta name="theme-color" content={theme === "light" ? "#fbfbfc" : theme === "eyesaver" ? "#000000" : "#0a0a0a"} />
         <style dangerouslySetInnerHTML={{ __html: appearanceToCssVariables(appearance) }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }} />

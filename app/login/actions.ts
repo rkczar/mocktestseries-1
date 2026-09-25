@@ -11,6 +11,12 @@ import { nextStudentId } from "@/lib/student-id";
 import { requestOtp, OtpError } from "@/lib/otp";
 import { safeStudentCallback } from "@/lib/student-callback";
 import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
+import {
+  requestPasswordReset,
+  verifyPasswordResetCode,
+  resetPasswordWithToken,
+  PasswordResetError,
+} from "@/lib/password-reset";
 
 export interface AuthFormState {
   error?: string;
@@ -163,4 +169,67 @@ export async function verifyMobileOtpAction(
 export async function googleSignInAction(formData: FormData) {
   const callbackUrl = safeCallback(String(formData.get("callbackUrl") ?? ""));
   await studentSignIn("google", { redirectTo: callbackUrl });
+}
+
+// --- Forgot Password (phone OTP → reset token → new password). See lib/password-reset.ts.
+
+export interface ResetFormState {
+  error?: string;
+  step?: "code" | "password" | "done";
+  identifier?: string;
+  token?: string;
+  devCode?: string;
+}
+
+export async function requestPasswordResetAction(
+  _prevState: ResetFormState,
+  formData: FormData
+): Promise<ResetFormState> {
+  const identifier = String(formData.get("identifier") ?? "").trim();
+  if (!identifier) return { error: "Enter your email, mobile number or User ID." };
+  try {
+    const { devCode } = await requestPasswordReset(identifier, await clientIp());
+    return { step: "code", identifier, devCode };
+  } catch (error) {
+    if (error instanceof PasswordResetError || error instanceof OtpError) return { error: error.message };
+    throw error;
+  }
+}
+
+export async function verifyPasswordResetCodeAction(
+  prevState: ResetFormState,
+  formData: FormData
+): Promise<ResetFormState> {
+  // Already verified: a duplicate submit (OTP box auto-submit + button) must not
+  // replace the issued token with a "code already used" error.
+  if (prevState.step === "password" && prevState.token) return prevState;
+  const identifier = String(formData.get("identifier") ?? "").trim();
+  const code = String(formData.get("code") ?? "").trim();
+  if (!code) return { step: "code", identifier, error: "Enter the verification code." };
+  try {
+    const token = await verifyPasswordResetCode(identifier, code);
+    return { step: "password", identifier, token };
+  } catch (error) {
+    if (error instanceof PasswordResetError) return { step: "code", identifier, error: error.message };
+    throw error;
+  }
+}
+
+export async function resetPasswordAction(
+  _prevState: ResetFormState,
+  formData: FormData
+): Promise<ResetFormState> {
+  const token = String(formData.get("token") ?? "");
+  const password = String(formData.get("password") ?? "");
+  const confirmPassword = String(formData.get("confirmPassword") ?? "");
+  if (password !== confirmPassword) return { step: "password", token, error: "Passwords do not match." };
+  try {
+    await resetPasswordWithToken(token, password);
+    return { step: "done" };
+  } catch (error) {
+    if (error instanceof PasswordResetError) {
+      return { step: /expired/i.test(error.message) ? undefined : "password", token, error: error.message };
+    }
+    throw error;
+  }
 }

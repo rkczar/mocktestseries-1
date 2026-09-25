@@ -73,8 +73,9 @@ export const {
           throw new Error("Too many login attempts. Please try again later.");
         }
 
+        // The form is labelled "User ID or Email" — User IDs are stored upper-case (MTS-000123).
         const student = await prisma.student.findFirst({
-          where: { OR: [{ email: identifier }, { mobile: identifier }] },
+          where: { OR: [{ email: identifier }, { mobile: identifier }, { studentId: identifier.toUpperCase() }] },
         });
 
         let success = false;

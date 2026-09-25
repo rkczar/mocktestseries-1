@@ -31,8 +31,8 @@ import { TestOnTheGo } from "./test-on-the-go";
 import type { DashboardMetricsView } from "./metrics-view";
 import { OmrPracticeCard } from "@/components/omr/omr-practice-card";
 
-// Primary study/test actions — shown right after Performance Summary and
-// Your Active Exam. Test Schedule shares Test Series' route (the schedule
+// Primary study/test actions — the Practice / Tests block, after Progress &
+// Tools. Test Schedule shares Test Series' route (the schedule
 // lives there), so links are keyed by label, not href.
 const PRACTICE_LINKS = [
   { label: "Subject Test", href: "/student/subject-test", icon: BookOpen, description: "Practice by subject" },
@@ -41,7 +41,7 @@ const PRACTICE_LINKS = [
   { label: "Custom Module", href: "/student/custom-module", icon: ListChecks, description: "Focused practice sets" },
 ];
 
-// Progress & tools — lower on the page.
+// Progress & tools — directly after Performance Summary.
 const TOOL_LINKS = [
   { label: "Analytics", href: "/student/analytics", icon: BarChart3, description: "Your performance breakdown" },
   { label: "History", href: "/student/history", icon: HistoryIcon, description: "Your past attempts" },
@@ -109,7 +109,8 @@ export function ActiveExamDashboard({
   studyStreak,
   nextTest: initialNextTest,
   omrResourceId = null,
-  notices = null,
+  announcements = null,
+  footer = null,
 }: {
   enrolledExams: ExamOption[];
   initialActiveExamId: string | null;
@@ -118,8 +119,10 @@ export function ActiveExamDashboard({
   studyStreak: number;
   nextTest: NextTestCard | null;
   omrResourceId?: string | null;
-  /** Server-rendered announcements / subscription status, placed after Your Active Exam. */
-  notices?: React.ReactNode;
+  /** Server-rendered announcements — rendered first, directly under Welcome Back. */
+  announcements?: React.ReactNode;
+  /** Lower-priority server-rendered content (subscription status), rendered last. */
+  footer?: React.ReactNode;
 }) {
   const [activeExamId, setActiveExamId] = useState(initialActiveExamId);
   const [metrics, setMetrics] = useState(initialMetrics);
@@ -151,25 +154,10 @@ export function ActiveExamDashboard({
 
   return (
     <div className="flex flex-col gap-6">
-      {/* 1. Performance Summary — the student's own numbers come first. */}
-      <section aria-labelledby="performance-summary" className="flex flex-col gap-3">
-        <h2 id="performance-summary" className="text-sm font-semibold text-[var(--color-foreground)]">
-          Performance Summary{activeExam ? <span className="font-normal text-[var(--color-muted-foreground)]"> · {activeExam.name}</span> : null}
-        </h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          <MetricTile icon={<CheckCircle2 className="h-5 w-5 text-[var(--color-success)]" aria-hidden />} label="MCQs Solved Today" value={metrics.mcqSolvedToday} />
-          <MetricTile icon={<ListTodo className="h-5 w-5 text-[var(--color-primary)]" aria-hidden />} label="Questions Attempted" value={metrics.questionsAttempted} />
-          <MetricTile icon={<Trophy className="h-5 w-5 text-[var(--color-accent)]" aria-hidden />} label="Tests Completed" value={metrics.testsCompleted} />
-          <MetricTile icon={<Flame className="h-5 w-5 text-[var(--color-warning)]" aria-hidden />} label="Study Streak (All Exams)" value={`${studyStreak}d`} />
-          <MetricTile
-            icon={<BarChart3 className="h-5 w-5 text-[var(--color-info)]" aria-hidden />}
-            label="Average Score"
-            value={metrics.averageScore !== null ? metrics.averageScore.toFixed(1) : "—"}
-          />
-        </div>
-      </section>
+      {/* 1. Announcements — directly under Welcome Back (page.tsx) */}
+      {announcements}
 
-      {/* 2. Your Active Exam */}
+      {/* 2. Your Active Exam — canonical DB exam name */}
       {enrolledExams.length > 0 ? (
         <Card className="border-[var(--color-primary)]/40">
           <CardContent className="flex flex-col gap-4 pt-5">
@@ -234,6 +222,37 @@ export function ActiveExamDashboard({
         </Card>
       )}
 
+      {/* 3. Performance Summary — right after the active exam. */}
+      <section aria-labelledby="performance-summary" className="flex flex-col gap-3">
+        <h2 id="performance-summary" className="text-sm font-semibold text-[var(--color-foreground)]">
+          Performance Summary{activeExam ? <span className="font-normal text-[var(--color-muted-foreground)]"> · {activeExam.name}</span> : null}
+        </h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <MetricTile icon={<CheckCircle2 className="h-5 w-5 text-[var(--color-success)]" aria-hidden />} label="MCQs Solved Today" value={metrics.mcqSolvedToday} />
+          <MetricTile icon={<ListTodo className="h-5 w-5 text-[var(--color-primary)]" aria-hidden />} label="Questions Attempted" value={metrics.questionsAttempted} />
+          <MetricTile icon={<Trophy className="h-5 w-5 text-[var(--color-accent)]" aria-hidden />} label="Tests Completed" value={metrics.testsCompleted} />
+          <MetricTile icon={<Flame className="h-5 w-5 text-[var(--color-warning)]" aria-hidden />} label="Study Streak (All Exams)" value={`${studyStreak}d`} />
+          <MetricTile
+            icon={<BarChart3 className="h-5 w-5 text-[var(--color-info)]" aria-hidden />}
+            label="Average Score"
+            value={metrics.averageScore !== null ? metrics.averageScore.toFixed(1) : "—"}
+          />
+        </div>
+      </section>
+
+      {/* 4. Your Progress & Tools */}
+      <section aria-labelledby="progress-tools" className="flex flex-col gap-3">
+        <h2 id="progress-tools" className="text-sm font-semibold text-[var(--color-foreground)]">
+          Your Progress &amp; Tools
+        </h2>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {TOOL_LINKS.map((link) => (
+            <QuickLinkCard key={link.label} {...link} />
+          ))}
+        </div>
+      </section>
+
+      {/* 5. Practice / Tests — resume, schedule, practice links, OMR, Test on the Go */}
       {metrics.inProgress ? (
         <Card className="border-[var(--color-primary)]/40">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
@@ -283,9 +302,7 @@ export function ActiveExamDashboard({
         </Card>
       ) : null}
 
-      {notices}
-
-      {/* 3. Start Practicing — primary study/test actions */}
+      {/* 5b. Start Practicing — primary study/test actions */}
       <section aria-labelledby="start-practicing" className="flex flex-col gap-3">
         <h2 id="start-practicing" className="text-sm font-semibold text-[var(--color-foreground)]">
           Start Practicing
@@ -297,7 +314,7 @@ export function ActiveExamDashboard({
         </div>
       </section>
 
-      {/* 4. Practice Resources — the canonical branded OMR sheet */}
+      {/* 5c. Practice Resources — the canonical branded OMR sheet */}
       {omrResourceId ? (
         <section aria-labelledby="practice-resources" className="flex flex-col gap-3">
           <h2 id="practice-resources" className="text-sm font-semibold text-[var(--color-foreground)]">
@@ -329,18 +346,31 @@ export function ActiveExamDashboard({
         </div>
       ) : null}
 
-      {/* 5. Your Progress & Tools */}
-      <section aria-labelledby="progress-tools" className="flex flex-col gap-3">
-        <h2 id="progress-tools" className="text-sm font-semibold text-[var(--color-foreground)]">
-          Your Progress &amp; Tools
-        </h2>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {TOOL_LINKS.map((link) => (
-            <QuickLinkCard key={link.label} {...link} />
-          ))}
-        </div>
-      </section>
+      {/* 6. Recent Tests — unchanged card, below the practice sections */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Test</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {metrics.recentTest ? (
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-[var(--color-foreground)]">{metrics.recentTest.title}</p>
+                <p className="text-sm text-[var(--color-muted-foreground)]">
+                  {metrics.recentTest.score?.toFixed(1) ?? "—"} / {metrics.recentTest.maxScore}
+                </p>
+              </div>
+              <Button asChild size="sm" variant="outline">
+                <Link href={`/student/attempt/${metrics.recentTest.id}/result`}>View</Link>
+              </Button>
+            </div>
+          ) : (
+            <p className="text-sm text-[var(--color-muted-foreground)]">No completed tests yet.</p>
+          )}
+        </CardContent>
+      </Card>
 
+      {/* 7. Lower-priority: Weak Topics, Saved Questions, subscription */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -383,30 +413,7 @@ export function ActiveExamDashboard({
         </Card>
       </Link>
 
-      {/* 6. Recent Tests — unchanged card, placed last */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Test</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {metrics.recentTest ? (
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium text-[var(--color-foreground)]">{metrics.recentTest.title}</p>
-                <p className="text-sm text-[var(--color-muted-foreground)]">
-                  {metrics.recentTest.score?.toFixed(1) ?? "—"} / {metrics.recentTest.maxScore}
-                </p>
-              </div>
-              <Button asChild size="sm" variant="outline">
-                <Link href={`/student/attempt/${metrics.recentTest.id}/result`}>View</Link>
-              </Button>
-            </div>
-          ) : (
-            <p className="text-sm text-[var(--color-muted-foreground)]">No completed tests yet.</p>
-          )}
-        </CardContent>
-      </Card>
-
+      {footer}
     </div>
   );
 }
