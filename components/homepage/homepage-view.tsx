@@ -2,6 +2,7 @@ import type { ResolvedHomepage } from "@/lib/homepage-render";
 import { SiteHeader } from "./site-header";
 import { SiteFooter } from "./site-footer";
 import { AskAiDemoSection } from "./ask-ai-demo-section";
+import { OmrPracticeCard } from "@/components/omr/omr-practice-card";
 import {
   HeroSection,
   FeaturedExamSection,
@@ -35,7 +36,7 @@ const SECTION_COMPONENTS: Partial<Record<HomepageSectionKey, ComponentType<Secti
   CTA: CtaSection,
 };
 
-export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
+export function HomepageView({ homepage, omrResourceId = null }: { homepage: ResolvedHomepage; omrResourceId?: string | null }) {
   const byKey = new Map(homepage.sections.map((s) => [s.key, s]));
   const header = byKey.get("HEADER");
   const footer = byKey.get("FOOTER");
@@ -65,6 +66,18 @@ export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
               : null;
           let tryAiNowInserted = tryAiNowAfterKey === null;
 
+          // Practice OMR is a supporting resource: mid-page, after the
+          // platform features (AI_USP, else BENEFITS), never above the hero.
+          const omrAfterKey = (["AI_USP", "BENEFITS", "HOW_IT_WORKS"] as const).find((k) => bodySections.some((s) => s.key === k)) ?? null;
+          let omrInserted = !omrResourceId;
+          const omrSection = omrResourceId ? (
+            <section key="practice-omr" id="practice-omr" className="border-t border-[var(--color-border)]">
+              <div className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6 sm:py-16">
+                <OmrPracticeCard resourceId={omrResourceId} context="homepage" />
+              </div>
+            </section>
+          ) : null;
+
           const nodes: ReactNode[] = [];
           for (const section of bodySections) {
             const Component = SECTION_COMPONENTS[section.key];
@@ -75,7 +88,12 @@ export function HomepageView({ homepage }: { homepage: ResolvedHomepage }) {
               nodes.push(<AskAiDemoSection key="try-ai-now" />);
               tryAiNowInserted = true;
             }
+            if (!omrInserted && section.key === omrAfterKey) {
+              nodes.push(omrSection);
+              omrInserted = true;
+            }
           }
+          if (!omrInserted) nodes.push(omrSection);
           if (!tryAiNowInserted) nodes.push(<AskAiDemoSection key="try-ai-now" />);
           return nodes;
         })()}

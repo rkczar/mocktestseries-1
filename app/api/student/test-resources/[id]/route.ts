@@ -8,6 +8,7 @@ import { hasMockTestReleased } from "@/lib/mock-test-schedule";
 import { canAccessTestResource } from "@/lib/test-resources-access";
 import { resolveTestResourcePath } from "@/lib/test-resources";
 import { getContentAccess, accessDeniedMessage } from "@/lib/payments/access";
+import { brandOmrPdf, getOfficialInstagram, OMR_DOWNLOAD_FILENAME } from "@/lib/omr-sheet";
 
 /**
  * The only enforcement point for TestResource downloads — every request re-
@@ -87,23 +88,38 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const filePath = resolveTestResourcePath(resource.fileUrl);
   if (!filePath) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  let buffer: Buffer;
+  let buffer: Uint8Array;
   try {
     buffer = await readFile(filePath);
   } catch {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // Every OMR download — Homepage, Student Dashboard, Practice with OMR, exam
+  // pages, result print kit — is stamped here by the one canonical branding
+  // step (lib/omr-sheet.ts). The stored file itself is never modified.
+  const isOmr = resource.type === "OMR_TEMPLATE";
+  if (isOmr) {
+    try {
+      buffer = await brandOmrPdf(buffer, { instagram: await getOfficialInstagram() });
+    } catch (err) {
+      // An unparseable upload still downloads as-is rather than 500ing.
+      console.error("[omr] branding failed for resource", resource.id, err);
+    }
+  }
+
   // Strip anything outside a conservative safe set before it reaches a header
   // value — resource.title is admin-supplied and stored, not attacker
   // input off this request, but an unsanitized value could still break the
   // response (quotes/control characters) if a title is ever entered oddly.
-  const safeFilename = path.basename(resource.title || resource.id).replace(/[^a-zA-Z0-9 _.-]/g, "") || resource.id;
+  const safeFilename = isOmr
+    ? OMR_DOWNLOAD_FILENAME
+    : `${path.basename(resource.title || resource.id).replace(/[^a-zA-Z0-9 _.-]/g, "") || resource.id}.pdf`;
 
   return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": resource.mimeType,
-      "Content-Disposition": `inline; filename="${safeFilename}.pdf"`,
+      "Content-Disposition": `inline; filename="${safeFilename}"`,
       // Derived from the actual bytes read, not the stored fileSizeBytes —
       // never trust a persisted length to match the file on disk.
       "Content-Length": String(buffer.length),

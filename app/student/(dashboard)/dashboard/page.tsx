@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { SubscriptionStatusCard } from "@/components/student/subscription-status-card";
 import { ActiveExamDashboard } from "./active-exam-dashboard";
 import { toDashboardMetricsView } from "./metrics-view";
+import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
@@ -45,6 +46,7 @@ export default async function StudentDashboardPage() {
       ])
     : [null, [], await getNextScheduledTestForStudent(student.id)];
 
+  const omrSheet = await findPracticeOmrSheet(activeExamId);
   const initialMetrics = toDashboardMetricsView(rawExamMetrics ?? globalMetrics);
   const nextTestCard = nextTest
     ? {
@@ -103,6 +105,7 @@ export default async function StudentDashboardPage() {
         initialSubjects={subjects}
         studyStreak={globalMetrics.studyStreak}
         nextTest={nextTestCard}
+        omrResourceId={omrSheet?.id ?? null}
       />
     </div>
   );

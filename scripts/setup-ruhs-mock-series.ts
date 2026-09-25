@@ -23,10 +23,10 @@
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { testResourcesDir, randomResourceFilename, publicResourceUrlFor } from "@/lib/test-resources";
+import { buildOmrPdf } from "@/lib/omr-sheet";
 
 const APPLY = process.argv.includes("--apply");
 const EXAM_CODE = "RUHSMO";
@@ -36,52 +36,6 @@ const PRODUCT_CODE = "ruhs-mo-full-access";
 const PRODUCT_NAME = "RUHS Medical Officer 2026 Complete Mock Test Series";
 
 const log = (msg: string) => console.log(`${APPLY ? "APPLY" : "DRY  "} ${msg}`);
-
-async function buildOmrPdf(title: string, questionCount: number): Promise<Uint8Array> {
-  const pdf = await PDFDocument.create();
-  const page = pdf.addPage([595.28, 841.89]); // A4
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const ink = rgb(0.1, 0.1, 0.1);
-  const { width, height } = page.getSize();
-
-  page.drawText(title, { x: 40, y: height - 50, size: 14, font: bold, color: ink });
-  page.drawText("Practice OMR Answer Sheet — for self-practice only. Fill one bubble per question with a dark pen.", {
-    x: 40, y: height - 68, size: 8.5, font, color: ink,
-  });
-  const fields = ["Name", "Roll No.", "Mock Test No.", "Date", "Start time", "End time"];
-  fields.forEach((f, i) => {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
-    const x = 40 + col * 175;
-    const y = height - 98 - row * 26;
-    page.drawText(`${f}:`, { x, y, size: 9, font, color: ink });
-    page.drawLine({ start: { x: x + 62, y: y - 2 }, end: { x: x + 165, y: y - 2 }, thickness: 0.6, color: ink });
-  });
-
-  const cols = 4;
-  const perCol = Math.ceil(questionCount / cols);
-  const top = height - 170;
-  const rowH = Math.min(24, (top - 60) / perCol);
-  const colW = (width - 80) / cols;
-  const opts = ["A", "B", "C", "D"];
-  for (let q = 0; q < questionCount; q++) {
-    const c = Math.floor(q / perCol);
-    const r = q % perCol;
-    const x = 40 + c * colW;
-    const y = top - r * rowH;
-    page.drawText(String(q + 1).padStart(3, " "), { x, y: y - 3, size: 8.5, font: bold, color: ink });
-    opts.forEach((o, i) => {
-      const cx = x + 30 + i * 22;
-      page.drawCircle({ x: cx, y, size: 7, borderColor: ink, borderWidth: 0.7 });
-      page.drawText(o, { x: cx - 2.6, y: y - 2.8, size: 7, font, color: ink });
-    });
-  }
-  page.drawText("MockTestSeries.in — enter these answers online via Test Series > Enter OMR Answers to get your score and review.", {
-    x: 40, y: 30, size: 7.5, font, color: ink,
-  });
-  return pdf.save();
-}
 
 type Pair = [string, string];
 

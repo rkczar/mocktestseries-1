@@ -3,6 +3,7 @@ import { getPublishedHomepage, getFallbackHomepage } from "@/lib/homepage";
 import { resolveHomepage } from "@/lib/homepage-render";
 import { HomepageView } from "@/components/homepage/homepage-view";
 import { requirePageVisible } from "@/lib/page-visibility";
+import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 
 export async function generateMetadata(): Promise<Metadata> {
   const published = await getPublishedHomepage();
@@ -19,7 +20,7 @@ export default async function Home() {
   await requirePageVisible("homepage");
   const published = await getPublishedHomepage();
   const config = published ?? getFallbackHomepage();
-  const homepage = await resolveHomepage(config);
+  const [homepage, omrSheet] = await Promise.all([resolveHomepage(config), findPracticeOmrSheet()]);
 
-  return <HomepageView homepage={homepage} />;
+  return <HomepageView homepage={homepage} omrResourceId={omrSheet?.id ?? null} />;
 }

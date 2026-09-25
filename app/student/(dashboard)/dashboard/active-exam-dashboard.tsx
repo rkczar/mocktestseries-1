@@ -29,6 +29,7 @@ import { formatIst } from "@/lib/ist-time";
 import { getActiveExamDashboardDataAction } from "./actions";
 import { TestOnTheGo } from "./test-on-the-go";
 import type { DashboardMetricsView } from "./metrics-view";
+import { OmrPracticeCard } from "@/components/omr/omr-practice-card";
 
 const QUICK_LINKS = [
   { label: "My Exams", href: "/student/exams", icon: GraduationCap, description: "Browse exams, subjects and papers" },
@@ -99,6 +100,7 @@ export function ActiveExamDashboard({
   initialSubjects,
   studyStreak,
   nextTest: initialNextTest,
+  omrResourceId = null,
 }: {
   enrolledExams: ExamOption[];
   initialActiveExamId: string | null;
@@ -106,6 +108,7 @@ export function ActiveExamDashboard({
   initialSubjects: SubjectOverview[];
   studyStreak: number;
   nextTest: NextTestCard | null;
+  omrResourceId?: string | null;
 }) {
   const [activeExamId, setActiveExamId] = useState(initialActiveExamId);
   const [metrics, setMetrics] = useState(initialMetrics);
@@ -241,6 +244,8 @@ export function ActiveExamDashboard({
           value={metrics.upcomingExam ? `${metrics.upcomingExam.daysLeft}d left` : "—"}
         />
       </div>
+
+      {omrResourceId ? <OmrPracticeCard resourceId={omrResourceId} context="dashboard" /> : null}
 
       {activeExamId && subjects.length > 0 ? <TestOnTheGo examId={activeExamId} subjects={subjects} /> : null}
 

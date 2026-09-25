@@ -225,6 +225,33 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
 ];
 
 /**
+ * Non-page endpoints drawn as their own diagram node. Only one today: the
+ * canonical Practice OMR download (app/api/student/test-resources/[id], which
+ * brands every OMR_TEMPLATE via lib/omr-sheet.ts). There is exactly one OMR
+ * generator, so there is exactly one node — every OMR CTA points at it.
+ */
+export const RESOURCE_NODES = [
+  {
+    route: "/api/student/test-resources/[id]",
+    pageName: "Canonical OMR Generator → Branded OMR PDF (MockTestSeries.in link · watermark · website link · Instagram link)",
+    module: "Practice Resources",
+  },
+] as const;
+
+const OMR_GENERATOR = RESOURCE_NODES[0].route;
+ROUTE_CONNECTIONS.push(
+  // components/homepage/homepage-view.tsx — mid-page Practice OMR section (components/omr/omr-practice-card.tsx).
+  { from: "/", to: OMR_GENERATOR, source: "card", label: "Homepage: Practice OMR Sheet → Download OMR Sheet (no login)" },
+  // app/student/(dashboard)/dashboard/active-exam-dashboard.tsx — card after the summary tiles.
+  { from: "/student/dashboard", to: OMR_GENERATOR, source: "card", label: "Student Dashboard: Practice OMR Sheet → Download OMR Sheet" },
+  // Existing OMR CTAs.
+  { from: "/student/omr", to: OMR_GENERATOR, source: "button", label: "Practice with OMR → Download OMR Sheet" },
+  { from: "/exams/[slug]", to: OMR_GENERATOR, source: "button", label: "Public Exam Page → Download OMR Sheet" },
+  { from: "/exams/[slug]/mock-test-series", to: OMR_GENERATOR, source: "button", label: "Mock Test Series → Practice OMR → Download OMR" },
+  { from: "/student/attempt/[attemptId]/result", to: OMR_GENERATOR, source: "button", label: "Result → Print Practice Kit → Download OMR Sheet" },
+);
+
+/**
  * Ordered student journey for the Flow view (Section 6A). Each route must
  * exist in ROUTE_MANIFEST with status "CONNECTED" — this is a curated
  * narrative ordering, not a discovery, so it stays honest about what's

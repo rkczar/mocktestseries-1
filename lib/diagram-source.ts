@@ -1,6 +1,6 @@
 import "server-only";
 import { scanAppRoutes, scanOutgoingLinks } from "./route-scanner";
-import { ROUTE_CONNECTIONS, type RouteConnection } from "./route-connections";
+import { ROUTE_CONNECTIONS, RESOURCE_NODES, type RouteConnection } from "./route-connections";
 import { ADMIN_CONFIG_LINKS } from "./diagram-admin-links";
 import { DEPRECATED_ROUTES } from "./deprecated-routes";
 import { LEGACY_REDIRECTS } from "./legacy-redirects";
@@ -71,6 +71,22 @@ export function buildDiagramSource(dbEntries: DiagramEntry[]): DiagramSource {
       autoDiscovered: false,
       missing: false,
       deprecated: true,
+    });
+  }
+
+  for (const node of RESOURCE_NODES) {
+    if (knownRoutes.has(node.route)) continue;
+    entries.push({
+      pageName: node.pageName,
+      route: node.route,
+      module: node.module,
+      userType: "PUBLIC",
+      authRequired: false,
+      parentRoute: null,
+      status: "CONNECTED",
+      autoDiscovered: false,
+      missing: false,
+      deprecated: false,
     });
   }
 
