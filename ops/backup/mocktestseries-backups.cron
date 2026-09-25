@@ -1,0 +1,16 @@
+# mocktestseries backups — installed as /etc/cron.d/mocktestseries-backups (source: ops/backup/ in the repo).
+# Additive jobs only; none of them touch the live database or files.
+# 02:00 DB dump (pg_dump -Fc, 14-day retention)
+# 02:15 file mirrors: uploads + shared storage (images, test resources) — never deletes backup copies
+# 02:25 config archive (.env, nginx, PM2 dump, cron, scripts; 30-day retention; contains secrets, 0600)
+# 02:45 off-VPS copy via encrypted rclone remote "mts-offsite" (no-op until the owner configures it)
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+0  2 * * * root /usr/local/bin/mocktestseries-backup-db.sh >> /var/log/mocktestseries/backup-db.log 2>&1
+15 2 * * * root /usr/local/bin/mocktestseries-backup-uploads.sh >> /var/log/mocktestseries/backup-uploads.log 2>&1
+25 2 * * * root /usr/local/bin/mocktestseries-backup-config.sh >> /var/log/mocktestseries/backup-config.log 2>&1
+45 2 * * * root /usr/local/bin/mocktestseries-offsite-sync.sh >> /var/log/mocktestseries/backup-offsite.log 2>&1
+# Backup Center automatic retention at 03:30 UTC — a no-op unless a Master Admin enables it
+# (Admin → Backup → Retention; OFF by default). Deletes only cleanup-eligible items; audited.
+30 3 * * * root cd /var/www/mocktestseries-current && NODE_OPTIONS=--conditions=react-server /usr/bin/npx --no-install tsx scripts/backup-auto-retention.ts >> /var/log/mocktestseries/backup-retention.log 2>&1

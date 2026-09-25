@@ -1,7 +1,11 @@
-import { redirect } from "next/navigation";
 import { requirePageVisible } from "@/lib/page-visibility";
+import { LegalDocumentPage, legalDocumentMetadata } from "@/app/contact/legal-document";
 
-export default async function PrivacyPolicyRedirect() {
+export function generateMetadata() {
+  return legalDocumentMetadata("privacy");
+}
+
+export default async function PrivacyPolicyPage() {
   await requirePageVisible("privacy");
-  redirect("/contact#privacy");
+  return <LegalDocumentPage kind="privacy" />;
 }

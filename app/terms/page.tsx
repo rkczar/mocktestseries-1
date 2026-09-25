@@ -1,7 +1,11 @@
-import { redirect } from "next/navigation";
 import { requirePageVisible } from "@/lib/page-visibility";
+import { LegalDocumentPage, legalDocumentMetadata } from "@/app/contact/legal-document";
 
-export default async function TermsRedirect() {
+export function generateMetadata() {
+  return legalDocumentMetadata("terms");
+}
+
+export default async function TermsPage() {
   await requirePageVisible("terms");
-  redirect("/contact#terms");
+  return <LegalDocumentPage kind="terms" />;
 }

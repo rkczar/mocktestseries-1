@@ -20,8 +20,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   if (isVisible("homepage")) entries.push({ url: siteUrl, changeFrequency: "daily", priority: 1 });
   if (isVisible("contact")) entries.push({ url: `${siteUrl}/contact`, changeFrequency: "monthly", priority: 0.3 });
-  // /privacy and /terms are redirects to sections of /contact (listed above),
-  // so they are not separate sitemap URLs.
+  if (isVisible("privacy")) entries.push({ url: `${siteUrl}/privacy`, changeFrequency: "yearly", priority: 0.2 });
+  if (isVisible("terms")) entries.push({ url: `${siteUrl}/terms`, changeFrequency: "yearly", priority: 0.2 });
 
   if (isVisible("exams-directory")) {
     entries.push({ url: `${siteUrl}/exams`, changeFrequency: "weekly", priority: 0.8 });

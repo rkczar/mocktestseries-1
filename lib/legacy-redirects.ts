@@ -23,5 +23,5 @@ export const LEGACY_REDIRECTS: LegacyRedirect[] = [
   { source: "/index.php", destination: "/", label: "Legacy PHP home" },
   { source: "/index.html", destination: "/", label: "Legacy static home" },
   { source: "/contact.html", destination: "/contact", label: "Legacy static contact page" },
-  { source: "/privacy.php", destination: "/contact#privacy", label: "Legacy PHP privacy policy" },
+  { source: "/privacy.php", destination: "/privacy", label: "Legacy PHP privacy policy" },
 ];
