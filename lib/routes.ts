@@ -106,7 +106,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   // now; only the Solution Manager landing page is still an honest stub.
   { pageName: "AI Solution Manager", route: "/admin/ai/solution-manager", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
   { pageName: "AI Solutions", route: "/admin/ai/solutions", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
-  { pageName: "AI Question Variants", route: "/admin/ai/variants", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
+  { pageName: "AI Variant Monitoring", route: "/admin/ai/variants", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
   { pageName: "AI Usage", route: "/admin/ai/usage", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
   { pageName: "AI Settings", route: "/admin/ai/settings", module: "AI", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai/solution-manager", status: "CONNECTED" },
 

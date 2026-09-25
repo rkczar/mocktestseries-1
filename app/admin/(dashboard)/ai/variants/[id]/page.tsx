@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { AiSlot, AiVariantType } from "@prisma/client";
+import { AiSlot } from "@prisma/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { GenerateVariantControl, RetryVariantControl, PublishVariantControl } from "../variant-controls";
+import { GenerateMissingControl, ArchiveVariantControl, PublishVariantControl } from "../variant-controls";
 
 export const metadata = { title: "AI Variants — Mock Test Series.in Admin" };
 
@@ -26,7 +26,12 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
     include: {
       exam: true,
       options: { orderBy: { order: "asc" } },
-      aiVariants: { include: { options: { orderBy: { order: "asc" } } }, orderBy: { aiSlot: "asc" } },
+      subject: true,
+      topic: true,
+      aiVariants: {
+        include: { options: { orderBy: { order: "asc" } }, aiExplanation: true, _count: { select: { reports: true, mockTestQuestions: true } } },
+        orderBy: { aiSlot: "asc" },
+      },
     },
   });
   if (!parent || parent.parentQuestionId) notFound();
@@ -36,11 +41,14 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
   return (
     <div className="flex flex-col gap-6">
       <Link href="/admin/ai/variants" className="text-sm text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]">
-        ← Back to AI Question Variants
+        ← Back to AI Variant Monitoring
       </Link>
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{parent.code}</h1>
-        <p className="text-sm text-[var(--color-muted-foreground)]">{parent.exam.name}</p>
+        <p className="text-sm text-[var(--color-muted-foreground)]">
+          {parent.exam.name} · {parent.subject.name}
+          {parent.topic ? ` · ${parent.topic.name}` : ""}
+        </p>
       </div>
 
       <Card>
@@ -69,9 +77,15 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
       <Card>
         <CardHeader>
           <CardTitle>AI Variants</CardTitle>
-          <CardDescription>{parent.aiVariants.length}/5 slots used</CardDescription>
+          <CardDescription>
+            {parent.aiVariants.filter((v) => v.aiGenerationStatus === "COMPLETED" && v.status !== "ARCHIVED").length}/5 active · generated
+            automatically from Ask AI and saved to the Question Bank
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {parent.status === "PUBLISHED" && parent.aiVariants.filter((v) => v.aiGenerationStatus === "COMPLETED").length < 5 ? (
+            <GenerateMissingControl parentQuestionId={parent.id} />
+          ) : null}
           {SLOT_ORDER.map((slot) => {
             const variant = bySlot.get(slot);
             return (
@@ -82,22 +96,19 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
                     {STATUS_BADGE[variant?.aiGenerationStatus ?? "NONE"].label}
                   </Badge>
                   {variant?.aiGenerationStatus === "COMPLETED" ? (
-                    <Badge variant={variant.status === "PUBLISHED" ? "success" : "neutral"}>
-                      {variant.status === "PUBLISHED" ? "Published to Question Bank" : "Draft — not in Question Bank"}
+                    <Badge variant={variant.status === "PUBLISHED" ? "success" : variant.status === "ARCHIVED" ? "warning" : "neutral"}>
+                      {variant.status === "PUBLISHED" ? "In Question Bank" : variant.status === "ARCHIVED" ? "Archived" : "Draft (legacy)"}
                     </Badge>
                   ) : null}
                 </div>
 
                 {!variant ? (
-                  <div className="flex flex-wrap gap-3">
-                    <GenerateVariantControl parentQuestionId={parent.id} variantType={AiVariantType.AI_SIMILAR} />
-                    <GenerateVariantControl parentQuestionId={parent.id} variantType={AiVariantType.AI_TRAP} />
-                  </div>
+                  <p className="text-xs text-[var(--color-muted-foreground)]">Empty — filled automatically the next time a student asks for AI Question Variants.</p>
                 ) : variant.aiGenerationStatus === "COMPLETED" ? (
                   <div className="flex flex-col gap-2">
                     <p className="text-xs text-[var(--color-muted-foreground)]">
-                      {variant.code} · {variant.aiVariantType === "AI_SIMILAR" ? "Similar" : "Trap"} · {variant.aiModel} ·{" "}
-                      {variant.aiGeneratedAt?.toLocaleString()}
+                      {variant.code} · {variant.aiModel || "unknown model"} · {variant.aiGeneratedAt?.toLocaleString("en-IN")} · used in{" "}
+                      {variant._count.mockTestQuestions} test(s) · {variant._count.reports} report(s)
                     </p>
                     <p className="text-sm text-[var(--color-foreground)]">{variant.text}</p>
                     <div className="flex flex-col gap-1.5">
@@ -114,14 +125,32 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
                         </div>
                       ))}
                     </div>
-                    {variant.status !== "PUBLISHED" ? (
-                      <PublishVariantControl variantId={variant.id} parentQuestionId={parent.id} />
-                    ) : null}
+                    {(() => {
+                      const concept = (variant.aiExplanation?.content as { concept?: unknown } | null)?.concept;
+                      return typeof concept === "string" && concept ? (
+                        <p className="text-xs text-[var(--color-muted-foreground)]">
+                          <span className="font-semibold">Explanation:</span> {concept}
+                        </p>
+                      ) : null;
+                    })()}
+                    <div className="flex flex-wrap gap-2">
+                      <Link href={`/admin/questions?tab=add&id=${variant.id}`} className="self-center text-xs text-[var(--color-primary)] hover:underline">
+                        Edit / fix in Question Bank
+                      </Link>
+                      {variant.status !== "ARCHIVED" ? <ArchiveVariantControl variantId={variant.id} parentQuestionId={parent.id} /> : null}
+                      {variant.status !== "PUBLISHED" ? (
+                        <PublishVariantControl
+                          variantId={variant.id}
+                          parentQuestionId={parent.id}
+                          label={variant.status === "ARCHIVED" ? "Restore" : "Add to Question Bank"}
+                        />
+                      ) : null}
+                    </div>
                   </div>
                 ) : variant.aiGenerationStatus === "FAILED" ? (
                   <div className="flex flex-col gap-2">
                     <p className="text-xs text-[var(--color-error)]">{variant.aiErrorMessage ?? "Generation failed."}</p>
-                    <RetryVariantControl variantId={variant.id} parentQuestionId={parent.id} />
+                    <p className="text-xs text-[var(--color-muted-foreground)]">This slot is refilled automatically by the next generation.</p>
                   </div>
                 ) : (
                   <p className="text-xs text-[var(--color-muted-foreground)]">

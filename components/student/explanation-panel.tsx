@@ -4,16 +4,23 @@ import { useRef, useState, useTransition } from "react";
 import { Loader2, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getExplanationAction, getExplanationVariantAction } from "@/app/student/ai-actions";
+import { getExplanationAction, getExplanationVariantAction, getQuestionVariantsAction } from "@/app/student/ai-actions";
 import { EXPLANATION_VARIANTS } from "@/lib/ai-explanation-variants-catalog";
 import type { ExplanationContent } from "@/lib/ai-explanation";
-import { ExplanationContentView, ExplanationSection } from "@/components/student/explanation-content";
+import { ExplanationContentView } from "@/components/student/explanation-content";
+import { QuestionVariantsView } from "@/components/student/question-variants";
 
 const AUTO_RETRY_DELAYS_MS = [2500, 4000]; // a couple of gentle retries while someone else's generation finishes
 
 type ExplanationResult = Awaited<ReturnType<typeof getExplanationAction>>;
 type SuccessResult = Extract<ExplanationResult, { ok: true }>;
 type VariantResult = Awaited<ReturnType<typeof getExplanationVariantAction>>;
+type QuestionVariantsState = React.ComponentProps<typeof QuestionVariantsView>["state"];
+
+/** Pseudo-tab id for "AI Question Variants" — practice questions, not an explanation style. */
+const QUESTION_VARIANTS_TAB = "question-variants";
+/** Never leave an indefinite spinner: two bounded provider calls fit well inside this. */
+const QUESTION_VARIANTS_TIMEOUT_MS = 120_000;
 
 /**
  * All Ask AI + AI Variants state/logic in one hook, split into a `trigger`
@@ -41,6 +48,44 @@ export function useAskAi(questionId: string) {
   const [variantContents, setVariantContents] = useState<Record<string, { content: ExplanationContent; isStale: boolean }>>({});
   const [variantPendingId, setVariantPendingId] = useState<string | null>(null);
   const [variantError, setVariantError] = useState<string | null>(null);
+  const [questionVariants, setQuestionVariants] = useState<QuestionVariantsState | null>(null);
+  const questionVariantsRetryRef = useRef(0);
+
+  const loadQuestionVariants = () => {
+    setQuestionVariants({ kind: "loading" });
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      setQuestionVariants({ kind: "error", message: "This is taking longer than expected.", canRetry: true });
+    }, QUESTION_VARIANTS_TIMEOUT_MS);
+    getQuestionVariantsAction(questionId)
+      .then((outcome) => {
+        if (settled) return;
+        if (!outcome.ok && "retry" in outcome && outcome.retry && questionVariantsRetryRef.current < AUTO_RETRY_DELAYS_MS.length) {
+          // Someone else is generating this question's variants right now — wait and read theirs.
+          const delay = AUTO_RETRY_DELAYS_MS[questionVariantsRetryRef.current];
+          questionVariantsRetryRef.current += 1;
+          settled = true;
+          clearTimeout(timer);
+          setTimeout(loadQuestionVariants, delay);
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        setQuestionVariants(
+          outcome.ok
+            ? { kind: "ready", variants: outcome.variants, requested: outcome.requested }
+            : { kind: "error", message: outcome.error, canRetry: ("canRetry" in outcome && Boolean(outcome.canRetry)) || ("retry" in outcome && Boolean(outcome.retry)) }
+        );
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        setQuestionVariants({ kind: "error", message: "Couldn't reach the server.", canRetry: true });
+      });
+  };
 
   const run = () => {
     setError(null);
@@ -77,6 +122,13 @@ export function useAskAi(questionId: string) {
   const selectVariant = (variantId: string | null) => {
     setVariantError(null);
     setActiveVariantId(variantId);
+    if (variantId === QUESTION_VARIANTS_TAB) {
+      if (!questionVariants || questionVariants.kind === "error") {
+        questionVariantsRetryRef.current = 0;
+        loadQuestionVariants();
+      }
+      return;
+    }
     if (variantId === null || variantContents[variantId]) return;
 
     setVariantPendingId(variantId);
@@ -107,8 +159,9 @@ export function useAskAi(questionId: string) {
 
   let panel: React.ReactNode = null;
   if (result && panelOpen) {
-    const { content, remainingToday, relatedQuestions, isStale } = result;
-    const activeVariant = activeVariantId ? variantContents[activeVariantId] : null;
+    const { content, remainingToday, isStale } = result;
+    const showingQuestionVariants = activeVariantId === QUESTION_VARIANTS_TAB;
+    const activeVariant = activeVariantId && !showingQuestionVariants ? variantContents[activeVariantId] : null;
     const shownContent = activeVariant ? activeVariant.content : content;
     const shownIsStale = activeVariant ? activeVariant.isStale : isStale;
 
@@ -123,7 +176,7 @@ export function useAskAi(questionId: string) {
           ) : null}
         </div>
 
-        {shownIsStale ? (
+        {shownIsStale && !showingQuestionVariants ? (
           <p className="mb-2 text-xs text-[var(--color-warning)]">
             This question was updated after this explanation was generated — it may be outdated.
           </p>
@@ -131,7 +184,7 @@ export function useAskAi(questionId: string) {
 
         {EXPLANATION_VARIANTS.length > 0 ? (
           <div className="mb-3 flex flex-wrap items-center gap-1.5">
-            <span className="text-xs font-medium text-[var(--color-muted-foreground)]">Variants:</span>
+            <span className="text-xs font-medium text-[var(--color-muted-foreground)]">Ask AI:</span>
             <button
               type="button"
               onClick={() => selectVariant(null)}
@@ -161,20 +214,38 @@ export function useAskAi(questionId: string) {
                 {v.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => selectVariant(QUESTION_VARIANTS_TAB)}
+              disabled={questionVariants?.kind === "loading"}
+              className={cn(
+                "flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-60",
+                showingQuestionVariants
+                  ? "border-[var(--color-info)] bg-[var(--color-info)]/15 text-[var(--color-info)]"
+                  : "border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+              )}
+            >
+              {questionVariants?.kind === "loading" ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : null}
+              AI Question Variants
+            </button>
           </div>
         ) : null}
 
         {variantError ? <p className="mb-2 text-xs text-[var(--color-error)]">{variantError}</p> : null}
 
-        {shownContent ? (
-          <ExplanationContentView
-            content={shownContent}
-            extra={
-              !activeVariantId && relatedQuestions && relatedQuestions.length > 0 ? (
-                <ExplanationSection heading="Related practice questions" items={relatedQuestions.map((q) => q.text)} ordered />
-              ) : null
-            }
-          />
+        {showingQuestionVariants ? (
+          <section aria-label="AI Question Variants">
+            <p className="mb-2 text-sm font-semibold text-[var(--color-foreground)]">AI Question Variants</p>
+            <QuestionVariantsView
+              state={questionVariants ?? { kind: "loading" }}
+              onRetry={() => {
+                questionVariantsRetryRef.current = 0;
+                loadQuestionVariants();
+              }}
+            />
+          </section>
+        ) : shownContent ? (
+          <ExplanationContentView content={shownContent} />
         ) : null}
       </div>
     );

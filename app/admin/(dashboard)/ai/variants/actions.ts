@@ -1,65 +1,64 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { AiVariantType } from "@prisma/client";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
-import { generateVariant, retryFailedVariant, publishVariant } from "@/lib/ai-variant";
+import { ensureQuestionVariants, archiveVariant, publishVariant, MAX_VARIANTS_PER_QUESTION } from "@/lib/ai-variant";
 import { AiNotConfiguredError } from "@/lib/ai-explanation";
+
+/**
+ * Admin quality control for AI Question Variants. Normal variants are
+ * generated and saved automatically from Ask AI (lib/ai-variant.ts
+ * ensureQuestionVariants) — nothing here is a required approval step.
+ */
 
 export interface VariantActionState {
   error?: string;
-  success?: boolean;
+  success?: string;
 }
 
-export async function generateVariantAction(
-  parentQuestionId: string,
-  variantType: AiVariantType,
-  _prev: VariantActionState,
-  _formData: FormData
-): Promise<VariantActionState> {
-  await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
-  try {
-    await generateVariant(parentQuestionId, variantType);
-  } catch (error) {
-    return { error: describeError(error) };
-  }
+function revalidate(parentQuestionId: string) {
   revalidatePath(`/admin/ai/variants/${parentQuestionId}`);
   revalidatePath("/admin/ai/variants");
-  return { success: true };
 }
 
-export async function retryVariantAction(
-  variantId: string,
-  parentQuestionId: string,
-  _prev: VariantActionState,
-  _formData: FormData
-): Promise<VariantActionState> {
+/** Fills any free/failed slots up to 5 through the same validated, deduplicated path Ask AI uses. */
+export async function generateMissingVariantsAction(parentQuestionId: string, _prev: VariantActionState, _formData: FormData): Promise<VariantActionState> {
   await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
   try {
-    await retryFailedVariant(variantId);
+    const result = await ensureQuestionVariants(parentQuestionId, { target: MAX_VARIANTS_PER_QUESTION });
+    revalidate(parentQuestionId);
+    return {
+      success:
+        result.providerCalls === 0
+          ? "Nothing to generate — no free slots."
+          : `Saved ${result.generatedNow} new variant(s); rejected ${result.rejectedDuplicate} duplicate and ${result.rejectedInvalid} invalid candidate(s).`,
+    };
   } catch (error) {
     return { error: describeError(error) };
   }
-  revalidatePath(`/admin/ai/variants/${parentQuestionId}`);
-  return { success: true };
 }
 
-export async function publishVariantAction(
-  variantId: string,
-  parentQuestionId: string,
-  _prev: VariantActionState,
-  _formData: FormData
-): Promise<VariantActionState> {
+export async function archiveVariantAction(variantId: string, parentQuestionId: string, _prev: VariantActionState, _formData: FormData): Promise<VariantActionState> {
+  await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
+  try {
+    await archiveVariant(variantId);
+  } catch (error) {
+    return { error: describeError(error) };
+  }
+  revalidate(parentQuestionId);
+  return { success: "Archived." };
+}
+
+export async function publishVariantAction(variantId: string, parentQuestionId: string, _prev: VariantActionState, _formData: FormData): Promise<VariantActionState> {
   await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
   try {
     await publishVariant(variantId);
   } catch (error) {
     return { error: describeError(error) };
   }
-  revalidatePath(`/admin/ai/variants/${parentQuestionId}`);
-  revalidatePath("/admin/ai/variants");
-  return { success: true };
+  revalidate(parentQuestionId);
+  return { success: "Restored to Question Bank." };
 }
 
 function describeError(error: unknown): string {

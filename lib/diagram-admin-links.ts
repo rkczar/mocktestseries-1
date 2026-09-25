@@ -42,7 +42,7 @@ export const ADMIN_CONFIG_LINKS: AdminConfigLink[] = [
   // app/student/ai-actions.ts (the review page's Ask AI action) calls
   // lib/ai-explanation.ts, which reads the Gemini key/model from
   // lib/gemini-config.ts — configured on this page.
-  { from: "/admin/ai/settings", to: "/student/attempt/[attemptId]/review", label: "Powers Ask AI explanations" },
+  { from: "/admin/ai/settings", to: "/student/attempt/[attemptId]/review", label: "Powers Ask AI explanations & AI Question Variants (default count 1–5)" },
 
   // app/student/(dashboard)/exams/[examId]/page.tsx renders <ExamSyllabus> when
   // exam.syllabusEnabled — both fields come from lib/student-data.ts

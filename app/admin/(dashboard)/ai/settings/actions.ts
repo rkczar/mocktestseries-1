@@ -158,7 +158,7 @@ export async function saveAiSettingsAction(_prev: SettingsFormState, formData: F
     generateMemoryTrick: formData.get("generateMemoryTrick") === "on",
     generateExaminerTraps: formData.get("generateExaminerTraps") === "on",
     generatePointsToRemember: formData.get("generatePointsToRemember") === "on",
-    maxRelatedQuestions: Number.isFinite(maxRelatedRaw) ? Math.min(5, Math.max(0, Math.floor(maxRelatedRaw))) : 5,
+    maxRelatedQuestions: Number.isFinite(maxRelatedRaw) ? Math.min(5, Math.max(1, Math.floor(maxRelatedRaw))) : 5,
     homepageDemoEnabled: formData.get("homepageDemoEnabled") === "on",
     homepageDemoMaxQuestions:
       Number.isFinite(homepageDemoMaxRaw) && homepageDemoMaxRaw > 0 ? Math.min(HOMEPAGE_DEMO_MAX, Math.floor(homepageDemoMaxRaw)) : HOMEPAGE_DEMO_MAX,

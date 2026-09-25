@@ -40,6 +40,8 @@ interface Question {
   subTopic: { id: string; name: string } | null;
   previousYearPaper: { id: string; year: number; title: string } | null;
   importBatch: { id: string; label: string | null; filename: string; createdAt: string } | null;
+  parentQuestion: { id: string; code: string } | null;
+  _count: { aiVariants: number };
   options: QuestionOptionRow[];
 }
 
@@ -444,6 +446,8 @@ export function AllQuestionsPanelClient({
               <option value="">All sources</option>
               <option value="QUESTION_BANK">Question Bank</option>
               <option value="PYQ">Previous Year Paper</option>
+              <option value="AI_VARIANT">AI Variant</option>
+              <option value="HAS_AI_VARIANTS">Has AI Variants</option>
             </select>
 
             <select
@@ -607,7 +611,18 @@ export function AllQuestionsPanelClient({
                         onCheckedChange={() => handleToggleSelect(q.id)}
                       />
                     </td>
-                    <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{q.code}</td>
+                    <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">
+                      {q.code}
+                      {q.parentQuestion ? (
+                        <Link href={`/admin/ai/variants/${q.parentQuestion.id}`} className="mt-1 block font-sans hover:underline">
+                          <Badge variant="info" className="text-xs">AI variant of {q.parentQuestion.code}</Badge>
+                        </Link>
+                      ) : q._count.aiVariants > 0 ? (
+                        <Link href={`/admin/ai/variants/${q.id}`} className="mt-1 block font-sans text-[var(--color-primary)] hover:underline">
+                          View {q._count.aiVariants} AI variant{q._count.aiVariants === 1 ? "" : "s"}
+                        </Link>
+                      ) : null}
+                    </td>
                     <td className="max-w-xs py-2.5 pr-4 text-[var(--color-foreground)]">{q.text.slice(0, 90)}</td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
                       {q.exam.name}

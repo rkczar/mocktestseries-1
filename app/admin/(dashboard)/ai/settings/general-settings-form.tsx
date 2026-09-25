@@ -86,8 +86,11 @@ export function AiGeneralSettingsCard({ settings }: { settings: AiSettings }) {
                 </div>
               ))}
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="maxRelatedQuestions">Maximum Related Questions</Label>
-                <Input id="maxRelatedQuestions" name="maxRelatedQuestions" type="number" min={0} max={5} defaultValue={settings.maxRelatedQuestions} />
+                <Label htmlFor="maxRelatedQuestions">AI Question Variants per question</Label>
+                <Input id="maxRelatedQuestions" name="maxRelatedQuestions" type="number" min={1} max={5} defaultValue={Math.max(1, settings.maxRelatedQuestions)} />
+                <p className="text-xs text-[var(--color-muted-foreground)]">
+                  How many unique practice questions Ask AI aims for per source question (1–5). Only genuinely different variants are kept.
+                </p>
               </div>
             </div>
           </div>

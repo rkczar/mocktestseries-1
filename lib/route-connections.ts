@@ -195,6 +195,15 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/student/live-tests", to: "/student/test-series", source: "redirect", label: "Retired Live Tests → Test Series" },
   { from: "/admin/payments/products/[id]", to: "/exams/[slug]/mock-test-series", source: "admin-config", label: "Price / MRP / sale → homepage, Exam Hub, series page (one source)" },
 
+  // --- Ask AI → AI Question Variants (lib/ai-variant.ts ensureQuestionVariants) ---
+  // Student Result / Review → Ask AI {Simple Explanation, Exam Trick / Memory
+  // Aid, Step-by-Step, AI Question Variants}. Variants: existing-variant check
+  // → generate only the missing count → validate + deduplicate → saved to the
+  // canonical Question Bank as Source → AI01…AI05 → displayed inline.
+  { from: "/student/attempt/[attemptId]/review", to: "/admin/questions", source: "internal", label: "Ask AI → AI Question Variants: existing check → generate missing → validate + dedupe → Question Bank (Source → AI01–AI05) → inline display" },
+  { from: "/admin/questions", to: "/admin/ai/variants", source: "button", label: "Source question → View AI variants / filter: AI Variant, Has AI Variants" },
+  { from: "/admin/ai/variants", to: "/student/attempt/[attemptId]/review", source: "admin-config", label: "AI Variant Monitoring / Quality Control (archive, restore, generate missing) — no approval needed" },
+
   // app/student/attempt/resume/page.tsx — resumes into the canonical
   // TestAttempt flow, same destination the authenticated student flow uses.
   { from: "/student/attempt/resume", to: "/student/attempt/[attemptId]", source: "redirect", label: "Resumes into canonical TestAttempt" },

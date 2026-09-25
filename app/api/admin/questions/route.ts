@@ -28,7 +28,11 @@ export async function GET(request: NextRequest) {
     const subjectId = searchParams.get("subjectId") || undefined;
     const topicId = searchParams.get("topicId") || undefined;
     const subTopicId = searchParams.get("subTopicId") || undefined;
-    const source = searchParams.get("source") as QuestionSource | undefined;
+    const sourceParam = searchParams.get("source") || undefined;
+    // Two pseudo-sources (AI variants aren't a QuestionSource value — their
+    // provenance is parentQuestionId/aiSlot): "AI_VARIANT" = the variants
+    // themselves, "HAS_AI_VARIANTS" = source questions that have any.
+    const source = sourceParam === "QUESTION_BANK" || sourceParam === "PYQ" ? (sourceParam as QuestionSource) : undefined;
     const difficulty = searchParams.get("difficulty") as QuestionDifficulty | undefined;
     const status = searchParams.get("status") as QuestionStatus | undefined;
     const isPyq = searchParams.get("isPyq") === "true" ? true : searchParams.get("isPyq") === "false" ? false : undefined;
@@ -50,6 +54,8 @@ export async function GET(request: NextRequest) {
     if (topicId) where.topicId = topicId;
     if (subTopicId) where.subTopicId = subTopicId;
     if (source) where.source = source;
+    if (sourceParam === "AI_VARIANT") where.parentQuestionId = { not: null };
+    if (sourceParam === "HAS_AI_VARIANTS") where.aiVariants = { some: {} };
     if (difficulty) where.difficulty = difficulty;
     if (status) where.status = status;
     if (isPyq !== undefined) {
@@ -113,6 +119,8 @@ export async function GET(request: NextRequest) {
           subTopic: { select: { id: true, name: true } },
           previousYearPaper: { select: { id: true, year: true, title: true } },
           importBatch: { select: { id: true, label: true, filename: true, createdAt: true } },
+          parentQuestion: { select: { id: true, code: true } },
+          _count: { select: { aiVariants: true } },
           options: {
             orderBy: { order: "asc" },
             select: { id: true, label: true, text: true, imageUrl: true, isCorrect: true },
