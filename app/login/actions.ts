@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { studentSignIn } from "@/lib/auth-student";
 import { nextStudentId } from "@/lib/student-id";
 import { requestOtp, OtpError } from "@/lib/otp";
+import { safeStudentCallback } from "@/lib/student-callback";
 
 export interface AuthFormState {
   error?: string;
@@ -19,9 +20,7 @@ export interface AuthFormState {
   devCode?: string;
 }
 
-function safeCallback(callbackUrl: string | undefined) {
-  return callbackUrl && callbackUrl.startsWith("/student") ? callbackUrl : "/student/dashboard";
-}
+const safeCallback = safeStudentCallback;
 
 async function clientIp() {
   const h = await headers();

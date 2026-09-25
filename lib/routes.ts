@@ -145,8 +145,8 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
 
   // Student Auth — a fully separate next-auth instance/cookie from Admin (see lib/auth-student.ts)
   { pageName: "Student Login / Register", route: "/login", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/", status: "CONNECTED" },
-  { pageName: "Student Login (alias)", route: "/student/login", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/login", status: "CONNECTED" },
-  { pageName: "Student Register (alias)", route: "/student/register", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/login", status: "CONNECTED" },
+  { pageName: "Student Login (legacy redirect → /login)", route: "/student/login", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/login", status: "CONNECTED" },
+  { pageName: "Student Register (legacy redirect → /login?tab=register)", route: "/student/register", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/login", status: "CONNECTED" },
 
   // Student Dashboard
   { pageName: "Student Dashboard", route: "/student/dashboard", module: "Student Dashboard", userType: "STUDENT", authRequired: true, parentRoute: "/login", status: "CONNECTED" },

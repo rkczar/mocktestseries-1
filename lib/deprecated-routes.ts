@@ -19,4 +19,8 @@ export const DEPRECATED_ROUTES: string[] = [
   "/admin/tests/live",
   "/admin/tests/live/[id]",
   "/student/live-tests",
+  // Student auth consolidation: /login is the one canonical Student Login /
+  // Register page; these are permanent redirects into it (query preserved).
+  "/student/login",
+  "/student/register",
 ];

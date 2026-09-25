@@ -204,6 +204,17 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/admin/questions", to: "/admin/ai/variants", source: "button", label: "Source question → View AI variants / filter: AI Variant, Has AI Variants" },
   { from: "/admin/ai/variants", to: "/student/attempt/[attemptId]/review", source: "admin-config", label: "AI Variant Monitoring / Quality Control (archive, restore, generate missing) — no approval needed" },
 
+  // --- Student auth: ONE canonical Student Login (/login) -------------------
+  // Protected /student/* → middleware → /login?callbackUrl=<path+query> →
+  // Google / Phone OTP / Password → lib/student-callback.ts → original
+  // destination. Legacy aliases are permanent redirects into /login (query
+  // preserved); /student_login.php etc. come from lib/legacy-redirects.ts.
+  // Admin auth (/admin/login) is a separate NextAuth instance and cookie.
+  { from: "/student/login", to: "/login", source: "redirect", label: "Legacy alias → canonical Student Login (308, query preserved)" },
+  { from: "/student/register", to: "/login", source: "redirect", label: "Legacy alias → /login?tab=register (308, query preserved)" },
+  { from: "/student/dashboard", to: "/login", source: "redirect", label: "Protected Student route, not signed in → /login?callbackUrl=<original path+query>" },
+  { from: "/login", to: "/student/attempt/resume", source: "form", label: "Google / Phone OTP / Password → callbackUrl → original Student destination" },
+
   // app/student/attempt/resume/page.tsx — resumes into the canonical
   // TestAttempt flow, same destination the authenticated student flow uses.
   { from: "/student/attempt/resume", to: "/student/attempt/[attemptId]", source: "redirect", label: "Resumes into canonical TestAttempt" },

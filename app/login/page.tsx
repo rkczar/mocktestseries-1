@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getStudentSession } from "@/lib/student-session";
 import { getLoginPageConfig } from "@/lib/login-page";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
+import { safeStudentCallback } from "@/lib/student-callback";
 import { LeftCanvas } from "./left-canvas";
 import { LoginScreen } from "./login-screen";
 
@@ -13,10 +14,15 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ callbackUrl?: string; tab?: string }>;
 }) {
-  const session = await getStudentSession();
-  if (session?.user) redirect("/student/dashboard");
+  const { callbackUrl: rawCallbackUrl, tab } = await searchParams;
+  // Validated once here; the form actions re-validate server-side anyway.
+  const callbackUrl = safeStudentCallback(rawCallbackUrl);
 
-  const { callbackUrl, tab } = await searchParams;
+  // Already signed in (e.g. a "Start Free" link opened in a logged-in tab):
+  // go straight to where the link was headed, not always the dashboard.
+  const session = await getStudentSession();
+  if (session?.user) redirect(callbackUrl);
+
   const [pageConfig, providerConfig] = await Promise.all([getLoginPageConfig(), getAuthProviderConfig()]);
 
   const showLeft = pageConfig.splitLayout && pageConfig.leftPanelEnabled;
@@ -59,7 +65,7 @@ export default async function LoginPage({
         ) : null}
 
         <LoginScreen
-          callbackUrl={callbackUrl ?? "/student/dashboard"}
+          callbackUrl={callbackUrl}
           defaultMode={tab === "register" ? "register" : "signin"}
           defaultMethod={tab === "otp" ? "otp" : "password"}
           pageConfig={pageConfig}
