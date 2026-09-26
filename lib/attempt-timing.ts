@@ -47,10 +47,19 @@ export interface ServerTimedAttempt {
    * a no-op (unbounded cap).
    */
   liveTestEndAt?: Date | null;
+  /**
+   * Student practice with UNLIMITED time (AttemptDurationMode.UNLIMITED):
+   * there is no window at all — never expired, no time-based auto-submit.
+   */
+  unlimited?: boolean;
 }
+
+/** Stand-in "end" for an unlimited attempt: far enough to never be reached. */
+const UNLIMITED_END = new Date(8_640_000_000_000_000);
 
 /** Authoritative end of an attempt: startedAt + duration, capped by the Live Test's global endAt when present. */
 export function effectiveEndFor(attempt: ServerTimedAttempt): Date {
+  if (attempt.unlimited) return UNLIMITED_END;
   const byDuration = new Date(attempt.startedAt.getTime() + attempt.durationMinutes * 60_000);
   if (attempt.liveTestEndAt && attempt.liveTestEndAt.getTime() < byDuration.getTime()) {
     return attempt.liveTestEndAt;
@@ -89,6 +98,7 @@ export function remainingSecondsFor(attempt: ServerTimedAttempt, now: Date = ser
  * window, not the nominal per-student duration.
  */
 export function elapsedSecondsFor(attempt: ServerTimedAttempt, now: Date = serverNow()): number {
+  if (attempt.unlimited) return Math.max(Math.floor((now.getTime() - attempt.startedAt.getTime()) / 1000), 0);
   const windowMs = effectiveEndFor(attempt).getTime() - attempt.startedAt.getTime();
   const elapsedMs = now.getTime() - attempt.startedAt.getTime();
   return Math.min(Math.max(Math.floor(elapsedMs / 1000), 0), Math.floor(windowMs / 1000));

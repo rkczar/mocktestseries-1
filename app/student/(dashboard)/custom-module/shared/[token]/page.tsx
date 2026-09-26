@@ -6,6 +6,7 @@ import { startSharedCustomModuleAction } from "../../builder/actions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
+import { moduleDurationLabel } from "@/lib/module-duration-label";
 
 export const metadata = { title: "Shared Module — Mock Test Series.in" };
 
@@ -33,11 +34,14 @@ export default async function SharedCustomModulePage({ params }: { params: Promi
             <span className="flex items-center gap-1.5">
               <HelpCircle className="h-4 w-4" aria-hidden /> {customModule._count.questions} questions
             </span>
-            {customModule.durationMinutes ? (
-              <span className="flex items-center gap-1.5">
-                <Clock className="h-4 w-4" aria-hidden /> {customModule.durationMinutes} min
-              </span>
-            ) : null}
+            <span className="flex items-center gap-1.5">
+              <Clock className="h-4 w-4" aria-hidden />{" "}
+              {moduleDurationLabel({
+                durationMode: customModule.durationMode,
+                durationMinutes: customModule.durationMinutes,
+                questionCount: customModule._count.questions,
+              })}
+            </span>
           </div>
           <p className="text-sm text-[var(--color-muted-foreground)]">
             Starting this creates your own independent attempt against the same fixed question set — your progress is

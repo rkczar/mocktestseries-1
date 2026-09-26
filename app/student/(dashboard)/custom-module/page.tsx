@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { BackButton } from "@/components/student/back-button";
 import { CustomModuleTabs } from "./module-tabs";
 import { CustomModuleBuilder } from "./builder/custom-module-builder";
+import { moduleDurationLabel } from "@/lib/module-duration-label";
 
 export const metadata = { title: "Custom Module — Mock Test Series.in" };
 
@@ -100,11 +101,10 @@ function MyModulesPanel({
                       <span className="flex items-center gap-1">
                         <HelpCircle className="h-3.5 w-3.5" aria-hidden /> {m._count.questions} Qs
                       </span>
-                      {m.durationMinutes ? (
-                        <span className="flex items-center gap-1">
-                          <Clock className="h-3.5 w-3.5" aria-hidden /> {m.durationMinutes} min
-                        </span>
-                      ) : null}
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3.5 w-3.5" aria-hidden />{" "}
+                        {moduleDurationLabel({ durationMode: m.durationMode, durationMinutes: m.durationMinutes, questionCount: m._count.questions })}
+                      </span>
                     </div>
                     {latestAttempt ? (
                       <Badge variant={latestAttempt.status === "IN_PROGRESS" ? "warning" : "success"} className="w-fit">
@@ -149,11 +149,10 @@ function MyModulesPanel({
                       <span className="flex items-center gap-1">
                         <HelpCircle className="h-3.5 w-3.5" aria-hidden /> {m._count.questions} Qs
                       </span>
-                      {m.durationMinutes ? (
-                        <span className="flex items-center gap-1">
-                          <Clock className="h-3.5 w-3.5" aria-hidden /> {m.durationMinutes} min
-                        </span>
-                      ) : null}
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3.5 w-3.5" aria-hidden />{" "}
+                        {moduleDurationLabel({ durationMode: m.durationMode, durationMinutes: m.durationMinutes, questionCount: m._count.questions })}
+                      </span>
                       {bestScore !== null && bestScore !== undefined ? (
                         <span className="flex items-center gap-1">
                           <Trophy className="h-3.5 w-3.5" aria-hidden /> Best: {bestScore.toFixed(1)}

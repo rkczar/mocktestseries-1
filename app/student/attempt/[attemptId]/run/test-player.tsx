@@ -1,7 +1,32 @@
 "use client";
 
+/**
+ * TEST ENGINE CORE — HIGH RISK SHARED PATH.
+ * Changes to option selection, answer persistence, navigation, attempt
+ * snapshots, timer, submission or answer reveal require the focused
+ * test-engine regression suite before deployment (see ops/TEST-ENGINE.md).
+ *
+ * The ONE student test player for every attemptable test type (Mock, PYQ,
+ * Custom Module, Subject Test, Grand/Live). Test types only supply data.
+ *
+ * Invariants (each one was a production failure — see ops/TEST-ENGINE.md):
+ *  1. React state updates are pure. Nothing (no save, no transition) is ever
+ *     started from inside a setState updater — React may re-run updaters
+ *     during render, which turned one click into an endless save loop that
+ *     froze option selection and Save & Next.
+ *  2. Selecting an option updates the UI immediately; persistence is async.
+ *  3. Saves go through a per-question queue: one request in flight per
+ *     question, latest value wins, every request carries a monotonic `seq`
+ *     the server uses to reject stale writes, bounded by a timeout, retried
+ *     with backoff, and kept in sessionStorage until the server accepts it.
+ *  4. Navigation (Next / Previous / palette) is purely local and never waits
+ *     on the network, so it cannot hang.
+ *  5. The countdown is derived from a fixed deadline, not decremented state.
+ */
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { AlertTriangle, ChevronLeft, ChevronRight, Clock, Flag } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, Flag, Infinity as InfinityIcon, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -9,7 +34,14 @@ import { TextSizeControl } from "@/components/theme/text-size-control";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import { cn } from "@/lib/utils";
-import { saveAnswerAction, submitAttemptAction, toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
+import { AnswerSaveQueue, type SaveStatus } from "@/lib/answer-save-queue";
+import {
+  revealAnswerAction,
+  saveAnswerAction,
+  submitAttemptAction,
+  toggleSaveQuestionAction,
+  reportAttemptQuestionAction,
+} from "../actions";
 
 export interface PlayerOption {
   label: string;
@@ -23,6 +55,10 @@ export interface PlayerQuestion {
   imageUrl: string | null;
   difficulty: string;
   options: PlayerOption[];
+  /** Snapshot failed validation (too few / duplicate options): shown as a skippable notice. */
+  malformed: boolean;
+  /** Present only once the server has revealed this question (INSTANT mode). */
+  reveal: { correctLabel: string } | null;
   selectedOptionLabel: string | null;
   markForReview: boolean;
   saved: boolean;
@@ -34,16 +70,36 @@ interface QuestionState {
   visited: boolean;
 }
 
+interface RevealState {
+  correctLabel: string;
+}
+
 type Status = "current" | "answered-marked" | "marked" | "answered" | "visited" | "not-visited";
 
+const SAVE_TIMEOUT_MS = 12_000;
+const SUBMIT_FLUSH_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 /**
- * Answers whose autosave failed, kept per attempt in sessionStorage so a
- * reload can replay them. The realistic failure is deploy skew: a page loaded
- * before a release still calls the previous build's Server Action ids, which
- * the new server answers with 404 ("Failed to find Server Action"). Only a
- * reload fetches the new ids — previously the failure was swallowed and the
- * answer silently lost. The server still validates every replayed save
- * (ownership, IN_PROGRESS, time window).
+ * Answers not yet accepted by the server, kept per attempt in sessionStorage
+ * so a reload (e.g. after deploy skew: an old page calling a previous
+ * build's Server Action id) replays them instead of losing them. The server
+ * still validates every replayed save (ownership, IN_PROGRESS, window, seq).
  */
 type PendingAnswers = Record<string, { selected: string | null; marked: boolean }>;
 const pendingKey = (attemptId: string) => `mts-pending-answers:${attemptId}`;
@@ -61,7 +117,7 @@ function writePending(attemptId: string, pending: PendingAnswers) {
     if (Object.keys(pending).length === 0) window.sessionStorage.removeItem(pendingKey(attemptId));
     else window.sessionStorage.setItem(pendingKey(attemptId), JSON.stringify(pending));
   } catch {
-    // storage unavailable — the on-screen warning still tells the student to reload
+    // storage unavailable — the on-screen banner still offers retry
   }
 }
 
@@ -74,122 +130,262 @@ const STATUS_STYLES: Record<Status, string> = {
   "not-visited": "border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)]",
 };
 
+type Problem =
+  | { kind: "save-failed"; message: string }
+  | { kind: "submit-failed" }
+  | { kind: "expired" }
+  | { kind: "unsaved-before-submit" };
+
 export function TestPlayer({
   attemptId,
   title,
   initialRemainingSeconds,
+  instantMode = false,
   questions,
 }: {
   attemptId: string;
   title: string;
-  initialRemainingSeconds: number;
+  /** null = unlimited time (no countdown, no time-based auto-submit). */
+  initialRemainingSeconds: number | null;
+  instantMode?: boolean;
   questions: PlayerQuestion[];
 }) {
+  const router = useRouter();
   const [current, setCurrent] = useState(0);
   const [remaining, setRemaining] = useState(initialRemainingSeconds);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [isPending, startTransition] = useTransition();
+  const [submitting, setSubmitting] = useState(false);
+  const [, startSubmitTransition] = useTransition();
   const [states, setStates] = useState<Record<string, QuestionState>>(() =>
     Object.fromEntries(
       questions.map((q, i) => [q.questionId, { selected: q.selectedOptionLabel, marked: q.markForReview, visited: i === 0 }])
     )
   );
-  const submittedRef = useRef(false);
-  const [syncProblem, setSyncProblem] = useState<"save" | "submit" | null>(null);
+  const [reveals, setReveals] = useState<Record<string, RevealState>>(() =>
+    Object.fromEntries(questions.filter((q) => q.reveal).map((q) => [q.questionId, q.reveal as RevealState]))
+  );
+  const [revealing, setRevealing] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<{ questionId: string; message: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<Record<string, SaveStatus>>({});
+  const [problem, setProblem] = useState<Problem | null>(null);
 
+  // Canonical answer state for event handlers (mirrors `states`), so handlers
+  // never compute from a stale render closure and never need an updater.
+  const statesRef = useRef(states);
+  const submittedRef = useRef(false);
+  const finishRef = useRef<(reason: "manual" | "auto") => void>(() => {});
+  const queueRef = useRef<AnswerSaveQueue | null>(null);
+
+  const commitStates = useCallback((next: Record<string, QuestionState>) => {
+    statesRef.current = next;
+    setStates(next);
+  }, []);
+
+  /** The save queue lives outside React state (created once, used only from handlers/effects). */
+  const getQueue = useCallback((): AnswerSaveQueue => {
+    if (!queueRef.current) {
+      queueRef.current = new AnswerSaveQueue({
+        send: async (questionId, value, seq) => saveAnswerAction(attemptId, questionId, value.selected, value.marked, seq),
+        onStatus: (questionId, status) =>
+          setSaveStatus((prev) => {
+            if ((prev[questionId] ?? null) === status) return prev;
+            const next = { ...prev };
+            if (status) next[questionId] = status;
+            else delete next[questionId];
+            return next;
+          }),
+        onPendingChange: (questionId, value) => {
+          const pending = readPending(attemptId);
+          if (value) pending[questionId] = value;
+          else delete pending[questionId];
+          writePending(attemptId, pending);
+        },
+        onExhausted: () =>
+          setProblem((p) => p ?? { kind: "save-failed", message: "Some answers could not be saved yet. They are kept on this device." }),
+        onFatal: (code) => {
+          if (code === "EXPIRED") {
+            setProblem({ kind: "expired" });
+            finishRef.current("auto");
+          } else {
+            router.replace(`/student/attempt/${attemptId}/result`);
+          }
+        },
+        timeoutMs: SAVE_TIMEOUT_MS,
+      });
+    }
+    return queueRef.current;
+  }, [attemptId, router]);
+
+  const retryAllSaves = useCallback(() => {
+    setProblem(null);
+    getQueue().retryAll();
+  }, [getQueue]);
+
+  // ---- Submit ---------------------------------------------------------------
   const doSubmit = useCallback(() => {
-    if (submittedRef.current) return;
-    submittedRef.current = true;
-    startTransition(async () => {
+    startSubmitTransition(async () => {
       try {
         await submitAttemptAction(attemptId);
+        // A successful submit redirects; if the router somehow didn't navigate, do it.
+        setTimeout(() => {
+          if (window.location.pathname.endsWith("/run")) router.replace(`/student/attempt/${attemptId}/result`);
+        }, 4000);
       } catch {
-        // A successful submit navigates away (redirect); reaching here means the
-        // request itself failed (e.g. deploy skew) — let the student retry after reload.
         submittedRef.current = false;
-        setSyncProblem("submit");
+        setSubmitting(false);
+        setProblem({ kind: "submit-failed" });
       }
     });
-  }, [attemptId]);
+  }, [attemptId, router]);
 
-  useEffect(() => {
-    if (remaining <= 0) {
+  const finish = useCallback(
+    async (reason: "manual" | "auto", force = false) => {
+      if (submittedRef.current) return;
+      submittedRef.current = true;
+      setSubmitting(true);
+      setConfirmOpen(false);
+      const flushed = await getQueue().flush(SUBMIT_FLUSH_TIMEOUT_MS);
+      if (!flushed && reason === "manual" && !force) {
+        // Never silently submit over answers the server hasn't accepted.
+        submittedRef.current = false;
+        setSubmitting(false);
+        setProblem({ kind: "unsaved-before-submit" });
+        return;
+      }
       doSubmit();
-      return;
-    }
-    const timer = setInterval(() => setRemaining((r) => (r <= 1 ? 0 : r - 1)), 1000);
-    return () => clearInterval(timer);
-  }, [remaining, doSubmit]);
-
-  const persist = useCallback(
-    (questionId: string, selected: string | null, marked: boolean) => {
-      startTransition(async () => {
-        try {
-          await saveAnswerAction(attemptId, questionId, selected, marked);
-          const pending = readPending(attemptId);
-          if (questionId in pending) {
-            delete pending[questionId];
-            writePending(attemptId, pending);
-          }
-        } catch {
-          writePending(attemptId, { ...readPending(attemptId), [questionId]: { selected, marked } });
-          setSyncProblem("save");
-        }
-      });
     },
-    [attemptId]
+    [doSubmit, getQueue]
   );
 
-  // After a reload, replay answers whose save failed on the previous page
-  // load; each one appears in the palette once the server has accepted it.
+  useEffect(() => {
+    finishRef.current = (reason) => void finish(reason);
+  }, [finish]);
+
+  // Stop the queue's retry timers when the player unmounts.
+  useEffect(() => () => queueRef.current?.stop(), []);
+
+  // ---- Timer (deadline-based; unlimited = no timer) --------------------------
+  useEffect(() => {
+    if (initialRemainingSeconds === null) return;
+    const deadline = Date.now() + initialRemainingSeconds * 1000;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setRemaining(left);
+      if (left <= 0) {
+        clearInterval(timer);
+        finishRef.current("auto");
+      }
+    };
+    const timer = setInterval(tick, 1000);
+    if (initialRemainingSeconds <= 0) queueMicrotask(tick);
+    return () => clearInterval(timer);
+  }, [initialRemainingSeconds]);
+
+  // ---- Replay answers a previous page load could not save --------------------
   useEffect(() => {
     const pending = readPending(attemptId);
-    const entries = Object.entries(pending).filter(([questionId]) => questions.some((q) => q.questionId === questionId));
+    const known = new Set(questions.map((q) => q.questionId));
+    const entries = Object.entries(pending).filter(([questionId]) => known.has(questionId));
     if (entries.length === 0) return;
-    startTransition(async () => {
-      for (const [questionId, answer] of entries) {
-        try {
-          await saveAnswerAction(attemptId, questionId, answer.selected, answer.marked);
-        } catch {
-          setSyncProblem("save");
-          return;
-        }
-        const rest = readPending(attemptId);
-        delete rest[questionId];
-        writePending(attemptId, rest);
-        setStates((prev) => ({ ...prev, [questionId]: { ...prev[questionId], ...answer, visited: true } }));
-      }
-    });
-  }, [attemptId, questions]);
+    const next = { ...statesRef.current };
+    for (const [questionId, answer] of entries) {
+      if (questions.find((q) => q.questionId === questionId)?.reveal) continue; // frozen by the server
+      next[questionId] = { ...next[questionId], selected: answer.selected, marked: answer.marked };
+      getQueue().enqueue(questionId, { selected: answer.selected, marked: answer.marked });
+    }
+    queueMicrotask(() => commitStates(next));
+    // Mount-only: replays the previous page load's unsaved answers exactly once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const updateState = (questionId: string, patch: Partial<Pick<QuestionState, "selected" | "marked">>) => {
-    setStates((prev) => {
-      const next = { ...prev[questionId], ...patch };
-      persist(questionId, next.selected, next.marked);
-      return { ...prev, [questionId]: next };
-    });
+  // Retry immediately when the connection comes back; warn before leaving with unsaved answers.
+  useEffect(() => {
+    const onOnline = () => retryAllSaves();
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!submittedRef.current && queueRef.current && !queueRef.current.idle()) e.preventDefault();
+    };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [retryAllSaves]);
+
+  // ---- Answer + navigation handlers (pure state, side effects after) ---------
+  const setAnswer = (questionId: string, patch: Partial<Pick<QuestionState, "selected" | "marked">>) => {
+    if (submittedRef.current || (reveals[questionId] && patch.selected !== undefined)) return;
+    const prev = statesRef.current[questionId];
+    const next = { ...prev, ...patch };
+    if (next.selected === prev.selected && next.marked === prev.marked) return; // idempotent
+    commitStates({ ...statesRef.current, [questionId]: next });
+    getQueue().enqueue(questionId, { selected: next.selected, marked: next.marked });
   };
 
   const goTo = (index: number) => {
     if (index < 0 || index >= questions.length) return;
     setCurrent(index);
-    const q = questions[index];
-    setStates((prev) => (prev[q.questionId].visited ? prev : { ...prev, [q.questionId]: { ...prev[q.questionId], visited: true } }));
+    const questionId = questions[index].questionId;
+    if (!statesRef.current[questionId]?.visited) {
+      commitStates({ ...statesRef.current, [questionId]: { ...statesRef.current[questionId], visited: true } });
+    }
   };
 
-  const question = questions[current];
-  const state = states[question.questionId];
+  const checkAnswer = (questionId: string) => {
+    const selected = statesRef.current[questionId]?.selected;
+    if (!selected || revealing || reveals[questionId]) return;
+    setRevealing(questionId);
+    setRevealError(null);
+    withTimeout(revealAnswerAction(attemptId, questionId, selected, getQueue().nextSeq()), SAVE_TIMEOUT_MS)
+      .then((result) => {
+        if (result.ok) {
+          setReveals((prev) => ({ ...prev, [questionId]: { correctLabel: result.correctLabel } }));
+          // The server's frozen choice is the truth; any queued older save is now moot.
+          getQueue().drop(questionId);
+          commitStates({ ...statesRef.current, [questionId]: { ...statesRef.current[questionId], selected: result.selectedOptionLabel } });
+          return;
+        }
+        if (result.code === "EXPIRED") {
+          setProblem({ kind: "expired" });
+          finishRef.current("auto");
+          return;
+        }
+        setRevealError({ questionId, message: result.message });
+      })
+      .catch(() => setRevealError({ questionId, message: "Could not check the answer. Please try again." }))
+      .finally(() => setRevealing(null));
+  };
 
-  const minutes = Math.floor(remaining / 60);
-  const seconds = remaining % 60;
-  const timeLow = remaining <= 60;
+  if (questions.length === 0) {
+    return (
+      <div className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center gap-4 px-4 text-center">
+        <AlertTriangle className="h-8 w-8 text-[var(--color-warning)]" aria-hidden />
+        <p className="text-[var(--color-foreground)]">This test has no questions to show. Please start it again from your dashboard.</p>
+        <Button asChild>
+          <Link href="/student/dashboard">Back to dashboard</Link>
+        </Button>
+      </div>
+    );
+  }
+
+  const question = questions[Math.min(current, questions.length - 1)];
+  const state = states[question.questionId] ?? { selected: null, marked: false, visited: true };
+  const reveal = reveals[question.questionId] ?? null;
+  const qSave = saveStatus[question.questionId];
+  const isLast = current === questions.length - 1;
+
+  const minutes = remaining === null ? 0 : Math.floor(remaining / 60);
+  const seconds = remaining === null ? 0 : remaining % 60;
+  const timeLow = remaining !== null && remaining <= 60;
 
   const answeredCount = questions.filter((q) => states[q.questionId]?.selected).length;
   const markedCount = questions.filter((q) => states[q.questionId]?.marked).length;
+  const unsavedCount = Object.values(saveStatus).filter((s) => s !== "saving").length;
 
   function statusFor(q: PlayerQuestion, i: number): Status {
     if (i === current) return "current";
     const s = states[q.questionId];
+    if (!s) return "not-visited";
     if (s.marked && s.selected) return "answered-marked";
     if (s.marked) return "marked";
     if (s.selected) return "answered";
@@ -198,35 +394,67 @@ export function TestPlayer({
   }
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen flex-col" data-testid="test-player" data-question-index={current}>
       <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 sm:gap-4 sm:px-6">
         <p className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--color-foreground)]">{title}</p>
         <div className="flex shrink-0 items-center gap-2">
           <ThemeToggle />
           <TextSizeControl />
           <div
+            data-testid="timer"
             className={cn(
               "flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold tabular-nums",
               timeLow ? "bg-[var(--color-error)]/15 text-[var(--color-error)]" : "bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
             )}
           >
-            <Clock className="h-4 w-4" aria-hidden />
-            {String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}
+            {remaining === null ? (
+              <>
+                <InfinityIcon className="h-4 w-4" aria-hidden /> No time limit
+              </>
+            ) : (
+              <>
+                <Clock className="h-4 w-4" aria-hidden />
+                {String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}
+              </>
+            )}
           </div>
         </div>
       </header>
 
-      {syncProblem ? (
+      {problem ? (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-warning)]/50 bg-[var(--color-warning)]/10 px-4 py-3 sm:px-6">
           <p className="flex items-center gap-2 text-sm text-[var(--color-foreground)]">
             <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden />
-            {syncProblem === "submit"
-              ? "Your test could not be submitted — the website was just updated. Reload, then submit again. Your saved answers are kept."
-              : "Your latest answer could not be saved — the website was just updated. Reload to sync; your answers on this device are kept."}
+            {problem.kind === "submit-failed"
+              ? "Your test could not be submitted. Your saved answers are kept — try again, or reload and submit."
+              : problem.kind === "expired"
+                ? "Time is up — submitting your test."
+                : problem.kind === "unsaved-before-submit"
+                  ? "Some answers are not saved yet. Retry saving, or submit with the answers already saved."
+                  : problem.message}
           </p>
-          <Button size="sm" onClick={() => window.location.reload()}>
-            Reload &amp; Sync
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {problem.kind === "save-failed" || problem.kind === "unsaved-before-submit" ? (
+              <Button size="sm" variant="outline" onClick={retryAllSaves}>
+                Retry saving
+              </Button>
+            ) : null}
+            {problem.kind === "unsaved-before-submit" ? (
+              <Button size="sm" variant="danger" onClick={() => void finish("manual", true)}>
+                Submit anyway
+              </Button>
+            ) : null}
+            {problem.kind === "submit-failed" ? (
+              <Button size="sm" variant="danger" onClick={() => void finish("manual", true)}>
+                Try submit again
+              </Button>
+            ) : null}
+            {problem.kind !== "expired" ? (
+              <Button size="sm" onClick={() => window.location.reload()}>
+                Reload &amp; Sync
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -234,13 +462,18 @@ export function TestPlayer({
         <div className="flex flex-col gap-4">
           <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-sm font-medium text-[var(--color-muted-foreground)]">
+              <span className="text-sm font-medium text-[var(--color-muted-foreground)]" data-testid="question-position">
                 Question {current + 1} of {questions.length}
+                <span className="ml-2 text-xs" data-testid="save-status" aria-live="polite">
+                  {qSave === "saving" ? "Saving…" : qSave === "retrying" ? "Retrying save…" : qSave === "failed" ? "Not saved yet" : ""}
+                </span>
               </span>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-[var(--color-border)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-foreground)]">
-                  {question.difficulty}
-                </span>
+                {question.difficulty ? (
+                  <span className="rounded-full bg-[var(--color-border)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-foreground)]">
+                    {question.difficulty}
+                  </span>
+                ) : null}
                 <SaveQuestionButton
                   key={question.questionId}
                   initialSaved={question.saved}
@@ -260,41 +493,100 @@ export function TestPlayer({
               />
             ) : null}
 
-            <div className="mt-5 flex flex-col gap-2.5">
-              {question.options.map((opt) => {
-                const selected = state.selected === opt.label;
-                return (
-                  <label
-                    key={opt.label}
+            {question.malformed ? (
+              <div role="alert" data-testid="malformed-question" className="mt-5 rounded-[var(--radius-card)] border border-[var(--color-warning)]/50 bg-[var(--color-warning)]/10 p-4 text-sm text-[var(--color-foreground)]">
+                This question could not be displayed correctly and cannot be answered. Please report it and continue with
+                the next question — the rest of your test is unaffected.
+              </div>
+            ) : (
+              <div className="mt-5 flex flex-col gap-2.5" role="radiogroup" aria-label={`Question ${current + 1} options`}>
+                {question.options.map((opt, idx) => {
+                  const selected = state.selected === opt.label;
+                  const isCorrect = reveal ? opt.label === reveal.correctLabel : false;
+                  const isWrongPick = reveal ? selected && !isCorrect : false;
+                  return (
+                    <label
+                      key={`${question.questionId}:${idx}:${opt.label}`}
+                      data-testid="option"
+                      data-label={opt.label}
+                      className={cn(
+                        "flex items-start gap-3 rounded-[var(--radius-card)] border p-3 transition-colors",
+                        reveal ? "cursor-default" : "cursor-pointer",
+                        isCorrect
+                          ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
+                          : isWrongPick
+                            ? "border-[var(--color-error)] bg-[var(--color-error)]/10"
+                            : selected
+                              ? "border-[var(--color-primary)] bg-[var(--color-primary)]/10"
+                              : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name={`q-${question.questionId}`}
+                        value={opt.label}
+                        className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
+                        checked={selected}
+                        disabled={!!reveal || submitting}
+                        onChange={() => setAnswer(question.questionId, { selected: opt.label })}
+                      />
+                      <span className="min-w-0 text-sm text-[var(--color-foreground)]">
+                        <span className="font-semibold">{opt.label}.</span> {opt.text}
+                        {opt.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={opt.imageUrl}
+                            alt=""
+                            className="pointer-events-none mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                          />
+                        ) : null}
+                      </span>
+                      {isCorrect ? <CheckCircle2 className="ml-auto h-5 w-5 shrink-0 text-[var(--color-success)]" aria-label="Correct answer" /> : null}
+                      {isWrongPick ? <XCircle className="ml-auto h-5 w-5 shrink-0 text-[var(--color-error)]" aria-label="Your answer" /> : null}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+
+            {instantMode && !question.malformed ? (
+              <div className="mt-4 flex flex-col gap-2" data-testid="instant-panel">
+                {reveal ? (
+                  <p
+                    data-testid="reveal-result"
                     className={cn(
-                      "flex cursor-pointer items-start gap-3 rounded-[var(--radius-card)] border p-3 transition-colors",
-                      selected
-                        ? "border-[var(--color-primary)] bg-[var(--color-primary)]/10"
-                        : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
+                      "flex items-center gap-2 text-sm font-semibold",
+                      state.selected === reveal.correctLabel ? "text-[var(--color-success)]" : "text-[var(--color-error)]"
                     )}
                   >
-                    <input
-                      type="radio"
-                      name={`q-${question.questionId}`}
-                      className="mt-0.5 h-4 w-4 accent-[var(--color-primary)]"
-                      checked={selected}
-                      onChange={() => updateState(question.questionId, { selected: opt.label })}
-                    />
-                    <span className="text-sm text-[var(--color-foreground)]">
-                      <span className="font-semibold">{opt.label}.</span> {opt.text}
-                      {opt.imageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={opt.imageUrl}
-                          alt=""
-                          className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
-                        />
-                      ) : null}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
+                    {state.selected === reveal.correctLabel ? (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" aria-hidden /> Correct
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="h-4 w-4" aria-hidden /> Incorrect — correct answer: {reveal.correctLabel}
+                      </>
+                    )}
+                    <span className="font-normal text-[var(--color-muted-foreground)]">· Full explanation in Review after you submit.</span>
+                  </p>
+                ) : (
+                  <div>
+                    <Button
+                      variant="outline"
+                      onClick={() => checkAnswer(question.questionId)}
+                      disabled={!state.selected || revealing === question.questionId || submitting}
+                    >
+                      {revealing === question.questionId ? "Checking…" : "Check Answer"}
+                    </Button>
+                    <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">Checking locks your answer for this question.</p>
+                  </div>
+                )}
+                {revealError?.questionId === question.questionId ? (
+                  <p className="text-sm text-[var(--color-error)]">{revealError.message}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -302,22 +594,29 @@ export function TestPlayer({
               <Button variant="outline" onClick={() => goTo(current - 1)} disabled={current === 0}>
                 <ChevronLeft className="h-4 w-4" aria-hidden /> Previous
               </Button>
-              <Button variant="outline" onClick={() => updateState(question.questionId, { selected: null, marked: false })}>
+              <Button
+                variant="outline"
+                onClick={() => setAnswer(question.questionId, { selected: null, marked: false })}
+                disabled={!!reveal || submitting || question.malformed}
+              >
                 Clear Response
               </Button>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
+                disabled={submitting}
                 onClick={() => {
-                  updateState(question.questionId, { marked: !state.marked });
+                  setAnswer(question.questionId, { marked: !state.marked });
                   goTo(current + 1);
                 }}
               >
                 <Flag className="h-4 w-4" aria-hidden /> Mark for Review & Next
               </Button>
-              {current === questions.length - 1 ? (
-                <Button onClick={() => setConfirmOpen(true)}>Submit Test</Button>
+              {isLast ? (
+                <Button onClick={() => setConfirmOpen(true)} disabled={submitting}>
+                  Submit Test
+                </Button>
               ) : (
                 <Button onClick={() => goTo(current + 1)}>
                   Save & Next <ChevronRight className="h-4 w-4" aria-hidden />
@@ -343,12 +642,13 @@ export function TestPlayer({
                 <span className="h-2.5 w-2.5 rounded-full border border-[var(--color-border)]" /> Not visited
               </span>
             </div>
-            <div className="grid grid-cols-6 gap-2 sm:grid-cols-5 lg:grid-cols-6">
+            <div className="grid grid-cols-6 gap-2 sm:grid-cols-5 lg:grid-cols-6" data-testid="palette">
               {questions.map((q, i) => (
                 <button
                   key={q.questionId}
                   type="button"
                   onClick={() => goTo(i)}
+                  aria-label={`Go to question ${i + 1}`}
                   className={cn(
                     "flex h-9 w-9 items-center justify-center rounded-[var(--radius-button)] text-xs font-semibold transition-colors",
                     STATUS_STYLES[statusFor(q, i)]
@@ -360,8 +660,8 @@ export function TestPlayer({
             </div>
           </div>
 
-          <Button variant="danger" onClick={() => setConfirmOpen(true)}>
-            Submit Test
+          <Button variant="danger" onClick={() => setConfirmOpen(true)} disabled={submitting}>
+            {submitting ? "Submitting…" : "Submit Test"}
           </Button>
         </aside>
       </div>
@@ -373,15 +673,17 @@ export function TestPlayer({
               <AlertTriangle className="h-4 w-4 text-[var(--color-warning)]" aria-hidden /> Submit test?
             </DialogTitle>
             <DialogDescription>
-              You have answered {answeredCount} of {questions.length} questions. Once submitted, you cannot change your answers.
+              You have answered {answeredCount} of {questions.length} questions.
+              {unsavedCount > 0 ? ` ${unsavedCount} answer(s) are still being saved.` : ""} Once submitted, you cannot change your
+              answers.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <DialogClose asChild>
               <Button variant="outline">Keep Reviewing</Button>
             </DialogClose>
-            <Button variant="danger" onClick={doSubmit} disabled={isPending}>
-              {isPending ? "Submitting…" : "Submit Test"}
+            <Button variant="danger" onClick={() => void finish("manual")} disabled={submitting}>
+              {submitting ? "Submitting…" : "Submit Test"}
             </Button>
           </DialogFooter>
         </DialogContent>

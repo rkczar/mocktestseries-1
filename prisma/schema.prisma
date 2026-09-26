@@ -1010,6 +1010,10 @@ model CustomModule {
   createdByStudent   Student?           @relation("StudentCustomModules", fields: [createdByStudentId], references: [id])
   isStudentOwned     Boolean            @default(false)
   shareToken         String?            @unique
+  // Student practice configuration, copied onto every attempt at start.
+  // FIXED/EXAM = legacy behavior (durationMinutes ?? 30, answers hidden).
+  durationMode       AttemptDurationMode @default(FIXED)
+  answerMode         AttemptAnswerMode   @default(EXAM)
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -1224,6 +1228,30 @@ enum AnswerStatus {
   ANSWERED_AND_MARKED
 }
 
+/**
+ * How an attempt's time limit was chosen. FIXED is every pre-existing
+ * attempt and every admin-authored test: `durationMinutes` comes from the
+ * test's own configuration. The student-practice modes are frozen onto the
+ * attempt at creation so refresh/resume never re-derives them.
+ */
+enum AttemptDurationMode {
+  FIXED
+  PER_QUESTION
+  CUSTOM
+  UNLIMITED
+}
+
+/**
+ * EXAM keeps answers hidden until the result (the default everywhere).
+ * INSTANT lets a student reveal one question at a time via a server-authorized
+ * Check Answer — only ever set for student-built practice attempts (see
+ * lib/test-attempt.ts#instantAnswerAllowed).
+ */
+enum AttemptAnswerMode {
+  EXAM
+  INSTANT
+}
+
 model TestAttempt {
   id                   String             @id @default(cuid())
   studentId            String
@@ -1276,6 +1304,10 @@ model TestAttempt {
   // AttemptPolicy.MULTIPLE_PRACTICE never displace a student's original
   // leaderboard position. See lib/leaderboard.ts.
   isLeaderboardAttempt Boolean            @default(false)
+  // Frozen at creation (TEST ENGINE CORE): time-limit mode and answer-reveal
+  // mode. Defaults reproduce the pre-existing behavior for every old row.
+  durationMode         AttemptDurationMode @default(FIXED)
+  answerMode           AttemptAnswerMode   @default(EXAM)
   startedAt            DateTime           @default(now())
   submittedAt          DateTime?
   createdAt            DateTime           @default(now())
@@ -1324,6 +1356,14 @@ model Answer {
   isCorrect           Boolean?
   status              AnswerStatus        @default(UNANSWERED)
   answeredAt          DateTime?
+  // INSTANT answer mode: set once when the server reveals this question's
+  // answer; the selection is locked from then on so a revealed answer can
+  // never be changed to the correct one.
+  revealedAt          DateTime?
+  // Client-issued, per-tab monotonic save sequence (ms timestamp). A save
+  // only applies when its seq is newer than the stored one, so a delayed or
+  // retried older request can never overwrite a newer answer.
+  saveSeq             Float               @default(0)
 
   @@index([studentId])
   @@index([attemptId])

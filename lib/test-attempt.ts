@@ -1,6 +1,16 @@
 import "server-only";
+/**
+ * TEST ENGINE CORE — HIGH RISK SHARED PATH.
+ * Changes to option selection, answer persistence, navigation, attempt
+ * snapshots, timer, submission or answer reveal require the focused
+ * test-engine regression suite before deployment (see ops/TEST-ENGINE.md):
+ *   scripts/verify-test-engine-core.ts  (server, disposable DB)
+ *   scripts/verify-test-engine-ui.mjs   (real browser, local server)
+ */
 import {
   AnswerStatus,
+  AttemptAnswerMode,
+  AttemptDurationMode,
   AttemptEntryMode,
   AttemptSourceType,
   AttemptStatus,
@@ -17,8 +27,9 @@ import { deriveLiveTestState } from "@/lib/live-test";
 import { deriveMockTestAvailability, isMockTestAvailable, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
 import { assertContentAccess } from "@/lib/payments/access";
+import { TestEngineError } from "@/lib/test-engine-log";
 
-export { remainingSecondsFor, InsufficientQuestionsError };
+export { remainingSecondsFor, InsufficientQuestionsError, TestEngineError };
 export type { QuestionSelectionFilters } from "@/lib/question-selection";
 
 export interface QuestionSnapshot {
@@ -36,7 +47,39 @@ export interface QuestionWithOptions {
   text: string;
   imageUrl: string | null;
   difficulty: string;
-  options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean }[];
+  options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean; order?: number }[];
+}
+
+/** Hard ceiling for a student-entered CUSTOM duration (minutes). */
+export const MAX_CUSTOM_DURATION_MINUTES = 600;
+
+/**
+ * Minutes for a student-practice duration mode, computed ONCE at attempt
+ * creation from the effective (actually frozen) question count:
+ * PER_QUESTION = 1 min/question, CUSTOM = the student's explicit total,
+ * UNLIMITED = 0 (never read as a window — see toServerTimedAttempt).
+ */
+export function practiceDurationMinutes(mode: AttemptDurationMode, questionCount: number, customMinutes?: number | null): number {
+  if (mode === AttemptDurationMode.UNLIMITED) return 0;
+  if (mode === AttemptDurationMode.CUSTOM) {
+    const m = Math.floor(Number(customMinutes));
+    if (!Number.isFinite(m) || m < 1 || m > MAX_CUSTOM_DURATION_MINUTES) {
+      throw new TestEngineError("NOT_ALLOWED", `Custom time must be between 1 and ${MAX_CUSTOM_DURATION_MINUTES} minutes.`);
+    }
+    return m;
+  }
+  return Math.max(questionCount, 1);
+}
+
+/**
+ * Instant (per-question) answer reveal is a student-practice capability only.
+ * Mock Tests, PYQ papers, Grand/Live tests and admin-authored custom modules
+ * are ALWAYS exam mode, whatever a caller asks for.
+ */
+export function instantAnswerAllowed(sourceType: AttemptSourceType, opts: { studentOwnedModule?: boolean } = {}): boolean {
+  if (sourceType === AttemptSourceType.SUBJECT_TEST) return true;
+  if (sourceType === AttemptSourceType.CUSTOM_MODULE) return opts.studentOwnedModule === true;
+  return false;
 }
 
 /** Legacy source-grouping → production-facing test type, kept in one place. */
@@ -58,20 +101,29 @@ const TEST_TYPE_BY_SOURCE: Record<AttemptSourceType, TestType> = {
 export function toServerTimedAttempt(attempt: {
   startedAt: Date;
   durationMinutes: number;
+  durationMode?: AttemptDurationMode | null;
   liveTest?: { endAt: Date } | null;
   mockTest?: { availableUntil: Date | null } | null;
 }): ServerTimedAttempt {
   const windowEnd = attempt.liveTest?.endAt ?? attempt.mockTest?.availableUntil ?? null;
-  return { startedAt: attempt.startedAt, durationMinutes: attempt.durationMinutes, liveTestEndAt: windowEnd };
+  return {
+    startedAt: attempt.startedAt,
+    durationMinutes: attempt.durationMinutes,
+    liveTestEndAt: windowEnd,
+    unlimited: attempt.durationMode === AttemptDurationMode.UNLIMITED,
+  };
 }
 
 function toSnapshot(question: QuestionWithOptions): QuestionSnapshot {
+  // Options are frozen in their authored order (then label) — several start
+  // paths load options without an orderBy, which previously froze e.g. B,A,C,D.
+  const options = [...question.options].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.label.localeCompare(b.label));
   return {
     code: question.code,
     text: question.text,
     imageUrl: question.imageUrl,
     difficulty: question.difficulty,
-    options: question.options.map((o) => ({ label: o.label, text: o.text, imageUrl: o.imageUrl })),
+    options: options.map((o) => ({ label: o.label, text: o.text, imageUrl: o.imageUrl })),
     correctLabel: question.options.find((o) => o.isCorrect)?.label ?? "",
   };
 }
@@ -100,12 +152,20 @@ async function createAttemptFromQuestions(params: {
   negativeMarking: number;
   questions: QuestionWithOptions[];
   entryMode?: AttemptEntryMode;
+  durationMode?: AttemptDurationMode;
+  answerMode?: AttemptAnswerMode;
 }) {
   if (params.questions.length === 0) {
     throw new Error("This test has no questions yet. Please try again later.");
   }
+  // Never silently duplicate a question to pad a set.
+  const questions = params.questions.filter((q, i, all) => all.findIndex((x) => x.id === q.id) === i);
 
-  const attempt = await prisma.testAttempt.create({
+  // The attempt, its frozen question snapshots and one UNANSWERED Answer per
+  // question are written in ONE transaction: a half-created attempt (row but
+  // no questions) used to be resumable and crashed the player.
+  const attempt = await prisma.$transaction(async (tx) => {
+    const created = await tx.testAttempt.create({
     data: {
       studentId: params.studentId,
       sourceType: params.sourceType,
@@ -120,32 +180,33 @@ async function createAttemptFromQuestions(params: {
       topicIds: params.topicIds && params.topicIds.length > 0 ? params.topicIds : undefined,
       selection: (params.selection ?? undefined) as Prisma.InputJsonValue | undefined,
       durationMinutes: params.durationMinutes,
+      durationMode: params.durationMode ?? AttemptDurationMode.FIXED,
+      answerMode: params.answerMode ?? AttemptAnswerMode.EXAM,
       negativeMarking: params.negativeMarking,
-      totalQuestions: params.questions.length,
+      totalQuestions: questions.length,
       entryMode: params.entryMode ?? AttemptEntryMode.ONLINE,
     },
   });
-
-  await prisma.$transaction(
-    params.questions.map((q, order) =>
-      prisma.testAttemptQuestion.create({
-        data: {
-          attemptId: attempt.id,
-          questionId: q.id,
-          order,
-          questionSnapshot: toSnapshot(q) as never,
-          answer: {
-            create: {
-              attemptId: attempt.id,
-              studentId: params.studentId,
-              questionId: q.id,
-              status: AnswerStatus.UNANSWERED,
-            },
-          },
-        },
-      })
-    )
-  );
+    await tx.testAttemptQuestion.createMany({
+      data: questions.map((q, order) => ({
+        attemptId: created.id,
+        questionId: q.id,
+        order,
+        questionSnapshot: toSnapshot(q) as never,
+      })),
+    });
+    const rows = await tx.testAttemptQuestion.findMany({ where: { attemptId: created.id }, select: { id: true, questionId: true } });
+    await tx.answer.createMany({
+      data: rows.map((r) => ({
+        attemptId: created.id,
+        attemptQuestionId: r.id,
+        studentId: params.studentId,
+        questionId: r.questionId,
+        status: AnswerStatus.UNANSWERED,
+      })),
+    });
+    return created;
+  }, { timeout: 20_000 });
 
   await logActivity(params.studentId, "TEST_STARTED", { attemptId: attempt.id, sourceType: params.sourceType });
   return attempt;
@@ -250,12 +311,27 @@ async function startFromCustomModuleRow(studentId: string, customModule: CustomM
   const resumable = await findResumableAttempt(studentId, { customModuleId: customModule.id });
   if (resumable) return resumable;
 
+  // FIXED is every admin module and every module created before duration
+  // modes existed: exactly the old `durationMinutes ?? 30` behavior.
+  const durationMode = customModule.durationMode;
+  const durationMinutes =
+    durationMode === AttemptDurationMode.FIXED
+      ? (customModule.durationMinutes ?? 30)
+      : practiceDurationMinutes(durationMode, customModule.questions.length, customModule.durationMinutes);
+  const answerMode =
+    customModule.answerMode === AttemptAnswerMode.INSTANT &&
+    instantAnswerAllowed(AttemptSourceType.CUSTOM_MODULE, { studentOwnedModule: customModule.isStudentOwned })
+      ? AttemptAnswerMode.INSTANT
+      : AttemptAnswerMode.EXAM;
+
   return createAttemptFromQuestions({
     studentId,
     sourceType: AttemptSourceType.CUSTOM_MODULE,
     examId: customModule.examId,
     customModuleId: customModule.id,
-    durationMinutes: customModule.durationMinutes ?? 30,
+    durationMinutes,
+    durationMode,
+    answerMode,
     negativeMarking: customModule.negativeMarking,
     questions: customModule.questions.map((mq) => mq.question as unknown as QuestionWithOptions),
   });
@@ -402,6 +478,8 @@ export interface SubjectTestSelection extends QuestionSelectionFilters {
   count: number;
   /** Test on the Go: 1 question = 1 minute, so the duration follows the EFFECTIVE count, not the requested one. */
   minutesPerQuestion?: number;
+  /** Student-practice answer mode; INSTANT is permitted for subject practice (instantAnswerAllowed). */
+  answerMode?: AttemptAnswerMode;
 }
 
 /**
@@ -449,43 +527,154 @@ export async function startSubjectTestAttempt(studentId: string, selection: Subj
       subjects: [{ id: selection.subjectId, name: subject?.name ?? null }],
     },
     durationMinutes: selection.minutesPerQuestion ? questions.length * selection.minutesPerQuestion : selection.durationMinutes,
+    durationMode: selection.minutesPerQuestion ? AttemptDurationMode.PER_QUESTION : AttemptDurationMode.CUSTOM,
+    answerMode: selection.answerMode === AttemptAnswerMode.INSTANT ? AttemptAnswerMode.INSTANT : AttemptAnswerMode.EXAM,
     negativeMarking: 0,
     questions: questions as unknown as QuestionWithOptions[],
   });
 }
 
-export async function saveAnswer(
-  attemptId: string,
-  studentId: string,
-  questionId: string,
-  selectedOptionLabel: string | null,
-  markForReview: boolean
-) {
-  const attempt = await prisma.testAttempt.findFirst({
-    where: { id: attemptId, studentId, status: AttemptStatus.IN_PROGRESS },
-    include: { liveTest: { select: { endAt: true } }, mockTest: { select: { availableUntil: true } } },
-  });
-  if (!attempt) throw new Error("This attempt is not available for editing.");
+const EDITABLE_ATTEMPT_SELECT = {
+  id: true,
+  status: true,
+  startedAt: true,
+  durationMinutes: true,
+  durationMode: true,
+  answerMode: true,
+  liveTest: { select: { endAt: true } },
+  mockTest: { select: { availableUntil: true } },
+} as const;
 
-  if (isExpired(toServerTimedAttempt(attempt))) {
-    throw new Error("Time is up — this test has ended and answers can no longer be changed.");
+/**
+ * Loads the attempt + the one attempt-question a save/reveal targets and
+ * enforces every precondition: ownership, IN_PROGRESS, the server-side time
+ * window, membership, and (when a label is given) that the label is one of
+ * the frozen snapshot's options. Two small indexed reads — never the whole
+ * attempt, never the Question Bank.
+ */
+async function loadEditableQuestion(attemptId: string, studentId: string, questionId: string, label: string | null) {
+  const attempt = await prisma.testAttempt.findFirst({ where: { id: attemptId, studentId }, select: EDITABLE_ATTEMPT_SELECT });
+  if (!attempt || attempt.status !== AttemptStatus.IN_PROGRESS) {
+    throw new TestEngineError("NOT_EDITABLE", "This test has already been submitted.");
   }
+  if (isExpired(toServerTimedAttempt(attempt))) {
+    throw new TestEngineError("EXPIRED", "Time is up — this test has ended and answers can no longer be changed.");
+  }
+  const attemptQuestion = await prisma.testAttemptQuestion.findUnique({
+    where: { attemptId_questionId: { attemptId, questionId } },
+    select: { id: true, questionSnapshot: true, answer: { select: { selectedOptionLabel: true, revealedAt: true, status: true } } },
+  });
+  if (!attemptQuestion) throw new TestEngineError("NOT_IN_ATTEMPT", "Question does not belong to this attempt.");
+  if (label !== null) {
+    const snapshot = attemptQuestion.questionSnapshot as unknown as QuestionSnapshot;
+    if (!Array.isArray(snapshot?.options) || !snapshot.options.some((o) => o.label === label)) {
+      throw new TestEngineError("INVALID_OPTION", "That option is not part of this question.");
+    }
+  }
+  return { attempt, attemptQuestion };
+}
 
-  const attemptQuestion = await prisma.testAttemptQuestion.findFirst({ where: { attemptId, questionId } });
-  if (!attemptQuestion) throw new Error("Question does not belong to this attempt.");
-
-  const status: AnswerStatus = selectedOptionLabel
+function answerStatusFor(selectedOptionLabel: string | null, markForReview: boolean): AnswerStatus {
+  return selectedOptionLabel
     ? markForReview
       ? AnswerStatus.ANSWERED_AND_MARKED
       : AnswerStatus.ANSWERED
     : markForReview
       ? AnswerStatus.MARKED_FOR_REVIEW
       : AnswerStatus.UNANSWERED;
+}
 
-  await prisma.answer.update({
-    where: { attemptQuestionId: attemptQuestion.id },
-    data: { selectedOptionLabel, status, answeredAt: selectedOptionLabel ? new Date() : null },
+/**
+ * Persist one answer. Ordered + idempotent by construction:
+ *  - `seq` is the client's per-tab monotonic save sequence. The write is a
+ *    single conditional UPDATE (`saveSeq < seq`), so a delayed/retried older
+ *    request can never overwrite a newer answer, and replaying the same save
+ *    is a no-op. Server-side callers omit it and get "now".
+ *  - The same statement also requires the attempt to still be IN_PROGRESS
+ *    and the question not revealed, so a save racing a submit or an instant
+ *    reveal can't slip in afterwards.
+ * Exactly one Answer row exists per attempt-question (unique
+ * attemptQuestionId), so concurrent saves can never duplicate rows.
+ * Returns applied=false for a stale (superseded) save — not an error.
+ */
+export async function saveAnswer(
+  attemptId: string,
+  studentId: string,
+  questionId: string,
+  selectedOptionLabel: string | null,
+  markForReview: boolean,
+  seq?: number
+): Promise<{ applied: boolean }> {
+  const label = selectedOptionLabel || null;
+  const { attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, label);
+  const saveSeq = typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : Date.now();
+  const status = answerStatusFor(label, markForReview);
+
+  if (attemptQuestion.answer?.revealedAt) {
+    // A revealed practice answer is frozen: only the review flag may change.
+    if (label !== attemptQuestion.answer.selectedOptionLabel) {
+      throw new TestEngineError("LOCKED", "This answer was already checked and can no longer be changed.");
+    }
+  }
+
+  const result = await prisma.answer.updateMany({
+    where: {
+      attemptQuestionId: attemptQuestion.id,
+      saveSeq: { lt: saveSeq },
+      attempt: { status: AttemptStatus.IN_PROGRESS },
+      ...(attemptQuestion.answer?.revealedAt ? { selectedOptionLabel: label } : { revealedAt: null }),
+    },
+    data: { selectedOptionLabel: label, status, answeredAt: label ? new Date() : null, saveSeq },
   });
+  return { applied: result.count === 1 };
+}
+
+/**
+ * Server-authorized per-question answer reveal (INSTANT answer mode only).
+ * The correct label never reaches the client before this succeeds. The
+ * student's chosen option is recorded and frozen in the SAME conditional
+ * update that stamps revealedAt, so revealing and then switching to the
+ * correct option is impossible, and a refresh can't reset the reveal.
+ * Idempotent: a second call returns the already-frozen result.
+ */
+export async function revealAnswer(
+  attemptId: string,
+  studentId: string,
+  questionId: string,
+  selectedOptionLabel: string,
+  seq?: number
+): Promise<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean }> {
+  if (!selectedOptionLabel) throw new TestEngineError("NO_SELECTION", "Choose an option before checking the answer.");
+  const { attempt, attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, selectedOptionLabel);
+  if (attempt.answerMode !== AttemptAnswerMode.INSTANT) {
+    throw new TestEngineError("NOT_ALLOWED", "Answers are shown after you submit this test.");
+  }
+
+  const marked =
+    attemptQuestion.answer?.status === AnswerStatus.ANSWERED_AND_MARKED || attemptQuestion.answer?.status === AnswerStatus.MARKED_FOR_REVIEW;
+  const now = new Date();
+  await prisma.answer.updateMany({
+    where: { attemptQuestionId: attemptQuestion.id, revealedAt: null, attempt: { status: AttemptStatus.IN_PROGRESS } },
+    data: {
+      selectedOptionLabel,
+      status: answerStatusFor(selectedOptionLabel, marked),
+      answeredAt: now,
+      revealedAt: now,
+      saveSeq: typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : now.getTime(),
+    },
+  });
+
+  const answer = await prisma.answer.findUnique({
+    where: { attemptQuestionId: attemptQuestion.id },
+    select: { selectedOptionLabel: true, revealedAt: true },
+  });
+  if (!answer?.revealedAt) throw new TestEngineError("NOT_EDITABLE", "This test has already been submitted.");
+  const correctLabel = (attemptQuestion.questionSnapshot as unknown as QuestionSnapshot).correctLabel ?? "";
+  return {
+    selectedOptionLabel: answer.selectedOptionLabel,
+    correctLabel,
+    isCorrect: !!answer.selectedOptionLabel && answer.selectedOptionLabel === correctLabel,
+  };
 }
 
 export async function submitAttempt(attemptId: string, studentId: string) {
@@ -590,6 +779,7 @@ export async function finalizeIfExpired(attempt: {
   status: AttemptStatus;
   startedAt: Date;
   durationMinutes: number;
+  durationMode?: AttemptDurationMode | null;
   liveTest?: { endAt: Date } | null;
   mockTest?: { availableUntil: Date | null } | null;
 }): Promise<boolean> {
@@ -617,6 +807,7 @@ export async function reconcileExpiredAttempts(filter: { liveTestId?: string } =
       status: true,
       startedAt: true,
       durationMinutes: true,
+      durationMode: true,
       liveTest: { select: { endAt: true } },
       mockTest: { select: { availableUntil: true } },
     },

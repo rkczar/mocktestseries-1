@@ -1,11 +1,11 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import type { QuestionDifficulty, QuestionSource } from "@prisma/client";
+import { AttemptAnswerMode, AttemptDurationMode, type QuestionDifficulty, type QuestionSource } from "@prisma/client";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { startOrPaywall } from "@/lib/payments/paywall";
 import { prisma } from "@/lib/prisma";
-import { startCustomModuleAttempt, startSharedCustomModuleAttempt } from "@/lib/test-attempt";
+import { startCustomModuleAttempt, startSharedCustomModuleAttempt, MAX_CUSTOM_DURATION_MINUTES } from "@/lib/test-attempt";
 import { ensureCustomModuleShareToken, getSubjectTestSetup } from "@/lib/student-data";
 import {
   selectPublishedQuestions,
@@ -13,8 +13,11 @@ import {
   assertValidOwnershipChain,
   InsufficientQuestionsError,
   type QuestionSelectionFilters,
-  type AttemptFilterMode,
 } from "@/lib/question-selection";
+
+/** The student-facing duration choices (TestAttempt.durationMode, frozen at start). */
+const STUDENT_DURATION_MODES = [AttemptDurationMode.PER_QUESTION, AttemptDurationMode.UNLIMITED, AttemptDurationMode.CUSTOM] as const;
+const MAX_MODULE_QUESTIONS = 200;
 
 export interface CustomModuleBuilderState {
   error?: string;
@@ -46,32 +49,41 @@ export async function createCustomModuleAction(
   const examId = str(formData, "examId");
   if (!examId) return { error: "Exam is required." };
 
+  // Any whole number from 1 up to the platform maximum — the real limit is
+  // the eligible pool, checked against the database below.
   const count = Number(str(formData, "count"));
-  if (!Number.isInteger(count) || count < 1 || count > 200) return { error: "Question count must be between 1 and 200." };
-
-  const durationRaw = str(formData, "durationMinutes");
-  const durationMinutes = durationRaw ? Number(durationRaw) : undefined;
-  if (durationRaw && (!Number.isInteger(durationMinutes) || (durationMinutes as number) < 1 || (durationMinutes as number) > 300)) {
-    return { error: "Duration must be between 1 and 300 minutes." };
+  if (!Number.isInteger(count) || count < 1 || count > MAX_MODULE_QUESTIONS) {
+    return { error: `Question count must be between 1 and ${MAX_MODULE_QUESTIONS}.` };
   }
+
+  // Exactly three duration modes; default 1 minute per question.
+  const durationModeRaw = str(formData, "durationMode") || AttemptDurationMode.PER_QUESTION;
+  const durationMode = STUDENT_DURATION_MODES.find((m) => m === durationModeRaw);
+  if (!durationMode) return { error: "Choose a valid time option." };
+  let customMinutes: number | null = null;
+  if (durationMode === AttemptDurationMode.CUSTOM) {
+    customMinutes = Number(str(formData, "customMinutes"));
+    if (!Number.isInteger(customMinutes) || customMinutes < 1 || customMinutes > MAX_CUSTOM_DURATION_MINUTES) {
+      return { error: `Custom time must be a whole number of minutes between 1 and ${MAX_CUSTOM_DURATION_MINUTES}.` };
+    }
+  }
+  const answerMode = str(formData, "answerMode") === AttemptAnswerMode.INSTANT ? AttemptAnswerMode.INSTANT : AttemptAnswerMode.EXAM;
 
   const subjectId = str(formData, "subjectId");
   const topicId = str(formData, "topicId");
-  const subTopicId = str(formData, "subTopicId");
   const sourceRaw = str(formData, "source");
-  const attemptFilterRaw = str(formData, "attemptFilter");
   const difficulty = formData.getAll("difficulty").filter((v): v is string => typeof v === "string") as QuestionDifficulty[];
 
+  // Sub-topic and My History filters were removed from the builder: they are
+  // deliberately never read from the request any more.
   const filters: QuestionSelectionFilters = {
     examId,
     subjectId: subjectId || undefined,
     topicId: topicId || undefined,
-    subTopicId: subTopicId || undefined,
     year: optionalInt(str(formData, "year")),
     source: (sourceRaw || undefined) as QuestionSource | undefined,
     difficulty: difficulty.length > 0 ? difficulty : undefined,
     studentId: student.id,
-    attemptFilter: (attemptFilterRaw || undefined) as AttemptFilterMode | undefined,
   };
 
   try {
@@ -96,7 +108,9 @@ export async function createCustomModuleAction(
       title,
       selectionMode: "RULE_BASED",
       ruleConfig: filters as never,
-      durationMinutes: durationMinutes ?? null,
+      durationMode,
+      durationMinutes: customMinutes,
+      answerMode,
       accessType: "FREE",
       status: "ACTIVE",
       isStudentOwned: true,
@@ -119,9 +133,6 @@ export async function createCustomModuleAction(
 
 function buildModuleTitle(filters: QuestionSelectionFilters): string {
   const parts: string[] = [];
-  if (filters.attemptFilter === "SAVED") parts.push("Saved");
-  if (filters.attemptFilter === "INCORRECT") parts.push("Incorrect");
-  if (filters.attemptFilter === "UNATTEMPTED") parts.push("Unattempted");
   if (filters.source === "PYQ") parts.push("PYQ");
   parts.push("Custom Practice");
   return parts.join(" · ").slice(0, 120);
@@ -129,8 +140,15 @@ function buildModuleTitle(filters: QuestionSelectionFilters): string {
 
 /** Live "how many questions are in scope" count for the builder screen. */
 export async function countCustomModuleQuestionsAction(filters: QuestionSelectionFilters): Promise<number> {
-  const student = await requireStudentOrLogin();
-  return countPublishedQuestions({ ...filters, studentId: student.id });
+  await requireStudentOrLogin();
+  return countPublishedQuestions({
+    examId: filters.examId,
+    subjectId: filters.subjectId,
+    topicId: filters.topicId,
+    year: filters.year,
+    source: filters.source,
+    difficulty: filters.difficulty,
+  });
 }
 
 /** Subject/topic/sub-topic tree + available years for the exam the student just picked. */

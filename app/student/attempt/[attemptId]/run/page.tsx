@@ -1,11 +1,12 @@
 import { notFound, redirect } from "next/navigation";
-import { AttemptStatus, AnswerStatus } from "@prisma/client";
+import { AttemptStatus, AttemptAnswerMode, AttemptDurationMode } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
 import { getContentAccess, describeAttemptContent } from "@/lib/payments/access";
 import { AccessLocked } from "@/components/student/access-locked";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
-import { remainingSecondsFor, toServerTimedAttempt, type QuestionSnapshot } from "@/lib/test-attempt";
+import { remainingSecondsFor, toServerTimedAttempt } from "@/lib/test-attempt";
+import { toPlayerQuestions } from "@/lib/test-player-data";
 import { TestPlayer } from "./test-player";
 
 export const metadata = { title: "Test in Progress — Mock Test Series.in" };
@@ -22,30 +23,26 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
   const access = await getContentAccess(student.id, describeAttemptContent(attempt));
   if (!access.allowed) return <AccessLocked access={access} />;
 
-  const remainingSeconds = remainingSecondsFor(toServerTimedAttempt(attempt));
+  // null = UNLIMITED practice: no countdown, no time-based auto-submit.
+  const remainingSeconds =
+    attempt.durationMode === AttemptDurationMode.UNLIMITED ? null : remainingSecondsFor(toServerTimedAttempt(attempt));
+  const instantMode = attempt.answerMode === AttemptAnswerMode.INSTANT;
   const savedIds = await getSavedQuestionIdSet(
     student.id,
     attempt.questions.map((tq) => tq.questionId)
   );
 
-  const questions = attempt.questions.map((tq) => {
-    const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
-    return {
-      questionId: tq.questionId,
-      text: snapshot.text,
-      imageUrl: snapshot.imageUrl,
-      difficulty: snapshot.difficulty,
-      options: snapshot.options.map((o) => ({ label: o.label, text: o.text, imageUrl: o.imageUrl })),
-      selectedOptionLabel: tq.answer?.selectedOptionLabel ?? null,
-      markForReview:
-        tq.answer?.status === AnswerStatus.MARKED_FOR_REVIEW || tq.answer?.status === AnswerStatus.ANSWERED_AND_MARKED,
-      saved: savedIds.has(tq.questionId),
-    };
-  });
+  const questions = toPlayerQuestions(attempt.questions, { instantMode, savedIds });
 
   const title = attemptTitle(attempt);
 
   return (
-    <TestPlayer attemptId={attempt.id} title={title} initialRemainingSeconds={remainingSeconds} questions={questions} />
+    <TestPlayer
+      attemptId={attempt.id}
+      title={title}
+      initialRemainingSeconds={remainingSeconds}
+      instantMode={instantMode}
+      questions={questions}
+    />
   );
 }

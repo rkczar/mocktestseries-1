@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
 import { ShareModuleControl } from "./share-module-control";
+import { moduleDurationLabel } from "@/lib/module-duration-label";
 
 export const metadata = { title: "Custom Module — Mock Test Series.in" };
 
@@ -59,7 +60,7 @@ export default async function CustomModuleDetailPage({ params }: { params: Promi
             <Clock className="h-5 w-5 text-[var(--color-primary)]" aria-hidden />
             <div>
               <p className="text-xs text-[var(--color-muted-foreground)]">Duration</p>
-              <p className="font-semibold text-[var(--color-foreground)]">{m.durationMinutes ? `${m.durationMinutes} min` : "No limit"}</p>
+              <p className="font-semibold text-[var(--color-foreground)]">{moduleDurationLabel({ durationMode: m.durationMode, durationMinutes: m.durationMinutes, questionCount: m._count.questions })}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">

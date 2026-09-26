@@ -23,6 +23,8 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
 
   const title = attemptTitle(attempt as OwnedAttempt);
   const instructions = attemptInstructions(attempt as OwnedAttempt);
+  const unlimited = attempt.durationMode === "UNLIMITED";
+  const instant = attempt.answerMode === "INSTANT";
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center gap-6 px-4 py-10 sm:px-6">
@@ -46,7 +48,9 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
             <Clock className="h-5 w-5 text-[var(--color-primary)]" aria-hidden />
             <div>
               <p className="text-xs text-[var(--color-muted-foreground)]">Duration</p>
-              <p className="font-semibold text-[var(--color-foreground)]">{attempt.durationMinutes} min</p>
+              <p className="font-semibold text-[var(--color-foreground)]">
+                {unlimited ? "No time limit" : `${attempt.durationMinutes} min`}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
@@ -82,8 +86,17 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
       <Card>
         <CardContent className="pt-5 text-sm text-[var(--color-muted-foreground)]">
           <ul className="list-disc space-y-1 pl-5">
-            <li>The timer starts as soon as you click Start Test and cannot be paused.</li>
-            <li>The test auto-submits when time runs out.</li>
+            {unlimited ? (
+              <li>There is no time limit — submit whenever you are done.</li>
+            ) : (
+              <>
+                <li>The timer starts as soon as you click Start Test and cannot be paused.</li>
+                <li>The test auto-submits when time runs out.</li>
+              </>
+            )}
+            {instant ? (
+              <li>Practice mode: after choosing an option, tap “Check Answer” to see if you were right. Checking locks that answer.</li>
+            ) : null}
             <li>You can navigate between questions and change answers until you submit.</li>
             {attempt.negativeMarking > 0 ? <li>Each wrong answer deducts {attempt.negativeMarking} mark(s).</li> : null}
           </ul>

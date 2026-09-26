@@ -12,17 +12,23 @@ import { QuestionCountPresets } from "@/components/student/question-count-preset
 import { createCustomModuleAction, countCustomModuleQuestionsAction, getExamSetupAction, type CustomModuleBuilderState } from "./actions";
 
 const DIFFICULTIES = ["EASY", "MEDIUM", "HARD"] as const;
-const ATTEMPT_FILTERS = [
-  { value: "", label: "No history filter" },
-  { value: "INCORRECT", label: "Only questions I got wrong" },
-  { value: "UNATTEMPTED", label: "Only questions I've never attempted" },
-  { value: "SAVED", label: "Only my saved questions" },
+
+const DURATION_MODES = [
+  { value: "PER_QUESTION", label: "1 minute per question", hint: "Time = number of questions (default)" },
+  { value: "UNLIMITED", label: "Unlimited time", hint: "No countdown, no auto-submit" },
+  { value: "CUSTOM", label: "Custom time", hint: "Set the total minutes yourself" },
 ] as const;
+type DurationMode = (typeof DURATION_MODES)[number]["value"];
+
+const ANSWER_MODES = [
+  { value: "EXAM", label: "Exam mode", hint: "Answers are shown after you submit (default)" },
+  { value: "INSTANT", label: "Practice — instant answer", hint: "Check each answer with “Check Answer” before moving on" },
+] as const;
+type AnswerMode = (typeof ANSWER_MODES)[number]["value"];
 
 interface Topic {
   id: string;
   name: string;
-  subTopics: { id: string; name: string }[];
 }
 interface Subject {
   id: string;
@@ -61,13 +67,13 @@ export function CustomModuleBuilder({
   const [examSetup, setExamSetup] = useState<ExamSetup | null>(initialExam);
   const [subjectId, setSubjectId] = useState("");
   const [topicId, setTopicId] = useState("");
-  const [subTopicId, setSubTopicId] = useState("");
   const [year, setYear] = useState("");
   const [source, setSource] = useState("");
-  const [attemptFilter, setAttemptFilter] = useState("");
   const [difficulty, setDifficulty] = useState<string[]>([]);
-  const [count, setCount] = useState(15);
-  const [durationMinutes, setDurationMinutes] = useState(20);
+  const [count, setCount] = useState(10);
+  const [durationMode, setDurationMode] = useState<DurationMode>("PER_QUESTION");
+  const [customMinutes, setCustomMinutes] = useState("30");
+  const [answerMode, setAnswerMode] = useState<AnswerMode>("EXAM");
   const [available, setAvailable] = useState<number | null>(null);
   const [state, formAction] = useActionState<CustomModuleBuilderState, FormData>(createCustomModuleAction, {});
   const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
@@ -91,8 +97,6 @@ export function CustomModuleBuilder({
   const subjects = useMemo(() => activeSetup?.subjects ?? [], [activeSetup]);
   const subject = useMemo(() => subjects.find((s) => s.id === subjectId), [subjects, subjectId]);
   const topics = useMemo(() => subject?.topics ?? [], [subject]);
-  const topic = useMemo(() => topics.find((t) => t.id === topicId), [topics, topicId]);
-  const subTopics = topic?.subTopics ?? [];
 
   useEffect(() => {
     if (!examId) return;
@@ -101,11 +105,9 @@ export function CustomModuleBuilder({
       examId,
       subjectId: subjectId || undefined,
       topicId: topicId || undefined,
-      subTopicId: subTopicId || undefined,
       year: year ? Number(year) : undefined,
       source: (source || undefined) as never,
       difficulty: difficulty.length > 0 ? (difficulty as never) : undefined,
-      attemptFilter: (attemptFilter || undefined) as never,
     })
       .then((n) => {
         if (!cancelled) setAvailable(n);
@@ -116,7 +118,7 @@ export function CustomModuleBuilder({
     return () => {
       cancelled = true;
     };
-  }, [examId, subjectId, topicId, subTopicId, year, source, attemptFilter, difficulty]);
+  }, [examId, subjectId, topicId, year, source, difficulty]);
 
   const countExceeds = available !== null && count > available;
 
@@ -124,7 +126,7 @@ export function CustomModuleBuilder({
   // of every filter that affects the pool, so changing anything after
   // dismissing it makes the prompt reappear (derived during render — never a
   // setState-in-effect) instead of staying hidden forever.
-  const filterSignature = JSON.stringify([examId, subjectId, topicId, subTopicId, year, source, attemptFilter, difficulty, count]);
+  const filterSignature = JSON.stringify([examId, subjectId, topicId, year, source, difficulty, count]);
   const confirmDismissed = dismissedSignature === filterSignature;
   const activeConfirmError = confirmError?.signature === filterSignature ? confirmError.message : null;
 
@@ -153,7 +155,6 @@ export function CustomModuleBuilder({
                 setExamId(e.target.value);
                 setSubjectId("");
                 setTopicId("");
-                setSubTopicId("");
               }}
               required
             >
@@ -177,7 +178,6 @@ export function CustomModuleBuilder({
               onChange={(e) => {
                 setSubjectId(e.target.value);
                 setTopicId("");
-                setSubTopicId("");
               }}
               disabled={subjects.length === 0}
             >
@@ -196,34 +196,13 @@ export function CustomModuleBuilder({
               id="topicId"
               name="topicId"
               value={topicId}
-              onChange={(e) => {
-                setTopicId(e.target.value);
-                setSubTopicId("");
-              }}
+              onChange={(e) => setTopicId(e.target.value)}
               disabled={topics.length === 0}
             >
               <option value="">All Topics</option>
               {topics.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
-                </option>
-              ))}
-            </SelectNative>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="subTopicId">Sub-topic</Label>
-            <SelectNative
-              id="subTopicId"
-              name="subTopicId"
-              value={subTopicId}
-              onChange={(e) => setSubTopicId(e.target.value)}
-              disabled={subTopics.length === 0}
-            >
-              <option value="">All Sub-topics</option>
-              {subTopics.map((st) => (
-                <option key={st.id} value={st.id}>
-                  {st.name}
                 </option>
               ))}
             </SelectNative>
@@ -247,17 +226,6 @@ export function CustomModuleBuilder({
               <option value="">Question Bank + PYQ</option>
               <option value="QUESTION_BANK">Question Bank only</option>
               <option value="PYQ">Previous Year Papers only</option>
-            </SelectNative>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="attemptFilter">My History</Label>
-            <SelectNative id="attemptFilter" name="attemptFilter" value={attemptFilter} onChange={(e) => setAttemptFilter(e.target.value)}>
-              {ATTEMPT_FILTERS.map((f) => (
-                <option key={f.value} value={f.value}>
-                  {f.label}
-                </option>
-              ))}
             </SelectNative>
           </div>
 
@@ -301,19 +269,65 @@ export function CustomModuleBuilder({
             </p>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="durationMinutes">Duration (minutes, optional)</Label>
-            <Input
-              id="durationMinutes"
-              name="durationMinutes"
-              type="number"
-              min={1}
-              max={300}
-              value={durationMinutes}
-              onChange={(e) => setDurationMinutes(Math.max(1, Number(e.target.value)))}
-            />
-            <p className="text-xs text-[var(--color-muted-foreground)]">The timer is enforced server-side.</p>
-          </div>
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="mb-1.5 text-sm font-medium text-[var(--color-foreground)]">Time</legend>
+            {DURATION_MODES.map((m) => (
+              <label key={m.value} className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="durationMode"
+                  value={m.value}
+                  checked={durationMode === m.value}
+                  onChange={() => setDurationMode(m.value)}
+                  className="mt-1 accent-[var(--color-primary)]"
+                />
+                <span>
+                  <span className="font-medium text-[var(--color-foreground)]">{m.label}</span>
+                  <span className="block text-xs text-[var(--color-muted-foreground)]">{m.hint}</span>
+                </span>
+              </label>
+            ))}
+            {durationMode === "CUSTOM" ? (
+              <div className="flex items-center gap-2 pl-6">
+                <Input
+                  id="customMinutes"
+                  name="customMinutes"
+                  type="number"
+                  min={1}
+                  max={600}
+                  required
+                  value={customMinutes}
+                  onChange={(e) => setCustomMinutes(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
+                  className="w-24"
+                />
+                <span className="text-xs text-[var(--color-muted-foreground)]">minutes total (1–600)</span>
+              </div>
+            ) : durationMode === "PER_QUESTION" ? (
+              <p className="pl-6 text-xs text-[var(--color-muted-foreground)]">
+                {count} question{count === 1 ? "" : "s"} = {count} minute{count === 1 ? "" : "s"}
+              </p>
+            ) : null}
+          </fieldset>
+
+          <fieldset className="flex flex-col gap-1.5 sm:col-span-2">
+            <legend className="mb-1.5 text-sm font-medium text-[var(--color-foreground)]">Answer mode</legend>
+            {ANSWER_MODES.map((m) => (
+              <label key={m.value} className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="answerMode"
+                  value={m.value}
+                  checked={answerMode === m.value}
+                  onChange={() => setAnswerMode(m.value)}
+                  className="mt-1 accent-[var(--color-primary)]"
+                />
+                <span>
+                  <span className="font-medium text-[var(--color-foreground)]">{m.label}</span>
+                  <span className="block text-xs text-[var(--color-muted-foreground)]">{m.hint}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
         </CardContent>
       </Card>
 
