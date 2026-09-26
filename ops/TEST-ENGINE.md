@@ -17,6 +17,26 @@ result → review
 
 Test types only supply data and configuration. There is no per-type player.
 
+## Setup vs. player vs. policy
+
+- **UniversalTestSetup** (`components/student/universal-test-setup.tsx`) is the
+  one pre-test configuration form, used by **Custom Module** and **Subject
+  Test**: subject, topic, source, year, difficulty, question count (1 up to
+  the eligible pool, never padded), time mode (1 min/question default,
+  unlimited, custom) and answer mode (exam, instant). Filters never appear
+  inside the running player.
+- **UniversalTestPlayer** (`run/test-player.tsx`) runs every attempt.
+- **Policy is per test type and enforced server-side.** Mock Test, Previous
+  Year Paper, Grand and Live are *formal*: admin-defined question set and
+  timing, `answerMode = EXAM`, `durationMode = FIXED`.
+  `createAttemptFromQuestions` forces this for formal sources whatever a
+  caller passes, and `revealAnswer` refuses formal attempts. Hiding buttons
+  is never the control.
+- **PYQ full paper** freezes the whole published paper in original order
+  (question `createdAt`, then `code`). It is never sampled or shuffled.
+  PYQ-only practice goes through Custom Module with Source = PYQ.
+- **History is immutable.** Retake/Reattempt always creates a new attempt.
+
 ## Frozen per attempt
 
 When an attempt is created, these are fixed on it and never re-derived:

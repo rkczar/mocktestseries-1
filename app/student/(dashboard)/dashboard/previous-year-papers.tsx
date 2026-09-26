@@ -109,6 +109,10 @@ function PaperActions({ paper: p }: { paper: DashboardPaperView }) {
         <Button asChild size="sm" variant="outline">
           <Link href={`/student/attempt/${p.lastSubmittedAttemptId}/result`}>View Result</Link>
         </Button>
+        {/* The review page applies the existing result/answer release rules itself. */}
+        <Button asChild size="sm" variant="outline">
+          <Link href={`/student/attempt/${p.lastSubmittedAttemptId}/review`}>Review</Link>
+        </Button>
         <form action={startPaperFromExamAction.bind(null, p.id)}>
           <StartButton label="Reattempt" variant="ghost" />
         </form>

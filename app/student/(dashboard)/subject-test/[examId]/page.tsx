@@ -32,10 +32,9 @@ export default async function SubjectTestExamPage({
           id: setup.exam.id,
           name: setup.exam.name,
           instructions: setup.exam.instructions,
-          durationMinutes: setup.exam.durationMinutes,
+          subjects: setup.exam.subjects,
+          years: setup.years,
         }}
-        subjects={setup.exam.subjects}
-        years={setup.years}
         initialSubjectId={subjectId && setup.exam.subjects.some((s) => s.id === subjectId) ? subjectId : undefined}
       />
     </div>

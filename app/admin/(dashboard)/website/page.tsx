@@ -10,6 +10,7 @@ import NavigationPage from "./navigation/page";
 import FooterPage from "./footer/page";
 import AppearancePage from "./appearance/page";
 import WebsiteDiagramPage from "./diagram/page";
+import { StudentDashboardPanel } from "./student-dashboard/panel";
 
 export const metadata = { title: "Website — Mock Test Series.in Admin" };
 
@@ -58,7 +59,7 @@ export default function WebsiteControlCenter() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Website</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          Homepage, content, navigation, appearance, and the site&apos;s live architecture diagram.
+          Homepage, content, navigation, Student Dashboard, appearance, and the site&apos;s live architecture diagram.
         </p>
       </div>
 
@@ -89,6 +90,7 @@ export default function WebsiteControlCenter() {
               </div>
             ),
           },
+          { value: "student-dashboard", label: "Student Dashboard", content: <StudentDashboardPanel /> },
           { value: "appearance", label: "Appearance", content: <AppearancePage /> },
           { value: "diagram", label: "Website Diagram", content: <WebsiteDiagramPage /> },
         ]}

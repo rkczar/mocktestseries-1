@@ -82,6 +82,21 @@ export function instantAnswerAllowed(sourceType: AttemptSourceType, opts: { stud
   return false;
 }
 
+/**
+ * Formal tests: admin-defined question set, admin-defined timing, EXAM mode
+ * only. Enforced where every attempt is created (createAttemptFromQuestions)
+ * and again on reveal — never just by hiding UI.
+ */
+const FORMAL_SOURCES: ReadonlySet<AttemptSourceType> = new Set([
+  AttemptSourceType.MOCK_TEST,
+  AttemptSourceType.PREVIOUS_YEAR_PAPER,
+  AttemptSourceType.GRAND_TEST,
+  AttemptSourceType.LIVE_TEST,
+]);
+export function isFormalSource(sourceType: AttemptSourceType): boolean {
+  return FORMAL_SOURCES.has(sourceType);
+}
+
 /** Legacy source-grouping → production-facing test type, kept in one place. */
 const TEST_TYPE_BY_SOURCE: Record<AttemptSourceType, TestType> = {
   [AttemptSourceType.MOCK_TEST]: TestType.FULL_MOCK,
@@ -161,6 +176,12 @@ async function createAttemptFromQuestions(params: {
   // Never silently duplicate a question to pad a set.
   const questions = params.questions.filter((q, i, all) => all.findIndex((x) => x.id === q.id) === i);
 
+  // Formal-test policy overrides any practice capability a caller passes:
+  // Mock / PYQ / Grand / Live always run in EXAM mode on their fixed timing.
+  const formal = isFormalSource(params.sourceType);
+  const durationMode = formal ? AttemptDurationMode.FIXED : (params.durationMode ?? AttemptDurationMode.FIXED);
+  const answerMode = formal ? AttemptAnswerMode.EXAM : (params.answerMode ?? AttemptAnswerMode.EXAM);
+
   // The attempt, its frozen question snapshots and one UNANSWERED Answer per
   // question are written in ONE transaction: a half-created attempt (row but
   // no questions) used to be resumable and crashed the player.
@@ -180,8 +201,8 @@ async function createAttemptFromQuestions(params: {
       topicIds: params.topicIds && params.topicIds.length > 0 ? params.topicIds : undefined,
       selection: (params.selection ?? undefined) as Prisma.InputJsonValue | undefined,
       durationMinutes: params.durationMinutes,
-      durationMode: params.durationMode ?? AttemptDurationMode.FIXED,
-      answerMode: params.answerMode ?? AttemptAnswerMode.EXAM,
+      durationMode,
+      answerMode,
       negativeMarking: params.negativeMarking,
       totalQuestions: questions.length,
       entryMode: params.entryMode ?? AttemptEntryMode.ONLINE,
@@ -456,8 +477,11 @@ export async function startPreviousYearPaperAttempt(studentId: string, paperId: 
   });
   if (!paper) throw new Error("This paper is not available.");
 
+  // Full-paper integrity: the whole published paper in its original order
+  // (import order = paper order; code breaks ties). Never sampled or shuffled.
   const questions = await prisma.question.findMany({
     where: { previousYearPaperId: paperId, status: QuestionStatus.PUBLISHED },
+    orderBy: [{ createdAt: "asc" }, { code: "asc" }],
     include: { options: true },
   });
 
@@ -480,6 +504,25 @@ export interface SubjectTestSelection extends QuestionSelectionFilters {
   minutesPerQuestion?: number;
   /** Student-practice answer mode; INSTANT is permitted for subject practice (instantAnswerAllowed). */
   answerMode?: AttemptAnswerMode;
+  /**
+   * UniversalTestSetup time choice. When set, the frozen minutes come from
+   * practiceDurationMinutes (PER_QUESTION = effective count, UNLIMITED =
+   * untimed, CUSTOM = customMinutes). Unset keeps the legacy behaviour.
+   */
+  durationMode?: AttemptDurationMode;
+  customMinutes?: number;
+}
+
+function subjectTestTiming(selection: SubjectTestSelection, effectiveCount: number) {
+  if (selection.durationMode) {
+    return {
+      durationMode: selection.durationMode,
+      durationMinutes: practiceDurationMinutes(selection.durationMode, effectiveCount, selection.customMinutes),
+    };
+  }
+  return selection.minutesPerQuestion
+    ? { durationMode: AttemptDurationMode.PER_QUESTION, durationMinutes: effectiveCount * selection.minutesPerQuestion }
+    : { durationMode: AttemptDurationMode.CUSTOM, durationMinutes: selection.durationMinutes };
 }
 
 /**
@@ -526,8 +569,7 @@ export async function startSubjectTestAttempt(studentId: string, selection: Subj
       subTopicIds: selection.subTopicId ? [selection.subTopicId] : null,
       subjects: [{ id: selection.subjectId, name: subject?.name ?? null }],
     },
-    durationMinutes: selection.minutesPerQuestion ? questions.length * selection.minutesPerQuestion : selection.durationMinutes,
-    durationMode: selection.minutesPerQuestion ? AttemptDurationMode.PER_QUESTION : AttemptDurationMode.CUSTOM,
+    ...subjectTestTiming(selection, questions.length),
     answerMode: selection.answerMode === AttemptAnswerMode.INSTANT ? AttemptAnswerMode.INSTANT : AttemptAnswerMode.EXAM,
     negativeMarking: 0,
     questions: questions as unknown as QuestionWithOptions[],
@@ -536,6 +578,7 @@ export async function startSubjectTestAttempt(studentId: string, selection: Subj
 
 const EDITABLE_ATTEMPT_SELECT = {
   id: true,
+  sourceType: true,
   status: true,
   startedAt: true,
   durationMinutes: true,
@@ -646,7 +689,7 @@ export async function revealAnswer(
 ): Promise<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean }> {
   if (!selectedOptionLabel) throw new TestEngineError("NO_SELECTION", "Choose an option before checking the answer.");
   const { attempt, attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, selectedOptionLabel);
-  if (attempt.answerMode !== AttemptAnswerMode.INSTANT) {
+  if (attempt.answerMode !== AttemptAnswerMode.INSTANT || isFormalSource(attempt.sourceType)) {
     throw new TestEngineError("NOT_ALLOWED", "Answers are shown after you submit this test.");
   }
 

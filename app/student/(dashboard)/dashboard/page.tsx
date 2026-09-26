@@ -17,6 +17,7 @@ import { getDashboardPaperViews, type DashboardPaperView } from "./pyq-view";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 import { ensureDefaultExamEnrollment } from "@/lib/default-enrollment";
 import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
+import { getStudentDashboardLayout } from "@/lib/student-dashboard-layout";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
@@ -47,7 +48,7 @@ export default async function StudentDashboardPage() {
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet] = await Promise.all([
+  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet, layout] = await Promise.all([
     activeExamId
       ? Promise.all([
           getExamScopedDashboardMetrics(student.id, activeExamId),
@@ -57,6 +58,7 @@ export default async function StudentDashboardPage() {
         ])
       : Promise.all([null, [], getNextScheduledTestForStudent(student.id), [] as DashboardPaperView[]]),
     findPracticeOmrSheet(activeExamId),
+    getStudentDashboardLayout(),
   ]);
   const initialMetrics = toDashboardMetricsView(rawExamMetrics ?? globalMetrics);
   const nextTestCard = nextTest
@@ -94,6 +96,7 @@ export default async function StudentDashboardPage() {
         nextTest={nextTestCard}
         omrResourceId={omrSheet?.id ?? null}
         initialPapers={papers}
+        layout={layout}
         announcements={
           <DashboardAnnouncements
             announcements={dashboardAnnouncements.map((a) => ({

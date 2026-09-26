@@ -134,6 +134,7 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   // in-progress-attempt card.
   { from: "/student/dashboard", to: "/student/attempt/[attemptId]/run", source: "button", label: "Continue in-progress attempt" },
   { from: "/student/dashboard", to: "/student/attempt/[attemptId]", source: "form", label: "Previous Year Papers: Start → startPreviousYearPaperAttempt (resumes IN_PROGRESS) → canonical attempt" },
+  { from: "/admin/website", to: "/student/dashboard", source: "internal", label: "Website → Student Dashboard tab: show/hide + order of dashboard blocks (MASTER_ADMIN)" },
 
   // app/student/attempt/[attemptId]/result/page.tsx:69 — "Back to Dashboard" link.
   { from: "/student/attempt/[attemptId]/result", to: "/student/dashboard", source: "button", label: "Back to Dashboard" },
