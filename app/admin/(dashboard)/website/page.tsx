@@ -81,7 +81,7 @@ export default function WebsiteControlCenter() {
           },
           {
             value: "navigation",
-            label: "Navigation",
+            label: "Navigation & Footer",
             content: (
               <div className="flex flex-col gap-8">
                 <NavigationPage />
