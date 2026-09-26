@@ -17,8 +17,7 @@ import {
   AlertTriangle,
   BarChart3,
   Bookmark,
-  BookOpenCheck,
-  FileText,
+  FileDown,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,24 +28,23 @@ import { formatIst } from "@/lib/ist-time";
 import { getActiveExamDashboardDataAction } from "./actions";
 import { TestOnTheGo } from "./test-on-the-go";
 import type { DashboardMetricsView } from "./metrics-view";
-import { OmrPracticeCard } from "@/components/omr/omr-practice-card";
+import type { DashboardPaperView } from "./pyq-view";
+import { PreviousYearPapers } from "./previous-year-papers";
+import { omrDownloadHref } from "@/components/omr/omr-practice-card";
 
-// Primary study/test actions — the Practice / Tests block, after Progress &
-// Tools. Test Schedule shares Test Series' route (the schedule
-// lives there), so links are keyed by label, not href.
+// Practice & Tests — every test/practice entry point, one card per action.
+// Mock Tests covers the schedule too (it lives on the Test Series page).
 const PRACTICE_LINKS = [
+  { label: "Mock Tests", href: "/student/test-series", icon: ClipboardList, description: "Test series & schedule" },
   { label: "Subject Test", href: "/student/subject-test", icon: BookOpen, description: "Practice by subject" },
-  { label: "Test Series", href: "/student/test-series", icon: ClipboardList, description: "Scheduled mock tests" },
-  { label: "Test Schedule", href: "/student/test-series", icon: CalendarClock, description: "See upcoming release dates" },
-  { label: "Custom Module", href: "/student/custom-module", icon: ListChecks, description: "Focused practice sets" },
+  { label: "Custom Module", href: "/student/custom-module", icon: ListChecks, description: "Build your own practice set" },
 ];
 
-// Progress & tools — directly after Performance Summary.
-const TOOL_LINKS = [
+// Overview links — where the numbers in Performance Summary come from.
+const OVERVIEW_LINKS = [
   { label: "Analytics", href: "/student/analytics", icon: BarChart3, description: "Your performance breakdown" },
   { label: "History", href: "/student/history", icon: HistoryIcon, description: "Your past attempts" },
   { label: "My Exams", href: "/student/exams", icon: GraduationCap, description: "Browse exams, subjects and papers" },
-  { label: "Practice with OMR", href: "/student/omr", icon: FileText, description: "Simulate the pen-and-paper exam" },
 ];
 
 interface NextTestCard {
@@ -109,6 +107,7 @@ export function ActiveExamDashboard({
   studyStreak,
   nextTest: initialNextTest,
   omrResourceId = null,
+  initialPapers,
   announcements = null,
   footer = null,
 }: {
@@ -119,6 +118,7 @@ export function ActiveExamDashboard({
   studyStreak: number;
   nextTest: NextTestCard | null;
   omrResourceId?: string | null;
+  initialPapers: DashboardPaperView[];
   /** Server-rendered announcements — rendered first, directly under Welcome Back. */
   announcements?: React.ReactNode;
   /** Lower-priority server-rendered content (subscription status), rendered last. */
@@ -128,6 +128,7 @@ export function ActiveExamDashboard({
   const [metrics, setMetrics] = useState(initialMetrics);
   const [subjects, setSubjects] = useState(initialSubjects);
   const [nextTest, setNextTest] = useState(initialNextTest);
+  const [papers, setPapers] = useState(initialPapers);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -144,6 +145,7 @@ export function ActiveExamDashboard({
         setMetrics(data.metrics);
         setSubjects(data.subjects);
         setNextTest(data.nextTest);
+        setPapers(data.papers);
       } catch (error) {
         setSwitchError(error instanceof Error ? error.message : "Could not switch exams.");
       }
@@ -222,7 +224,7 @@ export function ActiveExamDashboard({
         </Card>
       )}
 
-      {/* 3. Performance Summary — right after the active exam. */}
+      {/* A. Overview — Performance Summary plus where those numbers come from. */}
       <section aria-labelledby="performance-summary" className="flex flex-col gap-3">
         <h2 id="performance-summary" className="text-sm font-semibold text-[var(--color-foreground)]">
           Performance Summary{activeExam ? <span className="font-normal text-[var(--color-muted-foreground)]"> · {activeExam.name}</span> : null}
@@ -238,197 +240,190 @@ export function ActiveExamDashboard({
             value={metrics.averageScore !== null ? metrics.averageScore.toFixed(1) : "—"}
           />
         </div>
-      </section>
-
-      {/* 4. Your Progress & Tools */}
-      <section aria-labelledby="progress-tools" className="flex flex-col gap-3">
-        <h2 id="progress-tools" className="text-sm font-semibold text-[var(--color-foreground)]">
-          Your Progress &amp; Tools
-        </h2>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {TOOL_LINKS.map((link) => (
+          {OVERVIEW_LINKS.map((link) => (
             <QuickLinkCard key={link.label} {...link} />
           ))}
+          <QuickLinkCard
+            label="Saved Questions"
+            href="/student/saved"
+            icon={Bookmark}
+            description={`${metrics.savedQuestionsCount} ${activeExamId ? `saved in ${activeExam?.name ?? "this exam"}` : "saved · All Exams"}`}
+          />
         </div>
       </section>
 
-      {/* 5. Practice / Tests — resume, schedule, practice links, OMR, Test on the Go */}
-      {metrics.inProgress ? (
-        <Card className="border-[var(--color-primary)]/40">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
-            <div>
-              <p className="text-sm font-medium text-[var(--color-foreground)]">Continue: {metrics.inProgress.title}</p>
-              <p className="text-sm text-[var(--color-muted-foreground)]">{metrics.inProgress.examName}</p>
-            </div>
-            <Button asChild>
-              <Link href={`/student/attempt/${metrics.inProgress.id}/run`}>
-                Continue <ArrowRight className="h-4 w-4" aria-hidden />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {nextTest ? (
-        <Card>
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]">
-                Test Schedule · Next Test
-              </p>
-              <p className="text-sm font-medium text-[var(--color-foreground)]">{nextTest.title}</p>
-              <p className="text-xs text-[var(--color-muted-foreground)]">{nextTest.examName}</p>
-              {nextTest.availability === "LIVE_NOW" ? (
-                <Badge variant="warning" className="mt-1 w-fit">
-                  Live Now{nextTest.availableUntil ? ` · Ends ${formatIst(new Date(nextTest.availableUntil))}` : ""}
-                </Badge>
-              ) : nextTest.availability === "AVAILABLE" ? (
-                <Badge variant="success" className="mt-1 w-fit">
-                  Available Now
-                </Badge>
-              ) : nextTest.availableFrom ? (
-                <>
-                  <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">{formatIst(new Date(nextTest.availableFrom))}</p>
-                  <Countdown target={new Date(nextTest.availableFrom)} />
-                </>
-              ) : null}
-            </div>
-            <Button asChild variant={nextTest.availability !== "UPCOMING" ? "primary" : "outline"}>
-              <Link href={nextTest.availability !== "UPCOMING" ? `/student/test-series/${nextTest.mockTestId}` : "/student/test-series"}>
-                {nextTest.availability !== "UPCOMING" ? "Start Test" : "View Full Schedule"}
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {/* 5b. Start Practicing — primary study/test actions */}
-      <section aria-labelledby="start-practicing" className="flex flex-col gap-3">
-        <h2 id="start-practicing" className="text-sm font-semibold text-[var(--color-foreground)]">
-          Start Practicing
+      {/* B. Practice & Tests — every test/practice entry point in one place. */}
+      <section aria-labelledby="practice-tests" className="flex flex-col gap-3">
+        <h2 id="practice-tests" className="text-sm font-semibold text-[var(--color-foreground)]">
+          Practice &amp; Tests
         </h2>
+
+        {nextTest ? (
+          <Card>
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]">
+                  <CalendarClock className="mr-1 inline h-3.5 w-3.5 align-[-2px]" aria-hidden />
+                  Test Schedule · Next Test
+                </p>
+                <p className="text-sm font-medium text-[var(--color-foreground)]">{nextTest.title}</p>
+                <p className="text-xs text-[var(--color-muted-foreground)]">{nextTest.examName}</p>
+                {nextTest.availability === "LIVE_NOW" ? (
+                  <Badge variant="warning" className="mt-1 w-fit">
+                    Live Now{nextTest.availableUntil ? ` · Ends ${formatIst(new Date(nextTest.availableUntil))}` : ""}
+                  </Badge>
+                ) : nextTest.availability === "AVAILABLE" ? (
+                  <Badge variant="success" className="mt-1 w-fit">
+                    Available Now
+                  </Badge>
+                ) : nextTest.availableFrom ? (
+                  <>
+                    <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">{formatIst(new Date(nextTest.availableFrom))}</p>
+                    <Countdown target={new Date(nextTest.availableFrom)} />
+                  </>
+                ) : null}
+              </div>
+              <Button asChild variant={nextTest.availability !== "UPCOMING" ? "primary" : "outline"}>
+                <Link href={nextTest.availability !== "UPCOMING" ? `/student/test-series/${nextTest.mockTestId}` : "/student/test-series"}>
+                  {nextTest.availability !== "UPCOMING" ? "Start Test" : "View Full Schedule"}
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
+
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {PRACTICE_LINKS.map((link) => (
             <QuickLinkCard key={link.label} {...link} />
           ))}
+          {omrResourceId ? (
+            // Direct download of the canonical branded OMR sheet — no intermediate page.
+            <a href={omrDownloadHref(omrResourceId)} download>
+              <QuickLinkCardBody label="Practice OMR Sheet" icon={FileDown} description="Download the printable OMR sheet" />
+            </a>
+          ) : null}
         </div>
-      </section>
 
-      {/* 5c. Practice Resources — the canonical branded OMR sheet */}
-      {omrResourceId ? (
-        <section aria-labelledby="practice-resources" className="flex flex-col gap-3">
-          <h2 id="practice-resources" className="text-sm font-semibold text-[var(--color-foreground)]">
-            Practice Resources
-          </h2>
-          <OmrPracticeCard resourceId={omrResourceId} context="dashboard" />
-        </section>
-      ) : null}
+        {activeExamId && subjects.length > 0 ? <TestOnTheGo examId={activeExamId} subjects={subjects} /> : null}
 
-      {activeExamId && subjects.length > 0 ? <TestOnTheGo examId={activeExamId} subjects={subjects} /> : null}
-
-      {activeExamId && subjects.length > 0 ? (
-        <div className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold text-[var(--color-foreground)]">
-            Subjects in {activeExam?.name ?? "Active Exam"}
-          </h2>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {subjects.map((s) => (
-              <Link key={s.id} href={`/student/subject-test/${activeExamId}?subjectId=${s.id}`}>
-                <Card className="h-full transition-shadow hover:shadow-md">
-                  <CardContent className="flex flex-col gap-1 pt-5">
-                    <p className="font-medium text-[var(--color-foreground)]">{s.name}</p>
-                    <p className="text-xs text-[var(--color-muted-foreground)]">{s.questionCount} Questions</p>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {/* 6. Recent Tests — unchanged card, below the practice sections */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Test</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {metrics.recentTest ? (
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium text-[var(--color-foreground)]">{metrics.recentTest.title}</p>
-                <p className="text-sm text-[var(--color-muted-foreground)]">
-                  {metrics.recentTest.score?.toFixed(1) ?? "—"} / {metrics.recentTest.maxScore}
-                </p>
-              </div>
-              <Button asChild size="sm" variant="outline">
-                <Link href={`/student/attempt/${metrics.recentTest.id}/result`}>View</Link>
-              </Button>
-            </div>
-          ) : (
-            <p className="text-sm text-[var(--color-muted-foreground)]">No completed tests yet.</p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* 7. Lower-priority: Weak Topics, Saved Questions, subscription */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-[var(--color-warning)]" aria-hidden /> Weak Topics
-          </CardTitle>
-          <CardDescription>Where you&apos;ve gotten the most questions wrong recently</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {metrics.weakTopics.length === 0 ? (
-            <p className="text-sm text-[var(--color-muted-foreground)]">Not enough data yet — keep practicing.</p>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {metrics.weakTopics.map((t) => (
-                <div key={t.topicId} className="flex items-center justify-between text-sm">
-                  <span className="text-[var(--color-foreground)]">{t.name}</span>
-                  <span className="text-[var(--color-muted-foreground)]">{t.incorrectCount} wrong</span>
-                </div>
+        {activeExamId && subjects.length > 0 ? (
+          <div className="flex flex-col gap-3">
+            <h3 className="text-sm font-medium text-[var(--color-muted-foreground)]">
+              Subjects in {activeExam?.name ?? "Active Exam"}
+            </h3>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {subjects.map((s) => (
+                <Link key={s.id} href={`/student/subject-test/${activeExamId}?subjectId=${s.id}`}>
+                  <Card className="h-full transition-shadow hover:shadow-md">
+                    <CardContent className="flex flex-col gap-1 pt-5">
+                      <p className="font-medium text-[var(--color-foreground)]">{s.name}</p>
+                      <p className="text-xs text-[var(--color-muted-foreground)]">{s.questionCount} Questions</p>
+                    </CardContent>
+                  </Card>
+                </Link>
               ))}
             </div>
-          )}
-        </CardContent>
-      </Card>
+          </div>
+        ) : null}
+      </section>
 
-      <Link href="/student/saved">
-        <Card className="transition-shadow hover:shadow-md">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-5">
-            <div className="flex items-center gap-3">
-              <Bookmark className="h-6 w-6 text-[var(--color-primary)]" aria-hidden />
+      {/* C. Previous Year Papers — real papers of the active exam, Start / Resume / Result. */}
+      {activeExamId ? <PreviousYearPapers papers={papers} examId={activeExamId} examName={activeExam?.name ?? "Active Exam"} /> : null}
+
+      {/* D. Recent Activity — continue an attempt, latest result, weak topics. */}
+      <section aria-labelledby="recent-activity" className="flex flex-col gap-3">
+        <h2 id="recent-activity" className="text-sm font-semibold text-[var(--color-foreground)]">
+          Recent Activity
+        </h2>
+
+        {metrics.inProgress ? (
+          <Card className="border-[var(--color-primary)]/40">
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
               <div>
-                <p className="font-medium text-[var(--color-foreground)]">Saved Questions</p>
-                <p className="text-sm text-[var(--color-muted-foreground)]">
-                  {metrics.savedQuestionsCount} {activeExamId ? `saved in ${activeExam?.name ?? "this exam"}` : "saved · All Exams"}
-                </p>
+                <p className="text-sm font-medium text-[var(--color-foreground)]">Continue: {metrics.inProgress.title}</p>
+                <p className="text-sm text-[var(--color-muted-foreground)]">{metrics.inProgress.examName}</p>
               </div>
-            </div>
-            <Button size="sm" variant="outline" tabIndex={-1} className="pointer-events-none">
-              <BookOpenCheck className="h-4 w-4" aria-hidden /> View Saved
-            </Button>
+              <Button asChild>
+                <Link href={`/student/attempt/${metrics.inProgress.id}/run`}>
+                  Continue <ArrowRight className="h-4 w-4" aria-hidden />
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent Test</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {metrics.recentTest ? (
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-[var(--color-foreground)]">{metrics.recentTest.title}</p>
+                  <p className="text-sm text-[var(--color-muted-foreground)]">
+                    {metrics.recentTest.score?.toFixed(1) ?? "—"} / {metrics.recentTest.maxScore}
+                  </p>
+                </div>
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/student/attempt/${metrics.recentTest.id}/result`}>View</Link>
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm text-[var(--color-muted-foreground)]">No completed tests yet.</p>
+            )}
           </CardContent>
         </Card>
-      </Link>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-[var(--color-warning)]" aria-hidden /> Weak Topics
+            </CardTitle>
+            <CardDescription>Where you&apos;ve gotten the most questions wrong recently</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {metrics.weakTopics.length === 0 ? (
+              <p className="text-sm text-[var(--color-muted-foreground)]">Not enough data yet — keep practicing.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {metrics.weakTopics.map((t) => (
+                  <div key={t.topicId} className="flex items-center justify-between text-sm">
+                    <span className="text-[var(--color-foreground)]">{t.name}</span>
+                    <span className="text-[var(--color-muted-foreground)]">{t.incorrectCount} wrong</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
 
       {footer}
     </div>
   );
 }
 
-function QuickLinkCard({ label, href, icon: Icon, description }: (typeof PRACTICE_LINKS)[number]) {
+type QuickLink = { label: string; href: string; icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>; description: string };
+
+function QuickLinkCard({ href, ...body }: QuickLink) {
   return (
     <Link href={href}>
-      <Card className="h-full transition-shadow hover:shadow-md">
-        <CardContent className="flex flex-col gap-2 pt-5">
-          <Icon className="h-6 w-6 text-[var(--color-primary)]" aria-hidden />
-          <p className="font-medium text-[var(--color-foreground)]">{label}</p>
-          <p className="text-sm text-[var(--color-muted-foreground)]">{description}</p>
-        </CardContent>
-      </Card>
+      <QuickLinkCardBody {...body} />
     </Link>
+  );
+}
+
+function QuickLinkCardBody({ label, icon: Icon, description }: Omit<QuickLink, "href">) {
+  return (
+    <Card className="h-full transition-shadow hover:shadow-md">
+      <CardContent className="flex flex-col gap-2 pt-5">
+        <Icon className="h-6 w-6 text-[var(--color-primary)]" aria-hidden />
+        <p className="font-medium text-[var(--color-foreground)]">{label}</p>
+        <p className="text-sm text-[var(--color-muted-foreground)]">{description}</p>
+      </CardContent>
+    </Card>
   );
 }
 

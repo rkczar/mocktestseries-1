@@ -2,9 +2,11 @@
 
 /**
  * TEST ENGINE CORE — HIGH RISK SHARED PATH.
- * Changes to option selection, answer persistence, navigation, attempt
- * snapshots, timer, submission or answer reveal require the focused
- * test-engine regression suite before deployment (see ops/TEST-ENGINE.md).
+ * Mock, PYQ, Subject Test and Custom Module depend on this player.
+ * Do not create test-type-specific player forks.
+ * Changes require focused test-engine regression verification: option
+ * selection, answer persistence, navigation, attempt snapshots, timer,
+ * submission and answer reveal (see ops/TEST-ENGINE.md).
  *
  * The ONE student test player for every attemptable test type (Mock, PYQ,
  * Custom Module, Subject Test, Grand/Live). Test types only supply data.

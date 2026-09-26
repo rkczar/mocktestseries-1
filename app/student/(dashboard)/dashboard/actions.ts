@@ -11,6 +11,7 @@ import {
 import { startSubjectTestAttempt, type SubjectTestSelection } from "@/lib/test-attempt";
 import { InsufficientQuestionsError, NoQuestionsAvailableError } from "@/lib/question-selection";
 import { toDashboardMetricsView } from "./metrics-view";
+import { getDashboardPaperViews } from "./pyq-view";
 
 export interface TestOnTheGoFormState {
   error?: string;
@@ -27,10 +28,11 @@ export async function getActiveExamDashboardDataAction(examId: string) {
   const enrolled = await isStudentEnrolledInExam(student.id, examId);
   if (!enrolled) throw new Error("You are not enrolled in this exam.");
 
-  const [rawMetrics, subjects, nextTestRow] = await Promise.all([
+  const [rawMetrics, subjects, nextTestRow, papers] = await Promise.all([
     getExamScopedDashboardMetrics(student.id, examId),
     getExamSubjectsOverview(examId),
     getNextScheduledTestForStudent(student.id, examId),
+    getDashboardPaperViews(student.id, examId),
   ]);
   const nextTest = nextTestRow
     ? {
@@ -42,7 +44,7 @@ export async function getActiveExamDashboardDataAction(examId: string) {
         availableUntil: nextTestRow.mockTest.availableUntil ? nextTestRow.mockTest.availableUntil.toISOString() : null,
       }
     : null;
-  return { metrics: toDashboardMetricsView(rawMetrics), subjects, nextTest };
+  return { metrics: toDashboardMetricsView(rawMetrics), subjects, nextTest, papers };
 }
 
 function str(formData: FormData, key: string): string {

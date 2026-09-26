@@ -383,6 +383,52 @@ export async function getPreviousYearPaperForStudent(paperId: string, studentId:
   return { paper, attempts };
 }
 
+/**
+ * Student Dashboard → Previous Year Papers: the active papers of one exam
+ * that have at least one PUBLISHED question (an empty paper can't start),
+ * with this student's attempts on them. Two queries total, no per-paper
+ * lookups. Attempts come back newest first, so the first IN_PROGRESS /
+ * SUBMITTED row per paper is the one to Resume / show the Result for.
+ */
+export async function getDashboardPreviousYearPapers(studentId: string, examId: string) {
+  const papers = await prisma.previousYearPaper.findMany({
+    where: { examId, isActive: true, questions: { some: { status: QuestionStatus.PUBLISHED } } },
+    orderBy: [{ year: "desc" }, { order: "asc" }, { title: "asc" }],
+    select: {
+      id: true,
+      title: true,
+      year: true,
+      paperCode: true,
+      examId: true,
+      _count: { select: { questions: { where: { status: QuestionStatus.PUBLISHED } } } },
+    },
+  });
+  if (papers.length === 0) return [];
+
+  const attempts = await prisma.testAttempt.findMany({
+    where: { studentId, previousYearPaperId: { in: papers.map((p) => p.id) } },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, previousYearPaperId: true, status: true },
+  });
+  const inProgress = new Map<string, string>();
+  const submitted = new Map<string, string>();
+  for (const a of attempts) {
+    const map = a.status === AttemptStatus.IN_PROGRESS ? inProgress : a.status === AttemptStatus.SUBMITTED ? submitted : null;
+    if (map && a.previousYearPaperId && !map.has(a.previousYearPaperId)) map.set(a.previousYearPaperId, a.id);
+  }
+
+  return papers.map((p) => ({
+    id: p.id,
+    title: p.title,
+    year: p.year,
+    paperCode: p.paperCode,
+    examId: p.examId,
+    questionCount: p._count.questions,
+    inProgressAttemptId: inProgress.get(p.id) ?? null,
+    lastSubmittedAttemptId: submitted.get(p.id) ?? null,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Subject Test (unified test engine — Step 3)
 // ---------------------------------------------------------------------------

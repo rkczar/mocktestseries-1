@@ -13,6 +13,7 @@ import { SubscriptionStatusCard } from "@/components/student/subscription-status
 import { ActiveExamDashboard } from "./active-exam-dashboard";
 import { DashboardAnnouncements } from "./dashboard-announcements";
 import { toDashboardMetricsView } from "./metrics-view";
+import { getDashboardPaperViews, type DashboardPaperView } from "./pyq-view";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 import { ensureDefaultExamEnrollment } from "@/lib/default-enrollment";
 import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
@@ -46,15 +47,17 @@ export default async function StudentDashboardPage() {
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const [rawExamMetrics, subjects, nextTest] = activeExamId
-    ? await Promise.all([
-        getExamScopedDashboardMetrics(student.id, activeExamId),
-        getExamSubjectsOverview(activeExamId),
-        getNextScheduledTestForStudent(student.id, activeExamId),
-      ])
-    : [null, [], await getNextScheduledTestForStudent(student.id)];
-
-  const omrSheet = await findPracticeOmrSheet(activeExamId);
+  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet] = await Promise.all([
+    activeExamId
+      ? Promise.all([
+          getExamScopedDashboardMetrics(student.id, activeExamId),
+          getExamSubjectsOverview(activeExamId),
+          getNextScheduledTestForStudent(student.id, activeExamId),
+          getDashboardPaperViews(student.id, activeExamId),
+        ])
+      : Promise.all([null, [], getNextScheduledTestForStudent(student.id), [] as DashboardPaperView[]]),
+    findPracticeOmrSheet(activeExamId),
+  ]);
   const initialMetrics = toDashboardMetricsView(rawExamMetrics ?? globalMetrics);
   const nextTestCard = nextTest
     ? {
@@ -90,6 +93,7 @@ export default async function StudentDashboardPage() {
         studyStreak={globalMetrics.studyStreak}
         nextTest={nextTestCard}
         omrResourceId={omrSheet?.id ?? null}
+        initialPapers={papers}
         announcements={
           <DashboardAnnouncements
             announcements={dashboardAnnouncements.map((a) => ({

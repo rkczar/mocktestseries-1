@@ -64,10 +64,10 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/admin/students/deletion-requests", to: "/login", source: "redirect", label: "Approve → Old Session → Login" },
   { from: "/login", to: "/student/dashboard", source: "form", label: "Same Email / Phone / Google → New Student Registration → New Student ID → Default Exam Enrollment (RUHS MO, idempotent)" },
   { from: "/student/dashboard", to: "/student/exams", source: "card", label: "Your Active Exam (default-enrolled) · My Exams" },
-  { from: "/student/dashboard", to: "/student/subject-test", source: "card", label: "Start Practicing: Subject Test" },
-  { from: "/student/dashboard", to: "/student/test-series", source: "card", label: "Start Practicing: Test Series / Test Schedule (Scheduled Mock Tests)" },
-  { from: "/student/dashboard", to: "/student/custom-module", source: "card", label: "Start Practicing: Custom Module" },
-  { from: "/student/dashboard", to: "/student/history", source: "card", label: "Your Progress & Tools: History" },
+  { from: "/student/dashboard", to: "/student/subject-test", source: "card", label: "Practice & Tests: Subject Test" },
+  { from: "/student/dashboard", to: "/student/test-series", source: "card", label: "Practice & Tests: Mock Tests (Test Series + Test Schedule)" },
+  { from: "/student/dashboard", to: "/student/custom-module", source: "card", label: "Practice & Tests: Custom Module" },
+  { from: "/student/dashboard", to: "/student/history", source: "card", label: "Overview: History" },
   { from: "/student/dashboard", to: "/student/test-series/[mockTestId]", source: "card", label: "Next Test → Mock Test Details (Start)" },
   { from: "/student/subject-test", to: "/student/subject-test/[examId]", source: "card", label: "Choose exam → Subject Test builder" },
   { from: "/student/subject-test/[examId]", to: "/student/attempt/[attemptId]", source: "form", label: "Subject → eligible count → effective = min(requested, available) → TestAttempt (0 available: blocked)" },
@@ -133,6 +133,7 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   // app/student/(dashboard)/dashboard/page.tsx — "Continue" button on the
   // in-progress-attempt card.
   { from: "/student/dashboard", to: "/student/attempt/[attemptId]/run", source: "button", label: "Continue in-progress attempt" },
+  { from: "/student/dashboard", to: "/student/attempt/[attemptId]", source: "form", label: "Previous Year Papers: Start → startPreviousYearPaperAttempt (resumes IN_PROGRESS) → canonical attempt" },
 
   // app/student/attempt/[attemptId]/result/page.tsx:69 — "Back to Dashboard" link.
   { from: "/student/attempt/[attemptId]/result", to: "/student/dashboard", source: "button", label: "Back to Dashboard" },
@@ -268,7 +269,7 @@ ROUTE_CONNECTIONS.push(
     from: "/student/dashboard",
     to: "/student/dashboard#announcements",
     source: "card",
-    label: "Welcome → Announcement → Active Examination → Performance Summary → Progress & Tools → Practice / Tests → Recent Tests",
+    label: "Welcome → Announcement → Active Examination → Overview (Performance Summary) → Practice & Tests → Previous Year Papers → Recent Activity",
   },
 );
 
@@ -276,10 +277,10 @@ const OMR_GENERATOR = RESOURCE_NODES[0].route;
 ROUTE_CONNECTIONS.push(
   // components/homepage/homepage-view.tsx — mid-page Practice OMR section (components/omr/omr-practice-card.tsx).
   { from: "/", to: OMR_GENERATOR, source: "card", label: "Homepage: Practice OMR Sheet → Download OMR Sheet (no login)" },
-  // app/student/(dashboard)/dashboard/active-exam-dashboard.tsx — card after the summary tiles.
-  { from: "/student/dashboard", to: OMR_GENERATOR, source: "card", label: "Student Dashboard: Practice OMR Sheet → Download OMR Sheet" },
+  // app/student/(dashboard)/dashboard/active-exam-dashboard.tsx — Practice & Tests card, direct download.
+  { from: "/student/dashboard", to: OMR_GENERATOR, source: "card", label: "Student Dashboard: Practice & Tests → Practice OMR Sheet (direct download)" },
   // Existing OMR CTAs.
-  { from: "/student/omr", to: OMR_GENERATOR, source: "button", label: "Practice with OMR → Download OMR Sheet" },
+  { from: "/student/omr", to: OMR_GENERATOR, source: "redirect", label: "Retired Practice with OMR page → direct OMR download (old links)" },
   { from: "/exams/[slug]", to: OMR_GENERATOR, source: "button", label: "Public Exam Page → Download OMR Sheet" },
   { from: "/exams/[slug]/mock-test-series", to: OMR_GENERATOR, source: "button", label: "Mock Test Series → Practice OMR → Download OMR" },
   { from: "/student/attempt/[attemptId]/result", to: OMR_GENERATOR, source: "button", label: "Result → Print Practice Kit → Download OMR Sheet" },

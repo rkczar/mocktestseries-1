@@ -18,3 +18,14 @@ Key routing rules:
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
 - Author a backlog-ready spec/issue → invoke /spec
+
+## Test engine (high-risk shared core)
+
+Before touching tests, attempts, the Test Player, answer save/reveal, timers,
+submission, result or review, read `ops/TEST-ENGINE.md` (the local
+`test-engine` project skill summarizes it). One canonical player
+(`app/student/attempt/[attemptId]/run/test-player.tsx`) serves Mock, PYQ,
+Subject Test and Custom Module: never fork it per test type, never add a test
+route when `/student/attempt/[attemptId]/*` can do the job, never send correct
+answers to the client before an authorized reveal, and run the focused
+test-engine regression after any shared-player change.
