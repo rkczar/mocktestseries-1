@@ -1,14 +1,3 @@
-"use client";
-
-import { usePathname } from "next/navigation";
-import { cn } from "@/lib/utils";
-
-// The live Test Player (a protected high-risk path). There the button is
-// never floated over the page: it is rendered in normal document flow after
-// every exam control, so it cannot cover options, navigation, the palette,
-// the timer or Submit at any scroll position or viewport size.
-const TEST_PLAYER_PATH = /^\/student\/attempt\/[^/]+\/run\/?$/;
-
 function WhatsAppGlyph({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden focusable="false">
@@ -18,29 +7,18 @@ function WhatsAppGlyph({ className }: { className?: string }) {
 }
 
 export function WhatsAppSupportButton({ href, label }: { href: string; label: string }) {
-  const pathname = usePathname();
-  const inline = TEST_PLAYER_PATH.test(pathname ?? "");
-
-  const button = (
+  return (
     <a
       href={href}
       target="_blank"
       rel="noopener noreferrer"
       aria-label={`${label} on WhatsApp (opens in a new tab)`}
       data-testid="whatsapp-support"
-      data-placement={inline ? "inline" : "floating"}
-      className={cn(
-        "group relative inline-flex h-13 w-13 shrink-0 items-center justify-center rounded-full bg-[#25D366] text-white shadow-lg shadow-black/25 transition-transform duration-150 ease-out hover:scale-105 active:scale-95 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-[var(--color-primary)] sm:h-14 sm:w-14 print:hidden",
-        !inline && "fixed z-40"
-      )}
-      style={
-        inline
-          ? undefined
-          : {
-              right: "calc(1.25rem + env(safe-area-inset-right, 0px))",
-              bottom: "calc(1.25rem + env(safe-area-inset-bottom, 0px))",
-            }
-      }
+      className="group fixed z-40 inline-flex h-13 w-13 shrink-0 items-center justify-center rounded-full bg-[#25D366] text-white shadow-lg shadow-black/25 transition-transform duration-150 ease-out hover:scale-105 active:scale-95 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-[var(--color-primary)] sm:h-14 sm:w-14 print:hidden"
+      style={{
+        right: "calc(1.25rem + env(safe-area-inset-right, 0px))",
+        bottom: "calc(1.25rem + env(safe-area-inset-bottom, 0px))",
+      }}
     >
       <WhatsAppGlyph className="h-7 w-7 sm:h-8 sm:w-8" />
       <span
@@ -50,15 +28,5 @@ export function WhatsAppSupportButton({ href, label }: { href: string; label: st
         {label}
       </span>
     </a>
-  );
-
-  if (!inline) return button;
-  return (
-    <div
-      className="flex justify-end px-4 pt-2 sm:px-6 print:hidden"
-      style={{ paddingBottom: "calc(1.25rem + env(safe-area-inset-bottom, 0px))" }}
-    >
-      {button}
-    </div>
   );
 }

@@ -71,7 +71,7 @@ export function WhatsAppSupportForm({
       <CardHeader>
         <CardTitle>WhatsApp Support</CardTitle>
         <CardDescription>
-          The floating WhatsApp button on the public website and in the student area. Changes apply on the next page load —
+          The floating WhatsApp button on the homepage and the Student Dashboard. Changes apply on the next page load —
           no deployment needed. The button stays hidden while disabled or without a valid number.
         </CardDescription>
       </CardHeader>
@@ -135,15 +135,15 @@ export function WhatsAppSupportForm({
 
           <ToggleRow
             name="showOnHomepage"
-            title="Show on Homepage & Public Pages"
-            description="Homepage, Exams, Contact, Privacy and Terms pages."
+            title="Show on Homepage"
+            description="Floating button on the public homepage."
             defaultChecked={config.showOnHomepage}
             disabled={!canManage}
           />
           <ToggleRow
             name="showInStudentArea"
-            title="Show in Student Area"
-            description="Dashboard and student pages. On the live Test Player it sits below the exam controls."
+            title="Show on Student Dashboard"
+            description="Floating button on the Student Dashboard."
             defaultChecked={config.showInStudentArea}
             disabled={!canManage}
           />

@@ -15,6 +15,7 @@ import { DashboardAnnouncements } from "./dashboard-announcements";
 import { toDashboardMetricsView } from "./metrics-view";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 import { ensureDefaultExamEnrollment } from "@/lib/default-enrollment";
+import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
@@ -103,6 +104,7 @@ export default async function StudentDashboardPage() {
         }
         footer={<SubscriptionStatusCard studentId={student.id} />}
       />
+      <FloatingWhatsAppSupport surface="dashboard" />
     </div>
   );
 }
