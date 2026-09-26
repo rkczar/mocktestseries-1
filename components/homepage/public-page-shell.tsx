@@ -2,6 +2,7 @@ import { getPublishedHomepage, getFallbackHomepage } from "@/lib/homepage";
 import { resolveHomepage } from "@/lib/homepage-render";
 import { SiteHeader } from "./site-header";
 import { SiteFooter } from "./site-footer";
+import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
 
 /**
  * Same canonical Header/Footer used by the homepage (components/homepage/
@@ -39,6 +40,7 @@ export async function PublicPageShell({ children }: { children: React.ReactNode 
           growWithUsEnabled={growWithUsEnabled}
         />
       ) : null}
+      <FloatingWhatsAppSupport surface="public" />
     </div>
   );
 }

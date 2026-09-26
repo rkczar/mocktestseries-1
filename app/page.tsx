@@ -26,7 +26,7 @@ export default async function Home() {
   return (
     <>
       <HomepageView homepage={homepage} omrResourceId={omrSheet?.id ?? null} />
-      <FloatingWhatsAppSupport surface="homepage" />
+      <FloatingWhatsAppSupport surface="public" />
     </>
   );
 }

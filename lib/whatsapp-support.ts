@@ -18,7 +18,8 @@ export const DEFAULT_WHATSAPP_SUPPORT_LABEL = "Chat with Us";
 export const WHATSAPP_SUPPORT_MESSAGE_MAX = 500;
 export const WHATSAPP_SUPPORT_LABEL_MAX = 40;
 
-export type WhatsAppSupportSurface = "homepage" | "student";
+/** "public" = the homepage and every PublicPageShell page (/exams, /contact, /privacy, /terms). */
+export type WhatsAppSupportSurface = "public" | "student";
 
 export interface WhatsAppSupportConfig {
   enabled: boolean;
@@ -26,6 +27,7 @@ export interface WhatsAppSupportConfig {
   number: string;
   message: string;
   label: string;
+  /** Homepage + public pages (key name kept for stored-config compatibility). */
   showOnHomepage: boolean;
   showInStudentArea: boolean;
   updatedAt: string | null;
@@ -124,7 +126,7 @@ export async function getPublicWhatsAppSupport(
   // failure the button is simply not rendered.
   const config = await getWhatsAppSupportConfig().catch(() => null);
   if (!config || !config.enabled || !config.number) return null;
-  if (surface === "homepage" && !config.showOnHomepage) return null;
+  if (surface === "public" && !config.showOnHomepage) return null;
   if (surface === "student" && !config.showInStudentArea) return null;
   return { href: buildWhatsAppSupportHref(config.number, config.message), label: config.label };
 }
