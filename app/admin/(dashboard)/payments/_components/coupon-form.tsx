@@ -80,7 +80,7 @@ export async function CouponForm({ coupon, readOnly }: { coupon: Coupon | null; 
       <F label="Total usage limit" name="totalUsageLimit" hint="Blank = unlimited">
         <Input id="c-totalUsageLimit" name="totalUsageLimit" type="number" min={1} defaultValue={c?.totalUsageLimit ?? ""} />
       </F>
-      <F label="Per-student limit" name="perStudentLimit" hint="Blank = unlimited">
+      <F label="Per-student limit" name="perStudentLimit" hint="Blank = unlimited (a coupon that makes the order free: 1)">
         <Input id="c-perStudentLimit" name="perStudentLimit" type="number" min={1} defaultValue={c?.perStudentLimit ?? 1} />
       </F>
       <div className="flex flex-wrap gap-4 text-sm md:col-span-2">

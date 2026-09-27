@@ -1,0 +1,9 @@
+# mocktestseries payments — installed as /etc/cron.d/mocktestseries-payments (source: ops/payments/ in the repo).
+# Scheduled payment reconciliation every 15 min: the safety net behind the Razorpay webhook
+# (which stays the primary, real-time fulfilment path). Re-reads only unresolved gateway orders
+# with per-order backoff and fulfils only genuinely captured payments (idempotent). No orders or
+# no gateway credentials => no Razorpay call. flock prevents overlapping runs.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+*/15 * * * * root cd /var/www/mocktestseries-current && flock -n /run/mocktestseries-reconcile.lock env NODE_OPTIONS=--conditions=react-server /usr/bin/npx --no-install tsx scripts/reconcile-payments.ts >> /var/log/mocktestseries/payments-reconcile.log 2>&1

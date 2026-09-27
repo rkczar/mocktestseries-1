@@ -96,11 +96,18 @@ export async function evaluateCoupon(
     const used = await db.couponRedemption.count({ where: { couponId: coupon.id, ...liveUsageWhere(input.now, input.excludeOrderId) } });
     if (used >= coupon.totalUsageLimit) return { ok: false, reason: "EXHAUSTED" };
   }
-  if (coupon.perStudentLimit != null) {
+  // A coupon that makes the order free (FREE_ACCESS, 100%, or a fixed amount
+  // covering the price) defaults to ONE redemption per student when the admin
+  // left the per-student limit blank, so repeated redemption can't keep
+  // extending free access. An explicit perStudentLimit is the controlled
+  // repeat-use policy and is honoured as set.
+  const discountPaise = computeCouponDiscount(coupon, input.pricePaise);
+  const perStudentLimit = coupon.perStudentLimit ?? (discountPaise >= input.pricePaise ? 1 : null);
+  if (perStudentLimit != null) {
     const mine = await db.couponRedemption.count({
       where: { couponId: coupon.id, studentId: input.studentId, ...liveUsageWhere(input.now, input.excludeOrderId) },
     });
-    if (mine >= coupon.perStudentLimit) return { ok: false, reason: "STUDENT_LIMIT" };
+    if (mine >= perStudentLimit) return { ok: false, reason: "STUDENT_LIMIT" };
   }
   if (coupon.newStudentOnly) {
     const prior = await db.paymentOrder.count({
@@ -113,5 +120,5 @@ export async function evaluateCoupon(
     if (prior > 0) return { ok: false, reason: "NOT_NEW_STUDENT" };
   }
 
-  return { ok: true, coupon, discountPaise: computeCouponDiscount(coupon, input.pricePaise) };
+  return { ok: true, coupon, discountPaise };
 }

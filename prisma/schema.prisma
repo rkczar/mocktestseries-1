@@ -2228,6 +2228,10 @@ model PaymentOrder {
   failureReason       String?
   expiresAt           DateTime?
   paidAt              DateTime?
+  // Scheduled reconciliation (scripts/reconcile-payments.ts) backoff state:
+  // when the gateway was last re-read for this order and how many times.
+  reconcileCheckedAt  DateTime?
+  reconcileChecks     Int                @default(0)
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 

@@ -62,6 +62,7 @@ export class CheckoutError extends Error {
       | "GATEWAY_NOT_CONFIGURED"
       | "GATEWAY_ERROR"
       | "ORDER_IN_PROGRESS"
+      | "PAYMENT_IN_PROGRESS"
       | "ORDER_NOT_FOUND"
   ) {
     super(message);
@@ -174,7 +175,36 @@ export type CreateOrderResult =
     }
   | { kind: "FREE_GRANT"; orderId: string; orderNumber: string };
 
-export async function createCheckoutOrder(studentId: string, productId: string, couponInput?: string | null): Promise<CreateOrderResult> {
+/**
+ * Before a new checkout retires the student's open order for this product
+ * (different coupon/environment, or expired), ask Razorpay whether a payment
+ * on it is already authorized/captured — that order stays payable in the
+ * other tab. If one is, settle it through the existing reconciliation path
+ * and refuse the second purchase instead of silently selling it twice.
+ */
+async function assertNoPaymentInFlight(openKey: string, couponCode: string | null, environment: PaymentEnvironment, now: Date) {
+  const open = await prisma.paymentOrder.findUnique({ where: { openKey } });
+  if (!open || !open.gatewayOrderId) return;
+  const stillValid = OPEN_STATUSES.includes(open.status) && (!open.expiresAt || open.expiresAt > now);
+  if (stillValid && open.couponCode === couponCode && open.environment === environment) return; // reused, not retired
+  let payments: RzpPayment[];
+  try {
+    payments = await fetchRazorpayOrderPayments(open.environment, open.gatewayOrderId);
+  } catch (e) {
+    if (e instanceof RazorpayApiError && e.category === "NOT_CONFIGURED") return; // that environment's keys were removed
+    throw new CheckoutError("We couldn't confirm your earlier payment attempt. Please try again in a minute.", "PAYMENT_IN_PROGRESS");
+  }
+  if (!payments.some((p) => p.status === "authorized" || p.status === "captured" || p.status === "refunded")) return;
+  await reconcileOrder(open.id);
+  throw new CheckoutError("A payment for this product is already being processed. Check My Subscriptions before paying again.", "PAYMENT_IN_PROGRESS");
+}
+
+export async function createCheckoutOrder(
+  studentId: string,
+  productId: string,
+  couponInput?: string | null,
+  opts: { renew?: boolean } = {}
+): Promise<CreateOrderResult> {
   const mode = await getPaymentMode();
   if (mode === "FREE") throw new CheckoutError("Everything is free right now — no purchase needed.", "PLATFORM_FREE");
   if (mode === "MAINTENANCE") throw new CheckoutError("Purchases are temporarily paused. Please try again later.", "PURCHASES_PAUSED");
@@ -187,10 +217,16 @@ export async function createCheckoutOrder(studentId: string, productId: string, 
     throw new CheckoutError("This product's access period has ended.", "PRODUCT_UNAVAILABLE");
 
   // Lifetime / fixed-date access already held → nothing to buy. Day-based
-  // access can be renewed early (extends from the current expiry).
+  // access can be renewed early (extends from the current expiry), but only
+  // as an explicit renewal: a stale "Buy Now" tab opened before the first
+  // purchase completed must not silently buy (and stack) a second period.
   const access = await canStudentAccessProduct(studentId, product.id, now);
-  if (access.status === "ACTIVE_SUBSCRIPTION" && (access.expiresAt === null || product.accessDurationType === "FIXED_DATE"))
-    throw new CheckoutError("You already have access to this product.", "ALREADY_OWNED");
+  if (access.status === "ACTIVE_SUBSCRIPTION") {
+    if (access.expiresAt === null || product.accessDurationType === "FIXED_DATE")
+      throw new CheckoutError("You already have access to this product.", "ALREADY_OWNED");
+    if (!opts.renew)
+      throw new CheckoutError("You already have access to this product. Refresh this page to extend it.", "ALREADY_OWNED");
+  }
 
   const couponCode = couponInput ? normalizeCouponCode(couponInput) : null;
   if (couponInput && !couponCode) throw new CheckoutError(COUPON_REJECTION_MESSAGES.INVALID, "COUPON_REJECTED");
@@ -200,6 +236,7 @@ export async function createCheckoutOrder(studentId: string, productId: string, 
   const environment: PaymentEnvironment = rzp.environment;
   const policy = await getPaymentPolicy();
   const openKey = `${studentId}:${product.id}`;
+  await assertNoPaymentInFlight(openKey, couponCode, environment, now);
 
   const attempt = async () =>
     prisma.$transaction(

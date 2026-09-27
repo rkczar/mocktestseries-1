@@ -66,14 +66,15 @@ export async function applyCouponAction(productCode: string, couponCode: string)
   }
 }
 
-export async function createOrderAction(productId: string, couponCode: string | null): Promise<ActionResult<CreateOrderResult>> {
+/** `renew` = the student pressed "Extend Access" (page rendered with access already active). */
+export async function createOrderAction(productId: string, couponCode: string | null, renew = false): Promise<ActionResult<CreateOrderResult>> {
   try {
     const student = await requireStudent();
     const p = idSchema.safeParse(productId);
     if (!p.success) return { ok: false, error: "Invalid product." };
     const coupon = couponCode ? z.string().trim().max(40).parse(couponCode) : null;
     await enforcePaymentRateLimit("create-order", student.id);
-    return { ok: true, data: await createCheckoutOrder(student.id, p.data, coupon || null) };
+    return { ok: true, data: await createCheckoutOrder(student.id, p.data, coupon || null, { renew: renew === true }) };
   } catch (e) {
     return toError(e);
   }

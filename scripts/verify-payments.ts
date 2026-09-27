@@ -20,7 +20,13 @@
  * callback → webhook and reconciliation restore access; expiry gating;
  * FULL_ADMIN has no manage permission and every admin mutation checks it;
  * student isolation (orders/invoices/subscriptions); refund transitions;
- * TEST-mode separation in analytics.
+ * TEST-mode separation in analytics. Hardening (§14-16): scheduled
+ * reconciliation recovers a captured payment whose callback + webhook were
+ * missed, exactly once, never for unpaid/failed orders, each environment
+ * with its own keys; a coupon that makes the order free defaults to one
+ * redemption per student (also under concurrency); a stale/duplicate tab
+ * can't buy a second period, an in-flight payment blocks a second order,
+ * and explicit renewal still works.
  */
 import "dotenv/config";
 import crypto from "node:crypto";
@@ -39,23 +45,32 @@ if (!/payverify/.test(process.env.DATABASE_URL ?? "")) {
 const KEY_ID = "rzp_test_VerifyKey123";
 const KEY_SECRET = "verify_secret_" + crypto.randomBytes(8).toString("hex");
 const WEBHOOK_SECRET = "verify_whsec_" + crypto.randomBytes(8).toString("hex");
+// A separate fake LIVE account: orders created with one key pair are
+// invisible (404) to the other, like two real Razorpay accounts/modes.
+const LIVE_KEY_ID = "rzp_live_VerifyKey456";
+const LIVE_KEY_SECRET = "verify_live_secret_" + crypto.randomBytes(8).toString("hex");
+const authFor = (id: string, secret: string) => "Basic " + Buffer.from(`${id}:${secret}`).toString("base64");
 
-type FakeOrder = { id: string; amount: number; currency: string; receipt: string; status: string };
+type FakeOrder = { id: string; amount: number; currency: string; receipt: string; status: string; env?: "TEST" | "LIVE" };
 type FakePayment = { id: string; order_id: string; amount: number; currency: string; status: string; method: string; amount_refunded: number };
-const fake = { orders: new Map<string, FakeOrder>(), payments: new Map<string, FakePayment>(), orderCreates: 0, refunds: 0 };
+const fake = { orders: new Map<string, FakeOrder>(), payments: new Map<string, FakePayment>(), orderCreates: 0, refunds: 0, calls: [] as { env: "TEST" | "LIVE"; path: string }[] };
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   if (!url.startsWith("https://api.razorpay.com/v1")) return realFetch(input, init);
   const auth = new Headers(init?.headers).get("authorization");
-  if (auth !== "Basic " + Buffer.from(`${KEY_ID}:${KEY_SECRET}`).toString("base64")) return new Response("{}", { status: 401 });
+  const env = auth === authFor(KEY_ID, KEY_SECRET) ? "TEST" : auth === authFor(LIVE_KEY_ID, LIVE_KEY_SECRET) ? "LIVE" : null;
+  if (!env) return new Response("{}", { status: 401 });
   const path = url.replace("https://api.razorpay.com/v1", "").split("?")[0];
+  fake.calls.push({ env, path });
+  const orderIdInPath = path.match(/^\/orders\/([^/]+)/)?.[1];
+  if (orderIdInPath && fake.orders.has(orderIdInPath) && (fake.orders.get(orderIdInPath)!.env ?? "TEST") !== env) return new Response("{}", { status: 404 });
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
   let m: RegExpMatchArray | null;
   if (init?.method === "POST" && path === "/orders") {
     fake.orderCreates++;
-    const o = { id: "order_" + crypto.randomBytes(7).toString("hex"), amount: body.amount, currency: body.currency, receipt: body.receipt, status: "created" };
+    const o: FakeOrder = { id: "order_" + crypto.randomBytes(7).toString("hex"), amount: body.amount, currency: body.currency, receipt: body.receipt, status: "created", env };
     fake.orders.set(o.id, o);
     return json(o);
   }
@@ -110,7 +125,7 @@ async function main() {
   // Import after the fetch stub + env guard so every module sees them.
   const { prisma } = await import("@/lib/prisma");
   const { setPaymentMode, bumpPaymentSettingsCache } = await import("@/lib/payments/settings");
-  const { saveRazorpayConfig, getRazorpayConfig } = await import("@/lib/razorpay-config");
+  const { saveRazorpayConfig, getRazorpayConfig, bumpRazorpayConfigEpoch } = await import("@/lib/razorpay-config");
   const { startMockTestAttempt, startPreviousYearPaperAttempt } = await import("@/lib/test-attempt");
   const { PaymentRequiredError, getContentAccess, canStudentAccessProduct } = await import("@/lib/payments/access");
   const { createCheckoutOrder, verifyCheckoutPayment, getOrderStatusForStudent, reconcileOrder, getCheckoutQuote, CheckoutError } = await import("@/lib/payments/orders");
@@ -119,6 +134,8 @@ async function main() {
   const { getPaymentOverview, parsePaymentFilters } = await import("@/lib/payments/analytics");
   const { computeProductPrice, computeCouponDiscount } = await import("@/lib/payments/pricing");
   const { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } = await import("@/lib/permissions");
+  const { runScheduledReconciliation, findPaymentMismatches } = await import("@/lib/payments/reconcile");
+  const { createRazorpayOrder } = await import("@/lib/payments/razorpay");
 
   const setMode = async (m: "FREE" | "PAID" | "MAINTENANCE") => {
     await setPaymentMode(m, undefined);
@@ -360,6 +377,166 @@ async function main() {
   check("Secrets encrypted at rest (no plaintext in Setting row)", !stored.includes(KEY_SECRET) && !stored.includes(WEBHOOK_SECRET));
   const invoice = await prisma.invoice.findFirstOrThrow({ where: { studentId: B.id } });
   check("TEST invoice uses separate TEST- numbering series", invoice.invoiceNumber.startsWith("TEST-"));
+
+
+  // -------------------------------------------------------------------------
+  // Pre-launch hardening
+  // -------------------------------------------------------------------------
+  const ents = (sid: string, pid = product.id) => prisma.studentEntitlement.count({ where: { studentId: sid, productId: pid } });
+  const [F, G, H, I, J, K, L, M, N, P, Q, R, S, T] = await Promise.all(["F", "G", "H", "I", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T"].map(mkStudent));
+  /** Simulates "the callback and webhook never arrived and the order then expired locally". */
+  const ageOrder = (id: string, extra: object = {}) =>
+    prisma.paymentOrder.update({ where: { id }, data: { createdAt: new Date(Date.now() - 30 * 60_000), ...extra } });
+  const entryFor = (r: Awaited<ReturnType<typeof runScheduledReconciliation>>, id: string) => r.entries.find((e) => e.orderId === id);
+
+  console.log("\n14. Scheduled reconciliation (cron safety net)");
+  const fOrder = await createCheckoutOrder(F.id, product.id);
+  const gOrder = await createCheckoutOrder(G.id, product.id);
+  const hOrder = await createCheckoutOrder(H.id, product.id);
+  const iOrder = await createCheckoutOrder(I.id, product.id);
+  if (fOrder.kind === "RAZORPAY" && gOrder.kind === "RAZORPAY" && hOrder.kind === "RAZORPAY" && iOrder.kind === "RAZORPAY") {
+    fakePay(fOrder.gatewayOrderId, "captured");
+    fakePay(gOrder.gatewayOrderId, "captured");
+    fakePay(iOrder.gatewayOrderId, "failed");
+    await ageOrder(fOrder.orderId, { status: OrderStatus.EXPIRED, openKey: null });
+    await ageOrder(hOrder.orderId);
+    await ageOrder(iOrder.orderId);
+
+    const callsBeforeDry = fake.calls.length;
+    const dry = await runScheduledReconciliation({ dryRun: true });
+    check("Dry run lists due orders without any Razorpay call or write", entryFor(dry, fOrder.orderId)?.result === "DUE" && fake.calls.length === callsBeforeDry && (await prisma.paymentOrder.findUniqueOrThrow({ where: { id: fOrder.orderId } })).reconcileChecks === 0);
+
+    const run1 = await runScheduledReconciliation();
+    check("Captured payment + missed callback/webhook + locally EXPIRED order → PAID", entryFor(run1, fOrder.orderId)?.result === "PAID" && (await prisma.paymentOrder.findUniqueOrThrow({ where: { id: fOrder.orderId } })).status === "PAID");
+    check("…exactly one Payment / Entitlement / Invoice", (await prisma.payment.count({ where: { orderId: fOrder.orderId } })) === 1 && (await ents(F.id)) === 1 && (await prisma.invoice.count({ where: { orderId: fOrder.orderId } })) === 1);
+    check("…and the student can now start the paid test", Boolean((await startMockTestAttempt(F.id, paidTest.id)).id));
+    check("Fresh order (< 10 min) is left to the webhook, not touched", !entryFor(run1, gOrder.orderId) && (await ents(G.id)) === 0);
+    check("Unpaid order → NO_PAYMENT, no entitlement", entryFor(run1, hOrder.orderId)?.result === "NO_PAYMENT" && (await ents(H.id)) === 0);
+    check("Failed payment → NOT_CAPTURED, no entitlement", entryFor(run1, iOrder.orderId)?.result === "NOT_CAPTURED" && (await ents(I.id)) === 0);
+
+    const run2 = await runScheduledReconciliation();
+    const run3 = await runScheduledReconciliation();
+    check("Re-running: settled order is no longer a candidate; no duplicates", !entryFor(run2, fOrder.orderId) && !entryFor(run3, fOrder.orderId) && (await prisma.payment.count({ where: { orderId: fOrder.orderId } })) === 1 && (await ents(F.id)) === 1 && (await prisma.invoice.count({ where: { orderId: fOrder.orderId } })) === 1);
+    check("Backoff: unpaid order not re-read on the very next run", !entryFor(run2, hOrder.orderId) && (await prisma.paymentOrder.findUniqueOrThrow({ where: { id: hOrder.orderId } })).reconcileChecks === 1);
+    await prisma.paymentOrder.update({ where: { id: hOrder.orderId }, data: { reconcileCheckedAt: new Date(Date.now() - 11 * 60_000) } });
+    const later = await runScheduledReconciliation();
+    check("…re-read again once its backoff elapsed (still no entitlement)", entryFor(later, hOrder.orderId)?.result === "NO_PAYMENT" && (await ents(H.id)) === 0);
+    await prisma.paymentOrder.update({ where: { id: hOrder.orderId }, data: { reconcileChecks: 10, reconcileCheckedAt: new Date(0) } });
+    const capped = await runScheduledReconciliation();
+    check("…stops after the max number of re-reads", !entryFor(capped, hOrder.orderId));
+
+    await prisma.invoice.delete({ where: { orderId: fOrder.orderId } });
+    const repair = await runScheduledReconciliation();
+    check("PAID order missing its invoice → restored once (ensureFulfilment)", entryFor(repair, fOrder.orderId)?.result === "FULFILMENT_REPAIRED" && (await prisma.invoice.count({ where: { orderId: fOrder.orderId } })) === 1);
+    const repair2 = await runScheduledReconciliation();
+    check("…next run: nothing to repair, still one invoice", !entryFor(repair2, fOrder.orderId) && (await prisma.invoice.count({ where: { orderId: fOrder.orderId } })) === 1);
+
+    // TEST / LIVE isolation.
+    const liveGw = { id: "order_livemissing", amount: 49900, currency: "INR", receipt: "x", status: "created", env: "LIVE" as const };
+    fake.orders.set(liveGw.id, liveGw);
+    const liveRow = await prisma.paymentOrder.create({
+      data: { orderNumber: `ORD-LIVE-${sfx}`, receipt: `ORD-LIVE-${sfx}`, studentId: J.id, productId: product.id, status: OrderStatus.GATEWAY_ORDER_CREATED, gateway: "RAZORPAY", environment: "LIVE", mrpPaise: 99900, sellingPricePaise: 49900, amountPaise: 49900, productSnapshot: {}, gatewayOrderId: liveGw.id, createdAt: new Date(Date.now() - 30 * 60_000) },
+    });
+    fakePay(liveGw.id, "captured");
+    const callsBeforeLive = fake.calls.length;
+    const noLiveKeys = await runScheduledReconciliation();
+    check("LIVE order with no LIVE credentials → skipped, no Razorpay call, no access", entryFor(noLiveKeys, liveRow.id)?.result === "SKIPPED_NO_CREDENTIALS" && fake.calls.length === callsBeforeLive && (await ents(J.id)) === 0);
+    await saveRazorpayConfig({ slot: "LIVE", keyId: LIVE_KEY_ID, keySecret: LIVE_KEY_SECRET });
+    const liveRun = await runScheduledReconciliation();
+    const liveCalls = fake.calls.slice(callsBeforeLive).filter((c) => c.path.includes(liveGw.id));
+    check("LIVE order re-read ONLY with LIVE keys → PAID", entryFor(liveRun, liveRow.id)?.result === "PAID" && liveCalls.length > 0 && liveCalls.every((c) => c.env === "LIVE") && (await ents(J.id)) === 1);
+    const testCalls = fake.calls.filter((c) => c.path.includes(fOrder.gatewayOrderId));
+    check("TEST order was re-read ONLY with TEST keys", testCalls.length > 0 && testCalls.every((c) => c.env === "TEST"));
+    const liveInvoice = await prisma.invoice.findUniqueOrThrow({ where: { orderId: liveRow.id } });
+    check("LIVE recovery uses the LIVE invoice series (no TEST- prefix)", !liveInvoice.invoiceNumber.startsWith("TEST-"));
+    // A TEST-labelled order whose gateway order lives in the LIVE account must not be settled.
+    const crossGw = await createRazorpayOrder("LIVE", { amountPaise: 49900, currency: "INR", receipt: "cross", notes: {} });
+    fakePay(crossGw.id, "captured");
+    const crossRow = await prisma.paymentOrder.create({
+      data: { orderNumber: `ORD-X-${sfx}`, receipt: `ORD-X-${sfx}`, studentId: K.id, productId: product.id, status: OrderStatus.GATEWAY_ORDER_CREATED, gateway: "RAZORPAY", environment: "TEST", mrpPaise: 99900, sellingPricePaise: 49900, amountPaise: 49900, productSnapshot: {}, gatewayOrderId: crossGw.id, createdAt: new Date(Date.now() - 30 * 60_000) },
+    });
+    const crossRun = await runScheduledReconciliation();
+    check("No cross-environment reconciliation (TEST row can't settle a LIVE payment)", entryFor(crossRun, crossRow.id)?.result === "GATEWAY_ERROR" && (await ents(K.id)) === 0);
+    // Remove the LIVE fixtures so a re-run on the same scratch DB starts from "no LIVE keys / no LIVE revenue".
+    await prisma.invoice.deleteMany({ where: { orderId: liveRow.id } });
+    await prisma.studentEntitlement.deleteMany({ where: { orderId: liveRow.id } });
+    await prisma.payment.deleteMany({ where: { orderId: liveRow.id } });
+    await prisma.paymentOrder.delete({ where: { id: liveRow.id } });
+    const gw = await prisma.setting.findUniqueOrThrow({ where: { key: "api.razorpay" } });
+    const withoutLive = { ...(gw.value as Record<string, unknown>) };
+    delete withoutLive.live;
+    await prisma.setting.update({ where: { key: "api.razorpay" }, data: { value: withoutLive as object } });
+    bumpRazorpayConfigEpoch();
+  }
+
+  console.log("\n15. Free-access coupons: one redemption per student by default");
+  const dayProduct = await prisma.product.create({ data: { code: `days-${sfx}`, name: "Day Pass", productType: "EXAM_ACCESS", examId: exam.id, accessType: "PAID", mrpPaise: 20000, sellingPricePaise: 20000, accessDurationType: "DAYS", accessDays: 30 } });
+  const openFree = await prisma.coupon.create({ data: { code: `OPENFREE${sfx}`.toUpperCase().slice(0, 32), discountType: "FREE_ACCESS", discountValue: 100 } });
+  const k1 = await createCheckoutOrder(K.id, dayProduct.id, openFree.code);
+  check("First redemption of a blank-limit 100% coupon → FREE_GRANT", k1.kind === "FREE_GRANT" && (await ents(K.id, dayProduct.id)) === 1);
+  const k2 = await rejects(() => createCheckoutOrder(K.id, dayProduct.id, openFree.code, { renew: true }));
+  check("Same student, same free coupon again (even as a renewal) → rejected", k2 instanceof CheckoutError && (k2 as InstanceType<typeof CheckoutError>).code === "COUPON_REJECTED" && (await ents(K.id, dayProduct.id)) === 1);
+  check("…quote explains the per-student limit", (await getCheckoutQuote(K.id, dayProduct.code, openFree.code))?.couponError === "You've already used this coupon the maximum number of times.");
+  const lTries = await Promise.allSettled([1, 2, 3, 4].map(() => createCheckoutOrder(L.id, dayProduct.id, openFree.code, { renew: true })));
+  check("Concurrent free redemptions by one student → exactly one grant/redemption", lTries.filter((t) => t.status === "fulfilled").length === 1 && (await ents(L.id, dayProduct.id)) === 1 && (await prisma.couponRedemption.count({ where: { couponId: openFree.id, studentId: L.id } })) === 1);
+  check("Different eligible student can still redeem", (await createCheckoutOrder(M.id, dayProduct.id, openFree.code)).kind === "FREE_GRANT");
+  const pct100 = await prisma.coupon.create({ data: { code: `HUNDRED${sfx}`.toUpperCase().slice(0, 32), discountType: "PERCENTAGE", discountValue: 100 } });
+  await createCheckoutOrder(N.id, dayProduct.id, pct100.code);
+  check("100% PERCENTAGE coupon is also one-per-student by default", Boolean(await rejects(() => createCheckoutOrder(N.id, dayProduct.id, pct100.code, { renew: true }))) && (await ents(N.id, dayProduct.id)) === 1);
+  const twice = await prisma.coupon.create({ data: { code: `TWICE${sfx}`.toUpperCase().slice(0, 32), discountType: "FREE_ACCESS", discountValue: 100, perStudentLimit: 2 } });
+  await createCheckoutOrder(P.id, dayProduct.id, twice.code);
+  const p2 = await createCheckoutOrder(P.id, dayProduct.id, twice.code, { renew: true });
+  const p3 = await rejects(() => createCheckoutOrder(P.id, dayProduct.id, twice.code, { renew: true }));
+  check("Explicit per-student limit (2) is the controlled repeat policy: 2 grants, 3rd rejected", p2.kind === "FREE_GRANT" && p3 instanceof CheckoutError && (await ents(P.id, dayProduct.id)) === 2);
+  const paidPct = await prisma.coupon.create({ data: { code: `TENOFF${sfx}`.toUpperCase().slice(0, 32), discountType: "PERCENTAGE", discountValue: 10 } });
+  const q1 = await createCheckoutOrder(Q.id, dayProduct.id, paidPct.code);
+  if (q1.kind === "RAZORPAY") {
+    const pay = fakePay(q1.gatewayOrderId, "captured");
+    await verifyCheckoutPayment(Q.id, { orderId: q1.orderId, razorpayOrderId: q1.gatewayOrderId, razorpayPaymentId: pay.payment.id, razorpaySignature: pay.signature });
+  }
+  const reQuote = await getCheckoutQuote(Q.id, dayProduct.code, paidPct.code);
+  check("Paid (10%) coupon with blank limit keeps existing behaviour: reusable, ₹180", q1.kind === "RAZORPAY" && q1.amountPaise === 18000 && reQuote?.couponError === null && reQuote.payablePaise === 18000);
+
+  console.log("\n16. Duplicate orders / renewal");
+  const [r1, r2] = await Promise.all([createCheckoutOrder(R.id, product.id), createCheckoutOrder(R.id, product.id)]);
+  check("Two simultaneous tabs → one shared order", r1.orderId === r2.orderId);
+  if (r1.kind === "RAZORPAY") {
+    const pay = fakePay(r1.gatewayOrderId, "captured");
+    await verifyCheckoutPayment(R.id, { orderId: r1.orderId, razorpayOrderId: r1.gatewayOrderId, razorpayPaymentId: pay.payment.id, razorpaySignature: pay.signature });
+    const createsBeforeStale = fake.orderCreates;
+    const stale = await rejects(() => createCheckoutOrder(R.id, product.id));
+    check("Stale 'Buy Now' tab after the purchase → ALREADY_OWNED, no 2nd order/access", stale instanceof CheckoutError && (stale as InstanceType<typeof CheckoutError>).code === "ALREADY_OWNED" && fake.orderCreates === createsBeforeStale && (await ents(R.id)) === 1);
+    const first = await prisma.studentEntitlement.findFirstOrThrow({ where: { studentId: R.id, productId: product.id } });
+    const renewal = await createCheckoutOrder(R.id, product.id, null, { renew: true });
+    if (renewal.kind === "RAZORPAY") {
+      const rp = fakePay(renewal.gatewayOrderId, "captured");
+      await verifyCheckoutPayment(R.id, { orderId: renewal.orderId, razorpayOrderId: renewal.gatewayOrderId, razorpayPaymentId: rp.payment.id, razorpaySignature: rp.signature });
+    }
+    const second = await prisma.studentEntitlement.findFirst({ where: { orderId: renewal.orderId } });
+    check("Explicit renewal ('Extend Access') still works and extends from the current expiry (+30 days)", renewal.kind === "RAZORPAY" && second?.expiresAt?.getTime() === first.expiresAt!.getTime() + 30 * 86_400_000);
+  }
+  const s1 = await createCheckoutOrder(S.id, product.id);
+  const tenOff = await prisma.coupon.create({ data: { code: `SWAP${sfx}`.toUpperCase().slice(0, 32), discountType: "PERCENTAGE", discountValue: 10 } });
+  if (s1.kind === "RAZORPAY") {
+    fakePay(s1.gatewayOrderId, "authorized"); // tab 1 is mid-payment, no callback yet
+    const createsBeforeSwap = fake.orderCreates;
+    const swap = await rejects(() => createCheckoutOrder(S.id, product.id, tenOff.code));
+    check("Coupon applied in tab 2 while tab 1's payment is in flight → PAYMENT_IN_PROGRESS, no 2nd order", swap instanceof CheckoutError && (swap as InstanceType<typeof CheckoutError>).code === "PAYMENT_IN_PROGRESS" && fake.orderCreates === createsBeforeSwap);
+    check("…the in-flight payment was settled instead (one PAID order, one entitlement)", (await prisma.paymentOrder.findUniqueOrThrow({ where: { id: s1.orderId } })).status === "PAID" && (await ents(S.id)) === 1);
+  }
+  const t1 = await createCheckoutOrder(T.id, product.id);
+  const t2 = await createCheckoutOrder(T.id, product.id, tenOff.code);
+  check("Different terms with NO payment in flight → old order retired, new order (existing behaviour)", t2.kind === "RAZORPAY" && t2.orderId !== t1.orderId && (await prisma.paymentOrder.findUniqueOrThrow({ where: { id: t1.orderId } })).status === "CANCELLED");
+  if (t1.kind === "RAZORPAY" && t2.kind === "RAZORPAY") {
+    // Residual race: the other tab still pays the retired order afterwards.
+    fakePay(t1.gatewayOrderId, "captured");
+    const pay = fakePay(t2.gatewayOrderId, "captured");
+    await verifyCheckoutPayment(T.id, { orderId: t2.orderId, razorpayOrderId: t2.gatewayOrderId, razorpayPaymentId: pay.payment.id, razorpaySignature: pay.signature });
+    await ageOrder(t1.orderId);
+    const late = await runScheduledReconciliation();
+    check("Retired order paid later in the other tab is recovered (money taken → access)", entryFor(late, t1.orderId)?.result === "PAID");
+    check("…and flagged as POSSIBLE_DUPLICATE_PURCHASE for admin review (not silent)", (await findPaymentMismatches()).some((m) => m.kind === "POSSIBLE_DUPLICATE_PURCHASE" && (m.orderId === t1.orderId || m.orderId === t2.orderId)));
+  }
 
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
   await prisma.$disconnect();

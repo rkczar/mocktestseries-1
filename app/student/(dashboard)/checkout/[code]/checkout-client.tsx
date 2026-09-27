@@ -120,7 +120,7 @@ export function CheckoutClient({ product, price, access, gatewayReady, environme
     setError(null);
     setNotice(null);
     try {
-      const r = await createOrderAction(product.id, coupon?.code ?? null);
+      const r = await createOrderAction(product.id, coupon?.code ?? null, owned);
       if (!r.ok) {
         setError(r.error);
         return;
