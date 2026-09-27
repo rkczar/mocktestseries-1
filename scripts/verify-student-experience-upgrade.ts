@@ -21,6 +21,7 @@ import { startSubjectTestAttempt } from "@/lib/test-attempt";
 import { InsufficientQuestionsError, countPublishedQuestions } from "@/lib/question-selection";
 import { getSavedQuestionsAdminOverview } from "@/lib/admin-saved-questions";
 import { getWhatsAppShareConfig, saveWhatsAppShareConfig, renderWhatsAppShareText } from "@/lib/whatsapp-share-config";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -49,8 +50,8 @@ function expectThrows(label: string, fn: () => Promise<unknown> | unknown): Prom
 async function main() {
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `Verify Exam ${suffix}`, code: `VERIFY-${suffix}`, isActive: true } });
-  const subjectPhysics = await prisma.subject.create({ data: { examId: exam.id, name: "Physics" } });
-  const subjectChem = await prisma.subject.create({ data: { examId: exam.id, name: "Chemistry" } });
+  const subjectPhysics = await createFixtureSubject(prisma, { examId: exam.id, name: "Physics" });
+  const subjectChem = await createFixtureSubject(prisma, { examId: exam.id, name: "Chemistry" });
 
   const passwordHash = await argon2.hash("verify-password-not-real");
   const studentA = await prisma.student.create({
@@ -157,7 +158,7 @@ async function main() {
     await prisma.studentExamEnrollment.deleteMany({ where: { studentId: { in: [studentA.id, studentB.id] } } });
     await prisma.student.deleteMany({ where: { id: { in: [studentA.id, studentB.id] } } });
     await prisma.question.deleteMany({ where: { examId: exam.id } });
-    await prisma.subject.deleteMany({ where: { examId: exam.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

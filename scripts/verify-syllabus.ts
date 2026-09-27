@@ -43,6 +43,8 @@ import { PrismaPg } from "@prisma/adapter-pg";
 // These import `server-only`, which is inert under the react-server condition.
 import { getExamDetailForStudent } from "@/lib/student-data";
 import { validateImportRows, validateWithDatabase, type BulkImportRow } from "@/lib/bulk-import";
+import { getExamTaxonomy, isSubjectLinked, withExamTaxonomy } from "../lib/exam-taxonomy";
+import { createFixtureSubTopic, createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -63,21 +65,17 @@ async function main() {
   try {
     console.log("--- Taxonomy scoping ---");
 
-    const subjA = await prisma.subject.create({ data: { examId: examA.id, name: "Physics", syllabusDescription: "Mechanics onward" } });
-    const subjB = await prisma.subject.create({ data: { examId: examB.id, name: "Physics" } }); // same name, different exam — must not collide
-    const topicA1 = await prisma.topic.create({ data: { subjectId: subjA.id, name: "Kinematics", syllabusDescription: "Motion in 1D and 2D" } });
-    const subTopicA1 = await prisma.subTopic.create({ data: { topicId: topicA1.id, name: "Projectile Motion" } });
+    const subjA = await createFixtureSubject(prisma, { examId: examA.id, name: "Physics", syllabusDescription: "Mechanics onward" });
+    const subjB = await createFixtureSubject(prisma, { examId: examB.id, name: "Physics" }); // same name, different exam — must not collide
+    const topicA1 = await createFixtureTopic(prisma, { subjectId: subjA.id, name: "Kinematics", syllabusDescription: "Motion in 1D and 2D" });
+    const subTopicA1 = await createFixtureSubTopic(prisma, { topicId: topicA1.id, name: "Projectile Motion" });
 
-    const reloadedSubjA = await prisma.subject.findUniqueOrThrow({ where: { id: subjA.id } });
-    check("subject resolves to its own exam, not another one", reloadedSubjA.examId === examA.id);
+    check("subject is linked to its own exam, not another one", (await isSubjectLinked(prisma, examA.id, subjA.id)) && !(await isSubjectLinked(prisma, examB.id, subjA.id)));
 
     const reloadedTopicA1 = await prisma.topic.findUniqueOrThrow({ where: { id: topicA1.id } });
     check("topic resolves to its own subject", reloadedTopicA1.subjectId === subjA.id);
 
-    const examATree = await prisma.exam.findUniqueOrThrow({
-      where: { id: examA.id },
-      include: { subjects: { include: { topics: true } } },
-    });
+    const examATree = { subjects: await getExamTaxonomy(prisma, examA.id) };
     check("exam A's syllabus tree contains exactly its own subject (no cross-exam leakage)", examATree.subjects.length === 1 && examATree.subjects[0].id === subjA.id);
     check("exam A's subject does not leak exam B's same-named subject", !examATree.subjects.some((s) => s.id === subjB.id));
 
@@ -92,13 +90,7 @@ async function main() {
     check("topic-level syllabusDescription flows through", loadedTopic?.syllabusDescription === "Motion in 1D and 2D");
 
     console.log("\n--- Question Bank integration (same tree Add/Edit Question loads) ---");
-    const examTreeForQuestionForm = await prisma.exam.findMany({
-      where: { id: examA.id },
-      orderBy: { order: "asc" },
-      include: {
-        subjects: { orderBy: { order: "asc" }, include: { topics: { orderBy: { order: "asc" }, include: { subTopics: { orderBy: { order: "asc" } } } } } },
-      },
-    });
+    const examTreeForQuestionForm = await withExamTaxonomy(prisma, await prisma.exam.findMany({ where: { id: examA.id } }));
     const qbSubject = examTreeForQuestionForm[0]?.subjects.find((s) => s.id === subjA.id);
     const qbTopic = qbSubject?.topics.find((t) => t.id === topicA1.id);
     const qbSubTopic = qbTopic?.subTopics.find((st) => st.id === subTopicA1.id);
@@ -152,9 +144,7 @@ async function main() {
     console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
   } finally {
     console.log("\nCleaning up fixture data...");
-    await prisma.subTopic.deleteMany({ where: { topic: { subject: { examId: { in: [examA.id, examB.id] } } } } });
-    await prisma.topic.deleteMany({ where: { subject: { examId: { in: [examA.id, examB.id] } } } });
-    await prisma.subject.deleteMany({ where: { examId: { in: [examA.id, examB.id] } } });
+    await deleteFixtureTaxonomy(prisma, [examA.id, examB.id]);
     await prisma.exam.deleteMany({ where: { id: { in: [examA.id, examB.id] } } });
     await prisma.$disconnect();
   }

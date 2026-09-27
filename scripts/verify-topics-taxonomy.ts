@@ -23,6 +23,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { createTopicChecked, bulkCreateTopics, topicSchema } from "@/lib/topic-taxonomy";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -36,7 +37,7 @@ function check(label: string, passed: boolean) {
 async function main() {
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `Topics Fix Exam ${suffix}`, code: `TFX-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Botany" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Botany" });
 
   try {
     const longName =
@@ -57,7 +58,7 @@ async function main() {
     const r4 = await createTopicChecked(prisma, subject.id, "cell structure and function"); // different case, same topic
     check("an exact (case-insensitive) duplicate under the same subject is rejected", "error" in r4);
 
-    const otherSubject = await prisma.subject.create({ data: { examId: exam.id, name: "Zoology" } });
+    const otherSubject = await createFixtureSubject(prisma, { examId: exam.id, name: "Zoology" });
     const r5 = await createTopicChecked(prisma, otherSubject.id, "Cell Structure and Function");
     check("the same name is allowed under a different subject", "topic" in r5);
 
@@ -93,8 +94,7 @@ async function main() {
     console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
   } finally {
     console.log("\nCleaning up fixture data...");
-    await prisma.topic.deleteMany({ where: { subject: { examId: exam.id } } });
-    await prisma.subject.deleteMany({ where: { examId: exam.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

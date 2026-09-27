@@ -25,6 +25,7 @@ import argon2 from "argon2";
 // These import `server-only`, which is inert under the react-server condition.
 import { startLiveTestAttempt, saveAnswer } from "@/lib/test-attempt";
 import { getOwnedAttempt } from "@/lib/student-data";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -55,7 +56,7 @@ async function main() {
   const suffix = Date.now().toString(36);
 
   const exam = await prisma.exam.create({ data: { name: `Step8 Exam ${suffix}`, code: `STEP8-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Step8 Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Step8 Subject" });
   const question = await prisma.question.create({
     data: {
       examId: exam.id,
@@ -138,6 +139,7 @@ async function main() {
     await prisma.liveTest.delete({ where: { id: liveTest.id } });
     await prisma.question.delete({ where: { id: question.id } });
     await prisma.subject.delete({ where: { id: subject.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

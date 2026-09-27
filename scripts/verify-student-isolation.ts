@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { PrismaClient, AttemptSourceType, AttemptStatus, AnswerStatus, StudentAuthProvider, QuestionStatus, QuestionDifficulty, MockTestStatus, ReportType } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import argon2 from "argon2";
+import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
@@ -65,8 +66,8 @@ async function main() {
 
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `Isolation Test Exam ${suffix}`, code: `ISOTEST-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Isolation Subject" } });
-  const topic = await prisma.topic.create({ data: { subjectId: subject.id, name: "Isolation Topic" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Isolation Subject" });
+  const topic = await createFixtureTopic(prisma, { subjectId: subject.id, name: "Isolation Topic" });
 
   const question = await prisma.question.create({
     data: {
@@ -221,6 +222,7 @@ async function main() {
     await prisma.question.delete({ where: { id: question.id } });
     await prisma.topic.delete({ where: { id: topic.id } });
     await prisma.subject.delete({ where: { id: subject.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

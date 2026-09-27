@@ -51,6 +51,7 @@ import {
   InsufficientQuestionsError,
 } from "@/lib/question-selection";
 import { isExpired, remainingSecondsFor, serverNow } from "@/lib/attempt-timing";
+import { createFixtureSubTopic, createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -86,14 +87,14 @@ async function main() {
   const examA = await prisma.exam.create({ data: { name: `Engine Exam A ${suffix}`, code: `ENG-A-${suffix}` } });
   const examB = await prisma.exam.create({ data: { name: `Engine Exam B ${suffix}`, code: `ENG-B-${suffix}` } });
 
-  const subjA = await prisma.subject.create({ data: { examId: examA.id, name: "Engine Subject A" } });
-  const subjB = await prisma.subject.create({ data: { examId: examA.id, name: "Engine Subject B" } });
-  const subjX = await prisma.subject.create({ data: { examId: examB.id, name: "Engine Subject X" } });
+  const subjA = await createFixtureSubject(prisma, { examId: examA.id, name: "Engine Subject A" });
+  const subjB = await createFixtureSubject(prisma, { examId: examA.id, name: "Engine Subject B" });
+  const subjX = await createFixtureSubject(prisma, { examId: examB.id, name: "Engine Subject X" });
 
-  const topicA1 = await prisma.topic.create({ data: { subjectId: subjA.id, name: "Engine Topic A1" } });
-  const subtopicA1 = await prisma.subTopic.create({ data: { topicId: topicA1.id, name: "Engine Subtopic A1" } });
-  const subtopicA2 = await prisma.subTopic.create({ data: { topicId: topicA1.id, name: "Engine Subtopic A2" } });
-  const topicA2 = await prisma.topic.create({ data: { subjectId: subjA.id, name: "Engine Topic A2" } });
+  const topicA1 = await createFixtureTopic(prisma, { subjectId: subjA.id, name: "Engine Topic A1" });
+  const subtopicA1 = await createFixtureSubTopic(prisma, { topicId: topicA1.id, name: "Engine Subtopic A1" });
+  const subtopicA2 = await createFixtureSubTopic(prisma, { topicId: topicA1.id, name: "Engine Subtopic A2" });
+  const topicA2 = await createFixtureTopic(prisma, { subjectId: subjA.id, name: "Engine Topic A2" });
 
   async function makeQuestion(opts: {
     subjectId: string;
@@ -420,6 +421,7 @@ async function main() {
     await prisma.subTopic.deleteMany({ where: { topicId: { in: [topicA1.id, topicA2.id] } } });
     await prisma.topic.deleteMany({ where: { id: { in: [topicA1.id, topicA2.id] } } });
     await prisma.subject.deleteMany({ where: { id: { in: [subjA.id, subjB.id, subjX.id] } } });
+    await deleteFixtureTaxonomy(prisma, [examA.id, examB.id]);
     await prisma.exam.deleteMany({ where: { id: { in: [examA.id, examB.id] } } });
     await prisma.$disconnect();
   }

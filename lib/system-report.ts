@@ -395,7 +395,9 @@ async function loadExamHierarchy(): Promise<ExamHierarchyRow[]> {
       code: true,
       _count: {
         select: {
-          subjects: true,
+          examSubjects: true,
+          examTopics: true,
+          examSubTopics: true,
           questions: true,
           mockTests: true,
           grandTests: true,
@@ -408,26 +410,13 @@ async function loadExamHierarchy(): Promise<ExamHierarchyRow[]> {
     orderBy: { order: "asc" },
   });
 
-  // Topics/SubTopics aren't direct Exam relations — bounded id-only scans
-  // (taxonomy tables, not attempt/question volume) aggregated in memory.
-  const [topics, subTopics] = await Promise.all([
-    prisma.topic.findMany({ select: { subject: { select: { examId: true } } } }),
-    prisma.subTopic.findMany({ select: { topic: { select: { subject: { select: { examId: true } } } } } }),
-  ]);
-  const topicsByExam = new Map<string, number>();
-  for (const t of topics) topicsByExam.set(t.subject.examId, (topicsByExam.get(t.subject.examId) ?? 0) + 1);
-  const subTopicsByExam = new Map<string, number>();
-  for (const st of subTopics) {
-    const examId = st.topic.subject.examId;
-    subTopicsByExam.set(examId, (subTopicsByExam.get(examId) ?? 0) + 1);
-  }
-
+  // Canonical taxonomy: counts are the exam's LINKED subjects/topics/sub-topics.
   return exams.map((e) => ({
     name: e.name,
     code: e.code,
-    subjects: e._count.subjects,
-    topics: topicsByExam.get(e.id) ?? 0,
-    subTopics: subTopicsByExam.get(e.id) ?? 0,
+    subjects: e._count.examSubjects,
+    topics: e._count.examTopics,
+    subTopics: e._count.examSubTopics,
     questions: e._count.questions,
     mockTests: e._count.mockTests,
     grandTests: e._count.grandTests,

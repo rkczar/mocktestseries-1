@@ -4,6 +4,7 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { QuestionDifficulty, QuestionSource, QuestionStatus, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { isSubjectLinked, isTopicLinked, isSubTopicLinked } from "@/lib/exam-taxonomy";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { allocateQuestionCode, questionCodeScope, resolveQuestionCodeInput } from "@/lib/question-code";
@@ -102,7 +103,7 @@ function parseQuestionForm(formData: FormData) {
   });
 }
 
-type HierarchyDb = Pick<Prisma.TransactionClient, "subject" | "topic" | "subTopic">;
+type HierarchyDb = Pick<Prisma.TransactionClient, "subject" | "topic" | "subTopic" | "examSubject" | "examTopic" | "examSubTopic">;
 
 /**
  * Server-side guard against cross-exam hierarchy corruption (e.g. a question
@@ -115,14 +116,21 @@ async function assertHierarchyConsistency(
   db: HierarchyDb,
   params: { examId: string; subjectId: string; topicId?: string | null; subTopicId?: string | null }
 ): Promise<string | null> {
-  const subject = await db.subject.findUnique({ where: { id: params.subjectId }, select: { examId: true } });
+  // Canonical taxonomy: "belongs to the exam" = linked to it (ExamSubject /
+  // ExamTopic / ExamSubTopic), on top of the Subject -> Topic -> SubTopic chain.
+  const subject = await db.subject.findUnique({ where: { id: params.subjectId }, select: { id: true } });
   if (!subject) return "Selected subject was not found.";
-  if (subject.examId !== params.examId) return "Selected subject does not belong to the selected exam.";
+  if (!(await isSubjectLinked(db, params.examId, params.subjectId))) {
+    return "Selected subject is not linked to the selected exam.";
+  }
 
   if (params.topicId) {
     const topic = await db.topic.findUnique({ where: { id: params.topicId }, select: { subjectId: true } });
     if (!topic) return "Selected topic was not found.";
     if (topic.subjectId !== params.subjectId) return "Selected topic does not belong to the selected subject.";
+    if (!(await isTopicLinked(db, params.examId, params.topicId))) {
+      return "Selected topic is not linked to the selected exam.";
+    }
   }
 
   if (params.subTopicId) {
@@ -130,6 +138,9 @@ async function assertHierarchyConsistency(
     if (!subTopic) return "Selected sub-topic was not found.";
     if (!params.topicId || subTopic.topicId !== params.topicId) {
       return "Selected sub-topic does not belong to the selected topic.";
+    }
+    if (!(await isSubTopicLinked(db, params.examId, params.subTopicId))) {
+      return "Selected sub-topic is not linked to the selected exam.";
     }
   }
 

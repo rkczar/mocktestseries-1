@@ -3,6 +3,7 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { QuestionDifficulty, QuestionStatus, QuestionSource } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { getAdminSession } from "@/lib/rbac";
 import {
   COLUMN_BY_KEY,
@@ -77,19 +78,8 @@ export async function POST(request: NextRequest) {
   let subTopicNames: string[] = [];
 
   if (body.examId) {
-    const exam = await prisma.exam.findUnique({
-      where: { id: body.examId },
-      select: {
-        name: true,
-        subjects: {
-          select: {
-            id: true,
-            name: true,
-            topics: { select: { name: true, subTopics: { select: { name: true } } } },
-          },
-        },
-      },
-    });
+    const examRow = await prisma.exam.findUnique({ where: { id: body.examId }, select: { name: true } });
+    const exam = examRow ? { ...examRow, subjects: await getExamTaxonomy(prisma, body.examId) } : null;
     if (exam) {
       examName = exam.name;
       if (body.year) examYear = body.year;

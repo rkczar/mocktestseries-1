@@ -1,30 +1,16 @@
 import { prisma } from "@/lib/prisma";
+import { withExamTaxonomy } from "@/lib/exam-taxonomy";
 import { TemplateBuilder, type ExamContextData } from "./template-builder";
 
 export const metadata = { title: "Question Templates — Mock Test Series.in Admin" };
 
 export default async function Page() {
-  const exams = await prisma.exam.findMany({
+  const examRows = await prisma.exam.findMany({
     orderBy: { order: "asc" },
     select: {
       id: true,
       name: true,
       code: true,
-      subjects: {
-        orderBy: { order: "asc" },
-        select: {
-          id: true,
-          name: true,
-          topics: {
-            orderBy: { order: "asc" },
-            select: {
-              id: true,
-              name: true,
-              subTopics: { orderBy: { order: "asc" }, select: { id: true, name: true } },
-            },
-          },
-        },
-      },
       previousYearPapers: {
         orderBy: { year: "desc" },
         select: { id: true, year: true, title: true },
@@ -32,6 +18,7 @@ export default async function Page() {
     },
   });
 
+  const exams = await withExamTaxonomy(prisma, examRows);
   const examData: ExamContextData[] = exams;
 
   return <TemplateBuilder exams={examData} />;

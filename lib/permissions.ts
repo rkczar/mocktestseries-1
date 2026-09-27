@@ -74,6 +74,12 @@ export const PERMISSIONS = {
   // email and phone. MASTER_ADMIN + FULL_ADMIN (global read-only); TEACHER
   // is refused server-side and never receives the contact data.
   STUDENT_DELETION_VIEW: "student-deletion:view",
+  // Bulk Import rollback (Admin -> Questions -> Bulk Import -> Import History
+  // -> run detail -> Delete Questions Created By This Import). Destructive,
+  // so MASTER_ADMIN-only: FULL_ADMIN can open the run and its impact
+  // analysis but every delete/archive is refused server-side without this
+  // key (TEACHER's QUESTIONS_MANAGE does not grant it either).
+  IMPORT_ROLLBACK_MANAGE: "import-rollback:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

@@ -74,7 +74,7 @@ export function DeleteExamDialog({ examId, examName }: { examId: string; examNam
             <>
               <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
                 {[
-                  ["Subjects", impact.subjects],
+                  ["Subject links (masters kept)", impact.subjects],
                   ["Topics", impact.topics],
                   ["Questions", impact.questions],
                   ["PYQ Papers", impact.papers],

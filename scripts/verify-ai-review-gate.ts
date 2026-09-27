@@ -16,6 +16,7 @@ import "dotenv/config";
 import { PrismaClient, StudentAuthProvider, QuestionStatus, QuestionDifficulty, TestType, AttemptSourceType, AttemptStatus } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { hasInProgressAttemptForQuestion } from "@/lib/student-data";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -29,7 +30,7 @@ function check(label: string, passed: boolean) {
 async function main() {
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `Gate Exam ${suffix}`, code: `GATE-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Gate Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Gate Subject" });
   const question = await prisma.question.create({
     data: {
       examId: exam.id,
@@ -87,6 +88,7 @@ async function main() {
   await prisma.student.delete({ where: { id: student.id } });
   await prisma.question.delete({ where: { id: question.id } });
   await prisma.subject.delete({ where: { id: subject.id } });
+  await deleteFixtureTaxonomy(prisma, [exam.id]);
   await prisma.exam.delete({ where: { id: exam.id } });
 
   console.log(failures === 0 ? "\n=== ALL CHECKS PASSED ===" : `\n=== ${failures} CHECK(S) FAILED ===`);

@@ -50,6 +50,7 @@ import {
 import { isExpired } from "@/lib/attempt-timing";
 import { toPlayerQuestions } from "@/lib/test-player-data";
 import { AnswerSaveQueue, type SaveResult } from "@/lib/answer-save-queue";
+import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 if (/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "") && process.env.ALLOW_PRODUCTION_DB !== "1") {
   console.error("Refusing to run against what looks like the production database. Point DATABASE_URL at a disposable copy.");
@@ -76,8 +77,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function main() {
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `ENG Exam ${suffix}`, code: `ENG-${suffix}`, isActive: true } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "ENG Subject" } });
-  const topic = await prisma.topic.create({ data: { subjectId: subject.id, name: "ENG Topic" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "ENG Subject" });
+  const topic = await createFixtureTopic(prisma, { subjectId: subject.id, name: "ENG Topic" });
   const paper = await prisma.previousYearPaper.create({ data: { examId: exam.id, year: 2024, title: `ENG PYQ ${suffix}` } });
 
   // Options are inserted D,C,B,A with explicit `order` so snapshot ordering is exercised.
@@ -521,6 +522,7 @@ async function main() {
     await prisma.question.deleteMany({ where: { examId: exam.id } });
     await prisma.previousYearPaper.deleteMany({ where: { examId: exam.id } });
     await prisma.student.deleteMany({ where: { id: { in: students } } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

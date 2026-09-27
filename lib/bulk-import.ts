@@ -1,4 +1,5 @@
 import "server-only";
+import { taxonomyNameKey } from "@/lib/exam-taxonomy";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import {
@@ -497,39 +498,59 @@ export function matchRowImagesSync(data: BulkImportRow, imageIndex: Map<string, 
 
 export type ValidationDb = Pick<
   Prisma.TransactionClient,
-  "exam" | "subject" | "topic" | "subTopic" | "previousYearPaper" | "question" | "bulkImportRow"
+  "exam" | "subject" | "topic" | "subTopic" | "examSubject" | "examTopic" | "examSubTopic" | "previousYearPaper" | "question" | "bulkImportRow"
 >;
 
 interface TaxonomyLookups {
   exams: { id: string; name: string; code: string; year: number | null }[];
   examsByName: Map<string, TaxonomyLookups["exams"][number]>;
-  subjects: { id: string; name: string; examId: string }[];
-  subjectsByExamAndName: Map<string, TaxonomyLookups["subjects"][number]>;
-  topics: { id: string; name: string; subjectId: string }[];
-  topicsBySubjectAndName: Map<string, TaxonomyLookups["topics"][number]>;
-  subTopics: { id: string; name: string; topicId: string }[];
-  subTopicsByTopicAndName: Map<string, TaxonomyLookups["subTopics"][number]>;
+  // Canonical taxonomy, keyed by normalized name (lib/exam-taxonomy.ts#taxonomyNameKey).
+  subjects: { id: string; name: string; nameKey: string }[];
+  subjectsByKey: Map<string, TaxonomyLookups["subjects"][number]>;
+  topics: { id: string; name: string; nameKey: string; subjectId: string }[];
+  topicsBySubjectAndKey: Map<string, TaxonomyLookups["topics"][number]>;
+  subTopics: { id: string; name: string; nameKey: string; topicId: string }[];
+  subTopicsByTopicAndKey: Map<string, TaxonomyLookups["subTopics"][number]>;
+  // "examId:recordId" for every active Exam<->taxonomy link.
+  linkedSubjects: Set<string>;
+  linkedTopics: Set<string>;
+  linkedSubTopics: Set<string>;
   papers: { id: string; examId: string; year: number; title: string }[];
 }
 
 export async function buildTaxonomyLookups(db: ValidationDb): Promise<TaxonomyLookups> {
-  const [exams, subjects, topics, subTopics, papers] = await Promise.all([
+  const [exams, subjects, topics, subTopics, papers, subjectLinks, topicLinks, subTopicLinks] = await Promise.all([
     db.exam.findMany({ select: { id: true, name: true, code: true, year: true } }),
-    db.subject.findMany({ select: { id: true, name: true, examId: true } }),
-    db.topic.findMany({ select: { id: true, name: true, subjectId: true } }),
-    db.subTopic.findMany({ select: { id: true, name: true, topicId: true } }),
+    db.subject.findMany({ select: { id: true, name: true, nameKey: true } }),
+    db.topic.findMany({ select: { id: true, name: true, nameKey: true, subjectId: true } }),
+    db.subTopic.findMany({ select: { id: true, name: true, nameKey: true, topicId: true } }),
     db.previousYearPaper.findMany({ select: { id: true, examId: true, year: true, title: true } }),
+    db.examSubject.findMany({ where: { isActive: true }, select: { examId: true, subjectId: true } }),
+    db.examTopic.findMany({ where: { isActive: true }, select: { examId: true, topicId: true } }),
+    db.examSubTopic.findMany({ where: { isActive: true }, select: { examId: true, subTopicId: true } }),
   ]);
 
   const examsByName = new Map(exams.map((e) => [e.name.toLowerCase(), e]));
-  const subjectsByExamAndName = new Map<string, (typeof subjects)[0]>();
-  subjects.forEach((s) => subjectsByExamAndName.set(`${s.examId}:${s.name.toLowerCase()}`, s));
-  const topicsBySubjectAndName = new Map<string, (typeof topics)[0]>();
-  topics.forEach((t) => topicsBySubjectAndName.set(`${t.subjectId}:${t.name.toLowerCase()}`, t));
-  const subTopicsByTopicAndName = new Map<string, (typeof subTopics)[0]>();
-  subTopics.forEach((st) => subTopicsByTopicAndName.set(`${st.topicId}:${st.name.toLowerCase()}`, st));
+  const subjectsByKey = new Map(subjects.map((s) => [s.nameKey, s]));
+  const topicsBySubjectAndKey = new Map<string, (typeof topics)[0]>();
+  topics.forEach((t) => topicsBySubjectAndKey.set(`${t.subjectId}:${t.nameKey}`, t));
+  const subTopicsByTopicAndKey = new Map<string, (typeof subTopics)[0]>();
+  subTopics.forEach((st) => subTopicsByTopicAndKey.set(`${st.topicId}:${st.nameKey}`, st));
 
-  return { exams, examsByName, subjects, subjectsByExamAndName, topics, topicsBySubjectAndName, subTopics, subTopicsByTopicAndName, papers };
+  return {
+    exams,
+    examsByName,
+    subjects,
+    subjectsByKey,
+    topics,
+    topicsBySubjectAndKey,
+    subTopics,
+    subTopicsByTopicAndKey,
+    linkedSubjects: new Set(subjectLinks.map((l) => `${l.examId}:${l.subjectId}`)),
+    linkedTopics: new Set(topicLinks.map((l) => `${l.examId}:${l.topicId}`)),
+    linkedSubTopics: new Set(subTopicLinks.map((l) => `${l.examId}:${l.subTopicId}`)),
+    papers,
+  };
 }
 
 /**
@@ -557,7 +578,7 @@ export async function resolveRow(
     return { ...parsedRow, errors, warnings, unmapped, reviewRequired, forceDraft: false, resolvedData: undefined };
   }
 
-  const { examsByName, subjectsByExamAndName, topicsBySubjectAndName, subTopicsByTopicAndName, topics, subTopics, papers } = lookups;
+  const { examsByName, subjectsByKey, topicsBySubjectAndKey, subTopicsByTopicAndKey, topics, subTopics, papers } = lookups;
 
   // Exam: the file's Exam column, when it names an existing Exam, wins;
   // otherwise fall back to the Bulk Import run's selected Exam context
@@ -598,12 +619,21 @@ export async function resolveRow(
     };
   }
 
+  // Canonical taxonomy: names resolve to the ONE shared Subject/Topic/SubTopic
+  // record (normalized-name match), never to a per-exam copy. A canonical
+  // record the exam doesn't link yet is reused and linked on import (a
+  // WARNING so the admin sees it); a name with no canonical record needs
+  // mapping — the importer never invents taxonomy.
+  const notLinked: string[] = [];
+
   // Subject: required data, but an unresolved name is a WARNING (needs mapping), not an ERROR.
-  const subject = data.subject ? subjectsByExamAndName.get(`${exam.id}:${data.subject.toLowerCase()}`) : undefined;
+  const subject = data.subject ? subjectsByKey.get(taxonomyNameKey(data.subject)) : undefined;
   if (data.subject && !subject) {
     unmapped.push({ field: "subject", value: data.subject });
-    warnings.push(`Subject "${data.subject}" not found for exam "${exam.name}" — needs mapping before import`);
+    warnings.push(`Subject "${data.subject}" not found in the master taxonomy — needs mapping before import`);
     reviewRequired = true;
+  } else if (subject && !lookups.linkedSubjects.has(`${exam.id}:${subject.id}`)) {
+    notLinked.push(`Subject "${subject.name}"`);
   }
 
   // Topic: only meaningful once Subject resolves. A name that exists under a
@@ -611,10 +641,11 @@ export async function resolveRow(
   // that doesn't exist anywhere is a WARNING (unmapped).
   let topic: TaxonomyLookups["topics"][number] | undefined;
   if (data.topic) {
+    const topicKey = taxonomyNameKey(data.topic);
     if (subject) {
-      topic = topicsBySubjectAndName.get(`${subject.id}:${data.topic.toLowerCase()}`);
+      topic = topicsBySubjectAndKey.get(`${subject.id}:${topicKey}`);
       if (!topic) {
-        const existsElsewhere = topics.some((t) => t.name.toLowerCase() === data.topic.toLowerCase() && t.subjectId !== subject.id);
+        const existsElsewhere = topics.some((t) => t.nameKey === topicKey && t.subjectId !== subject.id);
         if (existsElsewhere) {
           errors.push(`Topic "${data.topic}" exists but does not belong to subject "${data.subject}"`);
         } else {
@@ -622,6 +653,8 @@ export async function resolveRow(
           warnings.push(`Topic "${data.topic}" not found for subject "${data.subject}" — needs mapping`);
           reviewRequired = true;
         }
+      } else if (!lookups.linkedTopics.has(`${exam.id}:${topic.id}`)) {
+        notLinked.push(`Topic "${topic.name}"`);
       }
     } else {
       unmapped.push({ field: "topic", value: data.topic });
@@ -633,12 +666,11 @@ export async function resolveRow(
   // SubTopic: same pattern, relative to Topic.
   let subTopic: TaxonomyLookups["subTopics"][number] | undefined;
   if (data.subTopic) {
+    const subTopicKey = taxonomyNameKey(data.subTopic);
     if (topic) {
-      subTopic = subTopicsByTopicAndName.get(`${topic.id}:${data.subTopic.toLowerCase()}`);
+      subTopic = subTopicsByTopicAndKey.get(`${topic.id}:${subTopicKey}`);
       if (!subTopic) {
-        const existsElsewhere = subTopics.some(
-          (st) => st.name.toLowerCase() === data.subTopic.toLowerCase() && st.topicId !== topic!.id
-        );
+        const existsElsewhere = subTopics.some((st) => st.nameKey === subTopicKey && st.topicId !== topic!.id);
         if (existsElsewhere) {
           errors.push(`Sub-topic "${data.subTopic}" exists but does not belong to topic "${data.topic}"`);
         } else {
@@ -646,12 +678,18 @@ export async function resolveRow(
           warnings.push(`Sub-topic "${data.subTopic}" not found for topic "${data.topic}" — needs mapping`);
           reviewRequired = true;
         }
+      } else if (!lookups.linkedSubTopics.has(`${exam.id}:${subTopic.id}`)) {
+        notLinked.push(`Sub-topic "${subTopic.name}"`);
       }
     } else {
       unmapped.push({ field: "subTopic", value: data.subTopic });
       warnings.push(`Sub-topic "${data.subTopic}" could not be checked because Topic is unmapped`);
       reviewRequired = true;
     }
+  }
+
+  if (notLinked.length > 0) {
+    warnings.push(`${notLinked.join(", ")} exists in the master taxonomy but is not yet linked to "${exam.name}" — the existing record will be linked on import (no copy is created).`);
   }
 
   // Exam Year: file value wins when it's a valid 4-digit year; otherwise

@@ -290,8 +290,10 @@ export async function getExamDeleteImpact(examId: string): Promise<ExamDeleteImp
   await requirePermission(PERMISSIONS.EXAMS_MANAGE);
 
   const [subjects, topics, questions, papers, mockTests, customModules, grandTests, liveTests, testAttempts, enrollments] = await Promise.all([
-    prisma.subject.count({ where: { examId } }),
-    prisma.topic.count({ where: { subject: { examId } } }),
+    // Canonical taxonomy: deleting an exam removes only its links; the shared
+    // Subject/Topic masters stay for every other exam.
+    prisma.examSubject.count({ where: { examId } }),
+    prisma.examTopic.count({ where: { examId } }),
     prisma.question.count({ where: { examId } }),
     prisma.previousYearPaper.count({ where: { examId } }),
     prisma.mockTest.count({ where: { examId } }),

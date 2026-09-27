@@ -61,11 +61,16 @@ async function main() {
 
   try {
     // A subject with enough published questions for every case below.
-    const subject = await prisma.subject.findFirst({
-      where: { exam: { isActive: true }, questions: { some: { status: QuestionStatus.PUBLISHED } } },
+    const subjectRow = await prisma.subject.findFirst({
+      where: { examLinks: { some: { exam: { isActive: true } } }, questions: { some: { status: QuestionStatus.PUBLISHED } } },
       orderBy: { questions: { _count: "desc" } },
+      include: { examLinks: { where: { exam: { isActive: true } }, select: { examId: true } } },
     });
-    if (!subject) throw new Error("No subject with published questions.");
+    if (!subjectRow) throw new Error("No subject with published questions.");
+    // Canonical taxonomy: the exam is the linked one the questions belong to.
+    const examIdForSubject =
+      (await prisma.question.findFirst({ where: { subjectId: subjectRow.id, status: QuestionStatus.PUBLISHED, examId: { in: subjectRow.examLinks.map((l) => l.examId) } }, select: { examId: true } }))?.examId ?? "";
+    const subject = { ...subjectRow, examId: examIdForSubject };
     const base = { examId: subject.examId, subjectId: subject.id, durationMinutes: 0 };
 
     console.log("\n--- Subject Test via UniversalTestSetup ---");

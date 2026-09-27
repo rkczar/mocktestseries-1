@@ -4,6 +4,7 @@ import { z } from "zod";
 import { redirect } from "next/navigation";
 import type { MockResultRelease, MockTestStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { examSubjectWhere, examTopicWhere } from "@/lib/exam-taxonomy";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { parseIstDateTimeLocal } from "@/lib/ist-time";
@@ -56,8 +57,8 @@ async function readCoverage(formData: FormData, examId: string, coverageType: st
   const subjectIds = formData.getAll("coverageSubjectIds").map(String);
   const topicIds = formData.getAll("coverageTopicIds").map(String);
   const [subjects, topics] = await Promise.all([
-    prisma.subject.findMany({ where: { id: { in: subjectIds }, examId }, select: { id: true } }),
-    prisma.topic.findMany({ where: { id: { in: topicIds }, subject: { examId } }, select: { id: true } }),
+    prisma.subject.findMany({ where: { id: { in: subjectIds }, ...examSubjectWhere(examId) }, select: { id: true } }),
+    prisma.topic.findMany({ where: { id: { in: topicIds }, ...examTopicWhere(examId) }, select: { id: true } }),
   ]);
   const okS = new Set(subjects.map((s) => s.id));
   const okT = new Set(topics.map((t) => t.id));

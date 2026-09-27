@@ -17,6 +17,7 @@ import { validateImportRows, type BulkImportRow } from "@/lib/bulk-import";
 import { executeBulkImport, recomputeRunCounts } from "@/lib/bulk-import-execute";
 import { validateSelection, REQUIRED_CORE_KEYS, PRESETS } from "../app/admin/(dashboard)/questions/templates/presets";
 import { readFileSync } from "fs";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -128,7 +129,7 @@ async function main() {
     const suffix = Date.now();
     const exam = await prisma.exam.create({ data: { name: `VERIFY-QB-EXAM-${suffix}`, code: `VERIFYQB${suffix}` } });
     createdIds.exams.push(exam.id);
-    const subject = await prisma.subject.create({ data: { examId: exam.id, name: "VERIFY-QB-SUBJECT" } });
+    const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "VERIFY-QB-SUBJECT" });
 
     const adminUser = await prisma.adminUser.findFirst({ where: { role: { name: RoleName.MASTER_ADMIN } } });
     if (!adminUser) throw new Error("No MASTER_ADMIN admin user found to attribute the fixture import to");
@@ -200,6 +201,7 @@ async function main() {
       await prisma.bulkImportRow.deleteMany({ where: { runId: { in: createdIds.runs } } });
       await prisma.bulkImportRun.deleteMany({ where: { id: { in: createdIds.runs } } });
     }
+    if (createdIds.exams.length) await deleteFixtureTaxonomy(prisma, createdIds.exams);
     if (createdIds.exams.length) await prisma.exam.deleteMany({ where: { id: { in: createdIds.exams } } });
     await prisma.$disconnect();
   }

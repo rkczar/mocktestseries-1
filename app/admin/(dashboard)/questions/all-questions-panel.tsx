@@ -17,6 +17,7 @@ export async function AllQuestionsPanel({
   importBatchId,
   importedFrom,
   importedTo,
+  qb,
 }: {
   examId?: string;
   status?: string;
@@ -33,6 +34,8 @@ export async function AllQuestionsPanel({
   importBatchId?: string;
   importedFrom?: string;
   importedTo?: string;
+  /** Serialized list state ("page=4&subjectId=…") the client mirrors into the URL, so Admin Back returns to the same filtered page. */
+  qb?: string;
 }) {
   // Fetch filter options
   const [exams, subjects, topics, subTopics, importBatches] = await Promise.all([
@@ -42,15 +45,15 @@ export async function AllQuestionsPanel({
     }),
     prisma.subject.findMany({
       orderBy: { name: "asc" },
-      select: { id: true, name: true, examId: true }
+      select: { id: true, name: true, examLinks: { where: { isActive: true }, select: { examId: true } } },
     }),
     prisma.topic.findMany({
       orderBy: { name: "asc" },
-      select: { id: true, name: true, subjectId: true }
+      select: { id: true, name: true, subjectId: true, examLinks: { where: { isActive: true }, select: { examId: true } } },
     }),
     prisma.subTopic.findMany({
       orderBy: { name: "asc" },
-      select: { id: true, name: true, topicId: true }
+      select: { id: true, name: true, topicId: true, examLinks: { where: { isActive: true }, select: { examId: true } } },
     }),
     prisma.bulkImportRun.findMany({
       orderBy: { createdAt: "desc" },
@@ -76,15 +79,24 @@ export async function AllQuestionsPanel({
     importedFrom: importedFrom || "",
     importedTo: importedTo || "",
   };
+  // Restored list state (filters + page) wins over the individual params.
+  const restored = new URLSearchParams(qb ?? "");
+  for (const key of Object.keys(initialFilters) as (keyof typeof initialFilters)[]) {
+    const v = restored.get(key);
+    if (v) initialFilters[key] = v;
+  }
+  const initialPage = Math.max(1, parseInt(restored.get("page") ?? "1", 10) || 1);
 
   return (
     <AllQuestionsPanelClient
       initialFilters={initialFilters}
+      initialPage={initialPage}
       filterOptions={{
         exams,
-        subjects,
-        topics,
-        subTopics,
+        // Exam -> linked Subject -> linked Topic -> linked SubTopic cascade.
+        subjects: subjects.map(({ examLinks, ...s }) => ({ ...s, examIds: examLinks.map((l) => l.examId) })),
+        topics: topics.map(({ examLinks, ...t }) => ({ ...t, examIds: examLinks.map((l) => l.examId) })),
+        subTopics: subTopics.map(({ examLinks, ...st }) => ({ ...st, examIds: examLinks.map((l) => l.examId) })),
         importBatches: importBatches.map((b) => ({
           id: b.id,
           label: b.label ?? b.filename,

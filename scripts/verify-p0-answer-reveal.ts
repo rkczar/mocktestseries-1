@@ -34,6 +34,7 @@ import {
 } from "@/lib/student-data";
 import { startMockTestAttempt, saveAnswer, submitAttempt } from "@/lib/test-attempt";
 import { selectPublishedQuestions } from "@/lib/question-selection";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -55,7 +56,7 @@ async function rejects(fn: () => Promise<unknown>) {
 async function main() {
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `P0 Exam ${suffix}`, code: `P0-${suffix}`, isActive: true } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "P0 Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "P0 Subject" });
   const mkQuestion = (n: number, status: QuestionStatus = QuestionStatus.PUBLISHED) =>
     prisma.question.create({
       data: {
@@ -193,6 +194,7 @@ async function main() {
   await prisma.testAttempt.deleteMany({ where: { studentId: { in: [a.id, b.id] } } });
   await prisma.student.deleteMany({ where: { id: { in: [a.id, b.id] } } });
   await prisma.mockTest.delete({ where: { id: mock.id } });
+  await deleteFixtureTaxonomy(prisma, [exam.id]);
   await prisma.exam.delete({ where: { id: exam.id } });
 
   console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);

@@ -15,11 +15,11 @@ import { PERMISSIONS } from "@/lib/permissions";
  * fields, and reordering.
  */
 
-function revalidateSyllabusSurfaces(examId: string) {
+function revalidateSyllabusSurfaces(scopeId: string) {
   revalidatePath("/admin/exams/syllabus");
   revalidatePath("/admin/website/diagram");
   revalidatePath("/student/exams/[examId]", "page");
-  void examId; // kept for signature symmetry / future per-exam revalidation (e.g. ISR tags)
+  void scopeId; // kept for signature symmetry / future per-exam revalidation (e.g. ISR tags)
 }
 
 export async function toggleSyllabusEnabledAction(examId: string, enabled: boolean) {
@@ -82,7 +82,8 @@ export async function updateSubjectSyllabusDescriptionAction(
     data: { actorId: session.user.id, action: "SYLLABUS_SUBJECT_DESCRIPTION_UPDATED", entityType: "Subject", entityId: subjectId },
   });
 
-  revalidateSyllabusSurfaces(subject.examId);
+  // Canonical subject: its syllabus description is shared by every linking exam.
+  revalidateSyllabusSurfaces(subject.id);
   return { success: true };
 }
 
@@ -99,32 +100,34 @@ export async function updateTopicSyllabusDescriptionAction(
   const topic = await prisma.topic.update({
     where: { id: topicId },
     data: { syllabusDescription: parsed.data || null },
-    include: { subject: true },
   });
   await prisma.auditLog.create({
     data: { actorId: session.user.id, action: "SYLLABUS_TOPIC_DESCRIPTION_UPDATED", entityType: "Topic", entityId: topicId },
   });
 
-  revalidateSyllabusSurfaces(topic.subject.examId);
+  revalidateSyllabusSurfaces(topic.id);
   return { success: true };
 }
 
 /**
- * Reordering swaps two siblings' `order` after normalizing the whole list to
- * its currently-displayed 0..n-1 order — safe even though most existing rows
- * still share the schema default of `order: 0` (never reordered before).
+ * Reordering swaps two siblings' per-exam `displayOrder` (on the Exam link,
+ * never the shared master) after normalizing the whole list to its
+ * currently-displayed 0..n-1 order.
  */
 export async function moveSubjectAction(examId: string, subjectId: string, direction: "up" | "down") {
   const session = await requirePermission(PERMISSIONS.EXAMS_MANAGE);
-  const subjects = await prisma.subject.findMany({ where: { examId }, orderBy: [{ order: "asc" }, { name: "asc" }] });
-  const from = subjects.findIndex((s) => s.id === subjectId);
+  const links = await prisma.examSubject.findMany({
+    where: { examId, isActive: true },
+    orderBy: [{ displayOrder: "asc" }, { subject: { name: "asc" } }],
+  });
+  const from = links.findIndex((l) => l.subjectId === subjectId);
   const to = direction === "up" ? from - 1 : from + 1;
-  if (from < 0 || to < 0 || to >= subjects.length) return;
+  if (from < 0 || to < 0 || to >= links.length) return;
 
-  await prisma.$transaction(subjects.map((s, i) => prisma.subject.update({ where: { id: s.id }, data: { order: i } })));
+  await prisma.$transaction(links.map((l, i) => prisma.examSubject.update({ where: { id: l.id }, data: { displayOrder: i } })));
   await prisma.$transaction([
-    prisma.subject.update({ where: { id: subjects[from].id }, data: { order: to } }),
-    prisma.subject.update({ where: { id: subjects[to].id }, data: { order: from } }),
+    prisma.examSubject.update({ where: { id: links[from].id }, data: { displayOrder: to } }),
+    prisma.examSubject.update({ where: { id: links[to].id }, data: { displayOrder: from } }),
   ]);
 
   await prisma.auditLog.create({
@@ -135,15 +138,18 @@ export async function moveSubjectAction(examId: string, subjectId: string, direc
 
 export async function moveTopicAction(examId: string, subjectId: string, topicId: string, direction: "up" | "down") {
   const session = await requirePermission(PERMISSIONS.EXAMS_MANAGE);
-  const topics = await prisma.topic.findMany({ where: { subjectId }, orderBy: [{ order: "asc" }, { name: "asc" }] });
-  const from = topics.findIndex((t) => t.id === topicId);
+  const links = await prisma.examTopic.findMany({
+    where: { examId, isActive: true, topic: { subjectId } },
+    orderBy: [{ displayOrder: "asc" }, { topic: { name: "asc" } }],
+  });
+  const from = links.findIndex((l) => l.topicId === topicId);
   const to = direction === "up" ? from - 1 : from + 1;
-  if (from < 0 || to < 0 || to >= topics.length) return;
+  if (from < 0 || to < 0 || to >= links.length) return;
 
-  await prisma.$transaction(topics.map((t, i) => prisma.topic.update({ where: { id: t.id }, data: { order: i } })));
+  await prisma.$transaction(links.map((l, i) => prisma.examTopic.update({ where: { id: l.id }, data: { displayOrder: i } })));
   await prisma.$transaction([
-    prisma.topic.update({ where: { id: topics[from].id }, data: { order: to } }),
-    prisma.topic.update({ where: { id: topics[to].id }, data: { order: from } }),
+    prisma.examTopic.update({ where: { id: links[from].id }, data: { displayOrder: to } }),
+    prisma.examTopic.update({ where: { id: links[to].id }, data: { displayOrder: from } }),
   ]);
 
   await prisma.auditLog.create({

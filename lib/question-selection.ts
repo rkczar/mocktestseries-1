@@ -5,6 +5,7 @@ import {
   type QuestionOption,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { isSubjectLinked, isTopicLinked, isSubTopicLinked } from "@/lib/exam-taxonomy";
 import { getAnswerRevealableQuestionIds } from "@/lib/student-data";
 
 /**
@@ -179,22 +180,17 @@ async function buildQuestionWhere(filters: QuestionSelectionFilters) {
  * exact same check rather than re-implementing it.
  */
 export async function assertValidOwnershipChain(filters: QuestionSelectionFilters) {
-  if (filters.subjectId) {
-    const subject = await prisma.subject.findUnique({ where: { id: filters.subjectId }, select: { examId: true } });
-    if (!subject || subject.examId !== filters.examId) {
-      throw new Error("The selected subject does not belong to this exam.");
-    }
+  // Canonical taxonomy: "belongs to this exam" means linked to it
+  // (ExamSubject/ExamTopic/ExamSubTopic), plus the usual parent chain.
+  if (filters.subjectId && !(await isSubjectLinked(prisma, filters.examId, filters.subjectId))) {
+    throw new Error("The selected subject does not belong to this exam.");
   }
   if (filters.topicId) {
-    const topic = await prisma.topic.findUnique({
-      where: { id: filters.topicId },
-      select: { subjectId: true, subject: { select: { examId: true } } },
-    });
+    const topic = await prisma.topic.findUnique({ where: { id: filters.topicId }, select: { subjectId: true } });
     if (!topic || (filters.subjectId && topic.subjectId !== filters.subjectId)) {
       throw new Error("The selected topic does not belong to the selected subject.");
     }
-    // A topic id implies its subject — if none was given, trust the topic's own exam scope.
-    if (!filters.subjectId && topic.subject.examId !== filters.examId) {
+    if (!(await isTopicLinked(prisma, filters.examId, filters.topicId))) {
       throw new Error("The selected topic does not belong to this exam.");
     }
     if (filters.subTopicId) {
@@ -202,7 +198,7 @@ export async function assertValidOwnershipChain(filters: QuestionSelectionFilter
         where: { id: filters.subTopicId },
         select: { topicId: true },
       });
-      if (!subTopic || subTopic.topicId !== filters.topicId) {
+      if (!subTopic || subTopic.topicId !== filters.topicId || !(await isSubTopicLinked(prisma, filters.examId, filters.subTopicId))) {
         throw new Error("The selected sub-topic does not belong to the selected topic.");
       }
     }

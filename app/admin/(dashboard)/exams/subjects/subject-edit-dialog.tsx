@@ -26,7 +26,7 @@ function SubmitButton() {
   );
 }
 
-export function SubjectEditDialog({ id, name, order }: { id: string; name: string; order: number }) {
+export function SubjectEditDialog({ id, name, order, examId }: { id: string; name: string; order: number; examId?: string }) {
   const [state, formAction] = useActionState<SubjectFormState, FormData>(editSubjectAction, {});
   const [open, setOpen] = useState(false);
 
@@ -47,6 +47,10 @@ export function SubjectEditDialog({ id, name, order }: { id: string; name: strin
         </DialogHeader>
         <form action={formAction} className="flex flex-col gap-3">
           <input type="hidden" name="id" value={id} />
+          {examId ? <input type="hidden" name="examId" value={examId} /> : null}
+          <p className="text-xs text-[var(--color-muted-foreground)]">
+            Shared master record: a rename shows in every exam that uses it.{examId ? " Display order applies to this exam only." : ""}
+          </p>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`subject-name-${id}`}>Subject Name</Label>
             <Input id={`subject-name-${id}`} name="name" defaultValue={name} required />

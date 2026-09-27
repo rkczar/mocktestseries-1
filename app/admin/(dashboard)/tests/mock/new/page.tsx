@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -87,11 +88,7 @@ export default async function NewMockTestPage({
   }
 
   const [subjects, last] = await Promise.all([
-    prisma.subject.findMany({
-      where: { examId: exam.id },
-      orderBy: { order: "asc" },
-      select: { id: true, name: true, topics: { orderBy: { order: "asc" }, select: { id: true, name: true } } },
-    }),
+    getExamTaxonomy(prisma, exam.id),
     series ? prisma.mockTest.findFirst({ where: { testSeriesId: series.id }, orderBy: { order: "desc" }, select: { order: true } }) : null,
   ]);
 

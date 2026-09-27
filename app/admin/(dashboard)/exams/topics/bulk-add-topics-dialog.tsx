@@ -23,9 +23,18 @@ interface ExamWithSubjects {
   subjects: { id: string; name: string }[];
 }
 
-export function BulkAddTopicsDialog({ exams, defaultSubjectId }: { exams: ExamWithSubjects[]; defaultSubjectId?: string }) {
+export function BulkAddTopicsDialog({
+  exams,
+  defaultSubjectId,
+  defaultExamId,
+}: {
+  exams: ExamWithSubjects[];
+  defaultSubjectId?: string;
+  defaultExamId?: string;
+}) {
   const examsWithSubjects = useMemo(() => exams.filter((e) => e.subjects.length > 0), [exams]);
-  const defaultExam = examsWithSubjects.find((e) => e.subjects.some((s) => s.id === defaultSubjectId));
+  const defaultExam =
+    examsWithSubjects.find((e) => e.id === defaultExamId) ?? examsWithSubjects.find((e) => e.subjects.some((s) => s.id === defaultSubjectId));
 
   const [examId, setExamId] = useState(defaultExam?.id ?? examsWithSubjects[0]?.id ?? "");
   const exam = useMemo(() => examsWithSubjects.find((e) => e.id === examId), [examsWithSubjects, examId]);
@@ -47,7 +56,7 @@ export function BulkAddTopicsDialog({ exams, defaultSubjectId }: { exams: ExamWi
     setError(null);
     setResult(null);
     startTransition(async () => {
-      const res = await bulkCreateTopicsAction(subjectId, names);
+      const res = await bulkCreateTopicsAction(subjectId, names, examId);
       if (res.error) setError(res.error);
       else if (res.result) {
         setResult(res.result);
@@ -68,7 +77,7 @@ export function BulkAddTopicsDialog({ exams, defaultSubjectId }: { exams: ExamWi
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Bulk Add Topics</DialogTitle>
-          <DialogDescription>One topic per line. Blank lines are ignored, and duplicates under the same subject are skipped.</DialogDescription>
+          <DialogDescription>One topic per line. Blank lines are ignored. Names that already exist under the subject are never duplicated — they are linked to this exam instead.</DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-2 gap-3">
@@ -115,7 +124,12 @@ export function BulkAddTopicsDialog({ exams, defaultSubjectId }: { exams: ExamWi
             </p>
             {result.duplicates.length > 0 ? (
               <p className="flex items-center gap-1.5 text-[var(--color-warning)]">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden /> {result.duplicates.length} skipped (already exist): {result.duplicates.join(", ")}
+                <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden /> {result.duplicates.length} already existed (not duplicated): {result.duplicates.join(", ")}
+              </p>
+            ) : null}
+            {result.linkedExisting && result.linkedExisting.length > 0 ? (
+              <p className="flex items-center gap-1.5 text-[var(--color-success)]">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden /> {result.linkedExisting.length} existing linked to this exam: {result.linkedExisting.join(", ")}
               </p>
             ) : null}
             {result.failed.length > 0 ? (

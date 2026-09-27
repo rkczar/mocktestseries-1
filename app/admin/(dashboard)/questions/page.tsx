@@ -13,9 +13,9 @@ export const metadata = { title: "Question Bank — Mock Test Series.in Admin" }
 export default async function QuestionsControlCenter({
   searchParams,
 }: {
-  searchParams: Promise<{ examId?: string; status?: string; id?: string; subjectId?: string; search?: string }>;
+  searchParams: Promise<{ examId?: string; status?: string; id?: string; subjectId?: string; search?: string; qb?: string }>;
 }) {
-  const { examId, status, id, subjectId, search } = await searchParams;
+  const { examId, status, id, subjectId, search, qb } = await searchParams;
 
   return (
     <div className="flex flex-col gap-6">
@@ -29,7 +29,7 @@ export default async function QuestionsControlCenter({
       <ControlCenterTabs
         defaultValue="all"
         tabs={[
-          { value: "all", label: "All Questions", content: <AllQuestionsPanel examId={examId} status={status} /> },
+          { value: "all", label: "All Questions", content: <AllQuestionsPanel examId={examId} status={status} qb={qb} /> },
           { value: "add", label: "Add Question", content: <AddQuestionPage searchParams={Promise.resolve({ id })} /> },
           { value: "bulk-import", label: "Bulk Import", content: <BulkImportPage searchParams={Promise.resolve({})} /> },
           { value: "queries", label: "Queries", content: <QueriesPage /> },

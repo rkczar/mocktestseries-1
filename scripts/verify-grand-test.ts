@@ -38,6 +38,7 @@ import argon2 from "argon2";
 // These import `server-only`, which is inert under the react-server condition.
 import { startGrandTestAttempt } from "@/lib/test-attempt";
 import { selectPublishedQuestions, assertValidOwnershipChain, InsufficientQuestionsError } from "@/lib/question-selection";
+import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -108,10 +109,10 @@ async function main() {
   const examA = await prisma.exam.create({ data: { name: `Grand Exam A ${suffix}`, code: `GRD-A-${suffix}` } });
   const examB = await prisma.exam.create({ data: { name: `Grand Exam B ${suffix}`, code: `GRD-B-${suffix}` } });
 
-  const subjA = await prisma.subject.create({ data: { examId: examA.id, name: "Grand Subject A" } });
-  const subjB = await prisma.subject.create({ data: { examId: examA.id, name: "Grand Subject B" } });
-  const subjX = await prisma.subject.create({ data: { examId: examB.id, name: "Grand Subject X" } });
-  const topicA1 = await prisma.topic.create({ data: { subjectId: subjA.id, name: "Grand Topic A1" } });
+  const subjA = await createFixtureSubject(prisma, { examId: examA.id, name: "Grand Subject A" });
+  const subjB = await createFixtureSubject(prisma, { examId: examA.id, name: "Grand Subject B" });
+  const subjX = await createFixtureSubject(prisma, { examId: examB.id, name: "Grand Subject X" });
+  const topicA1 = await createFixtureTopic(prisma, { subjectId: subjA.id, name: "Grand Topic A1" });
 
   async function makeQuestion(opts: { subjectId: string; topicId?: string; status?: QuestionStatus }) {
     return prisma.question.create({
@@ -279,6 +280,7 @@ async function main() {
     await prisma.question.deleteMany({ where: { examId: { in: [examA.id, examB.id] } } });
     await prisma.topic.deleteMany({ where: { id: topicA1.id } });
     await prisma.subject.deleteMany({ where: { id: { in: [subjA.id, subjB.id, subjX.id] } } });
+    await deleteFixtureTaxonomy(prisma, [examA.id, examB.id]);
     await prisma.exam.deleteMany({ where: { id: { in: [examA.id, examB.id] } } });
     await prisma.$disconnect();
   }

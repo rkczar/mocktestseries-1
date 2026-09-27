@@ -14,7 +14,8 @@ export default async function AdminDashboardLayout({ children }: { children: Rea
   return (
     <div className="flex min-h-screen bg-[var(--color-background)]">
       <Sidebar defaultCollapsed={defaultCollapsed} />
-      <div className="flex min-h-screen flex-1 flex-col">
+      {/* min-w-0: wide tables scroll inside their own cards instead of stretching the column (and the header) past a phone screen. */}
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
         <AdminHeader adminName={session.user.name ?? "Admin"} role={session.user.role ?? "ADMIN"} />
         <main className="flex-1 p-4 lg:p-6">{children}</main>
       </div>

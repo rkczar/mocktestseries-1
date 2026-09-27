@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getExamSubjects } from "@/lib/exam-taxonomy";
 import { getSavedQuestionsAdminOverview } from "@/lib/admin-saved-questions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +17,7 @@ export default async function AdminSavedQuestionsPage({
 
   const [exams, subjects, overview] = await Promise.all([
     prisma.exam.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    examId ? prisma.subject.findMany({ where: { examId }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
+    examId ? getExamSubjects(prisma, examId) : Promise.resolve([]),
     getSavedQuestionsAdminOverview({ examId, subjectId, search }),
   ]);
 

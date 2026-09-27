@@ -46,6 +46,7 @@ import { startLiveTestAttempt, saveAnswer, submitAttempt, finalizeIfExpired, rec
 import { selectPublishedQuestions } from "@/lib/question-selection";
 import { deriveLiveTestState } from "@/lib/live-test";
 import { effectiveEndFor, isExpired, remainingSecondsFor } from "@/lib/attempt-timing";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -77,7 +78,7 @@ async function main() {
 
   // ---- Fixture ------------------------------------------------------
   const exam = await prisma.exam.create({ data: { name: `Live Exam ${suffix}`, code: `LIVE-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Live Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Live Subject" });
 
   async function makeQuestion(status: QuestionStatus = QuestionStatus.PUBLISHED) {
     return prisma.question.create({
@@ -333,6 +334,7 @@ async function main() {
     await prisma.liveTest.deleteMany({ where: { id: { in: liveTestIds } } });
     await prisma.question.deleteMany({ where: { examId: exam.id } });
     await prisma.subject.delete({ where: { id: subject.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

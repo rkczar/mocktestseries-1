@@ -1,21 +1,18 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { withExamTaxonomy } from "@/lib/exam-taxonomy";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { QuestionForm, type ExamTree, type QuestionDefaults } from "../question-form";
 
 export const metadata = { title: "Add Question — Mock Test Series.in Admin" };
 
 async function loadExamTree(): Promise<ExamTree[]> {
-  return prisma.exam.findMany({
+  // Each exam's LINKED canonical taxonomy (Exam -> Subject -> Topic -> SubTopic).
+  const exams = await prisma.exam.findMany({
     orderBy: { order: "asc" },
-    include: {
-      subjects: {
-        orderBy: { order: "asc" },
-        include: { topics: { orderBy: { order: "asc" }, include: { subTopics: { orderBy: { order: "asc" } } } } },
-      },
-      previousYearPapers: { orderBy: { year: "desc" } },
-    },
+    include: { previousYearPapers: { orderBy: { year: "desc" } } },
   });
+  return withExamTaxonomy(prisma, exams);
 }
 
 export default async function AddQuestionPage({

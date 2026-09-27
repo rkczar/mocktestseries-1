@@ -16,6 +16,7 @@ import argon2 from "argon2";
 import { checkAiAccessQuota, logAiAccess } from "@/lib/student-data";
 import { saveAiSettings, bumpAiSettingsEpoch } from "@/lib/ai-settings";
 import { regenerateExplanation, ExplanationNotReadyError, AiGenerationInProgressError, AiNotConfiguredError } from "@/lib/ai-explanation";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -42,7 +43,7 @@ async function main() {
   const suffix = Date.now().toString(36);
 
   const exam = await prisma.exam.create({ data: { name: `Quota Exam ${suffix}`, code: `QT-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Quota Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Quota Subject" });
 
   async function makeQuestion() {
     return prisma.question.create({
@@ -162,6 +163,7 @@ async function main() {
     await prisma.student.delete({ where: { id: student.id } });
     await prisma.question.deleteMany({ where: { id: { in: questionIds } } });
     await prisma.subject.delete({ where: { id: subject.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

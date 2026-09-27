@@ -18,6 +18,7 @@ import {
   type BulkImportRow as ParsedRowShape,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
+import { linkSubjectToExam, linkSubTopicToExam, linkTopicToExam } from "@/lib/exam-taxonomy";
 
 const OPTION_LABELS = ["A", "B", "C", "D"] as const;
 
@@ -275,6 +276,38 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
 
     try {
       const outcome = await prisma.$transaction(async (tx) => {
+        const finishRow = async <T extends { kind: "SUCCESS" | "SKIPPED" | "REPLACED"; questionId: string; questionCode: string | null }>(result: T): Promise<T> => {
+          // Per-question run provenance is written in the SAME transaction as
+          // the Question itself: a committed Question always has its row
+          // (runId, rowNumber, questionId, action), which is what
+          // "Delete Questions Created By This Import" relies on.
+          await tx.bulkImportRow.update({
+            where: { id: row.id },
+            data: {
+              status:
+                result.kind === "SUCCESS"
+                  ? BulkImportRowStatus.SUCCESS
+                  : result.kind === "SKIPPED"
+                    ? BulkImportRowStatus.SKIPPED
+                    : BulkImportRowStatus.REPLACED,
+              severity: resolved.severity,
+              questionId: result.questionId,
+              questionCode: result.questionCode,
+              errors: resolved.errors as unknown as Prisma.InputJsonValue,
+              warnings: resolved.warnings as unknown as Prisma.InputJsonValue,
+              errorMessage: null,
+              reviewRequired: resolved.reviewRequired,
+            },
+          });
+          return result;
+        };
+        // Canonical taxonomy: a shared record the exam doesn't link yet is
+        // linked (never copied) before a question of this exam uses it.
+        const linkTaxonomy = async () => {
+          if (rd.subTopicId) await linkSubTopicToExam(tx, rd.examId, rd.subTopicId);
+          else if (rd.topicId) await linkTopicToExam(tx, rd.examId, rd.topicId);
+          else await linkSubjectToExam(tx, rd.examId, rd.subjectId!);
+        };
         const dedupKey = runKey(rd.examId, rd.subjectId!, merged.questionText);
         const runMatch = seenInRun.get(dedupKey);
         const isDuplicate = rd.isDuplicate || Boolean(runMatch);
@@ -286,10 +319,10 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
             // SKIP keeps the existing canonical Question — that is the id a
             // Mock Test target receives (no new row, no duplicate content).
             const attached = await attachInTx(tx, duplicateQuestionId);
-            seenInRun.set(dedupKey, { id: duplicateQuestionId, code: existing?.code ?? "" });
-            return { kind: "SKIPPED" as const, questionId: duplicateQuestionId, questionCode: existing?.code ?? null, attached };
+            return finishRow({ kind: "SKIPPED" as const, questionId: duplicateQuestionId, questionCode: existing?.code ?? null, attached });
           }
           if (run.duplicateStrategy === BulkImportDuplicateStrategy.REPLACE) {
+            await linkTaxonomy();
             const updated = await tx.question.update({
               where: { id: duplicateQuestionId },
               data: {
@@ -320,12 +353,12 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
               })),
             });
             const attached = await attachInTx(tx, updated.id);
-            seenInRun.set(dedupKey, { id: updated.id, code: updated.code });
-            return { kind: "REPLACED" as const, questionId: updated.id, questionCode: updated.code, attached };
+            return finishRow({ kind: "REPLACED" as const, questionId: updated.id, questionCode: updated.code, attached });
           }
           // ADD_AS_NEW falls through to create below.
         }
 
+        await linkTaxonomy();
         const code = await allocateQuestionCode(tx, questionCodeScope(rd.examCode, rd.examYear));
         const created = await tx.question.create({
           data: {
@@ -355,14 +388,15 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
             order,
           })),
         });
-        // Attach before remembering the id: if attaching throws, the row's
-        // transaction (and its new Question) rolls back, and no later row
-        // may reuse an id that was never committed.
+        // The id is only remembered for later rows AFTER this transaction
+        // commits (below): if attaching or the provenance write throws, the
+        // row (and its new Question) rolls back, and no later row may reuse
+        // an id that was never committed.
         const attached = await attachInTx(tx, created.id);
-        seenInRun.set(dedupKey, { id: created.id, code: created.code });
-        return { kind: "SUCCESS" as const, questionId: created.id, questionCode: created.code, attached };
+        return finishRow({ kind: "SUCCESS" as const, questionId: created.id, questionCode: created.code, attached });
       });
 
+      seenInRun.set(runKey(rd.examId, rd.subjectId, merged.questionText), { id: outcome.questionId, code: outcome.questionCode ?? "" });
       if (outcome.attached) attachedNow++;
       if (outcome.kind === "SUCCESS") successCount++;
       else if (outcome.kind === "SKIPPED") skippedCount++;
@@ -370,24 +404,6 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
       if (effectiveStatus === QuestionStatus.DRAFT) draftCount++;
       if (resolved.reviewRequired) reviewRequiredCount++;
 
-      await prisma.bulkImportRow.update({
-        where: { id: row.id },
-        data: {
-          status:
-            outcome.kind === "SUCCESS"
-              ? BulkImportRowStatus.SUCCESS
-              : outcome.kind === "SKIPPED"
-                ? BulkImportRowStatus.SKIPPED
-                : BulkImportRowStatus.REPLACED,
-          severity: resolved.severity,
-          questionId: outcome.questionId,
-          questionCode: outcome.questionCode,
-          errors: resolved.errors as unknown as Prisma.InputJsonValue,
-          warnings: resolved.warnings as unknown as Prisma.InputJsonValue,
-          errorMessage: null,
-          reviewRequired: resolved.reviewRequired,
-        },
-      });
     } catch (error) {
       // A genuine system/transaction failure for this one row — never let it
       // abort rows that already succeeded (each row commits independently).

@@ -12,6 +12,7 @@ import {
   type Prisma,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getExamSubjects, getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { toIstDateString, istStartOfDay } from "@/lib/ist-time";
 import { getAiSettings } from "@/lib/ai-settings";
 import { attemptTitle } from "@/lib/attempt-title";
@@ -107,17 +108,15 @@ export async function getEnrolledExams(studentId: string) {
 }
 
 export async function getExamDetailForStudent(examId: string) {
-  const exam = await prisma.exam.findFirst({
+  const examRow = await prisma.exam.findFirst({
     where: { id: examId, isActive: true },
     include: {
-      subjects: {
-        orderBy: [{ order: "asc" }, { name: "asc" }],
-        include: { topics: { orderBy: [{ order: "asc" }, { name: "asc" }] } },
-      },
       previousYearPapers: { where: { isActive: true }, orderBy: { year: "desc" } },
     },
   });
-  if (!exam) return null;
+  if (!examRow) return null;
+  // Canonical taxonomy: the exam's linked Subjects/Topics, in its own order.
+  const exam = { ...examRow, subjects: await getExamTaxonomy(prisma, examId) };
 
   const [mockTests, customModules] = await Promise.all([
     prisma.mockTest.findMany({
@@ -438,7 +437,7 @@ export async function getSubjectTestExams() {
   return prisma.exam.findMany({
     where: { isActive: true },
     orderBy: [{ order: "asc" }, { name: "asc" }],
-    include: { _count: { select: { subjects: true } } },
+    include: { _count: { select: { examSubjects: { where: { isActive: true } } } } },
   });
 }
 
@@ -450,7 +449,7 @@ export async function getSubjectTestExams() {
  * the numbers always reflect the current question bank.
  */
 export async function getSubjectTestSetup(examId: string) {
-  const exam = await prisma.exam.findFirst({
+  const examRow = await prisma.exam.findFirst({
     where: { id: examId, isActive: true },
     select: {
       id: true,
@@ -458,20 +457,19 @@ export async function getSubjectTestSetup(examId: string) {
       instructions: true,
       durationMinutes: true,
       negativeMarking: true,
-      subjects: {
-        orderBy: { order: "asc" },
-        select: {
-          id: true,
-          name: true,
-          topics: {
-            orderBy: { order: "asc" },
-            select: { id: true, name: true, subTopics: { orderBy: { order: "asc" }, select: { id: true, name: true } } },
-          },
-        },
-      },
     },
   });
-  if (!exam) return null;
+  if (!examRow) return null;
+  // Only the taxonomy this exam links (Exam -> Subject -> Topic -> SubTopic).
+  const taxonomy = await getExamTaxonomy(prisma, examId);
+  const exam = {
+    ...examRow,
+    subjects: taxonomy.map((s) => ({
+      id: s.id,
+      name: s.name,
+      topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((st) => ({ id: st.id, name: st.name })) })),
+    })),
+  };
 
   const years = await prisma.question.groupBy({
     by: ["examYear"],
@@ -951,11 +949,7 @@ async function computeStudyStreak(studentId: string): Promise<number> {
  * the Test on the Go subject picker.
  */
 export async function getExamSubjectsOverview(examId: string) {
-  const subjects = await prisma.subject.findMany({
-    where: { examId },
-    orderBy: [{ order: "asc" }, { name: "asc" }],
-    select: { id: true, name: true },
-  });
+  const subjects = await getExamSubjects(prisma, examId);
   if (subjects.length === 0) return [];
 
   const counts = await prisma.question.groupBy({

@@ -13,6 +13,7 @@
  */
 import "dotenv/config";
 import { validateGenerated, validateCandidate, isNearDuplicate, screenCandidates, parseCandidateBatch } from "@/lib/ai-variant-validation";
+import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 let failures = 0;
 function check(label: string, passed: boolean) {
@@ -74,8 +75,8 @@ async function part2() {
 
   const suffix = Date.now().toString(36).toUpperCase();
   const exam = await prisma.exam.create({ data: { name: `ZZ Variant Fixture ${suffix}`, code: `ZZVAR-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Fixture Subject" } });
-  const topic = await prisma.topic.create({ data: { subjectId: subject.id, name: "Fixture Topic" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Fixture Subject" });
+  const topic = await createFixtureTopic(prisma, { subjectId: subject.id, name: "Fixture Topic" });
 
   let n = 0;
   async function makeSource() {
@@ -207,6 +208,7 @@ async function part2() {
     await prisma.question.deleteMany({ where: { id: { in: ids } } });
     await prisma.topic.deleteMany({ where: { subjectId: subject.id } });
     await prisma.subject.delete({ where: { id: subject.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

@@ -158,7 +158,12 @@ model Exam {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  subjects           Subject[]
+  // Subjects first created under this exam (provenance only — see
+  // Subject.originExamId). Which subjects an exam USES is examSubjects.
+  originSubjects     Subject[]           @relation("SubjectOriginExam")
+  examSubjects       ExamSubject[]
+  examTopics         ExamTopic[]
+  examSubTopics      ExamSubTopic[]
   previousYearPapers PreviousYearPaper[]
   testSeries         TestSeries[]
   questions          Question[]
@@ -174,16 +179,31 @@ model Exam {
   products           Product[]
 }
 
+// ---------------------------------------------------------------------------
+// Canonical taxonomy: Subject -> Topic -> SubTopic exist ONCE and are shared
+// by every Exam that links them (ExamSubject / ExamTopic / ExamSubTopic).
+// `nameKey` is the normalized name (lib/exam-taxonomy.ts#taxonomyNameKey:
+// trimmed, whitespace-collapsed, lower-cased) and is unique per parent, so
+// "Anatomy" can never be created twice. Removing a subject from an exam
+// deletes the link only, never the master record. Questions still carry
+// their own examId: shared taxonomy never shares questions across exams.
+// ---------------------------------------------------------------------------
+
 model Subject {
   id                  String        @id @default(cuid())
-  examId              String
-  exam                Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
+  // Exam the subject was first created under (the pre-canonical owner).
+  // Provenance only — never used to scope a subject to an exam (ExamSubject
+  // does that); SetNull so deleting that exam never deletes shared taxonomy.
+  originExamId        String?       @map("examId")
+  originExam          Exam?         @relation("SubjectOriginExam", fields: [originExamId], references: [id], onDelete: SetNull)
   name                String
+  nameKey             String        @unique
   order               Int           @default(0)
   syllabusDescription String?
   topics              Topic[]
   questions           Question[]
   testAttempts        TestAttempt[]
+  examLinks           ExamSubject[]
   createdAt           DateTime      @default(now())
 }
 
@@ -192,12 +212,61 @@ model Topic {
   subjectId           String
   subject             Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   name                String
+  nameKey             String
   order               Int      @default(0)
   syllabusDescription String?
   createdAt           DateTime @default(now())
 
   subTopics SubTopic[]
   questions Question[]
+  examLinks ExamTopic[]
+
+  @@unique([subjectId, nameKey])
+}
+
+/// Exam uses this canonical Subject. Unlinking never deletes the Subject.
+model ExamSubject {
+  id           String   @id @default(cuid())
+  examId       String
+  exam         Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  subjectId    String
+  subject      Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  @@unique([examId, subjectId])
+  @@index([subjectId])
+}
+
+/// Exam uses this canonical Topic (its Subject must be linked too).
+model ExamTopic {
+  id           String   @id @default(cuid())
+  examId       String
+  exam         Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  topicId      String
+  topic        Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  @@unique([examId, topicId])
+  @@index([topicId])
+}
+
+/// Exam uses this canonical SubTopic (its Topic must be linked too).
+model ExamSubTopic {
+  id           String   @id @default(cuid())
+  examId       String
+  exam         Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  subTopicId   String
+  subTopic     SubTopic @relation(fields: [subTopicId], references: [id], onDelete: Cascade)
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  @@unique([examId, subTopicId])
+  @@index([subTopicId])
 }
 
 model PreviousYearPaper {
@@ -686,10 +755,14 @@ model SubTopic {
   topicId   String
   topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
   name      String
+  nameKey   String
   order     Int      @default(0)
   createdAt DateTime @default(now())
 
   questions Question[]
+  examLinks ExamSubTopic[]
+
+  @@unique([topicId, nameKey])
 }
 
 /**
@@ -1608,6 +1681,19 @@ enum BulkImportSource {
   MOCK_TEST
 }
 
+/**
+ * Outcome of "Delete Questions Created By This Import" for one row. Only
+ * rows with status SUCCESS (the row CREATED its question) are ever eligible;
+ * REPLACED/SKIPPED rows point at questions that existed before the run.
+ */
+enum BulkImportRollbackAction {
+  DELETED
+  ARCHIVED
+  PROTECTED
+  ALREADY_MISSING
+  FAILED
+}
+
 enum BulkImportDuplicateStrategy {
   SKIP
   REPLACE
@@ -1657,6 +1743,10 @@ model BulkImportRun {
   completedAt         DateTime?
   errorMessage        String?
   createdAt           DateTime                    @default(now())
+  // Last "Delete Questions Created By This Import" run. Per-row outcomes
+  // live on BulkImportRow.rollbackAction; the run itself is never deleted.
+  lastRollbackAt      DateTime?
+  lastRollbackById    String?
 
   rows              BulkImportRow[]
   importedQuestions Question[]
@@ -1691,10 +1781,16 @@ model BulkImportRow {
   // Per-row override of the status the resulting Question should get on
   // import (e.g. explicit "Save as Draft"); null = use the run's default.
   targetStatus      QuestionStatus?
+  // Import rollback audit (see BulkImportRollbackAction). questionId and
+  // questionCode are kept after deletion so history still names the question.
+  rollbackAction    BulkImportRollbackAction?
+  rollbackReason    String?
+  rollbackAt        DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
   @@index([runId, rowNumber])
+  @@index([questionId])
   @@index([runId, status])
   @@index([runId, severity])
 }

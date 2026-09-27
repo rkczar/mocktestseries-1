@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TestResourceManager } from "@/components/admin/test-resource-manager";
@@ -57,11 +58,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
   const canManage = await hasPermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const mockIds = series.mockTests.map((m) => m.id);
   const [subjects, products, mode, canonical, attemptAgg, studentsAgg, examOmr, globalOmr, pdfCount] = await Promise.all([
-    prisma.subject.findMany({
-      where: { examId: series.examId },
-      orderBy: { order: "asc" },
-      select: { id: true, name: true, topics: { orderBy: { order: "asc" }, select: { id: true, name: true } } },
-    }),
+    getExamTaxonomy(prisma, series.examId),
     prisma.product.findMany({
       where: { OR: [{ testSeriesId: series.id }, { productType: "EXAM_ACCESS", examId: series.examId }, { mockTestId: { in: mockIds } }] },
       orderBy: [{ order: "asc" }, { createdAt: "asc" }],

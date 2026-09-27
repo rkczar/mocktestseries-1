@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Menu, LogOut } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { MobileSidebar } from "@/components/admin/sidebar";
+import { AdminBackButton } from "@/components/admin/admin-back-button";
 import { ADMIN_NAV, isNavItemActive } from "@/lib/admin-nav";
 import { logoutAction } from "@/app/admin/(dashboard)/actions";
 
@@ -26,7 +27,7 @@ export function AdminHeader({ adminName, role }: { adminName: string; role: stri
   return (
     <>
       <header className="flex h-16 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-card)] px-4">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <button
             type="button"
             onClick={() => setMobileOpen(true)}
@@ -35,12 +36,16 @@ export function AdminHeader({ adminName, role }: { adminName: string; role: stri
           >
             <Menu className="h-5 w-5" aria-hidden />
           </button>
-          <nav aria-label="Breadcrumb" className="text-sm text-[var(--color-muted-foreground)]">
+          {/* The Admin Panel's single internal Back button (all nested pages). */}
+          <Suspense fallback={null}>
+            <AdminBackButton />
+          </Suspense>
+          <nav aria-label="Breadcrumb" className="min-w-0 truncate text-sm text-[var(--color-muted-foreground)]">
             {crumbs.join(" / ")}
           </nav>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           <ThemeToggle />
           <div className="hidden text-right sm:block">
             <p className="text-sm font-medium text-[var(--color-foreground)]">{adminName}</p>

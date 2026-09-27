@@ -39,6 +39,7 @@ import argon2 from "argon2";
 // These import `server-only`, which is inert under the react-server condition.
 import { getOrCreateExplanation, claimGeneration, AiNotConfiguredError, STALE_GENERATION_MS, EXPLANATION_PROMPT_VERSION } from "@/lib/ai-explanation";
 import { toggleSavedQuestion, isQuestionSaved, reportQuestion, isAiGenerationRateLimited, logActivity } from "@/lib/student-data";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -72,7 +73,7 @@ async function main() {
   console.log(`Gemini configured in this environment: ${geminiRow ? "yes (unexpected — live calls would be attempted)" : "no"}\n`);
 
   const exam = await prisma.exam.create({ data: { name: `AI Exam ${suffix}`, code: `AI-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "AI Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "AI Subject" });
 
   async function makeQuestion() {
     return prisma.question.create({
@@ -219,6 +220,7 @@ async function main() {
     await prisma.student.delete({ where: { id: student.id } });
     await prisma.question.deleteMany({ where: { id: { in: questionIds } } });
     await prisma.subject.delete({ where: { id: subject.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

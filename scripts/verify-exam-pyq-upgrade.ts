@@ -18,6 +18,7 @@ import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions";
 import { validateImportRows, resolveRow, buildTaxonomyLookups, type BulkImportRow } from "@/lib/bulk-import";
 import { executeBulkImport } from "@/lib/bulk-import-execute";
 import { readFileSync } from "fs";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -116,7 +117,7 @@ async function main() {
     const suffix = Date.now();
     const exam = await prisma.exam.create({ data: { name: `VERIFY-EPU-EXAM-${suffix}`, code: `VERIFYEPU${suffix}`, year: 2026 } });
     createdIds.exams.push(exam.id);
-    const subject = await prisma.subject.create({ data: { examId: exam.id, name: "VERIFY-EPU-SUBJECT" } });
+    const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "VERIFY-EPU-SUBJECT" });
 
     const adminUser = await prisma.adminUser.findFirst({ where: { role: { name: RoleName.MASTER_ADMIN } } });
     if (!adminUser) throw new Error("No MASTER_ADMIN admin user found to attribute the fixture import to");
@@ -168,8 +169,8 @@ async function main() {
     const renamed = await prisma.exam.update({ where: { id: exam.id }, data: { name: `VERIFY-EPU-RENAMED-${suffix}`, examDate: new Date() } });
     check("Exam id unchanged after rename", renamed.id === exam.id);
     check("Exam examDate field is settable (Section 8)", renamed.examDate !== null);
-    const subjectStillLinked = await prisma.subject.findUnique({ where: { id: subject.id } });
-    check("Subject still linked to the (renamed) Exam", subjectStillLinked?.examId === exam.id);
+    const subjectStillLinked = await prisma.examSubject.findUnique({ where: { examId_subjectId: { examId: exam.id, subjectId: subject.id } } });
+    check("Subject still linked to the (renamed) Exam", subjectStillLinked !== null);
     const questionStillLinked = createdQuestion ? await prisma.question.findUnique({ where: { id: createdQuestion.id } }) : null;
     check("Question created before the rename is still linked (not recreated)", questionStillLinked?.examId === exam.id);
 
@@ -177,7 +178,7 @@ async function main() {
     console.log("\n--- Exam delete safety ---");
     const attemptExam = await prisma.exam.create({ data: { name: `VERIFY-EPU-ATTEMPT-EXAM-${suffix}`, code: `VERIFYEPUATT${suffix}` } });
     createdIds.exams.push(attemptExam.id);
-    const attemptSubject = await prisma.subject.create({ data: { examId: attemptExam.id, name: "VERIFY-EPU-ATTEMPT-SUBJECT" } });
+    const attemptSubject = await createFixtureSubject(prisma, { examId: attemptExam.id, name: "VERIFY-EPU-ATTEMPT-SUBJECT" });
     const student = await prisma.student.findFirst();
     if (student) {
       const attempt = await prisma.testAttempt.create({
@@ -194,6 +195,7 @@ async function main() {
       createdIds.attempts.push(attempt.id);
       let blocked = false;
       try {
+        await deleteFixtureTaxonomy(prisma, [attemptExam.id]);
         await prisma.exam.delete({ where: { id: attemptExam.id } });
       } catch {
         blocked = true;
@@ -204,6 +206,7 @@ async function main() {
     }
 
     const emptyExam = await prisma.exam.create({ data: { name: `VERIFY-EPU-EMPTY-EXAM-${suffix}`, code: `VERIFYEPUEMPTY${suffix}` } });
+    await deleteFixtureTaxonomy(prisma, [emptyExam.id]);
     await prisma.exam.delete({ where: { id: emptyExam.id } });
     check("An empty/new Exam with no history deletes cleanly", true);
 
@@ -252,6 +255,7 @@ async function main() {
       await prisma.bulkImportRow.deleteMany({ where: { runId: { in: createdIds.runs } } });
       await prisma.bulkImportRun.deleteMany({ where: { id: { in: createdIds.runs } } });
     }
+    if (createdIds.exams.length) await deleteFixtureTaxonomy(prisma, createdIds.exams);
     if (createdIds.exams.length) await prisma.exam.deleteMany({ where: { id: { in: createdIds.exams } } });
     await prisma.$disconnect();
   }

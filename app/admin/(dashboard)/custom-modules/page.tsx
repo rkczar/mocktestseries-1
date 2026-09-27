@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { withExamTaxonomy } from "@/lib/exam-taxonomy";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CustomModuleForm } from "./custom-module-form";
@@ -8,10 +9,7 @@ import { CustomModuleStatusSelect } from "./status-select";
 export const metadata = { title: "Custom Modules — Mock Test Series.in Admin" };
 
 export default async function CustomModulesPage() {
-  const exams = await prisma.exam.findMany({
-    orderBy: { order: "asc" },
-    include: { subjects: { orderBy: { order: "asc" }, include: { topics: { orderBy: { order: "asc" } } } } },
-  });
+  const exams = await withExamTaxonomy(prisma, await prisma.exam.findMany({ orderBy: { order: "asc" } }));
 
   const modules = await prisma.customModule.findMany({
     orderBy: { createdAt: "desc" },

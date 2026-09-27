@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BarChart3, BookOpen, CalendarClock, CheckCircle2, Clock, FileDown, FileText, ListChecks, Sparkles, Target } from "lucide-react";
 import { prisma } from "@/lib/prisma";
+import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug, getExamPapers } from "@/lib/exam-public";
 import { getExamMockSeriesSummary, getPlanComparison, getSeriesCta, mockSeriesPath, type PublicSeriesTest } from "@/lib/mock-series";
@@ -72,7 +73,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
     getStudentSession(),
     getExamPapers(exam.id),
     getPlanComparison(exam.id, mockSeries, offer),
-    prisma.subject.findMany({ where: { examId: exam.id }, orderBy: { order: "asc" }, select: { id: true, name: true, _count: { select: { topics: true } } } }),
+    getExamTaxonomy(prisma, exam.id),
     prisma.testResource.findFirst({
       where: {
         type: "OMR_TEMPLATE",
@@ -324,7 +325,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
           )}
           {subjects.length > 0 ? (
             <p className="mt-4 text-sm text-[var(--color-muted-foreground)]">
-              The full {exam.name} syllabus spans {subjects.length} subjects and {subjects.reduce((n, s) => n + s._count.topics, 0)} topics —{" "}
+              The full {exam.name} syllabus spans {subjects.length} subjects and {subjects.reduce((n, s) => n + s.topics.length, 0)} topics —{" "}
               <Link className="text-[var(--color-primary)] hover:underline" href={`${hub}/syllabus`}>
                 view the complete syllabus
               </Link>

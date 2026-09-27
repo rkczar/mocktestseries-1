@@ -15,6 +15,7 @@ import { PrismaClient, QuestionDifficulty, QuestionSource, QuestionStatus, Stude
 import { PrismaPg } from "@prisma/adapter-pg";
 import { encode } from "next-auth/jwt";
 import { startMockTestAttempt, startPreviousYearPaperAttempt, startSubjectTestAttempt } from "@/lib/test-attempt";
+import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 if (/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to create UI fixtures in what looks like the production database.");
@@ -33,8 +34,8 @@ async function mintToken(student: { id: string; studentId: string; name: string;
 async function setup() {
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `UI Engine Exam ${suffix}`, code: `UIE-${suffix}`, isActive: true } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "UI Engine Subject" } });
-  const topic = await prisma.topic.create({ data: { subjectId: subject.id, name: "UI Engine Topic" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "UI Engine Subject" });
+  const topic = await createFixtureTopic(prisma, { subjectId: subject.id, name: "UI Engine Topic" });
   const paper = await prisma.previousYearPaper.create({ data: { examId: exam.id, year: 2024, title: `UI PYQ ${suffix}` } });
   const mk = (n: number, extra: Record<string, unknown> = {}) =>
     prisma.question.create({
@@ -117,6 +118,7 @@ async function cleanup(examId: string, studentIds: string[]) {
   await prisma.previousYearPaper.deleteMany({ where: { examId } });
   await prisma.studentExamEnrollment.deleteMany({ where: { studentId: { in: studentIds } } });
   await prisma.student.deleteMany({ where: { id: { in: studentIds } } });
+  await deleteFixtureTaxonomy(prisma, [examId]);
   await prisma.exam.deleteMany({ where: { id: examId } });
   console.log("cleaned");
 }

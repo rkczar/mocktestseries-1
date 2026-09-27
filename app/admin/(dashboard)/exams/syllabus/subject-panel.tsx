@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { SubjectDeleteButton } from "../subjects/subject-delete-button";
+import { RemoveFromExamButton } from "../subjects/remove-from-exam-button";
 import { SubjectMoveButtons } from "./subject-move-buttons";
 import { DescriptionForm } from "./description-form";
 import { AddTopicForm } from "./add-topic-form";
@@ -31,7 +31,7 @@ export function SubjectPanel({ examId, subject, isFirst, isLast }: SubjectPanelP
         <h3 className="text-sm font-semibold text-[var(--color-foreground)]">{subject.name}</h3>
         <div className="flex items-center gap-2">
           <SubjectMoveButtons examId={examId} subjectId={subject.id} label={subject.name} disableUp={isFirst} disableDown={isLast} />
-          <SubjectDeleteButton subjectId={subject.id} />
+          <RemoveFromExamButton kind="subject" examId={examId} id={subject.id} label={subject.name} />
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -60,7 +60,7 @@ export function SubjectPanel({ examId, subject, isFirst, isLast }: SubjectPanelP
           )}
         </div>
 
-        <AddTopicForm subjectId={subject.id} />
+        <AddTopicForm subjectId={subject.id} examId={examId} />
       </CardContent>
     </Card>
   );

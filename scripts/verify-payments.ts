@@ -26,6 +26,7 @@ import "dotenv/config";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { StudentAuthProvider, QuestionStatus, QuestionDifficulty, MockTestStatus, RoleName, OrderStatus } from "@prisma/client";
+import { createFixtureSubject } from "./fixture-taxonomy";
 
 if (!/payverify/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run: DATABASE_URL must point at a *payverify* scratch database.");
@@ -127,7 +128,7 @@ async function main() {
   console.log("=== Payments / Entitlement Verification (scratch DB, fake Razorpay) ===\n");
   const sfx = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `Pay Exam ${sfx}`, code: `PAY-${sfx}`, durationMinutes: 30 } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Pay Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Pay Subject" });
   const q = await prisma.question.create({
     data: {
       examId: exam.id,

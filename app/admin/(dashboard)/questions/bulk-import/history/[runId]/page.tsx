@@ -5,10 +5,14 @@ import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Download } from "lucide-react";
+import { Download } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { mergeRowData, declaredImageFilenames, matchRowImagesSync, type BulkImportRow as ParsedRowShape } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
+import { analyzeImportRun } from "@/lib/import-rollback";
+import { hasPermission } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
+import { ImportedQuestionsPanel } from "./imported-questions-panel";
 
 async function ImportDetailsContent({ runId, page }: { runId: string; page: number }) {
   const limit = 50;
@@ -28,7 +32,7 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
     notFound();
   }
 
-  const [rows, total, imageIndex] = await Promise.all([
+  const [rows, total, imageIndex, analysis, canRollback] = await Promise.all([
     prisma.bulkImportRow.findMany({
       where: { runId },
       orderBy: { rowNumber: "asc" },
@@ -37,7 +41,10 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
     }),
     prisma.bulkImportRow.count({ where: { runId } }),
     getImageFilenameIndex(),
+    analyzeImportRun(runId),
+    hasPermission(PERMISSIONS.IMPORT_ROLLBACK_MANAGE),
   ]);
+  const summary = analysis?.summary;
 
   const totalPages = Math.ceil(total / limit) || 1;
 
@@ -54,12 +61,6 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" asChild>
-            <Link href="/admin/questions/bulk-import/history">
-              <ArrowLeft className="h-4 w-4 mr-1" />
-              Back
-            </Link>
-          </Button>
           <div>
             <h1 className="text-2xl font-bold text-[var(--color-foreground)]">{run.label || "Import Run Details"}</h1>
             <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
@@ -156,9 +157,26 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
               <Stat label="Failed" value={run.failedCount} cls="text-[var(--color-error)]" />
               {run.mockTestId ? <Stat label="Attached to Mock Test" value={run.attachedCount} cls="text-[var(--color-success)]" /> : null}
             </div>
+            {summary && (summary.laterDeleted + summary.laterArchived + summary.laterProtected > 0 || run.lastRollbackAt) ? (
+              <div className="mt-4 border-t border-[var(--color-border)] pt-3">
+                <p className="mb-2 text-xs font-medium uppercase text-[var(--color-muted-foreground)]">
+                  After import{run.lastRollbackAt ? ` · last rollback ${run.lastRollbackAt.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST` : ""}
+                </p>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Stat label="Imported (created)" value={summary.created} />
+                  <Stat label="Later deleted" value={summary.laterDeleted} />
+                  <Stat label="Archived" value={summary.laterArchived} cls="text-[var(--color-warning)]" />
+                  <Stat label="Protected" value={summary.laterProtected} cls="text-[var(--color-error)]" />
+                </div>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       </div>
+
+      {analysis ? (
+        <ImportedQuestionsPanel runId={run.id} filename={run.filename} rows={analysis.rows} canDelete={canRollback} />
+      ) : null}
 
       {run.errorMessage && (
         <Card>

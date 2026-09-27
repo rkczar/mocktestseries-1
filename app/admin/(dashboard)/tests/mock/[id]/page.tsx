@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CheckCircle2, Circle, AlertTriangle } from "lucide-react";
 import { prisma } from "@/lib/prisma";
+import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -109,11 +110,7 @@ export default async function MockTestDetailPage({
       },
       orderBy: [{ subject: { order: "asc" } }, { createdAt: "asc" }],
     }),
-    prisma.subject.findMany({
-      where: { examId: mockTest.examId },
-      orderBy: { order: "asc" },
-      select: { id: true, name: true, topics: { orderBy: { order: "asc" }, select: { id: true, name: true } } },
-    }),
+    getExamTaxonomy(prisma, mockTest.examId),
     imported
       ? prisma.bulkImportRun.findFirst({
           where: { id: imported, mockTestId: id },

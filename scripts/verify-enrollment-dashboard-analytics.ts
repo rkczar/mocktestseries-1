@@ -23,6 +23,7 @@ import {
   getStudentAnalytics,
   getWeakTopics,
 } from "@/lib/student-data";
+import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -44,9 +45,9 @@ async function main() {
   const examC = await prisma.exam.create({
     data: { name: `Dash Exam C ${suffix}`, code: `DASHC-${suffix}`, isActive: true, isUpcoming: true, upcomingDate: new Date(Date.now() + 3 * 24 * 60 * 60_000) },
   });
-  const subjectA = await prisma.subject.create({ data: { examId: examA.id, name: "Dash Subject A" } });
-  const topic1 = await prisma.topic.create({ data: { subjectId: subjectA.id, name: "Weak Topic 1" } });
-  const topic2 = await prisma.topic.create({ data: { subjectId: subjectA.id, name: "Weak Topic 2" } });
+  const subjectA = await createFixtureSubject(prisma, { examId: examA.id, name: "Dash Subject A" });
+  const topic1 = await createFixtureTopic(prisma, { subjectId: subjectA.id, name: "Weak Topic 1" });
+  const topic2 = await createFixtureTopic(prisma, { subjectId: subjectA.id, name: "Weak Topic 2" });
 
   async function makeQuestion(topicId: string) {
     return prisma.question.create({
@@ -201,6 +202,7 @@ async function main() {
     await prisma.question.deleteMany({ where: { id: { in: questionIds } } });
     await prisma.topic.deleteMany({ where: { id: { in: [topic1.id, topic2.id] } } });
     await prisma.subject.delete({ where: { id: subjectA.id } });
+    await deleteFixtureTaxonomy(prisma, [examA.id, examB.id, examC.id]);
     await prisma.exam.deleteMany({ where: { id: { in: [examA.id, examB.id, examC.id] } } });
     await prisma.$disconnect();
   }

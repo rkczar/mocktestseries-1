@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { syncCurrentAdminUrl } from "@/lib/admin-back";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -47,9 +48,10 @@ interface Question {
 
 interface FilterOptions {
   exams: { id: string; name: string }[];
-  subjects: { id: string; name: string; examId: string }[];
-  topics: { id: string; name: string; subjectId: string }[];
-  subTopics: { id: string; name: string; topicId: string }[];
+  // Canonical taxonomy: each record appears once; examIds = exams linking it.
+  subjects: { id: string; name: string; examIds: string[] }[];
+  topics: { id: string; name: string; subjectId: string; examIds: string[] }[];
+  subTopics: { id: string; name: string; topicId: string; examIds: string[] }[];
   importBatches: { id: string; label: string; createdAt: string }[];
 }
 
@@ -73,14 +75,16 @@ function ImageIndicator({ question }: { question: Question }) {
 
 export function AllQuestionsPanelClient({
   initialFilters,
+  initialPage = 1,
   filterOptions
 }: {
   initialFilters: Record<string, string>;
+  initialPage?: number;
   filterOptions: FilterOptions;
 }) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialPage);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState<string>("");
@@ -170,6 +174,21 @@ export function AllQuestionsPanelClient({
     delete (f as Record<string, unknown>).page;
     const params = buildParams(f);
     params.set("page", String(pageValue));
+
+    // Mirror list state into the URL (?qb=…) without navigating, so the
+    // Admin Back button (and a refresh) returns to this exact filtered page.
+    try {
+      const url = new URL(window.location.href);
+      const state = params.toString();
+      const current = url.searchParams.get("qb");
+      if (current !== state && !(current === null && state === "page=1")) {
+        url.searchParams.set("qb", state);
+        window.history.replaceState(window.history.state, "", url);
+        syncCurrentAdminUrl(url.pathname + url.search);
+      }
+    } catch {
+      // URL sync is a convenience only.
+    }
     params.set("limit", String(LIMIT));
 
     fetch(`/api/admin/questions?${params}`)
@@ -362,7 +381,7 @@ export function AllQuestionsPanelClient({
             >
               <option value="">All subjects</option>
               {filterOptions.subjects
-                .filter((s) => !examId || s.examId === examId)
+                .filter((s) => !examId || s.examIds.includes(examId))
                 .map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -381,7 +400,7 @@ export function AllQuestionsPanelClient({
             >
               <option value="">All topics</option>
               {filterOptions.topics
-                .filter((t) => !subjectId || t.subjectId === subjectId)
+                .filter((t) => (!subjectId || t.subjectId === subjectId) && (!examId || t.examIds.includes(examId)))
                 .map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
@@ -399,7 +418,7 @@ export function AllQuestionsPanelClient({
             >
               <option value="">All sub-topics</option>
               {filterOptions.subTopics
-                .filter((st) => !topicId || st.topicId === topicId)
+                .filter((st) => (!topicId || st.topicId === topicId) && (!examId || st.examIds.includes(examId)))
                 .map((st) => (
                   <option key={st.id} value={st.id}>
                     {st.name}

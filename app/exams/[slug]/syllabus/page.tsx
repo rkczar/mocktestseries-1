@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug } from "@/lib/exam-public";
 import { getSiteUrl } from "@/lib/site-url";
@@ -35,13 +36,13 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
   const mockSeriesSummary = await getExamMockSeriesSummary(exam);
 
   const [subjects, siteUrl] = await Promise.all([
-    prisma.subject.findMany({
-      where: { examId: exam.id },
-      orderBy: { order: "asc" },
-      include: {
-        topics: { orderBy: { order: "asc" }, select: { id: true, name: true } },
-        _count: { select: { questions: { where: { status: "PUBLISHED" } } } },
-      },
+    // Linked taxonomy; question counts are this exam's own.
+    Promise.all([
+      getExamTaxonomy(prisma, exam.id),
+      prisma.question.groupBy({ by: ["subjectId"], where: { examId: exam.id, status: "PUBLISHED" }, _count: { _all: true } }),
+    ]).then(([taxonomy, counts]) => {
+      const bySubject = new Map(counts.map((c) => [c.subjectId, c._count._all]));
+      return taxonomy.map((s) => ({ ...s, _count: { questions: bySubject.get(s.id) ?? 0 } }));
     }),
     getSiteUrl(),
   ]);

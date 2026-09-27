@@ -37,7 +37,7 @@ export default async function SubjectTestPage() {
                   <div>
                     <p className="font-medium text-[var(--color-foreground)]">{exam.name}</p>
                     <p className="text-sm text-[var(--color-muted-foreground)]">
-                      {exam._count.subjects} subject{exam._count.subjects === 1 ? "" : "s"}
+                      {exam._count.examSubjects} subject{exam._count.examSubjects === 1 ? "" : "s"}
                     </p>
                   </div>
                   <ChevronRight className="h-5 w-5 text-[var(--color-muted-foreground)] transition-transform group-hover:translate-x-0.5" aria-hidden />

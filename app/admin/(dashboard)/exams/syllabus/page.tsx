@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { examQuestionCounts, getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ExamPicker } from "./exam-picker";
 import { SyllabusEnabledToggle } from "./syllabus-enabled-toggle";
@@ -19,21 +20,17 @@ export default async function SyllabusPage({
 
   const exams = await prisma.exam.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, code: true } });
 
-  const selectedExam = examId
-    ? await prisma.exam.findUnique({
-        where: { id: examId },
-        include: {
-          subjects: {
-            orderBy: [{ order: "asc" }, { name: "asc" }],
-            include: {
-              topics: {
-                orderBy: [{ order: "asc" }, { name: "asc" }],
-                include: { subTopics: { orderBy: { order: "asc" } }, _count: { select: { questions: true } } },
-              },
-            },
-          },
-        },
-      })
+  // The exam's LINKED canonical taxonomy, in its own display order, with
+  // this exam's question counts (a shared topic's master count spans exams).
+  const examRow = examId ? await prisma.exam.findUnique({ where: { id: examId } }) : null;
+  const selectedExam = examRow
+    ? await Promise.all([getExamTaxonomy(prisma, examRow.id), examQuestionCounts(prisma, examRow.id)]).then(([taxonomy, counts]) => ({
+        ...examRow,
+        subjects: taxonomy.map((s) => ({
+          ...s,
+          topics: s.topics.map((t) => ({ ...t, _count: { questions: counts.topic.get(t.id) ?? 0 } })),
+        })),
+      }))
     : null;
 
   return (
@@ -96,6 +93,9 @@ export default async function SyllabusPage({
             </CardHeader>
             <CardContent>
               <AddSubjectForm examId={selectedExam.id} />
+              <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">
+                To reuse subjects that already exist (e.g. from another exam), use Exams → Subjects &amp; Topics → Add Existing Subject.
+              </p>
             </CardContent>
           </Card>
 

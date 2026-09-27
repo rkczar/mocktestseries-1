@@ -33,6 +33,7 @@ import {
   ensureCustomModuleShareToken,
   getCustomModuleByShareToken,
 } from "@/lib/student-data";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -63,7 +64,7 @@ async function main() {
   const suffix = Date.now().toString(36);
 
   const exam = await prisma.exam.create({ data: { name: `CMV2 Exam ${suffix}`, code: `CMV2-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "CMV2 Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "CMV2 Subject" });
 
   async function makeQuestion(status: QuestionStatus = QuestionStatus.PUBLISHED) {
     return prisma.question.create({
@@ -217,6 +218,7 @@ async function main() {
     await prisma.student.deleteMany({ where: { id: { in: [studentA.id, studentB.id] } } });
     await prisma.question.deleteMany({ where: { examId: exam.id } });
     await prisma.subject.delete({ where: { id: subject.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

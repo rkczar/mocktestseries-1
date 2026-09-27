@@ -56,6 +56,7 @@ import {
   validateMockSchedule,
 } from "@/lib/mock-test-schedule";
 import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions";
+import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -85,8 +86,8 @@ async function main() {
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `MBI Exam ${suffix}`, code: `MBI-${suffix}`, year: 2026 } });
   const otherExam = await prisma.exam.create({ data: { name: `MBI Other ${suffix}`, code: `MBO-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: `MBI Subject ${suffix}` } });
-  const topic = await prisma.topic.create({ data: { subjectId: subject.id, name: `MBI Topic ${suffix}` } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: `MBI Subject ${suffix}` });
+  const topic = await createFixtureTopic(prisma, { subjectId: subject.id, name: `MBI Topic ${suffix}` });
   const paper = await prisma.previousYearPaper.create({ data: { examId: exam.id, year: 2020, title: `MBI Paper ${suffix}` } });
   const admin = await prisma.adminUser.findFirstOrThrow({ select: { id: true } });
   const runIds: string[] = [];
@@ -347,6 +348,7 @@ async function main() {
     await prisma.questionOption.deleteMany({ where: { question: { examId: { in: [exam.id, otherExam.id] } } } });
     await prisma.question.deleteMany({ where: { examId: { in: [exam.id, otherExam.id] } } });
     await prisma.auditLog.deleteMany({ where: { entityId: { in: runIds } } });
+    await deleteFixtureTaxonomy(prisma, [exam.id, otherExam.id]);
     await prisma.exam.deleteMany({ where: { id: { in: [exam.id, otherExam.id] } } });
     const leftovers = await prisma.exam.count({ where: { code: { in: [`MBI-${suffix}`, `MBO-${suffix}`] } } });
     console.log(`\nCleanup: fixtures removed (${leftovers} leftover exams).`);

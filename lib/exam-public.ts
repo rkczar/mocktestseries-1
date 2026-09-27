@@ -1,6 +1,7 @@
 import "server-only";
 import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { prisma } from "@/lib/prisma";
+import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 
 /**
  * Data access for the public exam SEO hub (/exams, /exams/[slug] and its deep
@@ -34,8 +35,8 @@ export interface ExamPublicStats {
 
 export async function getExamPublicStats(examId: string): Promise<ExamPublicStats> {
   const [subjects, topics, questions, papers, mockTests, aiExplanations] = await Promise.all([
-    prisma.subject.count({ where: { examId } }),
-    prisma.topic.count({ where: { subject: { examId } } }),
+    prisma.examSubject.count({ where: { examId, isActive: true } }),
+    prisma.examTopic.count({ where: { examId, isActive: true } }),
     prisma.question.count({ where: { examId, status: "PUBLISHED" } }),
     prisma.previousYearPaper.count({ where: { examId, isActive: true } }),
     prisma.mockTest.count({ where: { examId, ...LIVE_MOCK_TEST_WHERE } }),
@@ -52,18 +53,18 @@ export interface SubjectWithCounts {
 }
 
 export async function getExamSubjectsWithCounts(examId: string): Promise<SubjectWithCounts[]> {
-  const subjects = await prisma.subject.findMany({
-    where: { examId },
-    orderBy: { order: "asc" },
-    include: {
-      _count: { select: { topics: true, questions: { where: { status: "PUBLISHED" } } } },
-    },
-  });
-  return subjects.map((s) => ({
+  // Linked taxonomy only; counts are this exam's own (a shared subject's
+  // master _count would include every exam's questions).
+  const [taxonomy, counts] = await Promise.all([
+    getExamTaxonomy(prisma, examId),
+    prisma.question.groupBy({ by: ["subjectId"], where: { examId, status: "PUBLISHED" }, _count: { _all: true } }),
+  ]);
+  const bySubject = new Map(counts.map((c) => [c.subjectId, c._count._all]));
+  return taxonomy.map((s) => ({
     id: s.id,
     name: s.name,
-    topicCount: s._count.topics,
-    questionCount: s._count.questions,
+    topicCount: s.topics.length,
+    questionCount: bySubject.get(s.id) ?? 0,
   }));
 }
 

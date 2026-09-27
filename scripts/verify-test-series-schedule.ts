@@ -54,6 +54,7 @@ import { isMockTestAvailable, deriveMockTestAvailability } from "@/lib/mock-test
 import { getMockTestLeaderboard } from "@/lib/leaderboard";
 import { canAccessTestResource } from "@/lib/test-resources-access";
 import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions";
+import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -85,7 +86,7 @@ async function main() {
   const now = Date.now();
 
   const exam = await prisma.exam.create({ data: { name: `Series Exam ${suffix}`, code: `TS-${suffix}` } });
-  const subject = await prisma.subject.create({ data: { examId: exam.id, name: "Series Subject" } });
+  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: "Series Subject" });
 
   async function makeQuestion() {
     return prisma.question.create({
@@ -269,6 +270,7 @@ async function main() {
     await prisma.mockTest.deleteMany({ where: { id: { in: mockTestIds } } });
     await prisma.question.deleteMany({ where: { examId: exam.id } });
     await prisma.subject.delete({ where: { id: subject.id } });
+    await deleteFixtureTaxonomy(prisma, [exam.id]);
     await prisma.exam.delete({ where: { id: exam.id } });
     await prisma.$disconnect();
   }

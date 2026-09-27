@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,11 +34,11 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
 
   if (!paper) notFound();
 
-  const subjects = await prisma.subject.findMany({
-    where: { examId: paper.examId },
-    orderBy: { name: "asc" },
-    select: { id: true, name: true, topics: { orderBy: { name: "asc" }, select: { id: true, name: true } } },
-  });
+  const subjects = (await getExamTaxonomy(prisma, paper.examId)).map((s) => ({
+    id: s.id,
+    name: s.name,
+    topics: s.topics.map((t) => ({ id: t.id, name: t.name })),
+  }));
 
   const subjectCounts = new Map<string, number>();
   paper.questions.forEach((q) => subjectCounts.set(q.subject.name, (subjectCounts.get(q.subject.name) ?? 0) + 1));

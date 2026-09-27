@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ChevronRight, ChevronDown as ChevronDownIcon } from "lucide-react";
-import { TopicDeleteButton } from "../topics/topic-delete-button";
+import { RemoveFromExamButton } from "../subjects/remove-from-exam-button";
 import { SubTopicsDialog } from "../topics/sub-topics-dialog";
 import { MoveButtons } from "./move-buttons";
 import { DescriptionForm } from "./description-form";
@@ -42,14 +42,19 @@ export function TopicRow({ examId, subjectId, topic, isFirst, isLast }: TopicRow
           <span className="shrink-0 text-xs text-[var(--color-muted-foreground)]">{topic._count.questions} Qs</span>
         </button>
         <div className="flex shrink-0 items-center gap-2">
-          <SubTopicsDialog topicId={topic.id} topicName={topic.name} initialSubTopics={topic.subTopics} />
+          <SubTopicsDialog
+            topicId={topic.id}
+            topicName={topic.name}
+            examId={examId}
+            initialSubTopics={topic.subTopics.map((st) => ({ id: st.id, name: st.name, linked: true }))}
+          />
           <MoveButtons
             label={topic.name}
             disableUp={isFirst}
             disableDown={isLast}
             onMove={(direction) => moveTopicAction(examId, subjectId, topic.id, direction)}
           />
-          <TopicDeleteButton topicId={topic.id} />
+          <RemoveFromExamButton kind="topic" examId={examId} id={topic.id} label={topic.name} />
         </div>
       </div>
       {open ? (
