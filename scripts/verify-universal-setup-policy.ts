@@ -11,7 +11,9 @@
  *  - History: a submitted attempt is untouched by a retake (new attempt).
  *  - Dashboard layout normalization / strict parsing.
  *
- * Run against a DISPOSABLE database (never production):
+ * Precondition (checked up front): a subject linked to an active exam with
+ * >= 7 PUBLISHED questions in that exam. Run against a DISPOSABLE database
+ * (never production):
  *   DATABASE_URL=postgresql://…/scratch NODE_OPTIONS="--conditions=react-server" \
  *     npx tsx scripts/verify-universal-setup-policy.ts
  */
@@ -60,17 +62,35 @@ async function main() {
   };
 
   try {
-    // A subject with enough published questions for every case below.
-    const subjectRow = await prisma.subject.findFirst({
-      where: { examLinks: { some: { exam: { isActive: true } } }, questions: { some: { status: QuestionStatus.PUBLISHED } } },
-      orderBy: { questions: { _count: "desc" } },
-      include: { examLinks: { where: { exam: { isActive: true } }, select: { examId: true } } },
+    // Fixture precondition: a subject linked to an active exam with at least
+    // MIN_PUBLISHED PUBLISHED questions in that exam (the largest request
+    // below is 7). Subject Test deliberately serves fewer questions when fewer
+    // exist (allowFewer in startSubjectTestAttempt), so on a thinner scratch
+    // DB the count/timing checks fail for data reasons, not engine reasons.
+    // The old picker ordered by ALL questions (drafts included) and never
+    // checked the minimum; refuse up front instead of reporting false FAILs.
+    const MIN_PUBLISHED = 7;
+    const groups = await prisma.question.groupBy({
+      by: ["subjectId", "examId"],
+      where: { status: QuestionStatus.PUBLISHED, exam: { isActive: true } },
+      _count: { id: true },
+      orderBy: { _count: { id: "desc" } },
     });
-    if (!subjectRow) throw new Error("No subject with published questions.");
-    // Canonical taxonomy: the exam is the linked one the questions belong to.
-    const examIdForSubject =
-      (await prisma.question.findFirst({ where: { subjectId: subjectRow.id, status: QuestionStatus.PUBLISHED, examId: { in: subjectRow.examLinks.map((l) => l.examId) } }, select: { examId: true } }))?.examId ?? "";
-    const subject = { ...subjectRow, examId: examIdForSubject };
+    let picked: { subjectId: string; examId: string; count: number } | null = null;
+    for (const g of groups) {
+      if (g._count.id < MIN_PUBLISHED) break;
+      const linked = await prisma.subject.count({ where: { id: g.subjectId, examLinks: { some: { examId: g.examId } } } });
+      if (linked) {
+        picked = { subjectId: g.subjectId, examId: g.examId, count: g._count.id };
+        break;
+      }
+    }
+    if (!picked)
+      throw new Error(
+        `Fixture precondition not met: needs a subject linked to an active exam with >= ${MIN_PUBLISHED} PUBLISHED questions in that exam (largest found: ${groups[0]?._count.id ?? 0}). Seed the scratch DB with enough questions.`
+      );
+    const subjectRow = await prisma.subject.findUniqueOrThrow({ where: { id: picked.subjectId } });
+    const subject = { ...subjectRow, examId: picked.examId };
     const base = { examId: subject.examId, subjectId: subject.id, durationMinutes: 0 };
 
     console.log("\n--- Subject Test via UniversalTestSetup ---");
