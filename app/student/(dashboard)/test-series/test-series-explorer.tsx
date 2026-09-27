@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatIst } from "@/lib/ist-time";
 import { startOfflineOmrEntryFromTestSeriesAction } from "./actions";
+import { accessLockLabel } from "@/lib/payments/access-labels";
 
 type Availability = "UPCOMING" | "AVAILABLE" | "LIVE_NOW" | "CLOSED";
 
@@ -176,7 +177,7 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
         <div className="flex flex-wrap gap-1">
           {row.lock ? (
             <Badge variant="warning">
-              <Lock className="h-3 w-3" aria-hidden /> {row.lock.status === "EXPIRED" ? "Access expired" : "Complete Access required"}
+              <Lock className="h-3 w-3" aria-hidden /> {accessLockLabel(row.lock.status)}
             </Badge>
           ) : null}
           <Badge

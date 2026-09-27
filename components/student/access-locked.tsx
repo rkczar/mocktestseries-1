@@ -3,6 +3,7 @@ import { Lock } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { accessDeniedMessage, type AccessResult } from "@/lib/payments/access";
+import { accessLockLabel } from "@/lib/payments/access-labels";
 
 /**
  * Shown instead of any question payload when the entitlement engine denies
@@ -16,7 +17,7 @@ export function AccessLocked({ access, backHref = "/student/dashboard" }: { acce
         <CardContent className="flex flex-col items-center gap-4 py-10 text-center">
           <Lock className="h-8 w-8 text-[var(--color-primary)]" aria-hidden />
           <p className="text-base font-semibold text-[var(--color-foreground)]">
-            {access.status === "EXPIRED" ? "Access expired" : "Complete Access required"}
+            {accessLockLabel(access.status)}
           </p>
           <p className="text-sm text-[var(--color-muted-foreground)]">{accessDeniedMessage(access)}</p>
           {!access.purchasesPaused && access.products.length > 0 ? (

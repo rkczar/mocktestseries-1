@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BackButton } from "@/components/student/back-button";
 import { StartMockForm } from "./start-mock-form";
+import { accessLockLabel } from "@/lib/payments/access-labels";
 
 export const metadata = { title: "Mock Test — Mock Test Series.in" };
 
@@ -104,7 +105,7 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
           </Badge>
           {!access.allowed ? (
             <Badge variant="warning">
-              <Lock className="h-3 w-3" aria-hidden /> {access.status === "EXPIRED" ? "Access expired" : "Complete Access required"}
+              <Lock className="h-3 w-3" aria-hidden /> {accessLockLabel(access.status)}
             </Badge>
           ) : null}
           {inProgressAttempt ? <Badge variant="warning">In progress</Badge> : null}
