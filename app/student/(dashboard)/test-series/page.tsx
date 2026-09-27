@@ -1,6 +1,8 @@
 import { requireStudent } from "@/lib/student-session";
 import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
-import { getScheduledMockTestsForStudent } from "@/lib/student-data";
+import { getEnrolledExams, getScheduledMockTestsForStudent } from "@/lib/student-data";
+import { getStudentExamAccessSummaries, isCheckoutGatewayReady } from "@/lib/payments/student-access";
+import { AccessPanel } from "@/components/student/access-panel";
 import { prisma } from "@/lib/prisma";
 import { loadAccessContext, evaluateContentAccess, paywallHref } from "@/lib/payments/access";
 import { BackButton } from "@/components/student/back-button";
@@ -12,7 +14,10 @@ export const metadata = { title: "Test Series — Mock Test Series.in" };
 
 export default async function TestSeriesPage() {
   const student = await requireStudent();
-  const { groups } = await getScheduledMockTestsForStudent(student.id);
+  const [{ groups }, enrolledExams] = await Promise.all([getScheduledMockTestsForStudent(student.id), getEnrolledExams(student.id)]);
+  // Same entitlement decision as the per-test locks below (lib/payments/access.ts).
+  const seriesIds = new Set(groups.map((g) => g.series?.id).filter(Boolean));
+  const accessSummaries = (await getStudentExamAccessSummaries(student.id, enrolledExams)).filter((s) => s.series && seriesIds.has(s.series.id));
 
   const mockTestIds = groups.flatMap((g) => g.tests.map((t) => t.mockTest.id));
   const paperResources = await prisma.testResource.findMany({
@@ -20,13 +25,14 @@ export default async function TestSeriesPage() {
     select: { id: true, mockTestId: true },
   });
   const paperResourceByMockTest = new Map(paperResources.map((r) => [r.mockTestId, r.id]));
-  const accessCtx = await loadAccessContext(student.id);
+  const [accessCtx, gatewayReady] = await Promise.all([loadAccessContext(student.id), isCheckoutGatewayReady()]);
   const lockFor = (mt: { id: string; examId: string; testSeriesId: string | null; accessType: "FREE" | "PAID" }) => {
     const a = evaluateContentAccess(accessCtx, { kind: "MOCK_TEST", id: mt.id, examId: mt.examId, testSeriesId: mt.testSeriesId, accessType: mt.accessType });
     if (a.allowed) return null;
     return {
       status: a.status as "PAYMENT_REQUIRED" | "EXPIRED" | "NOT_AVAILABLE",
-      href: a.status === "NOT_AVAILABLE" || a.purchasesPaused ? null : paywallHref(a),
+      // No dead checkout: without a ready gateway the lock shows "Not available".
+      href: a.status === "NOT_AVAILABLE" || a.purchasesPaused || !gatewayReady ? null : paywallHref(a),
     };
   };
 
@@ -66,6 +72,10 @@ export default async function TestSeriesPage() {
           you can take it anytime afterward.
         </p>
       </div>
+
+      {accessSummaries.map((s) => (
+        <AccessPanel key={s.exam.id} summary={s} variant="compact" />
+      ))}
 
       <TestSeriesExplorer groups={explorerGroups} />
     </div>

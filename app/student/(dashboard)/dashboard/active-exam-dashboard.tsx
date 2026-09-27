@@ -116,6 +116,7 @@ export function ActiveExamDashboard({
   initialPapers,
   layout,
   announcements = null,
+  accessPanels = {},
   footer = null,
 }: {
   enrolledExams: ExamOption[];
@@ -130,6 +131,8 @@ export function ActiveExamDashboard({
   layout: StudentDashboardLayout;
   /** Server-rendered announcements — rendered first, directly under Welcome Back. */
   announcements?: React.ReactNode;
+  /** Server-rendered Access & Subscription card per enrolled exam id (lib/payments/student-access.ts). */
+  accessPanels?: Record<string, React.ReactNode>;
   /** Lower-priority server-rendered content (subscription status), rendered last. */
   footer?: React.ReactNode;
 }) {
@@ -166,6 +169,7 @@ export function ActiveExamDashboard({
   // Every registered block (lib/student-dashboard-blocks.ts). null = nothing
   // to show for this student right now; the block is then skipped cleanly.
   const blocks: Record<StudentDashboardBlockId, React.ReactNode> = {
+    "access-status": activeExamId ? (accessPanels[activeExamId] ?? null) : null,
     "performance-summary": (
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <MetricTile icon={<CheckCircle2 className="h-5 w-5 text-[var(--color-success)]" aria-hidden />} label="MCQs Solved Today" value={metrics.mcqSolvedToday} />

@@ -192,8 +192,8 @@ export function accessDeniedMessage(a: AccessResult): string {
   if (a.status === "EXPIRED") return "Your access to this test has expired. Renew to continue.";
   if (a.status === "PAYMENT_REQUIRED")
     return a.purchasesPaused
-      ? "This is premium content. Purchases are temporarily paused — please try again later."
-      : "This is premium content. Unlock it to start the test.";
+      ? "Complete Access is required for this test. Purchases are temporarily paused — please try again later."
+      : "Complete Access is required for this test. Unlock it to start.";
   return "This test is not available right now.";
 }
 

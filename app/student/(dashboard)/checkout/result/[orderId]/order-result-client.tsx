@@ -22,7 +22,11 @@ interface Props {
     productCode: string;
     openHref: string;
     expiresAt: string | null;
+    startsAt: string | null;
     hasEntitlement: boolean;
+    paidAt: string | null;
+    paymentRef: string | null;
+    paymentMethod: string | null;
     invoiceId: string | null;
   };
   verifyFailed: boolean;
@@ -56,6 +60,7 @@ export function OrderResultClient({ order, verifyFailed }: Props) {
 
   const success = SUCCESS.includes(status);
   const pending = PENDING.includes(status);
+  const fmt = (iso: string) => new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
 
   return (
     <div className="mx-auto w-full max-w-lg">
@@ -68,46 +73,67 @@ export function OrderResultClient({ order, verifyFailed }: Props) {
           ) : (
             <XCircle className="h-10 w-10 text-[var(--color-error)]" aria-hidden />
           )}
-          <h1 className="text-xl font-semibold text-[var(--color-foreground)]" aria-live="polite">
-            {success ? "Payment Successful" : pending ? "Payment Processing" : "Payment Failed"}
-          </h1>
-          {order.environment === "TEST" ? <Badge variant="warning">TEST MODE</Badge> : null}
-          <p className="text-sm text-[var(--color-muted-foreground)]">
-            {order.productName}
-            {order.amountPaise > 0 ? ` — ${formatInr(order.amountPaise)}` : order.couponCode ? ` — free with ${order.couponCode}` : ""}
-          </p>
-          <p className="font-mono text-xs text-[var(--color-muted-foreground)]">Order {order.orderNumber}</p>
+          <div className="flex flex-col gap-1" aria-live="polite">
+            <h1 className="text-xl font-semibold text-[var(--color-foreground)]">
+              {success ? "Payment successful" : pending ? "Payment confirmation pending" : "Payment failed"}
+            </h1>
+            {success && order.hasEntitlement ? <p className="text-sm font-medium text-[var(--color-success)]">Complete Access activated</p> : null}
+          </div>
+          {order.environment === "TEST" ? <Badge variant="warning">TEST MODE — no real money was charged</Badge> : null}
 
-          {success && order.hasEntitlement ? (
-            <p className="text-sm text-[var(--color-success)]">
-              {order.expiresAt
-                ? `Access active until ${new Date(order.expiresAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}.`
-                : "Lifetime access activated."}
-            </p>
-          ) : null}
+          <dl className="grid w-full grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-left text-sm">
+            <dt className="text-[var(--color-muted-foreground)]">Product</dt>
+            <dd className="text-right font-medium text-[var(--color-foreground)]">{order.productName}</dd>
+            <dt className="text-[var(--color-muted-foreground)]">Amount</dt>
+            <dd className="text-right text-[var(--color-foreground)]">
+              {order.amountPaise > 0 ? formatInr(order.amountPaise) : order.couponCode ? `Free with ${order.couponCode}` : formatInr(0)}
+            </dd>
+            <dt className="text-[var(--color-muted-foreground)]">Order</dt>
+            <dd className="break-all text-right font-mono text-xs text-[var(--color-foreground)]">{order.orderNumber}</dd>
+            {order.paymentRef ? (
+              <>
+                <dt className="text-[var(--color-muted-foreground)]">Transaction</dt>
+                <dd className="break-all text-right font-mono text-xs text-[var(--color-foreground)]">
+                  {order.paymentRef}
+                  {order.paymentMethod ? <span className="ml-1 font-sans uppercase text-[var(--color-muted-foreground)]">· {order.paymentMethod}</span> : null}
+                </dd>
+              </>
+            ) : null}
+            {success && order.hasEntitlement ? (
+              <>
+                <dt className="text-[var(--color-muted-foreground)]">Access validity</dt>
+                <dd className="text-right text-[var(--color-foreground)]">
+                  {order.expiresAt ? `${order.startsAt ? `${fmt(order.startsAt)} – ` : "Until "}${fmt(order.expiresAt)}` : "Lifetime"}
+                </dd>
+              </>
+            ) : null}
+          </dl>
+
           {pending ? (
             <p className="text-sm text-[var(--color-muted-foreground)]">
               {polls >= 12
-                ? "Still confirming with the bank. If money was deducted, your access will activate automatically — check My Subscriptions shortly."
-                : "Confirming your payment with Razorpay. Please don't close this page."}
+                ? "Still confirming with the bank. If money was deducted, your access activates automatically once Razorpay confirms it — check My Subscription shortly. There's no need to pay again."
+                : "Confirming your payment with Razorpay. You can keep this page open; access activates automatically."}
             </p>
           ) : null}
           {!success && !pending ? (
             <p className="text-sm text-[var(--color-muted-foreground)]">
               {verifyFailed
                 ? "We couldn't verify this payment. If money was deducted it will be reconciled automatically, or refunded by your bank."
-                : "No access was granted for this order. You can try again."}
+                : "No access was granted for this order. If money was deducted for a failed payment, your bank reverses it automatically. You can try again safely."}
             </p>
           ) : null}
 
           <div className="flex w-full flex-col gap-2">
             {success ? (
               <Button asChild>
-                <Link href={order.openHref}>Start Learning</Link>
+                <Link href={order.openHref}>Start Learning — View Test Series</Link>
               </Button>
             ) : !pending ? (
+              // Retry goes back through checkout, whose server-side order guard
+              // reuses an open order / blocks in-flight duplicates.
               <Button asChild>
-                <Link href={`/student/checkout/${encodeURIComponent(order.productCode)}`}>Retry</Link>
+                <Link href={`/student/checkout/${encodeURIComponent(order.productCode)}`}>Try again</Link>
               </Button>
             ) : null}
             {order.invoiceId ? (
@@ -115,9 +141,14 @@ export function OrderResultClient({ order, verifyFailed }: Props) {
                 <a href={`/api/student/invoices/${order.invoiceId}`}>Download Invoice</a>
               </Button>
             ) : null}
-            <Button asChild variant="ghost">
-              <Link href="/student/subscriptions">My Subscriptions</Link>
-            </Button>
+            <div className="grid grid-cols-2 gap-2">
+              <Button asChild variant="ghost">
+                <Link href="/student/subscriptions">My Subscription</Link>
+              </Button>
+              <Button asChild variant="ghost">
+                <Link href="/student/payments">Payments &amp; Invoices</Link>
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

@@ -38,7 +38,7 @@ export function fullJourneyFlowNodeIds(): string[] {
   ];
 }
 
-/** Public exam hub → Mock Test Series → Product → Checkout → Entitlement → Student Test Series → Attempt → Result → Review. */
+/** Public exam hub / Student Dashboard (Access & Subscription) → Plans → Test Series → Product → Checkout → Razorpay → Payment → Entitlement → Subscription / Invoice → Test Access → Attempt → Result → Review. */
 export function mockSeriesFunnelNodeIds(): string[] {
   return MOCK_SERIES_FUNNEL_FLOW;
 }

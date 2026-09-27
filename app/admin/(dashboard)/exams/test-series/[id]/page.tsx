@@ -9,7 +9,8 @@ import { deriveMockTestAvailability } from "@/lib/mock-test-schedule";
 import { computeProductPrice, describeAccessDuration } from "@/lib/payments/pricing";
 import { formatInr } from "@/lib/payments/money";
 import { getPaymentMode } from "@/lib/payments/settings";
-import { getCanonicalSeriesRow, mockSeriesPath } from "@/lib/mock-series";
+import { getCanonicalSeriesRow, getExamMockSeries, getSeriesComparison, getSeriesOffer, mockSeriesPath } from "@/lib/mock-series";
+import { OfferDisplayForm } from "../offer-display-form";
 import { SeriesStatusSelect } from "../series-status-select";
 import { SeriesSettingsForm } from "../series-settings-form";
 import { MockTestTable, toMockTestTableRow } from "@/components/admin/mock-test-table";
@@ -101,6 +102,17 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
     questionCount: m._count.questions,
     accessType: m.accessType,
   }));
+
+  // Offer display editor (Free vs Complete presentation) — canonical series only,
+  // since that is the series every student/public surface compares against.
+  const offerEditor =
+    canonical?.id === series.id
+      ? await (async () => {
+          const ms = await getExamMockSeries(series.examId);
+          const offer = await getSeriesOffer(series.examId, series.id);
+          return getSeriesComparison(series.examId, ms, offer);
+        })()
+      : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -324,6 +336,20 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
             </table>
           )}
         </CardContent>
+        {offerEditor ? (
+          <CardContent className="border-t border-[var(--color-border)] pt-5">
+            <p className="text-sm font-semibold text-[var(--color-foreground)]">Student offer display — Free vs Complete</p>
+            <p className="mb-4 text-xs text-[var(--color-muted-foreground)]">
+              Controls the upgrade card on the Student Dashboard, the banner on the student Test Series page and the comparison on the public
+              series page. Presentation only: price, MRP, sale, duration and purchasability always come from the Product above.
+            </p>
+            <OfferDisplayForm seriesId={series.id} derivedRows={offerEditor.derivedRows} config={offerEditor.display} readOnly={!canManage} />
+          </CardContent>
+        ) : (
+          <CardContent className="border-t border-[var(--color-border)] pt-4 text-xs text-[var(--color-muted-foreground)]">
+            The student offer display is configured on the exam&apos;s canonical (first published) Test Series.
+          </CardContent>
+        )}
       </Card>
 
       {/* STUDENTS */}

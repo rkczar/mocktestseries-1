@@ -91,7 +91,17 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/student/checkout/result/[orderId]", to: "/student/subscriptions", source: "button", label: "Entitlement active (webhook/reconcile restores if callback lost)" },
   { from: "/student/checkout/result/[orderId]", to: "/student/payments", source: "button", label: "Invoice" },
   { from: "/student/subscriptions", to: "/student/checkout/[code]", source: "button", label: "Renew" },
-  { from: "/student/dashboard", to: "/student/subscriptions", source: "card", label: "Active subscription / expiry warning" },
+  { from: "/student/dashboard", to: "/student/subscriptions", source: "card", label: "Access & Subscription: Complete Access — Active / expiry reminder" },
+  // Access & Subscription block (components/student/access-panel.tsx): state from
+  // lib/payments/student-access.ts → evaluateContentAccess (same decision as test locks).
+  { from: "/student/dashboard", to: "/student/checkout/[code]", source: "card", label: "Access & Subscription: Unlock / Renew / Extend (canonical Product checkout)" },
+  { from: "/student/dashboard", to: "/student/test-series", source: "card", label: "Access & Subscription: View Test Series (entitlement unlocks tests)" },
+  { from: "/student/dashboard", to: "/student/payments", source: "card", label: "Access & Subscription: Payments & Invoices" },
+  { from: "/student/dashboard", to: "/exams/[slug]/mock-test-series", source: "card", label: "View full Free vs Complete comparison" },
+  { from: "/student/dashboard", to: "/student/plans", source: "card", label: "Plans & Access (no public page / promo hidden)" },
+  { from: "/student/checkout/result/[orderId]", to: "/student/test-series", source: "button", label: "Start Learning (Payment → Entitlement → Test Access)" },
+  { from: "/admin/exams/test-series/[id]", to: "/student/dashboard", source: "admin-config", label: "Offer display: Free vs Complete rows, heading, CTA (Setting; price stays on Product)" },
+  { from: "/admin/exams/test-series/[id]", to: "/exams/[slug]/mock-test-series", source: "admin-config", label: "Offer display: comparison rows" },
   // Test Access Gate (lib/payments/access.ts via lib/test-attempt.ts start*):
   // a denied start redirects to the unlocking product's checkout.
   { from: "/student/test-series", to: "/student/checkout/[code]", source: "button", label: "Test Access Gate: Unlock / Renew" },
@@ -304,10 +314,14 @@ export const MOCK_SERIES_FUNNEL_FLOW: string[] = [
   "/exams/[slug]/exam-pattern",
   "/exams/[slug]/question-bank",
   "/login",
+  "/student/dashboard",
   "/student/plans",
+  "/admin/exams/test-series/[id]",
   "/admin/payments/products/[id]",
   "/student/checkout/[code]",
   "/student/checkout/result/[orderId]",
+  "/student/subscriptions",
+  "/student/payments",
   "/student/test-series",
   "/student/test-series/[mockTestId]",
   "/student/attempt/[attemptId]/run",

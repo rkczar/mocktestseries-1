@@ -6,6 +6,8 @@ import { canStudentAccessProduct, evaluateContentAccess, loadAccessContext, type
 import { deriveMockTestAvailability, type MockTestAvailability } from "@/lib/mock-test-schedule";
 import { getAiSettings } from "@/lib/ai-settings";
 import { formatInr } from "@/lib/payments/money";
+import { applyOfferDisplay, DEFAULT_OFFER_DISPLAY, type OfferDisplayConfig, type OfferDisplayRow, type PlanRow } from "@/lib/payments/offer-display-shared";
+import { getOfferDisplay } from "@/lib/payments/offer-display";
 
 /**
  * The ONE source of truth for an exam's Mock Test Series as the public site
@@ -229,18 +231,13 @@ export async function getSeriesCta(studentId: string | null, offer: SeriesOffer 
 // settings, so marketing can never promise what the backend doesn't enforce.
 // ---------------------------------------------------------------------------
 
-export interface PlanRow {
-  feature: string;
-  free: string;
-  paid: string;
-  note?: string;
-}
+export type { PlanRow } from "@/lib/payments/offer-display-shared";
 
 export async function getPlanComparison(
   examId: string,
   mockSeries: ExamMockSeries | null,
   offer: SeriesOffer | null
-): Promise<{ rows: PlanRow[]; everythingFreeNow: boolean }> {
+): Promise<{ rows: PlanRow[]; everythingFreeNow: boolean; freeMocks: number; publishedMocks: number }> {
   const [ai, papers, omrCount, pdfCount] = await Promise.all([
     getAiSettings(),
     prisma.previousYearPaper.findMany({ where: { examId, isActive: true }, select: { id: true, year: true } }),
@@ -287,32 +284,65 @@ export async function getPlanComparison(
 
   const rows: PlanRow[] = [
     {
+      key: "price",
       feature: "Price",
       free: "₹0",
       paid: offer?.showPrice ? formatPriceShort(offer.price) : offer ? "Free right now" : "—",
     },
     {
+      key: "mock-tests",
       feature: "Mock Tests",
       free: freeMocks > 0 ? `${freeMocks} free mock${freeMocks === 1 ? "" : "s"}` : "Sample mocks when released",
       paid: planned > 0 ? `All ${planned} planned mocks (${tests.length} published so far)` : "All mocks in the series",
     },
-    { feature: "Scheduled mock access", free: freeMocks > 0 ? "Free mocks, as they release" : "—", paid: "Every mock, as it releases" },
-    { feature: "Previous Year Papers", free: pyqFree ? pyqLabel : "—", paid: pyqLabel },
-    { feature: "PYQ practice (attempt online)", free: pyqFree ? yes : "—", paid: yes },
-    { feature: "Downloadable Practice OMR", free: yes, paid: yes, note: omrCount > 0 ? undefined : "OMR sheets are published by the admin" },
-    { feature: "AI Explanations (Ask AI)", free: aiFree, paid: aiPaid },
-    { feature: "Examiner Traps & AI Trap Questions", free: `${aiFree} (shared with Ask AI)`, paid: ai.paidDailyLimit === null ? "Unlimited" : `${aiPaid} (shared with Ask AI)` },
-    { feature: "Result & Score", free: yes, paid: yes },
-    { feature: "Question-by-question Review", free: yes, paid: yes },
-    { feature: "Correct Answer Review", free: yes, paid: yes },
-    { feature: "Performance Analytics", free: yes, paid: yes },
-    { feature: "Subject-wise practice", free: subjectFree ? yes : "—", paid: yes },
-    { feature: "Bookmarks / Saved Questions", free: yes, paid: yes },
-    ...(pdfCount > 0 ? [{ feature: "Mock paper / solution PDFs", free: "With the mocks you can attempt", paid: "With every mock" }] : []),
-    { feature: "Syllabus coverage per mock", free: yes, paid: yes },
-    { feature: "Mobile practice", free: yes, paid: yes },
+    { key: "scheduled-mocks", feature: "Scheduled mock access", free: freeMocks > 0 ? "Free mocks, as they release" : "—", paid: "Every mock, as it releases" },
+    { key: "pyq-papers", feature: "Previous Year Papers", free: pyqFree ? pyqLabel : "—", paid: pyqLabel },
+    { key: "pyq-practice", feature: "PYQ practice (attempt online)", free: years > 0 && pyqFree ? yes : "—", paid: years > 0 ? yes : "—" },
+    { key: "practice-omr", feature: "Downloadable Practice OMR", free: yes, paid: yes, note: omrCount > 0 ? undefined : "OMR sheets are published by the admin" },
+    { key: "ai-explanations", feature: "AI Explanations (Ask AI)", free: aiFree, paid: aiPaid },
+    { key: "ai-traps", feature: "Examiner Traps & AI Trap Questions", free: `${aiFree} (shared with Ask AI)`, paid: ai.paidDailyLimit === null ? "Unlimited" : `${aiPaid} (shared with Ask AI)` },
+    { key: "result-score", feature: "Result & Score", free: yes, paid: yes },
+    { key: "question-review", feature: "Question-by-question Review", free: yes, paid: yes },
+    { key: "answer-review", feature: "Correct Answer Review", free: yes, paid: yes },
+    { key: "analytics", feature: "Performance Analytics", free: yes, paid: yes },
+    { key: "subject-practice", feature: "Subject-wise practice", free: subjectFree ? yes : "—", paid: yes },
+    { key: "bookmarks", feature: "Bookmarks / Saved Questions", free: yes, paid: yes },
+    ...(pdfCount > 0 ? [{ key: "paper-pdfs", feature: "Mock paper / solution PDFs", free: "With the mocks you can attempt", paid: "With every mock" }] : []),
+    { key: "syllabus-coverage", feature: "Syllabus coverage per mock", free: yes, paid: yes },
+    { key: "mobile-practice", feature: "Mobile practice", free: yes, paid: yes },
   ];
-  return { rows, everythingFreeNow: base.mode === "FREE" };
+  return { rows, everythingFreeNow: base.mode === "FREE", freeMocks, publishedMocks: tests.length };
+}
+
+export interface SeriesComparison {
+  rows: OfferDisplayRow[];
+  /** The live rows before admin display overrides (Admin editor baseline). */
+  derivedRows: PlanRow[];
+  display: OfferDisplayConfig;
+  everythingFreeNow: boolean;
+  freeMocks: number;
+  publishedMocks: number;
+}
+
+/**
+ * The canonical Free vs Complete comparison every surface renders (public
+ * series page, Student Dashboard, Test Series page): live rows from
+ * getPlanComparison with the series' admin display config applied.
+ */
+export async function getSeriesComparison(examId: string, mockSeries: ExamMockSeries | null, offer: SeriesOffer | null): Promise<SeriesComparison> {
+  const [base, display] = await Promise.all([
+    getPlanComparison(examId, mockSeries, offer),
+    mockSeries ? getOfferDisplay(mockSeries.series.id) : Promise.resolve(null),
+  ]);
+  const cfg = display ?? DEFAULT_OFFER_DISPLAY;
+  return {
+    rows: applyOfferDisplay(base.rows, cfg),
+    derivedRows: base.rows,
+    display: cfg,
+    everythingFreeNow: base.everythingFreeNow,
+    freeMocks: base.freeMocks,
+    publishedMocks: base.publishedMocks,
+  };
 }
 
 function formatPriceShort(p: ProductPrice): string {

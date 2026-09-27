@@ -10,11 +10,20 @@ import { Button } from "@/components/ui/button";
  * when it expires, and a 7/3/1-day expiry warning. Renders nothing for a
  * student with no subscriptions (the free-site experience is unchanged).
  * Never auto-renews — this phase is one-time purchase + timed access.
+ * Products already shown by the Access & Subscription card
+ * (components/student/access-panel.tsx) are excluded so a plan is never
+ * listed twice.
  */
-export async function SubscriptionStatusCard({ studentId }: { studentId: string }) {
+export async function SubscriptionStatusCard({ studentId, excludeProductIds = [] }: { studentId: string; excludeProductIds?: string[] }) {
   const now = new Date();
   const active = await prisma.studentEntitlement.findMany({
-    where: { studentId, status: "ACTIVE", startsAt: { lte: now }, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+    where: {
+      studentId,
+      status: "ACTIVE",
+      startsAt: { lte: now },
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      ...(excludeProductIds.length ? { productId: { notIn: excludeProductIds } } : {}),
+    },
     include: { product: { select: { name: true, code: true } } },
     orderBy: { expiresAt: { sort: "asc", nulls: "last" } },
     take: 3,

@@ -27,7 +27,9 @@ export default async function OrderResultPage({
       couponCode: true,
       environment: true,
       product: { select: { code: true, name: true, productType: true, examId: true } },
-      entitlement: { select: { expiresAt: true } },
+      paidAt: true,
+      entitlement: { select: { startsAt: true, expiresAt: true, status: true } },
+      payments: { where: { status: { in: ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"] } }, select: { gatewayPaymentId: true, method: true }, take: 1 },
       invoice: { select: { id: true } },
     },
   });
@@ -46,7 +48,11 @@ export default async function OrderResultPage({
         productCode: order.product.code,
         openHref: productHref(order.product),
         expiresAt: order.entitlement?.expiresAt ? order.entitlement.expiresAt.toISOString() : null,
-        hasEntitlement: Boolean(order.entitlement),
+        startsAt: order.entitlement?.startsAt ? order.entitlement.startsAt.toISOString() : null,
+        hasEntitlement: order.entitlement?.status === "ACTIVE",
+        paidAt: order.paidAt ? order.paidAt.toISOString() : null,
+        paymentRef: order.payments[0]?.gatewayPaymentId ?? null,
+        paymentMethod: order.payments[0]?.method ?? null,
         invoiceId: order.invoice?.id ?? null,
       }}
       verifyFailed={sp.verify === "failed"}

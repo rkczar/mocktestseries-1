@@ -6,6 +6,7 @@ import type { TestSeriesStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
+import { offerDisplaySchema, resetOfferDisplay, saveOfferDisplay } from "@/lib/payments/offer-display";
 
 // Test Series Control Center mutations are gated by TEST_SERIES_MANAGE
 // (MASTER_ADMIN only), not EXAMS_MANAGE — same reasoning as Mock Test
@@ -112,4 +113,44 @@ export async function setTestSeriesStatusAction(id: string, status: TestSeriesSt
     data: { actorId: session.user.id, action: "TEST_SERIES_STATUS_CHANGED", entityType: "TestSeries", entityId: id, metadata: { status } },
   });
   revalidateMockSeriesSurfaces();
+}
+
+/**
+ * Free vs Complete offer DISPLAY config for a series (heading, CTA label,
+ * comparison rows). Presentation only — prices stay on the Product. Same
+ * TEST_SERIES_MANAGE gate (MASTER_ADMIN; FULL_ADMIN is read-only).
+ */
+export async function saveOfferDisplayAction(seriesId: string, _prev: TestSeriesFormState, formData: FormData): Promise<TestSeriesFormState> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  if (!(await prisma.testSeries.findUnique({ where: { id: seriesId }, select: { id: true } }))) return { error: "Test Series not found." };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(String(formData.get("config") ?? ""));
+  } catch {
+    return { error: "Invalid configuration." };
+  }
+  const parsed = offerDisplaySchema.safeParse(raw);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid configuration." };
+  await saveOfferDisplay(seriesId, parsed.data);
+  await prisma.auditLog.create({
+    data: {
+      actorId: session.user.id,
+      action: "TEST_SERIES_OFFER_DISPLAY_UPDATED",
+      entityType: "TestSeries",
+      entityId: seriesId,
+      metadata: { promoVisible: parsed.data.promoVisible, rows: parsed.data.rows.length },
+    },
+  });
+  revalidateMockSeriesSurfaces();
+  return { success: true };
+}
+
+export async function resetOfferDisplayAction(seriesId: string): Promise<TestSeriesFormState> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  await resetOfferDisplay(seriesId);
+  await prisma.auditLog.create({
+    data: { actorId: session.user.id, action: "TEST_SERIES_OFFER_DISPLAY_RESET", entityType: "TestSeries", entityId: seriesId, metadata: {} },
+  });
+  revalidateMockSeriesSurfaces();
+  return { success: true };
 }

@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug, getExamPapers } from "@/lib/exam-public";
-import { getExamMockSeriesSummary, getPlanComparison, getSeriesCta, mockSeriesPath, type PublicSeriesTest } from "@/lib/mock-series";
+import { getExamMockSeriesSummary, getSeriesComparison, getSeriesCta, mockSeriesPath, type PublicSeriesTest } from "@/lib/mock-series";
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
 import { getStudentSession } from "@/lib/student-session";
@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
 import { OfferPrice, SeriesCounts } from "@/components/public-exam/mock-series-promo";
+import { PlanComparison } from "@/components/payments/plan-comparison";
 
 /**
  * Canonical Mock Test Series landing page (/exams/[slug]/mock-test-series).
@@ -72,7 +73,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
     getSiteUrl(),
     getStudentSession(),
     getExamPapers(exam.id),
-    getPlanComparison(exam.id, mockSeries, offer),
+    getSeriesComparison(exam.id, mockSeries, offer),
     getExamTaxonomy(prisma, exam.id),
     prisma.testResource.findFirst({
       where: {
@@ -341,48 +342,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
             Generated from the platform&apos;s live access rules and AI settings — only what is actually enforced is listed.
             {comparison.everythingFreeNow ? " Right now, every signed-in student gets complete access for free." : ""}
           </p>
-          {/* md+: table */}
-          <div className="mt-5 hidden overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] md:block">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-[var(--color-surface)]">
-                <tr className="text-xs uppercase text-[var(--color-muted-foreground)]">
-                  <th className="px-4 py-3 font-medium">Feature</th>
-                  <th className="px-4 py-3 font-medium">Free</th>
-                  <th className="px-4 py-3 font-medium text-[var(--color-foreground)]">Complete Series</th>
-                </tr>
-              </thead>
-              <tbody>
-                {comparison.rows.map((r) => (
-                  <tr key={r.feature} className="border-t border-[var(--color-border)]">
-                    <td className="px-4 py-3 font-medium text-[var(--color-foreground)]">
-                      {r.feature}
-                      {r.note ? <span className="block text-xs font-normal text-[var(--color-muted-foreground)]">{r.note}</span> : null}
-                    </td>
-                    <td className="px-4 py-3 text-[var(--color-muted-foreground)]">{r.free}</td>
-                    <td className="px-4 py-3 text-[var(--color-foreground)]">{r.paid}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {/* mobile: stacked cards, no horizontal scroll */}
-          <div className="mt-5 flex flex-col gap-2 md:hidden">
-            {comparison.rows.map((r) => (
-              <div key={r.feature} className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
-                <p className="text-sm font-medium text-[var(--color-foreground)]">{r.feature}</p>
-                <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <dt className="text-[11px] uppercase text-[var(--color-muted-foreground)]">Free</dt>
-                    <dd className="text-[var(--color-muted-foreground)]">{r.free}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-[11px] uppercase text-[var(--color-muted-foreground)]">Complete</dt>
-                    <dd className="text-[var(--color-foreground)]">{r.paid}</dd>
-                  </div>
-                </dl>
-              </div>
-            ))}
-          </div>
+          <PlanComparison rows={comparison.rows} className="mt-5" />
         </section>
 
         {/* AI REVIEW + PERFORMANCE */}

@@ -10,6 +10,8 @@ import {
 import { getVisibleAnnouncementsForStudent } from "@/lib/notifications";
 import { ACTIVE_EXAM_COOKIE } from "@/lib/active-exam";
 import { SubscriptionStatusCard } from "@/components/student/subscription-status-card";
+import { AccessPanel } from "@/components/student/access-panel";
+import { getStudentExamAccessSummaries } from "@/lib/payments/student-access";
 import { ActiveExamDashboard } from "./active-exam-dashboard";
 import { DashboardAnnouncements } from "./dashboard-announcements";
 import { toDashboardMetricsView } from "./metrics-view";
@@ -48,7 +50,7 @@ export default async function StudentDashboardPage() {
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet, layout] = await Promise.all([
+  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet, layout, accessSummaries] = await Promise.all([
     activeExamId
       ? Promise.all([
           getExamScopedDashboardMetrics(student.id, activeExamId),
@@ -59,7 +61,12 @@ export default async function StudentDashboardPage() {
       : Promise.all([null, [], getNextScheduledTestForStudent(student.id), [] as DashboardPaperView[]]),
     findPracticeOmrSheet(activeExamId),
     getStudentDashboardLayout(),
+    getStudentExamAccessSummaries(student.id, enrolledExams),
   ]);
+  // Server-rendered per exam; the client picks the active exam's card, so an
+  // exam switch never shows another exam's access state.
+  const accessPanels = Object.fromEntries(accessSummaries.map((s) => [s.exam.id, <AccessPanel key={s.exam.id} summary={s} />]));
+  const coveredProductIds = accessSummaries.flatMap((s) => (s.state === "ACTIVE" ? (s.entitlement?.productIds ?? []) : []));
   const initialMetrics = toDashboardMetricsView(rawExamMetrics ?? globalMetrics);
   const nextTestCard = nextTest
     ? {
@@ -109,7 +116,8 @@ export default async function StudentDashboardPage() {
             }))}
           />
         }
-        footer={<SubscriptionStatusCard studentId={student.id} />}
+        accessPanels={accessPanels}
+        footer={<SubscriptionStatusCard studentId={student.id} excludeProductIds={coveredProductIds} />}
       />
       <FloatingWhatsAppSupport surface="dashboard" />
     </div>

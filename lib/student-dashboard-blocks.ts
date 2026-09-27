@@ -14,6 +14,7 @@
 export type StudentDashboardGroup = "overview" | "practice" | "pyq" | "recent" | "account";
 
 export const STUDENT_DASHBOARD_BLOCKS = [
+  { id: "access-status", label: "Access & Subscription", group: "account", card: false, description: "Free / Complete Access / Expired state per exam: upgrade offer, Free vs Complete comparison, or active plan with expiry" },
   { id: "performance-summary", label: "Performance Summary", group: "overview", card: false, description: "MCQs today, questions attempted, tests completed, streak, average score" },
   { id: "analytics-progress", label: "Analytics & Progress links", group: "overview", card: false, description: "Analytics, History, My Exams, Saved Questions" },
   { id: "test-schedule", label: "Test Schedule · Next Test", group: "practice", card: false, description: "Next scheduled mock test with countdown / Start" },
@@ -27,7 +28,7 @@ export const STUDENT_DASHBOARD_BLOCKS = [
   { id: "continue-attempt", label: "Continue Attempt", group: "recent", card: false, description: "Resume the student's in-progress test" },
   { id: "recent-activity", label: "Recent Test", group: "recent", card: false, description: "Latest completed test and score" },
   { id: "weak-topics", label: "Weak Topics", group: "recent", card: false, description: "Topics with the most recent wrong answers" },
-  { id: "subscription-status", label: "Subscription Status", group: "account", card: false, description: "Active plan / expiry reminder" },
+  { id: "subscription-status", label: "Subscription Status", group: "account", card: false, description: "Other active plans not covered by Access & Subscription" },
 ] as const satisfies readonly { id: string; label: string; group: StudentDashboardGroup; card: boolean; description: string }[];
 
 export type StudentDashboardBlockId = (typeof STUDENT_DASHBOARD_BLOCKS)[number]["id"];
@@ -42,5 +43,5 @@ export function studentDashboardBlock(id: StudentDashboardBlockId) {
   return STUDENT_DASHBOARD_BLOCKS.find((b) => b.id === id)!;
 }
 
-/** Default: Overview → Practice & Tests → Previous Year Papers → Recent Activity → account. */
+/** Default: Access & Subscription → Overview → Practice & Tests → Previous Year Papers → Recent Activity → account. */
 export const DEFAULT_STUDENT_DASHBOARD_LAYOUT: StudentDashboardLayout = STUDENT_DASHBOARD_BLOCKS.map((b) => ({ id: b.id, visible: true }));

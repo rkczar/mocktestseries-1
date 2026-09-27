@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { GraduationCap, Menu, X, User, LogOut, Bookmark, BadgeCheck, Receipt } from "lucide-react";
+import { GraduationCap, Menu, X, User, LogOut, Bookmark, BadgeCheck, Receipt, Sparkles } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { TextSizeControl } from "@/components/theme/text-size-control";
 import {
@@ -95,6 +95,11 @@ export function StudentHeader({
               <DropdownMenuItem asChild>
                 <Link href="/student/saved">
                   <Bookmark className="h-4 w-4" aria-hidden /> Saved Questions
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/student/plans">
+                  <Sparkles className="h-4 w-4" aria-hidden /> Plans &amp; Access
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>

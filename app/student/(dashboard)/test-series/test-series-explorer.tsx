@@ -176,7 +176,7 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
         <div className="flex flex-wrap gap-1">
           {row.lock ? (
             <Badge variant="warning">
-              <Lock className="h-3 w-3" aria-hidden /> {row.lock.status === "EXPIRED" ? "Access expired" : "Premium"}
+              <Lock className="h-3 w-3" aria-hidden /> {row.lock.status === "EXPIRED" ? "Access expired" : "Complete Access required"}
             </Badge>
           ) : null}
           <Badge

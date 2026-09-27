@@ -5,6 +5,7 @@ import { requireStudent } from "@/lib/student-session";
 import { getMockTestDetailForStudent } from "@/lib/student-data";
 import { AVAILABILITY_LABELS, isMockResultReleased } from "@/lib/mock-test-schedule";
 import { loadAccessContext, evaluateContentAccess, paywallHref } from "@/lib/payments/access";
+import { isCheckoutGatewayReady } from "@/lib/payments/student-access";
 import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,11 +47,11 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
   if (inProgressAttempt && access.allowed) {
     action = <StartMockForm mockTestId={mockTest.id} label="Resume Test" />;
   } else if (!access.allowed) {
-    const canBuy = access.status !== "NOT_AVAILABLE" && !access.purchasesPaused;
+    const canBuy = access.status !== "NOT_AVAILABLE" && !access.purchasesPaused && (await isCheckoutGatewayReady());
     action = canBuy ? (
       <Button asChild size="lg" className="w-full">
         <Link href={paywallHref(access)}>
-          <Lock className="h-4 w-4" aria-hidden /> {access.status === "EXPIRED" ? "Renew Access" : "Unlock this Test"}
+          <Lock className="h-4 w-4" aria-hidden /> {access.status === "EXPIRED" ? "Renew Access" : "Unlock Complete Access"}
         </Link>
       </Button>
     ) : (
@@ -103,7 +104,7 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
           </Badge>
           {!access.allowed ? (
             <Badge variant="warning">
-              <Lock className="h-3 w-3" aria-hidden /> {access.status === "EXPIRED" ? "Access expired" : "Premium"}
+              <Lock className="h-3 w-3" aria-hidden /> {access.status === "EXPIRED" ? "Access expired" : "Complete Access required"}
             </Badge>
           ) : null}
           {inProgressAttempt ? <Badge variant="warning">In progress</Badge> : null}

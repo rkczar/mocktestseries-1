@@ -16,7 +16,7 @@ export function AccessLocked({ access, backHref = "/student/dashboard" }: { acce
         <CardContent className="flex flex-col items-center gap-4 py-10 text-center">
           <Lock className="h-8 w-8 text-[var(--color-primary)]" aria-hidden />
           <p className="text-base font-semibold text-[var(--color-foreground)]">
-            {access.status === "EXPIRED" ? "Access expired" : "Premium content"}
+            {access.status === "EXPIRED" ? "Access expired" : "Complete Access required"}
           </p>
           <p className="text-sm text-[var(--color-muted-foreground)]">{accessDeniedMessage(access)}</p>
           {!access.purchasesPaused && access.products.length > 0 ? (
