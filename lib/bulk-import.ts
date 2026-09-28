@@ -101,6 +101,21 @@ export interface RunExamContext {
   name: string;
   code: string;
   year: number | null;
+  /**
+   * The run targets a Mock Test. Such a run only says where its questions
+   * are USED, never which historical paper they belong to — so its rows are
+   * never auto-linked to a Previous Year Paper by exam + year (see resolveRow).
+   */
+  mockTarget?: boolean;
+}
+
+/** The run's Exam context as every validate/import path must see it (one rule for preview and import). */
+export function runExamContextFor(
+  exams: { id: string; name: string; code: string; year: number | null }[],
+  run: { examId: string | null; mockTestId: string | null } | null | undefined
+): RunExamContext | null {
+  const exam = run?.examId ? exams.find((e) => e.id === run.examId) : undefined;
+  return exam ? { ...exam, mockTarget: Boolean(run?.mockTestId) } : null;
 }
 
 export interface ImportValidationResult {
@@ -728,18 +743,37 @@ export async function resolveRow(
   const forceDraft = !["A", "B", "C", "D"].includes(data.correctAnswer?.toUpperCase() ?? "");
   if (forceDraft) reviewRequired = true;
 
-  // Resolve PYQ paper if source indicates it's a PYQ
+  // Resolve PYQ paper if source indicates it's a PYQ.
+  //
+  // A PYQ paper is a historical document: exam + year is only a safe key
+  // when the row genuinely belongs to that exam. Never infer it when
+  //  - the run targets a Mock Test (the test only REFERENCES its questions;
+  //    a Haryana/Punjab/Dermatology PYQ file imported into a RUHS mock once
+  //    became "RUHS MO <year>" questions this way), or
+  //  - the file names a different existing Exam than the one this row is
+  //    being saved under (the year belongs to that other exam's paper).
+  // An explicitly chosen run-level paper (lib/bulk-import-execute.ts) is the
+  // only other way a question joins a paper.
   let previousYearPaperId: string | null = null;
   let source: QuestionSource = QuestionSource.QUESTION_BANK;
 
   if (data.source.toUpperCase() === "PYQ" || data.source.toLowerCase().includes("previous year")) {
-    source = QuestionSource.PYQ;
-    const paper = papers.find((p) => p.examId === exam.id && p.year === examYear);
-    if (paper) {
-      previousYearPaperId = paper.id;
+    const examSubstituted = Boolean(fileExam && fileExam.id !== exam.id);
+    if (runExamContext?.mockTarget || examSubstituted) {
+      warnings.push(
+        `Source says PYQ${data.exam ? ` ("${data.exam}" ${examYear})` : ""}, but ${
+          runExamContext?.mockTarget ? "a Mock Test import" : `a row saved under "${exam.name}"`
+        } is never linked to "${exam.name}"'s ${examYear} Previous Year Paper — it will be created as a Question Bank question. To reuse an existing PYQ, add it from the Question Bank instead.`
+      );
     } else {
-      warnings.push(`No PYQ paper found for ${exam.name} ${examYear}, will create as QUESTION_BANK`);
-      source = QuestionSource.QUESTION_BANK;
+      source = QuestionSource.PYQ;
+      const paper = papers.find((p) => p.examId === exam.id && p.year === examYear);
+      if (paper) {
+        previousYearPaperId = paper.id;
+      } else {
+        warnings.push(`No PYQ paper found for ${exam.name} ${examYear}, will create as QUESTION_BANK`);
+        source = QuestionSource.QUESTION_BANK;
+      }
     }
   }
 

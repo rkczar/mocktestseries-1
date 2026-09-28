@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -24,26 +24,14 @@ import {
   removeMockTestQuestionsAction,
   reorderMockTestQuestionsAction,
   replaceMockTestQuestionAction,
+  searchMockQuestionBankAction,
+  matchingMockQuestionIdsAction,
   type QuestionOpResult,
 } from "@/app/admin/(dashboard)/tests/mock/actions";
+import type { BankFacets, BankFilters, BankRow } from "@/lib/mock-question-bank";
 
-/** One Question Bank row offered by Add From Question Bank (text is pre-truncated server-side). */
-export interface BankQuestion {
-  id: string;
-  code: string;
-  text: string;
-  subjectId: string;
-  subjectName: string;
-  topicId: string | null;
-  topicName: string | null;
-  subTopicId: string | null;
-  subTopicName: string | null;
-  year: number | null;
-  isPyq: boolean;
-  difficulty: "EASY" | "MEDIUM" | "HARD";
-  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
-  hasImage: boolean;
-}
+/** One Question Bank row (with its canonical exam / PYQ provenance). */
+export type BankQuestion = BankRow;
 
 /** A question already attached to the test, with its options for Preview. */
 export interface SelectedQuestion extends BankQuestion {
@@ -52,32 +40,49 @@ export interface SelectedQuestion extends BankQuestion {
 }
 
 type Panel = "selected" | "bank";
-const PAGE_SIZE = 50;
 const MAX_BULK_SELECT = 500;
+
+export interface BankExamOption {
+  id: string;
+  name: string;
+  code: string;
+}
+export interface BankPaperOption {
+  id: string;
+  examId: string;
+  title: string;
+  year: number;
+}
 
 /**
  * Mock Test → Step 3 Questions. Three obvious ways in: Add From Question
- * Bank (the exam's canonical questions, filtered), Bulk Import Questions
+ * Bank (the central bank of ANY exam, searched server-side — defaults to
+ * this test's exam; a question from another exam is referenced, never
+ * copied or reclassified), Bulk Import Questions
  * (the existing Question Bank importer, opened with this exam + test
  * pre-selected), and View Selected Questions (preview, drag/drop or up/down
  * reorder, remove, replace, search). Every change is persisted immediately
- * by a server action that re-validates exam ownership and rewrites a dense
+ * by a server action that re-validates eligibility and rewrites a dense
  * order — the stored order is the order students see.
  */
 export function MockQuestionsManager({
   mockTestId,
+  examId,
   examName,
   expected,
   selected,
-  bank,
+  exams,
+  papers,
   bulkImportHref,
   readOnly,
 }: {
   mockTestId: string;
+  examId: string;
   examName: string;
   expected: number | null;
   selected: SelectedQuestion[];
-  bank: BankQuestion[];
+  exams: BankExamOption[];
+  papers: BankPaperOption[];
   bulkImportHref: string;
   readOnly: boolean;
 }) {
@@ -117,7 +122,7 @@ export function MockQuestionsManager({
           onClick={openBank}
           icon={<Plus className="h-5 w-5" aria-hidden />}
           title="Add From Question Bank"
-          hint={`Pick from ${examName}'s canonical questions`}
+          hint={`Pick from ${examName} or any other exam's questions`}
         />
         {readOnly ? (
           <ActionTile disabled icon={<FileSpreadsheet className="h-5 w-5" aria-hidden />} title="Bulk Import Questions" hint="Master Admin only" />
@@ -155,7 +160,10 @@ export function MockQuestionsManager({
 
       {panel === "bank" ? (
         <BankPanel
-          bank={bank}
+          mockTestId={mockTestId}
+          mockExamId={examId}
+          exams={exams}
+          papers={papers}
           selectedIds={selectedIds}
           replaceTarget={replaceTarget}
           pending={pending}
@@ -180,6 +188,7 @@ export function MockQuestionsManager({
       ) : (
         <SelectedPanel
           selected={selected}
+          mockExamId={examId}
           readOnly={readOnly}
           pending={pending}
           onReorder={(ids) => run(() => reorderMockTestQuestionsAction(mockTestId, ids), () => "Order saved.")}
@@ -265,6 +274,7 @@ function ActionTile({
 
 function SelectedPanel({
   selected,
+  mockExamId,
   readOnly,
   pending,
   onReorder,
@@ -272,6 +282,7 @@ function SelectedPanel({
   onReplace,
 }: {
   selected: SelectedQuestion[];
+  mockExamId: string;
   readOnly: boolean;
   pending: boolean;
   onReorder: (ids: string[]) => void;
@@ -351,6 +362,7 @@ function SelectedPanel({
               <SelectedRow
                 key={q.id}
                 q={q}
+                mockExamId={mockExamId}
                 index={index}
                 total={ids.length}
                 canReorder={canReorder}
@@ -381,6 +393,7 @@ function SelectedPanel({
 
 function SelectedRow({
   q,
+  mockExamId,
   index,
   total,
   canReorder,
@@ -395,6 +408,7 @@ function SelectedRow({
   onReplace,
 }: {
   q: SelectedQuestion;
+  mockExamId: string;
   index: number;
   total: number;
   canReorder: boolean;
@@ -428,7 +442,7 @@ function SelectedRow({
           <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-muted-foreground)]">
             <span>{q.code}</span>·<span>{q.subjectName}</span>
             {q.topicName ? <span>› {q.topicName}</span> : null}
-            {q.isPyq ? <Badge variant="primary">PYQ{q.year ? ` ${q.year}` : ""}</Badge> : null}
+            <Provenance q={q} mockExamId={mockExamId} />
             {q.hasImage ? <ImageIcon className="h-3.5 w-3.5" aria-label="Has image" /> : null}
             {q.status !== "PUBLISHED" ? <Badge variant="warning">{q.status}</Badge> : null}
           </span>
@@ -457,6 +471,23 @@ function SelectedRow({
       </div>
       {previewOpen ? <QuestionPreview q={q} /> : null}
     </li>
+  );
+}
+
+/**
+ * Canonical ownership at a glance: "PYQ 2024" for this exam's own paper
+ * questions, and "PUNJAB-MO · PYQ 2021" / "HR-MO · Bank" for a question
+ * referenced from another exam. Membership in this test never changes it.
+ */
+function Provenance({ q, mockExamId }: { q: BankQuestion; mockExamId: string }) {
+  const other = q.examId !== mockExamId;
+  if (!other && !q.isPyq) return null;
+  const label = `${other ? `${q.examCode} · ` : ""}${q.isPyq ? `PYQ${q.paperYear ? ` ${q.paperYear}` : ""}` : "Bank"}`;
+  const title = `${q.examName}${q.paperTitle ? ` — ${q.paperTitle}` : " — Question Bank (not a Previous Year Paper question)"}`;
+  return (
+    <Badge variant={other ? "info" : "primary"} title={title}>
+      {label}
+    </Badge>
   );
 }
 
@@ -489,8 +520,15 @@ function QuestionPreview({ q }: { q: SelectedQuestion }) {
 // Add From Question Bank
 // ---------------------------------------------------------------------------
 
+type BankFilterState = Required<{ [K in keyof Omit<BankFilters, "year" | "excludeMockTestId">]: string }> & { year: string };
+
+const EMPTY_FACETS: BankFacets = { subjects: [], topics: [], subTopics: [], years: [] };
+
 function BankPanel({
-  bank,
+  mockTestId,
+  mockExamId,
+  exams,
+  papers,
   selectedIds,
   replaceTarget,
   pending,
@@ -498,7 +536,10 @@ function BankPanel({
   onAdd,
   onReplace,
 }: {
-  bank: BankQuestion[];
+  mockTestId: string;
+  mockExamId: string;
+  exams: BankExamOption[];
+  papers: BankPaperOption[];
   selectedIds: Set<string>;
   replaceTarget: SelectedQuestion | null;
   pending: boolean;
@@ -506,62 +547,89 @@ function BankPanel({
   onAdd: (ids: string[]) => void;
   onReplace: (id: string) => void;
 }) {
-  const [q, setQ] = useState("");
-  const [subjectId, setSubjectId] = useState(replaceTarget?.subjectId ?? "");
-  const [topicId, setTopicId] = useState("");
-  const [subTopicId, setSubTopicId] = useState("");
-  const [year, setYear] = useState("");
-  const [source, setSource] = useState("");
-  const [difficulty, setDifficulty] = useState("");
-  const [qType, setQType] = useState("");
-  const [status, setStatus] = useState("PUBLISHED");
+  // Source Exam defaults to this test's own exam; "All exams" / another exam
+  // is an explicit choice. A replacement starts from the replaced question's
+  // own exam + subject.
+  const [f, setF] = useState<BankFilterState>({
+    examId: replaceTarget?.examId ?? mockExamId,
+    paperId: "",
+    subjectId: replaceTarget?.subjectId ?? "",
+    topicId: "",
+    subTopicId: "",
+    year: "",
+    source: "",
+    difficulty: "",
+    status: "PUBLISHED",
+    qType: "",
+    q: "",
+  });
+  const [query, setQuery] = useState(f.q);
   const [hideAdded, setHideAdded] = useState(true);
   const [page, setPage] = useState(1);
   const [picked, setPicked] = useState<string[]>([]);
+  const [result, setResult] = useState<{ rows: BankQuestion[]; total: number; page: number; pageSize: number; facets: BankFacets } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Loading is derived: the key of the request in flight vs. the last one answered.
+  const [answeredKey, setAnsweredKey] = useState<string | null>(null);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const seq = useRef(0);
 
-  const pickedSet = useMemo(() => new Set(picked), [picked]);
-  const uniq = (rows: [string, string][]) => [...new Map(rows).entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  const subjects = useMemo(() => uniq(bank.map((x) => [x.subjectId, x.subjectName])), [bank]);
-  const topics = useMemo(
-    () => uniq(bank.filter((x) => x.topicId && (!subjectId || x.subjectId === subjectId)).map((x) => [x.topicId!, x.topicName ?? ""])),
-    [bank, subjectId]
+  // Debounced free-text search.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setF((prev) => (prev.q === query ? prev : { ...prev, q: query }));
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const filters = useMemo(
+    () => ({ ...f, year: f.year ? Number(f.year) : undefined, excludeMockTestId: hideAdded ? mockTestId : undefined }),
+    [f, hideAdded, mockTestId]
   );
-  const subTopics = useMemo(
-    () => uniq(bank.filter((x) => x.subTopicId && (!topicId || x.topicId === topicId) && (!subjectId || x.subjectId === subjectId)).map((x) => [x.subTopicId!, x.subTopicName ?? ""])),
-    [bank, subjectId, topicId]
-  );
-  const years = useMemo(() => [...new Set(bank.map((x) => x.year).filter((y): y is number => y !== null))].sort((a, b) => b - a), [bank]);
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return bank.filter(
-      (x) =>
-        (!hideAdded || !selectedIds.has(x.id)) &&
-        (!subjectId || x.subjectId === subjectId) &&
-        (!topicId || x.topicId === topicId) &&
-        (!subTopicId || x.subTopicId === subTopicId) &&
-        (!year || String(x.year) === year) &&
-        (!source || (source === "PYQ" ? x.isPyq : !x.isPyq)) &&
-        (!difficulty || x.difficulty === difficulty) &&
-        (!qType || (qType === "IMAGE" ? x.hasImage : !x.hasImage)) &&
-        (!status || x.status === status) &&
-        (!needle || x.text.toLowerCase().includes(needle) || x.code.toLowerCase().includes(needle))
-    );
-  }, [bank, selectedIds, hideAdded, subjectId, topicId, subTopicId, year, source, difficulty, qType, status, q]);
+  const requestKey = JSON.stringify([filters, page]);
+  const loading = answeredKey !== requestKey;
+  useEffect(() => {
+    const id = ++seq.current;
+    searchMockQuestionBankAction(mockTestId, filters, page)
+      .then((res) => {
+        if (id !== seq.current) return; // a newer request superseded this one
+        if ("error" in res) {
+          setError(res.error);
+          return;
+        }
+        setError(null);
+        setResult(res);
+      })
+      .catch(() => id === seq.current && setError("Could not load questions — try again."))
+      .finally(() => id === seq.current && setAnsweredKey(requestKey));
+  }, [mockTestId, filters, page, requestKey]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const current = Math.min(page, totalPages);
-  const pageRows = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
-  const addable = (x: BankQuestion) => !selectedIds.has(x.id);
-  const reset = (fn: () => void) => {
-    fn();
+  const set = (patch: Partial<BankFilterState>) => {
+    setF((prev) => ({ ...prev, ...patch }));
     setPage(1);
   };
 
+  const facets = result?.facets ?? EMPTY_FACETS;
+  const rows = result?.rows ?? [];
+  const total = result?.total ?? 0;
+  const totalPages = result ? Math.max(1, Math.ceil(total / result.pageSize)) : 1;
+  const current = result?.page ?? 1;
+  const examPapers = papers.filter((p) => !f.examId || p.examId === f.examId);
+  const examCode = new Map(exams.map((e) => [e.id, e.code]));
+  const pickedSet = useMemo(() => new Set(picked), [picked]);
+  const addable = (x: BankQuestion) => !selectedIds.has(x.id);
   const toggle = (id: string) => setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  const selectPage = () => setPicked((prev) => [...prev, ...pageRows.filter(addable).map((x) => x.id).filter((id) => !prev.includes(id))]);
-  const selectAllFiltered = () =>
-    setPicked((prev) => [...prev, ...filtered.filter(addable).map((x) => x.id).filter((id) => !prev.includes(id))].slice(0, MAX_BULK_SELECT));
+  const selectPage = () => setPicked((prev) => [...prev, ...rows.filter(addable).map((x) => x.id).filter((id) => !prev.includes(id))]);
+  const selectAllFiltered = async () => {
+    setSelectingAll(true);
+    const res = await matchingMockQuestionIdsAction(mockTestId, filters).catch(() => ({ error: "Could not select — try again." }));
+    setSelectingAll(false);
+    if ("error" in res) return setError(res.error);
+    setPicked((prev) => [...prev, ...res.ids.filter((id) => !prev.includes(id) && !selectedIds.has(id))].slice(0, MAX_BULK_SELECT));
+  };
+  const crossExamPicked = f.examId !== mockExamId;
 
   return (
     <div className="flex flex-col gap-3">
@@ -576,60 +644,115 @@ function BankPanel({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-5">
-        <Input placeholder="Question text or code" value={q} onChange={(e) => reset(() => setQ(e.target.value))} className="col-span-2" />
-        <SelectNative aria-label="Subject" value={subjectId} onChange={(e) => reset(() => { setSubjectId(e.target.value); setTopicId(""); setSubTopicId(""); })}>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <SelectNative
+          aria-label="Source exam"
+          value={f.examId}
+          onChange={(e) => set({ examId: e.target.value, paperId: "", subjectId: "", topicId: "", subTopicId: "", year: "" })}
+        >
+          <option value="">Source exam: All exams</option>
+          {exams.map((e) => (
+            <option key={e.id} value={e.id}>
+              {e.id === mockExamId ? `${e.name} (this test's exam)` : e.name}
+            </option>
+          ))}
+        </SelectNative>
+        <SelectNative
+          aria-label="Previous Year Paper"
+          value={f.paperId}
+          onChange={(e) => set({ paperId: e.target.value, subjectId: "", topicId: "", subTopicId: "", year: "" })}
+        >
+          <option value="">All papers</option>
+          {examPapers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {f.examId ? p.title : `${examCode.get(p.examId) ?? ""} · ${p.title}`}
+            </option>
+          ))}
+        </SelectNative>
+        <Input placeholder="Search question code or text" value={query} onChange={(e) => setQuery(e.target.value)} className="sm:col-span-2" />
+      </div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8">
+        <SelectNative aria-label="Subject" value={f.subjectId} onChange={(e) => set({ subjectId: e.target.value, topicId: "", subTopicId: "" })}>
           <option value="">All subjects</option>
-          {subjects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          {facets.subjects.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name}
+            </option>
+          ))}
         </SelectNative>
-        <SelectNative aria-label="Topic" value={topicId} onChange={(e) => reset(() => { setTopicId(e.target.value); setSubTopicId(""); })}>
+        <SelectNative aria-label="Topic" value={f.topicId} disabled={!f.subjectId} onChange={(e) => set({ topicId: e.target.value, subTopicId: "" })}>
           <option value="">All topics</option>
-          {topics.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          {facets.topics.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name}
+            </option>
+          ))}
         </SelectNative>
-        <SelectNative aria-label="Sub-topic" value={subTopicId} onChange={(e) => reset(() => setSubTopicId(e.target.value))}>
+        <SelectNative aria-label="Sub-topic" value={f.subTopicId} disabled={!f.topicId} onChange={(e) => set({ subTopicId: e.target.value })}>
           <option value="">All sub-topics</option>
-          {subTopics.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          {facets.subTopics.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name}
+            </option>
+          ))}
         </SelectNative>
-        <SelectNative aria-label="Year" value={year} onChange={(e) => reset(() => setYear(e.target.value))}>
-          <option value="">Any year</option>
-          {years.map((y) => <option key={y} value={y}>{y}</option>)}
+        <SelectNative aria-label="Year" value={f.year} disabled={Boolean(f.paperId)} onChange={(e) => set({ year: e.target.value })}>
+          <option value="">All years</option>
+          {facets.years.map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
         </SelectNative>
-        <SelectNative aria-label="Source" value={source} onChange={(e) => reset(() => setSource(e.target.value))}>
+        <SelectNative aria-label="Source" value={f.source} disabled={Boolean(f.paperId)} onChange={(e) => set({ source: e.target.value })}>
           <option value="">Source: All</option>
           <option value="PYQ">PYQ</option>
           <option value="BANK">Non-PYQ</option>
         </SelectNative>
-        <SelectNative aria-label="Difficulty" value={difficulty} onChange={(e) => reset(() => setDifficulty(e.target.value))}>
+        <SelectNative aria-label="Difficulty" value={f.difficulty} onChange={(e) => set({ difficulty: e.target.value })}>
           <option value="">Any difficulty</option>
           <option value="EASY">Easy</option>
           <option value="MEDIUM">Medium</option>
           <option value="HARD">Hard</option>
         </SelectNative>
-        <SelectNative aria-label="Question type" value={qType} onChange={(e) => reset(() => setQType(e.target.value))}>
-          <option value="">Type: All MCQ</option>
-          <option value="TEXT">Text MCQ</option>
-          <option value="IMAGE">Image-based MCQ</option>
-        </SelectNative>
-        <SelectNative aria-label="Status" value={status} onChange={(e) => reset(() => setStatus(e.target.value))}>
+        <SelectNative aria-label="Status" value={f.status} onChange={(e) => set({ status: e.target.value })}>
           <option value="PUBLISHED">Published</option>
           <option value="DRAFT">Draft</option>
           <option value="">Published + Draft</option>
         </SelectNative>
+        <SelectNative aria-label="Question type" value={f.qType} onChange={(e) => set({ qType: e.target.value })}>
+          <option value="">Type: All MCQ</option>
+          <option value="TEXT">Text MCQ</option>
+          <option value="IMAGE">Image-based MCQ</option>
+        </SelectNative>
       </div>
 
+      {crossExamPicked ? (
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          Questions from another exam are <strong>referenced</strong> by this test — they keep their own exam, Previous Year Paper and code.
+        </p>
+      ) : null}
+
       <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
-        <span>{filtered.length} match</span>
+        <span aria-live="polite">{loading && !result ? "Loading…" : `${total} match${loading ? " · updating…" : ""}`}</span>
         <label className="flex items-center gap-1">
-          <input type="checkbox" checked={hideAdded} onChange={(e) => reset(() => setHideAdded(e.target.checked))} /> Hide questions already in this test
+          <input
+            type="checkbox"
+            checked={hideAdded}
+            onChange={(e) => {
+              setHideAdded(e.target.checked);
+              setPage(1);
+            }}
+          />{" "}
+          Hide questions already in this test
         </label>
         {!replaceTarget ? (
           <>
-            <Button type="button" size="compact" variant="outline" onClick={selectPage} disabled={pageRows.length === 0}>
+            <Button type="button" size="compact" variant="outline" onClick={selectPage} disabled={rows.length === 0}>
               Select page
             </Button>
-            <Button type="button" size="compact" variant="outline" onClick={selectAllFiltered} disabled={filtered.length === 0}>
-              Select all {Math.min(filtered.length, MAX_BULK_SELECT)}
-              {filtered.length > MAX_BULK_SELECT ? ` (max ${MAX_BULK_SELECT})` : ""}
+            <Button type="button" size="compact" variant="outline" onClick={selectAllFiltered} disabled={total === 0 || selectingAll}>
+              {selectingAll ? "Selecting…" : `Select all ${Math.min(total, MAX_BULK_SELECT)}${total > MAX_BULK_SELECT ? ` (max ${MAX_BULK_SELECT})` : ""}`}
             </Button>
             {picked.length > 0 ? (
               <Button type="button" size="compact" variant="ghost" onClick={() => setPicked([])}>
@@ -639,82 +762,61 @@ function BankPanel({
           </>
         ) : null}
       </div>
+      {error ? (
+        <p role="alert" className="text-sm text-[var(--color-error)]">
+          {error}
+        </p>
+      ) : null}
 
-      <div className="overflow-x-auto rounded-[var(--radius-card)] border border-[var(--color-border)]">
-        <table className="w-full min-w-[820px] text-left text-sm">
-          <thead>
-            <tr className="border-b border-[var(--color-border)] text-[11px] uppercase text-[var(--color-muted-foreground)]">
-              <th className="w-8 px-3 py-2" />
-              <th className="px-2 py-2">Code</th>
-              <th className="px-2 py-2">Question</th>
-              <th className="px-2 py-2">Subject / Topic</th>
-              <th className="px-2 py-2">Year</th>
-              <th className="px-2 py-2">Source</th>
-              <th className="px-2 py-2">Difficulty</th>
-              <th className="px-2 py-2">Type</th>
-              {replaceTarget ? <th className="px-2 py-2" /> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.map((x) => {
-              const inTest = selectedIds.has(x.id);
-              return (
-                <tr key={x.id} className="border-b border-[var(--color-border)] last:border-0 align-top">
-                  <td className="px-3 py-2">
-                    {!replaceTarget ? (
-                      <input type="checkbox" checked={inTest || pickedSet.has(x.id)} disabled={inTest} onChange={() => toggle(x.id)} aria-label={`Select ${x.code}`} />
-                    ) : null}
-                  </td>
-                  <td className="px-2 py-2 font-mono text-[11px] text-[var(--color-muted-foreground)]">{x.code}</td>
-                  <td className="px-2 py-2">
-                    <span className="line-clamp-2 text-[var(--color-foreground)]">{x.text}</span>
-                    {inTest ? <span className="text-[11px] text-[var(--color-success)]">Already in this test</span> : null}
-                    {x.status !== "PUBLISHED" ? <Badge variant="warning">{x.status}</Badge> : null}
-                  </td>
-                  <td className="px-2 py-2 text-xs text-[var(--color-muted-foreground)]">
-                    {x.subjectName}
-                    {x.topicName ? <span className="block">{x.topicName}</span> : null}
-                  </td>
-                  <td className="px-2 py-2 text-xs">{x.year ?? "—"}</td>
-                  <td className="px-2 py-2 text-xs">{x.isPyq ? "PYQ" : "Non-PYQ"}</td>
-                  <td className="px-2 py-2 text-xs">{x.difficulty}</td>
-                  <td className="px-2 py-2 text-xs">
-                    {x.hasImage ? (
-                      <span className="flex items-center gap-1">
-                        <ImageIcon className="h-3.5 w-3.5" aria-hidden /> Image
-                      </span>
-                    ) : (
-                      "Text"
-                    )}
-                  </td>
-                  {replaceTarget ? (
-                    <td className="px-2 py-2">
-                      <Button type="button" size="compact" disabled={inTest || pending} onClick={() => onReplace(x.id)}>
-                        Use this
-                      </Button>
-                    </td>
-                  ) : null}
-                </tr>
-              );
-            })}
-            {pageRows.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="p-6 text-center text-xs text-[var(--color-muted-foreground)]">
-                  No questions match these filters.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <ul className={`flex flex-col rounded-[var(--radius-card)] border border-[var(--color-border)] ${loading ? "opacity-60" : ""}`}>
+        {rows.map((x) => {
+          const inTest = selectedIds.has(x.id);
+          return (
+            <li key={x.id} className="flex items-start gap-2 border-b border-[var(--color-border)] px-3 py-2 last:border-0">
+              {!replaceTarget ? (
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={inTest || pickedSet.has(x.id)}
+                  disabled={inTest}
+                  onChange={() => toggle(x.id)}
+                  aria-label={`Select ${x.code}`}
+                />
+              ) : null}
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-muted-foreground)]">
+                  <span className="font-mono">{x.code}</span>
+                  <Provenance q={x} mockExamId={mockExamId} />
+                  {x.status !== "PUBLISHED" ? <Badge variant="warning">{x.status}</Badge> : null}
+                  {x.hasImage ? <ImageIcon className="h-3.5 w-3.5" aria-label="Image-based" /> : null}
+                </span>
+                <span className="mt-0.5 line-clamp-2 text-sm text-[var(--color-foreground)]">{x.text}</span>
+                <span className="mt-0.5 block text-[11px] text-[var(--color-muted-foreground)]">
+                  {x.subjectName}
+                  {x.topicName ? ` › ${x.topicName}` : ""}
+                  {x.subTopicName ? ` › ${x.subTopicName}` : ""} · {x.difficulty.charAt(0) + x.difficulty.slice(1).toLowerCase()}
+                  {!x.isPyq && x.year ? ` · ${x.year}` : ""}
+                  {inTest ? <span className="text-[var(--color-success)]"> · Already in this test</span> : null}
+                </span>
+              </span>
+              {replaceTarget ? (
+                <Button type="button" size="compact" disabled={inTest || pending} onClick={() => onReplace(x.id)}>
+                  Use this
+                </Button>
+              ) : null}
+            </li>
+          );
+        })}
+        {rows.length === 0 && !loading ? <li className="p-6 text-center text-xs text-[var(--color-muted-foreground)]">No questions match these filters.</li> : null}
+      </ul>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
-          <Button type="button" size="compact" variant="outline" disabled={current <= 1} onClick={() => setPage(current - 1)}>
+          <Button type="button" size="compact" variant="outline" disabled={current <= 1 || loading} onClick={() => setPage(current - 1)}>
             Prev
           </Button>
           Page {current} / {totalPages}
-          <Button type="button" size="compact" variant="outline" disabled={current >= totalPages} onClick={() => setPage(current + 1)}>
+          <Button type="button" size="compact" variant="outline" disabled={current >= totalPages || loading} onClick={() => setPage(current + 1)}>
             Next
           </Button>
         </div>

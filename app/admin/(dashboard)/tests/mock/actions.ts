@@ -11,6 +11,8 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { parseIstDateTimeLocal } from "@/lib/ist-time";
 import { revalidateMockSeriesSurfaces } from "@/lib/mock-series-revalidate";
 import { validateMockSchedule, type MockAvailabilityMode } from "@/lib/mock-test-schedule";
+import { matchingQuestionIds, sanitizeBankFilters, searchQuestionBank, type BankPage } from "@/lib/mock-question-bank";
+import { addQuestionsToMock, loadAssignment, removeQuestionsFromMock, replaceQuestionInMock, writeAssignment } from "@/lib/mock-test-questions";
 
 // Every Mock Test mutation is gated by TEST_SERIES_MANAGE (MASTER_ADMIN
 // only). FULL_ADMIN can open every page read-only; each action below
@@ -256,11 +258,8 @@ export async function updateMockTestAccessAction(mockTestId: string, _prev: Sche
 }
 
 // ---------------------------------------------------------------------------
-// Step 3 — Questions. Every assignment references a canonical Question Bank
-// row (MockTestQuestion is only {mockTestId, questionId, order}); nothing
-// here ever copies question content. Each action re-reads the current
-// assignment server-side and rewrites a dense 0..n-1 order, so concurrent
-// edits and stale client lists can never produce duplicate slots.
+// Step 3 — Questions. Membership only (lib/mock-test-questions.ts): these
+// actions authorize + audit; they never copy, update or reclassify a Question.
 // ---------------------------------------------------------------------------
 
 export interface QuestionOpResult {
@@ -271,22 +270,6 @@ export interface QuestionOpResult {
 
 const idList = z.array(z.string().min(1).max(64)).max(2000);
 
-async function loadAssignment(mockTestId: string) {
-  const mockTest = await prisma.mockTest.findUnique({
-    where: { id: mockTestId },
-    select: { id: true, examId: true, status: true, questions: { orderBy: { order: "asc" }, select: { questionId: true } } },
-  });
-  return mockTest ? { ...mockTest, ids: mockTest.questions.map((q) => q.questionId) } : null;
-}
-
-/** Replaces the whole ordered assignment in one transaction. */
-async function writeAssignment(mockTestId: string, ids: string[]) {
-  await prisma.$transaction([
-    prisma.mockTestQuestion.deleteMany({ where: { mockTestId } }),
-    prisma.mockTestQuestion.createMany({ data: ids.map((questionId, order) => ({ mockTestId, questionId, order })) }),
-  ]);
-}
-
 async function audit(actorId: string | undefined, mockTestId: string, op: string, metadata: Record<string, unknown>) {
   await prisma.auditLog.create({
     data: { actorId, action: "MOCK_TEST_QUESTIONS_UPDATED", entityType: "MockTest", entityId: mockTestId, metadata: { op, ...metadata } },
@@ -294,41 +277,40 @@ async function audit(actorId: string | undefined, mockTestId: string, op: string
   revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`);
 }
 
-/** Only non-archived questions of the test's own exam can be attached (Question.examId == MockTest.examId). */
-async function sameExamIds(examId: string, ids: string[]) {
-  const rows = await prisma.question.findMany({ where: { id: { in: ids }, examId, status: { not: "ARCHIVED" } }, select: { id: true } });
-  const ok = new Set(rows.map((r) => r.id));
-  return ids.filter((id) => ok.has(id));
+/** Add From Question Bank search — server-side filtered + paginated over the whole central bank. */
+export async function searchMockQuestionBankAction(mockTestId: string, filters: unknown, page: number): Promise<BankPage | { error: string }> {
+  await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const exists = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { id: true } });
+  if (!exists) return { error: "Mock test not found." };
+  return searchQuestionBank(sanitizeBankFilters(filters), typeof page === "number" ? page : 1);
 }
 
-/** Add From Question Bank: appends in the order given, skipping anything already in the test. */
+/** "Select all filtered" — the ids matching the current filters (capped). */
+export async function matchingMockQuestionIdsAction(mockTestId: string, filters: unknown): Promise<{ ids: string[] } | { error: string }> {
+  await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const exists = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { id: true } });
+  if (!exists) return { error: "Mock test not found." };
+  return { ids: await matchingQuestionIds({ ...sanitizeBankFilters(filters), excludeMockTestId: mockTestId }) };
+}
+
+/** Add From Question Bank: appends in the order given — any exam; reference only (lib/mock-test-questions.ts). */
 export async function addMockTestQuestionsAction(mockTestId: string, questionIds: string[]): Promise<QuestionOpResult> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const parsed = idList.safeParse(questionIds);
   if (!parsed.success) return { error: "Invalid selection." };
-  const current = await loadAssignment(mockTestId);
-  if (!current) return { error: "Mock test not found." };
-  const have = new Set(current.ids);
-  const wanted = [...new Set(parsed.data)].filter((id) => !have.has(id));
-  const valid = await sameExamIds(current.examId, wanted);
-  if (valid.length > 0) await writeAssignment(mockTestId, [...current.ids, ...valid]);
-  await audit(session.user.id, mockTestId, "ADD", { added: valid.length, rejected: wanted.length - valid.length });
-  return { added: valid.length, skipped: parsed.data.length - valid.length };
+  const result = await addQuestionsToMock(mockTestId, parsed.data);
+  if ("error" in result) return { error: result.error };
+  await audit(session.user.id, mockTestId, "ADD", { added: result.added, crossExam: result.crossExam, rejected: result.rejected });
+  return { added: result.added, skipped: result.skipped };
 }
 
 export async function removeMockTestQuestionsAction(mockTestId: string, questionIds: string[]): Promise<QuestionOpResult> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const parsed = idList.safeParse(questionIds);
   if (!parsed.success) return { error: "Invalid selection." };
-  const current = await loadAssignment(mockTestId);
-  if (!current) return { error: "Mock test not found." };
-  const drop = new Set(parsed.data);
-  const next = current.ids.filter((id) => !drop.has(id));
-  if (current.status === "PUBLISHED" && next.length === 0) {
-    return { error: "A published test must keep at least one question. Unpublish it first to remove every question." };
-  }
-  await writeAssignment(mockTestId, next);
-  await audit(session.user.id, mockTestId, "REMOVE", { removed: current.ids.length - next.length });
+  const result = await removeQuestionsFromMock(mockTestId, parsed.data);
+  if ("error" in result) return { error: result.error };
+  await audit(session.user.id, mockTestId, "REMOVE", { removed: result.removed });
   return {};
 }
 
@@ -350,17 +332,9 @@ export async function reorderMockTestQuestionsAction(mockTestId: string, ordered
 /** Replace: swaps one question for another in the same slot. */
 export async function replaceMockTestQuestionAction(mockTestId: string, oldId: string, newId: string): Promise<QuestionOpResult> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
-  const current = await loadAssignment(mockTestId);
-  if (!current) return { error: "Mock test not found." };
-  const slot = current.ids.indexOf(oldId);
-  if (slot === -1) return { error: "That question is no longer in this test — reload and try again." };
-  if (current.ids.includes(newId)) return { error: "The replacement is already in this test." };
-  const [valid] = await sameExamIds(current.examId, [newId]);
-  if (!valid) return { error: "The replacement must be a non-archived question from this test's exam." };
-  const next = [...current.ids];
-  next[slot] = newId;
-  await writeAssignment(mockTestId, next);
-  await audit(session.user.id, mockTestId, "REPLACE", { oldId, newId, slot: slot + 1 });
+  const result = await replaceQuestionInMock(mockTestId, oldId, newId);
+  if ("error" in result) return { error: result.error };
+  await audit(session.user.id, mockTestId, "REPLACE", { oldId, newId, slot: result.slot });
   return {};
 }
 

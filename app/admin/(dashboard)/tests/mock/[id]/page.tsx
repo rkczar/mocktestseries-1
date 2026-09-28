@@ -7,7 +7,8 @@ import { hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { MockQuestionsManager, type BankQuestion, type SelectedQuestion } from "@/components/admin/mock-questions-manager";
+import { MockQuestionsManager, type SelectedQuestion } from "@/components/admin/mock-questions-manager";
+import { bankRowSelect, toBankRow } from "@/lib/mock-question-bank";
 import { TestResourceManager } from "@/components/admin/test-resource-manager";
 import { formatIst, toIstDateTimeLocalValue } from "@/lib/ist-time";
 import {
@@ -36,8 +37,6 @@ const STEPS = [
   ["access", "5 Access & Result"],
   ["publish", "6 Review & Publish"],
 ] as const;
-
-const TEXT_PREVIEW = 300;
 
 /**
  * The canonical Mock Test editor — the one place a Mock Test is edited,
@@ -68,19 +67,7 @@ export default async function MockTestDetailPage({
         select: {
           question: {
             select: {
-              id: true,
-              code: true,
-              text: true,
-              imageUrl: true,
-              difficulty: true,
-              status: true,
-              source: true,
-              examYear: true,
-              previousYearPaperId: true,
-              subject: { select: { id: true, name: true } },
-              topic: { select: { id: true, name: true } },
-              subTopic: { select: { id: true, name: true } },
-              previousYearPaper: { select: { year: true } },
+              ...bankRowSelect,
               options: { orderBy: { order: "asc" }, select: { label: true, text: true, imageUrl: true, isCorrect: true } },
             },
           },
@@ -92,27 +79,13 @@ export default async function MockTestDetailPage({
   });
   if (!mockTest) notFound();
 
-  const [bankRows, subjects, importRun, examSeries, coverageProducts] = await Promise.all([
-    prisma.question.findMany({
-      where: { examId: mockTest.examId, status: { not: "ARCHIVED" } },
-      select: {
-        id: true,
-        code: true,
-        text: true,
-        imageUrl: true,
-        difficulty: true,
-        status: true,
-        source: true,
-        examYear: true,
-        previousYearPaperId: true,
-        subject: { select: { id: true, name: true, order: true } },
-        topic: { select: { id: true, name: true } },
-        subTopic: { select: { id: true, name: true } },
-        previousYearPaper: { select: { year: true } },
-        options: { where: { imageUrl: { not: null } }, select: { id: true }, take: 1 },
-      },
-      orderBy: [{ subject: { order: "asc" } }, { createdAt: "asc" }],
-    }),
+  const [bankExams, bankPapers, subjects, importRun, examSeries, coverageProducts] = await Promise.all([
+    // Add From Question Bank source pickers — small reference lists only; the
+    // questions themselves are searched server-side, page by page.
+    canManage ? prisma.exam.findMany({ select: { id: true, name: true, code: true }, orderBy: [{ order: "asc" }, { name: "asc" }] }) : [],
+    canManage
+      ? prisma.previousYearPaper.findMany({ select: { id: true, examId: true, title: true, year: true }, orderBy: [{ year: "desc" }, { order: "asc" }] })
+      : [],
     getExamTaxonomy(prisma, mockTest.examId),
     imported
       ? prisma.bulkImportRun.findFirst({
@@ -124,27 +97,8 @@ export default async function MockTestDetailPage({
     loadCoverageProducts(prisma),
   ]);
 
-  const toBase = (q: (typeof bankRows)[number] | (typeof mockTest.questions)[number]["question"], optionHasImage: boolean): BankQuestion => ({
-    id: q.id,
-    code: q.code,
-    text: q.text.length > TEXT_PREVIEW ? `${q.text.slice(0, TEXT_PREVIEW)}…` : q.text,
-    subjectId: q.subject.id,
-    subjectName: q.subject.name,
-    topicId: q.topic?.id ?? null,
-    topicName: q.topic?.name ?? null,
-    subTopicId: q.subTopic?.id ?? null,
-    subTopicName: q.subTopic?.name ?? null,
-    year: q.previousYearPaper?.year ?? q.examYear ?? null,
-    isPyq: q.source === "PYQ" || q.previousYearPaperId !== null,
-    difficulty: q.difficulty,
-    status: q.status,
-    hasImage: Boolean(q.imageUrl) || optionHasImage,
-  });
-  // bankRows' options are pre-filtered to image-bearing ones (take 1).
-  const bank = bankRows.map((q) => toBase(q, q.options.length > 0));
   const selected: SelectedQuestion[] = mockTest.questions.map(({ question: q }) => ({
-    ...toBase(q, q.options.some((o) => Boolean(o.imageUrl))),
-    text: q.text,
+    ...toBankRow({ ...q, options: q.options.filter((o) => o.imageUrl).map((o) => ({ id: o.label })) }, true),
     imageUrl: q.imageUrl,
     options: q.options,
   }));
@@ -309,8 +263,8 @@ export default async function MockTestDetailPage({
         <CardHeader>
           <CardTitle>Step 3 — Questions</CardTitle>
           <CardDescription>
-            Every question is a canonical Question Bank question of {mockTest.exam.name} — this test only stores which ones and in what order. The
-            order here is the order students see.
+            Every question is a canonical Question Bank question — from {mockTest.exam.name} or, when you choose, any other exam. This test only
+            stores which ones and in what order; a reused question keeps its own exam and Previous Year Paper. The order here is the order students see.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -318,8 +272,10 @@ export default async function MockTestDetailPage({
             mockTestId={mockTest.id}
             examName={mockTest.exam.name}
             expected={mockTest.targetQuestionCount}
+            examId={mockTest.examId}
             selected={selected}
-            bank={bank}
+            exams={bankExams}
+            papers={bankPapers}
             bulkImportHref={bulkImportHref}
             readOnly={!canManage}
           />

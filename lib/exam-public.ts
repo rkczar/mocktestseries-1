@@ -1,6 +1,7 @@
 import "server-only";
 import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { prisma } from "@/lib/prisma";
+import { PAPER_PUBLISHED_QUESTION_COUNT } from "@/lib/pyq-membership";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 
 /**
@@ -80,7 +81,7 @@ export async function getExamPapers(examId: string): Promise<PublicPaper[]> {
   const papers = await prisma.previousYearPaper.findMany({
     where: { examId, isActive: true },
     orderBy: [{ year: "desc" }, { order: "asc" }],
-    include: { _count: { select: { questions: { where: { status: "PUBLISHED" } } } } },
+    include: { _count: { select: PAPER_PUBLISHED_QUESTION_COUNT } },
   });
   return papers.map((p) => ({
     id: p.id,

@@ -3,6 +3,7 @@ import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  runExamContextFor,
   mergeRowData,
   declaredImageFilenames,
   matchRowImagesSync,
@@ -277,7 +278,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const rows = await prisma.bulkImportRow.findMany({ where: { runId, removedFromImport: false }, orderBy: { rowNumber: "asc" } });
     const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
-    const runExamContext: RunExamContext | null = lookups.exams.find((e) => e.id === examId) ?? null;
+    const runExamContext: RunExamContext | null = runExamContextFor(lookups.exams, { examId, mockTestId });
 
     await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
       const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;

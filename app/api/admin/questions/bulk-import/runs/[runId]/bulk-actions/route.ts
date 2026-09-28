@@ -3,6 +3,7 @@ import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  runExamContextFor,
   buildTaxonomyLookups,
   resolveRow,
   validateImportRows,
@@ -124,9 +125,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         ? rowIds
         : (await prisma.bulkImportRow.findMany({ where: { runId, removedFromImport: false }, select: { id: true } })).map((r) => r.id);
 
-    const runExamContext: RunExamContext | null = run.examId
-      ? await prisma.exam.findUnique({ where: { id: run.examId }, select: { id: true, name: true, code: true, year: true } })
-      : null;
+    const runExamContext: RunExamContext | null = runExamContextFor(
+      run.examId ? await prisma.exam.findMany({ where: { id: run.examId }, select: { id: true, name: true, code: true, year: true } }) : [],
+      run
+    );
 
     let resultSummary: Record<string, number> = {};
 

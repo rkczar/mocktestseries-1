@@ -3,6 +3,7 @@ import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  runExamContextFor,
   buildTaxonomyLookups,
   resolveRow,
   validateImportRows,
@@ -61,9 +62,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const [lookups, imageIndex, run] = await Promise.all([
         buildTaxonomyLookups(prisma),
         getImageFilenameIndex(),
-        prisma.bulkImportRun.findUnique({ where: { id: existing.runId }, select: { examId: true } }),
+        prisma.bulkImportRun.findUnique({ where: { id: existing.runId }, select: { examId: true, mockTestId: true } }),
       ]);
-      const runExamContext = run?.examId ? (lookups.exams.find((e) => e.id === run.examId) ?? null) : null;
+      const runExamContext = runExamContextFor(lookups.exams, run);
       const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
 
       const finalReviewRequired = explicitReviewRequired !== undefined ? explicitReviewRequired || resolved.reviewRequired : resolved.reviewRequired;

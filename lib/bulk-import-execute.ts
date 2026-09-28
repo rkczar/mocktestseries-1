@@ -11,6 +11,7 @@ import {
   type Prisma,
 } from "@prisma/client";
 import {
+  runExamContextFor,
   buildTaxonomyLookups,
   resolveRow,
   validateImportRows,
@@ -166,7 +167,7 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
   });
 
   const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
-  const runExamContext = run.examId ? (lookups.exams.find((e) => e.id === run.examId) ?? null) : null;
+  const runExamContext = runExamContextFor(lookups.exams, run);
 
   let successCount = 0;
   let skippedCount = 0;
@@ -323,20 +324,22 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
           }
           if (run.duplicateStrategy === BulkImportDuplicateStrategy.REPLACE) {
             await linkTaxonomy();
+            // A Mock Test import only REFERENCES questions: replacing an
+            // existing question's content from it never reclassifies the
+            // question's canonical ownership (exam / PYQ paper / source /
+            // year) — e.g. never unlinks a RUHS 2024 PYQ from its paper.
+            const ownership = mockTarget ? {} : { examId: rd.examId, previousYearPaperId, source, examYear: rd.examYear };
             const updated = await tx.question.update({
               where: { id: duplicateQuestionId },
               data: {
-                examId: rd.examId,
+                ...ownership,
                 subjectId: rd.subjectId!,
                 topicId: rd.topicId,
                 subTopicId: rd.subTopicId,
-                previousYearPaperId,
                 text: merged.questionText,
                 imageUrl: merged.image || null,
                 difficulty: rd.difficulty,
                 status: effectiveStatus,
-                source,
-                examYear: rd.examYear,
                 importBatchId: runId,
                 reviewRequired: resolved.reviewRequired,
                 reviewReason,

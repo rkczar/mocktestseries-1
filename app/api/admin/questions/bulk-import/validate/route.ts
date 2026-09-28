@@ -3,6 +3,7 @@ import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  runExamContextFor,
   buildTaxonomyLookups,
   resolveRow,
   validateImportRows,
@@ -59,7 +60,7 @@ export async function POST(request: NextRequest) {
     });
 
     const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
-    const runExamContext = run.examId ? (lookups.exams.find((e) => e.id === run.examId) ?? null) : null;
+    const runExamContext = runExamContextFor(lookups.exams, run);
 
     let validCount = 0;
     let invalidCount = 0;

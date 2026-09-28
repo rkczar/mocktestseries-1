@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { PAPER_PUBLISHED_QUESTION_COUNT } from "@/lib/pyq-membership";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { ExamFilterSelect } from "@/components/admin/exam-filter-select";
@@ -25,7 +26,7 @@ export default async function PreviousYearPapersPage({
 
   const papers = await prisma.previousYearPaper.findMany({
     where: showAll ? {} : { examId: examId || undefined },
-    include: { exam: true, _count: { select: { questions: true } } },
+    include: { exam: true, _count: { select: { ...PAPER_PUBLISHED_QUESTION_COUNT } } },
     orderBy: [{ examId: "asc" }, { year: "desc" }, { order: "asc" }],
   });
 

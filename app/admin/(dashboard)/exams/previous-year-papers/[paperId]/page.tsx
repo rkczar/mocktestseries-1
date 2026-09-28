@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { PAPER_PUBLISHED_QUESTION_COUNT } from "@/lib/pyq-membership";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +29,7 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
         orderBy: { code: "asc" },
         include: { subject: { select: { name: true } }, topic: { select: { name: true } }, options: { select: { isCorrect: true } } },
       },
-      _count: { select: { questions: true, testAttempts: true } },
+      _count: { select: { ...PAPER_PUBLISHED_QUESTION_COUNT, testAttempts: true } },
     },
   });
 
@@ -64,7 +65,10 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
             <Info label="Exam" value={paper.exam.name} />
             <Info label="Year" value={String(paper.year)} />
             <Info label="Paper Code" value={paper.paperCode ?? "—"} />
-            <Info label="Question Count" value={String(paper._count.questions)} />
+            <Info
+              label="Question Count"
+              value={`${paper._count.questions} published${paper.questions.length > paper._count.questions ? ` (+${paper.questions.length - paper._count.questions} draft/archived)` : ""}`}
+            />
             <Info label="Subjects" value={Array.from(subjectCounts.entries()).map(([name, n]) => `${name} (${n})`).join(", ") || "—"} />
             <Info label="Status" value={paper.isActive ? "Active" : "Inactive"} />
             <Info label="Test Attempts" value={String(paper._count.testAttempts)} />

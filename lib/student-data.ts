@@ -12,6 +12,7 @@ import {
   type Prisma,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { PAPER_PUBLISHED_QUESTION_COUNT } from "@/lib/pyq-membership";
 import { getExamSubjects, getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { toIstDateString, istStartOfDay } from "@/lib/ist-time";
 import { getAiSettings } from "@/lib/ai-settings";
@@ -370,7 +371,7 @@ export async function ensureCustomModuleShareToken(moduleId: string, studentId: 
 export async function getPreviousYearPaperForStudent(paperId: string, studentId: string) {
   const paper = await prisma.previousYearPaper.findFirst({
     where: { id: paperId, isActive: true },
-    include: { exam: true, _count: { select: { questions: { where: { status: QuestionStatus.PUBLISHED } } } } },
+    include: { exam: true, _count: { select: PAPER_PUBLISHED_QUESTION_COUNT } },
   });
   if (!paper) return null;
 
@@ -399,7 +400,7 @@ export async function getDashboardPreviousYearPapers(studentId: string, examId: 
       year: true,
       paperCode: true,
       examId: true,
-      _count: { select: { questions: { where: { status: QuestionStatus.PUBLISHED } } } },
+      _count: { select: PAPER_PUBLISHED_QUESTION_COUNT },
     },
   });
   if (papers.length === 0) return [];
