@@ -182,7 +182,11 @@ async function main() {
   const PUBLIC_OK = new Set(["loginAction", "logoutAction", "clearServerCacheAction"]);
   // Server Actions that write nothing (verified: analyzeImportRun only reads) —
   // any signed-in admin may call them; each still checks getAdminSession().
-  const READ_ONLY_ACTIONS = new Set(["app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#previewImportRollbackAction"]);
+  const READ_ONLY_ACTIONS = new Set([
+    // Import History impact preview + dependency detail (verify-import-history-delete.ts asserts they never call a mutation).
+    "app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#previewImportSelectionAction",
+    "app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#planResolveAction",
+  ]);
   // POST handlers that write nothing (file generation only) — any admin may use them.
   const READ_ONLY_POST = new Set(["app/api/admin/questions/templates/generate/route.ts#POST"]);
   const allowedForFull: string[] = [];

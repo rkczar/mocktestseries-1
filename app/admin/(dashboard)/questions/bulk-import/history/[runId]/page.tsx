@@ -10,11 +10,34 @@ import { formatDistanceToNow } from "date-fns";
 import { mergeRowData, declaredImageFilenames, matchRowImagesSync, type BulkImportRow as ParsedRowShape } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
 import { analyzeImportRun } from "@/lib/import-rollback";
+import { importRunState, parseRowFilter, rowMatches, RUN_STATE_LABEL, type RowFilter } from "@/lib/import-history-selection";
 import { hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { ImportedQuestionsPanel } from "./imported-questions-panel";
 
-async function ImportDetailsContent({ runId, page }: { runId: string; page: number }) {
+const QUESTIONS_PER_PAGE = 50;
+const RUN_STATE_VARIANT = {
+  ACTIVE: "success",
+  ARCHIVED: "warning",
+  DELETED: "neutral",
+  PARTIALLY_DELETED: "warning",
+  PARTIALLY_ARCHIVED: "warning",
+  EMPTY: "neutral",
+} as const;
+
+async function ImportDetailsContent({
+  runId,
+  page,
+  qPage,
+  qFilter,
+  qSearch,
+}: {
+  runId: string;
+  page: number;
+  qPage: number;
+  qFilter: RowFilter;
+  qSearch: string;
+}) {
   const limit = 50;
   const skip = (page - 1) * limit;
 
@@ -45,6 +68,16 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
     hasPermission(PERMISSIONS.IMPORT_ROLLBACK_MANAGE),
   ]);
   const summary = analysis?.summary;
+
+  // Imported Questions: filtered + paginated on the server; only one page of rows reaches the browser.
+  const filtered = analysis ? analysis.rows.filter((r) => rowMatches(r, qFilter, qSearch)) : [];
+  const qTotalPages = Math.max(1, Math.ceil(filtered.length / QUESTIONS_PER_PAGE));
+  const qPageSafe = Math.min(Math.max(1, qPage), qTotalPages);
+  const pageRows = filtered.slice((qPageSafe - 1) * QUESTIONS_PER_PAGE, qPageSafe * QUESTIONS_PER_PAGE);
+  const selectableRows = filtered.filter((r) => r.action === "CREATED" && r.classification !== null && r.classification !== "ALREADY_MISSING");
+  const runState = summary
+    ? importRunState({ created: summary.created, deleted: summary.laterDeleted + summary.alreadyMissing, archived: summary.archivedNow })
+    : null;
 
   const totalPages = Math.ceil(total / limit) || 1;
 
@@ -130,6 +163,12 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
                 {run.status}
               </Badge>
             </div>
+            {runState ? (
+              <div className="flex justify-between">
+                <span className="text-sm text-[var(--color-muted-foreground)]">Imported questions:</span>
+                <Badge variant={RUN_STATE_VARIANT[runState]}>{RUN_STATE_LABEL[runState]}</Badge>
+              </div>
+            ) : null}
             {run.completedAt && (
               <div className="flex justify-between">
                 <span className="text-sm text-[var(--color-muted-foreground)]">Duration:</span>
@@ -175,7 +214,34 @@ async function ImportDetailsContent({ runId, page }: { runId: string; page: numb
       </div>
 
       {analysis ? (
-        <ImportedQuestionsPanel runId={run.id} filename={run.filename} rows={analysis.rows} canDelete={canRollback} />
+        <ImportedQuestionsPanel
+          // Remount per page/filter/search so a selection never silently spans rows the admin can't see.
+          key={`${qPageSafe}|${qFilter}|${qSearch}`}
+          runId={run.id}
+          filename={run.filename}
+          rows={pageRows}
+          page={qPageSafe}
+          totalPages={qTotalPages}
+          filter={qFilter}
+          search={qSearch}
+          counts={{
+            imported: analysis.summary.created,
+            active: analysis.summary.active,
+            archived: analysis.summary.archivedNow,
+            deleted: analysis.summary.laterDeleted + analysis.summary.alreadyMissing,
+            deletable: analysis.summary.safeToDelete,
+            archiveOnly: analysis.summary.archiveOnly,
+            protected: analysis.summary.protected,
+          }}
+          totals={{
+            rows: filtered.length,
+            selectable: selectableRows.length,
+            deletable: selectableRows.filter((r) => r.classification === "SAFE_TO_DELETE").length,
+            archiveOnly: selectableRows.filter((r) => r.classification === "ARCHIVE_ONLY").length,
+            protected: selectableRows.filter((r) => r.classification === "PROTECTED").length,
+          }}
+          canManage={canRollback}
+        />
       ) : null}
 
       {run.errorMessage && (
@@ -309,15 +375,16 @@ export default async function ImportDetailsPage({
   searchParams,
 }: {
   params: Promise<{ runId: string }>;
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; qp?: string; qf?: string; qs?: string }>;
 }) {
   const { runId } = await params;
-  const { page: pageParam } = await searchParams;
+  const { page: pageParam, qp, qf, qs } = await searchParams;
   const page = parseInt(pageParam || "1", 10);
+  const qPage = Number.parseInt(qp || "1", 10) || 1;
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <ImportDetailsContent runId={runId} page={page} />
+      <ImportDetailsContent runId={runId} page={page} qPage={qPage} qFilter={parseRowFilter(qf)} qSearch={(qs ?? "").slice(0, 200)} />
     </Suspense>
   );
 }

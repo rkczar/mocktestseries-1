@@ -7,6 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatDistanceToNow } from "date-fns";
 import type { Prisma } from "@prisma/client";
+import { importRunLifecycle } from "@/lib/import-rollback";
+import { importRunState, RUN_STATE_LABEL } from "@/lib/import-history-selection";
+
+const RUN_STATE_VARIANT = {
+  ACTIVE: "success",
+  ARCHIVED: "warning",
+  DELETED: "neutral",
+  PARTIALLY_DELETED: "warning",
+  PARTIALLY_ARCHIVED: "warning",
+  EMPTY: "neutral",
+} as const;
 
 async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
   const limit = 20;
@@ -41,6 +52,7 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
   ]);
 
   const totalPages = Math.ceil(total / limit) || 1;
+  const lifecycle = await importRunLifecycle(runs.map((r) => r.id));
 
   const STATUS_VARIANT = {
     PENDING: "neutral" as const,
@@ -110,6 +122,7 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
                     <th className="py-2 pr-4">Duplicates</th>
                     <th className="py-2 pr-4">Attached</th>
                     <th className="py-2 pr-4">Status</th>
+                    <th className="py-2 pr-4">Questions</th>
                     <th className="py-2 pr-4">Date</th>
                     <th className="py-2 pr-4" />
                   </tr>
@@ -150,6 +163,12 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
                       <td className="py-2.5 pr-4">{run.mockTestId ? run.attachedCount : "—"}</td>
                       <td className="py-2.5 pr-4">
                         <Badge variant={STATUS_VARIANT[run.status]}>{run.status}</Badge>
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        {(() => {
+                          const state = importRunState(lifecycle.get(run.id) ?? { created: 0, deleted: 0, archived: 0 });
+                          return <Badge variant={RUN_STATE_VARIANT[state]}>{RUN_STATE_LABEL[state]}</Badge>;
+                        })()}
                       </td>
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
                         {formatDistanceToNow(run.createdAt, { addSuffix: true })}
