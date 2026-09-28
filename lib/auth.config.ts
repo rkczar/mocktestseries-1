@@ -19,6 +19,10 @@ export const authConfig = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
+        // Sign-in time in ms (iat is re-stamped whenever the cookie is
+        // re-issued); lib/rbac.ts compares it with AdminUser.sessionsValidAfter
+        // so a logged-out session can't be replayed.
+        token.authAt = Date.now();
         token.role = (user as { role: string }).role;
         token.permissions = DEFAULT_ROLE_PERMISSIONS[
           (user as { role: keyof typeof DEFAULT_ROLE_PERMISSIONS }).role
@@ -29,6 +33,8 @@ export const authConfig = {
     async session({ session, token }) {
       if (session.user) {
         if (token.sub) session.user.id = token.sub;
+        session.user.authAt =
+          typeof token.authAt === "number" ? token.authAt : typeof token.iat === "number" ? token.iat * 1000 : 0;
         session.user.role = token.role as string | undefined;
         // Derive from the role on every request (not only the value frozen
         // into the JWT at sign-in) so newly added permission keys apply to

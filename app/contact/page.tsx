@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { getSiteUrl } from "@/lib/site-url";
 import Link from "next/link";
 import { PublicPageShell, getPublicChrome } from "@/components/homepage/public-page-shell";
 import { getStudentSession } from "@/lib/student-session";
@@ -10,10 +11,13 @@ import { LegalBody } from "./legal-body";
 import { MessageUsForm } from "./message-form";
 import { SupportDetailsList, getPublicSupportDetails } from "./support-details";
 
-export const metadata: Metadata = {
-  title: `Contact Us — ${BRAND_NAME}`,
-  description: "Contact MockTestSeries.in, learn about the platform, or grow with us.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: `Contact Us — ${BRAND_NAME}`,
+    description: "Contact MockTestSeries.in, learn about the platform, or grow with us.",
+    alternates: { canonical: `${await getSiteUrl()}/contact` },
+  };
+}
 
 const SECTIONS = [
   { id: "contact", label: "Contact Us" },

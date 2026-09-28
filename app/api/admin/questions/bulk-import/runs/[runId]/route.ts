@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
@@ -226,6 +226,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       summary,
     });
   } catch (error) {
+    if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
     console.error("GET /api/admin/questions/bulk-import/runs/[runId] error:", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to load import run" }, { status: 500 });
   }
@@ -308,6 +309,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     return NextResponse.json({ success: true, examId, revalidated: rows.length });
   } catch (error) {
+    if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
     console.error("PATCH /api/admin/questions/bulk-import/runs/[runId] error:", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to change Exam" }, { status: 500 });
   }

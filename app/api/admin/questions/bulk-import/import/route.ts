@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { BulkImportStatus } from "@prisma/client";
@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
       attachedCount: result.attachedCount,
     });
   } catch (error) {
+    if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
     // A refused Mock Test target is a pre-flight rejection: nothing was
     // written, so the run must stay READY (not be marked FAILED).
     if (error instanceof MockTargetError) {

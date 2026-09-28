@@ -180,6 +180,9 @@ async function main() {
   const actionFiles = walk("app/admin").filter((f) => /actions\.ts$/.test(f) && readFileSync(f, "utf8").includes('"use server"'));
   const routeFiles = walk("app/api/admin").filter((f) => f.endsWith("route.ts"));
   const PUBLIC_OK = new Set(["loginAction", "logoutAction", "clearServerCacheAction"]);
+  // Server Actions that write nothing (verified: analyzeImportRun only reads) —
+  // any signed-in admin may call them; each still checks getAdminSession().
+  const READ_ONLY_ACTIONS = new Set(["app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#previewImportRollbackAction"]);
   // POST handlers that write nothing (file generation only) — any admin may use them.
   const READ_ONLY_POST = new Set(["app/api/admin/questions/templates/generate/route.ts#POST"]);
   const allowedForFull: string[] = [];
@@ -189,7 +192,7 @@ async function main() {
     const helperKeys = [...src.matchAll(/async function (\w+)\(\)[^{]*\{\s*return requirePermission\(PERMISSIONS\.(\w+)\)/g)].map((m) => [m[1], m[2]] as const);
     for (const part of src.split(/(?=export async function )/).slice(1)) {
       const name = /export async function (\w+)/.exec(part)![1];
-      if (PUBLIC_OK.has(name)) continue;
+      if (PUBLIC_OK.has(name) || READ_ONLY_ACTIONS.has(`${f}#${name}`)) continue;
       const keys = [...part.matchAll(/requirePermission\(PERMISSIONS\.(\w+)\)/g)].map((m) => m[1]);
       for (const [helper, key] of helperKeys) if (new RegExp(`\\b${helper}\\(\\)`).test(part)) keys.push(key);
       if (/reviewDeletion\(/.test(part)) keys.push("STUDENT_DELETION_MANAGE");

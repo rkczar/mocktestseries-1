@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
@@ -57,6 +57,7 @@ export async function GET(
       },
     });
   } catch (error) {
+    if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
     console.error("GET /api/admin/questions/bulk-import/history/[runId] error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to fetch import details" },

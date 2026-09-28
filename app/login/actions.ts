@@ -9,6 +9,7 @@ import { studentSignIn } from "@/lib/auth-student";
 import { nextStudentId } from "@/lib/student-id";
 import { requestOtp, OtpError } from "@/lib/otp";
 import { safeStudentCallback } from "@/lib/student-callback";
+import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { getClientIp } from "@/lib/client-ip";
 import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
 import {
@@ -79,6 +80,11 @@ export async function registerWithPasswordAction(
   _prevState: AuthFormState,
   formData: FormData
 ): Promise<AuthFormState> {
+  // The Admin API Manager toggles hide the form; enforce them here too.
+  const providerConfig = await getAuthProviderConfig();
+  if (!providerConfig.registerEnabled) return { error: "New account creation is currently disabled." };
+  if (!providerConfig.passwordEnabled) return { error: "Password login is currently disabled." };
+
   const parsed = registerSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Please check the form and try again." };

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import Papa from "papaparse";
@@ -63,6 +63,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       },
     });
   } catch (error) {
+    if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
     console.error("GET /api/admin/questions/bulk-import/runs/[runId]/error-report error:", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to generate error report" }, { status: 500 });
   }

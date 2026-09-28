@@ -208,6 +208,7 @@ function OtpBoxInput({ autoSubmit }: { autoSubmit: () => void }) {
           <input
             key={i}
             id={`otp-box-${i}`}
+            aria-label={`OTP digit ${i + 1} of ${OTP_LENGTH}`}
             ref={(el) => {
               boxRefs.current[i] = el;
             }}

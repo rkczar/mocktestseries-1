@@ -86,6 +86,9 @@ fi
 
 SHA_ARG="${1:-}"
 [ -n "$SHA_ARG" ] || die "usage: $0 <sha>"
+# One deploy at a time: two runs would race on the switch and rollback target.
+exec 9>"${LOCK_FILE:-/var/lock/mocktestseries-deploy.lock}"
+flock -n 9 || die "another deploy is already running"
 cd "$REPO_DIR"
 git fetch -q origin
 SHA=$(git rev-parse --verify "$SHA_ARG^{commit}") || die "unknown commit $SHA_ARG"
@@ -121,7 +124,21 @@ safe_link "$SHARED_DIR/storage" "$R/public/storage"
 unset ASSEMBLING_RELEASE
 check_shared_clean
 log "installing + building $R"
-(cd "$R" && npm ci --no-audit --no-fund >"$LOG_DIR/deploy-npm.log" 2>&1 && npx prisma generate >/dev/null 2>&1 && npx next build >"$LOG_DIR/deploy-build.log" 2>&1)
+(cd "$R" && npm ci --no-audit --no-fund >"$LOG_DIR/deploy-npm.log" 2>&1 && npx prisma generate >/dev/null 2>&1)
+# Server Action ids are salted with the build's encryption key, which Next
+# otherwise randomizes per build: every deploy then renamed every action and
+# a student mid-test got "Server Action not found" (404) on each answer save
+# until reloading. A key derived from AUTH_SECRET is stable across releases
+# (ids only change when an action itself changes) and adds no new secret.
+# Never logged.
+ACTIONS_KEY=$(cd "$R" && node -e '
+require("dotenv").config({ path: ".env", quiet: true });
+const s = process.env.AUTH_SECRET;
+if (!s) process.exit(1);
+process.stdout.write(require("crypto").createHmac("sha256", s).update("mts-server-actions-key-v1").digest("base64"));
+') || die "could not derive the server actions key (AUTH_SECRET missing from shared .env?)"
+(cd "$R" && NEXT_SERVER_ACTIONS_ENCRYPTION_KEY="$ACTIONS_KEY" npx next build >"$LOG_DIR/deploy-build.log" 2>&1)
+unset ACTIONS_KEY
 validate_candidate "$R"
 log "candidate realpath:  $(realpath -e "$R")"
 
@@ -130,6 +147,8 @@ NEW_MIGRATIONS=$(comm -13 <(ls "$PREV/prisma/migrations" 2>/dev/null | sort) <(l
 if [ -n "$NEW_MIGRATIONS" ]; then
   log "new migrations: $(echo $NEW_MIGRATIONS)"
   [ "${APPLY_MIGRATIONS:-}" = "1" ] || { log "rerun with APPLY_MIGRATIONS=1 to apply them (current untouched)"; trap - ERR; cleanup_failed; exit 1; }
+  log "pre-migration database dump"
+  bash "$HERE/../backup/mocktestseries-backup-db.sh" >/dev/null
   (cd "$R" && npx prisma migrate deploy)
 fi
 
@@ -142,7 +161,8 @@ trap - ERR
 check_shared_clean || die "shared storage changed during build — not switching"
 atomic_switch "$R" || die "atomic switch failed (current unchanged: $(readlink "$CURRENT_LINK"))"
 log "current -> $(realpath -e "$CURRENT_LINK")"
-pm2 reload "$PM2_APP" >/dev/null
+# A failed reload must still reach the health check (and so the rollback).
+pm2 reload "$PM2_APP" >/dev/null || log "pm2 reload returned an error"
 
 # 5. Post-switch health; automatic rollback.
 if post_switch_healthy; then
@@ -152,7 +172,7 @@ if post_switch_healthy; then
 fi
 log "post-switch health FAILED — rolling back to $PREV"
 atomic_switch "$PREV"
-pm2 reload "$PM2_APP" >/dev/null
+pm2 reload "$PM2_APP" >/dev/null || log "pm2 reload (rollback) returned an error"
 if post_switch_healthy; then
   log "ROLLED BACK to $(basename "$PREV"); candidate $R left in place for inspection"
 else

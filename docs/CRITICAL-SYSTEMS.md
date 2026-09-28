@@ -1,0 +1,16 @@
+# Critical Systems — change protection
+
+A change that touches any file below must run that area's regression suite
+before deploy. All suites run against a **disposable** database (never
+production). See `ops/TEST-ENGINE.md` for how to set one up.
+
+| Area | Critical files | Invariants (must not bypass) | Required before deploy | Production smoke |
+|---|---|---|---|---|
+| Auth / session / logout | `middleware.ts`, `lib/auth*.ts`, `lib/rbac.ts`, `lib/student-session.ts`, `lib/student-devices.ts`, `app/admin/(dashboard)/actions.ts` | Student JWT is re-validated against StudentSession on every `auth()`. Admin JWT is re-validated against AdminUser (`isActive`, `sessionsValidAfter`). Logout revokes server-side. Admin and student cookies are separate. | `scripts/verify-auth-session.mjs`, `verify-student-devices.ts`, `verify-p1-security.ts` | `/login` 200. `/student/dashboard` and `/admin` redirect to login when signed out. |
+| RBAC | `lib/permissions.ts`, `lib/rbac.ts`, every `app/admin/**/actions.ts`, `app/api/admin/**` | Every mutation calls `requirePermission(<manage key>)`. FULL_ADMIN holds view keys only. | `verify-p1-security.ts` (static scan of all actions) | — |
+| Test engine / scoring / attempts | `lib/test-attempt.ts`, `lib/attempt-timing.ts`, `lib/test-player-data.ts`, `run/test-player.tsx`, `lib/answer-save-queue.ts`, attempt `actions.ts`, `lib/attempt-device-lease.ts`, `lib/question-selection.ts` | One player. Snapshot is frozen. Server deadline. Seq-guarded saves. No correct answer before an authorized reveal. | `verify-test-engine-core.ts`, `verify-test-engine-ui.mjs`, `verify-p0-answer-reveal.ts` | Start boundary redirects to login when signed out. |
+| Payments / webhook / entitlement / invoice / coupon | `lib/payments/*`, `app/api/webhooks/razorpay/route.ts`, checkout + admin payments actions, `lib/razorpay-config.ts` | Price comes from the DB. Signatures are checked on the server. Webhooks are idempotent. Fulfilment happens exactly once. Mode (TEST/LIVE) is stored per order. | `verify-payments.ts` (DB name must contain `payverify`) | Payment mode is still FREE. Webhook rejects an unsigned POST with 400. |
+| Database migrations | `prisma/schema.prisma`, `prisma/migrations/*` | Additive only. Deploy applies them only with `APPLY_MIGRATIONS=1`, after a pre-migration dump. | `prisma migrate deploy` + `migrate diff` on scratch, `verify-migration-replay.sh` | App boots; `/api/health` 200 |
+| Bulk import / question bank | `lib/bulk-import*.ts`, `lib/import-rollback.ts`, `app/api/admin/questions/bulk-import/**` | Duplicate checks are scoped to the paper. Rollback touches only questions the run created. | `verify-mock-bulk-import.ts`, `verify-import-rollback.ts` | — |
+| Deployment / storage | `ops/deploy/*`, `public/storage` symlink, shared `.env` | Guarded release, symlink-loop guards, boot test, atomic switch, automatic rollback, deploy lock, stable server-action key derived from AUTH_SECRET. Never hand-edit symlinks. | `ops/deploy/test-deploy-guards.sh` | Production SHA equals the pushed SHA. PM2 all online. |
+| Observability | `app/api/health/route.ts`, `ops/monitoring/*` | Health endpoint reports up/down only. | — | `/api/health` 200 |

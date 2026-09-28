@@ -56,7 +56,8 @@ import {
   validateMockSchedule,
 } from "@/lib/mock-test-schedule";
 import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions";
-import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
+import { createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
+import { taxonomyNameKey } from "@/lib/exam-taxonomy";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -86,7 +87,13 @@ async function main() {
   const suffix = Date.now().toString(36);
   const exam = await prisma.exam.create({ data: { name: `MBI Exam ${suffix}`, code: `MBI-${suffix}`, year: 2026 } });
   const otherExam = await prisma.exam.create({ data: { name: `MBI Other ${suffix}`, code: `MBO-${suffix}` } });
-  const subject = await createFixtureSubject(prisma, { examId: exam.id, name: `MBI Subject ${suffix}` });
+  // Import rows resolve subjects by their canonical name key, so this fixture
+  // subject needs a real key (suffix-unique, never a real master subject) —
+  // createFixtureSubject's "fixture:" key is deliberately unmatchable.
+  const subjectName = `MBI Subject ${suffix}`;
+  const subject = await prisma.subject.create({
+    data: { name: subjectName, nameKey: taxonomyNameKey(subjectName), originExamId: exam.id, examLinks: { create: { examId: exam.id, displayOrder: 0 } } },
+  });
   const topic = await createFixtureTopic(prisma, { subjectId: subject.id, name: `MBI Topic ${suffix}` });
   const paper = await prisma.previousYearPaper.create({ data: { examId: exam.id, year: 2020, title: `MBI Paper ${suffix}` } });
   const admin = await prisma.adminUser.findFirstOrThrow({ select: { id: true } });
@@ -189,6 +196,33 @@ async function main() {
     await executeBulkImport({ runId: py.run.id, adminUserId: admin.id });
     const pyQ = await prisma.question.findFirst({ where: { importBatchId: py.run.id } });
     check("linked to the paper as PYQ", pyQ?.previousYearPaperId === paper.id && pyQ?.source === "PYQ", pyQ);
+
+    // 3b. "Same paper/question number" is scoped to the paper ---------------------
+    // Regression (2026-09-28): the check matched on exam only, so importing a
+    // 2020 paper skipped rows as duplicates of the 2013 paper's same numbers.
+    console.log("\n3b. Paper/question-number duplicate is scoped to its own paper");
+    await prisma.previousYearPaper.create({ data: { examId: exam.id, year: 2013, title: `MBI Paper 2013 ${suffix}` } });
+    const pyqCsv = (year: string, qno: string, text: string) =>
+      csvOf([[exam.name, year, subject.name, topic.name, text, "Alpha", "Beta", "Gamma", "Delta", "B", "MEDIUM", "PUBLISHED"]])
+        .replace(/^([^\n]*)/, "$1,source,question_number")
+        .replace(/\n(.*)$/, `\n$1,PYQ,${qno}`);
+    const numbered = await stage(new File([pyqCsv("2020", "7", `MBI ${suffix} numbered 2020 q7`)], "pyq-q7.csv"), { previousYearPaperId: paper.id });
+    await executeBulkImport({ runId: numbered.run.id, adminUserId: admin.id });
+    const q7 = await prisma.question.findFirst({ where: { importBatchId: numbered.run.id }, select: { id: true, previousYearPaperId: true } });
+    check("numbered PYQ imported into the 2020 paper", q7?.previousYearPaperId === paper.id, q7);
+    const resolveOne = async (csv: string) => {
+      const lookups = await buildTaxonomyLookups(prisma);
+      const [shape] = validateImportRows((await parseImportFile(new File([csv], "probe.csv"))).rows);
+      return resolveRow(prisma, lookups, shape, undefined, lookups.exams.find((e) => e.id === exam.id) ?? null);
+    };
+    const otherYear = await resolveOne(pyqCsv("2013", "7", `MBI ${suffix} different 2013 q7`));
+    check("same number in ANOTHER paper is not a duplicate", otherYear.resolvedData?.isDuplicate === false, otherYear.warnings);
+    const sameYear = await resolveOne(pyqCsv("2020", "7", `MBI ${suffix} reworded 2020 q7`));
+    check(
+      "same number in the SAME paper is flagged with that question",
+      sameYear.resolvedData?.isDuplicate === true && sameYear.resolvedData?.duplicateQuestionId === q7?.id,
+      sameYear.warnings
+    );
 
     // 4. Mock Test target ------------------------------------------------------
     console.log("\n4. Import Target: Mock Test (append in row order, invalid rows not attached)");
@@ -348,6 +382,8 @@ async function main() {
     await prisma.questionOption.deleteMany({ where: { question: { examId: { in: [exam.id, otherExam.id] } } } });
     await prisma.question.deleteMany({ where: { examId: { in: [exam.id, otherExam.id] } } });
     await prisma.auditLog.deleteMany({ where: { entityId: { in: runIds } } });
+    await prisma.previousYearPaper.deleteMany({ where: { examId: { in: [exam.id, otherExam.id] } } });
+    await prisma.subject.deleteMany({ where: { id: subject.id } });
     await deleteFixtureTaxonomy(prisma, [exam.id, otherExam.id]);
     await prisma.exam.deleteMany({ where: { id: { in: [exam.id, otherExam.id] } } });
     const leftovers = await prisma.exam.count({ where: { code: { in: [`MBI-${suffix}`, `MBO-${suffix}`] } } });

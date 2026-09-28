@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
@@ -111,6 +111,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       },
     });
   } catch (error) {
+    if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
     console.error("PATCH /api/admin/questions/bulk-import/rows/[rowId] error:", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to update row" }, { status: 500 });
   }

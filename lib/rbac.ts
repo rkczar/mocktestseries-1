@@ -20,7 +20,7 @@ export class UnauthorizedError extends Error {
 const loadAdminAccount = cache(async (adminId: string) =>
   prisma.adminUser.findUnique({
     where: { id: adminId },
-    select: { name: true, isActive: true, role: { select: { name: true } } },
+    select: { name: true, isActive: true, sessionsValidAfter: true, role: { select: { name: true } } },
   })
 );
 
@@ -30,7 +30,8 @@ const loadAdminAccount = cache(async (adminId: string) =>
  *
  * A cryptographically valid admin JWT is not trusted on its own: the
  * account is re-read on every request. A deactivated or deleted admin gets
- * `null` immediately, and role/permissions always come from the account's
+ * `null` immediately, as does a session signed in before the admin's last
+ * logout, and role/permissions always come from the account's
  * CURRENT role, never the role frozen into the token at sign-in. The
  * separate student auth instance is unaffected.
  */
@@ -41,6 +42,9 @@ export async function getAdminSession() {
 
   const account = await loadAdminAccount(adminId);
   if (!account || !account.isActive) return null;
+  // Logged out (app/admin/(dashboard)/actions.ts): tokens signed in before
+  // that are dead even if a copy of the cookie survives.
+  if (account.sessionsValidAfter && (session.user.authAt ?? 0) < account.sessionsValidAfter.getTime()) return null;
 
   const role = account.role.name as RoleName;
   session.user.role = role;

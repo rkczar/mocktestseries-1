@@ -58,6 +58,8 @@ model AdminUser {
   role                   Role              @relation(fields: [roleId], references: [id])
   isActive               Boolean           @default(true)
   lastLoginAt            DateTime?
+  /// Admin JWTs signed in before this instant are rejected (set on logout).
+  sessionsValidAfter     DateTime?
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
   auditLogs              AuditLog[]
@@ -970,6 +972,8 @@ model QuestionOption {
   imageUrl   String?
   isCorrect  Boolean  @default(false)
   order      Int      @default(0)
+
+  @@index([questionId])
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ import { DEVICE_LIMIT_MESSAGE } from "@/lib/student-devices";
 import { LeftCanvas } from "./left-canvas";
 import { LoginScreen } from "./login-screen";
 
-export const metadata = { title: "Student Login — Mock Test Series.in" };
+export const metadata = { title: "Student Login — Mock Test Series.in", robots: { index: false } };
 
 export default async function LoginPage({
   searchParams,

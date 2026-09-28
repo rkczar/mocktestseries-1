@@ -41,6 +41,15 @@ async function withDeviceCookie(
 export default async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // Paper/Solution PDFs live under public/storage, which Next would serve to
+  // anyone with the URL. Students get them only through the access-checked
+  // /api/student/test-resources/[id] route; the raw file is Admin-only.
+  if (pathname.startsWith("/storage/test-resources/")) {
+    const session = await adminAuth();
+    if (!session?.user) return new NextResponse("Not found", { status: 404 });
+    return NextResponse.next();
+  }
+
   if (pathname.startsWith("/admin")) {
     if (pathname === "/admin/login") return NextResponse.next();
 
@@ -84,5 +93,5 @@ export default async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/student/:path*", "/login", "/api/student-auth/:path*"],
+  matcher: ["/admin/:path*", "/student/:path*", "/login", "/api/student-auth/:path*", "/storage/test-resources/:path*"],
 };

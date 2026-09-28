@@ -219,7 +219,16 @@ export const {
       },
     }),
     ...(googleCreds.clientId && googleCreds.clientSecret
-      ? [Google({ clientId: googleCreds.clientId, clientSecret: googleCreds.clientSecret })]
+      ? [
+          Google({
+            clientId: googleCreds.clientId,
+            clientSecret: googleCreds.clientSecret,
+            // Always show Google's account chooser: without it, "Continue with
+            // Google" right after Logout silently signs the same Google
+            // account back in (on a shared device, the previous student).
+            authorization: { params: { prompt: "select_account" } },
+          }),
+        ]
       : []),
   ],
   callbacks: {

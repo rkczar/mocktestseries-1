@@ -6,7 +6,7 @@ import { BrandLogo } from "@/components/brand/BrandLogo";
 import { LoginForm } from "./login-form";
 import { CacheTools } from "./cache-tools";
 
-export const metadata = { title: "Admin Login — Mock Test Series.in" };
+export const metadata = { title: "Admin Login — Mock Test Series.in", robots: { index: false, follow: false } };
 
 export default async function AdminLoginPage({
   searchParams,

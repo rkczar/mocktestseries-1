@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { getSiteUrl } from "@/lib/site-url";
 import { getPublishedHomepage, getFallbackHomepage } from "@/lib/homepage";
 import { resolveHomepage } from "@/lib/homepage-render";
 import { HomepageView } from "@/components/homepage/homepage-view";
@@ -7,13 +8,14 @@ import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const published = await getPublishedHomepage();
+  const [published, siteUrl] = await Promise.all([getPublishedHomepage(), getSiteUrl()]);
   const seo = (published?.seo as { title?: string; metaDescription?: string } | null) ?? {};
   return {
     title: seo.title || "MockTestSeries.in — Mock Tests, Previous Year Papers & AI Explanations",
     description:
       seo.metaDescription ||
       "Practice with full-length mock tests, previous year papers, and AI-powered explanations for RUHS Medical Officer, NEET UG, and more — all on one platform.",
+    alternates: { canonical: `${siteUrl}/` },
   };
 }
 

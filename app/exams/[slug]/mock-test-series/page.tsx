@@ -1,3 +1,4 @@
+import { safeJsonLd } from "@/lib/json-ld";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -188,7 +189,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
   return (
     <PublicPageShell>
       {jsonLd.map((j, i) => (
-        <script key={i} type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(j) }} />
+        <script key={i} type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(j) }} />
       ))}
 
       {/* HERO */}

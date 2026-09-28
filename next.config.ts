@@ -2,6 +2,20 @@ import type { NextConfig } from "next";
 import { LEGACY_REDIRECTS } from "./lib/legacy-redirects";
 
 const nextConfig: NextConfig = {
+  poweredByHeader: false,
+  // nginx already sets X-Content-Type-Options, X-Frame-Options and
+  // Referrer-Policy (sites-available/mocktestseries.in); these are the rest.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Strict-Transport-Security", value: "max-age=31536000" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), usb=()" },
+        ],
+      },
+    ];
+  },
   async redirects() {
     return [
       // The public Mock Test Series page moved to one canonical URL; keep old

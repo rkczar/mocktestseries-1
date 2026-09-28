@@ -1,0 +1,11 @@
+# Installed as /etc/logrotate.d/mocktestseries (source: ops/monitoring/ in the repo).
+# copytruncate: PM2 and the cron jobs keep their file handles open.
+/var/log/mocktestseries/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

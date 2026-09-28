@@ -1,3 +1,4 @@
+import { safeJsonLd } from "@/lib/json-ld";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { cookies } from "next/headers";
@@ -57,8 +58,8 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         <meta name="theme-color" content={theme === "light" ? "#fbfbfc" : "#000000"} />
         <style dangerouslySetInnerHTML={{ __html: appearanceToCssVariables(appearance) }} />
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }} />
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(organizationJsonLd) }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(websiteJsonLd) }} />
       </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

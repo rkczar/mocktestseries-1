@@ -758,8 +758,11 @@ export async function resolveRow(
   if (!duplicateReason && data.questionNumber && previousYearPaperId) {
     // Question has no dedicated questionNumber column, so this is approximated
     // via prior bulk-import history for the same exam (see report note).
-    const priorRow = await db.bulkImportRow
-      .findFirst({
+    // Question numbers repeat in every paper, so a prior row only counts when
+    // its question belongs to THIS paper — matching on exam alone flagged
+    // (and Skip/Replace acted on) another year's question.
+    const priorRows = await db.bulkImportRow
+      .findMany({
         where: {
           removedFromImport: false,
           status: { in: ["SUCCESS", "REPLACED"] },
@@ -767,12 +770,18 @@ export async function resolveRow(
           questionId: { not: null },
           rawData: { path: ["questionNumber"], equals: data.questionNumber } as unknown as Prisma.JsonFilter,
         },
-        select: { questionId: true, questionCode: true },
+        select: { questionId: true },
         orderBy: { createdAt: "desc" },
+        take: 500,
       })
-      .catch(() => null);
-    if (priorRow?.questionId) {
-      duplicateQuestionId = priorRow.questionId;
+      .catch(() => []);
+    const priorIds = priorRows.map((r) => r.questionId).filter((id): id is string => !!id);
+    const samePaper = priorIds.length
+      ? await db.question.findMany({ where: { id: { in: priorIds }, previousYearPaperId }, select: { id: true } })
+      : [];
+    const priorQuestionId = priorIds.find((id) => samePaper.some((q) => q.id === id));
+    if (priorQuestionId) {
+      duplicateQuestionId = priorQuestionId;
       duplicateReason = "Same paper/question number";
     }
   }

@@ -1,0 +1,8 @@
+# mocktestseries watchdog — installed as /etc/cron.d/mocktestseries-watchdog (source: ops/monitoring/ in the repo).
+# Every 5 min: /api/health (app + DB), PM2 workers (restarts a crash-looped/stopped app at most once per
+# 30 min), disk, TLS expiry, nightly dump freshness. One line per run in /var/log/mocktestseries/watchdog.log;
+# current state in watchdog-status.txt. flock prevents overlapping runs.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+*/5 * * * * root flock -n /run/mocktestseries-watchdog.lock /var/www/mocktestseries-current/ops/monitoring/mocktestseries-watchdog.sh >/dev/null 2>&1

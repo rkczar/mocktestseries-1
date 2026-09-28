@@ -25,6 +25,8 @@ declare module "next-auth" {
       deviceId?: string;
       /** StudentSession row id (never the session secret). */
       sessionRowId?: string;
+      /** Admin sign-in time (ms); compared with AdminUser.sessionsValidAfter. */
+      authAt?: number;
     };
   }
 }
