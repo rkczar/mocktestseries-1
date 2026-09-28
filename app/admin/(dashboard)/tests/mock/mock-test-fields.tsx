@@ -31,13 +31,17 @@ const textareaClass =
 /**
  * Shared Mock Test fields (create + edit) — Step 1 Basic Details (Test
  * Number, title, duration, marking, expected question count, description,
- * instructions) and Step 2 Coverage, picked from the exam's real
+ * instructions) and Step 2 Mock Category / Coverage, picked from the exam's real
  * Subject/Topic taxonomy. FREE/PAID access is Step 5, not here.
  */
 export function MockTestFields({ v = {}, subjects }: { v?: MockTestFieldValues; subjects: CoverageSubject[] }) {
   const [coverageType, setCoverageType] = useState(v.coverageType ?? "FULL_SYLLABUS");
   const [pickedSubjects, setPickedSubjects] = useState<Set<string>>(new Set(v.coverageSubjectIds ?? []));
   const pickedTopics = new Set(v.coverageTopicIds ?? []);
+  // Subject Mock = SUBJECT_WISE coverage of exactly one canonical subject.
+  const [subjectId, setSubjectId] = useState(v.coverageType === "SUBJECT_WISE" ? (v.coverageSubjectIds?.[0] ?? "") : "");
+  const isSubjectMock = coverageType === "SUBJECT_WISE";
+  const subjectTopics = subjects.find((s) => s.id === subjectId)?.topics ?? [];
 
   return (
     <>
@@ -72,25 +76,74 @@ export function MockTestFields({ v = {}, subjects }: { v?: MockTestFieldValues; 
       </div>
 
       <fieldset id="coverage" className="flex scroll-mt-24 flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-4 sm:col-span-2 lg:col-span-3">
-        <legend className="px-1 text-sm font-medium text-[var(--color-foreground)]">Step 2 — Syllabus / Coverage</legend>
+        <legend className="px-1 text-sm font-medium text-[var(--color-foreground)]">Step 2 — Mock Category / Coverage</legend>
         <p className="text-xs text-[var(--color-muted-foreground)]">
-          Picked from the exam&apos;s own Subject → Topic taxonomy (Sub-topics and questions sit beneath these in the Question Bank).
+          A <strong>Subject Mock</strong> covers one subject and is listed to students under Subject Mock Tests → that subject. Everything else is a
+          Full / General mock. Picked from the exam&apos;s own Subject → Topic taxonomy.
         </p>
-        <SelectNative
-          name="coverageType"
-          value={coverageType}
-          onChange={(e) => setCoverageType(e.target.value as typeof coverageType)}
-          className="max-w-xs"
-          aria-label="Coverage type"
-        >
-          <option value="FULL_SYLLABUS">Full Syllabus</option>
-          <option value="PARTIAL_SYLLABUS">Partial Syllabus</option>
-          <option value="SUBJECT_WISE">Subject-wise</option>
-        </SelectNative>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="mockCategory">Mock Category</Label>
+            <SelectNative
+              id="mockCategory"
+              value={isSubjectMock ? "SUBJECT" : "GENERAL"}
+              onChange={(e) => {
+                if (e.target.value === "SUBJECT") {
+                  setCoverageType("SUBJECT_WISE");
+                  setSubjectId((cur) => cur || [...pickedSubjects][0] || "");
+                } else setCoverageType("FULL_SYLLABUS");
+              }}
+            >
+              <option value="GENERAL">Full / General Mock</option>
+              <option value="SUBJECT">Subject Mock</option>
+            </SelectNative>
+          </div>
+          {isSubjectMock ? (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="subjectMockSubject">Subject</Label>
+              <SelectNative id="subjectMockSubject" name="coverageSubjectIds" value={subjectId} required onChange={(e) => setSubjectId(e.target.value)}>
+                <option value="">Select subject…</option>
+                {subjects.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </SelectNative>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="coverageType">Syllabus</Label>
+              <SelectNative
+                id="coverageType"
+                value={coverageType}
+                onChange={(e) => setCoverageType(e.target.value as typeof coverageType)}
+                aria-label="Coverage type"
+              >
+                <option value="FULL_SYLLABUS">Full Syllabus</option>
+                <option value="PARTIAL_SYLLABUS">Partial Syllabus</option>
+              </SelectNative>
+            </div>
+          )}
+        </div>
+        <input type="hidden" name="coverageType" value={coverageType} />
         {coverageType === "FULL_SYLLABUS" ? (
           <p className="text-xs text-[var(--color-muted-foreground)]">Students see “Full Syllabus”. No subject selection needed.</p>
         ) : subjects.length === 0 ? (
           <p className="text-xs text-[var(--color-muted-foreground)]">This exam has no subjects yet (Admin → Exams → Subjects).</p>
+        ) : isSubjectMock ? (
+          subjectTopics.length > 0 ? (
+            <details open={subjectTopics.some((t) => pickedTopics.has(t.id))}>
+              <summary className="cursor-pointer text-xs text-[var(--color-muted-foreground)]">Limit to specific topics (optional, {subjectTopics.length})</summary>
+              <div className="mt-1 grid gap-1 pl-1 sm:grid-cols-2 lg:grid-cols-3">
+                {subjectTopics.map((t) => (
+                  <label key={t.id} className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
+                    <input type="checkbox" name="coverageTopicIds" value={t.id} defaultChecked={pickedTopics.has(t.id)} />
+                    {t.name}
+                  </label>
+                ))}
+              </div>
+            </details>
+          ) : null
         ) : (
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {subjects.map((s) => (

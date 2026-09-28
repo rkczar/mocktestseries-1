@@ -55,6 +55,13 @@ function readDetails(formData: FormData) {
 }
 
 /** Coverage ids are only kept when they belong to the test's exam (never trust posted ids). */
+/**
+ * Step 2 — Mock Category / Coverage. A Subject Mock (coverageType
+ * SUBJECT_WISE) names exactly ONE canonical Subject of the exam (topics, if
+ * any, must belong to it); it is what groups the test under "Subject Mock
+ * Tests → <Subject>" (lib/subject-mocks.ts). Full / Partial Syllabus are the
+ * Full / General category.
+ */
 async function readCoverage(formData: FormData, examId: string, coverageType: string) {
   if (coverageType === "FULL_SYLLABUS") return { coverageSubjectIds: [] as string[], coverageTopicIds: [] as string[] };
   const subjectIds = formData.getAll("coverageSubjectIds").map(String);
@@ -65,7 +72,14 @@ async function readCoverage(formData: FormData, examId: string, coverageType: st
   ]);
   const okS = new Set(subjects.map((s) => s.id));
   const okT = new Set(topics.map((t) => t.id));
-  return { coverageSubjectIds: subjectIds.filter((id) => okS.has(id)), coverageTopicIds: topicIds.filter((id) => okT.has(id)) };
+  const coverageSubjectIds = [...new Set(subjectIds.filter((id) => okS.has(id)))];
+  let coverageTopicIds = topicIds.filter((id) => okT.has(id));
+  if (coverageType === "SUBJECT_WISE") {
+    if (coverageSubjectIds.length !== 1) return { error: "A Subject Mock needs exactly one subject — use Partial Syllabus for a test spanning several subjects." };
+    const own = await prisma.topic.findMany({ where: { id: { in: coverageTopicIds }, subjectId: coverageSubjectIds[0] }, select: { id: true } });
+    coverageTopicIds = own.map((t) => t.id);
+  }
+  return { coverageSubjectIds, coverageTopicIds };
 }
 
 export interface MockTestFormState {
@@ -105,6 +119,7 @@ export async function createMockTestAction(_prev: MockTestFormState, formData: F
   }
 
   const coverage = await readCoverage(formData, rest.examId, rest.coverageType);
+  if ("error" in coverage) return { error: coverage.error };
   const mockTest = await prisma.mockTest.create({
     data: { ...rest, ...coverage, order: testNumber, testSeriesId: testSeriesId || null },
   });
@@ -127,6 +142,7 @@ export async function updateMockTestDetailsAction(mockTestId: string, _prev: Moc
 
   const { order, ...rest } = parsed.data;
   const coverage = await readCoverage(formData, existing.examId, rest.coverageType);
+  if ("error" in coverage) return { error: coverage.error };
   await prisma.mockTest.update({
     where: { id: mockTestId },
     data: { ...rest, ...coverage, order: order ?? existing.order, description: rest.description ?? null, instructions: rest.instructions ?? null },

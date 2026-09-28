@@ -55,7 +55,7 @@ export interface ExamMockSeries {
   tests: PublicSeriesTest[];
 }
 
-const COVERAGE_LABEL = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject-wise" } as const;
+const COVERAGE_LABEL = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject Mock" } as const;
 
 /** Canonical series for an exam: the first PUBLISHED Test Series by admin order (a slugged one wins ties). */
 export async function getCanonicalSeriesRow(examId: string) {

@@ -3,6 +3,7 @@ import { AttemptStatus } from "@prisma/client";
 import { requireStudent } from "@/lib/student-session";
 import { getContentAccess, describeAttemptContent } from "@/lib/payments/access";
 import { AccessLocked } from "@/components/student/access-locked";
+import { AttemptResetNotice } from "@/components/student/attempt-reset-notice";
 import { getOwnedAttempt } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
@@ -23,6 +24,7 @@ export default async function OmrEntryPage({ params }: { params: Promise<{ attem
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status === AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}/result`);
+  if (attempt.status === AttemptStatus.ABANDONED) return <AttemptResetNotice isPyq={Boolean(attempt.previousYearPaperId)} />;
   if (attempt.entryMode !== "OFFLINE_OMR_ENTRY") redirect(`/student/attempt/${attemptId}/run`);
 
   // Entitlement re-check on every load: no paid question payload is ever

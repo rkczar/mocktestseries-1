@@ -12,7 +12,7 @@ import {
 export const COVERAGE_LABELS: Record<MockCoverageType, string> = {
   FULL_SYLLABUS: "Full Syllabus",
   PARTIAL_SYLLABUS: "Partial Syllabus",
-  SUBJECT_WISE: "Subject-wise",
+  SUBJECT_WISE: "Subject Mock",
 };
 
 export interface MockTestTableRow {

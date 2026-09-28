@@ -3,6 +3,7 @@ import { AttemptStatus, AttemptAnswerMode, AttemptDurationMode } from "@prisma/c
 import { requireStudent } from "@/lib/student-session";
 import { getContentAccess, describeAttemptContent } from "@/lib/payments/access";
 import { AccessLocked } from "@/components/student/access-locked";
+import { AttemptResetNotice } from "@/components/student/attempt-reset-notice";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import { remainingSecondsFor, toServerTimedAttempt } from "@/lib/test-attempt";
@@ -19,6 +20,7 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status === AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}/result`);
+  if (attempt.status === AttemptStatus.ABANDONED) return <AttemptResetNotice isPyq={Boolean(attempt.previousYearPaperId)} />;
 
   // Entitlement re-check on every load: no paid question payload is ever
   // rendered for a student who doesn't currently hold access.

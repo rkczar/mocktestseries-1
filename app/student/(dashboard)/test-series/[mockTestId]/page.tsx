@@ -16,7 +16,7 @@ import { accessLockLabel } from "@/lib/payments/access-labels";
 
 export const metadata = { title: "Mock Test — Mock Test Series.in" };
 
-const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject-wise" } as const;
+const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject Mock" } as const;
 
 /**
  * Mock Test Details / Instructions — the step between a Mock Test card and

@@ -6,9 +6,10 @@ import { AccessPanel } from "@/components/student/access-panel";
 import { prisma } from "@/lib/prisma";
 import { loadAccessContext, evaluateContentAccess, paywallHref } from "@/lib/payments/access";
 import { BackButton } from "@/components/student/back-button";
+import { subjectMockSubjectId } from "@/lib/subject-mocks";
 import { TestSeriesExplorer, type ExplorerGroup } from "./test-series-explorer";
 
-const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject-wise" } as const;
+const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject Mock" } as const;
 
 export const metadata = { title: "Test Series — Mock Test Series.in" };
 
@@ -36,6 +37,16 @@ export default async function TestSeriesPage() {
     };
   };
 
+  // Subject Mock Tests: names of the one canonical subject each Subject Mock covers.
+  const subjectIds = [...new Set(groups.flatMap((g) => g.tests.map((t) => subjectMockSubjectId(t.mockTest)).filter((id): id is string => Boolean(id))))];
+  const subjectNames = new Map(
+    (subjectIds.length ? await prisma.subject.findMany({ where: { id: { in: subjectIds } }, select: { id: true, name: true } }) : []).map((sub) => [sub.id, sub.name])
+  );
+  const subjectMockOf = (mt: Parameters<typeof subjectMockSubjectId>[0]) => {
+    const id = subjectMockSubjectId(mt);
+    return id && subjectNames.has(id) ? { subjectId: id, subjectName: subjectNames.get(id)! } : null;
+  };
+
   const explorerGroups: ExplorerGroup[] = groups.map((g) => ({
     seriesId: g.series?.id ?? null,
     seriesName: g.series?.name ?? "Standalone Mock Tests",
@@ -45,6 +56,7 @@ export default async function TestSeriesPage() {
       title: row.mockTest.title,
       testNumber: row.mockTest.testSeriesId ? row.mockTest.order : null,
       coverageLabel: COVERAGE_LABELS[row.mockTest.coverageType],
+      subjectMock: subjectMockOf(row.mockTest),
       examName: row.mockTest.exam.name,
       questionCount: row.mockTest._count.questions,
       durationMinutes: row.mockTest.durationMinutes,

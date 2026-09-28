@@ -17,6 +17,8 @@ export interface ExplorerTestRow {
   title: string;
   testNumber: number | null;
   coverageLabel: string;
+  /** Set when this is a Subject Mock (lib/subject-mocks.ts) — listed under Subject Mock Tests → subject. */
+  subjectMock: { subjectId: string; subjectName: string } | null;
   examName: string;
   questionCount: number;
   durationMinutes: number;
@@ -121,14 +123,59 @@ export function TestSeriesExplorer({ groups }: { groups: ExplorerGroup[] }) {
                 <p className="text-xs text-[var(--color-muted-foreground)]">{group.seriesDescription}</p>
               ) : null}
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {group.tests.map((row) => (
-                <TestCard key={row.id} row={row} />
-              ))}
-            </div>
+            <SeriesTests tests={group.tests} />
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+/**
+ * One series' tests, split into Full / General Mock Tests and Subject Mock
+ * Tests → <Subject>. Only a presentation grouping: every card starts the same
+ * canonical Mock Test attempt.
+ */
+function SeriesTests({ tests }: { tests: ExplorerTestRow[] }) {
+  const general = tests.filter((t) => !t.subjectMock);
+  const bySubject = new Map<string, { name: string; tests: ExplorerTestRow[] }>();
+  for (const t of tests) {
+    if (!t.subjectMock) continue;
+    const entry = bySubject.get(t.subjectMock.subjectId) ?? { name: t.subjectMock.subjectName, tests: [] };
+    entry.tests.push(t);
+    bySubject.set(t.subjectMock.subjectId, entry);
+  }
+  const subjects = [...bySubject.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const grid = (rows: ExplorerTestRow[]) => (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {rows.map((row) => (
+        <TestCard key={row.id} row={row} />
+      ))}
+    </div>
+  );
+  if (subjects.length === 0) return grid(general);
+  return (
+    <div className="flex flex-col gap-5">
+      {general.length > 0 ? (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">Full / General Mock Tests</h3>
+          {grid(general)}
+        </section>
+      ) : null}
+      <section className="flex flex-col gap-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">Subject Mock Tests</h3>
+        {subjects.map((sub) => (
+          <div key={sub.name} className="flex flex-col gap-2">
+            <p className="text-sm font-medium text-[var(--color-foreground)]">
+              {sub.name}{" "}
+              <span className="text-xs font-normal text-[var(--color-muted-foreground)]">
+                · {sub.tests.length} test{sub.tests.length === 1 ? "" : "s"}
+              </span>
+            </p>
+            {grid(sub.tests)}
+          </div>
+        ))}
+      </section>
     </div>
   );
 }
@@ -145,7 +192,7 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
             {row.title}
           </Link>
           <p className="text-xs text-[var(--color-muted-foreground)]">
-            {row.examName} · {row.coverageLabel}
+            {row.examName} · {row.subjectMock ? `Subject Mock · ${row.subjectMock.subjectName}` : row.coverageLabel}
           </p>
         </div>
 

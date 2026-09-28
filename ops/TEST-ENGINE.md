@@ -76,6 +76,11 @@ Each of these once caused a real production failure.
    Revealing freezes the chosen option (`Answer.revealedAt`), so a student
    can't reveal and then switch to the correct option.
 7. **A malformed snapshot is a skippable notice**, never a crash.
+8. **Content corrections never rewrite a snapshot.** An IN_PROGRESS attempt
+   frozen from wrong content is set to `ABANDONED` and gets an AuditLog row.
+   Its snapshot and answers are kept, the next Start is a fresh attempt, and
+   the attempt pages render `AttemptResetNotice`. SUBMITTED attempts are never
+   changed. See `docs/CONTENT-OWNERSHIP.md`.
 
 ## Observability
 

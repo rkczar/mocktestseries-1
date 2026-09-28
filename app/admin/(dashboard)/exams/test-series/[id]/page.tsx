@@ -22,7 +22,7 @@ import { ScheduleTable } from "../../../tests/scheduled/schedule-table";
 
 export const metadata = { title: "Test Series — Mock Test Series.in Admin" };
 
-const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject-wise" } as const;
+const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject Mock" } as const;
 
 const SECTIONS = [
   ["overview", "Overview"],
@@ -318,7 +318,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
           <p className="text-[var(--color-muted-foreground)]">
             {series.mockTests.filter((m) => m.coverageType === "FULL_SYLLABUS").length} full-syllabus ·{" "}
             {series.mockTests.filter((m) => m.coverageType === "PARTIAL_SYLLABUS").length} partial ·{" "}
-            {series.mockTests.filter((m) => m.coverageType === "SUBJECT_WISE").length} subject-wise
+            {series.mockTests.filter((m) => m.coverageType === "SUBJECT_WISE").length} subject mocks
           </p>
           <div className="flex flex-wrap gap-2">
             {subjects.map((s) => (
