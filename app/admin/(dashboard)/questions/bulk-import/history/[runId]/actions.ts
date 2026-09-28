@@ -7,10 +7,14 @@ import { PERMISSIONS } from "@/lib/permissions";
 import {
   SelectionError,
   executeImportRollback,
+  forceDeleteImportedQuestions,
   planResolve,
+  previewForceDelete,
   previewSelection,
   resolveProtectedQuestions,
   resolveSelection,
+  type ForceDeleteResult,
+  type ForcePreview,
   type ResolvePlanRow,
   type ResolveResult,
   type RollbackResult,
@@ -164,6 +168,46 @@ export async function resolveProtectedAction(input: {
   }
 
   const result = await resolveProtectedQuestions({ runId, rowIds, detach, then, actorId });
+  revalidate(runId);
+  return { result };
+}
+
+/** Force Delete impact counts. Read-only: any signed-in admin. */
+export async function previewForceDeleteAction(runId: string, selection: ImportSelection): Promise<{ error?: string; preview?: ForcePreview }> {
+  const session = await getAdminSession();
+  if (!session?.user) return { error: "Not signed in" };
+  const scoped = await scope(runId, selection);
+  if ("error" in scoped) return { error: scoped.error };
+  const preview = await previewForceDelete(runId, scoped.rowIds);
+  if (!preview) return { error: "Import run not found" };
+  return { preview };
+}
+
+const forceSchema = z.object({ runId: runIdSchema, selection: selectionSchema, confirmation: z.string().max(40) });
+
+/**
+ * Owner override: permanently delete the selected questions created by this
+ * import no matter where they are used (see forceDeleteImportedQuestions).
+ * Requires typing "FORCE DELETE <n>", n = the server's own current count.
+ */
+export async function forceDeleteAction(input: { runId: string; selection: ImportSelection; confirmation: string }): Promise<{ error?: string; result?: ForceDeleteResult }> {
+  const session = await requirePermission(PERMISSIONS.IMPORT_ROLLBACK_MANAGE);
+  const parsed = forceSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid request" };
+  const actorId = session.user.id;
+  if (!actorId) return { error: "Not signed in" };
+
+  const { runId, selection } = parsed.data;
+  const scoped = await scope(runId, selection);
+  if ("error" in scoped) return { error: scoped.error };
+  const preview = await previewForceDelete(runId, scoped.rowIds);
+  if (!preview) return { error: "Import run not found" };
+  if (preview.total === 0) return { error: "Nothing left to delete in this selection." };
+  if (parsed.data.confirmation.trim().replace(/\s+/g, " ") !== `FORCE DELETE ${preview.total}`) {
+    return { error: `Type FORCE DELETE ${preview.total} to confirm (count re-checked on the server; re-open the dialog if it changed).` };
+  }
+
+  const result = await forceDeleteImportedQuestions({ runId, rowIds: scoped.rowIds, actorId });
   revalidate(runId);
   return { result };
 }

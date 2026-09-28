@@ -186,6 +186,7 @@ async function main() {
     // Import History impact preview + dependency detail (verify-import-history-delete.ts asserts they never call a mutation).
     "app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#previewImportSelectionAction",
     "app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#planResolveAction",
+    "app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#previewForceDeleteAction",
   ]);
   // POST handlers that write nothing (file generation only) — any admin may use them.
   const READ_ONLY_POST = new Set(["app/api/admin/questions/templates/generate/route.ts#POST"]);

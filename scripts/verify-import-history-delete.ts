@@ -15,8 +15,10 @@ import {
   SelectionError,
   analyzeImportRun,
   executeImportRollback,
+  forceDeleteImportedQuestions,
   importRunLifecycle,
   planResolve,
+  previewForceDelete,
   previewSelection,
   resolveProtectedQuestions,
   resolveSelection,
@@ -284,6 +286,25 @@ async function main() {
     check("run still exists after bulk delete", (await prisma.bulkImportRun.count({ where: { id: run.id } })) === 1);
     check("attempts still byte-identical after bulk delete", (await historySnapshot()) === historyBefore);
 
+    console.log("\n9b. Force Delete — no matter where used");
+    const rest = await resolveSelection(run.id, { kind: "all", filter: "ALL", search: "" });
+    const fp = (await previewForceDelete(run.id, rest))!;
+    check("force preview: 6 remaining (history, in-progress, archived, student module, mock+PYQ, mock)", fp.total === 6, fp);
+    check("force preview counts mocks / attempts / modules / archived", fp.inMockTests === 2 && fp.withAttempts === 3 && fp.inCustomModules === 1 && fp.archived === 2, fp);
+    const forced = await forceDeleteImportedQuestions({ runId: run.id, rowIds: rest, actorId: admin.id });
+    check("force: all 6 deleted, 0 failed", forced.deleted.length === 6 && forced.failed.length === 0, forced);
+    check("force: every question of this run gone", (await prisma.question.count({ where: { id: { in: q } } })) === 0);
+    check("force: removedFrom lists the dependencies", forced.deleted.find((d) => d.questionId === q[7])?.removedFrom.some((x) => x.startsWith("Used in 1 Mock Test")) === true);
+    check("force: mock test itself kept, its links to these questions removed", (await prisma.mockTest.count({ where: { id: mock.id } })) === 1 && (await prisma.mockTestQuestion.count({ where: { mockTestId: mock.id } })) === 0);
+    check("force: student module kept, link removed", (await prisma.customModule.count({ where: { id: mod.id } })) === 1 && (await prisma.customModuleQuestion.count({ where: { customModuleId: mod.id } })) === 0);
+    check("force: PYQ paper kept", (await prisma.previousYearPaper.count({ where: { id: paper.id } })) === 1);
+    check("force: attempts, frozen snapshots, answers and score unchanged", (await historySnapshot()) === historyBefore);
+    check("force: audit IMPORT_BULK_FORCE_DELETED", (await audits("IMPORT_BULK_FORCE_DELETED", run.id)) === 1);
+    check("force: import run + rows kept, state Deleted", (await prisma.bulkImportRow.count({ where: { runId: run.id } })) === N && importRunState((await importRunLifecycle([run.id])).get(run.id)!) === "DELETED");
+    const again = await forceDeleteImportedQuestions({ runId: run.id, rowIds: rest, actorId: admin.id });
+    check("force: re-run deletes nothing more (idempotent)", again.deleted.length === 0 && again.failed.length === 0, again);
+    check("force: other import untouched", (await prisma.question.count({ where: { importBatchId: other.id } })) === 2);
+
     console.log("\n10. Unrelated data untouched");
     check("questions of other exams unchanged", (await prisma.question.count({ where: { examId: { not: exam.id } } })) === globalBefore.questions);
     check("no pre-existing attempt/answer rows touched", (await prisma.testAttempt.count()) === globalBefore.attempts + 2 && (await prisma.answer.count()) === globalBefore.answers + 2);
@@ -298,17 +319,18 @@ async function main() {
       const next = src.indexOf("export async function", start + 10);
       return src.slice(start, next === -1 ? undefined : next);
     };
-    for (const name of ["executeImportRollbackAction", "resolveProtectedAction"]) {
+    for (const name of ["executeImportRollbackAction", "resolveProtectedAction", "forceDeleteAction"]) {
       check(`${name}: first statement is requirePermission(IMPORT_ROLLBACK_MANAGE)`, /\{\s*const session = await requirePermission\(PERMISSIONS\.IMPORT_ROLLBACK_MANAGE\);/.test(body(name)));
       check(`${name}: validates ids through resolveSelection before acting`, /await scope\(runId, selection\)/.test(body(name)));
     }
     check("executeImportRollbackAction requires server-computed DELETE <n>", /confirmation !== `DELETE \$\{preview\.safe\}`/.test(body("executeImportRollbackAction")));
+    check("forceDeleteAction requires server-computed FORCE DELETE <n>", /`FORCE DELETE \$\{preview\.total\}`/.test(body("forceDeleteAction")));
     check("resolveProtectedAction requires RESOLVE <n>", /`RESOLVE \$\{rowIds\.length\}`/.test(body("resolveProtectedAction")));
-    for (const name of ["previewImportSelectionAction", "planResolveAction"]) {
-      check(`${name} is read-only`, !/executeImportRollback\(|resolveProtectedQuestions\(/.test(body(name)));
+    for (const name of ["previewImportSelectionAction", "planResolveAction", "previewForceDeleteAction"]) {
+      check(`${name} is read-only`, !/executeImportRollback\(|resolveProtectedQuestions\(|forceDeleteImportedQuestions\(/.test(body(name)));
     }
     const exported = [...src.matchAll(/export async function (\w+)/g)].map((m) => m[1]).sort();
-    check("no other server actions exported", JSON.stringify(exported) === JSON.stringify(["executeImportRollbackAction", "planResolveAction", "previewImportSelectionAction", "resolveProtectedAction"]), exported);
+    check("no other server actions exported", JSON.stringify(exported) === JSON.stringify(["executeImportRollbackAction", "forceDeleteAction", "planResolveAction", "previewForceDeleteAction", "previewImportSelectionAction", "resolveProtectedAction"]), exported);
     const pageSrc = readFileSync("app/admin/(dashboard)/questions/bulk-import/history/[runId]/page.tsx", "utf8");
     check("page decides manage UI from hasPermission(IMPORT_ROLLBACK_MANAGE)", /hasPermission\(PERMISSIONS\.IMPORT_ROLLBACK_MANAGE\)/.test(pageSrc) && /canManage=\{canRollback\}/.test(pageSrc));
   } finally {

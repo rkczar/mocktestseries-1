@@ -758,6 +758,127 @@ export async function resolveProtectedQuestions(input: {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Force Delete (owner override: delete no matter where the question is used)
+// ---------------------------------------------------------------------------
+
+export interface ForcePreview {
+  /** Selected questions that still exist and will be deleted. */
+  total: number;
+  inMockTests: number;
+  inPyqPaper: number;
+  inCustomModules: number;
+  inGrandOrLive: number;
+  withAttempts: number;
+  savedOrReported: number;
+  archived: number;
+}
+
+export async function previewForceDelete(runId: string, rowIds: string[]): Promise<ForcePreview | null> {
+  const analysis = await analyzeImportRun(runId);
+  if (!analysis) return null;
+  const set = new Set(rowIds);
+  const rows = analysis.rows.filter((r) => set.has(r.rowId) && r.action === "CREATED" && r.question !== null && r.classification !== null);
+  const has = (r: ImportedQuestionRow, ...kinds: Dependency["kind"][]) => r.dependencies.some((d) => kinds.includes(d.kind));
+  return {
+    total: rows.length,
+    inMockTests: rows.filter((r) => has(r, "MOCK_TEST")).length,
+    inPyqPaper: rows.filter((r) => has(r, "PYQ_PAPER")).length,
+    inCustomModules: rows.filter((r) => has(r, "ADMIN_CUSTOM_MODULE", "STUDENT_CUSTOM_MODULE")).length,
+    inGrandOrLive: rows.filter((r) => has(r, "GRAND_TEST", "LIVE_TEST")).length,
+    withAttempts: rows.filter((r) => has(r, "ATTEMPT_ACTIVE", "ATTEMPT_HISTORY")).length,
+    savedOrReported: rows.filter((r) => has(r, "SAVED", "REPORTED")).length,
+    archived: rows.filter((r) => r.question?.status === QuestionStatus.ARCHIVED).length,
+  };
+}
+
+export interface ForceDeleteResult {
+  deleted: (Ref & { removedFrom: string[] })[];
+  alreadyMissing: Ref[];
+  failed: (Ref & { error: string })[];
+}
+
+/**
+ * MASTER_ADMIN override: permanently delete the questions this run CREATED
+ * regardless of where they are used. Per question, in its own locked
+ * transaction: remove its Mock Test / Custom Module (admin and student) /
+ * Grand / Live Test links, then delete the Question (its PYQ link, options,
+ * AI explanation cache, saved-by-student and report rows go with it; AI
+ * variants are un-parented). Tests, papers, attempts and the import record
+ * are never deleted; attempts keep their frozen question snapshots, answers
+ * and scores (TestAttemptQuestion / Answer have no FK to Question).
+ */
+export async function forceDeleteImportedQuestions(input: { runId: string; rowIds: string[]; actorId: string }): Promise<ForceDeleteResult> {
+  const { runId, rowIds, actorId } = input;
+  const result: ForceDeleteResult = { deleted: [], alreadyMissing: [], failed: [] };
+  const candidates = await prisma.bulkImportRow.findMany({
+    where: { runId, status: BulkImportRowStatus.SUCCESS, questionId: { not: null }, id: { in: rowIds } },
+    orderBy: { rowNumber: "asc" },
+    select: { id: true },
+  });
+
+  for (const { id: rowId } of candidates) {
+    let questionId = "";
+    let code: string | null = null;
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM "BulkImportRun" WHERE id = ${runId} FOR UPDATE`;
+          const row = await tx.bulkImportRow.findUnique({ where: { id: rowId }, select: { questionId: true, questionCode: true, status: true, runId: true } });
+          if (!row || row.runId !== runId || row.status !== BulkImportRowStatus.SUCCESS || !row.questionId) return;
+          questionId = row.questionId;
+          code = row.questionCode;
+          const mark = (action: BulkImportRollbackAction, reason: string | null) =>
+            tx.bulkImportRow.update({ where: { id: rowId }, data: { rollbackAction: action, rollbackReason: reason, rollbackAt: new Date() } });
+
+          const question = await tx.question.findUnique({ where: { id: row.questionId }, select: QUESTION_REF_SELECT });
+          if (!question) {
+            await mark(BulkImportRollbackAction.ALREADY_MISSING, "Question no longer exists.");
+            result.alreadyMissing.push({ questionId, code });
+            return;
+          }
+          const deps = dependenciesOf(runId, question, await loadReferences(tx, [question.id]));
+          await tx.mockTestQuestion.deleteMany({ where: { questionId: question.id } });
+          await tx.customModuleQuestion.deleteMany({ where: { questionId: question.id } });
+          await tx.grandTestQuestion.deleteMany({ where: { questionId: question.id } });
+          await tx.liveTestQuestion.deleteMany({ where: { questionId: question.id } });
+          await tx.question.delete({ where: { id: question.id } });
+          const removedFrom = deps.map((d) => d.label);
+          await mark(BulkImportRollbackAction.DELETED, `Force deleted by Master Admin${removedFrom.length ? `: ${removedFrom.join("; ")}` : ""}`.slice(0, 500));
+          result.deleted.push({ questionId, code, removedFrom });
+        },
+        { timeout: 20_000 }
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      result.failed.push({ questionId, code, error: message });
+      await prisma.bulkImportRow
+        .update({ where: { id: rowId }, data: { rollbackAction: BulkImportRollbackAction.FAILED, rollbackReason: message.slice(0, 500), rollbackAt: new Date() } })
+        .catch(() => undefined);
+    }
+  }
+
+  await prisma.bulkImportRun.update({ where: { id: runId }, data: { lastRollbackAt: new Date(), lastRollbackById: actorId } });
+  await prisma.auditLog.create({
+    data: {
+      actorId,
+      action: rowIds.length === 1 ? "IMPORT_QUESTION_FORCE_DELETED" : "IMPORT_BULK_FORCE_DELETED",
+      entityType: "BulkImportRun",
+      entityId: runId,
+      metadata: {
+        importRunId: runId,
+        operation: "FORCE_DELETE",
+        requested: candidates.length,
+        counts: { deleted: result.deleted.length, alreadyMissing: result.alreadyMissing.length, failed: result.failed.length },
+        deleted: result.deleted,
+        alreadyMissing: result.alreadyMissing,
+        failed: result.failed,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+  return result;
+}
+
 /**
  * Per-run lifecycle counts for the Import History list, from the live
  * questions each run's CREATED rows point at (one grouped query): a missing

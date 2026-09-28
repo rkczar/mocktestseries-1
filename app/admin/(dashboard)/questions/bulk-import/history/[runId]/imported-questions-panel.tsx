@@ -3,16 +3,23 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Archive, ShieldAlert, Trash2 } from "lucide-react";
+import { AlertTriangle, Archive, ShieldAlert, Skull, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { ResolvePlanRow, ResolveResult, RollbackResult, SelectionPreview } from "@/lib/import-rollback";
+import type { ForceDeleteResult, ForcePreview, ResolvePlanRow, ResolveResult, RollbackResult, SelectionPreview } from "@/lib/import-rollback";
 import { ROW_FILTERS, ROW_FILTER_LABEL, type Dependency, type ImportSelection, type ImportedQuestionRow, type RowFilter } from "@/lib/import-history-selection";
-import { executeImportRollbackAction, planResolveAction, previewImportSelectionAction, resolveProtectedAction } from "./actions";
+import {
+  executeImportRollbackAction,
+  forceDeleteAction,
+  planResolveAction,
+  previewForceDeleteAction,
+  previewImportSelectionAction,
+  resolveProtectedAction,
+} from "./actions";
 
 const ROLLBACK_LABEL = {
   DELETED: { text: "Deleted", variant: "neutral" as const },
@@ -45,7 +52,7 @@ export interface FilteredTotals {
 type Selection = { kind: "ids"; ids: Set<string> } | { kind: "all" };
 
 /** A row can be selected when this import created it and the question still exists. */
-const selectable = (r: ImportedQuestionRow) => r.action === "CREATED" && r.classification !== null && r.classification !== "ALREADY_MISSING";
+const selectable = (r: ImportedQuestionRow) => r.action === "CREATED" && r.question !== null && r.classification !== null && r.classification !== "ALREADY_MISSING";
 
 function protectedLabel(deps: Dependency[]): string {
   const protect = deps.filter((d) => d.level === "PROTECT");
@@ -121,7 +128,10 @@ export function ImportedQuestionsPanel({
 }) {
   const router = useRouter();
   const [selection, setSelection] = useState<Selection>({ kind: "ids", ids: new Set() });
-  const [dialog, setDialog] = useState<null | "archive" | "delete" | "resolve">(null);
+  const [dialog, setDialog] = useState<null | "archive" | "delete" | "resolve" | "force">(null);
+  const [forceScope, setForceScope] = useState<ImportSelection | null>(null);
+  const [forcePreview, setForcePreview] = useState<ForcePreview | null>(null);
+  const [forceResult, setForceResult] = useState<ForceDeleteResult | null>(null);
   const [preview, setPreview] = useState<SelectionPreview | null>(null);
   const [plan, setPlan] = useState<ResolvePlanRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -171,6 +181,38 @@ export function ImportedQuestionsPanel({
       return { kind: "ids", ids };
     });
   const togglePage = (on: boolean) => setSelection({ kind: "ids", ids: on ? new Set(pageSelectable.map((r) => r.rowId)) : new Set() });
+
+  const openForce = (sel: ImportSelection) => {
+    setDialog("force");
+    setForceScope(sel);
+    setForcePreview(null);
+    setForceResult(null);
+    setLoadError(null);
+    setConfirmText("");
+    setRunError(null);
+    startTransition(async () => {
+      const res = await previewForceDeleteAction(runId, sel);
+      if (res.error) setLoadError(res.error);
+      else setForcePreview(res.preview!);
+    });
+  };
+
+  const runForce = () => {
+    if (!forceScope) return;
+    setRunError(null);
+    startTransition(async () => {
+      try {
+        const res = await forceDeleteAction({ runId, selection: forceScope, confirmation: confirmText });
+        if (res.error) setRunError(res.error);
+        else {
+          setForceResult(res.result!);
+          finish();
+        }
+      } catch (err) {
+        setRunError(err instanceof Error ? err.message : "Force delete failed.");
+      }
+    });
+  };
 
   const open = (kind: "archive" | "delete" | "resolve") => {
     setDialog(kind);
@@ -309,7 +351,16 @@ export function ImportedQuestionsPanel({
                 <Button type="button" size="sm" variant="outline" onClick={() => open("resolve")} disabled={stats.protected === 0}>
                   <ShieldAlert className="h-3.5 w-3.5" aria-hidden /> Resolve &amp; Remove ({stats.protected})
                 </Button>
+                <Button type="button" size="sm" variant="danger" onClick={() => openForce(toServer())} disabled={nothingSelected}>
+                  <Skull className="h-3.5 w-3.5" aria-hidden /> Force Delete Selected ({stats.selected})
+                </Button>
               </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border)] pt-2 text-xs text-[var(--color-muted-foreground)]">
+              <span>Force Delete removes questions no matter where they are used (Mock Tests, PYQ papers, Custom Modules, archived or not).</span>
+              <Button type="button" size="sm" variant="danger" onClick={() => openForce({ kind: "all", filter: "ALL", search: "" })} disabled={counts.imported - counts.deleted <= 0}>
+                <Skull className="h-3.5 w-3.5" aria-hidden /> Force Delete ALL From This Import ({Math.max(0, counts.imported - counts.deleted)})
+              </Button>
             </div>
             {pageAllSelected && selection.kind === "ids" && totals.selectable > pageSelectable.length ? (
               <p className="text-xs">
@@ -558,6 +609,83 @@ export function ImportedQuestionsPanel({
                     }
                   >
                     {isPending ? "Working…" : `Delete ${preview.safe}${archiveHistory && preview.archive ? ` · Archive ${preview.archive}` : ""}`}
+                  </Button>
+                ) : null}
+              </DialogFooter>
+            </>
+          ) : null}
+
+          {dialog === "force" ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Force delete questions?</DialogTitle>
+                <DialogDescription>Permanently deletes the questions no matter where they are used. This cannot be undone except from a database backup.</DialogDescription>
+              </DialogHeader>
+              {forceResult ? (
+                <div className="flex flex-col gap-2 text-sm">
+                  <p className="font-medium text-[var(--color-foreground)]">Finished — the import history record is kept.</p>
+                  <ResultLine label="Permanently deleted" items={forceResult.deleted.map((d) => `${d.code ?? d.questionId}${d.removedFrom.length ? ` — removed from: ${d.removedFrom.join("; ")}` : ""}`)} />
+                  <ResultLine label="Already missing" items={forceResult.alreadyMissing.map((d) => d.code ?? d.questionId)} />
+                  <ResultLine label="Failed" items={forceResult.failed.map((d) => `${d.code ?? d.questionId} — ${d.error}`)} />
+                </div>
+              ) : loadError ? (
+                <p className="text-sm text-[var(--color-error)]">{loadError}</p>
+              ) : !forcePreview ? (
+                <p className="text-sm text-[var(--color-muted-foreground)]">Counting…</p>
+              ) : (
+                <div className="flex flex-col gap-3 text-sm">
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    <dt className="text-[var(--color-muted-foreground)]">Import</dt>
+                    <dd className="break-all font-medium">{filename}</dd>
+                    <dt className="text-[var(--color-muted-foreground)]">Questions to delete</dt>
+                    <dd className="font-medium text-[var(--color-error)]">{forcePreview.total}</dd>
+                    <dt className="text-[var(--color-muted-foreground)]">In Mock Tests</dt>
+                    <dd className="font-medium">{forcePreview.inMockTests}</dd>
+                    <dt className="text-[var(--color-muted-foreground)]">In a Previous Year Paper</dt>
+                    <dd className="font-medium">{forcePreview.inPyqPaper}</dd>
+                    <dt className="text-[var(--color-muted-foreground)]">In Custom Modules</dt>
+                    <dd className="font-medium">{forcePreview.inCustomModules}</dd>
+                    <dt className="text-[var(--color-muted-foreground)]">In Grand / Live Tests</dt>
+                    <dd className="font-medium">{forcePreview.inGrandOrLive}</dd>
+                    <dt className="text-[var(--color-muted-foreground)]">Used in student attempts</dt>
+                    <dd className="font-medium">{forcePreview.withAttempts}</dd>
+                    <dt className="text-[var(--color-muted-foreground)]">Saved / reported by students</dt>
+                    <dd className="font-medium">{forcePreview.savedOrReported}</dd>
+                    <dt className="text-[var(--color-muted-foreground)]">Already archived</dt>
+                    <dd className="font-medium">{forcePreview.archived}</dd>
+                  </dl>
+                  <div className="flex gap-2 rounded-[var(--radius-button)] border border-[var(--color-error)] p-3 text-xs text-[var(--color-muted-foreground)]">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--color-error)]" aria-hidden />
+                    <div className="flex flex-col gap-1">
+                      <p>
+                        Each question is removed from every Mock Test, Previous Year Paper, Custom Module and Grand / Live Test, then permanently deleted
+                        together with its options, AI explanation, saved and report entries.
+                      </p>
+                      <p>The tests and papers themselves are kept (with fewer questions). Past attempt scores are kept from their frozen copies.</p>
+                      <p>The import history record is kept.</p>
+                    </div>
+                  </div>
+                  <label className="flex flex-col gap-1.5 text-xs">
+                    <span>
+                      Type <strong>FORCE DELETE {forcePreview.total}</strong> to confirm
+                    </span>
+                    <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoComplete="off" aria-label={`Type FORCE DELETE ${forcePreview.total} to confirm`} />
+                  </label>
+                  {runError ? <p className="text-sm text-[var(--color-error)]">{runError}</p> : null}
+                </div>
+              )}
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setDialog(null)} disabled={isPending}>
+                  {forceResult ? "Close" : "Cancel"}
+                </Button>
+                {!forceResult && forcePreview ? (
+                  <Button
+                    type="button"
+                    variant="danger"
+                    onClick={runForce}
+                    disabled={isPending || forcePreview.total === 0 || confirmText.trim().replace(/\s+/g, " ") !== `FORCE DELETE ${forcePreview.total}`}
+                  >
+                    {isPending ? "Deleting…" : `Force Delete ${forcePreview.total}`}
                   </Button>
                 ) : null}
               </DialogFooter>

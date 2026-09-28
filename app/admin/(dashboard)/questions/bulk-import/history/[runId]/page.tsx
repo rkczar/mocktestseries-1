@@ -115,9 +115,9 @@ async function ImportDetailsContent({
             <CardTitle>Run Summary</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="flex justify-between">
+            <div className="flex justify-between gap-3">
               <span className="text-sm text-[var(--color-muted-foreground)]">File:</span>
-              <span className="text-sm font-medium">{run.filename}</span>
+              <span className="min-w-0 break-all text-right text-sm font-medium">{run.filename}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-[var(--color-muted-foreground)]">Format:</span>
