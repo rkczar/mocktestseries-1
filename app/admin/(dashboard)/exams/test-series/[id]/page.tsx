@@ -5,7 +5,9 @@ import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TestResourceManager } from "@/components/admin/test-resource-manager";
-import { deriveMockTestAvailability } from "@/lib/mock-test-schedule";
+import { AVAILABILITY_LABELS, deriveMockTestAvailability } from "@/lib/mock-test-schedule";
+import { loadCoverageProducts, purchasableProductsFor, seriesPlanProducts, summarizeCoverage, mockIsFree } from "@/lib/test-series-assignment";
+import { ManageTestsPanel, type ManageTestRow } from "./manage-tests-panel";
 import { computeProductPrice, describeAccessDuration } from "@/lib/payments/pricing";
 import { formatInr } from "@/lib/payments/money";
 import { getPaymentMode } from "@/lib/payments/settings";
@@ -25,6 +27,7 @@ const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Par
 const SECTIONS = [
   ["overview", "Overview"],
   ["mock-tests", "Mock Tests"],
+  ["manage-tests", "Manage Tests & Plan Coverage"],
   ["schedule", "Schedule"],
   ["coverage", "Coverage"],
   ["resources", "Resources"],
@@ -58,7 +61,7 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
 
   const canManage = await hasPermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const mockIds = series.mockTests.map((m) => m.id);
-  const [subjects, products, mode, canonical, attemptAgg, studentsAgg, examOmr, globalOmr, pdfCount] = await Promise.all([
+  const [subjects, products, mode, canonical, attemptAgg, studentsAgg, examOmr, globalOmr, pdfCount, standaloneMocks, coverageProducts] = await Promise.all([
     getExamTaxonomy(prisma, series.examId),
     prisma.product.findMany({
       where: { OR: [{ testSeriesId: series.id }, { productType: "EXAM_ACCESS", examId: series.examId }, { mockTestId: { in: mockIds } }] },
@@ -72,6 +75,12 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
     prisma.testResource.count({ where: { type: "OMR_TEMPLATE", isActive: true, examId: series.examId, mockTestId: null, testSeriesId: null } }),
     prisma.testResource.count({ where: { type: "OMR_TEMPLATE", isActive: true, examId: null, mockTestId: null, testSeriesId: null } }),
     prisma.testResource.count({ where: { type: { in: ["PAPER_PDF", "SOLUTION_PDF"] }, mockTestId: { in: mockIds } } }),
+    prisma.mockTest.findMany({
+      where: { examId: series.examId, testSeriesId: null, status: { not: "ARCHIVED" } },
+      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+      include: { _count: { select: { questions: true } } },
+    }),
+    loadCoverageProducts(prisma),
   ]);
 
   const now = new Date();
@@ -88,6 +97,22 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
   const coverageCount = new Map<string, number>();
   for (const m of series.mockTests)
     for (const sid of m.coverageSubjectIds) coverageCount.set(subjectName.get(sid) ?? "?", (coverageCount.get(subjectName.get(sid) ?? "?") ?? 0) + 1);
+
+  // Plan coverage (same productCovers() rule as the student access engine).
+  const seriesPlans = seriesPlanProducts(series.id, series.examId, coverageProducts, now);
+  const seriesCoverage = summarizeCoverage(series.mockTests, coverageProducts, now);
+  const standaloneCoverage = summarizeCoverage(standaloneMocks, coverageProducts, now);
+  const toManageRow = (m: (typeof standaloneMocks)[number]): ManageTestRow => ({
+    id: m.id,
+    title: m.title,
+    order: m.order,
+    accessType: m.accessType,
+    status: m.status,
+    availability: m.status === "PUBLISHED" ? AVAILABILITY_LABELS[deriveMockTestAvailability(m, now)] : "Not released",
+    questionCount: m._count.questions,
+    uncoveredPaid: !mockIsFree(m, coverageProducts) && purchasableProductsFor(m, coverageProducts, now).length === 0,
+  });
+  const uncoveredReview = [...seriesCoverage.uncovered, ...standaloneCoverage.uncovered];
 
   const scheduleRows = series.mockTests.map((m) => ({
     id: m.id,
@@ -209,6 +234,59 @@ export default async function TestSeriesDetailPage({ params }: { params: Promise
               + Add Mock Test #{nextNumber}
             </Link>
           ) : null}
+        </CardContent>
+      </Card>
+
+      {/* MANAGE TESTS & PLAN COVERAGE */}
+      <Card id="manage-tests" className="scroll-mt-20">
+        <CardHeader>
+          <CardTitle>Manage Tests &amp; Plan Coverage</CardTitle>
+          <CardDescription>
+            Assign existing mock tests to this series or make them Standalone. Access is Product → Test Series → Mock Test:{" "}
+            {seriesPlans.length > 0 ? (
+              <>
+                this series is unlocked by <strong>{seriesPlans.map((p) => p.name).join(", ")}</strong>.
+              </>
+            ) : (
+              <strong>no purchasable plan covers this series.</strong>
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <Tile label="Total Mocks" value={seriesCoverage.total} />
+            <Tile label="Free Mocks" value={seriesCoverage.free} />
+            <Tile label="Paid Mocks" value={seriesCoverage.paid} />
+            <Tile label="Covered Paid" value={seriesCoverage.coveredPaid} />
+            <Tile label="Uncovered Paid" value={seriesCoverage.uncoveredPaid} />
+          </div>
+          <p className="text-xs text-[var(--color-muted-foreground)]">
+            Compatible standalone mocks of {series.exam.name}: {standaloneCoverage.total} ({standaloneCoverage.free} free, {standaloneCoverage.coveredPaid} covered paid,{" "}
+            {standaloneCoverage.uncoveredPaid} uncovered paid).
+          </p>
+          {uncoveredReview.length > 0 ? (
+            <div className="rounded-[var(--radius-button)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-sm">
+              <p className="font-medium text-[var(--color-foreground)]">Review — paid mocks students cannot unlock ({uncoveredReview.length})</p>
+              <ul className="mt-1 list-disc pl-5 text-[var(--color-muted-foreground)]">
+                {uncoveredReview.map((m) => (
+                  <li key={m.id}>
+                    <Link href={`/admin/tests/mock/${m.id}#assignment`} className="hover:underline">
+                      {m.title}
+                    </Link>{" "}
+                    — {m.testSeriesId ? "in this series, but no purchasable plan covers it" : "standalone, not in any purchasable plan"}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">Nothing is changed automatically — assign, mark FREE, or add a plan deliberately.</p>
+            </div>
+          ) : null}
+          <ManageTestsPanel
+            seriesId={series.id}
+            assigned={series.mockTests.map(toManageRow)}
+            unassigned={standaloneMocks.map(toManageRow)}
+            seriesHasPlan={seriesPlans.length > 0}
+            readOnly={!canManage}
+          />
         </CardContent>
       </Card>
 

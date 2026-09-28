@@ -44,6 +44,7 @@ export default async function CheckoutPage({ params }: { params: Promise<{ code:
           purchasesPaused: quote.access.purchasesPaused,
           expiresAt: quote.access.expiresAt ? quote.access.expiresAt.toISOString() : null,
         }}
+        renewal={quote.renewal ? { days: quote.renewal.days, newExpiresAt: quote.renewal.newExpiresAt.toISOString() } : null}
         gatewayReady={quote.gatewayReady}
         environment={quote.environment}
         openHref={productHref(product)}

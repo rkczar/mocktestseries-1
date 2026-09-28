@@ -25,6 +25,7 @@ import {
   getInvoiceSettings,
   getPaymentMode,
   getPaymentPolicy,
+  parseInvoiceSettingsInput,
   PAYMENT_MODES,
   saveInvoiceSettings,
   savePaymentPolicy,
@@ -34,6 +35,8 @@ import {
 import { getRazorpayConfig, saveRazorpayConfig, testRazorpayConnection, RazorpayConfigError } from "@/lib/razorpay-config";
 import { reconcileOrder, ensureFulfilment, expireStaleOrders } from "@/lib/payments/orders";
 import { requestRefund, RefundError } from "@/lib/payments/refunds";
+import { getLaunchReadiness } from "@/lib/payments/launch-readiness";
+import { LEGAL_DOCS, markLegalDocReviewed, type LegalDocKey } from "@/lib/legal-readiness";
 
 /**
  * Every mutation here requires PAYMENTS_MANAGE (MASTER_ADMIN only) —
@@ -331,13 +334,22 @@ export async function saveGatewayModeAction(_prev: FormState, fd: FormData): Pro
     const environment = str(fd, "environment") === "LIVE" ? "LIVE" : "TEST";
     const enabled = bool(fd, "enabled");
     const before = await getRazorpayConfig();
-    if (environment === "LIVE" && !before.live.configured) return { error: "Save LIVE Key ID + Key Secret before switching to LIVE." };
-    if (environment === "LIVE" && before.environment !== "LIVE" && str(fd, "confirmLive") !== "LIVE")
-      return { error: "Type LIVE to confirm switching to real-money payments." };
+    let acknowledged: string[] = [];
+    if (environment === "LIVE" && before.environment !== "LIVE") {
+      // Evidence-based guard: never switch to real money on missing technical
+      // prerequisites; business/legal gaps need an explicit acknowledgement.
+      const readiness = await getLaunchReadiness();
+      if (readiness.liveBlockers.length) return { error: `LIVE blocked: ${readiness.liveBlockers.join("; ")}.` };
+      if (readiness.acknowledgementsRequired.length && !bool(fd, "acknowledgeReadiness"))
+        return { error: `${readiness.acknowledgementsRequired.length} readiness item(s) still need action — review Live Launch Readiness and tick the acknowledgement to proceed.` };
+      if (str(fd, "confirmLive") !== "LIVE") return { error: "Type LIVE to confirm switching to real-money payments." };
+      acknowledged = readiness.acknowledgementsRequired;
+    }
     await saveRazorpayConfig({ environment, enabled });
     await logPaymentAudit(session.user.id, "GATEWAY_CREDENTIALS_UPDATED", "PaymentGateway", "api.razorpay", {
       before: { environment: before.environment, enabled: before.enabled },
       after: { environment, enabled },
+      ...(acknowledged.length ? { acknowledgedReadinessItems: acknowledged } : {}),
     });
     revalidatePayments();
     return { success: `Gateway ${enabled ? "enabled" : "disabled"} in ${environment} mode.` };
@@ -346,11 +358,13 @@ export async function saveGatewayModeAction(_prev: FormState, fd: FormData): Pro
   }
 }
 
-export async function testGatewayAction(): Promise<FormState> {
+/** Read-only probe of one slot's keys (default: the active one). Testing LIVE never switches the gateway. */
+export async function testGatewayAction(_prev?: FormState, fd?: FormData): Promise<FormState> {
   try {
     const session = await manage();
-    const r = await testRazorpayConnection();
-    await logPaymentAudit(session.user.id, "GATEWAY_TESTED", "PaymentGateway", "api.razorpay", { ok: r.ok });
+    const target = fd?.get("environment") === "LIVE" ? "LIVE" : fd?.get("environment") === "TEST" ? "TEST" : undefined;
+    const r = await testRazorpayConnection(target);
+    await logPaymentAudit(session.user.id, "GATEWAY_TESTED", "PaymentGateway", "api.razorpay", { ok: r.ok, environment: target ?? "ACTIVE" });
     revalidatePayments();
     return r.ok ? { success: r.message } : { error: r.message };
   } catch (e) {
@@ -481,34 +495,17 @@ export async function expireStaleOrdersAction(): Promise<FormState> {
 export async function saveInvoiceSettingsAction(_prev: FormState, fd: FormData): Promise<FormState> {
   try {
     const session = await manage();
-    const taxMode = str(fd, "taxMode") === "INCLUSIVE" ? "INCLUSIVE" : "NONE";
-    const rate = taxMode === "INCLUSIVE" ? Number(str(fd, "taxRatePercent")) : 0;
-    if (taxMode === "INCLUSIVE" && (!Number.isFinite(rate) || rate <= 0 || rate > 50)) return { error: "Tax rate must be between 0 and 50%." };
-    const gstin = str(fd, "gstin").toUpperCase();
-    if (gstin && !/^[0-9]{2}[A-Z0-9]{13}$/.test(gstin)) return { error: "GSTIN must be 15 characters." };
-    if (taxMode === "INCLUSIVE" && !gstin) return { error: "Tax lines need a GSTIN — configure it or set tax mode to None." };
+    const parsed = parseInvoiceSettingsInput((k) => String(fd.get(k) ?? ""));
+    if (!parsed.ok) return { error: parsed.error };
+    const next = parsed.value;
     const before = await getInvoiceSettings();
-    const next = {
-      legalName: str(fd, "legalName").slice(0, 150),
-      tradeName: str(fd, "tradeName").slice(0, 150),
-      billingAddress: str(fd, "billingAddress").slice(0, 500),
-      supportEmail: str(fd, "supportEmail").slice(0, 150),
-      supportPhone: str(fd, "supportPhone").slice(0, 30),
-      gstin,
-      invoicePrefix: str(fd, "invoicePrefix").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "MTS",
-      taxMode: taxMode as "NONE" | "INCLUSIVE",
-      taxRatePercent: rate,
-      taxSplit: (str(fd, "taxSplit") === "CGST_SGST" ? "CGST_SGST" : "IGST") as "IGST" | "CGST_SGST",
-      sacCode: str(fd, "sacCode").replace(/[^0-9]/g, "").slice(0, 8),
-      footerNote: str(fd, "footerNote").slice(0, 300),
-    };
     await saveInvoiceSettings(next);
     await logPaymentAudit(session.user.id, "INVOICE_SETTINGS_UPDATED", "PaymentSettings", "payments.invoice", {
-      before: { taxMode: before.taxMode, taxRatePercent: before.taxRatePercent, invoicePrefix: before.invoicePrefix, gstinSet: Boolean(before.gstin) },
-      after: { taxMode: next.taxMode, taxRatePercent: next.taxRatePercent, invoicePrefix: next.invoicePrefix, gstinSet: Boolean(next.gstin) },
+      before: { taxMode: before.taxMode, taxRatePercent: before.taxRatePercent, invoicePrefix: before.invoicePrefix, gstinSet: Boolean(before.gstin), gstRegistered: before.gstRegistered },
+      after: { taxMode: next.taxMode, taxRatePercent: next.taxRatePercent, invoicePrefix: next.invoicePrefix, gstinSet: Boolean(next.gstin), gstRegistered: next.gstRegistered },
     });
     revalidatePayments();
-    return { success: "Invoice settings saved. They apply to invoices issued from now on." };
+    return { success: "Invoice settings saved. They apply to invoices issued from now on — existing invoices keep their snapshot." };
   } catch (e) {
     return fail(e);
   }
@@ -528,6 +525,26 @@ export async function savePaymentPolicyAction(_prev: FormState, fd: FormData): P
     revalidatePayments();
     return { success: "Policy saved." };
   } catch (e) {
+    return fail(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Legal readiness — owner review acknowledgement (bound to the published text)
+// ---------------------------------------------------------------------------
+
+export async function markLegalReviewedAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  try {
+    const session = await manage();
+    const key = str(fd, "doc") as LegalDocKey;
+    if (!(key in LEGAL_DOCS)) return { error: "Unknown document." };
+    if (str(fd, "confirm") !== "REVIEWED") return { error: "Type REVIEWED to confirm you have reviewed the published text." };
+    await markLegalDocReviewed(key, session.user.id);
+    await logPaymentAudit(session.user.id, "LEGAL_DOC_REVIEWED", "PaymentSettings", `legal.review.${key}`, { doc: key });
+    revalidatePayments();
+    return { success: `${LEGAL_DOCS[key].title} marked as owner-reviewed. Editing its text later requires a new review.` };
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("Nothing is published")) return { error: e.message };
     return fail(e);
   }
 }

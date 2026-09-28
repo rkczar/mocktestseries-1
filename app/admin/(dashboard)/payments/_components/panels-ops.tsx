@@ -5,6 +5,7 @@ import { getInvoiceSettings, getPaymentMode, getPaymentPolicy } from "@/lib/paym
 import { findPaymentMismatches } from "@/lib/payments/reconcile";
 import { PAYMENT_AUDIT_ENTITY_TYPES } from "@/lib/payments/audit";
 import { getSiteUrl } from "@/lib/site-url";
+import { getLaunchReadiness } from "@/lib/payments/launch-readiness";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -46,8 +47,17 @@ function SlotCard({ slot, data, readOnly }: { slot: "TEST" | "LIVE"; data: Razor
           Key ID: <span className="font-mono">{data.keyIdMasked || "—"}</span> · Secret: {data.keySecretConfigured ? "••••••••••••" : "—"} · Webhook secret:{" "}
           {data.webhookSecretConfigured ? "••••••••••••" : "—"}
         </CardDescription>
+        <p className={`text-xs ${data.lastTest ? (data.lastTest.ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]") : "text-[var(--color-muted-foreground)]"}`}>
+          {data.lastTest ? `Connection test ${fmtDate(new Date(data.lastTest.at), true)}: ${data.lastTest.message}` : "Connection not tested since these credentials last changed."}
+        </p>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-4">
+        {!readOnly && data.configured ? (
+          <ActionForm action={testGatewayAction} submitLabel={`Test ${slot} connection`} variant="outline">
+            <input type="hidden" name="environment" value={slot} />
+            {slot === "LIVE" ? <p className="text-xs text-[var(--color-muted-foreground)]">Read-only API check with the LIVE keys — the gateway stays in its current mode.</p> : null}
+          </ActionForm>
+        ) : null}
         {readOnly ? (
           <p className="text-sm text-[var(--color-muted-foreground)]">View only — only Master Admin can update credentials.</p>
         ) : (
@@ -70,7 +80,7 @@ function SlotCard({ slot, data, readOnly }: { slot: "TEST" | "LIVE"; data: Razor
 }
 
 export async function GatewayPanel({ canManage }: { canManage: boolean }) {
-  const rzp = await getRazorpayConfig();
+  const [rzp, readiness] = await Promise.all([getRazorpayConfig(), getLaunchReadiness()]);
   const webhookUrl = `${await getSiteUrl()}/api/webhooks/razorpay`;
   return (
     <div className="flex flex-col gap-4">
@@ -106,8 +116,33 @@ export async function GatewayPanel({ canManage }: { canManage: boolean }) {
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="enabled" defaultChecked={rzp.enabled} /> Payments enabled
             </label>
+            {rzp.environment !== "LIVE" ? (
+              <label className="flex items-start gap-2 text-xs sm:col-span-4">
+                <input type="checkbox" name="acknowledgeReadiness" className="mt-0.5" />
+                <span>
+                  Switching to LIVE: I have reviewed{" "}
+                  <Link href="/admin/payments?tab=readiness" className="text-[var(--color-primary)] hover:underline">
+                    Live Launch Readiness
+                  </Link>{" "}
+                  and accept the {readiness.acknowledgementsRequired.length} open business / legal item(s).
+                </span>
+              </label>
+            ) : null}
           </ActionForm>
-          <ActionForm action={testGatewayAction} submitLabel="Test connection" variant="outline" readOnly={!canManage} />
+          {rzp.environment !== "LIVE" ? (
+            readiness.liveBlockers.length ? (
+              <div className="rounded-[var(--radius-button)] border border-[var(--color-error)]/40 bg-[var(--color-error)]/5 px-3 py-2 text-xs text-[var(--color-muted-foreground)]">
+                <p className="font-medium text-[var(--color-foreground)]">Switching to LIVE is blocked (checked again on the server when you save):</p>
+                <ul className="list-disc pl-5">
+                  {readiness.liveBlockers.map((b) => (
+                    <li key={b}>{b}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--color-muted-foreground)]">LIVE technical requirements are met. Follow the controlled first-payment checklist under Live Launch Readiness.</p>
+            )
+          ) : null}
         </CardContent>
       </Card>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -324,10 +359,32 @@ export async function SettingsPanel({ canManage }: { canManage: boolean }) {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Order &amp; Refund Policy</CardTitle>
+          <CardDescription>
+            What happens to a student&apos;s access after a refund. Refunds are never automatic — a Master Admin requests each one from the order page and
+            picks its access policy there (defaulting to the setting below). Access changes only once Razorpay reports the refund <strong>PROCESSED</strong> and
+            the payment is <strong>fully</strong> refunded; partial refunds never change access.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
+          <ul className="grid grid-cols-1 gap-2 text-xs text-[var(--color-muted-foreground)] sm:grid-cols-3">
+            <li className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-2">
+              <strong className="text-[var(--color-foreground)]">Retain access</strong> — the entitlement stays active until its normal expiry.
+            </li>
+            <li className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-2">
+              <strong className="text-[var(--color-foreground)]">Revoke immediately</strong> — the entitlement from that order is revoked when the full refund is
+              processed.
+            </li>
+            <li className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-2">
+              <strong className="text-[var(--color-foreground)]">Retain until a date</strong> (per refund) — access ends on the chosen date (never later than its
+              normal expiry).
+            </li>
+          </ul>
+          <p className="text-xs text-[var(--color-muted-foreground)]">
+            Refunds started outside this panel (e.g. in the Razorpay Dashboard) are recorded from the refund webhook with <strong>Retain access</strong>; revoke
+            manually from the student&apos;s payment profile if needed. Public wording: Refund &amp; Cancellation Policy (/refund-policy).
+          </p>
           <ActionForm action={savePaymentPolicyAction} submitLabel="Save policy" readOnly={ro} className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end">
-            <Field label="Access after full refund (default)" htmlFor="pol-refund">
+            <Field label="Default access after full refund" htmlFor="pol-refund">
               <SelectNative id="pol-refund" name="refundAccessPolicy" defaultValue={policy.refundAccessPolicy}>
                 <option value="RETAIN">Retain access</option>
                 <option value="REVOKE_IMMEDIATELY">Revoke immediately</option>
@@ -345,22 +402,45 @@ export async function SettingsPanel({ canManage }: { canManage: boolean }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Invoice &amp; Tax Settings</CardTitle>
+          <CardTitle className="text-base">Invoice &amp; Business Details</CardTitle>
           <CardDescription>
-            Printed on invoices issued from now on (old invoices keep their snapshot). Tax treatment is never assumed — set it to match your registration, or leave it at None.
+            Printed on invoices issued from now on — existing invoices keep their snapshot. Nothing is assumed: GST registration stays &ldquo;not answered&rdquo;
+            until you choose, and the tax treatment only changes when you change it here.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ActionForm action={saveInvoiceSettingsAction} submitLabel="Save invoice settings" readOnly={ro} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Legal name" htmlFor="inv-legal">
+            <Field label="Legal / business name" htmlFor="inv-legal">
               <Input id="inv-legal" name="legalName" defaultValue={inv.legalName} />
             </Field>
-            <Field label="Trade / brand name" htmlFor="inv-trade">
+            <Field label="Brand / trading name (optional)" htmlFor="inv-trade">
               <Input id="inv-trade" name="tradeName" defaultValue={inv.tradeName} />
             </Field>
-            <Field label="Billing address" htmlFor="inv-addr">
-              <Textarea id="inv-addr" name="billingAddress" defaultValue={inv.billingAddress} rows={3} />
+            <Field label="Address line 1" htmlFor="inv-a1">
+              <Input id="inv-a1" name="addressLine1" defaultValue={inv.addressLine1} />
             </Field>
+            <Field label="Address line 2" htmlFor="inv-a2">
+              <Input id="inv-a2" name="addressLine2" defaultValue={inv.addressLine2} />
+            </Field>
+            <Field label="City" htmlFor="inv-city">
+              <Input id="inv-city" name="city" defaultValue={inv.city} />
+            </Field>
+            <Field label="State" htmlFor="inv-state">
+              <Input id="inv-state" name="state" defaultValue={inv.state} />
+            </Field>
+            <Field label="PIN code" htmlFor="inv-pin">
+              <Input id="inv-pin" name="pinCode" defaultValue={inv.pinCode} inputMode="numeric" maxLength={10} />
+            </Field>
+            <Field label="Country" htmlFor="inv-country">
+              <Input id="inv-country" name="country" defaultValue={inv.country} />
+            </Field>
+            {inv.billingAddress && !inv.addressLine1 ? (
+              <Field label="Legacy billing address (used until the fields above are filled)" htmlFor="inv-addr">
+                <Textarea id="inv-addr" name="billingAddress" defaultValue={inv.billingAddress} rows={3} />
+              </Field>
+            ) : (
+              <input type="hidden" name="billingAddress" value={inv.billingAddress} />
+            )}
             <div className="flex flex-col gap-3">
               <Field label="Support email" htmlFor="inv-email">
                 <Input id="inv-email" name="supportEmail" type="email" defaultValue={inv.supportEmail} />
@@ -369,10 +449,17 @@ export async function SettingsPanel({ canManage }: { canManage: boolean }) {
                 <Input id="inv-phone" name="supportPhone" defaultValue={inv.supportPhone} />
               </Field>
             </div>
-            <Field label="GSTIN (if registered)" htmlFor="inv-gstin">
+            <Field label="GST registered?" htmlFor="inv-gstreg" hint="Your decision — the site never assumes it. “No” prints no GSTIN and no tax lines.">
+              <SelectNative id="inv-gstreg" name="gstRegistered" defaultValue={inv.gstRegistered === true ? "YES" : inv.gstRegistered === false ? "NO" : "UNSET"}>
+                <option value="UNSET">Not answered yet</option>
+                <option value="YES">Yes — GST registered</option>
+                <option value="NO">No — not GST registered</option>
+              </SelectNative>
+            </Field>
+            <Field label="GSTIN (only if registered)" htmlFor="inv-gstin">
               <Input id="inv-gstin" name="gstin" defaultValue={inv.gstin} maxLength={15} />
             </Field>
-            <Field label="Invoice prefix" htmlFor="inv-prefix" hint="e.g. MTS → MTS/2026-27/00001">
+            <Field label="Invoice prefix" htmlFor="inv-prefix" hint="e.g. MTS → MTS/2026-27/00001 (TEST invoices: TEST-MTS/…)">
               <Input id="inv-prefix" name="invoicePrefix" defaultValue={inv.invoicePrefix} maxLength={10} />
             </Field>
             <Field label="Tax mode" htmlFor="inv-taxmode">
@@ -393,7 +480,7 @@ export async function SettingsPanel({ canManage }: { canManage: boolean }) {
             <Field label="SAC code" htmlFor="inv-sac">
               <Input id="inv-sac" name="sacCode" defaultValue={inv.sacCode} maxLength={8} />
             </Field>
-            <Field label="Footer note" htmlFor="inv-footer">
+            <Field label="Footer / support note" htmlFor="inv-footer">
               <Input id="inv-footer" name="footerNote" defaultValue={inv.footerNote} maxLength={300} />
             </Field>
           </ActionForm>

@@ -49,6 +49,11 @@ export function MockTestForm({
           <option value="PAID">PAID — Complete Series entitlement</option>
         </SelectNative>
         <p className="text-[11px] text-[var(--color-muted-foreground)]">Changeable later in Step 5 — Access &amp; Result.</p>
+        {!testSeriesId ? (
+          <p className="text-[11px] text-[var(--color-warning)]">
+            Standalone: a PAID mock is unlockable only if a purchasable Product covers it — otherwise students see &ldquo;Not in any current plan&rdquo;.
+          </p>
+        ) : null}
       </div>
       <div className="flex flex-wrap items-end gap-3 sm:col-span-2 lg:col-span-3">
         <SubmitButton />

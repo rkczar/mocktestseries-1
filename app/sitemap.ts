@@ -22,6 +22,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   if (isVisible("contact")) entries.push({ url: `${siteUrl}/contact`, changeFrequency: "monthly", priority: 0.3 });
   if (isVisible("privacy")) entries.push({ url: `${siteUrl}/privacy`, changeFrequency: "yearly", priority: 0.2 });
   if (isVisible("terms")) entries.push({ url: `${siteUrl}/terms`, changeFrequency: "yearly", priority: 0.2 });
+  if (isVisible("refund-policy")) entries.push({ url: `${siteUrl}/refund-policy`, changeFrequency: "yearly", priority: 0.2 });
 
   if (isVisible("exams-directory")) {
     entries.push({ url: `${siteUrl}/exams`, changeFrequency: "weekly", priority: 0.8 });

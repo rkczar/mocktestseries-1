@@ -10,12 +10,14 @@ import { FilterBar } from "./_components/shared";
 import { OverviewPanel, OrdersPanel, TransactionsPanel, RevenuePanel } from "./_components/panels-core";
 import { ProductsPanel, CouponsPanel, SubscriptionsPanel, InvoicesPanel, RefundsPanel } from "./_components/panels-catalog";
 import { GatewayPanel, WebhooksPanel, ReconciliationPanel, AuditPanel, SettingsPanel } from "./_components/panels-ops";
+import { ReadinessPanel } from "./_components/panels-readiness";
 
 export const metadata = { title: "Payments — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";
 
 const TABS = [
   { value: "overview", label: "Overview" },
+  { value: "readiness", label: "Live Launch Readiness" },
   { value: "transactions", label: "Transactions" },
   { value: "orders", label: "Orders" },
   { value: "products", label: "Products & Pricing" },
@@ -28,7 +30,7 @@ const TABS = [
   { value: "reconciliation", label: "Reconciliation" },
   { value: "audit", label: "Audit Logs" },
   { value: "revenue", label: "Revenue Analytics" },
-  { value: "settings", label: "Mode & Invoice Settings" },
+  { value: "settings", label: "Mode, Invoice & Refund Settings" },
 ] as const;
 
 const FILTERED = new Set(["overview", "transactions", "orders", "subscriptions", "invoices", "refunds", "revenue"]);
@@ -56,6 +58,8 @@ export default async function PaymentsControlCenter({ searchParams }: { searchPa
 
   const panel = (() => {
     switch (tab) {
+      case "readiness":
+        return <ReadinessPanel canManage={canManage} />;
       case "transactions":
         return <TransactionsPanel filters={filters} />;
       case "orders":

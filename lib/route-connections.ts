@@ -80,6 +80,10 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/admin/payments", to: "/admin/payments/coupons/[id]", source: "card", label: "Coupons" },
   { from: "/admin/payments", to: "/admin/payments/orders/[id]", source: "card", label: "Orders / Transactions / Refunds / Reconciliation" },
   { from: "/admin/payments", to: "/admin/students/[id]", source: "card", label: "Entitlements → student payment profile" },
+  // Admin Payments → Gateway / Products / Invoice Settings / Legal Readiness / Live Launch Readiness (?tab=readiness).
+  { from: "/admin/payments", to: "/admin/website/homepage", source: "card", label: "Legal Readiness → edit Terms / Privacy / Refund text (Contact / About / Legal)" },
+  { from: "/admin/payments", to: "/refund-policy", source: "card", label: "Live Launch Readiness → legal owner review (Terms, Privacy, Refund & Cancellation)" },
+  { from: "/admin/payments", to: "/admin/exams/test-series/[id]", source: "card", label: "Live Launch Readiness → Test Series coverage review" },
   { from: "/admin/payments/orders/[id]", to: "/admin/payments", source: "form", label: "Razorpay Refund API + refund.* webhook / Reconcile (server re-read)" },
   { from: "/admin/students/[id]", to: "/admin/payments/orders/[id]", source: "card", label: "Payments & Access: grant/revoke entitlement, purchase history" },
   // Pricing set in Admin is what the student checkout shows (server-computed).
@@ -87,7 +91,8 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/admin/payments/coupons/[id]", to: "/student/checkout/[code]", source: "admin-config", label: "Server-side coupon validation" },
   // Student checkout flow (app/student/(dashboard)/checkout/*).
   { from: "/student/plans", to: "/student/checkout/[code]", source: "card", label: "View & Buy" },
-  { from: "/student/checkout/[code]", to: "/student/checkout/result/[orderId]", source: "form", label: "Razorpay: Create Order → Checkout → Verify signature (server)" },
+  { from: "/student/checkout/[code]", to: "/student/checkout/result/[orderId]", source: "form", label: "Razorpay → Order → Signed webhook (/api/webhooks/razorpay) / Checkout signature verification → Payment → Entitlement → Invoice" },
+  { from: "/student/checkout/[code]", to: "/refund-policy", source: "internal", label: "Checkout legal links: Terms / Privacy / Refund & Cancellation / Contact" },
   { from: "/student/checkout/result/[orderId]", to: "/student/subscriptions", source: "button", label: "Entitlement active (webhook/reconcile restores if callback lost)" },
   { from: "/student/checkout/result/[orderId]", to: "/student/payments", source: "button", label: "Invoice" },
   { from: "/student/subscriptions", to: "/student/checkout/[code]", source: "button", label: "Renew" },
@@ -187,7 +192,11 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   { from: "/student/test-series/[mockTestId]", to: "/student/checkout/[code]", source: "button", label: "Test Access Gate: Unlock / Renew" },
   { from: "/student/dashboard", to: "/student/analytics", source: "card", label: "Performance Analytics (after Result / Review / Ask AI — daily AI quota by plan)" },
   // Admin side of the same series.
-  { from: "/admin/exams/test-series/[id]", to: "/admin/tests/mock/[id]", source: "button", label: "Mock Tests → Edit (details, coverage, questions, schedule, resources, publish)" },
+  { from: "/admin/exams/test-series/[id]", to: "/admin/tests/mock/[id]", source: "button", label: "Mock Tests → Edit; Manage Tests & Plan Coverage → assign / remove mocks (MockTest.testSeriesId)" },
+  // Canonical access chain: Product → Test Series → Mock Assignment → Access Engine → Student Access.
+  { from: "/admin/payments/products/[id]", to: "/admin/exams/test-series/[id]", source: "admin-config", label: "Product → Test Series (a TEST_SERIES product covers every mock assigned to the series)" },
+  { from: "/admin/tests/mock/[id]", to: "/admin/exams/test-series/[id]", source: "form", label: "Test Series / Course Assignment (Standalone by default)" },
+  { from: "/admin/tests/mock/[id]", to: "/student/test-series", source: "admin-config", label: "Mock Assignment → Access Engine (lib/payments/access.ts) → Student Access (no per-mock entitlements)" },
   { from: "/admin/exams/test-series/[id]", to: "/admin/tests/scheduled", source: "button", label: "Schedule → Bulk Schedule Upload" },
   { from: "/admin/exams/test-series/[id]", to: "/admin/payments/products/[id]", source: "button", label: "Pricing & Access → Edit price" },
   { from: "/admin/tests/mock/[id]", to: "/exams/[slug]/mock-test-series", source: "admin-config", label: "Published mocks → public schedule" },

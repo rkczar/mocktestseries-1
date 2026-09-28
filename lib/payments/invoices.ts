@@ -1,7 +1,7 @@
 import "server-only";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import type { Prisma, PaymentEnvironment } from "@prisma/client";
-import { getInvoiceSettings, type InvoiceSettings } from "@/lib/payments/settings";
+import { composeSellerAddress, getInvoiceSettings, type InvoiceSettings } from "@/lib/payments/settings";
 
 /**
  * Immutable invoices. The full snapshot (seller, customer, lines, tax,
@@ -76,7 +76,8 @@ async function nextInvoiceNumber(tx: Prisma.TransactionClient, settings: Invoice
 
 function computeTax(settings: InvoiceSettings, totalPaise: number): InvoiceSnapshot["tax"] {
   const rate = Math.max(0, Math.min(100, Number(settings.taxRatePercent) || 0));
-  if (settings.taxMode !== "INCLUSIVE" || rate === 0) {
+  // An explicit "not GST-registered" answer never prints tax lines.
+  if (settings.taxMode !== "INCLUSIVE" || rate === 0 || settings.gstRegistered === false) {
     return { mode: "NONE", ratePercent: 0, split: settings.taxSplit, taxablePaise: totalPaise, components: [] };
   }
   const taxable = Math.round((totalPaise * 100) / (100 + rate));
@@ -119,10 +120,10 @@ export async function issueInvoiceTx(
     seller: {
       legalName: settings.legalName,
       tradeName: settings.tradeName,
-      address: settings.billingAddress,
+      address: composeSellerAddress(settings),
       email: settings.supportEmail,
       phone: settings.supportPhone,
-      gstin: settings.gstin,
+      gstin: settings.gstRegistered === false ? "" : settings.gstin,
     },
     customer: {
       name: order.student.name,

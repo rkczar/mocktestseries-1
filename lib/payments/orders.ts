@@ -117,6 +117,31 @@ export interface CheckoutQuote {
   access: AccessResult;
   gatewayReady: boolean;
   environment: PaymentEnvironment;
+  /**
+   * Early renewal ("Extend Access") for an ACTIVE day-based product: the
+   * product's configured days are added to the current expiry — the same
+   * computeAccessWindow() fulfilment uses. Null when extension isn't
+   * offered (lifetime / fixed-date access, or not currently active).
+   */
+  renewal: RenewalPreview | null;
+}
+
+export interface RenewalPreview {
+  days: number;
+  currentExpiresAt: Date;
+  newExpiresAt: Date;
+}
+
+/** What "Extend Access" would do right now — null when there's nothing meaningful to extend. */
+export function renewalPreview(
+  product: Pick<Product, "accessDurationType" | "accessDays" | "accessExpiresAt">,
+  access: Pick<AccessResult, "status" | "expiresAt">,
+  now: Date
+): RenewalPreview | null {
+  if (access.status !== "ACTIVE_SUBSCRIPTION" || !access.expiresAt) return null;
+  if (product.accessDurationType !== "DAYS" || !product.accessDays || product.accessDays <= 0) return null;
+  const { expiresAt } = computeAccessWindow(product, now, access.expiresAt);
+  return expiresAt ? { days: product.accessDays, currentExpiresAt: access.expiresAt, newExpiresAt: expiresAt } : null;
 }
 
 export async function getCheckoutQuote(studentId: string, productCode: string, couponInput?: string | null): Promise<CheckoutQuote | null> {
@@ -154,6 +179,7 @@ export async function getCheckoutQuote(studentId: string, productCode: string, c
     access,
     gatewayReady: rzp.enabled && rzp.configured,
     environment: rzp.environment,
+    renewal: renewalPreview(product, access, now),
   };
 }
 

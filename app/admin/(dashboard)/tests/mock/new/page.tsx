@@ -41,31 +41,16 @@ export default async function NewMockTestPage({
         <Header />
         <Card>
           <CardHeader>
-            <CardTitle>Where does this Mock Test belong?</CardTitle>
-            <CardDescription>Most tests belong to a Test Series — pick it and the exam follows. Standalone tests pick only an exam.</CardDescription>
+            <CardTitle>Test Series / Course Assignment</CardTitle>
+            <CardDescription>
+              New mock tests are Standalone by default. Assign one to a Test Series only deliberately — a mock in a paid series becomes part of that
+              paid plan. You can change this later in the editor or from the series&apos; Manage Tests.
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-6 md:grid-cols-2">
             <form className="flex flex-col gap-2" method="get">
-              <label htmlFor="testSeriesId" className="text-sm font-medium text-[var(--color-foreground)]">
-                Test Series
-              </label>
-              <SelectNative id="testSeriesId" name="testSeriesId" required defaultValue="">
-                <option value="" disabled>
-                  Select a Test Series
-                </option>
-                {allSeries.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} · {s.exam.name}
-                  </option>
-                ))}
-              </SelectNative>
-              <Button type="submit" className="w-fit">
-                Continue
-              </Button>
-            </form>
-            <form className="flex flex-col gap-2" method="get">
               <label htmlFor="examId" className="text-sm font-medium text-[var(--color-foreground)]">
-                Standalone — Exam only
+                1. Standalone / No Test Series (default) — pick the exam
               </label>
               <SelectNative id="examId" name="examId" required defaultValue="">
                 <option value="" disabled>
@@ -74,6 +59,24 @@ export default async function NewMockTestPage({
                 {exams.map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.name}
+                  </option>
+                ))}
+              </SelectNative>
+              <Button type="submit" className="w-fit">
+                Continue
+              </Button>
+            </form>
+            <form className="flex flex-col gap-2" method="get">
+              <label htmlFor="testSeriesId" className="text-sm font-medium text-[var(--color-foreground)]">
+                2. Assign to Test Series — the exam follows
+              </label>
+              <SelectNative id="testSeriesId" name="testSeriesId" required defaultValue="">
+                <option value="" disabled>
+                  Select a Test Series
+                </option>
+                {allSeries.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} · {s.exam.name}
                   </option>
                 ))}
               </SelectNative>

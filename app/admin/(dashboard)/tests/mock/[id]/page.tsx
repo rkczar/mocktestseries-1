@@ -22,12 +22,15 @@ import { mockSeriesPath } from "@/lib/mock-series";
 import { AccessResultForm, ScheduleForm } from "./schedule-form";
 import { MockDetailsForm } from "../mock-details-form";
 import { MockTestStatusSelect } from "../status-select";
+import { SeriesAssignmentForm } from "./series-assignment-form";
+import { UNCOVERED_PAID_MOCK_WARNING, loadCoverageProducts, mockIsFree, purchasableProductsFor, seriesPlanProducts } from "@/lib/test-series-assignment";
 
 export const metadata = { title: "Mock Test — Mock Test Series.in Admin" };
 
 const STEPS = [
   ["basic", "1 Basic Details"],
   ["coverage", "2 Coverage"],
+  ["assignment", "Test Series"],
   ["questions", "3 Questions"],
   ["schedule", "4 Schedule & Availability"],
   ["access", "5 Access & Result"],
@@ -89,7 +92,7 @@ export default async function MockTestDetailPage({
   });
   if (!mockTest) notFound();
 
-  const [bankRows, subjects, importRun] = await Promise.all([
+  const [bankRows, subjects, importRun, examSeries, coverageProducts] = await Promise.all([
     prisma.question.findMany({
       where: { examId: mockTest.examId, status: { not: "ARCHIVED" } },
       select: {
@@ -117,6 +120,8 @@ export default async function MockTestDetailPage({
           select: { id: true, filename: true, successCount: true, replacedCount: true, skippedCount: true, failedCount: true, attachedCount: true },
         })
       : null,
+    prisma.testSeries.findMany({ where: { examId: mockTest.examId }, orderBy: [{ order: "asc" }, { createdAt: "asc" }], select: { id: true, name: true, status: true } }),
+    loadCoverageProducts(prisma),
   ]);
 
   const toBase = (q: (typeof bankRows)[number] | (typeof mockTest.questions)[number]["question"], optionHasImage: boolean): BankQuestion => ({
@@ -145,6 +150,10 @@ export default async function MockTestDetailPage({
   }));
 
   const now = new Date();
+  const coverageMock = { id: mockTest.id, examId: mockTest.examId, testSeriesId: mockTest.testSeriesId, accessType: mockTest.accessType };
+  const coveringPlans = purchasableProductsFor(coverageMock, coverageProducts, now);
+  const uncoveredPaid = !mockIsFree(coverageMock, coverageProducts) && coveringPlans.length === 0;
+  const seriesOptions = examSeries.map((s) => ({ ...s, plans: seriesPlanProducts(s.id, mockTest.examId, coverageProducts, now).map((p) => p.name) }));
   const mode = deriveAvailabilityMode(mockTest);
   const windowState = deriveMockTestAvailability(mockTest, now);
   const releaseAt = mockResultReleaseInstant(mockTest);
@@ -167,6 +176,7 @@ export default async function MockTestDetailPage({
     { ok: true, label: `Availability: ${AVAILABILITY_MODE_LABELS[mode]}${mockTest.availableFrom ? ` · from ${formatIst(mockTest.availableFrom)}` : ""}${mockTest.availableUntil ? ` · until ${formatIst(mockTest.availableUntil)}` : ""}` },
     { ok: true, label: `Access: ${mockTest.accessType} · Results: ${RESULT_RELEASE_LABELS[mockTest.resultReleaseMode]}${releaseAt ? ` (${formatIst(releaseAt)})` : ""} · Leaderboard ${mockTest.leaderboardEnabled ? "on" : "off"}` },
     { ok: !mockTest.testSeries || mockTest.testSeries.status === "PUBLISHED", warn: true, label: mockTest.testSeries ? `Test Series is ${mockTest.testSeries.status}` : "Standalone test" },
+    { ok: !uncoveredPaid, warn: true, label: uncoveredPaid ? UNCOVERED_PAID_MOCK_WARNING : coveringPlans.length > 0 ? `Unlocked by: ${coveringPlans.map((p) => p.name).join(", ")}` : "Free for signed-in students" },
   ];
 
   return (
@@ -267,6 +277,30 @@ export default async function MockTestDetailPage({
               coverageSubjectIds: mockTest.coverageSubjectIds,
               coverageTopicIds: mockTest.coverageTopicIds,
             }}
+          />
+        </CardContent>
+      </Card>
+
+      <Card id="assignment" className="scroll-mt-20">
+        <CardHeader>
+          <CardTitle>Test Series / Course Assignment</CardTitle>
+          <CardDescription>
+            Currently: <strong>{mockTest.testSeries?.name ?? "Standalone / No Test Series"}</strong>. Access is inherited from the series&apos; Product (Product →
+            Test Series → Mock Test) — no per-mock entitlements.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {uncoveredPaid ? (
+            <p className="flex items-start gap-2 rounded-[var(--radius-button)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-sm text-[var(--color-foreground)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden /> {UNCOVERED_PAID_MOCK_WARNING}
+            </p>
+          ) : null}
+          <SeriesAssignmentForm
+            mockTestId={mockTest.id}
+            currentSeriesId={mockTest.testSeriesId}
+            options={seriesOptions}
+            accessType={mockTest.accessType}
+            readOnly={!canManage}
           />
         </CardContent>
       </Card>

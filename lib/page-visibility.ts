@@ -15,6 +15,7 @@ export const PAGE_VISIBILITY_DEFAULTS = [
   { key: "contact", label: "Contact", route: "/contact" },
   { key: "privacy", label: "Privacy", route: "/privacy" },
   { key: "terms", label: "Terms", route: "/terms" },
+  { key: "refund-policy", label: "Refund & Cancellation Policy", route: "/refund-policy" },
 ] as const;
 
 export type PageVisibilityKey = (typeof PAGE_VISIBILITY_DEFAULTS)[number]["key"];

@@ -54,7 +54,7 @@ export interface AccessResult {
   purchasesPaused: boolean;
 }
 
-type ProductRow = Pick<
+export type ProductRow = Pick<
   Product,
   "id" | "code" | "name" | "productType" | "examId" | "testSeriesId" | "mockTestId" | "grandTestId" | "liveTestId" | "accessType" | "isActive" | "isVisible" | "purchaseEnabled" | "accessDurationType" | "accessExpiresAt"
 >;
@@ -67,7 +67,7 @@ export interface AccessContext {
   now: Date;
 }
 
-const PRODUCT_SELECT = {
+export const PRODUCT_SELECT = {
   id: true,
   code: true,
   name: true,
@@ -122,7 +122,7 @@ function entitlementIsActive(e: EntRow, now: Date): boolean {
   return e.status === EntitlementStatus.ACTIVE && e.startsAt <= now && (e.expiresAt === null || e.expiresAt > now);
 }
 
-function isPurchasable(p: ProductRow, now: Date): boolean {
+export function isPurchasable(p: ProductRow, now: Date): boolean {
   if (!p.isVisible || !p.purchaseEnabled || p.accessType !== "PAID") return false;
   if (p.accessDurationType === "FIXED_DATE" && (!p.accessExpiresAt || p.accessExpiresAt <= now)) return false;
   return true;

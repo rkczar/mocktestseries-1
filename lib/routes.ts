@@ -33,6 +33,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Homepage", route: "/", module: "Website", userType: "PUBLIC", authRequired: false, status: "CONNECTED" },
   { pageName: "Privacy Policy", route: "/privacy", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
   { pageName: "Terms and Conditions", route: "/terms", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
+  { pageName: "Refund & Cancellation Policy", route: "/refund-policy", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
   { pageName: "Contact Us", route: "/contact", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
 
   // Admin auth

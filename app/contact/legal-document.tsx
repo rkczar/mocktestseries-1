@@ -7,13 +7,15 @@ import { getSiteUrl } from "@/lib/site-url";
 import { LegalBody } from "./legal-body";
 
 /**
- * Standalone /privacy and /terms pages. They render the SAME admin-managed
- * text as the Privacy/Terms sections of /contact (Admin → Website → Contact
- * info: privacyBody/termsBody) — one source, no legal copy lives in code.
+ * Standalone /privacy, /terms and /refund-policy pages. They render the SAME
+ * admin-managed text as the Privacy/Terms sections of /contact (Admin →
+ * Website → Contact info: privacyBody/termsBody/refundBody) — one source, no
+ * legal copy lives in code.
  */
 const DOCS = {
   privacy: { title: "Privacy Policy", path: "/privacy", body: "privacyBody", updated: "privacyLastUpdated" },
   terms: { title: "Terms & Conditions", path: "/terms", body: "termsBody", updated: "termsLastUpdated" },
+  refund: { title: "Refund & Cancellation Policy", path: "/refund-policy", body: "refundBody", updated: "refundLastUpdated" },
 } as const;
 
 export type LegalDocumentKind = keyof typeof DOCS;

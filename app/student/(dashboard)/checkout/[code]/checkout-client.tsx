@@ -15,6 +15,8 @@ interface Props {
   product: { id: string; code: string; name: string; description: string | null; accessLabel: string; examName: string | null };
   price: { isFree: boolean; mrpPaise: number; pricePaise: number; discountPercent: number; savingsPaise: number; saleEndsAt: string | null };
   access: { status: string; mode: string; purchasesPaused: boolean; expiresAt: string | null };
+  /** Present only when an active day-based plan can be extended: days added and the resulting expiry. */
+  renewal: { days: number; newExpiresAt: string } | null;
   gatewayReady: boolean;
   environment: "TEST" | "LIVE";
   openHref: string;
@@ -74,7 +76,9 @@ function useCountdown(target: string | null) {
   return d > 0 ? `${pad(d)}d ${pad(h)}h ${pad(m)}m` : `${pad(h)}h ${pad(m)}m ${pad(s)}s`;
 }
 
-export function CheckoutClient({ product, price, access, gatewayReady, environment, openHref, prefill }: Props) {
+const fmtDay = (iso: string) => new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
+
+export function CheckoutClient({ product, price, access, renewal, gatewayReady, environment, openHref, prefill }: Props) {
   const router = useRouter();
   const [couponInput, setCouponInput] = useState("");
   const [coupon, setCoupon] = useState<{ code: string; discountPaise: number; label: string | null } | null>(null);
@@ -90,7 +94,8 @@ export function CheckoutClient({ product, price, access, gatewayReady, environme
   const free = access.status === "FREE_ACCESS";
   const expired = access.status === "EXPIRED";
   const lifetimeOwned = owned && !access.expiresAt;
-  const canBuy = !free && !lifetimeOwned && !access.purchasesPaused && access.status !== "NOT_AVAILABLE";
+  // An active plan can be extended only when the server offers a real day-based extension (never lifetime / fixed-date).
+  const canBuy = !free && !lifetimeOwned && (!owned || renewal !== null) && !access.purchasesPaused && access.status !== "NOT_AVAILABLE";
 
   function applyCoupon() {
     setCouponMsg(null);
@@ -280,6 +285,11 @@ export function CheckoutClient({ product, price, access, gatewayReady, environme
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Lock className="h-4 w-4" aria-hidden />}
                 {payablePaise === 0 ? "Get Access" : expired ? "Renew Access" : owned ? "Extend Access" : "Buy Now"}
               </Button>
+              {owned && renewal ? (
+                <p className="text-xs text-[var(--color-muted-foreground)]">
+                  Adds {renewal.days} days to your current access — new expiry {fmtDay(renewal.newExpiresAt)}.
+                </p>
+              ) : null}
               {owned ? (
                 <Button asChild variant="outline">
                   <Link href={openHref}>Continue</Link>
@@ -299,6 +309,12 @@ export function CheckoutClient({ product, price, access, gatewayReady, environme
           {error ? <p className="text-sm text-[var(--color-error)]" role="alert">{error}</p> : null}
           <p className="text-[11px] text-[var(--color-muted-foreground)]">
             Payments are processed securely by Razorpay. We never see or store your card, UPI PIN or OTP.
+          </p>
+          <p className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--color-muted-foreground)]">
+            <Link href="/terms" target="_blank" className="hover:underline">Terms</Link>
+            <Link href="/privacy" target="_blank" className="hover:underline">Privacy</Link>
+            <Link href="/refund-policy" target="_blank" className="hover:underline">Refund &amp; Cancellation</Link>
+            <Link href="/contact" target="_blank" className="hover:underline">Contact</Link>
           </p>
         </CardContent>
       </Card>

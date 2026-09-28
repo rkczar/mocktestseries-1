@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { offerDisplaySchema, resetOfferDisplay, saveOfferDisplay } from "@/lib/payments/offer-display";
+import { AssignmentError, assignMocksToSeries, removeMocksFromSeries } from "@/lib/test-series-assignment";
 
 // Test Series Control Center mutations are gated by TEST_SERIES_MANAGE
 // (MASTER_ADMIN only), not EXAMS_MANAGE — same reasoning as Mock Test
@@ -153,4 +154,45 @@ export async function resetOfferDisplayAction(seriesId: string): Promise<TestSer
   });
   revalidateMockSeriesSurfaces();
   return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Manage Tests — assign / remove existing Mock Tests (MockTest.testSeriesId).
+// Access follows automatically through the series' Product; nothing is
+// granted or copied per mock.
+// ---------------------------------------------------------------------------
+
+export interface AssignmentActionResult {
+  error?: string;
+  success?: string;
+}
+
+const idList = z.array(z.string().min(1).max(64)).min(1, "Select at least one mock test.").max(200);
+
+export async function assignMocksToSeriesAction(seriesId: string, mockIds: string[]): Promise<AssignmentActionResult> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const parsed = idList.safeParse(mockIds);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid selection." };
+  try {
+    const n = await prisma.$transaction((tx) => assignMocksToSeries(tx, { seriesId, mockIds: parsed.data, actorId: session.user.id }));
+    revalidateMockSeriesSurfaces(...parsed.data.map((id) => `/admin/tests/mock/${id}`));
+    return { success: `${n} mock test${n === 1 ? "" : "s"} added to this series.` };
+  } catch (e) {
+    if (e instanceof AssignmentError) return { error: e.message };
+    throw e;
+  }
+}
+
+export async function removeMocksFromSeriesAction(seriesId: string, mockIds: string[]): Promise<AssignmentActionResult> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const parsed = idList.safeParse(mockIds);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid selection." };
+  try {
+    const n = await prisma.$transaction((tx) => removeMocksFromSeries(tx, { seriesId, mockIds: parsed.data, actorId: session.user.id }));
+    revalidateMockSeriesSurfaces(...parsed.data.map((id) => `/admin/tests/mock/${id}`));
+    return { success: `${n} mock test${n === 1 ? "" : "s"} removed — now standalone.` };
+  } catch (e) {
+    if (e instanceof AssignmentError) return { error: e.message };
+    throw e;
+  }
 }

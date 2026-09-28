@@ -6,6 +6,7 @@ import type { MockResultRelease, MockTestStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { examSubjectWhere, examTopicWhere } from "@/lib/exam-taxonomy";
 import { requirePermission } from "@/lib/rbac";
+import { AssignmentError, setMockSeriesAssignment } from "@/lib/test-series-assignment";
 import { PERMISSIONS } from "@/lib/permissions";
 import { parseIstDateTimeLocal } from "@/lib/ist-time";
 import { revalidateMockSeriesSurfaces } from "@/lib/mock-series-revalidate";
@@ -361,4 +362,27 @@ export async function replaceMockTestQuestionAction(mockTestId: string, oldId: s
   await writeAssignment(mockTestId, next);
   await audit(session.user.id, mockTestId, "REPLACE", { oldId, newId, slot: slot + 1 });
   return {};
+}
+
+/**
+ * Test Series / Course Assignment card. "Standalone" clears testSeriesId;
+ * "Assign" requires an explicit series of the mock's own exam. Access is
+ * inherited through that series' Product — never granted per mock.
+ */
+export async function setMockSeriesAssignmentAction(mockTestId: string, _prev: MockTestFormState, formData: FormData): Promise<MockTestFormState> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const mode = String(formData.get("assignment") ?? "");
+  const seriesId = String(formData.get("testSeriesId") ?? "").trim();
+  if (mode !== "STANDALONE" && mode !== "SERIES") return { error: "Choose Standalone or a Test Series." };
+  if (mode === "SERIES" && !seriesId) return { error: "Select the Test Series to assign." };
+  try {
+    await prisma.$transaction((tx) =>
+      setMockSeriesAssignment(tx, { mockTestId, seriesId: mode === "SERIES" ? seriesId : null, actorId: session.user.id })
+    );
+  } catch (e) {
+    if (e instanceof AssignmentError) return { error: e.message };
+    throw e;
+  }
+  revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`);
+  return { success: true };
 }

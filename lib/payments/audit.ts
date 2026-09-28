@@ -22,7 +22,8 @@ export type PaymentAuditAction =
   | "REFUND_REQUESTED"
   | "INVOICE_SETTINGS_UPDATED"
   | "PAYMENT_POLICY_UPDATED"
-  | "ORDER_RECONCILED";
+  | "ORDER_RECONCILED"
+  | "LEGAL_DOC_REVIEWED";
 
 export async function logPaymentAudit(
   actorId: string | undefined,

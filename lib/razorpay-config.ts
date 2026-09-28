@@ -35,6 +35,9 @@ interface StoredSlot {
   keyId?: string;
   keySecretCipher?: string;
   webhookSecretCipher?: string;
+  /** Last connection probe of THIS slot's key pair; cleared whenever its credentials change. */
+  lastTest?: ProviderLastTest | null;
+  credentialsUpdatedAt?: string;
 }
 
 interface StoredRazorpay {
@@ -56,6 +59,8 @@ export interface RazorpaySlotPublic {
   keySecretConfigured: boolean;
   webhookSecretConfigured: boolean;
   configured: boolean;
+  /** Connection probe of this slot since its credentials last changed (null = not tested). */
+  lastTest: ProviderLastTest | null;
 }
 
 export interface RazorpayPublicConfig {
@@ -100,10 +105,13 @@ export function maskKeyId(keyId: string): string {
   return `${prefix}****${rest.slice(-3)}`;
 }
 
-function slotPublic(slot: StoredSlot | undefined): RazorpaySlotPublic {
+function slotPublic(slot: StoredSlot | undefined, env: RazorpayEnvironment, globalLastTest: ProviderLastTest | null | undefined): RazorpaySlotPublic {
   const keyId = slot?.keyId ?? "";
   const keySecretConfigured = Boolean(decryptSecret(slot?.keySecretCipher));
+  // Legacy: before per-slot probes, only the active environment's result was kept (its message names the mode).
+  const legacy = globalLastTest && globalLastTest.message.includes(`(${env} mode)`) ? globalLastTest : null;
   return {
+    lastTest: slot?.lastTest ?? legacy,
     keyIdMasked: maskKeyId(keyId),
     keyIdConfigured: Boolean(keyId),
     keySecretConfigured,
@@ -114,8 +122,8 @@ function slotPublic(slot: StoredSlot | undefined): RazorpaySlotPublic {
 
 function toPublic(raw: StoredRazorpay): RazorpayPublicConfig {
   const environment = raw.environment ?? "TEST";
-  const test = slotPublic(raw.test);
-  const live = slotPublic(raw.live);
+  const test = slotPublic(raw.test, "TEST", raw.lastTest);
+  const live = slotPublic(raw.live, "LIVE", raw.lastTest);
   return {
     enabled: raw.enabled ?? false,
     environment,
@@ -198,6 +206,10 @@ export async function saveRazorpayConfig(update: RazorpayConfigUpdate): Promise<
     }
     if (update.keySecret?.trim()) slot.keySecretCipher = encryptSecret(update.keySecret.trim());
     if (update.webhookSecret?.trim()) slot.webhookSecretCipher = encryptSecret(update.webhookSecret.trim());
+    if (keyId || update.keySecret?.trim() || update.webhookSecret?.trim()) {
+      slot.lastTest = null;
+      slot.credentialsUpdatedAt = new Date().toISOString();
+    }
     next[slotKey] = slot;
   }
   next.lastTest = null;
@@ -211,9 +223,11 @@ export async function saveRazorpayConfig(update: RazorpayConfigUpdate): Promise<
   bumpRazorpayConfigEpoch();
 }
 
-async function recordTest(result: ProviderLastTest): Promise<void> {
+async function recordTest(environment: RazorpayEnvironment, result: ProviderLastTest): Promise<void> {
   const raw = await readStored();
   raw.lastTest = result;
+  const slotKey = environment === "LIVE" ? "live" : "test";
+  raw[slotKey] = { ...(raw[slotKey] ?? {}), lastTest: result };
   await prisma.setting.upsert({
     where: { key: SETTING_KEY },
     update: { value: raw as unknown as object },
@@ -223,13 +237,14 @@ async function recordTest(result: ProviderLastTest): Promise<void> {
 }
 
 /**
- * Real connectivity probe: an authenticated GET /v1/orders?count=1 against
- * Razorpay with the ACTIVE environment's key pair. Only the HTTP outcome is
- * recorded — never the credentials or the response body.
+ * Real connectivity probe: an authenticated, read-only GET /v1/orders?count=1
+ * against Razorpay with one environment's key pair (default: the ACTIVE one).
+ * Testing LIVE keys never switches the gateway to LIVE. Only the HTTP outcome
+ * is recorded — never the credentials or the response body.
  */
-export async function testRazorpayConnection(): Promise<ProviderLastTest> {
+export async function testRazorpayConnection(target?: RazorpayEnvironment): Promise<ProviderLastTest> {
   const raw = await readStored();
-  const environment = raw.environment ?? "TEST";
+  const environment = target ?? raw.environment ?? "TEST";
   const creds = await getRazorpayCredentials(environment);
   const at = new Date().toISOString();
   let result: ProviderLastTest;
@@ -252,6 +267,6 @@ export async function testRazorpayConnection(): Promise<ProviderLastTest> {
       result = { ok: false, message: "Could not reach Razorpay (network/timeout).", at };
     }
   }
-  await recordTest(result);
+  await recordTest(environment, result);
   return result;
 }
