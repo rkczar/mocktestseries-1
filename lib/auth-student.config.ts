@@ -55,6 +55,10 @@ export const studentAuthConfig = {
         token.studentDbId = user.id;
         token.studentId = user.studentId;
         token.authProvider = user.authProvider;
+        if (user.deviceId) token.did = user.deviceId;
+        if (user.sessionSecret) token.sid = user.sessionSecret;
+        if (user.sessionRowId) token.sref = user.sessionRowId;
+        token.authAt = user.authAt ?? Date.now();
       }
       return token;
     },
@@ -63,6 +67,8 @@ export const studentAuthConfig = {
         if (token.studentDbId) session.user.id = token.studentDbId as string;
         session.user.studentId = token.studentId as string | undefined;
         session.user.authProvider = token.authProvider as string | undefined;
+        session.user.deviceId = token.did as string | undefined;
+        session.user.sessionRowId = token.sref as string | undefined;
       }
       return session;
     },

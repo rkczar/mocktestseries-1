@@ -140,7 +140,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
 
   // Settings
   { pageName: "General Settings", route: "/admin/settings/general", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "DRAFT" },
-  { pageName: "Security", route: "/admin/settings/security", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "DRAFT" },
+  { pageName: "Security", route: "/admin/settings/security", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "CONNECTED" },
   { pageName: "API Management", route: "/admin/settings/authentication", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "CONNECTED" },
   { pageName: "Notifications", route: "/admin/settings/notifications", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "DRAFT" },
 

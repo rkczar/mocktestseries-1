@@ -7,6 +7,7 @@ import { requestOtp, verifyOtp, OtpError } from "@/lib/otp";
 import { isStudentAuthEligible } from "@/lib/student-lifecycle";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { assertOtpVerifyAllowed, AuthRateLimitError } from "@/lib/auth-rate-limit";
+import { logoutAllStudentSessions } from "@/lib/student-devices";
 
 /**
  * Student Forgot Password — the one reset path, built on the existing phone
@@ -176,4 +177,7 @@ export async function resetPasswordWithToken(token: string, newPassword: string)
       data: { studentId: record.studentId, activity: "PASSWORD_RESET", metadata: { method: "phone_otp" } },
     });
   });
+  // A reset means the old password may be known to someone else: sign out
+  // every existing session. Registered devices keep their slots.
+  await logoutAllStudentSessions(record.studentId, { system: "PASSWORD_RESET" }, { reason: "PASSWORD_RESET" });
 }

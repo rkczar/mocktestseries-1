@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { NameCorrectionDialog } from "./name-correction-dialog";
 import { StudentPaymentProfile } from "@/app/admin/(dashboard)/payments/_components/student-payment-profile";
+import { DeviceAccessSection } from "./device-access-section";
 
 export const metadata = { title: "Student — Mock Test Series.in Admin" };
 
@@ -94,6 +95,8 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
           </div>
         </CardContent>
       </Card>
+
+      {!deleted ? <DeviceAccessSection studentId={student.id} canManage={canCorrectName} /> : null}
 
       {latestDeletionRequest ? (
         <Card>

@@ -31,6 +31,10 @@ export async function requireStudent() {
     name: session.user.name ?? null,
     email: session.user.email ?? null,
     authProvider: session.user.authProvider,
+    /** This browser's StudentDevice id (null for an untracked pre-device-security session). */
+    deviceId: session.user.deviceId ?? null,
+    /** This sign-in's StudentSession id (null when untracked). */
+    sessionRowId: session.user.sessionRowId ?? null,
   };
 }
 

@@ -6,6 +6,7 @@ import { requireStudentOrLogin } from "@/lib/student-session";
 import { revealAnswer, saveAnswer, submitAttempt } from "@/lib/test-attempt";
 import { toggleSavedQuestion, reportQuestion } from "@/lib/student-data";
 import { logEngine, SLOW_OP_MS, TestEngineError, type EngineErrorCode, type EngineOp } from "@/lib/test-engine-log";
+import { claimAttemptLease, OTHER_DEVICE_MESSAGE } from "@/lib/attempt-device-lease";
 
 /**
  * TEST ENGINE CORE — HIGH RISK SHARED PATH (see ops/TEST-ENGINE.md).
@@ -44,6 +45,16 @@ async function runEngineOp<T extends object>(
   }
 }
 
+/**
+ * One Active Test Device: the device must hold (or be able to take) the
+ * attempt's lease. Throws inside runEngineOp so the player gets a structured
+ * OTHER_DEVICE result; nothing about the attempt changes.
+ */
+async function assertAttemptDevice(attemptId: string, student: { id: string; deviceId: string | null }) {
+  const lease = await claimAttemptLease(attemptId, student.id, student.deviceId);
+  if (!lease.ok) throw new TestEngineError("OTHER_DEVICE", OTHER_DEVICE_MESSAGE);
+}
+
 export async function saveAnswerAction(
   attemptId: string,
   questionId: string,
@@ -52,9 +63,10 @@ export async function saveAnswerAction(
   seq?: number
 ): Promise<EngineResult<{ applied: boolean }>> {
   const student = await requireStudentOrLogin();
-  return runEngineOp("save", { attemptId, questionId }, () =>
-    saveAnswer(attemptId, student.id, questionId, selectedOptionLabel, markForReview, seq)
-  );
+  return runEngineOp("save", { attemptId, questionId }, async () => {
+    await assertAttemptDevice(attemptId, student);
+    return saveAnswer(attemptId, student.id, questionId, selectedOptionLabel, markForReview, seq);
+  });
 }
 
 /** INSTANT answer mode only — the server decides; the client never holds the key beforehand. */
@@ -65,14 +77,27 @@ export async function revealAnswerAction(
   seq?: number
 ): Promise<EngineResult<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean }>> {
   const student = await requireStudentOrLogin();
-  return runEngineOp("reveal", { attemptId, questionId }, () =>
-    revealAnswer(attemptId, student.id, questionId, selectedOptionLabel, seq)
-  );
+  return runEngineOp("reveal", { attemptId, questionId }, async () => {
+    await assertAttemptDevice(attemptId, student);
+    return revealAnswer(attemptId, student.id, questionId, selectedOptionLabel, seq);
+  });
+}
+
+/** Player heartbeat (every 60s): keeps this device's lease on the attempt alive. */
+export async function attemptHeartbeatAction(attemptId: string): Promise<EngineResult<{ held: true }>> {
+  const student = await requireStudentOrLogin();
+  return runEngineOp("heartbeat", { attemptId }, async () => {
+    await assertAttemptDevice(attemptId, student);
+    return { held: true as const };
+  });
 }
 
 export async function submitAttemptAction(attemptId: string) {
   const student = await requireStudentOrLogin();
   const t0 = Date.now();
+  // A second device can't submit an attempt another device is running.
+  const lease = await claimAttemptLease(attemptId, student.id, student.deviceId);
+  if (!lease.ok) throw new Error(OTHER_DEVICE_MESSAGE);
   try {
     await submitAttempt(attemptId, student.id);
   } catch (error) {

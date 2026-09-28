@@ -46,7 +46,7 @@ function ErrorBanner({ message }: { message?: string }) {
   return (
     <p
       role="alert"
-      className="rounded-[var(--radius-button)] border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-3 py-2 text-sm text-[var(--color-error)]"
+      className="whitespace-pre-line rounded-[var(--radius-button)] border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-3 py-2 text-sm text-[var(--color-error)]"
     >
       {message}
     </p>
@@ -507,12 +507,15 @@ export function LoginScreen({
   defaultMethod,
   pageConfig,
   providerConfig,
+  notice,
 }: {
   callbackUrl: string;
   defaultMode: "signin" | "register";
   defaultMethod: "password" | "otp";
   pageConfig: LoginPageConfig;
   providerConfig: AuthProviderPublicConfig;
+  /** Server-side sign-in rejection carried back in the URL (e.g. Google + device limit). */
+  notice?: string;
 }) {
   const showGoogle = providerConfig.google.enabled && providerConfig.google.configured;
   const showPassword = providerConfig.passwordEnabled;
@@ -553,6 +556,11 @@ export function LoginScreen({
         className="border p-6 shadow-2xl"
         style={{ borderColor: pageConfig.background.border, borderRadius: pageConfig.cardRadius, background: "rgba(255,255,255,0.03)" }}
       >
+        {notice ? (
+          <div className="mb-4">
+            <ErrorBanner message={notice} />
+          </div>
+        ) : null}
         {mode === "forgot" ? (
           <ForgotPasswordFlow
             key={forgotKey}

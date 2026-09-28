@@ -32,7 +32,7 @@ export interface AnswerValue {
 export interface SaveQueueOptions {
   send: (questionId: string, value: AnswerValue, seq: number) => Promise<SaveResult>;
   onStatus?: (questionId: string, status: SaveStatus | null) => void;
-  /** EXPIRED / NOT_EDITABLE — the attempt can no longer take answers. */
+  /** EXPIRED / NOT_EDITABLE / OTHER_DEVICE — this tab can no longer take answers. */
   onFatal?: (code: string) => void;
   /** Retries exhausted for some question. */
   onExhausted?: () => void;
@@ -43,7 +43,8 @@ export interface SaveQueueOptions {
   now?: () => number;
 }
 
-const FATAL_CODES = new Set(["EXPIRED", "NOT_EDITABLE"]);
+/** OTHER_DEVICE: another device holds this student's active test (lib/attempt-device-lease.ts). */
+const FATAL_CODES = new Set(["EXPIRED", "NOT_EDITABLE", "OTHER_DEVICE"]);
 /** The server rejected this value for good (locked/invalid) — retrying can't help. */
 const DROP_CODES = new Set(["LOCKED", "INVALID_OPTION", "NOT_IN_ATTEMPT", "NOT_ALLOWED", "NO_SELECTION"]);
 

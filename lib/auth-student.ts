@@ -8,16 +8,33 @@ import { studentAuthConfig } from "@/lib/auth-student.config";
 import { nextStudentId } from "@/lib/student-id";
 import { verifyOtp, OtpError } from "@/lib/otp";
 import { getAuthProviderConfig, getGoogleCredentials } from "@/lib/auth-provider-config";
-import { getStudentAuthStatus, isStudentAuthEligible, resolveGoogleStudent } from "@/lib/student-lifecycle";
+import { isStudentAuthEligible, resolveGoogleStudent } from "@/lib/student-lifecycle";
 import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
 import { clientIpFromHeaders, getClientIp } from "@/lib/client-ip";
 import { assertStudentPasswordLoginAllowed, assertOtpVerifyAllowed } from "@/lib/auth-rate-limit";
+import {
+  admitCurrentRequestSignIn,
+  checkStudentToken,
+  DeviceLimitError,
+  revokeSessionBySecret,
+  type AdmittedSignIn,
+} from "@/lib/student-devices";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
 
 function normalizeMobile(mobile: string) {
   return mobile.trim().replace(/[^\d+]/g, "");
+}
+
+/** Device/session claims the jwt callback copies into the token (see lib/auth-student.config.ts). */
+function deviceClaims(admitted: AdmittedSignIn) {
+  return {
+    deviceId: admitted.deviceId,
+    sessionSecret: admitted.sessionSecret,
+    sessionRowId: admitted.sessionRowId,
+    authAt: admitted.authAt,
+  };
 }
 
 
@@ -76,11 +93,15 @@ export const {
           success = await argon2.verify(student.passwordHash, password).catch(() => false);
         }
 
+        // Device limit, before any session exists. A blocked device records
+        // its own DEVICE_LIMIT attempt and throws the student-facing message.
+        const admitted = student && success ? await admitCurrentRequestSignIn(student.id, "PASSWORD", identifier) : null;
+
         await prisma.studentLoginAttempt.create({
           data: { identifier, ipAddress, success, method: "PASSWORD", studentId: student?.id },
         });
 
-        if (!student || !success) return null;
+        if (!student || !success || !admitted) return null;
 
         await prisma.student.update({ where: { id: student.id }, data: { lastLoginAt: new Date() } });
         await prisma.studentActivity.create({
@@ -93,6 +114,7 @@ export const {
           name: student.name,
           email: student.email,
           authProvider: student.authProvider,
+          ...deviceClaims(admitted),
         };
       },
     }),
@@ -153,6 +175,7 @@ export const {
             data: { studentId: student.id, activity: "REGISTERED", metadata: { method: "otp" } },
           });
           await ensureDefaultExamEnrollmentSafely(student.id);
+          const admitted = await admitCurrentRequestSignIn(student.id, "CREATE_ACCOUNT", mobile);
           await prisma.studentLoginAttempt.create({
             data: { identifier: mobile, ipAddress, success: true, method: attemptMethod, studentId: student.id },
           });
@@ -163,6 +186,7 @@ export const {
             name: student.name,
             email: student.email,
             authProvider: student.authProvider,
+            ...deviceClaims(admitted),
           };
         }
 
@@ -173,6 +197,8 @@ export const {
           });
           throw new Error("No account found for this mobile number.");
         }
+
+        const admitted = await admitCurrentRequestSignIn(student.id, "OTP", mobile);
 
         await prisma.student.update({ where: { id: student.id }, data: { lastLoginAt: new Date() } });
         await prisma.studentActivity.create({
@@ -188,6 +214,7 @@ export const {
           name: student.name,
           email: student.email,
           authProvider: student.authProvider,
+          ...deviceClaims(admitted),
         };
       },
     }),
@@ -202,17 +229,28 @@ export const {
      * so a deleted/suspended account's cookie would otherwise stay valid
      * until expiry. Every auth() call (pages, Server Actions, route
      * handlers — requireStudent() goes through here) re-checks the Student
-     * row; returning null makes Auth.js treat the request as signed out and
-     * clear the cookie wherever it can write one. Skipped on the sign-in
-     * call itself (`user` set), which just authenticated against the DB.
+     * row AND the device/session (checkStudentToken: revoked session,
+     * revoked device, "log out all"); returning null makes Auth.js treat the
+     * request as signed out and clear the cookie wherever it can write one.
+     * Skipped on the sign-in call itself (`user` set), which just
+     * authenticated against the DB and admitted the device.
      */
     async jwt(params) {
       const token = await studentAuthConfig.callbacks.jwt(params);
       if (params.user) return token;
-      const studentDbId = token.studentDbId as string | undefined;
-      if (!studentDbId) return null;
-      const status = await getStudentAuthStatus(studentDbId);
-      return isStudentAuthEligible(status) ? token : null;
+      if (!token.studentDbId) return null;
+      const check = await checkStudentToken({
+        studentDbId: token.studentDbId,
+        sid: token.sid,
+        sref: token.sref,
+        did: token.did,
+        authAt: token.authAt,
+        iat: typeof token.iat === "number" ? token.iat : undefined,
+      });
+      if (!check.ok) return null;
+      // A pre-device-security token resolves its device from the cookie each request.
+      if (check.deviceId) token.did = check.deviceId;
+      return token;
     },
     async signIn({ user, account, profile }) {
       if (account?.provider !== "google") return true;
@@ -244,6 +282,14 @@ export const {
         });
         return false;
       }
+      let admitted: AdmittedSignIn;
+      try {
+        admitted = await admitCurrentRequestSignIn(student.id, "GOOGLE", email ?? "unknown");
+      } catch (error) {
+        if (error instanceof DeviceLimitError) return "/login?error=DeviceLimit";
+        throw error;
+      }
+
       if (!resolved.created) {
         await prisma.student.update({ where: { id: student.id }, data: { lastLoginAt: new Date() } });
         await prisma.studentActivity.create({
@@ -260,6 +306,7 @@ export const {
       user.authProvider = student.authProvider;
       user.name = student.name;
       user.email = student.email;
+      Object.assign(user, deviceClaims(admitted));
 
       return true;
     },
@@ -267,6 +314,11 @@ export const {
   events: {
     async signOut(message) {
       const token = "token" in message ? message.token : undefined;
+      try {
+        if (token?.sid) await revokeSessionBySecret(token.sid as string, "LOGOUT");
+      } catch {
+        // best-effort; the JWT cookie is cleared regardless
+      }
       try {
         await prisma.studentLoginAttempt.create({
           data: {

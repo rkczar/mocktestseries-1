@@ -7,6 +7,12 @@ import { prisma } from "@/lib/prisma";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { updateStudentProfile, requestAccountDeletion } from "@/lib/student-data";
 import { DeletionLifecycleError } from "@/lib/student-lifecycle";
+import {
+  DeviceActionError,
+  logoutAllStudentSessions,
+  revokeStudentSession,
+  studentRemoveOwnDevice,
+} from "@/lib/student-devices";
 
 export interface ProfileActionState {
   error?: string;
@@ -49,6 +55,12 @@ export async function changePasswordAction(_prev: ProfileActionState, formData: 
 
   const passwordHash = await argon2.hash(newPassword);
   await prisma.student.update({ where: { id: student.id }, data: { passwordHash } });
+  // Sign out every other session and keep this one. An untracked (pre-device-security)
+  // session is skipped: the cut-off would sign out the current session too.
+  if (student.sessionRowId) {
+    await logoutAllStudentSessions(student.id, { studentId: student.id }, { exceptSessionRowId: student.sessionRowId, reason: "PASSWORD_CHANGED" });
+    return { success: "Password changed. Your other devices have been signed out." };
+  }
   return { success: "Password changed." };
 }
 
@@ -65,4 +77,59 @@ export async function requestDeletionAction(_prev: ProfileActionState, formData:
   }
   revalidatePath("/student/profile");
   return { success: "Your request has been submitted." };
+}
+
+// ---------------------------------------------------------------------------
+// Devices & Security (lib/student-devices.ts). Every id is re-scoped to the
+// signed-in student server-side; a forged id for someone else's device or
+// session is simply "not found".
+// ---------------------------------------------------------------------------
+
+export interface DeviceActionState {
+  error?: string;
+  success?: string;
+}
+
+function deviceActionError(error: unknown): DeviceActionState {
+  if (error instanceof DeviceActionError) return { error: error.message };
+  throw error;
+}
+
+/** Sign out one other session. The device keeps its slot. */
+export async function logoutDeviceSessionAction(sessionRowId: string): Promise<DeviceActionState> {
+  const student = await requireStudentOrLogin();
+  if (typeof sessionRowId !== "string" || !sessionRowId) return { error: "Session not found." };
+  if (sessionRowId === student.sessionRowId) return { error: "This is your current session. Use Logout instead." };
+  try {
+    await revokeStudentSession(student.id, sessionRowId, { studentId: student.id }, "STUDENT_LOGOUT");
+  } catch (error) {
+    return deviceActionError(error);
+  }
+  revalidatePath("/student/profile");
+  return { success: "That device has been signed out." };
+}
+
+/** Sign out everywhere except this session. */
+export async function logoutOtherSessionsAction(): Promise<DeviceActionState> {
+  const student = await requireStudentOrLogin();
+  const { sessionsRevoked } = await logoutAllStudentSessions(
+    student.id,
+    { studentId: student.id },
+    { exceptSessionRowId: student.sessionRowId, reason: "STUDENT_LOGOUT_OTHERS", cutoffUntracked: Boolean(student.sessionRowId) }
+  );
+  revalidatePath("/student/profile");
+  return { success: sessionsRevoked > 0 ? "All other devices have been signed out." : "No other device was signed in." };
+}
+
+/** Remove a registered device (frees a slot) — only when Admin allows it, rate-limited. */
+export async function removeOwnDeviceAction(deviceId: string): Promise<DeviceActionState> {
+  const student = await requireStudentOrLogin();
+  if (typeof deviceId !== "string" || !deviceId) return { error: "Device not found." };
+  try {
+    await studentRemoveOwnDevice(student.id, deviceId, student.deviceId);
+  } catch (error) {
+    return deviceActionError(error);
+  }
+  revalidatePath("/student/profile");
+  return { success: "Device removed." };
 }

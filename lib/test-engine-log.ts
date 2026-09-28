@@ -10,7 +10,7 @@ import "server-only";
  * PM2 logs as `[test-engine]`. Only ids, the operation, a safe error code and
  * latency are logged — never answers, correct labels, tokens or secrets.
  */
-export type EngineOp = "load" | "save" | "navigate" | "submit" | "reveal" | "start";
+export type EngineOp = "load" | "save" | "navigate" | "submit" | "reveal" | "start" | "heartbeat";
 
 export type EngineErrorCode =
   | "EXPIRED"
@@ -20,6 +20,7 @@ export type EngineErrorCode =
   | "NOT_ALLOWED"
   | "NO_SELECTION"
   | "INVALID_OPTION"
+  | "OTHER_DEVICE"
   | "INTERNAL";
 
 /** A known, student-safe engine failure. `message` is shown to the student. */

@@ -8,6 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
 import { EditProfileDialog, ChangePasswordDialog, DeleteAccountDialog } from "./profile-dialogs";
+import { getStudentDeviceOverview } from "@/lib/student-devices";
+import { DevicesCard, type StudentDeviceView } from "./devices-card";
+
+/** Revoked devices shown to the student (history beyond this stays admin-only). */
+const REVOKED_SHOWN = 5;
 
 export const metadata = { title: "My Profile — Mock Test Series.in" };
 
@@ -19,13 +24,31 @@ const PROVIDER_LABEL: Record<string, string> = {
 
 export default async function StudentProfilePage() {
   const student = await requireStudent();
-  const [profile, latestDeletion] = await Promise.all([
+  const [profile, latestDeletion, deviceOverview] = await Promise.all([
     getStudentProfile(student.id),
     getLatestDeletionRequest(student.id),
+    getStudentDeviceOverview(student.id),
   ]);
   const pendingDeletion = latestDeletion?.status === "PENDING" ? latestDeletion : null;
   const rejectedDeletion = latestDeletion?.status === "REJECTED" ? latestDeletion : null;
   if (!profile) notFound();
+
+  const activeDevices = deviceOverview.devices.filter((d) => d.active);
+  const revokedDevices = deviceOverview.devices.filter((d) => !d.active).slice(0, REVOKED_SHOWN);
+  const devices: StudentDeviceView[] = [...activeDevices, ...revokedDevices].map((d) => ({
+    id: d.id,
+    displayName: d.displayName,
+    os: d.os,
+    browser: d.browser,
+    deviceType: d.deviceType,
+    firstSeen: formatIst(d.firstSeenAt),
+    lastActive: formatIst(d.lastSeenAt),
+    active: d.active,
+    current: d.id === student.deviceId,
+    hasTestInProgress: d.hasTestInProgress,
+    sessionIds: d.active ? d.sessions.map((sess) => sess.id) : [],
+  }));
+  const hasOtherSessions = activeDevices.some((d) => d.sessions.some((sess) => sess.id !== student.sessionRowId));
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
@@ -93,6 +116,15 @@ export default async function StudentProfilePage() {
           </CardContent>
         </Card>
       ) : null}
+
+      <DevicesCard
+        devices={devices}
+        registered={deviceOverview.registered}
+        limit={deviceOverview.limit}
+        selfRemoveEnabled={deviceOverview.settings.studentSelfRemove}
+        nextSelfRemoval={deviceOverview.nextSelfRemovalAt ? formatIst(deviceOverview.nextSelfRemovalAt) : null}
+        hasOtherSessions={hasOtherSessions}
+      />
 
       <Card>
         <CardHeader>

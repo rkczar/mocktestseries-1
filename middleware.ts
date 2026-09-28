@@ -1,6 +1,31 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { auth as adminAuth } from "@/lib/auth-edge";
+import { DEVICE_COOKIE_NAME, deviceCookieOptions, mintDeviceCookieValue, verifyDeviceCookieValue } from "@/lib/device-cookie";
+
+/**
+ * Student device cookie (lib/device-cookie.ts). Guaranteed on every student
+ * auth surface BEFORE a sign-in runs, so the login Server Actions and the
+ * Google callback can always identify the device. A fresh value is also
+ * injected into this request's Cookie header, so even the very first
+ * request from a new browser sees it. Never set on /admin.
+ */
+async function withDeviceCookie(
+  request: NextRequest,
+  respond: (init?: { request: { headers: Headers } }) => NextResponse
+): Promise<NextResponse> {
+  if (await verifyDeviceCookieValue(request.cookies.get(DEVICE_COOKIE_NAME)?.value)) return respond();
+  const value = await mintDeviceCookieValue();
+  const headers = new Headers(request.headers);
+  const others = (request.headers.get("cookie") ?? "")
+    .split(";")
+    .map((c) => c.trim())
+    .filter((c) => c && !c.startsWith(`${DEVICE_COOKIE_NAME}=`));
+  headers.set("cookie", [...others, `${DEVICE_COOKIE_NAME}=${value}`].join("; "));
+  const response = respond({ request: { headers } });
+  response.cookies.set(DEVICE_COOKIE_NAME, value, deviceCookieOptions);
+  return response;
+}
 
 /**
  * Two entirely separate next-auth instances/cookies guard two entirely
@@ -28,8 +53,13 @@ export default async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (pathname === "/student/login" || pathname === "/student/register") {
-    return NextResponse.next();
+  if (
+    pathname === "/login" ||
+    pathname.startsWith("/api/student-auth") ||
+    pathname === "/student/login" ||
+    pathname === "/student/register"
+  ) {
+    return withDeviceCookie(request, (init) => NextResponse.next(init));
   }
 
   if (pathname.startsWith("/student")) {
@@ -45,14 +75,14 @@ export default async function middleware(request: NextRequest) {
       // survives the login round-trip instead of dropping which resource
       // the visitor was trying to reach.
       loginUrl.searchParams.set("callbackUrl", pathname + request.nextUrl.search);
-      return NextResponse.redirect(loginUrl);
+      return withDeviceCookie(request, () => NextResponse.redirect(loginUrl));
     }
-    return NextResponse.next();
+    return withDeviceCookie(request, (init) => NextResponse.next(init));
   }
 
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/student/:path*"],
+  matcher: ["/admin/:path*", "/student/:path*", "/login", "/api/student-auth/:path*"],
 };

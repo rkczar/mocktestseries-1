@@ -4,6 +4,7 @@ import { getStudentSession } from "@/lib/student-session";
 import { getLoginPageConfig } from "@/lib/login-page";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { safeStudentCallback } from "@/lib/student-callback";
+import { DEVICE_LIMIT_MESSAGE } from "@/lib/student-devices";
 import { LeftCanvas } from "./left-canvas";
 import { LoginScreen } from "./login-screen";
 
@@ -12,9 +13,9 @@ export const metadata = { title: "Student Login — Mock Test Series.in" };
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ callbackUrl?: string; tab?: string }>;
+  searchParams: Promise<{ callbackUrl?: string; tab?: string; error?: string }>;
 }) {
-  const { callbackUrl: rawCallbackUrl, tab } = await searchParams;
+  const { callbackUrl: rawCallbackUrl, tab, error } = await searchParams;
   // Validated once here; the form actions re-validate server-side anyway.
   const callbackUrl = safeStudentCallback(rawCallbackUrl);
 
@@ -70,6 +71,7 @@ export default async function LoginPage({
           defaultMethod={tab === "otp" ? "otp" : "password"}
           pageConfig={pageConfig}
           providerConfig={providerConfig}
+          notice={error === "DeviceLimit" ? DEVICE_LIMIT_MESSAGE : undefined}
         />
       </div>
     </div>

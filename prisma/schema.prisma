@@ -71,6 +71,9 @@ model AdminUser {
   assignedCommunications Communication[]
   aiExplanationReviews   AIExplanation[]   @relation("AiExplanationReviewedBy")
   createdTestResources   TestResource[]
+  revokedStudentDevices  StudentDevice[]       @relation("StudentDeviceRevokedBy")
+  revokedStudentSessions StudentSession[]      @relation("StudentSessionRevokedBy")
+  deviceSecurityEvents   DeviceSecurityEvent[]
 }
 
 model LoginAttempt {
@@ -527,6 +530,13 @@ model Student {
   authProvider StudentAuthProvider
   status       StudentStatus       @default(ACTIVE)
   lastLoginAt  DateTime?
+  // Device security (lib/student-devices.ts). A token with no tracked
+  // StudentSession (issued before device security, or with session tracking
+  // off) is rejected when it authenticated before this instant: "log out
+  // all devices" for tokens that have no session row to revoke.
+  sessionsValidAfter DateTime?
+  // Last Admin "Reset Device Limit" (history lives in DeviceSecurityEvent).
+  deviceLimitResetAt DateTime?
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
@@ -545,6 +555,9 @@ model Student {
   announcementRecipientOf AnnouncementRecipient[]
   communications          Communication[]
   passwordResetTokens     PasswordResetToken[]
+  devices                 StudentDevice[]
+  sessions                StudentSession[]
+  deviceSecurityEvents    DeviceSecurityEvent[]
 
   entitlements      StudentEntitlement[]
   couponRedemptions CouponRedemption[]
@@ -631,6 +644,104 @@ model StudentLoginAttempt {
 
   @@index([identifier, ipAddress, createdAt])
   @@index([method, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Student device security (lib/student-devices.ts)
+//
+// A device is a browser profile holding the signed first-party `mts-device`
+// cookie; only the SHA-256 of its random id is stored. A student may hold
+// at most N active devices (Setting `security.student_devices`). A session
+// is one successful sign-in on one device; the JWT carries a random session
+// secret whose SHA-256 is `tokenHash` — raw tokens are never stored.
+// Revocation is enforced by the Node-runtime jwt callback in
+// lib/auth-student.ts on every auth() call.
+// ---------------------------------------------------------------------------
+
+enum DeviceSecurityEventType {
+  DEVICE_REGISTERED
+  LOGIN_SUCCESS
+  DEVICE_LIMIT_REACHED
+  SESSION_REVOKED
+  DEVICE_REMOVED
+  ADMIN_DEVICE_RESET
+  LOGOUT_ALL
+  SUSPICIOUS_DEVICE_ACTIVITY
+  TEST_DEVICE_CONFLICT
+}
+
+model StudentDevice {
+  id               String     @id @default(cuid())
+  studentId        String
+  student          Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  deviceHash       String
+  displayName      String
+  deviceType       String
+  browser          String?
+  os               String?
+  userAgent        String?
+  firstSeenAt      DateTime   @default(now())
+  lastSeenAt       DateTime   @default(now())
+  lastLoginAt      DateTime?
+  lastIpHash       String?
+  lastIpMasked     String?
+  // Active = holds one of the student's device slots.
+  active           Boolean    @default(true)
+  trusted          Boolean    @default(false)
+  registeredVia    String     @default("LOGIN")
+  revokedAt        DateTime?
+  revokedByAdminId String?
+  revokedByAdmin   AdminUser? @relation("StudentDeviceRevokedBy", fields: [revokedByAdminId], references: [id], onDelete: SetNull)
+  revokeReason     String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  sessions       StudentSession[]
+  events         DeviceSecurityEvent[]
+  activeAttempts TestAttempt[]
+
+  @@unique([studentId, deviceHash])
+  @@index([studentId, active])
+}
+
+model StudentSession {
+  id               String        @id @default(cuid())
+  studentId        String
+  student          Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  deviceId         String
+  device           StudentDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  tokenHash        String        @unique
+  method           String
+  createdAt        DateTime      @default(now())
+  lastSeenAt       DateTime      @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  revokeReason     String?
+  revokedByAdminId String?
+  revokedByAdmin   AdminUser?    @relation("StudentSessionRevokedBy", fields: [revokedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([studentId, revokedAt])
+  @@index([deviceId, revokedAt])
+}
+
+/**
+ * Append-only audit trail. Never deleted by resets or revocations.
+ */
+model DeviceSecurityEvent {
+  id           String                  @id @default(cuid())
+  studentId    String?
+  student      Student?                @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  deviceId     String?
+  device       StudentDevice?          @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  sessionId    String?
+  eventType    DeviceSecurityEventType
+  actorAdminId String?
+  actorAdmin   AdminUser?              @relation(fields: [actorAdminId], references: [id], onDelete: SetNull)
+  metadata     Json?
+  createdAt    DateTime                @default(now())
+
+  @@index([studentId, createdAt])
+  @@index([eventType, createdAt])
 }
 
 model DeletionRequest {
@@ -1384,6 +1495,12 @@ model TestAttempt {
   startedAt            DateTime           @default(now())
   submittedAt          DateTime?
   createdAt            DateTime           @default(now())
+  // One Active Test Device (lib/attempt-device-lease.ts): the StudentDevice
+  // currently running this attempt and when it last proved it was alive.
+  // A lease only — it never touches answers.
+  activeDeviceId       String?
+  activeDevice         StudentDevice?     @relation(fields: [activeDeviceId], references: [id], onDelete: SetNull)
+  activeSeenAt         DateTime?
 
   questions TestAttemptQuestion[]
   answers   Answer[]
@@ -1400,6 +1517,7 @@ model TestAttempt {
   @@index([grandTestId])
   @@index([liveTestId])
   @@index([mockTestId, isLeaderboardAttempt, status])
+  @@index([activeDeviceId])
 }
 
 model TestAttemptQuestion {

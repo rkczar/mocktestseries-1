@@ -5,6 +5,10 @@ import { RestrictedCard } from "@/components/admin/restricted-card";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { getDeviceMonitoringData } from "@/lib/student-devices";
+import { formatIst } from "@/lib/ist-time";
+import { maskEmail, maskPhone } from "@/lib/pii-mask";
+import { DeviceMonitoringTable, type DeviceMonitoringRow } from "./device-monitoring-table";
 
 export const metadata = { title: "Authentication Monitoring — Mock Test Series.in Admin" };
 
@@ -36,6 +40,8 @@ function methodLabel(method: string | null): string {
       return "Create Account";
     case "LOGOUT":
       return "Logout";
+    case "DEVICE_LIMIT":
+      return "Device Limit Block";
     default:
       return method ?? "Unknown";
   }
@@ -45,7 +51,7 @@ function methodLabel(method: string | null): string {
 async function loadAuthMonitoringData() {
   const windowStart = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
-  const [total, successful, byMethod, recent] = await Promise.all([
+  const [total, successful, byMethod, recent, devices] = await Promise.all([
     prisma.studentLoginAttempt.count({ where: { createdAt: { gte: windowStart } } }),
     prisma.studentLoginAttempt.count({ where: { createdAt: { gte: windowStart }, success: true } }),
     prisma.studentLoginAttempt.groupBy({
@@ -57,9 +63,10 @@ async function loadAuthMonitoringData() {
       orderBy: { createdAt: "desc" },
       take: RECENT_LIMIT,
     }),
+    getDeviceMonitoringData(),
   ]);
 
-  return { total, successful, byMethod, recent };
+  return { total, successful, byMethod, recent, devices };
 }
 
 export default async function AuthenticationMonitoringPage() {
@@ -68,7 +75,13 @@ export default async function AuthenticationMonitoringPage() {
     return <RestrictedCard title="Authentication Monitoring" />;
   }
 
-  const { total, successful, byMethod, recent } = await loadAuthMonitoringData();
+  const { total, successful, byMethod, recent, devices } = await loadAuthMonitoringData();
+  const deviceRows: DeviceMonitoringRow[] = devices.rows.map((r) => ({
+    ...r,
+    lastLoginLabel: r.lastLoginAt ? formatIst(new Date(r.lastLoginAt)) : "Never",
+    emailMasked: maskEmail(r.email),
+    mobileMasked: maskPhone(r.mobile),
+  }));
 
   const failed = total - successful;
   const successRate = total > 0 ? Math.round((successful / total) * 1000) / 10 : 0;
@@ -98,6 +111,26 @@ export default async function AuthenticationMonitoringPage() {
         <StatCard label="Failed Attempts" value={failed} />
         <StatCard label="Success Rate" value={`${successRate}%`} />
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Student Device Monitoring</CardTitle>
+          <CardDescription>
+            Device limit {devices.limit} per student. Blocks, resets and suspicious activity come from the device security
+            audit trail; open a student to revoke devices or reset their limit.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+            <StatCard label="Active Student Sessions" value={devices.summary.activeSessions} />
+            <StatCard label="Registered Devices" value={devices.summary.registeredDevices} />
+            <StatCard label="Device Limit Blocks Today" value={devices.summary.blocksToday} />
+            <StatCard label="Suspicious Accounts" value={devices.summary.suspiciousAccounts} />
+            <StatCard label="Device Resets Today" value={devices.summary.resetsToday} />
+          </div>
+          <DeviceMonitoringTable rows={deviceRows} limit={devices.limit} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

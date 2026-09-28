@@ -38,6 +38,7 @@ import { ReportQuestionDialog } from "@/components/student/report-question-dialo
 import { cn } from "@/lib/utils";
 import { AnswerSaveQueue, type SaveStatus } from "@/lib/answer-save-queue";
 import {
+  attemptHeartbeatAction,
   revealAnswerAction,
   saveAnswerAction,
   submitAttemptAction,
@@ -80,6 +81,10 @@ type Status = "current" | "answered-marked" | "marked" | "answered" | "visited" 
 
 const SAVE_TIMEOUT_MS = 12_000;
 const SUBMIT_FLUSH_TIMEOUT_MS = 10_000;
+/** Renews this device's lease on the attempt (lib/attempt-device-lease.ts, lease = 3 min). */
+const HEARTBEAT_MS = 60_000;
+const OTHER_DEVICE_NOTICE =
+  "This test is now open on another device, so this device has stopped saving. Your saved answers are safe. Continue on the other device, or close it there and reload here after a few minutes.";
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -136,6 +141,7 @@ type Problem =
   | { kind: "save-failed"; message: string }
   | { kind: "submit-failed" }
   | { kind: "expired" }
+  | { kind: "other-device"; message: string }
   | { kind: "unsaved-before-submit" };
 
 export function TestPlayer({
@@ -205,7 +211,10 @@ export function TestPlayer({
         onExhausted: () =>
           setProblem((p) => p ?? { kind: "save-failed", message: "Some answers could not be saved yet. They are kept on this device." }),
         onFatal: (code) => {
-          if (code === "EXPIRED") {
+          if (code === "OTHER_DEVICE") {
+            // Another device holds this test: stop here, keep unsaved answers on this device, never submit.
+            setProblem({ kind: "other-device", message: OTHER_DEVICE_NOTICE });
+          } else if (code === "EXPIRED") {
             setProblem({ kind: "expired" });
             finishRef.current("auto");
           } else {
@@ -265,6 +274,25 @@ export function TestPlayer({
 
   // Stop the queue's retry timers when the player unmounts.
   useEffect(() => () => queueRef.current?.stop(), []);
+
+  // ---- One Active Test Device: keep this device's lease alive ----------------
+  // Side effect in an effect (never in a state updater — ops/TEST-ENGINE.md #1).
+  // Network failures are ignored; only an explicit OTHER_DEVICE stops the tab.
+  useEffect(() => {
+    const beat = () => {
+      if (submittedRef.current) return;
+      attemptHeartbeatAction(attemptId)
+        .then((result) => {
+          if (!result.ok && result.code === "OTHER_DEVICE") {
+            queueRef.current?.stop();
+            setProblem({ kind: "other-device", message: OTHER_DEVICE_NOTICE });
+          }
+        })
+        .catch(() => {});
+    };
+    const timer = setInterval(beat, HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [attemptId]);
 
   // ---- Timer (deadline-based; unlimited = no timer) --------------------------
   useEffect(() => {
@@ -431,6 +459,8 @@ export function TestPlayer({
               ? "Your test could not be submitted. Your saved answers are kept — try again, or reload and submit."
               : problem.kind === "expired"
                 ? "Time is up — submitting your test."
+                : problem.kind === "other-device"
+                  ? problem.message
                 : problem.kind === "unsaved-before-submit"
                   ? "Some answers are not saved yet. Retry saving, or submit with the answers already saved."
                   : problem.message}
