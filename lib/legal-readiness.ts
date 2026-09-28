@@ -49,6 +49,9 @@ const hashOf = (text: string) => createHash("sha256").update(text).digest("hex")
 
 function contentIssue(key: LegalDocKey, body: string): string | null {
   if (!body.trim()) return "No content published yet.";
+  if (/\[requires owner|\bTODO\b|coming soon|lorem ipsum|\[insert|\bTBD\b/i.test(body)) return "Contains placeholder text (e.g. \"[Requires owner…]\", TODO, coming soon).";
+  if (/do(es)? not (currently )?(accept|charge|process) payments?|all content (on the platform )?is (currently )?free|payments are not active/i.test(body))
+    return "Still says the platform does not accept payments / everything is free.";
   if (key === "terms") {
     if (/does not currently charge/i.test(body)) return "Still says the platform does not charge for access.";
     if (!/razorpay/i.test(body) || !/refund/i.test(body)) return "Needs a payments section naming the processor and linking the refund policy.";
@@ -56,6 +59,9 @@ function contentIssue(key: LegalDocKey, body: string): string | null {
   if (key === "privacy") {
     if (/does not currently process payments/i.test(body)) return "Still says the platform does not process payments.";
     if (!/razorpay/i.test(body)) return "Needs a payment-processor (Razorpay) disclosure.";
+  }
+  if (key === "refund") {
+    if (!/refund/i.test(body) || !/cancel/i.test(body) || !/duplicate/i.test(body)) return "Needs cancellation, refund and duplicate-payment sections.";
   }
   return null;
 }

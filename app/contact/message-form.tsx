@@ -42,7 +42,12 @@ export function MessageUsForm({ initialName, initialEmail }: { initialName: stri
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="msg-subject">Subject</Label>
-        <Input id="msg-subject" name="subject" required minLength={2} maxLength={150} />
+        <Input id="msg-subject" name="subject" required minLength={2} maxLength={150} list="msg-subject-topics" />
+        <datalist id="msg-subject-topics">
+          {["Payment issue", "Access not activated", "Duplicate payment", "Refund / cancellation request", "Invoice issue", "Account issue", "Technical issue"].map((t) => (
+            <option key={t} value={t} />
+          ))}
+        </datalist>
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="msg-message">Message</Label>

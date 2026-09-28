@@ -5,6 +5,7 @@ import { str } from "@/components/homepage/content-helpers";
 import { BRAND_NAME } from "@/lib/brand";
 import { getSiteUrl } from "@/lib/site-url";
 import { LegalBody } from "./legal-body";
+import { LegalSupportFooter } from "./support-details";
 
 /**
  * Standalone /privacy, /terms and /refund-policy pages. They render the SAME
@@ -44,8 +45,9 @@ export async function LegalDocumentPage({ kind }: { kind: LegalDocumentKind }) {
             <h1 className="text-2xl font-semibold text-[var(--color-foreground)]">{doc.title}</h1>
             {lastUpdated ? <CardDescription>Last Updated: {lastUpdated}</CardDescription> : null}
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-col gap-8">
             <LegalBody text={str(content, doc.body)} />
+            <LegalSupportFooter />
           </CardContent>
         </Card>
       </div>

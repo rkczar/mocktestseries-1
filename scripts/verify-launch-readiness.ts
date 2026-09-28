@@ -147,7 +147,7 @@ async function main() {
       status: "PUBLISHED",
       sections: {
         create: [
-          { key: "CONTACT_INFO", content: { termsBody: `Intro\n\n${copy.TERMS_PAYMENT_SECTION}`, privacyBody: `Intro\n\n${copy.PRIVACY_PAYMENT_SECTION}`, refundBody: copy.REFUND_POLICY_DEFAULT } },
+          { key: "CONTACT_INFO", content: { termsBody: copy.TERMS_DOCUMENT, privacyBody: copy.PRIVACY_DOCUMENT, refundBody: copy.REFUND_POLICY_DOCUMENT } },
           { key: "FOOTER", content: { links: [["Terms", "/terms"], ["Privacy", "/privacy"], ["Refund & Cancellation Policy", "/refund-policy"], ["Contact", "/contact"]] } },
         ],
       },
@@ -161,10 +161,12 @@ async function main() {
   await markLegalDocReviewed("refund", undefined);
   check("Owner review recorded for refund", (await getLegalReadiness()).docs.find((d) => d.key === "refund")?.reviewed === true);
   const ci = cfg.sections.find((s) => s.key === "CONTACT_INFO")!;
-  await prisma.homepageSection.update({ where: { id: ci.id }, data: { content: { ...(ci.content as object), refundBody: `${copy.REFUND_POLICY_DEFAULT}\n\nEdited.` } } });
+  await prisma.homepageSection.update({ where: { id: ci.id }, data: { content: { ...(ci.content as object), refundBody: `${copy.REFUND_POLICY_DOCUMENT}\n\nEdited.` } } });
   check("Editing text resets owner review", (await getLegalReadiness()).docs.find((d) => d.key === "refund")?.reviewed === false);
   await prisma.homepageSection.update({ where: { id: ci.id }, data: { content: { ...(ci.content as object), termsBody: `Intro\n\n${copy.LEGACY_TERMS_PAYMENT_BLOCK}` } } });
-  check("Stale 'does not charge' Terms flagged", /does not charge/.test((await getLegalReadiness()).docs.find((d) => d.key === "terms")?.contentIssue ?? ""));
+  check("Stale 'does not charge' / placeholder Terms flagged", /placeholder|does not/.test((await getLegalReadiness()).docs.find((d) => d.key === "terms")?.contentIssue ?? ""));
+  await prisma.homepageSection.update({ where: { id: ci.id }, data: { content: { ...(ci.content as object), refundBody: "## Refunds\nTODO" } } });
+  check("Placeholder / incomplete refund policy flagged", Boolean((await getLegalReadiness()).docs.find((d) => d.key === "refund")?.contentIssue));
   check("/refund-policy page + visibility key + sitemap", /LegalDocumentPage kind="refund"/.test(src("app/refund-policy/page.tsx")) && /key: "refund-policy"/.test(src("lib/page-visibility.ts")) && /refund-policy/.test(src("app/sitemap.ts")));
   check("Checkout links Terms / Privacy / Refund / Contact", ["/terms", "/privacy", "/refund-policy", "/contact"].every((h) => src("app/student/(dashboard)/checkout/[code]/checkout-client.tsx").includes(`href="${h}"`)));
 
