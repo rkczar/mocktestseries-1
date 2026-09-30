@@ -72,7 +72,8 @@ async function summarise(
   now: Date
 ): Promise<ExamAccessSummary | null> {
   const mockSeries = await getExamMockSeries(exam.id, now);
-  const offer = await getSeriesOffer(exam.id, mockSeries?.series.id ?? null, now);
+  // Student-aware: must agree with ctx.mode (a verification account is PAID).
+  const offer = await getSeriesOffer(exam.id, mockSeries?.series.id ?? null, now, studentId);
   if (!mockSeries && !offer) return null;
   const comparison = await getSeriesComparison(exam.id, mockSeries, offer);
 

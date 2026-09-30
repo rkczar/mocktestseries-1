@@ -11,7 +11,8 @@
  *   DATABASE_URL=<scratch url> NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-coupon-creator.ts
  *
  * Proves: verification accounts get PAID behaviour while everyone else stays
- * FREE; coupon code normalisation; invalid / inactive / not-started / expired
+ * FREE — including the PAID offer presentation (dashboard card, Plans mode,
+ * series CTA) while public / anonymous offers follow the global mode; coupon code normalisation; invalid / inactive / not-started / expired
  * / exhausted / wrong-product rejection; product-restricted acceptance;
  * percentage, fixed and 100% discounts (server-computed, never negative, no
  * Razorpay ₹0 order); amount/currency tampering fails closed; abandoned order
@@ -120,6 +121,11 @@ async function main() {
   const { requestRefund } = await import("@/lib/payments/refunds");
   const { getCouponSettlementRows, getCouponPerformance, settlementCsv, commissionFor } = await import("@/lib/payments/coupon-report");
   const { getLaunchReadiness } = await import("@/lib/payments/launch-readiness");
+  const { getPaymentModeForStudent } = await import("@/lib/payments/settings");
+  const { getStudentExamAccessSummaries } = await import("@/lib/payments/student-access");
+  const { getSeriesOffer, getExamMockSeriesSummary, getSeriesCta } = await import("@/lib/mock-series");
+  const { computeProductPrice, describeAccessDuration } = await import("@/lib/payments/pricing");
+  const { getRazorpayConfig } = await import("@/lib/razorpay-config");
 
   const setMode = async (m: "FREE" | "PAID" | "MAINTENANCE") => {
     await setPaymentMode(m, undefined);
@@ -172,6 +178,33 @@ async function main() {
   check("Verification account still gets the FREE sample mock", vSample.allowed);
   check("Regular student checkout refused (PLATFORM_FREE) — no order row", code(await rejects(() => createCheckoutOrder(U.id, product.id))) === "PLATFORM_FREE" && (await prisma.paymentOrder.count({ where: { studentId: U.id } })) === 0);
   check("Verification account product status → PAYMENT_REQUIRED", (await canStudentAccessProduct(V.id, product.id)).status === "PAYMENT_REQUIRED");
+  // Presentation must follow the same effective mode as access / checkout.
+  const summaryFor = async (sid: string) => (await getStudentExamAccessSummaries(sid, [exam]))[0];
+  const checkoutHref = `/student/checkout/${product.code}`;
+  const dbPrice = computeProductPrice(product);
+  const uSum = await summaryFor(U.id);
+  check("A. Regular student: effective mode FREE (Plans page mode)", (await getPaymentModeForStudent(U.id)) === "FREE");
+  check("A. Regular student card → FREE_MODE, no price, no checkout", uSum?.state === "FREE_MODE" && uSum.checkoutHref === null && uSum.offer?.showPrice === false);
+  check("A. Regular student series CTA → Open (no Buy)", (await getSeriesCta(U.id, uSum?.offer ?? null)).kind === "OPEN");
+  const vSum = await summaryFor(V.id);
+  check("B. Verification account: effective mode PAID (Plans page mode)", (await getPaymentModeForStudent(V.id)) === "PAID");
+  check("B. Verification card → FREE-tier upsell, not FREE_MODE", vSum?.state === "FREE");
+  check(
+    "B. Verification offer shows the DB selling price + MRP",
+    vSum?.offer?.showPrice === true && vSum.offer.price.pricePaise === dbPrice.pricePaise && vSum.offer.price.mrpPaise === product.mrpPaise
+  );
+  check("B. Verification offer duration from DB", vSum?.offer?.product.accessDuration === describeAccessDuration(product));
+  check("B. Comparison price row shows the paid price", !/Free right now/.test(vSum?.comparison.find((r) => r.key === "price")?.paid.text ?? "Free right now"));
+  check("B. Unlock CTA → canonical product checkout", vSum?.checkoutHref === checkoutHref && vSum.offer?.purchasable === true);
+  check("B. Series CTA → BUY at checkout", (await getSeriesCta(V.id, vSum?.offer ?? null)).href === checkoutHref);
+  check("B. Being a verification account grants no entitlement", (await prisma.studentEntitlement.count({ where: { studentId: V.id } })) === 0);
+  const pubOffer = await getSeriesOffer(exam.id, series.id);
+  const pubSummary = await getExamMockSeriesSummary({ id: exam.id, publicSlug: null });
+  check("C. Public offer stays global FREE (no price, not purchasable)", pubOffer?.mode === "FREE" && !pubOffer.showPrice && !pubOffer.purchasable && pubSummary.offer?.showPrice === false);
+  check("C. Anonymous CTA → Start Free (no paid CTA)", (await getSeriesCta(null, pubOffer)).kind === "START_FREE");
+  check("C. Unlisted student id → FREE offer", (await getSeriesOffer(exam.id, series.id, new Date(), U.id))?.showPrice === false);
+  check("No order rows created by presentation", (await prisma.paymentOrder.count({ where: { studentId: { in: [U.id, V.id] } } })) === 0);
+
   const vOrder = await createCheckoutOrder(V.id, product.id);
   check("Verification account can create a gateway order at the server price", vOrder.kind === "RAZORPAY" && vOrder.amountPaise === 49900);
   if (vOrder.kind === "RAZORPAY") {
@@ -179,6 +212,8 @@ async function main() {
     const r = await verifyCheckoutPayment(V.id, { orderId: vOrder.orderId, razorpayOrderId: vOrder.gatewayOrderId, razorpayPaymentId: payment.id, razorpaySignature: signature });
     const after = await getContentAccess(V.id, { kind: "MOCK_TEST", id: paidMock.id, examId: exam.id, testSeriesId: series.id, accessType: "PAID" });
     check("Paid → series unlocked for the verification account (ACTIVE_SUBSCRIPTION)", r.status === "SUCCESS" && after.status === "ACTIVE_SUBSCRIPTION");
+    const vActive = await summaryFor(V.id);
+    check("D. Verification account + ACTIVE entitlement → ACTIVE card, no purchase-required", vActive?.state === "ACTIVE" && vActive.entitlement?.productIds.includes(product.id) === true);
   }
   const readinessFreeWith = (await getLaunchReadiness()).groups.find((g) => g.key === "PRODUCT")!.items.find((i) => i.label === "Payment mode")!;
   await setVerificationStudentIds([], undefined);
@@ -190,6 +225,27 @@ async function main() {
 
   // Everything below exercises the paid path directly.
   await setMode("PAID");
+  {
+    const W = await mkStudent();
+    const wSum = await summaryFor(W.id);
+    const pub = await getSeriesOffer(exam.id, series.id);
+    check("E. Global PAID: regular student sees price + checkout (unchanged)", wSum?.state === "FREE" && wSum.checkoutHref === checkoutHref && wSum.offer?.price.pricePaise === dbPrice.pricePaise);
+    check("E. Global PAID: public offer shows price (unchanged)", pub?.showPrice === true && pub.purchasable === true);
+    check("E. Global PAID: anonymous CTA → login to buy", (await getSeriesCta(null, pub)).kind === "LOGIN_TO_BUY");
+  }
+
+  console.log("\n1b. Gateway environment form (stored value drives badge + dropdown)");
+  {
+    const panel = readFileSync("app/admin/(dashboard)/payments/_components/panels-ops.tsx", "utf8");
+    // The action form resets after submit; an unkeyed uncontrolled select would
+    // fall back to its first-render option (the stale TEST display).
+    check("F. Dropdown remounts from the stored environment", /<SelectNative key=\{rzp\.environment\} id="gw-env" name="environment" defaultValue=\{rzp\.environment\}>/.test(panel));
+    check("F. Badge reads the same stored value", /\{rzp\.environment === "TEST" \? <Badge variant="warning">TEST MODE<\/Badge> : <Badge variant="error">LIVE MODE — real money<\/Badge>\}/.test(panel));
+    await switchGatewayEnv("LIVE");
+    check("F. Persisted LIVE → config LIVE (badge + dropdown source)", (await getRazorpayConfig()).environment === "LIVE");
+    await switchGatewayEnv("TEST");
+    check("F. Persisted TEST → config TEST (badge + dropdown source)", (await getRazorpayConfig()).environment === "TEST");
+  }
 
   // ------------------------------------------------------------------------
   console.log("\n2. Coupon validation (server-side)");

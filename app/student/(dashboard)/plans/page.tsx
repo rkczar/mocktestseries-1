@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireStudent } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
-import { getPaymentMode } from "@/lib/payments/settings";
+import { getPaymentModeForStudent } from "@/lib/payments/settings";
 import { computeProductPrice, describeAccessDuration } from "@/lib/payments/pricing";
 import { formatInr } from "@/lib/payments/money";
 import { PRODUCT_TYPE_LABELS } from "@/lib/payments/product-links";
@@ -17,7 +17,7 @@ export default async function PlansPage() {
   const student = await requireStudent();
   const now = new Date();
   const [mode, products, entitlements] = await Promise.all([
-    getPaymentMode(),
+    getPaymentModeForStudent(student.id),
     prisma.product.findMany({
       where: { isActive: true, isVisible: true },
       include: { exam: { select: { name: true } } },

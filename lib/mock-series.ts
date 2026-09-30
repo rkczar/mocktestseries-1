@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { getPaymentMode, type PaymentMode } from "@/lib/payments/settings";
+import { getPaymentMode, getPaymentModeForStudent, type PaymentMode } from "@/lib/payments/settings";
 import { computeProductPrice, describeAccessDuration, type ProductPrice } from "@/lib/payments/pricing";
 import { canStudentAccessProduct, evaluateContentAccess, loadAccessContext, type AccessContext } from "@/lib/payments/access";
 import { deriveMockTestAvailability, type MockTestAvailability } from "@/lib/mock-test-schedule";
@@ -156,10 +156,19 @@ export interface SeriesOffer {
  * The product that sells an exam's mock series: a TEST_SERIES product bound
  * to the canonical series wins; otherwise an EXAM_ACCESS product for the exam
  * (which also unlocks the series). Only active + visible products count.
+ *
+ * `studentId` (internal Student.id) makes the mode that student's effective
+ * mode, so a payment verification account sees the PAID offer while the site
+ * is FREE. Public / anonymous callers omit it and follow the global mode.
  */
-export async function getSeriesOffer(examId: string, seriesId: string | null, now: Date = new Date()): Promise<SeriesOffer | null> {
+export async function getSeriesOffer(
+  examId: string,
+  seriesId: string | null,
+  now: Date = new Date(),
+  studentId?: string | null
+): Promise<SeriesOffer | null> {
   const [mode, candidates] = await Promise.all([
-    getPaymentMode(),
+    studentId ? getPaymentModeForStudent(studentId) : getPaymentMode(),
     prisma.product.findMany({
       where: {
         isActive: true,

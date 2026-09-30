@@ -106,7 +106,9 @@ export async function GatewayPanel({ canManage }: { canManage: boolean }) {
           ) : null}
           <ActionForm action={saveGatewayModeAction} submitLabel="Save gateway mode" readOnly={!canManage} className="grid grid-cols-1 gap-3 sm:grid-cols-4 sm:items-end">
             <Field label="Environment" htmlFor="gw-env">
-              <SelectNative id="gw-env" name="environment" defaultValue={rzp.environment}>
+              {/* key: remount from the stored value after a save — React resets the form
+                  after the action, which would otherwise revert to the first-render option. */}
+              <SelectNative key={rzp.environment} id="gw-env" name="environment" defaultValue={rzp.environment}>
                 <option value="TEST">TEST</option>
                 <option value="LIVE">LIVE</option>
               </SelectNative>
