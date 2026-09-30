@@ -1,4 +1,5 @@
 import "server-only";
+import crypto from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/secret-cipher";
 
@@ -188,6 +189,12 @@ export interface RazorpayConfigUpdate {
 
 export class RazorpayConfigError extends Error {}
 
+/** Constant-time equality for two secrets (compares fixed-length digests). */
+function sameSecret(a: string, b: string): boolean {
+  const digest = (s: string) => crypto.createHash("sha256").update(s).digest();
+  return crypto.timingSafeEqual(digest(a), digest(b));
+}
+
 export async function saveRazorpayConfig(update: RazorpayConfigUpdate): Promise<void> {
   const next = await readStored();
   if (update.enabled !== undefined) next.enabled = update.enabled;
@@ -205,7 +212,20 @@ export async function saveRazorpayConfig(update: RazorpayConfigUpdate): Promise<
       slot.keyId = keyId;
     }
     if (update.keySecret?.trim()) slot.keySecretCipher = encryptSecret(update.keySecret.trim());
-    if (update.webhookSecret?.trim()) slot.webhookSecretCipher = encryptSecret(update.webhookSecret.trim());
+    const webhookSecret = update.webhookSecret?.trim();
+    if (webhookSecret) {
+      // Webhooks are routed to an environment by whichever slot's secret
+      // verifies the signature, so a secret shared by TEST and LIVE makes
+      // LIVE events resolve as TEST (and get ignored). Never echo either value.
+      const other = decryptSecret(next[slotKey === "live" ? "test" : "live"]?.webhookSecretCipher);
+      if (other && sameSecret(other, webhookSecret)) {
+        const otherEnv = update.slot === "LIVE" ? "TEST" : "LIVE";
+        throw new RazorpayConfigError(
+          `The ${update.slot} Webhook Secret must be different from the ${otherEnv} Webhook Secret. Set a new, unique secret on the ${update.slot} webhook in the Razorpay Dashboard and save that. Nothing was changed.`
+        );
+      }
+      slot.webhookSecretCipher = encryptSecret(webhookSecret);
+    }
     if (keyId || update.keySecret?.trim() || update.webhookSecret?.trim()) {
       slot.lastTest = null;
       slot.credentialsUpdatedAt = new Date().toISOString();
