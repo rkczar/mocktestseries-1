@@ -105,15 +105,18 @@ export async function CouponForm({ coupon, readOnly }: { coupon: Coupon | null; 
         {multi("testSeriesIds", series, c?.testSeriesIds ?? [])}
       </F>
 
-      <div className="md:col-span-2 border-t border-[var(--color-border)] pt-3 text-sm font-medium">Attribution</div>
+      <div className="md:col-span-2 border-t border-[var(--color-border)] pt-3 text-sm font-medium">
+        Attribution &amp; creator{" "}
+        <span className="font-normal text-[var(--color-muted-foreground)]">(sales are attributed from successful orders only — never from codes typed at checkout)</span>
+      </div>
+      <F label="Creator / collaborator name" name="referrerName" hint="The doctor / creator / partner this code belongs to">
+        <Input id="c-referrerName" name="referrerName" defaultValue={c?.referrerName ?? ""} maxLength={100} />
+      </F>
       <F label="Source" name="source">
         <Input id="c-source" name="source" defaultValue={c?.source ?? ""} placeholder="instagram, telegram, friend…" />
       </F>
       <F label="Campaign" name="campaign">
         <Input id="c-campaign" name="campaign" defaultValue={c?.campaign ?? ""} />
-      </F>
-      <F label="Referrer name" name="referrerName">
-        <Input id="c-referrerName" name="referrerName" defaultValue={c?.referrerName ?? ""} />
       </F>
       <F label="Referrer code" name="referrerCode">
         <Input id="c-referrerCode" name="referrerCode" defaultValue={c?.referrerCode ?? ""} />
@@ -123,6 +126,27 @@ export async function CouponForm({ coupon, readOnly }: { coupon: Coupon | null; 
       </F>
       <F label="Referrer admin ID (optional)" name="referrerAdminId">
         <Input id="c-referrerAdminId" name="referrerAdminId" defaultValue={c?.referrerAdminId ?? ""} />
+      </F>
+      <F label="Commission type (optional)" name="commissionType" hint="Reporting only — nothing is paid out automatically">
+        <SelectNative id="c-commissionType" name="commissionType" defaultValue={c?.commissionType ?? ""}>
+          <option value="">No commission</option>
+          <option value="PERCENTAGE">Percentage of eligible net collected</option>
+          <option value="FIXED_AMOUNT">Fixed amount per eligible sale (₹)</option>
+        </SelectNative>
+      </F>
+      <F label="Commission value" name="commissionValue" hint="% (e.g. 10 or 12.5) or ₹ per sale. Eligible net = collected − refunded.">
+        <Input
+          id="c-commissionValue"
+          name="commissionValue"
+          inputMode="decimal"
+          defaultValue={
+            c?.commissionType && c.commissionValue
+              ? c.commissionType === "PERCENTAGE"
+                ? String(c.commissionValue / 100)
+                : paiseToRupeeString(c.commissionValue)
+              : ""
+          }
+        />
       </F>
       <div className="md:col-span-2">
         <F label="Notes" name="notes">

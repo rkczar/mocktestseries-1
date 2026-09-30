@@ -1,8 +1,20 @@
 import "server-only";
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
 import { EntitlementStatus, PaymentStatus, WebhookEventStatus, type PaymentEnvironment } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getRazorpayConfig, type RazorpayPublicConfig } from "@/lib/razorpay-config";
-import { composeSellerAddress, getInvoiceSettings, getPaymentMode, getPaymentPolicy, GSTIN_RE, type InvoiceSettings, type PaymentMode } from "@/lib/payments/settings";
+import {
+  composeSellerAddress,
+  getInvoiceSettings,
+  getPaymentMode,
+  getPaymentPolicy,
+  getVerificationStudentIds,
+  GSTIN_RE,
+  type InvoiceSettings,
+  type PaymentMode,
+} from "@/lib/payments/settings";
+import { PATTERNS, PRODUCTION_ROOTS } from "@/lib/backup/roots";
 import { describeAccessDuration } from "@/lib/payments/pricing";
 import { formatInr } from "@/lib/payments/money";
 import { isPurchasable, PRODUCT_SELECT } from "@/lib/payments/access";
@@ -23,7 +35,7 @@ import { loadCoverageProducts, summarizeCoverage } from "@/lib/test-series-assig
  */
 
 export type ReadinessStatus = "PASS" | "ACTION_REQUIRED" | "NOT_CONFIGURED";
-export type ReadinessGroupKey = "TEST" | "LIVE" | "PRODUCT" | "INVOICE" | "LEGAL" | "WEBHOOK" | "COVERAGE";
+export type ReadinessGroupKey = "TEST" | "LIVE" | "PRODUCT" | "INVOICE" | "LEGAL" | "WEBHOOK" | "COVERAGE" | "OPERATIONS";
 
 export interface ReadinessItem {
   label: string;
@@ -177,14 +189,31 @@ function liveGroup(rzp: RazorpayPublicConfig, liveWebhook: Date | null, e2e: E2E
   return { key: "LIVE", title: "LIVE Gateway", status: worst(items), items };
 }
 
-async function productGroup(mode: PaymentMode, rzp: RazorpayPublicConfig, now: Date): Promise<ReadinessGroup> {
+/**
+ * FREE is a safe state for the controlled LIVE purchase as long as a payment
+ * verification account exists to make it (everyone else stays free). PAID is
+ * the general-sale state. MAINTENANCE blocks new purchases.
+ */
+function modeItem(mode: PaymentMode, verificationAccounts: number): ReadinessItem {
+  if (mode === "PAID") return item("Payment mode", true, "PAID — pricing and entitlements apply to every student");
+  if (mode === "MAINTENANCE") return item("Payment mode", false, "MAINTENANCE — new purchases are paused");
+  return item(
+    "Payment mode",
+    verificationAccounts > 0,
+    verificationAccounts > 0
+      ? `FREE — all students keep free access; ${verificationAccounts} payment verification account(s) see PAID behaviour for the controlled purchase`
+      : "FREE — all students keep free access. Add a payment verification account (Settings) to make the controlled LIVE purchase, or set PAID for general sale"
+  );
+}
+
+async function productGroup(mode: PaymentMode, verificationAccounts: number, rzp: RazorpayPublicConfig, now: Date): Promise<ReadinessGroup> {
   const products = await prisma.product.findMany({
     where: { accessType: "PAID", isActive: true },
     orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     select: { ...PRODUCT_SELECT, sellingPricePaise: true, mrpPaise: true, accessDays: true, testSeries: { select: { name: true, status: true } } },
   });
   const items: ReadinessItem[] = [
-    item("Payment mode", mode === "PAID", mode === "PAID" ? "PAID — pricing and entitlements apply" : `${mode} — set PAID before selling`),
+    modeItem(mode, verificationAccounts),
     item("Gateway", rzp.enabled && rzp.configured, `${rzp.environment} · ${rzp.enabled ? "enabled" : "disabled"}${rzp.configured ? "" : " · active slot not configured"}`),
   ];
   if (products.length === 0) items.push({ label: "Paid products", status: "NOT_CONFIGURED", detail: "No active PAID product" });
@@ -282,11 +311,44 @@ async function coverageGroup(now: Date): Promise<ReadinessGroup> {
   return { key: "COVERAGE", title: "Test Series Coverage", status: worst(items), items };
 }
 
+/** Newest nightly pg_dump (non-empty, < 30 h old) and every on-disk migration applied. */
+async function operationsGroup(now: Date): Promise<ReadinessGroup> {
+  let latest: { name: string; size: number; mtime: Date } | null = null;
+  for (const name of await readdir(PRODUCTION_ROOTS.nightlyDb).catch(() => [] as string[])) {
+    if (!PATTERNS.nightlyDump.test(name)) continue;
+    const st = await stat(path.join(PRODUCTION_ROOTS.nightlyDb, name)).catch(() => null);
+    if (st && st.size > 0 && (!latest || st.mtime > latest.mtime)) latest = { name, size: st.size, mtime: st.mtime };
+  }
+  const fresh = Boolean(latest && now.getTime() - latest.mtime.getTime() < 30 * 3600_000);
+
+  const onDisk = (await readdir(path.join(process.cwd(), "prisma", "migrations")).catch(() => [] as string[])).filter((n) => /^\d{14}_/.test(n));
+  const applied = await prisma.$queryRaw<{ migration_name: string }[]>`SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`.catch(
+    () => null
+  );
+  const appliedSet = new Set((applied ?? []).map((r) => r.migration_name));
+  const pending = onDisk.filter((n) => !appliedSet.has(n));
+
+  const items = [
+    item(
+      "Latest database backup",
+      fresh,
+      latest ? `${latest.name} · ${(latest.size / 1_048_576).toFixed(1)} MB · ${fmt(latest.mtime)}${fresh ? "" : " — older than 30 hours"}` : "No nightly database dump found"
+    ),
+    item(
+      "Database migrations",
+      applied !== null && onDisk.length > 0 && pending.length === 0,
+      applied === null ? "Could not read the migration history" : pending.length ? `${pending.length} pending: ${pending.join(", ")}` : `All ${onDisk.length} applied`
+    ),
+  ];
+  return { key: "OPERATIONS", title: "Operations", status: worst(items), items };
+}
+
 export async function getLaunchReadiness(): Promise<LaunchReadiness> {
   const now = new Date();
-  const [rzp, mode, inv, policy, legal, testE2E, liveE2E, testHook, liveHook, failedRecent] = await Promise.all([
+  const [rzp, mode, verificationIds, inv, policy, legal, testE2E, liveE2E, testHook, liveHook, failedRecent] = await Promise.all([
     getRazorpayConfig(),
     getPaymentMode(),
+    getVerificationStudentIds(),
     getInvoiceSettings(),
     getPaymentPolicy(),
     getLegalReadiness(),
@@ -302,11 +364,12 @@ export async function getLaunchReadiness(): Promise<LaunchReadiness> {
   const groups = [
     testGroup(rzp, testAt, testE2E),
     liveGroup(rzp, liveAt, liveE2E),
-    await productGroup(mode, rzp, now),
+    await productGroup(mode, verificationIds.length, rzp, now),
     invoiceGroup(inv),
     legalGroup(legal, policy.refundAccessPolicy),
     webhookGroup(rzp, testAt, liveAt, failedRecent),
     await coverageGroup(now),
+    await operationsGroup(now),
   ];
   const byKey = Object.fromEntries(groups.map((g) => [g.key, g])) as Record<ReadinessGroupKey, ReadinessGroup>;
 
@@ -318,7 +381,7 @@ export async function getLaunchReadiness(): Promise<LaunchReadiness> {
     l.lastTest?.ok ? null : "LIVE connection has not passed a test since the LIVE keys last changed",
   ].filter((x): x is string => Boolean(x));
 
-  const acknowledgementsRequired = (["PRODUCT", "INVOICE", "LEGAL", "COVERAGE"] as const).flatMap((k) =>
+  const acknowledgementsRequired = (["PRODUCT", "INVOICE", "LEGAL", "COVERAGE", "OPERATIONS"] as const).flatMap((k) =>
     byKey[k].items.filter((i) => i.status !== "PASS").map((i) => `${byKey[k].title}: ${i.label} — ${i.detail}`)
   );
   if (!testE2E) acknowledgementsRequired.push("TEST Gateway: no TEST payment fulfilled through a signed webhook yet");

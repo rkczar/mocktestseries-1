@@ -14,7 +14,7 @@ import {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getRazorpayConfig, getRazorpayCredentials } from "@/lib/razorpay-config";
-import { getPaymentMode, getPaymentPolicy } from "@/lib/payments/settings";
+import { getPaymentModeForStudent, getPaymentPolicy } from "@/lib/payments/settings";
 import { computeProductPrice, computeAccessWindow, describeAccessDuration, type ProductPrice } from "@/lib/payments/pricing";
 import { evaluateCoupon, lockCoupon, normalizeCouponCode, COUPON_REJECTION_MESSAGES, type CouponRejection } from "@/lib/payments/coupons";
 import { canStudentAccessProduct, type AccessResult } from "@/lib/payments/access";
@@ -231,7 +231,7 @@ export async function createCheckoutOrder(
   couponInput?: string | null,
   opts: { renew?: boolean } = {}
 ): Promise<CreateOrderResult> {
-  const mode = await getPaymentMode();
+  const mode = await getPaymentModeForStudent(studentId);
   if (mode === "FREE") throw new CheckoutError("Everything is free right now — no purchase needed.", "PLATFORM_FREE");
   if (mode === "MAINTENANCE") throw new CheckoutError("Purchases are temporarily paused. Please try again later.", "PURCHASES_PAUSED");
 

@@ -5,6 +5,7 @@ import { formatInr } from "@/lib/payments/money";
 import { computeProductPrice, describeAccessDuration } from "@/lib/payments/pricing";
 import { PRODUCT_TYPE_LABELS, entitlementDisplayStatus } from "@/lib/payments/product-links";
 import { orderWhere, type PaymentFilters } from "@/lib/payments/analytics";
+import { describeCommission, getCouponPerformance } from "@/lib/payments/coupon-report";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -108,17 +109,11 @@ export async function CouponsPanel({ canManage }: { canManage: boolean }) {
     _sum: { discountPaise: true },
     where: { couponId: { in: coupons.map((c) => c.id) } },
   });
-  const revenue = await prisma.paymentOrder.groupBy({
-    by: ["couponId"],
-    where: { couponId: { in: coupons.map((c) => c.id) }, status: { in: [OrderStatus.PAID, OrderStatus.PARTIALLY_REFUNDED] } },
-    _sum: { amountPaise: true },
-    _count: true,
-  });
-  const freeGrants = await prisma.paymentOrder.groupBy({
-    by: ["couponId"],
-    where: { couponId: { in: coupons.map((c) => c.id) }, status: OrderStatus.PAID, amountPaise: 0 },
-    _count: true,
-  });
+  // LIVE only — TEST purchases never count towards creator revenue.
+  const perf = await getCouponPerformance(
+    { environment: "LIVE", from: null, to: null, couponId: null, creator: null },
+    coupons.map((c) => c.id)
+  );
   const consumed = (id: string) => stats.find((s) => s.couponId === id && s.status === CouponRedemptionStatus.CONSUMED)?._count ?? 0;
   const reserved = (id: string) => stats.find((s) => s.couponId === id && s.status === CouponRedemptionStatus.RESERVED)?._count ?? 0;
 
@@ -127,13 +122,21 @@ export async function CouponsPanel({ canManage }: { canManage: boolean }) {
       <CardHeader className="flex-row items-start justify-between gap-2">
         <div>
           <CardTitle className="text-base">Coupons</CardTitle>
-          <CardDescription>Validated server-side and transactionally at checkout. Attribution (source / campaign / referrer) feeds revenue reporting.</CardDescription>
+          <CardDescription>
+            Validated server-side and transactionally at checkout. Sales, eligible net and commission count LIVE successful orders only (collected − refunded);
+            open a coupon for TEST numbers.
+          </CardDescription>
         </div>
-        {canManage ? (
-          <Button asChild size="sm">
-            <Link href="/admin/payments/coupons/new">New coupon</Link>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild size="sm" variant="outline">
+            <a href="/api/admin/payments/coupons/settlement?env=LIVE">Settlement CSV (LIVE)</a>
           </Button>
-        ) : null}
+          {canManage ? (
+            <Button asChild size="sm">
+              <Link href="/admin/payments/coupons/new">New coupon</Link>
+            </Button>
+          ) : null}
+        </div>
       </CardHeader>
       <CardContent>
         {coupons.length === 0 ? (
@@ -146,9 +149,10 @@ export async function CouponsPanel({ canManage }: { canManage: boolean }) {
                 <Th>Discount</Th>
                 <Th>Validity</Th>
                 <Th right>Used / limit</Th>
-                <Th right>Revenue</Th>
-                <Th right>Free grants</Th>
-                <Th>Attribution</Th>
+                <Th right>Paid orders</Th>
+                <Th right>Collected</Th>
+                <Th right>Eligible net</Th>
+                <Th>Creator / attribution</Th>
                 <Th>Status</Th>
                 <Th> </Th>
               </tr>
@@ -156,7 +160,7 @@ export async function CouponsPanel({ canManage }: { canManage: boolean }) {
             <tbody>
               {coupons.map((c) => {
                 const expired = c.validUntil && c.validUntil <= now;
-                const rev = revenue.find((r) => r.couponId === c.id);
+                const p = perf.get(c.id)!;
                 return (
                   <tr key={c.id}>
                     <Td>
@@ -179,12 +183,22 @@ export async function CouponsPanel({ canManage }: { canManage: boolean }) {
                       {reserved(c.id) ? <span className="text-[10px] text-[var(--color-muted-foreground)]"> (+{reserved(c.id)} held)</span> : null} / {c.totalUsageLimit ?? "∞"}
                       {c.perStudentLimit ? <div className="text-[10px] text-[var(--color-muted-foreground)]">{c.perStudentLimit}/student</div> : null}
                     </Td>
-                    <Td right>{formatInr(rev?._sum.amountPaise ?? 0)}</Td>
-                    <Td right>{freeGrants.find((f) => f.couponId === c.id)?._count ?? 0}</Td>
+                    <Td right>
+                      {p.successfulOrders}
+                      {p.uniqueStudents ? <div className="text-[10px] text-[var(--color-muted-foreground)]">{p.uniqueStudents} student(s)</div> : null}
+                    </Td>
+                    <Td right>{formatInr(p.collectedPaise)}</Td>
+                    <Td right>
+                      {formatInr(p.eligibleNetPaise)}
+                      {p.commissionPaise ? <div className="text-[10px] text-[var(--color-muted-foreground)]">commission {formatInr(p.commissionPaise)}</div> : null}
+                    </Td>
                     <Td>
                       <div className="text-xs">
-                        {[c.source, c.campaign, c.referrerName ?? c.referrerCode].filter(Boolean).join(" · ") || "—"}
+                        {c.referrerName ? <strong>{c.referrerName}</strong> : null}
+                        {c.referrerName ? " · " : ""}
+                        {[c.source, c.campaign, c.referrerName ? null : c.referrerCode].filter(Boolean).join(" · ") || (c.referrerName ? "" : "—")}
                       </div>
+                      {c.commissionType ? <div className="text-[10px] text-[var(--color-muted-foreground)]">{describeCommission(c)}</div> : null}
                     </Td>
                     <Td>{!c.isActive ? <Badge>Inactive</Badge> : expired ? <Badge variant="warning">Expired</Badge> : <Badge variant="success">Active</Badge>}</Td>
                     <Td>

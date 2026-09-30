@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getRazorpayConfig, type RazorpaySlotPublic } from "@/lib/razorpay-config";
-import { getInvoiceSettings, getPaymentMode, getPaymentPolicy } from "@/lib/payments/settings";
+import { getInvoiceSettings, getPaymentMode, getPaymentPolicy, getVerificationStudentIds, MAX_VERIFICATION_ACCOUNTS } from "@/lib/payments/settings";
 import { findPaymentMismatches } from "@/lib/payments/reconcile";
 import { PAYMENT_AUDIT_ENTITY_TYPES } from "@/lib/payments/audit";
 import { getSiteUrl } from "@/lib/site-url";
@@ -21,6 +21,7 @@ import {
   saveGatewayModeAction,
   saveInvoiceSettingsAction,
   savePaymentPolicyAction,
+  saveVerificationAccountsAction,
   setPaymentModeAction,
   testGatewayAction,
 } from "../actions";
@@ -326,7 +327,10 @@ export async function AuditPanel() {
 }
 
 export async function SettingsPanel({ canManage }: { canManage: boolean }) {
-  const [mode, policy, inv] = await Promise.all([getPaymentMode(), getPaymentPolicy(), getInvoiceSettings()]);
+  const [mode, policy, inv, verificationIds] = await Promise.all([getPaymentMode(), getPaymentPolicy(), getInvoiceSettings(), getVerificationStudentIds()]);
+  const verificationStudents = verificationIds.length
+    ? await prisma.student.findMany({ where: { id: { in: verificationIds } }, select: { id: true, studentId: true, name: true } })
+    : [];
   const ro = !canManage;
   return (
     <div className="flex flex-col gap-4">
@@ -351,6 +355,40 @@ export async function SettingsPanel({ canManage }: { canManage: boolean }) {
             </Field>
             <Field label="Confirm" htmlFor="pm-confirm" hint="Type the mode name again to confirm.">
               <Input id="pm-confirm" name="confirm" autoComplete="off" />
+            </Field>
+          </ActionForm>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            Payment Verification Accounts <Badge>{verificationStudents.length}</Badge>
+          </CardTitle>
+          <CardDescription>
+            While the mode is FREE, these students (max {MAX_VERIFICATION_ACCOUNTS}) see PAID behaviour — locked paid mocks, pricing, coupons and checkout —
+            so one controlled real purchase can be verified without charging or locking anyone else. Everyone else stays free. Ignored in PAID /
+            MAINTENANCE. Clear the list after verification.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {verificationStudents.length ? (
+            <ul className="text-sm">
+              {verificationStudents.map((st) => (
+                <li key={st.id}>
+                  <Link href={`/admin/students/${st.id}`} className="font-mono text-[var(--color-primary)] hover:underline">
+                    {st.studentId}
+                  </Link>{" "}
+                  {st.name}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-[var(--color-muted-foreground)]">None — every student follows the global mode.</p>
+          )}
+          <ActionForm action={saveVerificationAccountsAction} submitLabel="Save verification accounts" readOnly={ro} className="grid grid-cols-1 gap-3 sm:items-end">
+            <Field label="Student IDs (one per line; empty = clear)" htmlFor="pv-accounts">
+              <Textarea id="pv-accounts" name="accounts" rows={3} defaultValue={verificationStudents.map((st) => st.studentId).join("\n")} />
             </Field>
           </ActionForm>
         </CardContent>

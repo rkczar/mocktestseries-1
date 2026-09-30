@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   AccessDurationType,
   AccessType,
+  CouponCommissionType,
   CouponDiscountType,
   EntitlementSource,
   EntitlementStatus,
@@ -25,8 +26,11 @@ import {
   getInvoiceSettings,
   getPaymentMode,
   getPaymentPolicy,
+  getVerificationStudentIds,
+  MAX_VERIFICATION_ACCOUNTS,
   parseInvoiceSettingsInput,
   PAYMENT_MODES,
+  setVerificationStudentIds,
   saveInvoiceSettings,
   savePaymentPolicy,
   setPaymentMode,
@@ -114,6 +118,37 @@ export async function setPaymentModeAction(_prev: FormState, fd: FormData): Prom
     await logPaymentAudit(session.user.id, "PAYMENT_MODE_CHANGED", "PaymentSettings", "payments.mode", { before, after: mode });
     revalidatePayments();
     return { success: `Payment mode is now ${mode}.` };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * Payment verification accounts (max 5): students who get PAID behaviour
+ * while the global mode is FREE, for one controlled real purchase. Input is
+ * one Student ID / email / mobile per line; each must match exactly one
+ * existing student. An empty list clears it.
+ */
+export async function saveVerificationAccountsAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  try {
+    const session = await manage();
+    const lines = [...new Set(str(fd, "accounts").split(/[\s,]+/).map((l) => l.trim()).filter(Boolean))];
+    if (lines.length > MAX_VERIFICATION_ACCOUNTS) return { error: `At most ${MAX_VERIFICATION_ACCOUNTS} verification accounts.` };
+    const ids: string[] = [];
+    for (const l of lines) {
+      const matches = await prisma.student.findMany({
+        where: { OR: [{ studentId: l }, { email: l.toLowerCase() }, { mobile: l }] },
+        select: { id: true },
+        take: 2,
+      });
+      if (matches.length !== 1) return { error: `"${l.slice(0, 60)}" doesn't match exactly one student. Use the Student ID.` };
+      ids.push(matches[0].id);
+    }
+    const before = await getVerificationStudentIds();
+    await setVerificationStudentIds([...new Set(ids)], session.user.id);
+    await logPaymentAudit(session.user.id, "VERIFICATION_ACCOUNTS_UPDATED", "PaymentSettings", "payments.verification", { before, after: ids });
+    revalidatePayments();
+    return { success: ids.length ? `${ids.length} verification account(s) saved.` : "Verification accounts cleared." };
   } catch (e) {
     return fail(e);
   }
@@ -236,6 +271,18 @@ export async function saveCouponAction(_prev: FormState, fd: FormData): Promise<
           ? int(fd, "discountValue", "Discount %", 1, 100)
           : paise(fd, "discountValue", "Discount amount");
     if (!discountValue || discountValue <= 0) return { error: "Enter a discount value." };
+    // Optional creator commission (reporting only — nothing is paid out automatically).
+    const commissionRaw = str(fd, "commissionType");
+    const commissionType = commissionRaw ? z.nativeEnum(CouponCommissionType).parse(commissionRaw) : null;
+    let commissionValue: number | null = null;
+    if (commissionType === "PERCENTAGE") {
+      const v = str(fd, "commissionValue");
+      if (!/^\d{1,3}(\.\d{1,2})?$/.test(v) || Number(v) <= 0 || Number(v) > 100) return { error: "Commission % must be between 0.01 and 100." };
+      commissionValue = Math.round(Number(v) * 100);
+    } else if (commissionType === "FIXED_AMOUNT") {
+      commissionValue = paise(fd, "commissionValue", "Commission amount");
+      if (!commissionValue || commissionValue <= 0) return { error: "Enter the fixed commission per sale." };
+    }
     const ids = (k: string) =>
       fd
         .getAll(k)
@@ -266,6 +313,8 @@ export async function saveCouponAction(_prev: FormState, fd: FormData): Promise<
       referrerStudentId: optStr(fd, "referrerStudentId", 64),
       referrerAdminId: optStr(fd, "referrerAdminId", 64),
       notes: optStr(fd, "notes", 2000),
+      commissionType,
+      commissionValue,
     };
     if (data.validFrom && data.validUntil && data.validUntil <= data.validFrom) return { error: "Valid until must be after valid from." };
     if (id) {
@@ -274,8 +323,15 @@ export async function saveCouponAction(_prev: FormState, fd: FormData): Promise<
       await prisma.coupon.update({ where: { id }, data });
       await logPaymentAudit(session.user.id, before.isActive && !data.isActive ? "COUPON_DEACTIVATED" : "COUPON_UPDATED", "Coupon", id, {
         code,
-        before: { isActive: before.isActive, discountType: before.discountType, discountValue: before.discountValue, totalUsageLimit: before.totalUsageLimit },
-        after: { isActive: data.isActive, discountType, discountValue, totalUsageLimit: data.totalUsageLimit },
+        before: {
+          isActive: before.isActive,
+          discountType: before.discountType,
+          discountValue: before.discountValue,
+          totalUsageLimit: before.totalUsageLimit,
+          commissionType: before.commissionType,
+          commissionValue: before.commissionValue,
+        },
+        after: { isActive: data.isActive, discountType, discountValue, totalUsageLimit: data.totalUsageLimit, commissionType, commissionValue },
       });
     } else {
       const c = await prisma.coupon.create({ data: { ...data, createdByAdminId: session.user.id } });

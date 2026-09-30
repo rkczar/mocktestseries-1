@@ -8,6 +8,8 @@ import { prisma } from "@/lib/prisma";
  *   payments.mode     FREE | PAID | MAINTENANCE (global switch)
  *   payments.invoice  seller/legal/tax details printed on invoices
  *   payments.policy   refund access policy + invoice rules
+ *   payments.verification  student accounts that see PAID behaviour while
+ *                     the global mode is FREE (controlled LIVE verification)
  *
  * Nothing here is secret — gateway credentials live in lib/razorpay-config.ts.
  */
@@ -18,12 +20,15 @@ export const PAYMENT_MODES: PaymentMode[] = ["FREE", "PAID", "MAINTENANCE"];
 const MODE_KEY = "payments.mode";
 const INVOICE_KEY = "payments.invoice";
 const POLICY_KEY = "payments.policy";
+const VERIFICATION_KEY = "payments.verification";
 const CACHE_TTL_MS = 5_000;
 
 let modeCache: { at: number; value: PaymentMode } | null = null;
+let verificationCache: { at: number; value: string[] } | null = null;
 
 export function bumpPaymentSettingsCache() {
   modeCache = null;
+  verificationCache = null;
 }
 
 /**
@@ -44,6 +49,39 @@ export async function setPaymentMode(mode: PaymentMode, actorId: string | undefi
   const value = { mode, updatedAt: new Date().toISOString(), updatedBy: actorId ?? null };
   await prisma.setting.upsert({ where: { key: MODE_KEY }, update: { value }, create: { key: MODE_KEY, value } });
   bumpPaymentSettingsCache();
+}
+
+/**
+ * Payment verification accounts: at most a handful of student ids (internal
+ * Student.id) that get PAID behaviour — pricing, locked content, checkout —
+ * while the global mode is FREE, so ONE controlled real purchase can be made
+ * without charging or locking anyone else. Ignored in PAID / MAINTENANCE.
+ */
+export const MAX_VERIFICATION_ACCOUNTS = 5;
+
+export async function getVerificationStudentIds(): Promise<string[]> {
+  if (verificationCache && Date.now() - verificationCache.at < CACHE_TTL_MS) return verificationCache.value;
+  const row = await prisma.setting.findUnique({ where: { key: VERIFICATION_KEY } });
+  const raw = (row?.value as { studentIds?: unknown } | null)?.studentIds;
+  const value = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string").slice(0, MAX_VERIFICATION_ACCOUNTS) : [];
+  verificationCache = { at: Date.now(), value };
+  return value;
+}
+
+export async function setVerificationStudentIds(studentIds: string[], actorId: string | undefined): Promise<void> {
+  const value = { studentIds: studentIds.slice(0, MAX_VERIFICATION_ACCOUNTS), updatedAt: new Date().toISOString(), updatedBy: actorId ?? null };
+  await prisma.setting.upsert({ where: { key: VERIFICATION_KEY }, update: { value }, create: { key: VERIFICATION_KEY, value } });
+  bumpPaymentSettingsCache();
+}
+
+/**
+ * The mode that applies to ONE student: the global mode, except that a
+ * payment verification account is treated as PAID while the site is FREE.
+ */
+export async function getPaymentModeForStudent(studentId: string): Promise<PaymentMode> {
+  const mode = await getPaymentMode();
+  if (mode !== "FREE") return mode;
+  return (await getVerificationStudentIds()).includes(studentId) ? "PAID" : "FREE";
 }
 
 export interface InvoiceSettings {

@@ -2264,6 +2264,11 @@ model Coupon {
   referrerStudentId String?
   referrerAdminId   String?
   notes             String?
+  // Optional creator/collaborator commission — reporting only, never paid
+  // out automatically. PERCENTAGE: basis points of the eligible net
+  // collected (1250 = 12.5%). FIXED_AMOUNT: paise per eligible sale.
+  commissionType    CouponCommissionType?
+  commissionValue   Int?
   createdByAdminId  String?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
@@ -2272,6 +2277,11 @@ model Coupon {
   orders      PaymentOrder[]
 
   @@index([isActive])
+}
+
+enum CouponCommissionType {
+  PERCENTAGE
+  FIXED_AMOUNT
 }
 
 enum CouponRedemptionStatus {

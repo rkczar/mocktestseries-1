@@ -1,7 +1,7 @@
 import "server-only";
 import { EntitlementStatus, type Product, type StudentEntitlement } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getPaymentMode, type PaymentMode } from "@/lib/payments/settings";
+import { getPaymentModeForStudent, type PaymentMode } from "@/lib/payments/settings";
 
 /**
  * Canonical entitlement / access engine. Payment rows are NEVER consulted
@@ -11,7 +11,8 @@ import { getPaymentMode, type PaymentMode } from "@/lib/payments/settings";
  * hiding is never the control.
  *
  * Decision order (server time throughout):
- *   1. Global mode FREE                         → FREE_ACCESS
+ *   1. Global mode FREE (unless the student is a
+ *      payment verification account)            → FREE_ACCESS
  *   2. Any covering active product is FREE      → FREE_ACCESS
  *   3. No covering PAID product and the content
  *      itself isn't flagged PAID                → FREE_ACCESS
@@ -86,7 +87,7 @@ export const PRODUCT_SELECT = {
 } as const;
 
 export async function loadAccessContext(studentId: string, now: Date = new Date()): Promise<AccessContext> {
-  const mode = await getPaymentMode();
+  const mode = await getPaymentModeForStudent(studentId);
   if (mode === "FREE") return { mode, products: [], entitlements: [], now };
   const [products, entitlements] = await Promise.all([
     prisma.product.findMany({ where: { isActive: true }, select: PRODUCT_SELECT }),
@@ -240,7 +241,7 @@ export function describeAttemptContent(attempt: {
  * vs "Buy Now" vs "Renew"). Same rules as content access.
  */
 export async function canStudentAccessProduct(studentId: string, productId: string, now: Date = new Date()): Promise<AccessResult> {
-  const mode = await getPaymentMode();
+  const mode = await getPaymentModeForStudent(studentId);
   const product = await prisma.product.findUnique({ where: { id: productId }, select: PRODUCT_SELECT });
   const base = { mode, products: product ? [ref(product)] : [], expiresAt: null, purchasesPaused: mode === "MAINTENANCE" };
   if (!product || !product.isActive) return { ...base, status: "NOT_AVAILABLE", allowed: false };
