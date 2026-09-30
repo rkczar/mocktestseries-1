@@ -26,7 +26,7 @@ export default async function OrderResultPage({
       amountPaise: true,
       couponCode: true,
       environment: true,
-      product: { select: { code: true, name: true, productType: true, examId: true } },
+      product: { select: { code: true, name: true, productType: true, examId: true, mockTestId: true } },
       paidAt: true,
       entitlement: { select: { startsAt: true, expiresAt: true, status: true } },
       payments: { where: { status: { in: ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"] } }, select: { gatewayPaymentId: true, method: true }, take: 1 },

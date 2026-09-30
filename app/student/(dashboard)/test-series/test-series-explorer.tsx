@@ -35,7 +35,8 @@ export interface ExplorerTestRow {
   hasSubmittedAttempt: boolean;
   paperResourceId: string | null;
   /** Server-evaluated entitlement lock (null = accessible). The start action re-checks regardless. */
-  lock: { status: "PAYMENT_REQUIRED" | "EXPIRED" | "NOT_AVAILABLE"; href: string | null } | null;
+  /** individual: the mock can also be bought on its own. */
+  lock: { status: "PAYMENT_REQUIRED" | "EXPIRED" | "NOT_AVAILABLE"; href: string | null; individual?: boolean } | null;
 }
 
 export interface ExplorerGroup {
@@ -224,7 +225,7 @@ function TestCard({ row }: { row: ExplorerTestRow }) {
         <div className="flex flex-wrap gap-1">
           {row.lock ? (
             <Badge variant="warning">
-              <Lock className="h-3 w-3" aria-hidden /> {accessLockLabel(row.lock.status)}
+              <Lock className="h-3 w-3" aria-hidden /> {accessLockLabel(row.lock.status, { individual: row.lock.individual })}
             </Badge>
           ) : null}
           <Badge

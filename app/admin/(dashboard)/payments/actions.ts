@@ -21,6 +21,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { logPaymentAudit } from "@/lib/payments/audit";
 import { rupeesToPaise } from "@/lib/payments/money";
 import { validatePricingConfig } from "@/lib/payments/pricing";
+import { validateProductTarget } from "@/lib/payments/product-targets";
 import { COUPON_CODE_RE } from "@/lib/payments/coupons";
 import {
   getInvoiceSettings,
@@ -223,6 +224,9 @@ export async function saveProductAction(_prev: FormState, fd: FormData): Promise
     };
     const needKey = needsEntity[productType];
     if (needKey && !data[needKey]) return { error: "Choose what this product unlocks." };
+
+    const targetError = await validateProductTarget({ id, productType, accessType, isActive: data.isActive, examId: data.examId, testSeriesId: data.testSeriesId, mockTestId: data.mockTestId });
+    if (targetError) return { error: targetError };
 
     // Resolve the exam from the linked entity so exam-scoped coupons/analytics work.
     if (data.testSeriesId) data.examId = (await prisma.testSeries.findUnique({ where: { id: data.testSeriesId }, select: { examId: true } }))?.examId ?? null;

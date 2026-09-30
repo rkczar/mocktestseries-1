@@ -1,10 +1,11 @@
 import type { ProductType } from "@prisma/client";
 
 /** Where "Open Product" / "Start Learning" goes for each product type. Pure, client-safe. */
-export function productHref(p: { productType: ProductType; examId: string | null }): string {
+export function productHref(p: { productType: ProductType; examId: string | null; mockTestId?: string | null }): string {
   switch (p.productType) {
-    case "TEST_SERIES":
     case "MOCK_TEST":
+      return p.mockTestId ? `/student/test-series/${encodeURIComponent(p.mockTestId)}` : "/student/test-series";
+    case "TEST_SERIES":
     // Live Tests are retired — fixed-window Mock Tests live in Test Series.
     case "LIVE_TEST":
       return "/student/test-series";
@@ -15,8 +16,8 @@ export function productHref(p: { productType: ProductType; examId: string | null
 
 export const PRODUCT_TYPE_LABELS: Record<ProductType, string> = {
   EXAM_ACCESS: "Full Exam Access",
-  TEST_SERIES: "Test Series",
-  MOCK_TEST: "Mock Test",
+  TEST_SERIES: "Complete Test Series",
+  MOCK_TEST: "Individual Mock Test",
   GRAND_TEST: "Grand Test",
   LIVE_TEST: "Live Test",
   PYQ_PACKAGE: "PYQ Package",

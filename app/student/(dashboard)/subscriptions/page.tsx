@@ -20,7 +20,7 @@ export default async function SubscriptionsPage() {
   const ents = await prisma.studentEntitlement.findMany({
     where: { studentId: student.id },
     include: {
-      product: { select: { code: true, name: true, productType: true, examId: true, isActive: true, isVisible: true, exam: { select: { name: true } } } },
+      product: { select: { code: true, name: true, productType: true, examId: true, mockTestId: true, isActive: true, isVisible: true, exam: { select: { name: true } } } },
       order: { select: { paidAt: true, createdAt: true } },
     },
     orderBy: { createdAt: "desc" },

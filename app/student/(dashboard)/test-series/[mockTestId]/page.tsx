@@ -4,7 +4,10 @@ import { AlertTriangle, CalendarClock, Clock, ListChecks, Lock } from "lucide-re
 import { requireStudent } from "@/lib/student-session";
 import { getMockTestDetailForStudent } from "@/lib/student-data";
 import { AVAILABILITY_LABELS, isMockResultReleased } from "@/lib/mock-test-schedule";
-import { loadAccessContext, evaluateContentAccess, paywallHref } from "@/lib/payments/access";
+import { loadAccessContext, evaluateContentAccess, type AccessProductRef } from "@/lib/payments/access";
+import { computeProductPrice } from "@/lib/payments/pricing";
+import { formatInr } from "@/lib/payments/money";
+import { prisma } from "@/lib/prisma";
 import { isCheckoutGatewayReady } from "@/lib/payments/student-access";
 import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +20,23 @@ import { accessLockLabel } from "@/lib/payments/access-labels";
 export const metadata = { title: "Mock Test — Mock Test Series.in" };
 
 const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Partial Syllabus", SUBJECT_WISE: "Subject Mock" } as const;
+
+/**
+ * Every product that can unlock this mock, priced from its Product row right
+ * now (this mock alone first, then Complete Series / Exam Access).
+ */
+async function purchaseOptions(refs: AccessProductRef[], renew: boolean) {
+  if (refs.length === 0) return [];
+  const rows = await prisma.product.findMany({ where: { id: { in: refs.map((r) => r.id) } } });
+  const rank = { MOCK_TEST: 0, TEST_SERIES: 1, EXAM_ACCESS: 2 } as Record<string, number>;
+  return rows
+    .map((p) => {
+      const what = p.productType === "MOCK_TEST" ? "this Mock" : p.productType === "TEST_SERIES" ? "Complete Series" : p.productType === "EXAM_ACCESS" ? "Full Exam Access" : p.name;
+      const label = renew ? `Renew ${what}` : p.productType === "MOCK_TEST" ? "Buy this Mock" : `Unlock ${what}`;
+      return { id: p.id, code: p.code, name: p.name, label, individual: p.productType === "MOCK_TEST", pricePaise: computeProductPrice(p).pricePaise, rank: rank[p.productType] ?? 3 };
+    })
+    .sort((a, b) => a.rank - b.rank);
+}
 
 /**
  * Mock Test Details / Instructions — the step between a Mock Test card and
@@ -49,12 +69,24 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
     action = <StartMockForm mockTestId={mockTest.id} label="Resume Test" />;
   } else if (!access.allowed) {
     const canBuy = access.status !== "NOT_AVAILABLE" && !access.purchasesPaused && (await isCheckoutGatewayReady());
-    action = canBuy ? (
-      <Button asChild size="lg" className="w-full">
-        <Link href={paywallHref(access)}>
-          <Lock className="h-4 w-4" aria-hidden /> {access.status === "EXPIRED" ? "Renew Access" : "Unlock Complete Access"}
-        </Link>
-      </Button>
+    const options = canBuy ? await purchaseOptions(access.products, access.status === "EXPIRED") : [];
+    action = options.length ? (
+      <div className="flex flex-col gap-2" data-testid="purchase-options">
+        {options.map((o, i) => (
+          <Button key={o.id} asChild size="lg" variant={i === 0 ? "primary" : "outline"} className="h-auto w-full whitespace-normal py-2">
+            <Link href={`/student/checkout/${encodeURIComponent(o.code)}`} data-product-code={o.code}>
+              <Lock className="h-4 w-4 shrink-0" aria-hidden />
+              <span>
+                {o.label} — {formatInr(o.pricePaise)}
+                {o.individual ? null : <span className="block text-xs font-normal opacity-80">{o.name}</span>}
+              </span>
+            </Link>
+          </Button>
+        ))}
+        {options.length > 1 ? (
+          <p className="text-center text-xs text-[var(--color-muted-foreground)]">Buy just this mock, or unlock every paid mock in the series.</p>
+        ) : null}
+      </div>
     ) : (
       <Button size="lg" disabled className="w-full">
         <Lock className="h-4 w-4" aria-hidden /> Not available
@@ -105,7 +137,12 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
           </Badge>
           {!access.allowed ? (
             <Badge variant="warning">
-              <Lock className="h-3 w-3" aria-hidden /> {accessLockLabel(access.status)}
+              <Lock className="h-3 w-3" aria-hidden /> {accessLockLabel(access.status, { individual: access.products.some((p) => p.productType === "MOCK_TEST") })}
+            </Badge>
+          ) : null}
+          {access.status === "ACTIVE_SUBSCRIPTION" && access.products.length ? (
+            <Badge variant="success" data-testid="access-source">
+              {access.products.some((p) => p.productType === "MOCK_TEST") ? "Purchased · Access active" : `Included in ${access.products[0].name}`}
             </Badge>
           ) : null}
           {inProgressAttempt ? <Badge variant="warning">In progress</Badge> : null}

@@ -12,7 +12,7 @@ export async function startOrPaywall<T>(start: () => Promise<T>): Promise<T> {
   try {
     return await start();
   } catch (e) {
-    if (e instanceof PaymentRequiredError) redirect(paywallHref(e.access));
+    if (e instanceof PaymentRequiredError) redirect(paywallHref(e.access, e.content));
     throw e;
   }
 }

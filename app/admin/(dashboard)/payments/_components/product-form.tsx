@@ -32,7 +32,12 @@ export async function ProductForm({ product, readOnly }: { product: Product | nu
   const [exams, series, mocks, grands, lives] = await Promise.all([
     prisma.exam.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.testSeries.findMany({ select: { id: true, name: true, exam: { select: { name: true } } }, orderBy: { name: "asc" } }),
-    prisma.mockTest.findMany({ where: { status: { not: "ARCHIVED" } }, select: { id: true, title: true, exam: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 500 }),
+    prisma.mockTest.findMany({
+      where: { status: { not: "ARCHIVED" } },
+      select: { id: true, title: true, order: true, accessType: true, exam: { select: { name: true } }, testSeries: { select: { name: true } } },
+      orderBy: [{ exam: { name: "asc" } }, { testSeriesId: "asc" }, { order: "asc" }, { createdAt: "asc" }],
+      take: 1000,
+    }),
     prisma.grandTest.findMany({ where: { status: { not: "ARCHIVED" } }, select: { id: true, title: true, exam: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 300 }),
     prisma.liveTest.findMany({ where: { status: { not: "CANCELLED" } }, select: { id: true, title: true, exam: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 300 }),
   ]);
@@ -82,12 +87,16 @@ export async function ProductForm({ product, readOnly }: { product: Product | nu
           ))}
         </SelectNative>
       </F>
-      <F label="Mock Test (Mock Test type)" name="mockTestId">
+      <F
+        label="Mock Test (Individual Mock Test type)"
+        name="mockTestId"
+        hint="Unlocks ONLY this mock. The mock must be PAID; its Complete Series product keeps working alongside."
+      >
         <SelectNative id="p-mockTestId" name="mockTestId" defaultValue={p?.mockTestId ?? ""}>
           <option value="">—</option>
           {mocks.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.title} · {m.exam.name}
+              {m.exam.name} · {m.testSeries ? `${m.testSeries.name} · Mock ${m.order}` : "Standalone"} · {m.title} ({m.accessType})
             </option>
           ))}
         </SelectNative>

@@ -43,16 +43,26 @@ export interface AccessProductRef {
   id: string;
   code: string;
   name: string;
+  productType: Product["productType"];
 }
 
 export interface AccessResult {
   status: AccessStatus;
   allowed: boolean;
   mode: PaymentMode;
-  /** Products that would unlock this content (for PAYMENT_REQUIRED / EXPIRED). */
+  /**
+   * PAYMENT_REQUIRED / EXPIRED: products that would unlock this content.
+   * ACTIVE_SUBSCRIPTION: the products whose active entitlement grants it.
+   */
   products: AccessProductRef[];
   expiresAt: Date | null;
   purchasesPaused: boolean;
+  /**
+   * canStudentAccessProduct only: an individual Mock Test product whose mock
+   * is already unlocked by ANOTHER product the student holds (e.g. Complete
+   * Series) — nothing to buy.
+   */
+  coveredBy?: AccessProductRef | null;
 }
 
 export type ProductRow = Pick<
@@ -130,7 +140,7 @@ export function isPurchasable(p: ProductRow, now: Date): boolean {
 }
 
 function ref(p: ProductRow): AccessProductRef {
-  return { id: p.id, code: p.code, name: p.name };
+  return { id: p.id, code: p.code, name: p.name, productType: p.productType };
 }
 
 /** Pure evaluation against a preloaded context — use for lists (one query set, many items). */
@@ -141,9 +151,9 @@ export function evaluateContentAccess(ctx: AccessContext, c: ContentDescriptor):
   const covering = ctx.products.filter((p) => productCovers(p, c));
   if (covering.some((p) => p.accessType === "FREE")) return { ...base, status: "FREE_ACCESS", allowed: true };
   // A mock the admin marked FREE is a free sample even inside a paid series /
-  // exam pass (Admin → Test Series → Mock → Access). Only a product sold for
-  // that exact mock overrides it.
-  if (c.kind === "MOCK_TEST" && c.accessType === "FREE" && !covering.some((p) => p.productType === "MOCK_TEST")) {
+  // exam pass (Admin → Test Series → Mock → Access), and even if an
+  // individual Mock Test product exists for it: FREE always means open.
+  if (c.kind === "MOCK_TEST" && c.accessType === "FREE") {
     return { ...base, status: "FREE_ACCESS", allowed: true };
   }
   const paid = covering.filter((p) => p.accessType === "PAID");
@@ -156,7 +166,8 @@ export function evaluateContentAccess(ctx: AccessContext, c: ContentDescriptor):
     const expiresAt = active.some((e) => e.expiresAt === null)
       ? null
       : new Date(Math.max(...active.map((e) => e.expiresAt!.getTime())));
-    return { ...base, status: "ACTIVE_SUBSCRIPTION", allowed: true, expiresAt, products: paid.map(ref) };
+    const granting = new Set(active.map((e) => e.productId));
+    return { ...base, status: "ACTIVE_SUBSCRIPTION", allowed: true, expiresAt, products: paid.filter((p) => granting.has(p.id)).map(ref) };
   }
 
   const purchasable = paid.filter((p) => isPurchasable(p, ctx.now));
@@ -183,7 +194,10 @@ export async function getContentAccess(studentId: string, c: ContentDescriptor):
 }
 
 export class PaymentRequiredError extends Error {
-  constructor(public readonly access: AccessResult) {
+  constructor(
+    public readonly access: AccessResult,
+    public readonly content?: ContentDescriptor
+  ) {
     super(accessDeniedMessage(access));
     this.name = "PaymentRequiredError";
   }
@@ -193,15 +207,15 @@ export function accessDeniedMessage(a: AccessResult): string {
   if (a.status === "EXPIRED") return "Your access to this test has expired. Renew to continue.";
   if (a.status === "PAYMENT_REQUIRED")
     return a.purchasesPaused
-      ? "Complete Access is required for this test. Purchases are temporarily paused — please try again later."
-      : "Complete Access is required for this test. Unlock it to start.";
+      ? "This test requires a purchase. Purchases are temporarily paused — please try again later."
+      : "This test requires a purchase. Unlock it to start.";
   return "This test is not available right now.";
 }
 
 /** Throws PaymentRequiredError unless the student may receive this content's questions. */
 export async function assertContentAccess(studentId: string, c: ContentDescriptor): Promise<AccessResult> {
   const access = await getContentAccess(studentId, c);
-  if (!access.allowed) throw new PaymentRequiredError(access);
+  if (!access.allowed) throw new PaymentRequiredError(access, c);
   return access;
 }
 
@@ -247,6 +261,25 @@ export async function canStudentAccessProduct(studentId: string, productId: stri
   if (!product || !product.isActive) return { ...base, status: "NOT_AVAILABLE", allowed: false };
   if (mode === "FREE" || product.accessType === "FREE") return { ...base, status: "FREE_ACCESS", allowed: true };
 
+  // Individual Mock Test product: a FREE mock needs no purchase, and a mock
+  // already unlocked by another product (Complete Series / Exam Access) must
+  // not be sold again.
+  if (product.productType === "MOCK_TEST") {
+    const mock = product.mockTestId
+      ? await prisma.mockTest.findUnique({ where: { id: product.mockTestId }, select: { id: true, examId: true, testSeriesId: true, accessType: true } })
+      : null;
+    if (!mock) return { ...base, status: "NOT_AVAILABLE", allowed: false };
+    if (mock.accessType === "FREE") return { ...base, status: "FREE_ACCESS", allowed: true };
+    const ctx = await loadAccessContext(studentId, now);
+    const content = evaluateContentAccess(
+      { ...ctx, products: ctx.products.filter((p) => p.id !== product.id) },
+      { kind: "MOCK_TEST", id: mock.id, examId: mock.examId, testSeriesId: mock.testSeriesId, accessType: mock.accessType }
+    );
+    if (content.status === "ACTIVE_SUBSCRIPTION") {
+      return { ...base, status: "ACTIVE_SUBSCRIPTION", allowed: true, expiresAt: content.expiresAt, coveredBy: content.products[0] ?? null };
+    }
+  }
+
   const ents = await prisma.studentEntitlement.findMany({
     where: { studentId, productId, status: EntitlementStatus.ACTIVE },
     select: { productId: true, status: true, startsAt: true, expiresAt: true },
@@ -264,7 +297,11 @@ export async function canStudentAccessProduct(studentId: string, productId: stri
 }
 
 /** Where to send a student who was denied: the single unlocking product's checkout, else the plans list. */
-export function paywallHref(a: AccessResult): string {
+export function paywallHref(a: AccessResult, content?: ContentDescriptor): string {
   if (!a.purchasesPaused && a.products.length === 1) return `/student/checkout/${encodeURIComponent(a.products[0].code)}`;
+  // Several ways to unlock one mock (e.g. this mock alone or Complete Series):
+  // its details page lists every option with its current price.
+  if (!a.purchasesPaused && a.products.length > 1 && content?.kind === "MOCK_TEST" && content.id)
+    return `/student/test-series/${encodeURIComponent(content.id)}`;
   return `/student/plans?locked=${a.status === "EXPIRED" ? "expired" : "1"}`;
 }

@@ -96,6 +96,7 @@ function productSnapshot(product: Product, price: ProductPrice) {
     productType: product.productType,
     examId: product.examId,
     testSeriesId: product.testSeriesId,
+    mockTestId: product.mockTestId,
     accessDurationType: product.accessDurationType,
     accessDays: product.accessDays,
     accessExpiresAt: product.accessExpiresAt?.toISOString() ?? null,
@@ -135,10 +136,12 @@ export interface RenewalPreview {
 /** What "Extend Access" would do right now — null when there's nothing meaningful to extend. */
 export function renewalPreview(
   product: Pick<Product, "accessDurationType" | "accessDays" | "accessExpiresAt">,
-  access: Pick<AccessResult, "status" | "expiresAt">,
+  access: Pick<AccessResult, "status" | "expiresAt" | "coveredBy">,
   now: Date
 ): RenewalPreview | null {
-  if (access.status !== "ACTIVE_SUBSCRIPTION" || !access.expiresAt) return null;
+  // Access that comes from another product (e.g. Complete Series covering an
+  // individual mock) is never "extended" by buying this product.
+  if (access.status !== "ACTIVE_SUBSCRIPTION" || !access.expiresAt || access.coveredBy) return null;
   if (product.accessDurationType !== "DAYS" || !product.accessDays || product.accessDays <= 0) return null;
   const { expiresAt } = computeAccessWindow(product, now, access.expiresAt);
   return expiresAt ? { days: product.accessDays, currentExpiresAt: access.expiresAt, newExpiresAt: expiresAt } : null;
@@ -247,6 +250,10 @@ export async function createCheckoutOrder(
   // as an explicit renewal: a stale "Buy Now" tab opened before the first
   // purchase completed must not silently buy (and stack) a second period.
   const access = await canStudentAccessProduct(studentId, product.id, now);
+  if (access.coveredBy)
+    throw new CheckoutError(`Your ${access.coveredBy.name} access already includes this test — no purchase needed.`, "ALREADY_OWNED");
+  if (access.status === "FREE_ACCESS") throw new CheckoutError("This test is free — no purchase needed.", "PRODUCT_UNAVAILABLE");
+  if (access.status === "NOT_AVAILABLE") throw new CheckoutError("This product isn't available for purchase.", "PRODUCT_UNAVAILABLE");
   if (access.status === "ACTIVE_SUBSCRIPTION") {
     if (access.expiresAt === null || product.accessDurationType === "FIXED_DATE")
       throw new CheckoutError("You already have access to this product.", "ALREADY_OWNED");

@@ -21,7 +21,7 @@ export default async function CheckoutPage({ params }: { params: Promise<{ code:
   if (!quote) notFound();
 
   const [product, profile] = await Promise.all([
-    prisma.product.findUniqueOrThrow({ where: { id: quote.product.id }, select: { productType: true, examId: true } }),
+    prisma.product.findUniqueOrThrow({ where: { id: quote.product.id }, select: { productType: true, examId: true, mockTestId: true } }),
     prisma.student.findUnique({ where: { id: student.id }, select: { name: true, email: true, mobile: true } }),
   ]);
 
@@ -43,6 +43,7 @@ export default async function CheckoutPage({ params }: { params: Promise<{ code:
           mode: quote.access.mode,
           purchasesPaused: quote.access.purchasesPaused,
           expiresAt: quote.access.expiresAt ? quote.access.expiresAt.toISOString() : null,
+          coveredBy: quote.access.coveredBy?.name ?? null,
         }}
         renewal={quote.renewal ? { days: quote.renewal.days, newExpiresAt: quote.renewal.newExpiresAt.toISOString() } : null}
         gatewayReady={quote.gatewayReady}

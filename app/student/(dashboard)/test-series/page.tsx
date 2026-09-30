@@ -28,12 +28,14 @@ export default async function TestSeriesPage() {
   const paperResourceByMockTest = new Map(paperResources.map((r) => [r.mockTestId, r.id]));
   const [accessCtx, gatewayReady] = await Promise.all([loadAccessContext(student.id), isCheckoutGatewayReady()]);
   const lockFor = (mt: { id: string; examId: string; testSeriesId: string | null; accessType: "FREE" | "PAID" }) => {
-    const a = evaluateContentAccess(accessCtx, { kind: "MOCK_TEST", id: mt.id, examId: mt.examId, testSeriesId: mt.testSeriesId, accessType: mt.accessType });
+    const content = { kind: "MOCK_TEST" as const, id: mt.id, examId: mt.examId, testSeriesId: mt.testSeriesId, accessType: mt.accessType };
+    const a = evaluateContentAccess(accessCtx, content);
     if (a.allowed) return null;
     return {
       status: a.status as "PAYMENT_REQUIRED" | "EXPIRED" | "NOT_AVAILABLE",
       // No dead checkout: without a ready gateway the lock shows "Not available".
-      href: a.status === "NOT_AVAILABLE" || a.purchasesPaused || !gatewayReady ? null : paywallHref(a),
+      href: a.status === "NOT_AVAILABLE" || a.purchasesPaused || !gatewayReady ? null : paywallHref(a, content),
+      individual: a.products.some((p) => p.productType === "MOCK_TEST"),
     };
   };
 

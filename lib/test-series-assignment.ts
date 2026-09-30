@@ -32,6 +32,7 @@ export interface ProductRef {
   id: string;
   code: string;
   name: string;
+  productType: ProductRow["productType"];
 }
 
 export const UNCOVERED_PAID_MOCK_WARNING =
@@ -49,7 +50,7 @@ function descriptor(m: CoverageMock) {
 export function mockIsFree(m: CoverageMock, products: ProductRow[]): boolean {
   const covering = products.filter((p) => productCovers(p, descriptor(m)));
   if (covering.some((p) => p.accessType === "FREE")) return true;
-  if (m.accessType === "FREE" && !covering.some((p) => p.productType === "MOCK_TEST")) return true;
+  if (m.accessType === "FREE") return true;
   return m.accessType !== "PAID" && !covering.some((p) => p.accessType === "PAID");
 }
 
@@ -57,7 +58,26 @@ export function mockIsFree(m: CoverageMock, products: ProductRow[]): boolean {
 export function purchasableProductsFor(m: CoverageMock, products: ProductRow[], now: Date): ProductRef[] {
   return products
     .filter((p) => p.accessType === "PAID" && isPurchasable(p, now) && productCovers(p, descriptor(m)))
-    .map((p) => ({ id: p.id, code: p.code, name: p.name }));
+    .map((p) => ({ id: p.id, code: p.code, name: p.name, productType: p.productType }));
+}
+
+/**
+ * How a PAID mock is sold, for the Admin mock page: included in a Complete
+ * Series / Exam Access product, sold on its own, both, or not at all.
+ */
+export function sellingCoverageLabel(plans: ProductRef[]): string | null {
+  const individual = plans.filter((p) => p.productType === "MOCK_TEST").map((p) => p.name);
+  const bundles = plans.filter((p) => p.productType !== "MOCK_TEST").map((p) => p.name);
+  if (individual.length && bundles.length) return `Sold individually (${individual.join(", ")}) and included in ${bundles.join(", ")}`;
+  if (individual.length) return `Sold individually only (${individual.join(", ")})`;
+  if (bundles.length) return `Included in Complete Series only (${bundles.join(", ")})`;
+  return null;
+}
+
+/** An active Individual Mock Test product exists for a mock that is FREE — it can never be sold (FREE always means open). */
+export function inertIndividualProducts(m: CoverageMock, products: ProductRow[]): string[] {
+  if (m.accessType !== "FREE") return [];
+  return products.filter((p) => p.productType === "MOCK_TEST" && p.mockTestId === m.id && p.accessType === "PAID").map((p) => p.name);
 }
 
 /** Purchasable PAID products that would unlock a PAID mock placed in `seriesId` of `examId`. */

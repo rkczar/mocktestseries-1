@@ -24,7 +24,15 @@ import { AccessResultForm, ScheduleForm } from "./schedule-form";
 import { MockDetailsForm } from "../mock-details-form";
 import { MockTestStatusSelect } from "../status-select";
 import { SeriesAssignmentForm } from "./series-assignment-form";
-import { UNCOVERED_PAID_MOCK_WARNING, loadCoverageProducts, mockIsFree, purchasableProductsFor, seriesPlanProducts } from "@/lib/test-series-assignment";
+import {
+  UNCOVERED_PAID_MOCK_WARNING,
+  inertIndividualProducts,
+  loadCoverageProducts,
+  mockIsFree,
+  purchasableProductsFor,
+  sellingCoverageLabel,
+  seriesPlanProducts,
+} from "@/lib/test-series-assignment";
 
 export const metadata = { title: "Mock Test — Mock Test Series.in Admin" };
 
@@ -107,6 +115,7 @@ export default async function MockTestDetailPage({
   const coverageMock = { id: mockTest.id, examId: mockTest.examId, testSeriesId: mockTest.testSeriesId, accessType: mockTest.accessType };
   const coveringPlans = purchasableProductsFor(coverageMock, coverageProducts, now);
   const uncoveredPaid = !mockIsFree(coverageMock, coverageProducts) && coveringPlans.length === 0;
+  const inertProducts = inertIndividualProducts(coverageMock, coverageProducts);
   const seriesOptions = examSeries.map((s) => ({ ...s, plans: seriesPlanProducts(s.id, mockTest.examId, coverageProducts, now).map((p) => p.name) }));
   const mode = deriveAvailabilityMode(mockTest);
   const windowState = deriveMockTestAvailability(mockTest, now);
@@ -130,7 +139,7 @@ export default async function MockTestDetailPage({
     { ok: true, label: `Availability: ${AVAILABILITY_MODE_LABELS[mode]}${mockTest.availableFrom ? ` · from ${formatIst(mockTest.availableFrom)}` : ""}${mockTest.availableUntil ? ` · until ${formatIst(mockTest.availableUntil)}` : ""}` },
     { ok: true, label: `Access: ${mockTest.accessType} · Results: ${RESULT_RELEASE_LABELS[mockTest.resultReleaseMode]}${releaseAt ? ` (${formatIst(releaseAt)})` : ""} · Leaderboard ${mockTest.leaderboardEnabled ? "on" : "off"}` },
     { ok: !mockTest.testSeries || mockTest.testSeries.status === "PUBLISHED", warn: true, label: mockTest.testSeries ? `Test Series is ${mockTest.testSeries.status}` : "Standalone test" },
-    { ok: !uncoveredPaid, warn: true, label: uncoveredPaid ? UNCOVERED_PAID_MOCK_WARNING : coveringPlans.length > 0 ? `Unlocked by: ${coveringPlans.map((p) => p.name).join(", ")}` : "Free for signed-in students" },
+    { ok: !uncoveredPaid, warn: true, label: uncoveredPaid ? UNCOVERED_PAID_MOCK_WARNING : (sellingCoverageLabel(coveringPlans) ?? "Free for signed-in students") },
   ];
 
   return (
@@ -239,11 +248,22 @@ export default async function MockTestDetailPage({
         <CardHeader>
           <CardTitle>Test Series / Course Assignment</CardTitle>
           <CardDescription>
-            Currently: <strong>{mockTest.testSeries?.name ?? "Standalone / No Test Series"}</strong>. Access is inherited from the series&apos; Product (Product →
-            Test Series → Mock Test) — no per-mock entitlements.
+            Currently: <strong>{mockTest.testSeries?.name ?? "Standalone / No Test Series"}</strong>. A PAID mock is unlocked by its series&apos; Complete
+            Series product (Product → Test Series) and/or an Individual Mock Test product for this mock (Admin → Payments → Products).
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {mockTest.accessType === "PAID" ? (
+            <p className="text-sm text-[var(--color-muted-foreground)]" data-testid="selling-coverage">
+              Selling coverage: <strong className="text-[var(--color-foreground)]">{sellingCoverageLabel(coveringPlans) ?? "Not covered by any purchasable product"}</strong>
+            </p>
+          ) : null}
+          {inertProducts.length ? (
+            <p className="flex items-start gap-2 rounded-[var(--radius-button)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-sm text-[var(--color-foreground)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden /> This mock is FREE, so its individual product (
+              {inertProducts.join(", ")}) is never sold. Set the mock to PAID to sell it, or deactivate that product.
+            </p>
+          ) : null}
           {uncoveredPaid ? (
             <p className="flex items-start gap-2 rounded-[var(--radius-button)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-sm text-[var(--color-foreground)]">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]" aria-hidden /> {UNCOVERED_PAID_MOCK_WARNING}

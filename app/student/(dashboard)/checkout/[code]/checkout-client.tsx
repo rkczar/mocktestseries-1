@@ -14,7 +14,8 @@ import { applyCouponAction, createOrderAction, verifyPaymentAction } from "../ac
 interface Props {
   product: { id: string; code: string; name: string; description: string | null; accessLabel: string; examName: string | null };
   price: { isFree: boolean; mrpPaise: number; pricePaise: number; discountPercent: number; savingsPaise: number; saleEndsAt: string | null };
-  access: { status: string; mode: string; purchasesPaused: boolean; expiresAt: string | null };
+  /** coveredBy: name of another product that already unlocks this one (e.g. Complete Series covering a single mock). */
+  access: { status: string; mode: string; purchasesPaused: boolean; expiresAt: string | null; coveredBy?: string | null };
   /** Present only when an active day-based plan can be extended: days added and the resulting expiry. */
   renewal: { days: number; newExpiresAt: string } | null;
   gatewayReady: boolean;
@@ -191,6 +192,7 @@ export function CheckoutClient({ product, price, access, renewal, gatewayReady, 
           {owned ? (
             <p className="flex items-center gap-2 text-[var(--color-success)]">
               <BadgeCheck className="h-4 w-4" aria-hidden />
+              {access.coveredBy ? `Already included in your ${access.coveredBy} access — no purchase needed. ` : null}
               {access.expiresAt
                 ? `You have access until ${new Date(access.expiresAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}.`
                 : "You have lifetime access."}
