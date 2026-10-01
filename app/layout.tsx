@@ -8,6 +8,8 @@ import { TEXT_SIZE_COOKIE, isTextSize } from "@/lib/text-size";
 import { getAppearance, appearanceToCssVariables } from "@/lib/appearance";
 import { getSeoSettings } from "@/lib/seo-settings";
 import { PUBLIC_BRAND_NAME } from "@/lib/brand";
+import { getSiteUrl } from "@/lib/site-url";
+import { defaultSocialImage, socialMetadata } from "@/lib/social-metadata";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,10 +21,18 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: PUBLIC_BRAND_NAME,
-  description: "Online mock tests, previous year papers and AI-powered explanations for medical officer exams.",
-};
+const DEFAULT_DESCRIPTION = "Online mock tests, previous year papers and AI-powered explanations for medical officer exams.";
+
+// Defaults for every route; pages that set their own `openGraph`/`twitter`
+// build them with lib/social-metadata.ts so the image is never dropped.
+export async function generateMetadata(): Promise<Metadata> {
+  const [seo, siteUrl] = await Promise.all([getSeoSettings(), getSiteUrl()]);
+  return {
+    title: PUBLIC_BRAND_NAME,
+    description: DEFAULT_DESCRIPTION,
+    ...socialMetadata({ title: PUBLIC_BRAND_NAME, description: DEFAULT_DESCRIPTION, image: defaultSocialImage(seo, siteUrl), seo }),
+  };
+}
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const cookieStore = await cookies();

@@ -2,45 +2,53 @@ import { safeJsonLd } from "@/lib/json-ld";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { BookOpen, FileText, ListChecks, Sparkles, Clock, Target } from "lucide-react";
+import { ArrowRight, BookOpen, FileText, ListChecks, Sparkles, Clock, Target } from "lucide-react";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
-import {
-  getPublicExamBySlug,
-  getExamPublicStats,
-  getExamSubjectsWithCounts,
-  getExamPapers,
-  parseFaqItems,
-  parseImportantDates,
-} from "@/lib/exam-public";
+import { getPublicExamBySlug, getExamPublicStats, getExamSubjectsWithCounts, parseFaqItems, parseImportantDates } from "@/lib/exam-public";
 import { getSiteUrl } from "@/lib/site-url";
-import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
 import { getStudentSession } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
 import { MockSeriesPromo, OfferPrice } from "@/components/public-exam/mock-series-promo";
+import { ExamDisclaimer, ExamSection, FactGrid, FaqList } from "@/components/public-exam/seo-blocks";
 import { getExamMockSeriesSummary } from "@/lib/mock-series";
+import { displayExamName } from "@/lib/exam-display";
+import { examPageMetadata } from "@/lib/exam-seo";
+import { formatShare, getExamPyqInsights, pyqYearPath } from "@/lib/exam-pyq-insights";
+
+type PublicExam = NonNullable<Awaited<ReturnType<typeof getPublicExamBySlug>>>;
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const [exam, seo, siteUrl] = await Promise.all([getPublicExamBySlug(slug), getSeoSettings(), getSiteUrl()]);
+  const exam = await getPublicExamBySlug(slug);
   if (!exam) return {};
+  const name = displayExamName(exam.name);
+  return examPageMetadata({
+    exam,
+    path: `/exams/${exam.publicSlug}`,
+    absoluteTitle: exam.seoTitle || undefined,
+    title: `${name}: Exam Pattern, Syllabus, Previous Papers & Mock Tests`,
+    description:
+      exam.seoDescription ||
+      exam.shortDescription ||
+      `${name} preparation: exam pattern, syllabus, previous year papers and timed mock tests with AI-powered explanations.`,
+  });
+}
 
-  const title = exam.seoTitle || applyTitleTemplate(seo.titleTemplate, exam.name);
-  const description = exam.seoDescription || exam.shortDescription || seo.defaultMetaDescription;
-  const url = `${siteUrl}/exams/${exam.publicSlug}`;
-
-  return {
-    title,
-    description,
-    alternates: { canonical: url },
-    robots: seo.siteIndexable ? { index: true, follow: true } : { index: false, follow: false },
-    openGraph: { title, description, url, type: "website" },
-    twitter: { card: "summary_large_image", title, description },
-  };
+/** Pattern facts an admin has entered on the Exam row. */
+function patternFacts(exam: PublicExam) {
+  const facts: { label: string; value: string }[] = [];
+  if (exam.examMode) facts.push({ label: "Mode", value: exam.examMode });
+  if (exam.totalQuestions) facts.push({ label: "Questions", value: String(exam.totalQuestions) });
+  if (exam.totalMarks) facts.push({ label: "Total marks", value: String(exam.totalMarks) });
+  if (exam.durationMinutes) facts.push({ label: "Duration", value: `${exam.durationMinutes} minutes` });
+  if (exam.negativeMarking != null) {
+    facts.push({ label: "Negative marking", value: exam.negativeMarking === 0 ? "None" : `${exam.negativeMarking} per wrong answer` });
+  }
+  return facts;
 }
 
 export default async function ExamPillarPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -48,10 +56,10 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
   const exam = await getPublicExamBySlug(slug);
   if (!exam) notFound();
 
-  const [stats, subjects, papers, siteUrl, session, omrResource, mockSeriesSummary] = await Promise.all([
+  const [stats, subjects, insights, siteUrl, session, omrResource, mockSeriesSummary] = await Promise.all([
     getExamPublicStats(exam.id),
     getExamSubjectsWithCounts(exam.id),
-    getExamPapers(exam.id),
+    getExamPyqInsights(exam.id),
     getSiteUrl(),
     getStudentSession(),
     prisma.testResource.findFirst({
@@ -60,62 +68,99 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
     }),
     getExamMockSeriesSummary(exam),
   ]);
+  const name = displayExamName(exam.name);
+  const base = `/exams/${exam.publicSlug}`;
   const seriesHref = mockSeriesSummary.mockSeries ? mockSeriesSummary.href : null;
-
   const faqItems = parseFaqItems(exam.faqItems);
   const importantDates = parseImportantDates(exam.importantDates);
+  const facts = patternFacts(exam);
   const isLoggedIn = Boolean(session?.user);
-  const pageUrl = `${siteUrl}/exams/${exam.publicSlug}`;
-
-  const firstAttemptablePaper = papers.find((p) => p.questionCount > 0);
-
-  const patternFacts: { label: string; value: string }[] = [];
-  if (exam.conductingAuthority) patternFacts.push({ label: "Conducting Authority", value: exam.conductingAuthority });
-  if (exam.examMode) patternFacts.push({ label: "Exam Mode", value: exam.examMode });
-  if (exam.totalQuestions) patternFacts.push({ label: "Questions", value: String(exam.totalQuestions) });
-  if (exam.totalMarks) patternFacts.push({ label: "Total Marks", value: String(exam.totalMarks) });
-  if (exam.durationMinutes) patternFacts.push({ label: "Duration", value: `${exam.durationMinutes} minutes` });
-  if (exam.negativeMarking) patternFacts.push({ label: "Negative Marking", value: `${exam.negativeMarking} per wrong answer` });
+  const papers = insights.papers.filter((p) => p.questionCount > 0);
+  const firstAttemptablePaper = papers[0];
+  const topSubjects = insights.weightage.slice(0, 3);
+  const inEveryPaper = papers.length > 1 ? insights.weightage.filter((w) => w.papers === papers.length).length : 0;
+  const years = papers.map((p) => p.year);
 
   const webPageJsonLd = {
     "@context": "https://schema.org",
     "@type": "WebPage",
-    name: exam.seoTitle || exam.name,
+    name,
     description: exam.seoDescription || exam.shortDescription || undefined,
-    url: pageUrl,
+    url: `${siteUrl}${base}`,
+    isPartOf: { "@type": "WebSite", "@id": `${siteUrl}/#website` },
   };
-  const faqJsonLd =
-    faqItems.length > 0
-      ? {
-          "@context": "https://schema.org",
-          "@type": "FAQPage",
-          mainEntity: faqItems.map((f) => ({
-            "@type": "Question",
-            name: f.question,
-            acceptedAnswer: { "@type": "Answer", text: f.answer },
-          })),
-        }
-      : null;
+
+  const onThisPage = [
+    exam.overview ? { id: "overview", label: "Overview" } : null,
+    { id: "important-dates", label: "Important dates" },
+    exam.eligibility ? { id: "eligibility", label: "Eligibility" } : null,
+    facts.length > 0 || exam.examPatternInfo ? { id: "exam-pattern", label: "Exam pattern" } : null,
+    subjects.length > 0 ? { id: "syllabus", label: "Syllabus" } : null,
+    papers.length > 0 ? { id: "previous-year-papers", label: "Previous papers" } : null,
+    seriesHref ? { id: "mock-tests", label: "Mock tests" } : null,
+    { id: "preparation", label: "How to prepare" },
+    faqItems.length > 0 ? { id: "faq", label: "FAQ" } : null,
+  ].filter((x): x is { id: string; label: string } => x !== null);
+
+  const steps = [
+    {
+      title: "Know the paper you are training for",
+      body:
+        facts.length > 0
+          ? `Practise in the format you will face (${facts
+              .filter((f) => ["Mode", "Questions", "Duration", "Negative marking"].includes(f.label))
+              .map((f) => `${f.label.toLowerCase()}: ${f.value}`)
+              .join(" · ")}) and re-check the official notice for any change before the exam.`
+          : "Start with the official notice so your practice matches the real paper.",
+      href: `${base}/exam-pattern`,
+      link: "Exam pattern",
+    },
+    {
+      title: "Spend time where the questions are",
+      body:
+        topSubjects.length > 0
+          ? `In past papers, ${topSubjects.map((s) => s.name).join(", ")} together made up ${formatShare(
+              topSubjects.reduce((sum, s) => sum + s.share, 0)
+            )} of the questions.${inEveryPaper > 0 ? ` ${inEveryPaper} subjects appeared in every paper, so cover breadth as well as depth.` : ""}`
+          : "Cover every subject, then go deeper where past papers concentrate.",
+      href: `${base}/syllabus`,
+      link: "Subject-wise syllabus",
+    },
+    {
+      title: "Solve previous papers under exam conditions",
+      body:
+        papers.length > 0
+          ? `Attempt the ${papers.length} available past papers timed, one at a time, and review every wrong or guessed answer before moving to the next year.`
+          : "Use past papers as timed practice as soon as they are available.",
+      href: `${base}/previous-year-papers`,
+      link: "Previous year papers",
+    },
+    {
+      title: "Take full mocks and review them properly",
+      body: "Full-length mocks build pacing and show weak topics. After each one, read the explanation for every question you missed and ask the AI about anything still unclear.",
+      href: seriesHref ?? `${base}/question-bank`,
+      link: seriesHref ? "Mock test series" : "Question bank",
+    },
+  ];
 
   return (
     <PublicPageShell>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(webPageJsonLd) }} />
-      {faqJsonLd ? <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(faqJsonLd) }} /> : null}
 
       {/* HERO */}
       <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">
         <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
-          <ExamBreadcrumbs baseUrl={siteUrl} crumbs={[{ label: "Home", href: "/" }, { label: "Exams", href: "/exams" }, { label: exam.name }]} />
+          <ExamBreadcrumbs baseUrl={siteUrl} crumbs={[{ label: "Home", href: "/" }, { label: "Exams", href: "/exams" }, { label: name }]} />
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {exam.year ? <Badge variant="primary">{exam.year}</Badge> : null}
             {exam.isUpcoming ? <Badge variant="info">Upcoming</Badge> : null}
           </div>
 
-          <h1 className="mt-3 max-w-3xl text-3xl font-semibold text-[var(--color-foreground)] sm:text-4xl lg:text-5xl">{exam.name}</h1>
+          <h1 className="mt-3 max-w-3xl text-3xl tracking-[-0.02em] text-[var(--color-foreground)] sm:text-4xl lg:text-5xl">{name}</h1>
 
           {exam.shortDescription ? (
-            <p className="mt-4 max-w-2xl text-base text-[var(--color-muted-foreground)] sm:text-lg">{exam.shortDescription}</p>
+            <p className="mt-4 max-w-2xl text-base leading-relaxed text-[var(--color-muted-foreground)] sm:text-lg">{exam.shortDescription}</p>
           ) : null}
 
           {seriesHref ? (
@@ -124,7 +169,7 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
             </div>
           ) : null}
 
-          <div className="mt-7 flex flex-wrap items-center gap-3">
+          <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
             {isLoggedIn ? (
               <Button asChild size="lg">
                 <Link href={`/student/exams/${exam.id}`}>Continue Preparation →</Link>
@@ -145,17 +190,12 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
             ) : null}
             {papers.length > 0 ? (
               <Button asChild variant="outline" size="lg">
-                <Link href={`/exams/${exam.publicSlug}/previous-year-papers`}>Explore Previous Year Papers</Link>
+                <Link href={`${base}/previous-year-papers`}>Previous Year Papers</Link>
               </Button>
             ) : null}
             {omrResource ? (
-              <Button asChild variant="outline" size="lg">
-                <a href={`/api/student/test-resources/${omrResource.id}`}>Download OMR Sheet</a>
-              </Button>
-            ) : null}
-            {!isLoggedIn ? (
               <Button asChild variant="ghost" size="lg">
-                <Link href="/login">Student Login</Link>
+                <a href={`/api/student/test-resources/${omrResource.id}`}>Download OMR Sheet</a>
               </Button>
             ) : null}
           </div>
@@ -177,170 +217,159 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
         <ExamSubNav slug={exam.publicSlug!} active="overview" />
       </div>
 
-      <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
-        <MockSeriesPromo
-          summary={mockSeriesSummary}
-          blurb="Scheduled, exam-pattern mocks with stated syllabus coverage, instant results, question-by-question review and AI explanations."
-        />
-
-        {/* EXAM AT A GLANCE */}
-        {patternFacts.length > 0 || exam.eligibility ? (
-          <section className="mt-12">
-            <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Exam at a Glance</h2>
-            <p className="mt-1 text-sm text-[var(--color-muted-foreground)]">
-              Facts an admin has verified for this exam. Anything not confirmed for the current cycle is labeled below rather than
-              stated as fact — always cross-check against the official notification.
-            </p>
-            {patternFacts.length > 0 ? (
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {patternFacts.map((f) => (
-                  <Card key={f.label}>
-                    <CardContent className="p-4">
-                      <p className="text-xs uppercase tracking-wide text-[var(--color-muted-foreground)]">{f.label}</p>
-                      <p className="mt-1 text-base font-medium text-[var(--color-foreground)]">{f.value}</p>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            ) : null}
-            {exam.eligibility ? (
-              <div className="mt-4">
-                <h3 className="text-base font-semibold text-[var(--color-foreground)]">Eligibility</h3>
-                <p className="mt-1 whitespace-pre-line text-sm text-[var(--color-muted-foreground)]">{exam.eligibility}</p>
-              </div>
-            ) : null}
-            {importantDates.length > 0 ? (
-              <div className="mt-4">
-                <h3 className="text-base font-semibold text-[var(--color-foreground)]">Important Dates</h3>
-                <div className="mt-2 flex flex-col divide-y divide-[var(--color-border)] rounded-[var(--radius-card)] border border-[var(--color-border)]">
-                  {importantDates.map((d, i) => (
-                    <div key={i} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                      <span className="text-[var(--color-muted-foreground)]">{d.label}</span>
-                      <span className="font-medium text-[var(--color-foreground)]">{d.date}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
+      <div className="mx-auto w-full max-w-6xl px-4 pb-14 pt-8 sm:px-6">
+        <nav aria-label="On this page" className="flex flex-wrap gap-2 pb-8">
+          {onThisPage.map((item) => (
+            <a
+              key={item.id}
+              href={`#${item.id}`}
+              className="rounded-[var(--radius-badge)] border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-muted-foreground)] transition-colors hover:border-[var(--color-primary)]/60 hover:text-[var(--color-foreground)]"
+            >
+              {item.label}
+            </a>
+          ))}
+        </nav>
 
         {exam.overview ? (
-          <section className="mt-12">
-            <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">About This Exam</h2>
-            <p className="mt-3 whitespace-pre-line text-[var(--color-muted-foreground)]">{exam.overview}</p>
-          </section>
-        ) : null}
-
-        {/* MOCKTESTSERIES STATS */}
-        <section className="mt-12">
-          <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">MockTestSeries.in Preparation Stats</h2>
-          <p className="mt-1 text-sm text-[var(--color-muted-foreground)]">Live numbers from our database — updated automatically.</p>
-          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <MiniStat value={stats.questions} label="Questions" />
-            <MiniStat value={stats.papers} label="PYQ Papers" />
-            <MiniStat value={stats.subjects} label="Subjects" />
-            <MiniStat value={stats.topics} label="Topics" />
-            <MiniStat value={stats.mockTests} label="Mock Tests" />
-            <MiniStat value={stats.aiExplanations} label="AI Explanations" />
-          </div>
-        </section>
-
-        {/* PREVIOUS YEAR PAPERS */}
-        {papers.length > 0 ? (
-          <section className="mt-12">
-            <div className="flex items-baseline justify-between gap-4">
-              <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Previous Year Papers</h2>
-              <Link href={`/exams/${exam.publicSlug}/previous-year-papers`} className="text-sm font-medium text-[var(--color-primary)] hover:underline">
-                View All →
-              </Link>
-            </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {papers.slice(0, 6).map((p) => (
-                <Card key={p.id}>
-                  <CardContent className="flex flex-col gap-2 p-4">
-                    <p className="text-lg font-semibold text-[var(--color-foreground)]">{p.year}</p>
-                    <p className="text-sm text-[var(--color-muted-foreground)]">{p.title}</p>
-                    {p.questionCount > 0 ? <p className="text-xs text-[var(--color-muted-foreground)]">{p.questionCount} questions</p> : null}
-                    {p.questionCount > 0 ? (
-                      <Button asChild size="sm" className="mt-1 w-fit">
-                        <Link href={`/student/attempt/resume?paper=${p.id}`}>Attempt Paper</Link>
-                      </Button>
-                    ) : (
-                      <Button size="sm" className="mt-1 w-fit" disabled>
-                        Attempt Paper
-                      </Button>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        {/* SUBJECTS / SYLLABUS */}
-        {subjects.length > 0 ? (
-          <section className="mt-12">
-            <div className="flex items-baseline justify-between gap-4">
-              <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Subjects &amp; Syllabus</h2>
-              <Link href={`/exams/${exam.publicSlug}/syllabus`} className="text-sm font-medium text-[var(--color-primary)] hover:underline">
-                Full Syllabus →
-              </Link>
-            </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {subjects.slice(0, 8).map((s) => (
-                <Link key={s.id} href={`/student/subject-test/${exam.id}`} className="group block">
-                  <Card className="h-full transition-colors group-hover:border-[var(--color-primary)]/50">
-                    <CardContent className="p-4">
-                      <p className="font-medium text-[var(--color-foreground)]">{s.name}</p>
-                      <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
-                        {s.topicCount} topics · {s.questionCount} questions
-                      </p>
-                    </CardContent>
-                  </Card>
-                </Link>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        {/* HOW IT WORKS */}
-        <section className="mt-12">
-          <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">How MockTestSeries.in Works</h2>
-          <div className="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            {["Choose Exam", "Attempt", "Submit", "Result", "Ask AI", "Practice Again"].map((step, i) => (
-              <div key={step} className="flex flex-col items-center gap-2 text-center">
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-primary)]/10 text-sm font-semibold text-[var(--color-primary)]">
-                  {i + 1}
+          <ExamSection id="overview" title={`About ${name}`}>
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <p className="whitespace-pre-line leading-relaxed text-[var(--color-muted-foreground)]">{exam.overview}</p>
+              {exam.conductingAuthority ? (
+                <div className="h-fit rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-4">
+                  <p className="text-xs text-[var(--color-muted-foreground)]">Conducting authority</p>
+                  <p className="mt-1 text-sm leading-relaxed text-[var(--color-foreground)]">{exam.conductingAuthority}</p>
                 </div>
-                <p className="text-xs font-medium text-[var(--color-foreground)]">{step}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* FAQ */}
-        {faqItems.length > 0 ? (
-          <section className="mt-12">
-            <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Frequently Asked Questions</h2>
-            <div className="mt-5 flex flex-col gap-2">
-              {faqItems.map((f, i) => (
-                <details key={i} className="group rounded-[var(--radius-card)] border border-[var(--color-border)] p-4">
-                  <summary className="cursor-pointer list-none text-sm font-medium text-[var(--color-foreground)] marker:content-none">
-                    {f.question}
-                  </summary>
-                  <p className="mt-2 whitespace-pre-line text-sm text-[var(--color-muted-foreground)]">{f.answer}</p>
-                </details>
-              ))}
+              ) : null}
             </div>
-          </section>
+          </ExamSection>
         ) : null}
 
-        {/* FINAL CTA */}
-        <section className="mt-14 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-center">
-          <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Ready to start preparing?</h2>
+        <ExamSection id="important-dates" title="Important dates">
+          {importantDates.length > 0 ? (
+            <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)]">
+              <table className="w-full text-sm">
+                <caption className="sr-only">{name} important dates</caption>
+                <tbody className="divide-y divide-[var(--color-border)]">
+                  {importantDates.map((d, i) => (
+                    <tr key={i} className="bg-[var(--color-card)]">
+                      <th scope="row" className="w-1/2 px-4 py-3 text-left align-top font-normal text-[var(--color-muted-foreground)]">
+                        {d.label}
+                      </th>
+                      <td className="px-4 py-3 font-medium text-[var(--color-foreground)]">{d.date}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] px-4 py-4 text-sm text-[var(--color-muted-foreground)]">
+              Awaiting the official notification. Dates will be listed here once the conducting authority announces them.
+            </p>
+          )}
+        </ExamSection>
+
+        {exam.eligibility ? (
+          <ExamSection id="eligibility" title="Eligibility">
+            <p className="max-w-3xl whitespace-pre-line leading-relaxed text-[var(--color-muted-foreground)]">{exam.eligibility}</p>
+          </ExamSection>
+        ) : null}
+
+        {facts.length > 0 || exam.examPatternInfo ? (
+          <ExamSection id="exam-pattern" title="Exam pattern" action={{ href: `${base}/exam-pattern`, label: "Full exam pattern" }}>
+            <FactGrid facts={facts} />
+            {exam.examPatternInfo ? (
+              <p className="mt-4 max-w-3xl whitespace-pre-line text-sm leading-relaxed text-[var(--color-muted-foreground)]">{exam.examPatternInfo}</p>
+            ) : null}
+          </ExamSection>
+        ) : null}
+
+        {subjects.length > 0 ? (
+          <ExamSection
+            id="syllabus"
+            title="Syllabus and subjects"
+            intro={
+              topSubjects.length > 0
+                ? `Across ${papers.length} previous papers, ${topSubjects.map((s) => `${s.name} (${formatShare(s.share)})`).join(", ")} carried the most questions.`
+                : undefined
+            }
+            action={{ href: `${base}/syllabus`, label: "Subject-wise syllabus" }}
+          >
+            <ul className="flex flex-wrap gap-2">
+              {subjects.map((s) => (
+                <li key={s.id} className="rounded-[var(--radius-badge)] border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-1.5 text-sm text-[var(--color-foreground)]">
+                  {s.name}
+                  <span className="ml-1.5 text-xs text-[var(--color-muted-foreground)]">{s.topicCount} topics</span>
+                </li>
+              ))}
+            </ul>
+          </ExamSection>
+        ) : null}
+
+        {papers.length > 0 ? (
+          <ExamSection
+            id="previous-year-papers"
+            title="Previous year papers"
+            intro={`${papers.length} past papers (${Math.min(...years)}–${Math.max(...years)}) to attempt online in the exam format, with question-wise review after you submit.`}
+            action={{ href: `${base}/previous-year-papers`, label: "All previous year papers" }}
+          >
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              {papers.map((p) => (
+                <li key={p.id}>
+                  <Link
+                    href={p.indexable ? pyqYearPath(exam.publicSlug!, p.year) : `${base}/previous-year-papers`}
+                    className="flex h-full flex-col gap-1 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-4 transition-colors hover:border-[var(--color-primary)]/60"
+                  >
+                    <span className="text-lg tabular-nums text-[var(--color-foreground)]" style={{ fontFamily: "var(--font-mono)" }}>
+                      {p.year}
+                    </span>
+                    <span className="text-sm text-[var(--color-foreground)]">{p.title}</span>
+                    <span className="text-xs text-[var(--color-muted-foreground)]">{p.questionCount} questions</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </ExamSection>
+        ) : null}
+
+        {seriesHref ? (
+          <ExamSection id="mock-tests" title="Mock tests" action={{ href: seriesHref, label: `${name} mock test series` }}>
+            <MockSeriesPromo
+              summary={mockSeriesSummary}
+              blurb="Scheduled, exam-pattern mocks with stated syllabus coverage, instant results, question-by-question review and AI explanations."
+            />
+          </ExamSection>
+        ) : null}
+
+        <ExamSection id="preparation" title={`How to prepare for ${name}`}>
+          <ol className="grid gap-3 md:grid-cols-2">
+            {steps.map((step, i) => (
+              <li key={step.title} className="flex gap-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] text-sm tabular-nums text-[var(--color-foreground)]">
+                  {i + 1}
+                </span>
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <h3 className="text-base font-semibold text-[var(--color-foreground)]">{step.title}</h3>
+                  <p className="text-sm leading-relaxed text-[var(--color-muted-foreground)]">{step.body}</p>
+                  <Link href={step.href} className="mt-1 inline-flex w-fit items-center gap-1 text-sm font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
+                    {step.link}
+                    <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+                  </Link>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </ExamSection>
+
+        {faqItems.length > 0 ? (
+          <ExamSection id="faq" title="Frequently asked questions">
+            <FaqList items={faqItems} />
+          </ExamSection>
+        ) : null}
+
+        <section className="mt-6 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6 text-center sm:p-8">
+          <h2 className="text-2xl tracking-[-0.01em] text-[var(--color-foreground)]">Start preparing for {name}</h2>
           <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--color-muted-foreground)]">
-            Join MockTestSeries.in for {exam.name} — previous year papers, subject practice, and AI-powered explanations.
+            Previous year papers, subject-wise practice and AI-powered explanations, in one place.
           </p>
           <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
             <Button asChild size="lg">
@@ -348,6 +377,8 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
             </Button>
           </div>
         </section>
+
+        <ExamDisclaimer authority={exam.conductingAuthority} />
       </div>
     </PublicPageShell>
   );
@@ -359,14 +390,5 @@ function StatItem({ icon, value, label }: { icon: React.ReactNode; value: number
       {icon}
       <span className="font-semibold text-[var(--color-foreground)]">{value}</span> {label}
     </span>
-  );
-}
-
-function MiniStat({ value, label }: { value: number; label: string }) {
-  return (
-    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-center">
-      <p className="text-xl font-semibold text-[var(--color-foreground)]">{value}</p>
-      <p className="text-[11px] text-[var(--color-muted-foreground)]">{label}</p>
-    </div>
   );
 }

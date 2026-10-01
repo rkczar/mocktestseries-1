@@ -4,7 +4,8 @@ import { notFound } from "next/navigation";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug, getExamSubjectsWithCounts, getExamPublicStats } from "@/lib/exam-public";
 import { getSiteUrl } from "@/lib/site-url";
-import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
+import { displayExamName } from "@/lib/exam-display";
+import { examPageMetadata } from "@/lib/exam-seo";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
@@ -14,18 +15,15 @@ import { getExamMockSeriesSummary } from "@/lib/mock-series";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const [exam, seo, siteUrl] = await Promise.all([getPublicExamBySlug(slug), getSeoSettings(), getSiteUrl()]);
+  const exam = await getPublicExamBySlug(slug);
   if (!exam) return {};
-  const title = applyTitleTemplate(seo.titleTemplate, `${exam.name} Question Bank`);
-  const description = `Subject-wise ${exam.name} question bank with AI-powered explanations for every question.`;
-  const url = `${siteUrl}/exams/${exam.publicSlug}/question-bank`;
-  return {
-    title,
-    description,
-    alternates: { canonical: url },
-    robots: seo.siteIndexable ? { index: true, follow: true } : { index: false, follow: false },
-    openGraph: { title, description, url, type: "website" },
-  };
+  const name = displayExamName(exam.name);
+  return examPageMetadata({
+    exam,
+    path: `/exams/${exam.publicSlug}/question-bank`,
+    title: `${name} Practice Questions by Subject`,
+    description: `Subject-wise ${name} practice questions with topic coverage and AI-powered explanations, for focused revision between full mock tests.`,
+  });
 }
 
 export default async function ExamQuestionBankPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -39,6 +37,7 @@ export default async function ExamQuestionBankPage({ params }: { params: Promise
     getExamPublicStats(exam.id),
     getSiteUrl(),
   ]);
+  const name = displayExamName(exam.name);
 
   return (
     <PublicPageShell>
@@ -49,11 +48,11 @@ export default async function ExamQuestionBankPage({ params }: { params: Promise
             crumbs={[
               { label: "Home", href: "/" },
               { label: "Exams", href: "/exams" },
-              { label: exam.name, href: `/exams/${exam.publicSlug}` },
+              { label: name, href: `/exams/${exam.publicSlug}` },
               { label: "Question Bank" },
             ]}
           />
-          <h1 className="mt-3 text-3xl font-semibold text-[var(--color-foreground)]">{exam.name} Question Bank</h1>
+          <h1 className="mt-3 text-3xl tracking-[-0.02em] text-[var(--color-foreground)] sm:text-4xl">{name} Question Bank</h1>
           <p className="mt-2 max-w-2xl text-[var(--color-muted-foreground)]">
             {stats.questions} published questions across {stats.subjects} subjects, each with an AI-powered explanation available
             once you sign in.

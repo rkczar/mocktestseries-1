@@ -11,6 +11,7 @@ import { getStudentSession } from "@/lib/student-session";
 import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
 import { BRAND_NAME, PUBLIC_BRAND_NAME } from "@/lib/brand";
 import { safeJsonLd } from "@/lib/json-ld";
+import { defaultSocialImage, socialMetadata } from "@/lib/social-metadata";
 
 type HomepageSeo = { title?: string; metaDescription?: string; canonicalUrl?: string; ogTitle?: string; ogDescription?: string };
 
@@ -23,7 +24,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const canonical = seo.canonicalUrl && seo.canonicalUrl.startsWith(`${siteUrl}/`) ? seo.canonicalUrl : `${siteUrl}/`;
   const ogTitle = seo.ogTitle || title;
   const ogDescription = seo.ogDescription || description;
-  const images = settings.defaultOgImage ? [{ url: settings.defaultOgImage }] : undefined;
+  const image = defaultSocialImage(settings, siteUrl);
   return {
     title: { absolute: title },
     description,
@@ -31,13 +32,7 @@ export async function generateMetadata(): Promise<Metadata> {
     robots: settings.siteIndexable
       ? { index: true, follow: true, googleBot: { index: true, follow: true, "max-image-preview": "large", "max-snippet": -1 } }
       : { index: false, follow: false },
-    openGraph: { type: "website", url: canonical, siteName: PUBLIC_BRAND_NAME, locale: "en_IN", title: ogTitle, description: ogDescription, images },
-    twitter: {
-      card: images ? "summary_large_image" : "summary",
-      title: ogTitle,
-      description: ogDescription,
-      ...(settings.twitterHandle ? { site: settings.twitterHandle } : {}),
-    },
+    ...socialMetadata({ title: ogTitle, description: ogDescription, url: canonical, image, seo: settings }),
   };
 }
 

@@ -6,7 +6,9 @@ import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug } from "@/lib/exam-public";
 import { getSiteUrl } from "@/lib/site-url";
-import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
+import { displayExamName } from "@/lib/exam-display";
+import { examPageMetadata } from "@/lib/exam-seo";
+import { formatShare, getExamPyqInsights } from "@/lib/exam-pyq-insights";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
@@ -15,18 +17,15 @@ import { getExamMockSeriesSummary } from "@/lib/mock-series";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const [exam, seo, siteUrl] = await Promise.all([getPublicExamBySlug(slug), getSeoSettings(), getSiteUrl()]);
+  const exam = await getPublicExamBySlug(slug);
   if (!exam) return {};
-  const title = applyTitleTemplate(seo.titleTemplate, `${exam.name} Syllabus`);
-  const description = `Full subject and topic-wise syllabus for ${exam.name}, drawn from our question bank taxonomy.`;
-  const url = `${siteUrl}/exams/${exam.publicSlug}/syllabus`;
-  return {
-    title,
-    description,
-    alternates: { canonical: url },
-    robots: seo.siteIndexable ? { index: true, follow: true } : { index: false, follow: false },
-    openGraph: { title, description, url, type: "website" },
-  };
+  const name = displayExamName(exam.name);
+  return examPageMetadata({
+    exam,
+    path: `/exams/${exam.publicSlug}/syllabus`,
+    title: `${name} Syllabus & Subject Weightage`,
+    description: `Subject and topic-wise ${name} syllabus, with how many questions each subject carried in previous year papers, so you know where revision time pays off.`,
+  });
 }
 
 export default async function ExamSyllabusPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -46,6 +45,10 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
     }),
     getSiteUrl(),
   ]);
+  const insights = await getExamPyqInsights(exam.id);
+  const weightBySubject = new Map(insights.weightage.map((w) => [w.name, w]));
+  const pastPapers = insights.papers.filter((p) => p.questionCount > 0).length;
+  const name = displayExamName(exam.name);
 
   return (
     <PublicPageShell>
@@ -56,11 +59,11 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
             crumbs={[
               { label: "Home", href: "/" },
               { label: "Exams", href: "/exams" },
-              { label: exam.name, href: `/exams/${exam.publicSlug}` },
+              { label: name, href: `/exams/${exam.publicSlug}` },
               { label: "Syllabus" },
             ]}
           />
-          <h1 className="mt-3 text-3xl font-semibold text-[var(--color-foreground)]">{exam.name} Syllabus</h1>
+          <h1 className="mt-3 text-3xl tracking-[-0.02em] text-[var(--color-foreground)] sm:text-4xl">{name} Syllabus</h1>
           {exam.syllabusDescription ? (
             <p className="mt-2 max-w-2xl text-[var(--color-muted-foreground)]">{exam.syllabusDescription}</p>
           ) : (
@@ -76,6 +79,15 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
       </div>
 
       <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
+        {pastPapers > 0 && subjects.length > 0 ? (
+          <p className="mb-6 max-w-3xl text-sm leading-relaxed text-[var(--color-muted-foreground)]">
+            Each subject shows its topics, the practice questions available here, and its share of the {insights.totalQuestions} questions in{" "}
+            <Link href={`/exams/${exam.publicSlug}/previous-year-papers`} className="font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
+              {pastPapers} previous year papers
+            </Link>{" "}
+            (this site&apos;s subject classification). Confirm the official syllabus in the conducting authority&apos;s notification.
+          </p>
+        ) : null}
         {subjects.length === 0 ? (
           <p className="text-sm text-[var(--color-muted-foreground)]">Syllabus not published for this exam yet.</p>
         ) : (
@@ -84,8 +96,14 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
               <details key={s.id} className="group rounded-[var(--radius-card)] border border-[var(--color-border)] p-4 open:pb-5" open>
                 <summary className="flex cursor-pointer list-none items-center justify-between marker:content-none">
                   <span className="text-base font-semibold text-[var(--color-foreground)]">{s.name}</span>
-                  <span className="text-xs text-[var(--color-muted-foreground)]">
+                  <span className="text-right text-xs text-[var(--color-muted-foreground)]">
                     {s.topics.length} topics · {s._count.questions} questions
+                    {weightBySubject.has(s.name) ? (
+                      <span className="block sm:inline">
+                        <span className="hidden sm:inline"> · </span>
+                        {formatShare(weightBySubject.get(s.name)!.share)} of past-paper questions
+                      </span>
+                    ) : null}
                   </span>
                 </summary>
                 {s.topics.length > 0 ? (

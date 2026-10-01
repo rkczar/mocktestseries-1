@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings } from "@/lib/seo-settings";
 import { getPageVisibilityMap } from "@/lib/page-visibility";
+import { getExamPyqInsights, pyqYearPath } from "@/lib/exam-pyq-insights";
 
 // Regenerate hourly so exams published/unpublished in Admin appear without a redeploy.
 export const revalidate = 3600;
@@ -37,7 +38,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
     const exams = await prisma.exam.findMany({
       where: { publicPageEnabled: true, publicSlug: { not: null } },
-      select: { publicSlug: true, updatedAt: true },
+      select: { id: true, publicSlug: true, updatedAt: true },
     });
 
     for (const exam of exams) {
@@ -49,6 +50,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
           changeFrequency: "weekly",
           priority: 0.6,
         });
+      }
+      // Year pages exist only where the paper clears the non-thin threshold;
+      // the page itself 404s otherwise, so the sitemap uses the same rule.
+      const { indexableYears } = await getExamPyqInsights(exam.id);
+      for (const year of indexableYears) {
+        entries.push({ url: `${siteUrl}${pyqYearPath(exam.publicSlug!, year)}`, lastModified: exam.updatedAt, changeFrequency: "monthly", priority: 0.5 });
       }
     }
   }

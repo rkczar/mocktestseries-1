@@ -4,7 +4,8 @@ import { AlertTriangle } from "lucide-react";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug } from "@/lib/exam-public";
 import { getSiteUrl } from "@/lib/site-url";
-import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
+import { displayExamName } from "@/lib/exam-display";
+import { examPageMetadata } from "@/lib/exam-seo";
 import { Card, CardContent } from "@/components/ui/card";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
@@ -13,18 +14,15 @@ import { getExamMockSeriesSummary } from "@/lib/mock-series";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const [exam, seo, siteUrl] = await Promise.all([getPublicExamBySlug(slug), getSeoSettings(), getSiteUrl()]);
+  const exam = await getPublicExamBySlug(slug);
   if (!exam) return {};
-  const title = applyTitleTemplate(seo.titleTemplate, `${exam.name} Exam Pattern`);
-  const description = `${exam.name} exam pattern — questions, marks, duration, and negative marking, with official vs. historical facts clearly labeled.`;
-  const url = `${siteUrl}/exams/${exam.publicSlug}/exam-pattern`;
-  return {
-    title,
-    description,
-    alternates: { canonical: url },
-    robots: seo.siteIndexable ? { index: true, follow: true } : { index: false, follow: false },
-    openGraph: { title, description, url, type: "website" },
-  };
+  const name = displayExamName(exam.name);
+  return examPageMetadata({
+    exam,
+    path: `/exams/${exam.publicSlug}/exam-pattern`,
+    title: `${name} Exam Pattern & Marking Scheme`,
+    description: `${name} exam pattern: number of questions, marks, duration, mode and negative marking, with confirmed facts kept separate from previous-cycle details.`,
+  });
 }
 
 export default async function ExamPatternPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -34,13 +32,16 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
   const mockSeriesSummary = await getExamMockSeriesSummary(exam);
 
   const siteUrl = await getSiteUrl();
+  const name = displayExamName(exam.name);
 
   const confirmedFacts: { label: string; value: string }[] = [];
   if (exam.conductingAuthority) confirmedFacts.push({ label: "Conducting Authority", value: exam.conductingAuthority });
   if (exam.totalQuestions) confirmedFacts.push({ label: "Questions", value: String(exam.totalQuestions) });
   if (exam.totalMarks) confirmedFacts.push({ label: "Total Marks", value: String(exam.totalMarks) });
   if (exam.durationMinutes) confirmedFacts.push({ label: "Duration", value: `${exam.durationMinutes} minutes` });
-  if (exam.negativeMarking != null) confirmedFacts.push({ label: "Negative Marking", value: `${exam.negativeMarking} per wrong answer` });
+  if (exam.negativeMarking != null) {
+    confirmedFacts.push({ label: "Negative Marking", value: exam.negativeMarking === 0 ? "None" : `${exam.negativeMarking} per wrong answer` });
+  }
   if (exam.examMode) confirmedFacts.push({ label: "Exam Mode", value: exam.examMode });
 
   return (
@@ -52,11 +53,11 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
             crumbs={[
               { label: "Home", href: "/" },
               { label: "Exams", href: "/exams" },
-              { label: exam.name, href: `/exams/${exam.publicSlug}` },
+              { label: name, href: `/exams/${exam.publicSlug}` },
               { label: "Exam Pattern" },
             ]}
           />
-          <h1 className="mt-3 text-3xl font-semibold text-[var(--color-foreground)]">{exam.name} Exam Pattern</h1>
+          <h1 className="mt-3 text-3xl tracking-[-0.02em] text-[var(--color-foreground)] sm:text-4xl">{name} Exam Pattern</h1>
         </div>
       </div>
 
@@ -67,7 +68,7 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
       <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
         {confirmedFacts.length > 0 ? (
           <section>
-            <h2 className="text-xl font-semibold text-[var(--color-foreground)]">Confirmed Facts</h2>
+            <h2 className="text-xl font-semibold text-[var(--color-foreground)]">Pattern at a Glance</h2>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {confirmedFacts.map((f) => (
                 <Card key={f.label}>
@@ -86,7 +87,7 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
             <div className="flex items-start gap-3 rounded-[var(--radius-card)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 p-5">
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-[var(--color-warning)]" aria-hidden />
               <div>
-                <h2 className="text-base font-semibold text-[var(--color-foreground)]">Historical / Unconfirmed Pattern Details</h2>
+                <h2 className="text-base font-semibold text-[var(--color-foreground)]">Sources and what is still to be confirmed</h2>
                 <p className="mt-2 whitespace-pre-line text-sm text-[var(--color-muted-foreground)]">{exam.examPatternInfo}</p>
               </div>
             </div>
@@ -95,7 +96,7 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
 
         {confirmedFacts.length === 0 && !exam.examPatternInfo ? (
           <p className="text-sm text-[var(--color-muted-foreground)]">
-            Exam pattern details haven&apos;t been published yet for {exam.name}.
+            Exam pattern details haven&apos;t been published yet for {name}.
           </p>
         ) : null}
         <div className="mt-10">

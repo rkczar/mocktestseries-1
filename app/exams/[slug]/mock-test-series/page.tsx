@@ -10,6 +10,8 @@ import { getPublicExamBySlug, getExamPapers } from "@/lib/exam-public";
 import { getExamMockSeriesSummary, getSeriesComparison, getSeriesCta, mockSeriesPath, type PublicSeriesTest } from "@/lib/mock-series";
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
+import { displayExamName } from "@/lib/exam-display";
+import { defaultSocialImage, examSocialImage, socialMetadata } from "@/lib/social-metadata";
 import { getStudentSession } from "@/lib/student-session";
 import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent } from "@/components/ui/card";
@@ -57,8 +59,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     description,
     alternates: { canonical: url },
     robots: seo.siteIndexable ? { index: true, follow: true } : { index: false, follow: false },
-    openGraph: { title, description, url, type: "website" },
-    twitter: { card: "summary_large_image", title, description },
+    ...socialMetadata({ title, description, url, seo, image: examSocialImage(siteUrl, exam, displayExamName(exam.name)) ?? defaultSocialImage(seo, siteUrl) }),
   };
 }
 
@@ -155,7 +156,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
   const breadcrumbs = [
     { label: "Home", href: "/" },
     { label: "Exams", href: "/exams" },
-    { label: exam.name, href: hub },
+    { label: displayExamName(exam.name), href: hub },
     { label: "Mock Test Series" },
   ];
 

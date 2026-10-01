@@ -7,20 +7,22 @@ import { getPublicExamList, getExamPublicStats } from "@/lib/exam-public";
 import { getExamMockSeries } from "@/lib/mock-series";
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
+import { displayExamName } from "@/lib/exam-display";
+import { defaultSocialImage, socialMetadata } from "@/lib/social-metadata";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 
 export async function generateMetadata(): Promise<Metadata> {
   const [seo, siteUrl] = await Promise.all([getSeoSettings(), getSiteUrl()]);
-  const title = applyTitleTemplate(seo.titleTemplate, "Exams");
-  const description = "Browse every exam on MockTestSeries.in — mock tests, previous year papers, syllabus, and AI-powered explanations.";
+  const title = applyTitleTemplate(seo.titleTemplate, "Exams: Mock Tests, Previous Year Papers & Syllabus");
+  const description = "Every exam on Mock Test Series, with its mock tests, previous year papers, syllabus and AI-powered explanations.";
   return {
     title,
     description,
     alternates: { canonical: `${siteUrl}/exams` },
     robots: seo.siteIndexable ? { index: true, follow: true } : { index: false, follow: false },
-    openGraph: { title, description, url: `${siteUrl}/exams`, type: "website" },
+    ...socialMetadata({ title, description, url: `${siteUrl}/exams`, seo, image: defaultSocialImage(seo, siteUrl) }),
   };
 }
 
@@ -53,7 +55,7 @@ export default async function ExamsDirectoryPage() {
                   <Card className="h-full transition-colors group-hover:border-[var(--color-primary)]/50">
                     <CardContent className="flex flex-col gap-3 p-5">
                       <div className="flex items-center justify-between gap-2">
-                        <h2 className="text-lg font-semibold text-[var(--color-foreground)]">{exam.name}</h2>
+                        <h2 className="text-lg font-semibold text-[var(--color-foreground)]">{displayExamName(exam.name)}</h2>
                         {exam.isUpcoming ? <Badge variant="primary">Upcoming</Badge> : null}
                       </div>
                       {exam.shortDescription ? (
