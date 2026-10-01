@@ -6,7 +6,7 @@ import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
 import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
 import { formatIst } from "@/lib/ist-time";
-import { getWhatsAppShareConfig, renderWhatsAppShareText } from "@/lib/whatsapp-share-config";
+import { getWhatsAppShareConfig, buildQuestionShareText } from "@/lib/whatsapp-share-config";
 import { BackButton } from "@/components/student/back-button";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,8 +16,6 @@ import { AttemptReview, type ReviewQuestionView } from "./attempt-review";
 import { toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
 
 export const metadata = { title: "Review Answers — Mock Test Series.in" };
-
-const SITE_URL = process.env.NEXTAUTH_URL ?? "https://mocktestseries.in";
 
 export default async function AttemptReviewPage({ params }: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = await params;
@@ -77,11 +75,16 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
       isCorrect: tq.answer?.isCorrect ?? null,
       saved: savedIds.has(tq.questionId),
       shareText: whatsappConfig.enabled
-        ? renderWhatsAppShareText(whatsappConfig.template, {
-            exam: attempt.exam.name,
-            subject: subjectByQuestionId.get(tq.questionId) ?? "",
-            question: snapshot.text,
-            website_url: SITE_URL,
+        ? buildQuestionShareText({
+            template: whatsappConfig.template,
+            examName: attempt.exam.name,
+            subjectName: subjectByQuestionId.get(tq.questionId) ?? "",
+            // Student-facing fields only — never snapshot.correctLabel.
+            question: {
+              text: snapshot.text,
+              imageUrl: snapshot.imageUrl,
+              options: snapshot.options.map((o) => ({ label: o.label, text: o.text, imageUrl: o.imageUrl })),
+            },
           })
         : null,
       saveAction: toggleSaveQuestionAction.bind(null, tq.questionId),

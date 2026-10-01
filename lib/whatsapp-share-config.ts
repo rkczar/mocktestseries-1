@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { DEFAULT_WHATSAPP_SHARE_TEMPLATE } from "@/lib/whatsapp-share-template";
+import { DEFAULT_WHATSAPP_SHARE_TEMPLATE, resolveWhatsAppShareTemplate } from "@/lib/whatsapp-share-template";
 
 /**
  * Admin-controlled template for the student Review page's WhatsApp Share
@@ -29,7 +29,7 @@ export async function getWhatsAppShareConfig(): Promise<WhatsAppShareConfig> {
   const raw = (row?.value as StoredWhatsAppShareConfig | undefined) ?? {};
   return {
     enabled: raw.enabled ?? false,
-    template: raw.template?.trim() || DEFAULT_WHATSAPP_SHARE_TEMPLATE,
+    template: resolveWhatsAppShareTemplate(raw.template),
     updatedAt: raw.updatedAt ?? null,
   };
 }
@@ -47,4 +47,4 @@ export async function saveWhatsAppShareConfig(update: { enabled: boolean; templa
   });
 }
 
-export { renderWhatsAppShareText, WHATSAPP_SHARE_PLACEHOLDERS, DEFAULT_WHATSAPP_SHARE_TEMPLATE } from "@/lib/whatsapp-share-template";
+export { renderWhatsAppShareText, buildQuestionShareText, WHATSAPP_SHARE_PLACEHOLDERS, DEFAULT_WHATSAPP_SHARE_TEMPLATE } from "@/lib/whatsapp-share-template";

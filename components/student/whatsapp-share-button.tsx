@@ -2,6 +2,7 @@
 
 import { MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { whatsAppShareUrl } from "@/lib/whatsapp-share-template";
 
 /**
  * Standard `wa.me` deep link — no WhatsApp Business API, no credentials, no
@@ -11,7 +12,7 @@ import { Button } from "@/components/ui/button";
  * another student's data or a correct-answer key that hasn't been released.
  */
 export function WhatsAppShareButton({ text }: { text: string }) {
-  const href = `https://wa.me/?text=${encodeURIComponent(text)}`;
+  const href = whatsAppShareUrl(text);
   return (
     <Button asChild variant="outline" className="flex-1">
       <a href={href} target="_blank" rel="noopener noreferrer">

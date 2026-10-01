@@ -11,6 +11,8 @@ import { WHATSAPP_SHARE_PLACEHOLDERS, renderWhatsAppShareText } from "@/lib/what
 import { saveWhatsAppShareConfigAction, type WhatsAppShareFormState } from "./actions";
 
 const PREVIEW_VALUES = {
+  heading: "📝 *NEET UG Question*",
+  options: "*A.* 400 J\n*B.* 200 J\n*C.* 100 J\n*D.* 0 J",
   exam: "NEET UG",
   subject: "Physics",
   question: "A body of mass 2 kg is thrown vertically upward with a velocity of 20 m/s. What is its kinetic energy at the highest point?",
@@ -58,7 +60,7 @@ export function WhatsAppShareForm({ config, canManage }: { config: WhatsAppShare
             <Textarea
               id="whatsapp-template"
               name="template"
-              rows={6}
+              rows={12}
               value={template}
               onChange={(e) => setTemplate(e.target.value)}
               disabled={!canManage}
