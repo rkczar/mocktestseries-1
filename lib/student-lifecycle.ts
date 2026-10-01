@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { maskEmail, maskPhone } from "@/lib/pii-mask";
 import { nextStudentId } from "@/lib/student-id";
 import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
+import { assertPlatformOpen } from "@/lib/platform-controls";
 
 /**
  * Student account lifecycle — the single implementation of account-deletion
@@ -320,6 +321,10 @@ export async function resolveGoogleStudent(input: {
 
   if (student) return { student, created: false };
   if (!email) return null;
+
+  // Platform Controls → New Registrations: only a brand-new student is
+  // refused (PlatformPausedError); every existing account above still resolves.
+  await assertPlatformOpen("registrations");
 
   const studentId = await nextStudentId();
   const created = await prisma.student.create({

@@ -2,6 +2,7 @@ import "server-only";
 import { getAiSettings, type AiProviderName } from "@/lib/ai-settings";
 import { getGeminiApiKey, getGeminiConfig, getGeminiModelCandidates, recordGeminiModelResult } from "@/lib/gemini-config";
 import { getOpenAiApiKey, getOpenAiConfig } from "@/lib/openai-config";
+import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 
 /**
  * The single AI text-generation entry point for both lib/ai-explanation.ts
@@ -19,6 +20,17 @@ import { getOpenAiApiKey, getOpenAiConfig } from "@/lib/openai-config";
  */
 
 export class AiNotConfiguredError extends Error {}
+
+/**
+ * Platform Controls → AI Services (also Lockdown / Maintenance). Refuses a
+ * NEW provider generation with an AiNotConfiguredError carrying the public
+ * message, so every existing catch site shows it. Cached explanations and
+ * stored variants are read before this is reached and stay servable.
+ */
+export async function assertAiGenerationOpen(): Promise<void> {
+  const platform = await getPlatformControls();
+  if (!effectivePlatformControls(platform).aiOpen) throw new AiNotConfiguredError(pausedMessage(platform, "ai"));
+}
 
 export interface AiGenerationResult {
   text: string;
@@ -251,6 +263,7 @@ function candidateOrder(active: AiProviderName, fallback: AiProviderName | "none
  * before this outer loop ever reaches the OpenAI fallback provider.
  */
 export async function generateWithAi(prompt: string, opts: AiGenerationOptions): Promise<AiGenerationResult> {
+  await assertAiGenerationOpen();
   const settings = await getAiSettings();
   if (!settings.askAiEnabled) {
     throw new AiNotConfiguredError("Ask AI is currently disabled by an admin.");

@@ -1,4 +1,5 @@
 import "server-only";
+import { effectivePlatformControls, getPlatformControls, pausedMessage } from "@/lib/platform-controls";
 import crypto from "node:crypto";
 import {
   CouponRedemptionStatus,
@@ -237,6 +238,12 @@ export async function createCheckoutOrder(
   const mode = await getPaymentModeForStudent(studentId);
   if (mode === "FREE") throw new CheckoutError("Everything is free right now — no purchase needed.", "PLATFORM_FREE");
   if (mode === "MAINTENANCE") throw new CheckoutError("Purchases are temporarily paused. Please try again later.", "PURCHASES_PAUSED");
+  // Platform Controls → New Payments (also paused by Emergency Lockdown /
+  // Maintenance). Blocks only NEW orders: verification, webhooks,
+  // reconciliation, invoices and entitlements for existing orders never
+  // pass through here. Payment mode stays PAID, so nothing becomes free.
+  const platform = await getPlatformControls();
+  if (!effectivePlatformControls(platform).paymentsOpen) throw new CheckoutError(pausedMessage(platform, "payments"), "PURCHASES_PAUSED");
 
   const product = await prisma.product.findUnique({ where: { id: productId } });
   const now = new Date();

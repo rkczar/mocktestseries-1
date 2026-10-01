@@ -1,4 +1,5 @@
 import "server-only";
+import { assertPlatformOpen } from "@/lib/platform-controls";
 /**
  * TEST ENGINE CORE — HIGH RISK SHARED PATH.
  * Changes to option selection, answer persistence, navigation, attempt
@@ -173,6 +174,11 @@ async function createAttemptFromQuestions(params: {
   if (params.questions.length === 0) {
     throw new Error("This test has no questions yet. Please try again later.");
   }
+  // Platform Controls → Start New Tests (also Lockdown / Maintenance). This
+  // is the only place a TestAttempt row is created, and every start* helper
+  // returns an existing IN_PROGRESS attempt before reaching it, so resume,
+  // save, heartbeat, submit and auto-submit are never affected.
+  await assertPlatformOpen("tests");
   // Never silently duplicate a question to pad a set.
   const questions = params.questions.filter((q, i, all) => all.findIndex((x) => x.id === q.id) === i);
 

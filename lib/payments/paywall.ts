@@ -1,6 +1,7 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { PaymentRequiredError, paywallHref } from "@/lib/payments/access";
+import { PlatformPausedError } from "@/lib/platform-controls";
 
 /**
  * Wraps a test-start call so a PaymentRequiredError sends the student to the
@@ -13,6 +14,8 @@ export async function startOrPaywall<T>(start: () => Promise<T>): Promise<T> {
     return await start();
   } catch (e) {
     if (e instanceof PaymentRequiredError) redirect(paywallHref(e.access, e.content));
+    // Platform Controls paused new test starts: explain instead of an error screen.
+    if (e instanceof PlatformPausedError) redirect(`/student/unavailable?feature=${e.control}`);
     throw e;
   }
 }

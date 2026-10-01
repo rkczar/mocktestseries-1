@@ -1,7 +1,7 @@
 import "server-only";
 import { AiGenerationStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
+import { assertAiGenerationOpen, generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 
 /**
@@ -212,6 +212,7 @@ export async function getOrCreateExplanation(questionId: string) {
 
   // Checked BEFORE claiming: an unconfigured provider must refuse with no
   // DB write at all (no network call attempted, no dangling GENERATING row).
+  await assertAiGenerationOpen();
   if (!(await isAiGenerationConfigured())) {
     throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }
@@ -280,6 +281,7 @@ export async function regenerateExplanation(questionId: string) {
   const existing = await prisma.aIExplanation.findUnique({ where: { questionId } });
   if (!existing) throw new ExplanationNotReadyError("No explanation exists yet for this question — use Generate instead.");
 
+  await assertAiGenerationOpen();
   if (!(await isAiGenerationConfigured())) {
     throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }

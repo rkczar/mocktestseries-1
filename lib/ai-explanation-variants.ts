@@ -1,7 +1,7 @@
 import "server-only";
 import { AiGenerationStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
+import { assertAiGenerationOpen, generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, validateExplanationContent, isTruncatedOrMalformedJson, type ExplanationContent, type QuestionForExplanation } from "@/lib/ai-explanation";
 import { EXPLANATION_VARIANTS, getVariantDef, type ExplanationVariantDef } from "@/lib/ai-explanation-variants-catalog";
@@ -148,6 +148,7 @@ export async function getOrCreateExplanationVariant(questionId: string, variantI
   const existing = await prisma.aIExplanationVariant.findUnique({ where: { questionId_variantId: { questionId, variantId } } });
   if (existing?.status === AiGenerationStatus.COMPLETED) return existing;
 
+  await assertAiGenerationOpen();
   if (!(await isAiGenerationConfigured())) {
     throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }

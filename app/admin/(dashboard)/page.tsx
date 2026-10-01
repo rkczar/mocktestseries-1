@@ -4,6 +4,7 @@ import { Plus, FileWarning, UserX, FileClock } from "lucide-react";
 import { HardDrive } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { StatCard } from "@/components/admin/stat-card";
+import { PlatformStatusStrip } from "@/components/admin/platform-status-strip";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { getStorageSnapshot, formatBytes } from "@/lib/storage-stats";
 import { formatInr } from "@/lib/payments/money";
@@ -74,6 +75,7 @@ const ACTION_LABELS: Record<string, string> = {
   INVOICE_SETTINGS_UPDATED: "updated invoice settings",
   PAYMENT_POLICY_UPDATED: "updated the payment policy",
   ORDER_RECONCILED: "reconciled an order",
+  PLATFORM_CONTROL_CHANGED: "changed a platform control",
 };
 
 function humanizeAction(action: string): string {
@@ -277,6 +279,7 @@ export default async function AdminDashboardPage() {
           Everything happening on the platform right now — students, tests, questions, AI usage and what needs your
           attention.
         </p>
+        <PlatformStatusStrip className="mt-3" />
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">

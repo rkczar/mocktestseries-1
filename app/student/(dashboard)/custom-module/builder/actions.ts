@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { AttemptAnswerMode, AttemptDurationMode, type QuestionDifficulty, type QuestionSource } from "@prisma/client";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { startOrPaywall } from "@/lib/payments/paywall";
+import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 import { prisma } from "@/lib/prisma";
 import { startCustomModuleAttempt, startSharedCustomModuleAttempt, MAX_CUSTOM_DURATION_MINUTES } from "@/lib/test-attempt";
 import { ensureCustomModuleShareToken, getSubjectTestSetup } from "@/lib/student-data";
@@ -45,6 +46,9 @@ export async function createCustomModuleAction(
   formData: FormData
 ): Promise<CustomModuleBuilderState> {
   const student = await requireStudentOrLogin();
+  // Checked before the module row is written, so a paused start leaves nothing behind.
+  const platform = await getPlatformControls();
+  if (!effectivePlatformControls(platform).testsOpen) return { error: pausedMessage(platform, "tests") };
 
   const examId = str(formData, "examId");
   if (!examId) return { error: "Exam is required." };

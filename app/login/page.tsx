@@ -5,6 +5,7 @@ import { getLoginPageConfig } from "@/lib/login-page";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { safeStudentCallback } from "@/lib/student-callback";
 import { DEVICE_LIMIT_MESSAGE } from "@/lib/student-devices";
+import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 import { LeftCanvas } from "./left-canvas";
 import { LoginScreen } from "./login-screen";
 
@@ -24,7 +25,20 @@ export default async function LoginPage({
   const session = await getStudentSession();
   if (session?.user) redirect(callbackUrl);
 
-  const [pageConfig, providerConfig] = await Promise.all([getLoginPageConfig(), getAuthProviderConfig()]);
+  const [pageConfig, rawProviderConfig, platform] = await Promise.all([getLoginPageConfig(), getAuthProviderConfig(), getPlatformControls()]);
+  // Platform Controls: hide Create Account while registrations are paused
+  // and explain a paused login. Display only — the sign-in providers and
+  // registration actions enforce both server-side.
+  const effective = effectivePlatformControls(platform);
+  const providerConfig = { ...rawProviderConfig, registerEnabled: rawProviderConfig.registerEnabled && effective.registrationsOpen };
+  const notice =
+    error === "DeviceLimit"
+      ? DEVICE_LIMIT_MESSAGE
+      : !effective.loginOpen || error === "LoginPaused"
+        ? pausedMessage(platform, "login")
+        : error === "RegistrationPaused"
+          ? pausedMessage(platform, "registrations")
+          : undefined;
 
   const showLeft = pageConfig.splitLayout && pageConfig.leftPanelEnabled;
 
@@ -71,7 +85,7 @@ export default async function LoginPage({
           defaultMethod={tab === "otp" ? "otp" : "password"}
           pageConfig={pageConfig}
           providerConfig={providerConfig}
-          notice={error === "DeviceLimit" ? DEVICE_LIMIT_MESSAGE : undefined}
+          notice={notice}
         />
       </div>
     </div>

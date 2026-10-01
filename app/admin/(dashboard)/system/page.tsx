@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { GitBranch, ArrowRight } from "lucide-react";
+import { GitBranch, ArrowRight, ShieldAlert } from "lucide-react";
 import { getStorageSnapshot, formatBytes } from "@/lib/storage-stats";
 import { getGitRepoStatus, getDeploymentStatus, type GitRepoStatus, type DeploymentStatus } from "@/lib/git-repo-status";
 import { ControlCenterTabs } from "@/components/admin/control-center-tabs";
+import { PlatformStatusStrip } from "@/components/admin/platform-status-strip";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StorageScanButton } from "./storage-panel";
@@ -41,6 +42,26 @@ export default async function SystemPage() {
           built from.
         </p>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldAlert className="h-4 w-4" aria-hidden /> Platform Controls
+          </CardTitle>
+          <CardDescription>
+            Pause registrations, student login, new payments, new test starts or AI; Maintenance Mode; Emergency Lockdown.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <PlatformStatusStrip />
+          <Link
+            href="/admin/system/platform-controls"
+            className="inline-flex w-fit shrink-0 items-center gap-1.5 text-sm font-medium text-[var(--color-primary)] hover:underline"
+          >
+            Open Platform Controls <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+          </Link>
+        </CardContent>
+      </Card>
 
       <ControlCenterTabs
         defaultValue="overview"

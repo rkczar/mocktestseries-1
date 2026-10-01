@@ -2,6 +2,52 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { auth as adminAuth } from "@/lib/auth-edge";
 import { DEVICE_COOKIE_NAME, deviceCookieOptions, mintDeviceCookieValue, verifyDeviceCookieValue } from "@/lib/device-cookie";
+import { getPlatformControls, DEFAULT_MAINTENANCE_MESSAGE, DEFAULT_MAINTENANCE_TITLE, type MaintenanceState } from "@/lib/platform-controls";
+
+/**
+ * Platform Controls → Maintenance Mode. While ON, every request outside
+ * this allowlist gets a 503 maintenance page (Retry-After, noindex, so
+ * search engines keep the real pages). Allowed through:
+ *   - Admin (pages, admin auth, admin APIs): the recovery path.
+ *   - /api/health: the watchdog and the deploy script's health checks.
+ *   - /api/webhooks: Razorpay capture/refund fulfilment for existing orders.
+ *   - Checkout + invoices: verification and receipts for in-flight orders
+ *     (creating a NEW order is refused by createCheckoutOrder itself).
+ *   - /student/attempt: a student mid-test can save and submit; starting a
+ *     new attempt is refused by the Start New Tests gate.
+ * Everything else that maintenance pauses (login, registration, payments,
+ * test starts, AI) is also refused at its own server entry point, so this
+ * page is the friendly front, not the only lock.
+ */
+const MAINTENANCE_ALLOW = [
+  "/admin",
+  "/api/auth",
+  "/api/admin",
+  "/api/health",
+  "/api/webhooks",
+  "/api/student/invoices",
+  "/student/checkout",
+  "/student/attempt",
+  "/storage/test-resources",
+];
+
+function maintenanceAllowed(pathname: string) {
+  return MAINTENANCE_ALLOW.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+function maintenanceResponse(request: NextRequest, m: MaintenanceState) {
+  const headers = { "Retry-After": "300", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" };
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new NextResponse("Service temporarily unavailable for maintenance.", { status: 503, headers });
+  }
+  const title = escapeHtml(m.title || DEFAULT_MAINTENANCE_TITLE);
+  const message = escapeHtml(m.message || DEFAULT_MAINTENANCE_MESSAGE);
+  const eta = m.eta ? `<p class="eta">Expected back: ${escapeHtml(m.eta)}</p>` : "";
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title} — Mock Test Series.in</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#0b1020;color:#e5e7eb;padding:16px}main{max-width:480px;text-align:center}h1{font-size:1.5rem;margin:0 0 .75rem}p{color:#9ca3af;line-height:1.6;margin:.5rem 0}.eta{color:#fbbf24}</style></head><body><main><h1>${title}</h1><p>${message}</p>${eta}</main></body></html>`;
+  return new NextResponse(html, { status: 503, headers: { ...headers, "Content-Type": "text/html; charset=utf-8" } });
+}
 
 /**
  * Student device cookie (lib/device-cookie.ts). Guaranteed on every student
@@ -38,8 +84,13 @@ async function withDeviceCookie(
  * was given an explicit custom cookie name specifically to sidestep this,
  * so getToken() with that name is reliable for it.
  */
-export default async function middleware(request: NextRequest) {
+export default async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  if (!maintenanceAllowed(pathname)) {
+    const { maintenance } = await getPlatformControls();
+    if (maintenance.on) return maintenanceResponse(request, maintenance);
+  }
 
   // Paper/Solution PDFs live under public/storage, which Next would serve to
   // anyone with the URL. Students get them only through the access-checked
@@ -93,5 +144,8 @@ export default async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/student/:path*", "/login", "/api/student-auth/:path*", "/storage/test-resources/:path*"],
+  // Every page and API route (for the Maintenance gate), excluding Next's
+  // static assets and plain files such as images; test-resource files are
+  // re-included for their Admin-only check.
+  matcher: ["/((?!_next/static|_next/image|.*\\.[a-zA-Z0-9]+$).*)", "/storage/test-resources/:path*"],
 };

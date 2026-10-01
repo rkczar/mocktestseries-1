@@ -12,6 +12,7 @@ import { safeStudentCallback } from "@/lib/student-callback";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { getClientIp } from "@/lib/client-ip";
 import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
+import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 import {
   requestPasswordReset,
   verifyPasswordResetCode,
@@ -84,6 +85,9 @@ export async function registerWithPasswordAction(
   const providerConfig = await getAuthProviderConfig();
   if (!providerConfig.registerEnabled) return { error: "New account creation is currently disabled." };
   if (!providerConfig.passwordEnabled) return { error: "Password login is currently disabled." };
+  // Platform Controls → New Registrations (also Lockdown / Maintenance / Login paused).
+  const platform = await getPlatformControls();
+  if (!effectivePlatformControls(platform).registrationsOpen) return { error: pausedMessage(platform, "registrations") };
 
   const parsed = registerSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
@@ -130,6 +134,12 @@ export async function sendMobileOtpAction(
 
   const existingStudent = await prisma.student.findUnique({ where: { mobile } });
   const purpose = existingStudent ? "LOGIN" : "REGISTER";
+
+  // Platform Controls: don't send (or pay for) an OTP that could only be refused at verify time.
+  const platform = await getPlatformControls();
+  const effective = effectivePlatformControls(platform);
+  if (existingStudent && !effective.loginOpen) return { error: pausedMessage(platform, "login") };
+  if (!existingStudent && !effective.registrationsOpen) return { error: pausedMessage(platform, "registrations") };
 
   try {
     const { devCode } = await requestOtp(mobile, purpose, await clientIp());

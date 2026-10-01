@@ -80,6 +80,13 @@ export const PERMISSIONS = {
   // analysis but every delete/archive is refused server-side without this
   // key (TEACHER's QUESTIONS_MANAGE does not grant it either).
   IMPORT_ROLLBACK_MANAGE: "import-rollback:manage",
+  // Platform / Emergency Controls (Admin -> System -> Platform Controls):
+  // pause registrations, student login, new payments, new test starts or AI
+  // generation; Maintenance Mode; Emergency Lockdown. VIEW is read access to
+  // the control states and history (MASTER_ADMIN + FULL_ADMIN). MANAGE —
+  // every change — is MASTER_ADMIN-only and enforced server-side.
+  PLATFORM_CONTROLS_VIEW: "platform-controls:view",
+  PLATFORM_CONTROLS_MANAGE: "platform-controls:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -97,6 +104,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.BACKUP_VIEW,
     PERMISSIONS.STUDENT_DELETION_VIEW,
     PERMISSIONS.COMMUNICATIONS_VIEW,
+    PERMISSIONS.PLATFORM_CONTROLS_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };

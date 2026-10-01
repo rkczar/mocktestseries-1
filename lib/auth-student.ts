@@ -10,6 +10,7 @@ import { verifyOtp, OtpError } from "@/lib/otp";
 import { getAuthProviderConfig, getGoogleCredentials } from "@/lib/auth-provider-config";
 import { isStudentAuthEligible, resolveGoogleStudent } from "@/lib/student-lifecycle";
 import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
+import { assertPlatformOpen, isPlatformOpen, PlatformPausedError } from "@/lib/platform-controls";
 import { clientIpFromHeaders, getClientIp } from "@/lib/client-ip";
 import { assertStudentPasswordLoginAllowed, assertOtpVerifyAllowed } from "@/lib/auth-rate-limit";
 import {
@@ -73,6 +74,9 @@ export const {
         if (!providerConfig.passwordEnabled) {
           throw new Error("Password login is currently disabled.");
         }
+        // Platform Controls → Student Login (also Lockdown / Maintenance).
+        // Refuses NEW sessions only; existing session cookies stay valid.
+        await assertPlatformOpen("login");
 
         const windowStart = new Date(Date.now() - LOGIN_WINDOW_MS);
         const recentAttempts = await prisma.studentLoginAttempt.count({
@@ -140,6 +144,9 @@ export const {
         if (mode === "register" && !providerConfig.registerEnabled) {
           throw new Error("New account creation is currently disabled.");
         }
+        // Platform Controls, checked before the OTP is consumed. Effective
+        // registrations-open already implies effective login-open.
+        await assertPlatformOpen(mode === "register" ? "registrations" : "login");
 
         const purpose = mode === "register" ? OtpPurpose.REGISTER : OtpPurpose.LOGIN;
         const attemptMethod = mode === "register" ? "CREATE_ACCOUNT" : "PHONE_OTP";
@@ -266,6 +273,11 @@ export const {
 
       const ipAddress = await getClientIp();
 
+      // Platform Controls → Student Login. Account creation is gated inside
+      // resolveGoogleStudent, so an existing student still signs in while
+      // only registrations are paused.
+      if (!(await isPlatformOpen("login"))) return "/login?error=LoginPaused";
+
       if (!providerConfig.google.enabled) {
         await prisma.studentLoginAttempt.create({
           data: { identifier: profile?.email?.toLowerCase() ?? "unknown", ipAddress, success: false, method: "GOOGLE" },
@@ -276,12 +288,18 @@ export const {
       const providerAccountId = account.providerAccountId;
       const email = profile?.email?.toLowerCase();
 
-      const resolved = await resolveGoogleStudent({
-        providerAccountId,
-        email,
-        name: profile?.name ?? null,
-        picture: typeof profile?.picture === "string" ? profile.picture : null,
-      });
+      let resolved: Awaited<ReturnType<typeof resolveGoogleStudent>>;
+      try {
+        resolved = await resolveGoogleStudent({
+          providerAccountId,
+          email,
+          name: profile?.name ?? null,
+          picture: typeof profile?.picture === "string" ? profile.picture : null,
+        });
+      } catch (error) {
+        if (error instanceof PlatformPausedError) return "/login?error=RegistrationPaused";
+        throw error;
+      }
       if (!resolved) return false;
       const { student } = resolved;
 

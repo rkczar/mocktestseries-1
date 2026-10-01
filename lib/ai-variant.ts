@@ -1,7 +1,8 @@
 import "server-only";
 import { AiGenerationStatus, AiSlot, AiVariantType, Prisma, QuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult, type AiGenerationOptions } from "@/lib/ai-provider";
+import { assertAiGenerationOpen, generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult, type AiGenerationOptions } from "@/lib/ai-provider";
+import { isPlatformOpen } from "@/lib/platform-controls";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, type ExplanationContent } from "@/lib/ai-explanation";
 import { getAiSettings } from "@/lib/ai-settings";
 import { parseCandidateBatch, screenCandidates, type ComparableQuestion, type GeneratedVariant } from "@/lib/ai-variant-validation";
@@ -315,6 +316,9 @@ export async function ensureQuestionVariants(
   if ((await findWritableSlots(prisma, source.id)).length === 0) return { ...base, variants: existing };
 
   const generate = opts.generate ?? generateWithAi;
+  // Platform Controls → AI paused: keep serving what exists; refuse only a new generation.
+  if (!opts.generate && existing.length > 0 && !(await isPlatformOpen("ai"))) return { ...base, variants: existing };
+  if (!opts.generate) await assertAiGenerationOpen();
   if (!opts.generate && !(await isAiGenerationConfigured())) {
     if (existing.length > 0) return { ...base, variants: existing };
     throw new AiNotConfiguredError("AI variants aren't configured yet. An admin needs to add a provider API key under AI → Settings.");

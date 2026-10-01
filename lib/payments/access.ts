@@ -1,4 +1,5 @@
 import "server-only";
+import { isPlatformOpen } from "@/lib/platform-controls";
 import { EntitlementStatus, type Product, type StudentEntitlement } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getPaymentModeForStudent, type PaymentMode } from "@/lib/payments/settings";
@@ -76,6 +77,8 @@ export interface AccessContext {
   products: ProductRow[];
   entitlements: EntRow[];
   now: Date;
+  /** Platform Controls → New Payments paused (display only: never changes `allowed`). */
+  purchasesPaused?: boolean;
 }
 
 export const PRODUCT_SELECT = {
@@ -99,14 +102,15 @@ export const PRODUCT_SELECT = {
 export async function loadAccessContext(studentId: string, now: Date = new Date()): Promise<AccessContext> {
   const mode = await getPaymentModeForStudent(studentId);
   if (mode === "FREE") return { mode, products: [], entitlements: [], now };
-  const [products, entitlements] = await Promise.all([
+  const [products, entitlements, paymentsOpen] = await Promise.all([
     prisma.product.findMany({ where: { isActive: true }, select: PRODUCT_SELECT }),
     prisma.studentEntitlement.findMany({
       where: { studentId, status: EntitlementStatus.ACTIVE },
       select: { productId: true, status: true, startsAt: true, expiresAt: true },
     }),
+    isPlatformOpen("payments"),
   ]);
-  return { mode, products, entitlements, now };
+  return { mode, products, entitlements, now, purchasesPaused: !paymentsOpen };
 }
 
 /** Does `product` unlock `content`? */
@@ -171,7 +175,7 @@ export function evaluateContentAccess(ctx: AccessContext, c: ContentDescriptor):
   }
 
   const purchasable = paid.filter((p) => isPurchasable(p, ctx.now));
-  const purchasesPaused = ctx.mode === "MAINTENANCE";
+  const purchasesPaused = ctx.mode === "MAINTENANCE" || ctx.purchasesPaused === true;
   const expired = ents.filter((e) => e.expiresAt !== null && e.expiresAt <= ctx.now);
   if (expired.length > 0) {
     return {
@@ -257,7 +261,8 @@ export function describeAttemptContent(attempt: {
 export async function canStudentAccessProduct(studentId: string, productId: string, now: Date = new Date()): Promise<AccessResult> {
   const mode = await getPaymentModeForStudent(studentId);
   const product = await prisma.product.findUnique({ where: { id: productId }, select: PRODUCT_SELECT });
-  const base = { mode, products: product ? [ref(product)] : [], expiresAt: null, purchasesPaused: mode === "MAINTENANCE" };
+  const purchasesPaused = mode === "MAINTENANCE" || (mode !== "FREE" && !(await isPlatformOpen("payments")));
+  const base = { mode, products: product ? [ref(product)] : [], expiresAt: null, purchasesPaused };
   if (!product || !product.isActive) return { ...base, status: "NOT_AVAILABLE", allowed: false };
   if (mode === "FREE" || product.accessType === "FREE") return { ...base, status: "FREE_ACCESS", allowed: true };
 
