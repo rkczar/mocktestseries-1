@@ -18,6 +18,7 @@ import { toDashboardMetricsView } from "./metrics-view";
 import { getDashboardPaperViews, type DashboardPaperView } from "./pyq-view";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 import { ensureDefaultExamEnrollment } from "@/lib/default-enrollment";
+import { InstallAppBanner } from "@/components/pwa/install-app";
 import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
 import { getStudentDashboardLayout } from "@/lib/student-dashboard-layout";
 
@@ -88,6 +89,7 @@ export default async function StudentDashboardPage() {
             ? `${globalMetrics.testsCompleted} test${globalMetrics.testsCompleted === 1 ? "" : "s"} completed so far.`
             : "Start your first test to see your progress here."}
         </p>
+        <InstallAppBanner className="mt-3" />
       </div>
 
       <ActiveExamDashboard

@@ -15,6 +15,12 @@ import { usePwa } from "@/components/pwa/pwa-provider";
  *     Share → Add to Home Screen steps instead.
  * Hidden when already running as the installed app and on every other
  * browser, so there is never a button that does nothing.
+ *
+ * Surfaces: InstallAppBanner (compact, under the dashboard greeting),
+ * InstallAppCard (the "install-app" dashboard block) and InstallAppMenuItem
+ * (mobile menu). All use the one install state from PwaProvider, and the
+ * two dashboard surfaces share one 30-day dismissal: "Not now" on either
+ * hides both.
  */
 
 const DISMISS_KEY = "mts-install-dismissed-at";
@@ -38,6 +44,21 @@ const subscribeDismiss = (onChange: () => void) => {
   return () => window.removeEventListener(DISMISS_EVENT, onChange);
 };
 
+function dismissInstallPrompts() {
+  dismissedThisVisit = true;
+  try {
+    window.localStorage.setItem(DISMISS_KEY, String(Date.now()));
+  } catch {
+    // Storage unavailable (private mode): hidden for this visit only.
+  }
+  window.dispatchEvent(new Event(DISMISS_EVENT));
+}
+
+/** Dashboard surfaces: hidden until the client has read the dismissal (server snapshot = dismissed). */
+function useDismissed() {
+  return useSyncExternalStore(subscribeDismiss, dismissedRecently, () => true);
+}
+
 function useInstallable() {
   const pwa = usePwa();
   return { ...pwa, available: !pwa.standalone && (pwa.canPrompt || pwa.ios) };
@@ -56,23 +77,61 @@ function IosSteps({ className }: { className?: string }) {
   );
 }
 
-/** Student Dashboard block ("install-app"). Dismissible for 30 days. */
-export function InstallAppCard() {
+/** Compact CTA under the Student Dashboard greeting. Shares the card's dismissal. */
+export function InstallAppBanner({ className }: { className?: string }) {
   const { available, canPrompt, ios, promptInstall } = useInstallable();
-  const dismissed = useSyncExternalStore(subscribeDismiss, dismissedRecently, () => true);
+  const dismissed = useDismissed();
   const [showSteps, setShowSteps] = useState(false);
 
   if (!available || dismissed) return null;
 
-  const dismiss = () => {
-    dismissedThisVisit = true;
-    try {
-      window.localStorage.setItem(DISMISS_KEY, String(Date.now()));
-    } catch {
-      // Storage unavailable (private mode): hidden for this visit only.
-    }
-    window.dispatchEvent(new Event(DISMISS_EVENT));
-  };
+  return (
+    <div
+      role="region"
+      aria-label="Install MockTestSeries App"
+      className={cn("rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5 sm:px-4", className)}
+    >
+      {/* Phones: icon · text · ✕, with the button under the text. sm+: one row. */}
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
+        <span className="col-start-1 row-start-1 flex h-8 w-8 items-center justify-center self-start rounded-lg bg-[var(--color-primary)] text-white sm:self-center">
+          <Download className="h-4 w-4" aria-hidden />
+        </span>
+        <div className="col-start-2 row-start-1">
+          <p className="text-sm font-semibold leading-tight text-[var(--color-foreground)]">Install MockTestSeries App</p>
+          <p className="mt-0.5 text-xs leading-snug text-[var(--color-muted-foreground)]">Get faster access directly from your home screen.</p>
+        </div>
+        {canPrompt || ios ? (
+          <Button
+            size="sm"
+            className="col-start-2 row-start-2 justify-self-start sm:col-start-3 sm:row-start-1"
+            aria-expanded={!canPrompt ? showSteps : undefined}
+            onClick={() => (canPrompt ? void promptInstall() : setShowSteps((v) => !v))}
+          >
+            Install App
+          </Button>
+        ) : null}
+        <button
+          type="button"
+          onClick={dismissInstallPrompts}
+          aria-label="Not now"
+          title="Not now"
+          className="col-start-3 row-start-1 -mr-1 inline-flex h-8 w-8 items-center justify-center self-start rounded-[var(--radius-button)] text-[var(--color-muted-foreground)] hover:bg-[color-mix(in_srgb,var(--color-foreground)_6%,transparent)] hover:text-[var(--color-foreground)] sm:col-start-4 sm:self-center"
+        >
+          <X className="h-4 w-4" aria-hidden />
+        </button>
+        {ios && !canPrompt && showSteps ? <IosSteps className="col-span-2 col-start-2 sm:col-span-3" /> : null}
+      </div>
+    </div>
+  );
+}
+
+/** Student Dashboard block ("install-app"). Dismissible for 30 days. */
+export function InstallAppCard() {
+  const { available, canPrompt, ios, promptInstall } = useInstallable();
+  const dismissed = useDismissed();
+  const [showSteps, setShowSteps] = useState(false);
+
+  if (!available || dismissed) return null;
 
   return (
     <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
@@ -96,7 +155,7 @@ export function InstallAppCard() {
             How to install
           </Button>
         ) : null}
-        <Button size="sm" variant="ghost" onClick={dismiss}>
+        <Button size="sm" variant="ghost" onClick={dismissInstallPrompts}>
           <X className="h-3.5 w-3.5" aria-hidden /> Not now
         </Button>
       </div>

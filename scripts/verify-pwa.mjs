@@ -65,6 +65,16 @@ async function cachedUrls(page) {
     return out;
   });
 }
+/** The two Student Dashboard install surfaces: compact banner under the greeting, and the "install-app" block card. */
+const installBanner = (page) => page.getByRole("region", { name: "Install MockTestSeries App" });
+const installCard = (page) => page.getByText("Install MockTestSeries", { exact: true });
+/** No horizontal scroll, and the given locator lies fully inside the viewport. */
+async function fitsViewport(page, locator) {
+  const vw = await page.evaluate(() => window.innerWidth);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  const box = await locator.boundingBox();
+  return overflow <= 0 && !!box && box.x >= 0 && box.x + box.width <= vw;
+}
 const allowedCacheEntry = (p) => p.startsWith("/_next/static/") || p.startsWith("/icons/") || p === "/favicon.ico" || p === "/offline.html";
 
 async function main() {
@@ -173,11 +183,10 @@ async function main() {
       await page.reload();
       check("dashboard controlled by the worker", await page.evaluate(() => !!navigator.serviceWorker.controller));
       const hasPrompt = await page.evaluate(() => !!window.__mtsInstallEvent);
-      const card = page.getByText("Install MockTestSeries", { exact: true });
       if (hasPrompt) {
-        check("Chromium: install card shown with an Install button", (await card.count()) > 0 && (await page.getByRole("button", { name: "Install", exact: true }).count()) === 1);
+        check("Chromium: both install CTAs shown", (await installBanner(page).count()) === 1 && (await installCard(page).count()) === 1);
       } else {
-        check("no install event → no install CTA at all (no fake button)", (await card.count()) === 0);
+        check("no install event → no install CTA at all (no fake button)", (await installBanner(page).count()) === 0 && (await installCard(page).count()) === 0);
       }
       const all = Object.values(await cachedUrls(page)).flat();
       check("student pages never cached", !all.some((p) => p.startsWith("/student") || p.startsWith("/api")), all.filter((p) => !allowedCacheEntry(p)));
@@ -191,30 +200,56 @@ async function main() {
     // event that has the same prompt()/userChoice contract. Chromium's own
     // installability verdict is checked above via CDP.
     console.log("\n--- Chromium install flow (stand-in install event) + standalone ---");
-    {
-      const ctx = await newContext(browser, { token: F.token, device: "Pixel 7" });
-      await ctx.addInitScript(() => {
-        window.__prompted = 0;
-        window.addEventListener("load", () => {
-          const e = new Event("beforeinstallprompt", { cancelable: true });
-          e.prompt = async () => { window.__prompted++; };
-          e.userChoice = Promise.resolve({ outcome: "accepted" });
-          window.dispatchEvent(e);
-        });
+    const standInPrompt = () => {
+      window.__prompted = 0;
+      window.addEventListener("load", () => {
+        const e = new Event("beforeinstallprompt", { cancelable: true });
+        e.prompt = async () => { window.__prompted++; };
+        e.userChoice = Promise.resolve({ outcome: "accepted" });
+        window.dispatchEvent(e);
       });
+    };
+    for (const [surface, device] of [["upper banner", "Pixel 7"], ["lower card", "Pixel 7"]]) {
+      const ctx = await newContext(browser, { token: F.token, device });
+      await ctx.addInitScript(standInPrompt);
       const page = await ctx.newPage();
       await page.goto(`${BASE}/student/dashboard`);
-      await page.waitForSelector("text=Install MockTestSeries", { timeout: 15000 }).catch(() => null);
-      check("install card shown once the browser offers installation", (await page.getByText("Install MockTestSeries", { exact: true }).count()) > 0);
-      check("browser's default mini-infobar suppressed (preventDefault)", await page.evaluate(() => window.__mtsInstallEvent?.defaultPrevented === true));
-      await page.getByRole("button", { name: "Install", exact: true }).click();
+      await installBanner(page).waitFor({ timeout: 15000 }).catch(() => null);
+      check(`[${surface}] both CTAs shown once the browser offers installation`, (await installBanner(page).count()) === 1 && (await installCard(page).count()) === 1);
+      check(`[${surface}] browser's default mini-infobar suppressed (preventDefault)`, await page.evaluate(() => window.__mtsInstallEvent?.defaultPrevented === true));
+      if (surface === "upper banner") {
+        const banner = installBanner(page);
+        check("upper banner sits directly under the greeting", await page.evaluate(() => {
+          const h1 = document.querySelector("h1");
+          const region = document.querySelector('[aria-label="Install MockTestSeries App"]');
+          return !!h1 && !!region && h1.parentElement === region.parentElement;
+        }));
+        check("upper banner copy", /Get faster access directly from your home screen\./.test(await banner.innerText()));
+        check("upper banner is compact (≤ 120 px tall on a phone)", ((await banner.boundingBox())?.height ?? 999) <= 120, await banner.boundingBox());
+        check("upper banner fits the phone viewport, no horizontal scroll", await fitsViewport(page, banner.getByRole("button", { name: "Install App" })));
+        await banner.getByRole("button", { name: "Install App" }).click();
+      } else {
+        await page.getByRole("button", { name: "Install", exact: true }).click();
+      }
       await page.waitForFunction(() => window.__prompted === 1, null, { timeout: 5000 }).catch(() => null);
-      check("Install opens the browser's own install dialog (prompt())", await page.evaluate(() => window.__prompted === 1));
+      check(`[${surface}] opens the browser's own install dialog (same prompt())`, await page.evaluate(() => window.__prompted === 1));
       await sleep(500);
-      check("after install the CTA disappears", (await page.getByText("Install MockTestSeries", { exact: true }).count()) === 0);
+      check(`[${surface}] after install BOTH CTAs disappear`, (await installBanner(page).count()) === 0 && (await installCard(page).count()) === 0);
       await ctx.close();
+    }
+    for (const device of ["iPhone SE", "Galaxy S8"]) {
+      const ctx = await newContext(browser, { token: F.token, device });
+      await ctx.addInitScript(standInPrompt);
+      const page = await ctx.newPage();
+      await page.goto(`${BASE}/student/dashboard`);
+      await installBanner(page).waitFor({ timeout: 15000 }).catch(() => null);
+      const vw = await page.evaluate(() => window.innerWidth);
+      check(`${device} (${vw}px): banner + Install App button fit, no horizontal scroll`, await fitsViewport(page, installBanner(page).getByRole("button", { name: "Install App" })));
+      await ctx.close();
+    }
 
-      // Installed app: (display-mode: standalone) matches → no CTA anywhere.
+    // Installed app: (display-mode: standalone) matches → no CTA anywhere.
+    {
       const app = await newContext(browser, { token: F.token, device: "Pixel 7" });
       await app.addInitScript(() => {
         const real = window.matchMedia.bind(window);
@@ -230,7 +265,8 @@ async function main() {
       await ap.goto(`${BASE}/student/dashboard`);
       await sleep(1500);
       check("installed (standalone) app: dashboard renders", /\/student\/dashboard$/.test(ap.url()));
-      check("installed (standalone) app: no install card", (await ap.getByText("Install MockTestSeries", { exact: true }).count()) === 0);
+      check("installed (standalone) app: no upper banner", (await installBanner(ap).count()) === 0);
+      check("installed (standalone) app: no install card", (await installCard(ap).count()) === 0);
       await ap.getByRole("button", { name: "Toggle menu" }).tap();
       check("installed (standalone) app: no install menu item", (await ap.getByRole("button", { name: "Install MockTestSeries" }).count()) === 0);
       await app.close();
@@ -262,18 +298,33 @@ async function main() {
       const ctx = await newContext(browser, { token: F.token, device: "iPhone 14" });
       const page = await ctx.newPage();
       await page.goto(`${BASE}/student/dashboard`);
-      await page.waitForSelector("text=Install MockTestSeries", { timeout: 15000 }).catch(() => null);
-      check("iOS: install card shown", (await page.getByText("Install MockTestSeries", { exact: true }).count()) > 0);
+      await installBanner(page).waitFor({ timeout: 15000 }).catch(() => null);
+      check("iOS: upper banner + lower card shown", (await installBanner(page).count()) === 1 && (await installCard(page).count()) === 1);
       check("iOS: no programmatic Install button", (await page.getByRole("button", { name: "Install", exact: true }).count()) === 0);
+      check("iOS: upper banner fits, no horizontal scroll", await fitsViewport(page, installBanner(page).getByRole("button", { name: "Install App" })));
+      await installBanner(page).getByRole("button", { name: "Install App" }).tap();
+      check("iOS upper banner: shows Share → Add to Home Screen steps", /Add to Home Screen/.test(await installBanner(page).innerText()));
       await page.getByRole("button", { name: "How to install" }).tap();
-      check("iOS: shows Share → Add to Home Screen steps", /Add to Home Screen/.test(await page.locator("body").innerText()));
-      await page.getByRole("button", { name: /Not now/ }).tap();
-      check("Not now hides the card", (await page.getByText("Install MockTestSeries", { exact: true }).count()) === 0);
+      check("iOS lower card: shows the same steps", (await page.getByText("Add to Home Screen").count()) === 2);
+      await installBanner(page).getByRole("button", { name: "Not now" }).tap();
+      await sleep(300);
+      check("Not now on the banner hides BOTH dashboard CTAs", (await installBanner(page).count()) === 0 && (await installCard(page).count()) === 0);
       await page.reload();
       await sleep(1500);
-      check("dismissal remembered after reload", (await page.getByText("Install MockTestSeries", { exact: true }).count()) === 0);
+      check("shared dismissal remembered after reload (both hidden)", (await installBanner(page).count()) === 0 && (await installCard(page).count()) === 0);
       await page.getByRole("button", { name: "Toggle menu" }).tap();
       check("mobile menu still offers Install MockTestSeries", (await page.getByRole("button", { name: "Install MockTestSeries" }).count()) === 1);
+      await ctx.close();
+    }
+    {
+      // Dismissing from the lower card hides the upper banner too.
+      const ctx = await newContext(browser, { token: F.token, device: "iPhone 14" });
+      const page = await ctx.newPage();
+      await page.goto(`${BASE}/student/dashboard`);
+      await installBanner(page).waitFor({ timeout: 15000 }).catch(() => null);
+      await page.getByRole("button", { name: /Not now/ }).last().tap();
+      await sleep(300);
+      check("Not now on the card hides BOTH dashboard CTAs", (await installBanner(page).count()) === 0 && (await installCard(page).count()) === 0);
       await ctx.close();
     }
 
