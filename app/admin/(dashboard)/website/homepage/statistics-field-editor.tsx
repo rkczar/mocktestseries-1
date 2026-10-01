@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, arrayMove, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Plus, Trash2, RefreshCw } from "lucide-react";
+import { GripVertical, Plus, Trash2, RefreshCw, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,6 +23,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { normalizeStatMetrics, STAT_DATA_SOURCE_LABELS, type StatMetric, type StatDynamicKey } from "@/lib/homepage-field-codec";
 import type { HomepageStatsSnapshot } from "@/lib/homepage-statistics";
 import { HOMEPAGE_STAT_ICONS } from "@/lib/homepage-icons";
+import { DEFAULT_STAT_METRICS } from "@/lib/homepage-sections";
+import {
+  STAT_FORMATS,
+  STAT_FORMAT_LABELS,
+  formatStatNumber,
+  parseManualNumber,
+  withSuffix,
+  type StatFormat,
+} from "@/lib/homepage-stat-format";
 import { updateSectionContentAction, refreshHomepageStatisticsAction } from "./actions";
 
 const DYNAMIC_KEYS = Object.keys(STAT_DATA_SOURCE_LABELS) as StatDynamicKey[];
@@ -36,10 +45,47 @@ function relativeTime(iso: string): string {
   return `${hours} hour${hours === 1 ? "" : "s"} ago`;
 }
 
+/** Exactly what the public card will show — same formatter as the homepage. */
+function previewValue(metric: StatMetric, liveStats: HomepageStatsSnapshot): string {
+  const format = metric.format ?? "EXACT";
+  const raw = metric.mode === "DEMO" ? metric.demoValue : metric.manualValue;
+  const numeric = metric.mode === "LIVE" ? (metric.dynamicKey ? (liveStats.values[metric.dynamicKey] ?? 0) : 0) : parseManualNumber(raw);
+  if (numeric === null) return raw ? withSuffix(raw, metric.suffix) : "—";
+  return withSuffix(formatStatNumber(numeric, format), metric.suffix);
+}
+
+function IconPicker({ value, onChange }: { value?: string; onChange: (icon: string) => void }) {
+  return (
+    <div role="radiogroup" aria-label="Icon" className="flex flex-wrap gap-1.5">
+      {Object.entries(HOMEPAGE_STAT_ICONS).map(([key, Icon]) => {
+        const selected = value === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            aria-label={key}
+            title={key}
+            onClick={() => onChange(key)}
+            className={`flex h-9 w-9 items-center justify-center rounded-[var(--radius-button)] border transition-colors ${
+              selected
+                ? "border-[var(--color-primary)] bg-[var(--color-card)] text-[var(--color-primary)]"
+                : "border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+            }`}
+          >
+            <Icon className="h-4 w-4" aria-hidden />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ModeBadge({ mode }: { mode: StatMetric["mode"] }) {
   if (mode === "LIVE") return <Badge variant="success">LIVE ●</Badge>;
   if (mode === "DEMO") return <Badge variant="warning">DEMO</Badge>;
-  return <Badge variant="info">MANUAL</Badge>;
+  return <Badge variant="info">CUSTOM</Badge>;
 }
 
 function ModeChangeConfirm({
@@ -122,6 +168,7 @@ function MetricRow({
         <button type="button" onClick={() => setOpen((o) => !o)} className="flex-1 text-left text-sm font-medium text-[var(--color-foreground)]">
           {metric.label || "Untitled card"}
         </button>
+        <span className="hidden font-mono text-sm tabular-nums text-[var(--color-muted-foreground)] sm:inline">{previewValue(metric, liveStats)}</span>
         <ModeBadge mode={metric.mode} />
         <button type="button" onClick={onRemove} aria-label={`Remove ${metric.label}`} className="text-[var(--color-muted-foreground)] hover:text-[var(--color-error)]">
           <Trash2 className="h-4 w-4" aria-hidden />
@@ -130,22 +177,14 @@ function MetricRow({
 
       {open ? (
         <div className="flex flex-col gap-3 border-t border-[var(--color-border)] p-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <Label>Display Label</Label>
-              <Input value={metric.label} onChange={(e) => onChange({ ...metric, label: e.target.value })} />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Icon</Label>
-              <SelectNative value={metric.icon ?? ""} onChange={(e) => onChange({ ...metric, icon: e.target.value })}>
-                <option value="">None</option>
-                {Object.keys(HOMEPAGE_STAT_ICONS).map((key) => (
-                  <option key={key} value={key}>
-                    {key}
-                  </option>
-                ))}
-              </SelectNative>
-            </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>Card Title</Label>
+            <Input value={metric.label} maxLength={60} onChange={(e) => onChange({ ...metric, label: e.target.value })} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Icon</Label>
+            <IconPicker value={metric.icon} onChange={(icon) => onChange({ ...metric, icon })} />
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -167,10 +206,10 @@ function MetricRow({
           <div className="flex flex-col gap-1.5">
             <Label>Data Mode</Label>
             <div className="flex flex-wrap gap-4">
-              {(["LIVE", "DEMO", "MANUAL"] as const).map((mode) => (
+              {(metric.mode === "DEMO" ? (["LIVE", "DEMO", "MANUAL"] as const) : (["LIVE", "MANUAL"] as const)).map((mode) => (
                 <label key={mode} className="flex items-center gap-1.5 text-sm text-[var(--color-foreground)]">
                   <input type="radio" name={`mode-${metric.id}`} checked={metric.mode === mode} onChange={() => requestModeChange(mode)} />
-                  {mode === "LIVE" ? "Live Data" : mode === "DEMO" ? "Demo Data" : "Manual Display"}
+                  {mode === "LIVE" ? "Live (database)" : mode === "DEMO" ? "Demo Data" : "Custom display value"}
                 </label>
               ))}
             </div>
@@ -201,7 +240,7 @@ function MetricRow({
                   </p>
                   <p>
                     Current Live Value:{" "}
-                    <span className="font-mono text-[var(--color-foreground)]">{liveStats.values[metric.dynamicKey]}</span>
+                    <span className="font-mono text-[var(--color-foreground)]">{(liveStats.values[metric.dynamicKey] ?? 0).toLocaleString("en-IN")}</span>
                   </p>
                   <p>Last Updated: {relativeTime(liveStats.computedAt)}</p>
                 </div>
@@ -217,10 +256,39 @@ function MetricRow({
             </div>
           ) : (
             <div className="flex flex-col gap-1.5">
-              <Label>Display Value</Label>
-              <Input value={metric.manualValue ?? ""} onChange={(e) => onChange({ ...metric, manualValue: e.target.value })} placeholder="50,000+" />
+              <Label>Custom Display Value</Label>
+              <Input
+                value={metric.manualValue ?? ""}
+                maxLength={24}
+                onChange={(e) => onChange({ ...metric, manualValue: e.target.value })}
+                placeholder="50000"
+              />
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                Only changes the number shown on the homepage — the real database statistics are never modified. A plain
+                number (e.g. 50000) uses the format and suffix below; any other text is shown as typed.
+              </p>
             </div>
           )}
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label>Number Format</Label>
+              <SelectNative value={metric.format ?? "EXACT"} onChange={(e) => onChange({ ...metric, format: e.target.value as StatFormat })}>
+                {STAT_FORMATS.map((format) => (
+                  <option key={format} value={format}>
+                    {STAT_FORMAT_LABELS[format]}
+                  </option>
+                ))}
+              </SelectNative>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>Suffix (optional, e.g. &ldquo;+&rdquo;)</Label>
+              <Input value={metric.suffix ?? ""} maxLength={6} onChange={(e) => onChange({ ...metric, suffix: e.target.value })} placeholder="+" />
+            </div>
+          </div>
+          <p className="text-xs text-[var(--color-muted-foreground)]">
+            Homepage will show: <span className="font-mono text-[var(--color-foreground)]">{previewValue(metric, liveStats)}</span>
+          </p>
         </div>
       ) : null}
 
@@ -257,6 +325,7 @@ export function StatisticsFieldEditor({
   const [pending, startTransition] = useTransition();
   const [refreshing, startRefresh] = useTransition();
   const [saved, setSaved] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -315,18 +384,56 @@ export function StatisticsFieldEditor({
           onClick={() =>
             setMetrics((current) => [
               ...current,
-              { id: generateId(), label: "New Card", enabled: true, mode: "MANUAL", manualValue: "" },
+              { id: generateId(), label: "New Card", icon: "barChart", enabled: true, mode: "MANUAL", manualValue: "", format: "EXACT" },
             ])
           }
         >
           <Plus className="h-4 w-4" aria-hidden />
           Add Card
         </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setConfirmRestore(true)}
+        >
+          <RotateCcw className="h-4 w-4" aria-hidden />
+          Restore Default Cards
+        </Button>
         <Button type="button" size="sm" disabled={pending} onClick={handleSave}>
           {pending ? "Saving…" : "Save Section"}
         </Button>
         {saved ? <span className="text-sm text-[var(--color-success)]">Saved to draft.</span> : null}
       </div>
+
+      <Dialog open={confirmRestore} onOpenChange={setConfirmRestore}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restore default cards?</DialogTitle>
+            <DialogDescription>
+              All cards are replaced with the 4 default LIVE cards: Questions Available, Students Joined, Tests Attempted
+              and Questions Attempted. Nothing is saved until you click Save Section.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setMetrics(normalizeStatMetrics(DEFAULT_STAT_METRICS));
+                setConfirmRestore(false);
+              }}
+            >
+              Restore
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

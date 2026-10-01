@@ -16,13 +16,14 @@ import {
   BarChart3,
   type LucideIcon,
 } from "lucide-react";
+import type { StatIconKey } from "@/lib/homepage-field-codec";
 
 /**
  * Curated icon set for homepage statistic/marketing cards — a fixed lookup
  * table rather than a free-text icon name, so an admin can only ever pick a
  * real, rendered icon (Section 2/3 of the spec).
  */
-export const HOMEPAGE_STAT_ICONS: Record<string, LucideIcon> = {
+export const HOMEPAGE_STAT_ICONS: Record<StatIconKey, LucideIcon> = {
   helpCircle: HelpCircle,
   sparkles: Sparkles,
   graduationCap: GraduationCap,
@@ -40,8 +41,8 @@ export const HOMEPAGE_STAT_ICONS: Record<string, LucideIcon> = {
   barChart: BarChart3,
 };
 
-export const DEFAULT_STAT_ICON = "barChart";
+export const DEFAULT_STAT_ICON: StatIconKey = "barChart";
 
 export function getStatIcon(icon?: string): LucideIcon {
-  return (icon && HOMEPAGE_STAT_ICONS[icon]) || HOMEPAGE_STAT_ICONS[DEFAULT_STAT_ICON];
+  return (icon && HOMEPAGE_STAT_ICONS[icon as StatIconKey]) || HOMEPAGE_STAT_ICONS[DEFAULT_STAT_ICON];
 }

@@ -9,7 +9,8 @@ export interface HomepageStatsSnapshot {
   computedAt: string;
 }
 
-async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot> {
+/** Uncached aggregation — exported for scripts/verify-homepage-stats.ts; pages use getHomepageStatistics. */
+export async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot> {
   const [
     questionsAnswered,
     aiExplanations,
@@ -21,17 +22,24 @@ async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot> {
     mockTestsAttempted,
     previousYearPapers,
     mockTestsPublished,
+    testsCompleted,
+    questionsAvailable,
   ] = await Promise.all([
     prisma.answer.count({ where: { status: { in: ["ANSWERED", "ANSWERED_AND_MARKED"] } } }),
     prisma.aIExplanation.count(),
     prisma.exam.count({ where: { isActive: true } }),
     prisma.testSeries.count({ where: { isActive: true } }),
     prisma.question.count({ where: { status: "PUBLISHED" } }),
-    prisma.student.count(),
+    // Deleted accounts are anonymized tombstones (lib/student-lifecycle.ts), not students.
+    prisma.student.count({ where: { status: { not: "DELETED" } } }),
     prisma.student.count({ where: { status: "ACTIVE" } }),
     prisma.testAttempt.count({ where: { sourceType: "MOCK_TEST", status: "SUBMITTED" } }),
     prisma.previousYearPaper.count({ where: { isActive: true } }),
     prisma.mockTest.count({ where: LIVE_MOCK_TEST_WHERE }),
+    // Every successfully submitted attempt, across all test types.
+    prisma.testAttempt.count({ where: { status: "SUBMITTED" } }),
+    // What a student can actually practise: published questions of exams that are live.
+    prisma.question.count({ where: { status: "PUBLISHED", exam: { isActive: true } } }),
   ]);
 
   return {
@@ -46,6 +54,8 @@ async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot> {
       mockTestsAttempted,
       previousYearPapers,
       mockTestsPublished,
+      testsCompleted,
+      questionsAvailable,
     },
     computedAt: new Date().toISOString(),
   };

@@ -433,6 +433,9 @@ enum HomepageSectionKey {
   CTA
   FOOTER
   CONTACT_INFO
+  FREE_START
+  EXAM_GUIDE
+  FAQ
 }
 
 model HomepageConfig {

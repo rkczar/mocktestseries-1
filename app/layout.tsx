@@ -7,6 +7,7 @@ import { THEME_COOKIE, isTheme } from "@/lib/theme";
 import { TEXT_SIZE_COOKIE, isTextSize } from "@/lib/text-size";
 import { getAppearance, appearanceToCssVariables } from "@/lib/appearance";
 import { getSeoSettings } from "@/lib/seo-settings";
+import { PUBLIC_BRAND_NAME } from "@/lib/brand";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,8 +20,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mock Test Series.in",
-  description: "Mock tests, previous year papers, and AI-powered explanations for RUHS Medical Officer, NEET UG, and more.",
+  title: PUBLIC_BRAND_NAME,
+  description: "Online mock tests, previous year papers and AI-powered explanations for medical officer exams.",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
@@ -33,18 +34,17 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   const appearance = await getAppearance();
   const seo = await getSeoSettings();
 
+  const siteUrl = seo.canonicalBase.replace(/\/+$/, "");
+  // Organization on every page; WebSite is emitted by the homepage only
+  // (app/page.tsx), where Google reads it for the site name.
   const organizationJsonLd = {
     "@context": "https://schema.org",
     "@type": "Organization",
+    "@id": `${siteUrl}/#organization`,
     name: seo.siteName,
-    url: seo.canonicalBase,
+    alternateName: PUBLIC_BRAND_NAME,
+    url: `${siteUrl}/`,
     ...(seo.defaultOgImage ? { logo: seo.defaultOgImage } : {}),
-  };
-  const websiteJsonLd = {
-    "@context": "https://schema.org",
-    "@type": "WebSite",
-    name: seo.siteName,
-    url: seo.canonicalBase,
   };
 
   return (
@@ -59,7 +59,6 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         <meta name="theme-color" content={theme === "light" ? "#fbfbfc" : "#000000"} />
         <style dangerouslySetInnerHTML={{ __html: appearanceToCssVariables(appearance) }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(organizationJsonLd) }} />
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(websiteJsonLd) }} />
       </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

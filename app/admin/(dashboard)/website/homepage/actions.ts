@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getOrCreateDraft } from "@/lib/homepage";
 import { normalizeStatMetrics } from "@/lib/homepage-field-codec";
+import { sanitizeStatisticsContent } from "@/lib/homepage-stat-sanitize";
 import type { Prisma } from "@prisma/client";
 
 export async function toggleSectionAction(sectionId: string, isEnabled: boolean) {
@@ -41,6 +42,7 @@ export async function updateSectionContentAction(
   let modeChanges: { label: string; from: string; to: string }[] | undefined;
 
   if (existing?.key === "STATISTICS") {
+    content = sanitizeStatisticsContent(content);
     const before = normalizeStatMetrics((existing.content as Record<string, unknown>).metrics);
     const after = normalizeStatMetrics(content.metrics);
     const beforeById = new Map(before.map((m) => [m.id, m]));

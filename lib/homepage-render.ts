@@ -10,8 +10,19 @@ import {
   type HeroPanelConfig,
 } from "@/lib/homepage-field-codec";
 import { getHomepageStatistics } from "@/lib/homepage-statistics";
+import { formatStatNumber, parseManualNumber, withSuffix, type StatFormat } from "@/lib/homepage-stat-format";
 import { BRAND_NAME } from "@/lib/brand";
-import { getExamMockSeriesSummary, type ExamMockSeriesSummary } from "@/lib/mock-series";
+import {
+  getExamMockSeriesSummary,
+  getSeriesComparison,
+  getSeriesCta,
+  type ExamMockSeriesSummary,
+  type SeriesComparison,
+  type SeriesCta,
+} from "@/lib/mock-series";
+import { paidBenefits, type OfferDisplayRow } from "@/lib/payments/offer-display-shared";
+import { getAiSettings } from "@/lib/ai-settings";
+import { displayExamName } from "@/lib/exam-display";
 
 export interface ResolvedStatValue {
   label: string;
@@ -21,6 +32,10 @@ export interface ResolvedStatValue {
   badge?: string;
   link?: string;
   mode: StatMetric["mode"];
+  /** Underlying count when the value is numeric — drives the client count-up. */
+  numeric?: number;
+  format?: StatFormat;
+  suffix?: string;
 }
 
 export interface ResolvedExamStats {
@@ -48,6 +63,48 @@ export interface ResolvedFeaturedTest {
   examId: string;
   examName: string;
   route: string;
+}
+
+/** One "Start for free" card — only ever built from a resource the access engine says is free. */
+export interface ResolvedFreeCard {
+  key: string;
+  title: string;
+  value: string;
+  detail: string;
+  href: string;
+}
+
+/** A public page of the featured exam, for descriptive internal links. */
+export interface ResolvedExamLink {
+  label: string;
+  description: string;
+  href: string;
+}
+
+/** Real facts about the featured exam for the hero card and exam sections. */
+export interface ResolvedExamSummary {
+  name: string;
+  hubHref: string | null;
+  examDate: Date | null;
+  daysLeft: number | null;
+  plannedMocks: number;
+  publishedMocks: number;
+  availableMocks: number;
+  freeMocks: number;
+  freeMocksAvailable: number;
+  papers: number;
+  paperYears: number;
+  questions: number;
+  subjects: number;
+  links: ResolvedExamLink[];
+}
+
+export interface ResolvedOffer {
+  cta: SeriesCta;
+  benefits: OfferDisplayRow[];
+  accessDuration: string | null;
+  productName: string | null;
+  compareHref: string | null;
 }
 
 export interface ResolvedUpcomingExam {
@@ -78,16 +135,59 @@ export interface ResolvedHomepage {
       statValues?: ResolvedStatValue[];
       heroPanel?: ResolvedHeroPanel;
       copyrightLine?: string;
+      examSummary?: ResolvedExamSummary | null;
+      freeCards?: ResolvedFreeCard[];
+      /** Where "start free" buttons go for this visitor (sign-up, or the dashboard when signed in). */
+      startFreeHref?: string;
+      offer?: ResolvedOffer | null;
     };
   }[];
 }
 
-function resolveStatValue(metric: StatMetric, stats: Awaited<ReturnType<typeof getHomepageStatistics>>): string {
-  if (metric.mode === "LIVE") {
-    return metric.dynamicKey ? String(stats.values[metric.dynamicKey] ?? 0) : "0";
-  }
-  if (metric.mode === "DEMO") return metric.demoValue ?? "";
-  return metric.manualValue ?? "";
+/** Who is looking — drives "start free" vs "dashboard" and buy vs open CTAs. Null studentId = anonymous. */
+export interface HomepageViewer {
+  studentId: string | null;
+}
+
+export const STUDENT_HOME = "/student/dashboard";
+export const FREE_SIGNUP_HREF = `/login?tab=register&callbackUrl=${encodeURIComponent(STUDENT_HOME)}`;
+
+/**
+ * Resolves one card to its public display value. LIVE reads the cached
+ * aggregate snapshot; MANUAL/DEMO only override what is displayed — they
+ * never touch the underlying statistics. Only the aggregate number leaves
+ * the server.
+ */
+function resolveStatValue(
+  metric: StatMetric,
+  stats: Awaited<ReturnType<typeof getHomepageStatistics>>
+): Pick<ResolvedStatValue, "value" | "numeric" | "format" | "suffix"> {
+  const format = metric.format ?? "EXACT";
+  const suffix = metric.suffix || undefined;
+  const raw = metric.mode === "LIVE" ? undefined : metric.mode === "DEMO" ? metric.demoValue : metric.manualValue;
+  const numeric =
+    metric.mode === "LIVE" ? (metric.dynamicKey ? (stats.values[metric.dynamicKey] ?? 0) : 0) : parseManualNumber(raw);
+  if (numeric === null) return { value: withSuffix(raw ?? "", raw ? suffix : undefined) };
+  return { value: withSuffix(formatStatNumber(numeric, format), suffix), numeric, format, suffix };
+}
+
+/** Visible STATISTICS cards, in admin order, resolved to public display values. */
+export function resolveStatisticsCards(
+  content: Record<string, unknown>,
+  stats: Awaited<ReturnType<typeof getHomepageStatistics>>
+): ResolvedStatValue[] {
+  const values: ResolvedStatValue[] = normalizeStatMetrics(content.metrics)
+    .filter((m) => m.enabled)
+    .map((m) => ({
+      label: m.label,
+      ...resolveStatValue(m, stats),
+      description: m.description,
+      icon: m.icon,
+      badge: m.badge,
+      link: m.link,
+      mode: m.mode,
+    }));
+  return content.hideZeroLive === true ? values.filter((v) => !(v.mode === "LIVE" && v.numeric === 0)) : values;
 }
 
 async function resolveExamStats(examId: string): Promise<ResolvedExamStats> {
@@ -121,10 +221,31 @@ function daysUntil(date: Date): number {
   return Math.ceil((date.getTime() - Date.now()) / DAY_MS);
 }
 
-export async function resolveHomepage(config: HomepageConfig & { sections: HomepageSection[] }): Promise<ResolvedHomepage> {
+const EXAM_PAGE_LINKS: { segment: string; label: (exam: string) => string; description: string }[] = [
+  { segment: "mock-test-series", label: (e) => `${e} Mock Test Series`, description: "Every mock with its syllabus coverage and release date" },
+  { segment: "previous-year-papers", label: (e) => `${e} Previous Year Papers`, description: "Real past papers to attempt online" },
+  { segment: "syllabus", label: (e) => `${e} Syllabus`, description: "Subjects and topics to cover" },
+  { segment: "exam-pattern", label: (e) => `${e} Exam Pattern`, description: "Questions, marks, duration and mode" },
+  { segment: "question-bank", label: (e) => `${e} Question Bank`, description: "Subject-wise questions for practice" },
+];
+
+/** Rows of the live comparison whose FREE column is really available ("—" means not free). */
+function isFreeValue(value: string | undefined): value is string {
+  return Boolean(value) && value !== "—" && value !== "Sample mocks when released";
+}
+
+export async function resolveHomepage(
+  config: HomepageConfig & { sections: HomepageSection[] },
+  viewer: HomepageViewer = { studentId: null }
+): Promise<ResolvedHomepage> {
   // Single shared live-stats snapshot for every section that needs platform
   // totals (statistics cards, hero panel LIVE mode, hero supporting stats).
-  const platformStats = getHomepageStatistics();
+  // A statistics failure only hides the numbers — it never takes the page down.
+  const platformStats = getHomepageStatistics().catch((error) => {
+    console.error("[homepage] statistics unavailable", error);
+    return null;
+  });
+  const startFreeHref = viewer.studentId ? STUDENT_HOME : FREE_SIGNUP_HREF;
   const liveMockTestCountPromise = prisma.mockTest.count({ where: LIVE_MOCK_TEST_WHERE });
   // One lazily-resolved canonical series per exam, shared by every section
   // that promotes it (Featured Exam, Mock Test Promotion, Test Series).
@@ -158,6 +279,24 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
     return first ? seriesFor(first.examId) : null;
   };
 
+  // Exam used by sections that don't pick their own: the Featured Exam's.
+  const featuredExamId = typeof featuredExamRef?.examId === "string" ? featuredExamRef.examId : null;
+  const comparisonByExam = new Map<string, Promise<SeriesComparison | null>>();
+  const comparisonFor = (examId: string) => {
+    if (!comparisonByExam.has(examId)) {
+      comparisonByExam.set(
+        examId,
+        seriesFor(examId).then((series) => (series ? getSeriesComparison(examId, series.mockSeries, series.offer) : null))
+      );
+    }
+    return comparisonByExam.get(examId)!;
+  };
+  const summaryByExam = new Map<string, Promise<ResolvedExamSummary | null>>();
+  const examSummaryFor = (examId: string) => {
+    if (!summaryByExam.has(examId)) summaryByExam.set(examId, buildExamSummary(examId, seriesFor));
+    return summaryByExam.get(examId)!;
+  };
+
   const sections = await Promise.all(
     config.sections
       .sort((a, b) => a.order - b.order)
@@ -180,40 +319,70 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
                 ? `/exams/${resolved.exam.publicSlug}`
                 : `/student/exams/${resolved.exam.id}`;
             resolved.mockSeries = await seriesFor(resolved.exam.id);
+            resolved.examSummary = await examSummaryFor(resolved.exam.id);
           }
         }
 
         if (section.key === "HERO") {
           const panel = normalizeHeroPanel(content.panel);
           let live = { questionsAnswered: 0, mockTestsAttempted: 0, aiExplanations: 0, activeExams: 0 };
-          if (panel.mode === "LIVE") {
+          const heroStats = await platformStats;
+          if (panel.mode === "LIVE" && heroStats) {
             live = {
-              questionsAnswered: (await platformStats).values.questionsAnswered,
-              mockTestsAttempted: (await platformStats).values.mockTestsAttempted,
-              aiExplanations: (await platformStats).values.aiExplanations,
-              activeExams: (await platformStats).values.examsActive,
+              questionsAnswered: heroStats.values.questionsAnswered,
+              mockTestsAttempted: heroStats.values.mockTestsAttempted,
+              aiExplanations: heroStats.values.aiExplanations,
+              activeExams: heroStats.values.examsActive,
             };
           }
           const liveCount = Object.values(live).reduce((sum, n) => sum + (n || 0), 0);
           resolved.heroPanel = { config: panel, live, liveCount };
 
-          // Supporting statistics under the headline (real numbers only).
-          const stats = await platformStats;
-          const heroStatValues: ResolvedStatValue[] = [
-            {
-              label: "Published Tests",
-              value: String((await liveMockTestCountPromise)),
-              mode: "LIVE",
-            },
-            { label: "Questions", value: String(stats.values.questionBank), mode: "LIVE" },
-            { label: "Active Exams", value: String(stats.values.examsActive), mode: "LIVE" },
-          ];
+          // Supporting statistics under the analytics panel (real numbers only).
+          const heroStatValues: ResolvedStatValue[] = heroStats
+            ? [
+                { label: "Published Tests", value: String(await liveMockTestCountPromise), mode: "LIVE" },
+                { label: "Questions", value: String(heroStats.values.questionBank), mode: "LIVE" },
+                { label: "Active Exams", value: String(heroStats.values.examsActive), mode: "LIVE" },
+              ]
+            : [];
           resolved.statValues = heroStatValues.filter((s) => s.value !== "0");
+          resolved.startFreeHref = startFreeHref;
+          if (content.showExamCard !== false && featuredExamId) resolved.examSummary = await examSummaryFor(featuredExamId);
+        }
+
+        if (section.key === "FREE_START") {
+          const examId = typeof references.examId === "string" ? references.examId : featuredExamId;
+          resolved.startFreeHref = startFreeHref;
+          if (examId) {
+            const [summary, comparison, ai] = await Promise.all([examSummaryFor(examId), comparisonFor(examId), getAiSettings()]);
+            resolved.examSummary = summary;
+            resolved.freeCards = buildFreeCards(summary, comparison, ai.freeDailyLimit);
+          }
+        }
+
+        if (section.key === "EXAM_GUIDE") {
+          const examId = typeof references.examId === "string" ? references.examId : featuredExamId;
+          if (examId) resolved.examSummary = await examSummaryFor(examId);
         }
 
         if (section.key === "MOCK_TEST_PROMOTION") {
           resolved.liveMockTestCount = await liveMockTestCountPromise;
           resolved.mockSeries = await primarySeries();
+          const series = resolved.mockSeries;
+          if (series?.mockSeries) {
+            const [cta, comparison] = await Promise.all([
+              getSeriesCta(viewer.studentId, series.offer),
+              comparisonFor(series.mockSeries.series.examId),
+            ]);
+            resolved.offer = {
+              cta,
+              benefits: comparison ? paidBenefits(comparison.rows) : [],
+              accessDuration: series.offer?.showPrice ? series.offer.product.accessDuration : null,
+              productName: series.offer?.product.name ?? null,
+              compareHref: series.href ? `${series.href}#plans` : null,
+            };
+          }
         }
 
         if (section.key === "UPCOMING_EXAMS") {
@@ -318,21 +487,10 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
 
         if (section.key === "STATISTICS" && Array.isArray(content.metrics)) {
           const stats = await platformStats;
-          const hideZeroLive = content.hideZeroLive === true;
-          const metrics = normalizeStatMetrics(content.metrics).filter((m) => m.enabled);
-          resolved.statValues = metrics.map((m) => ({
-            label: m.label,
-            value: resolveStatValue(m, stats),
-            description: m.description,
-            icon: m.icon,
-            badge: m.badge,
-            link: m.link,
-            mode: m.mode,
-          }));
-          if (hideZeroLive) {
-            resolved.statValues = resolved.statValues.filter((v) => !(v.mode === "LIVE" && v.value === "0"));
-          }
+          resolved.statValues = stats ? resolveStatisticsCards(content, stats) : [];
         }
+
+        if (section.key === "CTA") resolved.startFreeHref = startFreeHref;
 
         if (section.key === "FOOTER") {
           const year = new Date().getFullYear();
@@ -345,4 +503,122 @@ export async function resolveHomepage(config: HomepageConfig & { sections: Homep
   );
 
   return { seo: (config.seo as ResolvedHomepage["seo"]) ?? {}, sections };
+}
+/**
+ * Real, public-safe facts about one exam: dates, mock/PYQ/question counts and
+ * its public pages. Counts reuse the canonical series (lib/mock-series.ts)
+ * so the homepage can never disagree with the Exam Hub.
+ */
+async function buildExamSummary(
+  examId: string,
+  seriesFor: (examId: string) => Promise<(ExamMockSeriesSummary & { examName: string }) | null>
+): Promise<ResolvedExamSummary | null> {
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    select: {
+      name: true,
+      isActive: true,
+      publicSlug: true,
+      publicPageEnabled: true,
+      examDate: true,
+      upcomingDate: true,
+      _count: { select: { questions: { where: { status: "PUBLISHED" } }, examSubjects: true } },
+    },
+  });
+  if (!exam || !exam.isActive) return null;
+  const [series, papers] = await Promise.all([
+    seriesFor(examId),
+    prisma.previousYearPaper.findMany({ where: { examId, isActive: true }, select: { year: true } }),
+  ]);
+  const ms = series?.mockSeries ?? null;
+  const freeMocks = ms ? ms.tests.filter((t) => t.accessType === "FREE").length : 0;
+  const examDate = exam.examDate ?? exam.upcomingDate ?? null;
+  const daysLeft = examDate ? daysUntil(examDate) : null;
+  const hubHref = exam.publicPageEnabled && exam.publicSlug ? `/exams/${exam.publicSlug}` : null;
+  const shortName = displayExamName(exam.name);
+  return {
+    name: exam.name,
+    hubHref,
+    examDate: daysLeft !== null && daysLeft >= 0 ? examDate : null,
+    daysLeft: daysLeft !== null && daysLeft >= 0 ? daysLeft : null,
+    plannedMocks: ms?.planned ?? 0,
+    publishedMocks: ms?.published ?? 0,
+    availableMocks: ms?.available ?? 0,
+    freeMocks,
+    freeMocksAvailable: ms?.freeAvailable ?? 0,
+    papers: papers.length,
+    paperYears: new Set(papers.map((p) => p.year)).size,
+    questions: exam._count.questions,
+    subjects: exam._count.examSubjects,
+    links: hubHref
+      ? EXAM_PAGE_LINKS.filter((l) => l.segment !== "mock-test-series" || ms).map((l) => ({
+          label: l.label(shortName),
+          description: l.description,
+          href: `${hubHref}/${l.segment}`,
+        }))
+      : [],
+  };
+}
+
+/**
+ * "Start for free" cards, derived from the live Free vs Complete comparison
+ * (the same access engine that gates attempts). A resource appears only when
+ * its FREE column is genuinely available.
+ */
+export function buildFreeCards(summary: ResolvedExamSummary | null, comparison: SeriesComparison | null, aiFreeDailyLimit: number): ResolvedFreeCard[] {
+  if (!summary) return [];
+  const free = new Map((comparison?.derivedRows ?? []).map((r) => [r.key, r.free]));
+  const hub = summary.hubHref;
+  const cards: ResolvedFreeCard[] = [];
+  const freeMocks = comparison?.freeMocks ?? 0;
+  if (freeMocks > 0) {
+    const later = Math.max(0, freeMocks - summary.freeMocksAvailable);
+    cards.push({
+      key: "free-mocks",
+      title: "Free Mock Tests",
+      value: String(freeMocks),
+      detail:
+        later > 0
+          ? `${summary.freeMocksAvailable} open now, ${later} more on the release schedule — exam-pattern, timed, with results.`
+          : "Exam-pattern, timed mock tests with results and review.",
+      href: hub ? `${hub}/mock-test-series` : FREE_SIGNUP_HREF,
+    });
+  }
+  if (summary.papers > 0 && isFreeValue(free.get("pyq-practice"))) {
+    cards.push({
+      key: "pyq",
+      title: "Previous Year Papers",
+      value: String(summary.papers),
+      detail: `${summary.paperYears} year${summary.paperYears === 1 ? "" : "s"} of real papers to attempt online, with results and review.`,
+      href: hub ? `${hub}/previous-year-papers` : FREE_SIGNUP_HREF,
+    });
+  }
+  if (summary.questions > 0 && isFreeValue(free.get("subject-practice"))) {
+    cards.push({
+      key: "subject-practice",
+      title: "Subject-wise Practice",
+      value: summary.subjects > 0 ? `${summary.subjects} subjects` : "All subjects",
+      detail: "Build practice tests by subject and topic from the question bank.",
+      href: hub ? `${hub}/question-bank` : FREE_SIGNUP_HREF,
+    });
+  }
+  if (aiFreeDailyLimit > 0 && isFreeValue(free.get("ai-explanations"))) {
+    cards.push({
+      key: "ai",
+      title: "AI Explanations",
+      value: `${aiFreeDailyLimit} / day`,
+      detail: "Ask why an answer is right — and why the other options are wrong.",
+      href: "/#try-ai-now",
+    });
+  }
+  if (isFreeValue(free.get("analytics"))) {
+    cards.push({
+      key: "analysis",
+      title: "Results & Analysis",
+      value: "Every test",
+      detail: "Score, question-by-question review and subject-wise performance.",
+      href: FREE_SIGNUP_HREF,
+    });
+  }
+  return cards;
 }

@@ -8,6 +8,32 @@
  * their types and back-compat normalizers.
  */
 
+import { isStatFormat, type StatFormat } from "@/lib/homepage-stat-format";
+
+/**
+ * Allowed homepage statistic icon keys. Kept here (dependency-free) so
+ * server-side validation needn't load the icon components; lib/homepage-
+ * icons.ts maps every key to its component and is type-checked against this.
+ */
+export const STAT_ICON_KEYS = [
+  "helpCircle",
+  "sparkles",
+  "graduationCap",
+  "clipboardList",
+  "bookOpen",
+  "users",
+  "userCheck",
+  "fileText",
+  "brain",
+  "award",
+  "checkCircle",
+  "database",
+  "trendingUp",
+  "layers",
+  "barChart",
+] as const;
+export type StatIconKey = (typeof STAT_ICON_KEYS)[number];
+
 export type StatDynamicKey =
   | "questionsAnswered"
   | "aiExplanations"
@@ -18,7 +44,9 @@ export type StatDynamicKey =
   | "activeStudents"
   | "mockTestsAttempted"
   | "mockTestsPublished"
-  | "previousYearPapers";
+  | "previousYearPapers"
+  | "testsCompleted"
+  | "questionsAvailable";
 
 export interface StatMetric {
   id: string;
@@ -34,6 +62,10 @@ export interface StatMetric {
   dynamicKey?: StatDynamicKey;
   demoValue?: string;
   manualValue?: string;
+  /** Number display format (lib/homepage-stat-format.ts). Absent = EXACT. */
+  format?: StatFormat;
+  /** Short text appended to the number, e.g. "+". */
+  suffix?: string;
 }
 
 export const STAT_DATA_SOURCE_LABELS: Record<StatDynamicKey, string> = {
@@ -47,6 +79,8 @@ export const STAT_DATA_SOURCE_LABELS: Record<StatDynamicKey, string> = {
   mockTestsAttempted: "Submitted Mock Test Attempts",
   mockTestsPublished: "Published Mock Tests",
   previousYearPapers: "Active Previous Year Papers",
+  testsCompleted: "Submitted Test Attempts (all test types)",
+  questionsAvailable: "Published Questions in Active Exams",
 };
 
 export interface UpcomingExamConfig {
@@ -91,6 +125,8 @@ export function normalizeStatMetric(raw: unknown): StatMetric {
     dynamicKey: typeof r.dynamicKey === "string" ? (r.dynamicKey as StatDynamicKey) : undefined,
     demoValue: typeof r.demoValue === "string" ? r.demoValue : undefined,
     manualValue: typeof r.manualValue === "string" ? r.manualValue : undefined,
+    format: isStatFormat(r.format) ? r.format : undefined,
+    suffix: typeof r.suffix === "string" ? r.suffix : undefined,
   };
 }
 

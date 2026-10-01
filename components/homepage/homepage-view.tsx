@@ -16,6 +16,7 @@ import {
   StatisticsSection,
   CtaSection,
 } from "./sections";
+import { FreeStartSection, ExamGuideSection, FaqSection } from "./growth-sections";
 import type { HomepageSectionKey } from "@prisma/client";
 import type { ComponentType, ReactNode } from "react";
 
@@ -34,9 +35,20 @@ const SECTION_COMPONENTS: Partial<Record<HomepageSectionKey, ComponentType<Secti
   TEST_SERIES: TestSeriesSection,
   STATISTICS: StatisticsSection,
   CTA: CtaSection,
+  FREE_START: FreeStartSection,
+  EXAM_GUIDE: ExamGuideSection,
+  FAQ: FaqSection,
 };
 
-export function HomepageView({ homepage, omrResourceId = null }: { homepage: ResolvedHomepage; omrResourceId?: string | null }) {
+export function HomepageView({
+  homepage,
+  omrResourceId = null,
+  studentSignedIn = false,
+}: {
+  homepage: ResolvedHomepage;
+  omrResourceId?: string | null;
+  studentSignedIn?: boolean;
+}) {
   const byKey = new Map(homepage.sections.map((s) => [s.key, s]));
   const header = byKey.get("HEADER");
   const footer = byKey.get("FOOTER");
@@ -50,25 +62,26 @@ export function HomepageView({ homepage, omrResourceId = null }: { homepage: Res
   return (
     <div className="flex min-h-full flex-col bg-[var(--color-background)]">
       {header?.isEnabled !== false ? (
-        <SiteHeader content={(header?.content as Record<string, unknown>) ?? {}} growWithUsEnabled={growWithUsEnabled} />
+        <SiteHeader
+          content={(header?.content as Record<string, unknown>) ?? {}}
+          growWithUsEnabled={growWithUsEnabled}
+          studentSignedIn={studentSignedIn}
+        />
       ) : null}
 
       <main className="flex-1">
         {(() => {
-          // "Try AI Now" is a major product demo, not a footnote — render it
-          // right after Featured Exam (falling back to right after Hero if
-          // Featured Exam is disabled/unconfigured, or at the very end as a
-          // last resort) instead of always trailing every other section.
-          const tryAiNowAfterKey = bodySections.some((s) => s.key === "FEATURED_EXAM")
-            ? "FEATURED_EXAM"
-            : bodySections.some((s) => s.key === "HERO")
-              ? "HERO"
-              : null;
+          // "Try AI Now" is the hands-on proof of the AI section, so it sits
+          // right after AI Features (else after Featured Exam, else Hero, or
+          // at the very end as a last resort) — below the fold, so its
+          // client player never competes with the hero for first paint.
+          const tryAiNowAfterKey =
+            (["AI_USP", "FEATURED_EXAM", "HERO"] as const).find((k) => bodySections.some((s) => s.key === k)) ?? null;
           let tryAiNowInserted = tryAiNowAfterKey === null;
 
           // Practice OMR is a supporting resource: mid-page, after the
-          // platform features (AI_USP, else BENEFITS), never above the hero.
-          const omrAfterKey = (["AI_USP", "BENEFITS", "HOW_IT_WORKS"] as const).find((k) => bodySections.some((s) => s.key === k)) ?? null;
+          // platform features (BENEFITS, else AI_USP), never above the hero.
+          const omrAfterKey = (["BENEFITS", "AI_USP", "HOW_IT_WORKS"] as const).find((k) => bodySections.some((s) => s.key === k)) ?? null;
           let omrInserted = !omrResourceId;
           const omrSection = omrResourceId ? (
             <section key="practice-omr" id="practice-omr" className="border-t border-[var(--color-border)]">

@@ -9,13 +9,16 @@ import { str, pairs } from "./content-helpers";
 export function SiteHeader({
   content,
   growWithUsEnabled = false,
+  studentSignedIn = false,
 }: {
   content: Record<string, unknown>;
   growWithUsEnabled?: boolean;
+  /** A signed-in student gets their dashboard instead of the login button. */
+  studentSignedIn?: boolean;
 }) {
   const navItems = pairs(content, "navItems");
-  const loginHref = str(content, "loginHref", "/login");
-  const loginButtonText = str(content, "loginButtonText", "Login");
+  const loginHref = studentSignedIn ? "/student/dashboard" : str(content, "loginHref", "/login");
+  const loginButtonText = studentSignedIn ? "My Dashboard" : str(content, "loginButtonText", "Login");
   const loginButtonVisible = content.loginButtonVisible !== false;
 
   return (
@@ -24,12 +27,12 @@ export function SiteHeader({
         <BrandLogo size="lg" />
 
         {navItems.length > 0 ? (
-          <nav className="hidden flex-1 items-center justify-center gap-7 md:flex" aria-label="Primary">
+          <nav className="hidden flex-1 items-center justify-center gap-7 lg:flex" aria-label="Primary">
             {navItems.map(([label, href]) => (
               <Link
                 key={href}
                 href={href}
-                className="text-sm text-[var(--color-muted-foreground)] transition-colors hover:text-[var(--color-foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] focus-visible:rounded-sm"
+                className="whitespace-nowrap text-sm text-[var(--color-muted-foreground)] transition-colors hover:text-[var(--color-foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] focus-visible:rounded-sm"
               >
                 {label}
               </Link>
@@ -53,7 +56,7 @@ export function SiteHeader({
 
       {navItems.length > 0 || growWithUsEnabled ? (
         <nav
-          className="flex items-center gap-4 overflow-x-auto border-t border-[var(--color-border)] px-4 py-2 md:hidden"
+          className="flex items-center gap-4 overflow-x-auto border-t border-[var(--color-border)] px-4 py-2 sm:px-6 lg:hidden"
           aria-label="Primary"
         >
           {navItems.map(([label, href]) => (
@@ -67,7 +70,7 @@ export function SiteHeader({
           ))}
           {growWithUsEnabled ? <GrowWithUsButton variant="ghost" className="shrink-0 sm:hidden" /> : null}
           {loginButtonVisible ? (
-            <Link href={loginHref} className="shrink-0 text-sm font-semibold text-[var(--color-primary)]">
+            <Link href={loginHref} className="shrink-0 text-sm font-semibold text-[var(--color-primary)] sm:hidden">
               {loginButtonText}
             </Link>
           ) : null}

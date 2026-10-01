@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { SelectNative } from "@/components/ui/select-native";
 import type { SectionFieldDef, SectionMeta } from "@/lib/homepage-sections";
 import { pairListToText, textToPairList, listToText, textToList } from "@/lib/homepage-field-codec";
 import type { HomepageStatsSnapshot } from "@/lib/homepage-statistics";
@@ -44,7 +45,15 @@ function TextAreaFieldEditor({
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={field.key}>{field.label}</Label>
-      {isTextarea ? (
+      {field.type === "select" && field.options ? (
+        <SelectNative id={field.key} value={value} onChange={(e) => onChange(e.target.value)}>
+          {field.options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </SelectNative>
+      ) : isTextarea ? (
         <textarea
           id={field.key}
           value={value}
@@ -142,6 +151,7 @@ export function SectionContentForm({
       const raw = content[field.key];
       if (field.type === "pairlist") init[field.key] = pairListToText(raw);
       else if (field.type === "list") init[field.key] = listToText(raw);
+      else if (field.type === "select") init[field.key] = typeof raw === "string" && field.options?.includes(raw) ? raw : (field.options?.[0] ?? "");
       else init[field.key] = typeof raw === "string" ? raw : "";
     }
     return init;

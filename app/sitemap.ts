@@ -18,7 +18,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const entries: MetadataRoute.Sitemap = [];
 
-  if (isVisible("homepage")) entries.push({ url: siteUrl, changeFrequency: "daily", priority: 1 });
+  // Same form as the homepage canonical (`${siteUrl}/`).
+  if (isVisible("homepage")) {
+    const published = await prisma.homepageConfig.findFirst({
+      where: { status: "PUBLISHED" },
+      orderBy: { version: "desc" },
+      select: { publishedAt: true },
+    });
+    entries.push({ url: `${siteUrl}/`, lastModified: published?.publishedAt ?? undefined, changeFrequency: "daily", priority: 1 });
+  }
   if (isVisible("contact")) entries.push({ url: `${siteUrl}/contact`, changeFrequency: "monthly", priority: 0.3 });
   if (isVisible("privacy")) entries.push({ url: `${siteUrl}/privacy`, changeFrequency: "yearly", priority: 0.2 });
   if (isVisible("terms")) entries.push({ url: `${siteUrl}/terms`, changeFrequency: "yearly", priority: 0.2 });

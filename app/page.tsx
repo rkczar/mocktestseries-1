@@ -1,33 +1,86 @@
 import type { Metadata } from "next";
 import { getSiteUrl } from "@/lib/site-url";
-import { getPublishedHomepage, getFallbackHomepage } from "@/lib/homepage";
+import { getSeoSettings } from "@/lib/seo-settings";
+import { getPublishedHomepage, getFallbackHomepage, DEFAULT_HOMEPAGE_SEO } from "@/lib/homepage";
 import { resolveHomepage } from "@/lib/homepage-render";
 import { HomepageView } from "@/components/homepage/homepage-view";
+import { faqItems } from "@/components/homepage/growth-sections";
 import { requirePageVisible } from "@/lib/page-visibility";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
+import { getStudentSession } from "@/lib/student-session";
 import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
+import { BRAND_NAME, PUBLIC_BRAND_NAME } from "@/lib/brand";
+import { safeJsonLd } from "@/lib/json-ld";
+
+type HomepageSeo = { title?: string; metaDescription?: string; canonicalUrl?: string; ogTitle?: string; ogDescription?: string };
 
 export async function generateMetadata(): Promise<Metadata> {
-  const [published, siteUrl] = await Promise.all([getPublishedHomepage(), getSiteUrl()]);
-  const seo = (published?.seo as { title?: string; metaDescription?: string } | null) ?? {};
+  const [published, siteUrl, settings] = await Promise.all([getPublishedHomepage(), getSiteUrl(), getSeoSettings()]);
+  const seo = (published?.seo as HomepageSeo | null) ?? {};
+  const title = seo.title || DEFAULT_HOMEPAGE_SEO.title;
+  const description = seo.metaDescription || DEFAULT_HOMEPAGE_SEO.metaDescription;
+  // One canonical homepage URL; an admin override is honoured only on our own origin.
+  const canonical = seo.canonicalUrl && seo.canonicalUrl.startsWith(`${siteUrl}/`) ? seo.canonicalUrl : `${siteUrl}/`;
+  const ogTitle = seo.ogTitle || title;
+  const ogDescription = seo.ogDescription || description;
+  const images = settings.defaultOgImage ? [{ url: settings.defaultOgImage }] : undefined;
   return {
-    title: seo.title || "MockTestSeries.in — Mock Tests, Previous Year Papers & AI Explanations",
-    description:
-      seo.metaDescription ||
-      "Practice with full-length mock tests, previous year papers, and AI-powered explanations for RUHS Medical Officer, NEET UG, and more — all on one platform.",
-    alternates: { canonical: `${siteUrl}/` },
+    title: { absolute: title },
+    description,
+    alternates: { canonical },
+    robots: settings.siteIndexable
+      ? { index: true, follow: true, googleBot: { index: true, follow: true, "max-image-preview": "large", "max-snippet": -1 } }
+      : { index: false, follow: false },
+    openGraph: { type: "website", url: canonical, siteName: PUBLIC_BRAND_NAME, locale: "en_IN", title: ogTitle, description: ogDescription, images },
+    twitter: {
+      card: images ? "summary_large_image" : "summary",
+      title: ogTitle,
+      description: ogDescription,
+      ...(settings.twitterHandle ? { site: settings.twitterHandle } : {}),
+    },
   };
 }
 
 export default async function Home() {
   await requirePageVisible("homepage");
-  const published = await getPublishedHomepage();
+  const [published, session, siteUrl] = await Promise.all([getPublishedHomepage(), getStudentSession(), getSiteUrl()]);
   const config = published ?? getFallbackHomepage();
-  const [homepage, omrSheet] = await Promise.all([resolveHomepage(config), findPracticeOmrSheet()]);
+  const studentId = session?.user?.studentId ? (session.user.id ?? null) : null;
+  const [homepage, omrSheet] = await Promise.all([resolveHomepage(config, { studentId }), findPracticeOmrSheet()]);
+
+  // WebSite markup names the site for Google's site-name system: the public
+  // brand, with the domain-style wordmark as an alternate name.
+  const websiteJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "@id": `${siteUrl}/#website`,
+    name: PUBLIC_BRAND_NAME,
+    alternateName: [BRAND_NAME, "mocktestseries.in"],
+    url: `${siteUrl}/`,
+    inLanguage: "en-IN",
+    publisher: { "@id": `${siteUrl}/#organization` },
+  };
+  // FAQPage only for questions that are visibly rendered on this page.
+  const faq = homepage.sections.find((s) => s.key === "FAQ" && s.isEnabled);
+  const faqs = faq && faq.content.structuredData !== false ? faqItems(faq.content) : [];
+  const faqJsonLd =
+    faqs.length > 0
+      ? {
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          mainEntity: faqs.map(([question, answer]) => ({
+            "@type": "Question",
+            name: question,
+            acceptedAnswer: { "@type": "Answer", text: answer },
+          })),
+        }
+      : null;
 
   return (
     <>
-      <HomepageView homepage={homepage} omrResourceId={omrSheet?.id ?? null} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(websiteJsonLd) }} />
+      {faqJsonLd ? <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(faqJsonLd) }} /> : null}
+      <HomepageView homepage={homepage} omrResourceId={omrSheet?.id ?? null} studentSignedIn={Boolean(studentId)} />
       <FloatingWhatsAppSupport surface="homepage" />
     </>
   );

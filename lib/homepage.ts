@@ -3,6 +3,17 @@ import { SECTION_META, SECTION_ORDER } from "@/lib/homepage-sections";
 import type { Prisma, HomepageConfig, HomepageSection } from "@prisma/client";
 
 /**
+ * Exam-neutral homepage SEO used when no admin SEO is set (new drafts, the
+ * no-homepage fallback, and app/page.tsx when the published title is blank).
+ * Admin → Website → Homepage → SEO overrides it per published version.
+ */
+export const DEFAULT_HOMEPAGE_SEO = {
+  title: "Mock Test Series – Online Mock Tests & Previous Year Papers",
+  metaDescription:
+    "Mock Test Series: online mock tests in the real exam pattern, previous year papers, subject-wise practice and AI-powered explanations. Start free, upgrade when you need complete access.",
+};
+
+/**
  * Returns the current DRAFT HomepageConfig (with sections), creating one if
  * none exists yet — cloning the live PUBLISHED config's sections if there is
  * one, or seeding the documented defaults (Section 34) otherwise. There is
@@ -13,7 +24,7 @@ export async function getOrCreateDraft() {
     where: { status: "DRAFT" },
     include: { sections: { orderBy: { order: "asc" } } },
   });
-  if (existingDraft) return existingDraft;
+  if (existingDraft) return addMissingSections(existingDraft);
 
   const published = await prisma.homepageConfig.findFirst({
     where: { status: "PUBLISHED" },
@@ -40,19 +51,46 @@ export async function getOrCreateDraft() {
         references: {},
       }));
 
-  return prisma.homepageConfig.create({
+  const created = await prisma.homepageConfig.create({
     data: {
       version: nextVersion,
       status: "DRAFT",
       seo: published?.seo ?? {
-        title: "MockTestSeries.in — Mock Tests, Previous Year Papers & AI Explanations",
-        metaDescription:
-          "Practice with full-length mock tests, previous year papers, and AI-powered explanations for RUHS Medical Officer, NEET UG, and more — all on one platform.",
+        title: DEFAULT_HOMEPAGE_SEO.title,
+        metaDescription: DEFAULT_HOMEPAGE_SEO.metaDescription,
       },
       sections: { create: sectionsData },
     },
     include: { sections: { orderBy: { order: "asc" } } },
   });
+  return addMissingSections(created);
+}
+
+/**
+ * Section types added after a config was first created (e.g. FREE_START,
+ * EXAM_GUIDE, FAQ) are appended to the DRAFT — disabled, with their default
+ * content — so the admin can see, fill and enable them. Never touches a
+ * PUBLISHED config.
+ */
+async function addMissingSections<T extends HomepageConfig & { sections: HomepageSection[] }>(draft: T): Promise<T> {
+  const present = new Set(draft.sections.map((s) => s.key));
+  const missing = SECTION_ORDER.filter((key) => !present.has(key));
+  if (missing.length === 0) return draft;
+  const maxOrder = draft.sections.reduce((max, s) => Math.max(max, s.order), -1);
+  await prisma.homepageSection.createMany({
+    data: missing.map((key, index) => ({
+      homepageConfigId: draft.id,
+      key,
+      isEnabled: false,
+      order: maxOrder + 1 + index,
+      content: SECTION_META[key].defaultContent as Prisma.InputJsonValue,
+      references: {},
+    })),
+  });
+  return (await prisma.homepageConfig.findUniqueOrThrow({
+    where: { id: draft.id },
+    include: { sections: { orderBy: { order: "asc" } } },
+  })) as T;
 }
 
 export async function getPublishedHomepage() {
@@ -77,11 +115,7 @@ export function getFallbackHomepage(): HomepageConfig & { sections: HomepageSect
     id: "fallback",
     version: 0,
     status: "DRAFT",
-    seo: {
-      title: "MockTestSeries.in — Mock Tests, Previous Year Papers & AI Explanations",
-      metaDescription:
-        "Practice with full-length mock tests, previous year papers, and AI-powered explanations for RUHS Medical Officer, NEET UG, and more — all on one platform.",
-    } as Prisma.JsonValue,
+    seo: { ...DEFAULT_HOMEPAGE_SEO } as Prisma.JsonValue,
     publishedAt: null,
     createdBy: null,
     createdAt: now,

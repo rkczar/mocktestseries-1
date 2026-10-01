@@ -35,18 +35,38 @@ export interface SectionMeta {
   defaultContent: Record<string, unknown>;
 }
 
+/**
+ * The four default Platform Stats cards — all LIVE, backed by
+ * lib/homepage-statistics.ts. Shared by new drafts, the no-homepage
+ * fallback and the admin editor's "Restore default cards".
+ */
+export const DEFAULT_STAT_METRICS = [
+  { id: "questions-available", label: "Questions Available", icon: "bookOpen", enabled: true, mode: "LIVE", dynamicKey: "questionsAvailable", format: "EXACT", suffix: "+" },
+  { id: "students-joined", label: "Students Joined", icon: "users", enabled: true, mode: "LIVE", dynamicKey: "registeredStudents", format: "EXACT", suffix: "+" },
+  { id: "tests-attempted", label: "Tests Attempted", icon: "checkCircle", enabled: true, mode: "LIVE", dynamicKey: "testsCompleted", format: "EXACT", suffix: "+" },
+  { id: "questions-attempted", label: "Questions Attempted", icon: "helpCircle", enabled: true, mode: "LIVE", dynamicKey: "questionsAnswered", format: "EXACT", suffix: "+" },
+] as const;
+
+/**
+ * Default order for new drafts. Free value comes before price: Hero → proof
+ * → what is free → the exam → practice material → how it works → AI →
+ * platform benefits → Complete Access (price) → exam guide → FAQ → CTA.
+ */
 export const SECTION_ORDER: HomepageSectionKey[] = [
   "HEADER",
   "HERO",
+  "STATISTICS",
+  "FREE_START",
   "FEATURED_EXAM",
-  "MOCK_TEST_PROMOTION",
   "PREVIOUS_YEAR_PAPERS",
+  "HOW_IT_WORKS",
   "AI_USP",
   "BENEFITS",
-  "HOW_IT_WORKS",
-  "UPCOMING_EXAMS",
+  "MOCK_TEST_PROMOTION",
   "TEST_SERIES",
-  "STATISTICS",
+  "UPCOMING_EXAMS",
+  "EXAM_GUIDE",
+  "FAQ",
   "CTA",
   "FOOTER",
   "CONTACT_INFO",
@@ -80,7 +100,7 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
   HERO: {
     key: "HERO",
     label: "Hero",
-    description: "Main value proposition + analytics preview panel — Admin → Website → Homepage → Hero",
+    description: "Main value proposition (the page's only H1) + featured exam card — Admin → Website → Homepage → Hero. Leave a CTA link blank to use the free sign-up route.",
     fields: [
       { key: "eyebrow", label: "Eyebrow text", type: "text" },
       { key: "heading", label: "Main heading", type: "text" },
@@ -89,7 +109,13 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
       { key: "primaryCtaHref", label: "Primary CTA link", type: "url" },
       { key: "secondaryCtaText", label: "Secondary CTA text", type: "text" },
       { key: "secondaryCtaHref", label: "Secondary CTA link", type: "url" },
-      { key: "panel", label: "Analytics preview panel", type: "analyticsPanel" },
+      { key: "trustLine", label: "Trust line under the buttons (optional)", type: "text" },
+      {
+        key: "showExamCard",
+        label: "Show the featured exam card beside the headline (exam date and real counts from the Featured Exam section's exam)",
+        type: "boolean",
+      },
+      { key: "panel", label: "Analytics preview panel (shown only when the exam card is off)", type: "analyticsPanel" },
     ],
     defaultContent: {
       eyebrow: "",
@@ -100,6 +126,8 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
       primaryCtaHref: "/login",
       secondaryCtaText: "Explore Previous Year Papers",
       secondaryCtaHref: "/login",
+      trustLine: "",
+      showExamCard: true,
       panel: { enabled: false, mode: "HIDDEN", showBadge: true, badgeLabel: "Preview" },
     },
   },
@@ -109,7 +137,9 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
     description: "Highlight one exam from Exam Management — Admin → Website → Homepage → Featured Exam",
     fields: [
       { key: "title", label: "Title (used only when no exam is selected)", type: "text" },
-      { key: "description", label: "Description", type: "textarea" },
+      { key: "heading", label: "Display heading (blank = the exam's name)", type: "text" },
+      { key: "description", label: "Description (blank = the exam's short description)", type: "textarea" },
+      { key: "showDeepLinks", label: "Show links to the exam's public pages (mock series, PYQs, syllabus, pattern, question bank)", type: "boolean" },
       { key: "ctaText", label: "Primary CTA text", type: "text" },
       { key: "ctaHref", label: "Primary CTA link (blank = use the real exam page)", type: "url" },
       { key: "secondaryCtaText", label: "Secondary CTA text", type: "text" },
@@ -125,22 +155,29 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
       secondaryCtaText: "Previous Year Papers",
       secondaryCtaHref: "",
       aiExplanationEnabled: true,
+      heading: "",
+      showDeepLinks: true,
     },
   },
   MOCK_TEST_PROMOTION: {
     key: "MOCK_TEST_PROMOTION",
-    label: "Mock Test Promotion",
-    description: "Promote the mock test library using the real published-test count — Admin → Website → Homepage → Mock Test Promotion",
+    label: "Complete Access / Pricing",
+    description:
+      "The paid Complete Test Series offer. Price, MRP, sale and access period always come from the canonical Product (Admin → Payments → Products); the CTA adapts to the visitor (sign in to buy / buy / open, never \"buy again\" for owned access) — Admin → Website → Homepage → Complete Access",
     fields: [
       { key: "badge", label: "Badge", type: "text" },
-      { key: "numberMode", label: "Number source", type: "select", options: ["LIVE", "MANUAL"] },
+      { key: "eyebrow", label: "Eyebrow (small text above the heading)", type: "text" },
+      { key: "numberMode", label: "Number source (used only when no Test Series is published)", type: "select", options: ["LIVE", "MANUAL"] },
       { key: "manualNumber", label: "Manual number (when source = MANUAL)", type: "text" },
       { key: "heading", label: "Heading", type: "text" },
       { key: "description", label: "Description", type: "textarea" },
-      { key: "ctaText", label: "CTA text", type: "text" },
-      { key: "ctaHref", label: "CTA link", type: "url" },
+      { key: "ctaText", label: "CTA text (blank = automatic per visitor)", type: "text" },
+      { key: "ctaHref", label: "CTA link (used only when no Test Series is published)", type: "url" },
+      { key: "compareText", label: "Comparison link text (blank = hidden)", type: "text" },
     ],
     defaultContent: {
+      eyebrow: "",
+      compareText: "Compare Free vs Complete",
       badge: "Most Popular",
       numberMode: "LIVE",
       manualNumber: "50",
@@ -267,29 +304,30 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
   },
   STATISTICS: {
     key: "STATISTICS",
-    label: "Platform Statistics",
-    description: "Trust-building numbers — live, demo, or manual — Admin → Website → Homepage → Platform Statistics",
+    label: "Platform Stats / Social Proof",
+    description:
+      "Live platform numbers (questions, students, tests and questions attempted). Turn the whole section on/off with the section switch; per card choose LIVE or a CUSTOM display value. CUSTOM changes only what the homepage shows — the database and Admin Analytics keep the real numbers — Admin → Website → Homepage → Platform Stats",
     fields: [
-      { key: "heading", label: "Heading", type: "text" },
-      { key: "showModeBadge", label: "Publicly show a Live/Demo/Manual tag on each card", type: "boolean" },
+      { key: "heading", label: "Heading (optional)", type: "text" },
+      { key: "subheading", label: "Subheading (optional)", type: "textarea" },
+      {
+        key: "background",
+        label: "Background",
+        type: "select",
+        options: ["DEFAULT", "SURFACE"],
+        help: "DEFAULT = page background. SURFACE = the theme's surface band, as used by other homepage sections. Colors follow Admin → Website → Appearance and the visitor's theme.",
+      },
+      { key: "showModeBadge", label: "Publicly show a Live/Custom tag on each card", type: "boolean" },
       { key: "hideZeroLive", label: "Hide live cards while their value is zero", type: "boolean" },
       { key: "metrics", label: "Cards", type: "statistics" },
     ],
     defaultContent: {
-      heading: "Track your progress in numbers",
+      heading: "",
+      subheading: "",
+      background: "DEFAULT",
       showModeBadge: false,
       hideZeroLive: true,
-      metrics: [
-        { id: "questions-answered", label: "Questions Answered", icon: "helpCircle", description: "Total questions answered by students.", enabled: true, mode: "LIVE", dynamicKey: "questionsAnswered" },
-        { id: "ai-explanations", label: "AI Explanations", icon: "sparkles", description: "AI-generated explanations available.", enabled: true, mode: "LIVE", dynamicKey: "aiExplanations" },
-        { id: "exams", label: "Exams", icon: "graduationCap", description: "Active exams on the platform.", enabled: true, mode: "LIVE", dynamicKey: "examsActive" },
-        { id: "test-series", label: "Test Series", icon: "clipboardList", description: "Published mock test series.", enabled: true, mode: "LIVE", dynamicKey: "testSeriesCount" },
-        { id: "question-bank", label: "Question Bank", icon: "bookOpen", description: "Questions in the question bank.", enabled: true, mode: "LIVE", dynamicKey: "questionBank" },
-        { id: "registered-students", label: "Registered Students", icon: "users", description: "Students registered on the platform.", enabled: true, mode: "LIVE", dynamicKey: "registeredStudents" },
-        { id: "active-students", label: "Active Students", icon: "userCheck", description: "Currently active student accounts.", enabled: false, mode: "LIVE", dynamicKey: "activeStudents" },
-        { id: "mock-tests-attempted", label: "Mock Tests Attempted", icon: "checkCircle", description: "Mock test attempts submitted.", enabled: true, mode: "LIVE", dynamicKey: "mockTestsAttempted" },
-        { id: "pyq-papers", label: "Previous Year Papers", icon: "fileText", description: "Previous year papers available.", enabled: true, mode: "LIVE", dynamicKey: "previousYearPapers" },
-      ],
+      metrics: DEFAULT_STAT_METRICS,
     },
   },
   CTA: {
@@ -306,7 +344,7 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
     ],
     defaultContent: {
       heading: "Start Your Preparation Today",
-      description: "Join Mock Test Series.in and take your first mock test now.",
+      description: "Create a free account and take your first mock test today.",
       buttonText: "Start a Mock Test",
       buttonHref: "/login",
       secondaryButtonText: "",
@@ -336,6 +374,66 @@ export const SECTION_META: Record<HomepageSectionKey, SectionMeta> = {
         ["Contact Us", "/contact"],
       ],
       copyrightOverride: "",
+    },
+  },
+  FREE_START: {
+    key: "FREE_START",
+    label: "Start for Free",
+    description:
+      "What a visitor can use without paying. Every card is derived from the real access rules (free mocks, PYQs, subject practice, AI quota, OMR) — a paid-only resource is never shown as free — Admin → Website → Homepage → Start for Free",
+    fields: [
+      { key: "showFreeBadge", label: "Show the FREE badge above the heading", type: "boolean" },
+      { key: "heading", label: "Heading", type: "text" },
+      { key: "description", label: "Description", type: "textarea" },
+      { key: "ctaText", label: "Button text", type: "text" },
+      { key: "ctaHref", label: "Button link (blank = free sign-up, or the dashboard for signed-in students)", type: "url" },
+      { key: "note", label: "Small note under the button", type: "text" },
+      { key: "examId", label: "Exam (blank = the Featured Exam)", type: "examSingle" },
+    ],
+    defaultContent: {
+      showFreeBadge: true,
+      heading: "Start for free",
+      description: "Create a free account and start practicing straight away.",
+      ctaText: "Start Free Practice",
+      ctaHref: "",
+      note: "No payment required to start.",
+    },
+  },
+  EXAM_GUIDE: {
+    key: "EXAM_GUIDE",
+    label: "Exam Preparation Guide",
+    description:
+      "Long-form, visible preparation content for the main exam (helps students and search engines understand the page). Paragraph blocks are plain text — Admin → Website → Homepage → Exam Guide",
+    fields: [
+      { key: "eyebrow", label: "Eyebrow", type: "text" },
+      { key: "heading", label: "Heading", type: "text" },
+      { key: "intro", label: "Introduction", type: "textarea" },
+      { key: "blocks", label: "Content blocks (one per line: Sub-heading | Paragraph)", type: "pairlist" },
+      { key: "disclaimer", label: "Disclaimer (shown small at the end)", type: "textarea" },
+      { key: "examId", label: "Exam for the page links (blank = the Featured Exam)", type: "examSingle" },
+    ],
+    defaultContent: {
+      eyebrow: "",
+      heading: "How to prepare with online mock tests",
+      intro: "",
+      blocks: [],
+      disclaimer: "",
+    },
+  },
+  FAQ: {
+    key: "FAQ",
+    label: "FAQ",
+    description:
+      "Frequently asked questions, shown as an accessible accordion. Answer only what the platform really does — Admin → Website → Homepage → FAQ",
+    fields: [
+      { key: "heading", label: "Heading", type: "text" },
+      { key: "items", label: "Questions (one per line: Question | Answer)", type: "pairlist" },
+      { key: "structuredData", label: "Add FAQPage structured data (schema.org) for the visible questions", type: "boolean" },
+    ],
+    defaultContent: {
+      heading: "Frequently asked questions",
+      items: [],
+      structuredData: true,
     },
   },
   CONTACT_INFO: {
