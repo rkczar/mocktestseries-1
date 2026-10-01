@@ -37,6 +37,7 @@ import {
   type StudentDashboardLayout,
 } from "@/lib/student-dashboard-blocks";
 import { omrDownloadHref } from "@/components/omr/omr-practice-card";
+import { InstallAppCard } from "@/components/pwa/install-app";
 
 // Practice & Tests — every test/practice entry point, one card per action.
 // Mock Tests covers the schedule too (it lives on the Test Series page).
@@ -323,6 +324,7 @@ export function ActiveExamDashboard({
       </Card>
     ),
     "subscription-status": footer,
+    "install-app": <InstallAppCard />,
   };
 
   const sectionHeading: Partial<Record<StudentDashboardGroup, { id: string; title: React.ReactNode }>> = {

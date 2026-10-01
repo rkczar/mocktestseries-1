@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#000000">
+<script>if(/(?:^|; )mts-theme=light(?:;|$)/.test(document.cookie)){document.documentElement.setAttribute("data-theme","light");document.querySelector('meta[name="theme-color"]').setAttribute("content","#fbfbfc")}</script>
+<title>You're offline — MockTestSeries</title>
+<!--
+  Shown by the service worker (app/sw.js/route.ts) when a page can't be
+  loaded because the network is down. Self-contained (no build assets) so it
+  renders with nothing else cached. Colors are the site's theme tokens from
+  app/globals.css, following the mts-theme cookie. It never states that anything was saved or submitted.
+-->
+<style>
+  :root{--bg:#000000;--surface:#141414;--border:rgba(255,255,255,0.12);--fg:#f5f5f5;--muted:#a3a3a3;--primary:#3b82f6;--action:#f2f2f2;--action-ink:#1a1a1a;color-scheme:dark}
+  :root[data-theme="light"]{--bg:#fbfbfc;--surface:#ffffff;--border:#e6e7ea;--fg:#16171a;--muted:#61646b;--action:#16171a;--action-ink:#ffffff;color-scheme:light}
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--bg);color:var(--fg);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  main{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--border);border-radius:0.75rem;padding:28px 24px;text-align:center}
+  .mark{width:48px;height:48px;margin:0 auto 18px;border-radius:12px;background:var(--primary);display:flex;align-items:center;justify-content:center}
+  h1{margin:0 0 8px;font-size:1.25rem;font-weight:700;letter-spacing:-0.01em}
+  p{margin:0;color:var(--muted);line-height:1.6;font-size:0.95rem}
+  .note{margin-top:14px;font-size:0.85rem}
+  button{margin-top:22px;width:100%;min-height:44px;border:0;border-radius:0.625rem;background:var(--action);color:var(--action-ink);font:inherit;font-weight:600;cursor:pointer}
+  button:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+</style>
+</head>
+<body>
+<main>
+  <div class="mark" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></svg>
+  </div>
+  <h1>You're offline.</h1>
+  <p>Reconnect to continue using MockTestSeries.</p>
+  <p class="note">This page will reload automatically when your connection returns.</p>
+  <button type="button" onclick="location.reload()">Try again</button>
+</main>
+<script>
+  // Back online → reload the page the student asked for. The "online" event
+  // alone is unreliable (Wi-Fi without internet, some WebViews), so also
+  // probe the network every 10 s while this page is visible.
+  (function(){
+    var reloading=false;
+    function reload(){if(!reloading){reloading=true;location.reload();}}
+    window.addEventListener("online",reload);
+    setInterval(function(){
+      if(document.visibilityState!=="visible")return;
+      fetch(location.href,{method:"HEAD",cache:"no-store",credentials:"same-origin"}).then(reload,function(){});
+    },10000);
+  })();
+</script>
+</body>
+</html>

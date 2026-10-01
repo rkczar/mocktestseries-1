@@ -80,3 +80,10 @@ Rollback never deletes anything in shared storage. The script never removes old 
 - Validate a built release without switching: `ops/deploy/mocktestseries-deploy.sh --check <release-dir>`.
 - Guard self-test (temp paths only): `bash ops/deploy/test-deploy-guards.sh`.
 - Migrations: if the candidate has migration folders the current release lacks, the script stops before the boot test (current untouched). Rerun with `APPLY_MIGRATIONS=1` to apply them with `prisma migrate deploy` from the candidate before the boot test.
+
+## Installable app (PWA) — service worker
+
+The site is installable as "MockTestSeries" (`app/manifest.ts`, icons in `public/icons/` from `scripts/generate-pwa-icons.mjs`). `/sw.js` (`app/sw.js/route.ts`) caches only `/_next/static/*`, the app icons and `/offline.html`. It never caches page HTML or anything under `/api`, `/admin`, `/student/checkout`, `/student/attempt` or `/storage`, and never intercepts POSTs. Each deploy's `BUILD_ID` produces a new worker. Students see "New version available — Update"; the banner is never shown on attempt pages.
+
+- **Kill switch:** if the worker ever misbehaves, add `PWA_SW_DISABLED=1` to the shared `.env` and run `pm2 reload mocktestseries`. Every browser that checks `/sw.js` then gets a worker that deletes the `mts-*` caches and unregisters itself; the site keeps working as a normal website. Remove the line and reload to re-enable.
+- **Verify (local build + disposable DB, as for the test-engine suite):** `BASE=http://localhost:3100 FIXTURE=<fixture.json> NODE_PATH=<dir with playwright> node scripts/verify-pwa.mjs`. Add `SIGNAL_DIR=<dir>` to also exercise a live update mid-test (see the script header).

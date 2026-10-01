@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { studentLogoutAction } from "@/app/student/(dashboard)/actions";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { NotificationBell, type BellAnnouncement } from "@/components/student/notification-bell";
+import { InstallAppMenuItem } from "@/components/pwa/install-app";
 
 const NAV_ITEMS = [
   { label: "My Exams", href: "/student/exams" },
@@ -147,6 +148,7 @@ export function StudentHeader({
               {item.label}
             </Link>
           ))}
+          <InstallAppMenuItem onDone={() => setMobileOpen(false)} />
         </nav>
       ) : null}
     </header>

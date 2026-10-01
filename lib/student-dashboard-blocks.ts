@@ -29,6 +29,7 @@ export const STUDENT_DASHBOARD_BLOCKS = [
   { id: "recent-activity", label: "Recent Test", group: "recent", card: false, description: "Latest completed test and score" },
   { id: "weak-topics", label: "Weak Topics", group: "recent", card: false, description: "Topics with the most recent wrong answers" },
   { id: "subscription-status", label: "Subscription Status", group: "account", card: false, description: "Other active plans not covered by Access & Subscription" },
+  { id: "install-app", label: "Install MockTestSeries", group: "account", card: false, description: "Install-as-app prompt; shown only on browsers that support installing, never inside the installed app" },
 ] as const satisfies readonly { id: string; label: string; group: StudentDashboardGroup; card: boolean; description: string }[];
 
 export type StudentDashboardBlockId = (typeof STUDENT_DASHBOARD_BLOCKS)[number]["id"];

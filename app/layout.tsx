@@ -10,6 +10,7 @@ import { getSeoSettings } from "@/lib/seo-settings";
 import { PUBLIC_BRAND_NAME } from "@/lib/brand";
 import { getSiteUrl } from "@/lib/site-url";
 import { defaultSocialImage, socialMetadata } from "@/lib/social-metadata";
+import { PwaProvider, PWA_INSTALL_CAPTURE_SCRIPT } from "@/components/pwa/pwa-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,6 +32,10 @@ export async function generateMetadata(): Promise<Metadata> {
     title: PUBLIC_BRAND_NAME,
     description: DEFAULT_DESCRIPTION,
     ...socialMetadata({ title: PUBLIC_BRAND_NAME, description: DEFAULT_DESCRIPTION, image: defaultSocialImage(seo, siteUrl), seo }),
+    // Installed-app (PWA) identity; the manifest itself is app/manifest.ts.
+    applicationName: "MockTestSeries",
+    appleWebApp: { capable: true, title: "MockTestSeries", statusBarStyle: "default" },
+    icons: { apple: "/icons/apple-touch-icon.png" },
   };
 }
 
@@ -69,8 +74,11 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         <meta name="theme-color" content={theme === "light" ? "#fbfbfc" : "#000000"} />
         <style dangerouslySetInnerHTML={{ __html: appearanceToCssVariables(appearance) }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(organizationJsonLd) }} />
+        <script dangerouslySetInnerHTML={{ __html: PWA_INSTALL_CAPTURE_SCRIPT }} />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <PwaProvider>{children}</PwaProvider>
+      </body>
     </html>
   );
 }
