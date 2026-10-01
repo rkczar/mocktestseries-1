@@ -25,7 +25,8 @@ import { execFileSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { formatStatNumber, parseManualNumber, withSuffix } from "@/lib/homepage-stat-format";
-import { sanitizeStatisticsContent } from "@/lib/homepage-stat-sanitize";
+import { isValidCustomDisplayValue, sanitizeStatisticsContent, validateStatisticsMetrics } from "@/lib/homepage-stat-sanitize";
+import { normalizeStatMetrics } from "@/lib/homepage-field-codec";
 import { DEFAULT_STAT_METRICS } from "@/lib/homepage-sections";
 import { computeHomepageStatistics } from "@/lib/homepage-statistics";
 import { resolveStatisticsCards, type ResolvedStatValue } from "@/lib/homepage-render";
@@ -134,6 +135,25 @@ async function main() {
     );
   });
 
+  check("custom display values: examples accepted, junk rejected", () => {
+    for (const v of ["100+", "1,500+", "2.8K+", "10K+", "25,000", "5000", "1.2 Lakh+"]) assert.ok(isValidCustomDisplayValue(v), v);
+    for (const v of ["", "abc", "100+<b>", "javascript:1", "9".repeat(17), "+100"]) assert.ok(!isValidCustomDisplayValue(v), v);
+  });
+  check("save validation: CUSTOM needs a valid value, every card a label", () => {
+    const cards = (patch: Record<string, unknown>) => normalizeStatMetrics([{ ...DEFAULT_STAT_METRICS[1], ...patch }]);
+    assert.equal(validateStatisticsMetrics(cards({})), null);
+    assert.equal(validateStatisticsMetrics(cards({ mode: "MANUAL", manualValue: "100+" })), null);
+    assert.ok(validateStatisticsMetrics(cards({ mode: "MANUAL", manualValue: "" })));
+    assert.ok(validateStatisticsMetrics(cards({ mode: "MANUAL", manualValue: "lots" })));
+    assert.ok(validateStatisticsMetrics(cards({ label: "" })));
+    // A stored custom value on a LIVE card is kept but never validated or shown.
+    assert.equal(validateStatisticsMetrics(cards({ mode: "LIVE", manualValue: "junk" })), null);
+  });
+  check("label edit persists through sanitization; markup stripped", () => {
+    const out = sanitizeStatisticsContent({ metrics: [{ ...DEFAULT_STAT_METRICS[0], label: "Practice <i>Questions</i>" }] });
+    assert.equal((out.metrics as { label: string }[])[0].label, "Practice iQuestions/i");
+  });
+
   console.log("3. Live accuracy (raw SQL vs app aggregate)");
   const [sql] = await prisma.$queryRaw<{ students: bigint; tests: bigint; questions: bigint; answered: bigint }[]>`
     SELECT
@@ -170,19 +190,30 @@ async function main() {
   });
 
   const manual = resolveStatisticsCards(
-    { ...base, metrics: base.metrics.map((m, i) => (i === 1 ? { ...m, mode: "MANUAL", manualValue: "125430", format: "LAKH_PLUS" } : m)) },
+    { ...base, metrics: base.metrics.map((m, i) => (i === 1 ? { ...m, label: "Students Preparing", mode: "MANUAL", manualValue: "100+" } : m)) },
     snapshot
   );
-  check("MANUAL overrides only the displayed number", () => {
-    assert.equal(manual[1].value, "1.2 Lakh+");
-    assert.equal(manual[1].numeric, 125430);
+  check("CUSTOM shows the exact value and label, only for that card", () => {
+    assert.equal(manual[1].value, "100+");
+    assert.equal(manual[1].label, "Students Preparing");
+    assert.equal(manual[1].numeric, undefined);
     assert.equal(manual[0].value, fmt(expected.questions));
   });
-  check("MANUAL never changes the real statistics", () => {
+  check("CUSTOM never changes the real statistics", () => {
     assert.equal(snapshot.values.registeredStudents, expected.students);
   });
+  check("CUSTOM values are shown verbatim, never reformatted", () => {
+    for (const v of ["100+", "1,500+", "2.8K+", "10K+", "25,000", "5000"]) {
+      const [card] = resolveStatisticsCards({ ...base, metrics: [{ ...base.metrics[2], mode: "MANUAL", manualValue: v }] }, snapshot);
+      assert.equal(card.value, v);
+    }
+  });
+  check("CUSTOM card without a value is not rendered", () => {
+    const empty = resolveStatisticsCards({ ...base, metrics: [{ ...base.metrics[2], mode: "MANUAL", manualValue: "" }] }, snapshot);
+    assert.equal(empty.length, 0);
+  });
   const verbatim = resolveStatisticsCards({ ...base, metrics: [{ ...base.metrics[0], mode: "MANUAL", manualValue: "4.8/5", suffix: "" }] }, snapshot);
-  check("non-numeric MANUAL text shown verbatim, not animated", () => {
+  check("legacy non-numeric MANUAL text shown verbatim, not animated", () => {
     assert.equal(verbatim[0].value, "4.8/5");
     assert.equal(verbatim[0].numeric, undefined);
   });
@@ -235,7 +266,7 @@ async function main() {
   check("SURFACE background + subheading render", () => {
     assert.ok(html.manual.includes("bg-[var(--color-surface)]"));
     assert.ok(html.manual.includes("Sub"));
-    assert.ok(html.manual.includes("1.2 Lakh+"));
+    assert.ok(html.manual.includes("100+") && html.manual.includes("Students Preparing"));
   });
   check("no cards → section omitted", () => assert.equal(html.empty, ""));
   check("HTML carries no student identity", () => {

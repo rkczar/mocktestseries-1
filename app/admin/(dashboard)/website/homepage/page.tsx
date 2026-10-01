@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { getOrCreateDraft } from "@/lib/homepage";
 import { SECTION_META } from "@/lib/homepage-sections";
 import { getHomepageStatistics } from "@/lib/homepage-statistics";
+import { hasPermission } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { HomepageBuilder } from "./homepage-builder";
@@ -18,7 +20,7 @@ export const metadata = { title: "Homepage — Mock Test Series.in Admin" };
 export default async function HomepageBuilderPage() {
   const draft = await getOrCreateDraft();
 
-  const [exams, papers, seriesList, otherVersions, liveStats] = await Promise.all([
+  const [exams, papers, seriesList, otherVersions, liveStats, canEdit, canPublish] = await Promise.all([
     prisma.exam.findMany({ orderBy: { name: "asc" } }),
     prisma.previousYearPaper.findMany({ orderBy: { year: "desc" } }),
     prisma.testSeries.findMany({ orderBy: { name: "asc" } }),
@@ -28,6 +30,9 @@ export default async function HomepageBuilderPage() {
       select: { id: true, version: true, status: true, publishedAt: true },
     }),
     getHomepageStatistics(),
+    // Display only: every action enforces requirePermission server-side.
+    hasPermission(PERMISSIONS.WEBSITE_MANAGE),
+    hasPermission(PERMISSIONS.HOMEPAGE_PUBLISH),
   ]);
 
   const sections: SectionCardData[] = draft.sections.map((s) => ({
@@ -57,7 +62,7 @@ export default async function HomepageBuilderPage() {
               Preview
             </Link>
           </Button>
-          <PublishButton />
+          <PublishButton disabled={!canPublish} />
         </div>
       </div>
 
@@ -67,6 +72,7 @@ export default async function HomepageBuilderPage() {
         paperOptions={papers.map((p) => ({ id: p.id, name: `${p.title} (${p.year})` }))}
         seriesOptions={seriesList.map((s) => ({ id: s.id, name: s.name }))}
         liveStats={liveStats}
+        canEdit={canEdit}
       />
 
       <Card>

@@ -2,11 +2,11 @@
 
 import { revalidatePath, updateTag } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getOrCreateDraft } from "@/lib/homepage";
 import { normalizeStatMetrics } from "@/lib/homepage-field-codec";
-import { sanitizeStatisticsContent } from "@/lib/homepage-stat-sanitize";
+import { sanitizeStatisticsContent, validateStatisticsMetrics } from "@/lib/homepage-stat-sanitize";
 import type { Prisma } from "@prisma/client";
 
 export async function toggleSectionAction(sectionId: string, isEnabled: boolean) {
@@ -31,27 +31,51 @@ export interface SectionContentFormState {
   success?: boolean;
 }
 
+/** Only sections of the current DRAFT are editable; published/archived versions change only via Publish/Restore. */
+async function findDraftSection(sectionId: string) {
+  const section = await prisma.homepageSection.findUnique({ where: { id: sectionId }, include: { homepageConfig: { select: { status: true } } } });
+  return section?.homepageConfig.status === "DRAFT" ? section : null;
+}
+
+type StatModeChange = { label: string; from: string; to: string };
+
+/** Mode switches between the stored and the new STATISTICS content, for the audit log. */
+function statModeChanges(before: unknown, after: unknown): StatModeChange[] | undefined {
+  const beforeById = new Map(normalizeStatMetrics(before).map((m) => [m.id, m]));
+  const changes: StatModeChange[] = [];
+  for (const m of normalizeStatMetrics(after)) {
+    const prev = beforeById.get(m.id);
+    if (prev && prev.mode !== m.mode) changes.push({ label: m.label, from: prev.mode, to: m.mode });
+  }
+  return changes.length > 0 ? changes : undefined;
+}
+
 export async function updateSectionContentAction(
   sectionId: string,
   content: Record<string, unknown>,
   references: Record<string, unknown>
 ): Promise<SectionContentFormState> {
-  const session = await requirePermission(PERMISSIONS.WEBSITE_MANAGE);
+  let session;
+  try {
+    session = await requirePermission(PERMISSIONS.WEBSITE_MANAGE);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) return { error: "Read-only — only the Master Admin can edit the Homepage." };
+    throw e;
+  }
 
-  const existing = await prisma.homepageSection.findUnique({ where: { id: sectionId } });
-  let modeChanges: { label: string; from: string; to: string }[] | undefined;
+  const existing = await findDraftSection(sectionId);
+  if (!existing) return { error: "This section is no longer part of the current draft. Reload the page and try again." };
+  let modeChanges: StatModeChange[] | undefined;
 
-  if (existing?.key === "STATISTICS") {
-    content = sanitizeStatisticsContent(content);
-    const before = normalizeStatMetrics((existing.content as Record<string, unknown>).metrics);
-    const after = normalizeStatMetrics(content.metrics);
-    const beforeById = new Map(before.map((m) => [m.id, m]));
-    const changes: { label: string; from: string; to: string }[] = [];
-    for (const m of after) {
-      const prev = beforeById.get(m.id);
-      if (prev && prev.mode !== m.mode) changes.push({ label: m.label, from: prev.mode, to: m.mode });
-    }
-    if (changes.length > 0) modeChanges = changes;
+  if (existing.key === "STATISTICS") {
+    // Merge onto the stored content: the section-level form and the Platform
+    // Stats card editor each send only their own fields, so neither can
+    // overwrite the other's saved values with a stale copy.
+    const stored = existing.content as Record<string, unknown>;
+    content = sanitizeStatisticsContent({ ...stored, ...content });
+    const invalid = validateStatisticsMetrics(normalizeStatMetrics(content.metrics));
+    if (invalid) return { error: invalid };
+    modeChanges = statModeChanges(stored.metrics, content.metrics);
   }
 
   await prisma.homepageSection.update({
@@ -69,6 +93,54 @@ export async function updateSectionContentAction(
   });
   revalidatePath("/admin/website/homepage");
   revalidatePath("/");
+  return { success: true };
+}
+
+/**
+ * Admin → Website → Homepage → Platform Stats "Save Changes": writes the
+ * section's master visibility and its cards to the DRAFT in one update.
+ * CUSTOM values are presentation settings only — nothing but this
+ * HomepageSection row is written. Goes live through the normal Publish.
+ */
+export async function saveStatisticsCardsAction(
+  sectionId: string,
+  input: { showSection: boolean; metrics: unknown }
+): Promise<SectionContentFormState> {
+  let session;
+  try {
+    session = await requirePermission(PERMISSIONS.WEBSITE_MANAGE);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) return { error: "Read-only — only the Master Admin can change Homepage Stats." };
+    throw e;
+  }
+
+  const existing = await findDraftSection(sectionId);
+  if (!existing || existing.key !== "STATISTICS") {
+    return { error: "This section is no longer part of the current draft. Reload the page and try again." };
+  }
+
+  const stored = existing.content as Record<string, unknown>;
+  const content = sanitizeStatisticsContent({ ...stored, metrics: input.metrics });
+  const invalid = validateStatisticsMetrics(normalizeStatMetrics(content.metrics));
+  if (invalid) return { error: invalid };
+  const isEnabled = input.showSection === true;
+  const modeChanges = statModeChanges(stored.metrics, content.metrics);
+
+  await prisma.homepageSection.update({
+    where: { id: sectionId },
+    data: { isEnabled, content: content as Prisma.InputJsonValue },
+  });
+  await prisma.auditLog.create({
+    data: {
+      actorId: session.user.id,
+      action: "HOMEPAGE_SECTION_UPDATED",
+      entityType: "HomepageSection",
+      entityId: sectionId,
+      metadata: { platformStats: true, isEnabled, ...(modeChanges ? { modeChanges } : {}) },
+    },
+  });
+  revalidatePath("/admin/website/homepage");
+  revalidatePath("/admin/website/homepage/preview");
   return { success: true };
 }
 

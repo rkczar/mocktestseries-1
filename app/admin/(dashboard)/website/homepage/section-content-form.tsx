@@ -131,6 +131,8 @@ export function SectionContentForm({
   paperOptions,
   seriesOptions,
   liveStats,
+  sectionEnabled,
+  canEdit,
 }: {
   sectionId: string;
   meta: SectionMeta;
@@ -140,6 +142,8 @@ export function SectionContentForm({
   paperOptions: RefOption[];
   seriesOptions: RefOption[];
   liveStats: HomepageStatsSnapshot;
+  sectionEnabled: boolean;
+  canEdit: boolean;
 }) {
   const simpleFields = meta.fields.filter((f) => !isStandaloneField(f.type));
   const standaloneFields = meta.fields.filter((f) => isStandaloneField(f.type));
@@ -184,9 +188,13 @@ export function SectionContentForm({
 
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSave = () => {
     const newContent: Record<string, unknown> = { ...content };
+    // Statistics cards have their own editor and Save; never resend this
+    // form's first-render copy of them (that silently reverted saved cards).
+    for (const field of standaloneFields) if (field.type === "statistics") delete newContent[field.key];
     const newReferences: Record<string, unknown> = { ...references };
 
     for (const field of simpleFields) {
@@ -200,8 +208,13 @@ export function SectionContentForm({
       else newContent[field.key] = textValues[field.key] ?? "";
     }
 
+    setError(null);
     startTransition(async () => {
-      await updateSectionContentAction(sectionId, newContent, newReferences);
+      const result = await updateSectionContentAction(sectionId, newContent, newReferences);
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     });
@@ -265,10 +278,11 @@ export function SectionContentForm({
 
       {simpleFields.length > 0 ? (
         <div className="flex items-center gap-3">
-          <Button type="button" size="sm" disabled={pending} onClick={handleSave}>
+          <Button type="button" size="sm" disabled={pending || !canEdit} onClick={handleSave}>
             {pending ? "Saving…" : "Save Section"}
           </Button>
           {saved ? <span className="text-sm text-[var(--color-success)]">Saved to draft.</span> : null}
+          {error ? <span className="text-sm text-[var(--color-error)]">{error}</span> : null}
         </div>
       ) : null}
 
@@ -277,7 +291,13 @@ export function SectionContentForm({
           return (
             <div key={field.key} className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-4">
               <Label>{field.label}</Label>
-              <StatisticsFieldEditor sectionId={sectionId} content={content} references={references} liveStats={liveStats} />
+              <StatisticsFieldEditor
+                sectionId={sectionId}
+                content={content}
+                liveStats={liveStats}
+                sectionEnabled={sectionEnabled}
+                canEdit={canEdit}
+              />
             </div>
           );
         }

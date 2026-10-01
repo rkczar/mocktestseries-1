@@ -27,12 +27,14 @@ export function SectionCard({
   paperOptions,
   seriesOptions,
   liveStats,
+  canEdit,
 }: {
   section: SectionCardData;
   examOptions: RefOption[];
   paperOptions: RefOption[];
   seriesOptions: RefOption[];
   liveStats: HomepageStatsSnapshot;
+  canEdit: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: section.id });
   const [open, setOpen] = useState(false);
@@ -67,7 +69,7 @@ export function SectionCard({
 
         <Switch
           checked={section.isEnabled}
-          disabled={pending}
+          disabled={pending || !canEdit}
           onCheckedChange={(checked) => startTransition(() => toggleSectionAction(section.id, checked))}
           aria-label={section.isEnabled ? `Disable ${section.meta.label}` : `Enable ${section.meta.label}`}
           onClick={(e) => e.stopPropagation()}
@@ -85,6 +87,8 @@ export function SectionCard({
             paperOptions={paperOptions}
             seriesOptions={seriesOptions}
             liveStats={liveStats}
+            sectionEnabled={section.isEnabled}
+            canEdit={canEdit}
           />
         </div>
       ) : null}

@@ -5,13 +5,13 @@ import { UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { publishHomepageAction } from "./actions";
 
-export function PublishButton() {
+export function PublishButton({ disabled = false }: { disabled?: boolean }) {
   const [pending, startTransition] = useTransition();
 
   return (
     <Button
       variant="success"
-      disabled={pending}
+      disabled={pending || disabled}
       onClick={() => {
         if (confirm("Publish the current draft? It will go live on the public homepage immediately.")) {
           startTransition(publishHomepageAction);

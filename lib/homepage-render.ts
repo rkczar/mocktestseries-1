@@ -154,19 +154,21 @@ export const FREE_SIGNUP_HREF = `/login?tab=register&callbackUrl=${encodeURIComp
 
 /**
  * Resolves one card to its public display value. LIVE reads the cached
- * aggregate snapshot; MANUAL/DEMO only override what is displayed — they
- * never touch the underlying statistics. Only the aggregate number leaves
- * the server.
+ * aggregate snapshot and applies the card's format/suffix. CUSTOM (stored as
+ * MANUAL) is a presentation setting only: the sanitized value is shown
+ * exactly as the admin typed it ("100+", "2.8K+", "5000") and never touches
+ * the underlying statistics. DEMO keeps its legacy formatting. Only the
+ * aggregate number leaves the server.
  */
 function resolveStatValue(
   metric: StatMetric,
   stats: Awaited<ReturnType<typeof getHomepageStatistics>>
 ): Pick<ResolvedStatValue, "value" | "numeric" | "format" | "suffix"> {
+  if (metric.mode === "MANUAL") return { value: metric.manualValue?.trim() ?? "" };
   const format = metric.format ?? "EXACT";
   const suffix = metric.suffix || undefined;
-  const raw = metric.mode === "LIVE" ? undefined : metric.mode === "DEMO" ? metric.demoValue : metric.manualValue;
-  const numeric =
-    metric.mode === "LIVE" ? (metric.dynamicKey ? (stats.values[metric.dynamicKey] ?? 0) : 0) : parseManualNumber(raw);
+  const raw = metric.mode === "DEMO" ? metric.demoValue : undefined;
+  const numeric = metric.mode === "LIVE" ? (metric.dynamicKey ? (stats.values[metric.dynamicKey] ?? 0) : 0) : parseManualNumber(raw);
   if (numeric === null) return { value: withSuffix(raw ?? "", raw ? suffix : undefined) };
   return { value: withSuffix(formatStatNumber(numeric, format), suffix), numeric, format, suffix };
 }
@@ -187,7 +189,9 @@ export function resolveStatisticsCards(
       link: m.link,
       mode: m.mode,
     }));
-  return content.hideZeroLive === true ? values.filter((v) => !(v.mode === "LIVE" && v.numeric === 0)) : values;
+  // A CUSTOM card without a value has nothing to show; drop it rather than render an empty number.
+  const shown = values.filter((v) => v.value !== "");
+  return content.hideZeroLive === true ? shown.filter((v) => !(v.mode === "LIVE" && v.numeric === 0)) : shown;
 }
 
 async function resolveExamStats(examId: string): Promise<ResolvedExamStats> {

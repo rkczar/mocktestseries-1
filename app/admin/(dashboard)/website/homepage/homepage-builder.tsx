@@ -28,14 +28,23 @@ export function HomepageBuilder({
   paperOptions,
   seriesOptions,
   liveStats,
+  canEdit,
 }: {
   initialSections: SectionCardData[];
   examOptions: RefOption[];
   paperOptions: RefOption[];
   seriesOptions: RefOption[];
   liveStats: HomepageStatsSnapshot;
+  canEdit: boolean;
 }) {
   const [sections, setSections] = useState(initialSections);
+  // Adopt fresh server data after every save/revalidation; otherwise section
+  // switches and saved content stay frozen at their first-render values.
+  const [syncedFrom, setSyncedFrom] = useState(initialSections);
+  if (syncedFrom !== initialSections) {
+    setSyncedFrom(initialSections);
+    setSections(initialSections);
+  }
   const [, startTransition] = useTransition();
 
   const sensors = useSensors(
@@ -68,6 +77,7 @@ export function HomepageBuilder({
               paperOptions={paperOptions}
               seriesOptions={seriesOptions}
               liveStats={liveStats}
+              canEdit={canEdit}
             />
           ))}
         </div>

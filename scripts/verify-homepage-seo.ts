@@ -173,7 +173,10 @@ async function main() {
     const actions = [...src.matchAll(/export async function (\w+)\([^]*?\{([^]*?)\n\}/g)];
     assert.ok(actions.length >= 6);
     for (const [, name, body] of actions) assert.match(body, /requirePermission\(PERMISSIONS\.(WEBSITE_MANAGE|HOMEPAGE_PUBLISH)\)/, name);
-    assert.match(src, /sanitizeStatisticsContent\(content\)/);
+    assert.match(src, /sanitizeStatisticsContent\(\{ \.\.\.stored, \.\.\.content \}\)/);
+    assert.match(src, /sanitizeStatisticsContent\(\{ \.\.\.stored, metrics: input\.metrics \}\)/);
+    assert.equal((src.match(/validateStatisticsMetrics\(/g) ?? []).length, 2, "both STATISTICS writes validate cards");
+    assert.equal((src.match(/findDraftSection\(sectionId\)/g) ?? []).length, 2, "section writes are DRAFT-only");
   });
 
   console.log("6. Payments untouched");

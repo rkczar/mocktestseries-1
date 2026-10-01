@@ -9,6 +9,20 @@ import { isSafeInternalRoute } from "@/lib/safe-route";
 
 export const STAT_SECTION_BACKGROUNDS = ["DEFAULT", "SURFACE"] as const;
 export const MAX_STAT_CARDS = 12;
+export const MAX_STAT_LABEL_LENGTH = 60;
+export const MAX_CUSTOM_VALUE_LENGTH = 16;
+
+/**
+ * A CUSTOM display value is a short presentation number such as "100+",
+ * "1,500+", "2.8K+", "10K+", "25,000" or "5000": a number, an optional
+ * K / M / L / Lakh / Cr unit and an optional "+" or "%". Shown exactly as
+ * typed (after trimming), never parsed back into real statistics.
+ */
+const CUSTOM_VALUE_PATTERN = /^\d[\d,]*(\.\d+)?\s?(K|M|L|Lakh|Lakhs|Cr|Crore)?\s?[+%]?$/i;
+
+export function isValidCustomDisplayValue(value: string | undefined): boolean {
+  return typeof value === "string" && value.length <= MAX_CUSTOM_VALUE_LENGTH && CUSTOM_VALUE_PATTERN.test(value);
+}
 
 /**
  * Plain text only: strips control characters and angle brackets (no markup
@@ -30,7 +44,7 @@ function sanitizeMetric(metric: StatMetric): StatMetric {
   const link = cleanText(metric.link, 300);
   return {
     id: cleanText(metric.id, 64) ?? crypto.randomUUID(),
-    label: cleanText(metric.label, 60) ?? "",
+    label: cleanText(metric.label, MAX_STAT_LABEL_LENGTH) ?? "",
     description: cleanText(metric.description, 160),
     icon: (STAT_ICON_KEYS as readonly string[]).includes(metric.icon ?? "") ? metric.icon : undefined,
     badge: cleanText(metric.badge, 24),
@@ -63,4 +77,20 @@ export function sanitizeStatisticsContent(content: Record<string, unknown>): Rec
     hideZeroLive: content.hideZeroLive === true,
     metrics: normalizeStatMetrics(content.metrics).slice(0, MAX_STAT_CARDS).map(sanitizeMetric),
   };
+}
+
+/**
+ * Rejects sanitized cards an admin could not have meant to publish: a blank
+ * public label, or a CUSTOM card without a valid display value. Returns a
+ * message for the first problem, or null when every card is valid.
+ */
+export function validateStatisticsMetrics(metrics: StatMetric[]): string | null {
+  for (const [index, metric] of metrics.entries()) {
+    const name = metric.label || `Card ${index + 1}`;
+    if (!metric.label) return `Card ${index + 1}: enter a public label.`;
+    if (metric.mode === "MANUAL" && !isValidCustomDisplayValue(metric.manualValue)) {
+      return `${name}: enter a custom display value like 100+, 1,500+, 2.8K+ or 25,000 (max ${MAX_CUSTOM_VALUE_LENGTH} characters), or switch the card to LIVE.`;
+    }
+  }
+  return null;
 }
