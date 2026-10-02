@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import {
   getDashboardMetrics,
   getEnrolledExams,
@@ -25,7 +25,7 @@ import { getStudentDashboardLayout } from "@/lib/student-dashboard-layout";
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
 export default async function StudentDashboardPage() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const cookieStore = await cookies();
   const requestedExamId = cookieStore.get(ACTIVE_EXAM_COOKIE)?.value;
 

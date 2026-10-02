@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
 import { getCheckoutQuote } from "@/lib/payments/orders";
 import { productHref } from "@/lib/payments/product-links";
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function CheckoutPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const quote = await getCheckoutQuote(student.id, decodeURIComponent(code).slice(0, 64));
   if (!quote) notFound();
 

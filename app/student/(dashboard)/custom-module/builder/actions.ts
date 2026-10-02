@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { AttemptAnswerMode, AttemptDurationMode, type QuestionDifficulty, type QuestionSource } from "@prisma/client";
 import { requireStudentOrLogin } from "@/lib/student-session";
-import { startOrPaywall } from "@/lib/payments/paywall";
+import { startOrExplain } from "@/lib/payments/paywall";
 import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 import { prisma } from "@/lib/prisma";
 import { startCustomModuleAttempt, startSharedCustomModuleAttempt, MAX_CUSTOM_DURATION_MINUTES } from "@/lib/test-attempt";
@@ -176,6 +176,10 @@ export async function shareCustomModuleAction(moduleId: string): Promise<{ token
 
 export async function startSharedCustomModuleAction(shareToken: string) {
   const student = await requireStudentOrLogin();
-  const attempt = await startOrPaywall(() => startSharedCustomModuleAttempt(student.id, shareToken));
+  const attempt = await startOrExplain(() => startSharedCustomModuleAttempt(student.id, shareToken), {
+    route: "custom-module/shared",
+    studentId: student.id,
+    contentId: "share-link",
+  });
   redirect(`/student/attempt/${attempt.id}`);
 }

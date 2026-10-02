@@ -123,7 +123,7 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
                 <FactGrid facts={facts} />
                 <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
                   <Button asChild size="lg">
-                    <Link href={`/student/attempt/resume?paper=${paper.id}`}>Attempt the {year} paper</Link>
+                    <Link prefetch={false} href={`/student/attempt/resume?paper=${paper.id}`}>Attempt the {year} paper</Link>
                   </Button>
                   <p className="text-sm text-[var(--color-muted-foreground)]">Timed, in the exam format. Sign in required; review and explanations after you submit.</p>
                 </div>

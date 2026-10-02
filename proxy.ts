@@ -3,6 +3,40 @@ import { getToken } from "next-auth/jwt";
 import { auth as adminAuth } from "@/lib/auth-edge";
 import { DEVICE_COOKIE_NAME, deviceCookieOptions, mintDeviceCookieValue, verifyDeviceCookieValue } from "@/lib/device-cookie";
 import { getPlatformControls, DEFAULT_MAINTENANCE_MESSAGE, DEFAULT_MAINTENANCE_TITLE, type MaintenanceState } from "@/lib/platform-controls";
+import { checkStudentToken } from "@/lib/student-devices";
+import { STUDENT_PATH_HEADER } from "@/lib/student-path";
+
+const STUDENT_SESSION_COOKIE = "student-session-token";
+
+/**
+ * The jwt callback's revocation rule (lib/auth-student.ts → checkStudentToken)
+ * for an already-decoded student token. Legacy pre-device-security tokens
+ * resolve to "alive" here (no device cookie lookup, no device registration);
+ * the page's own auth() call still applies the full rule to them.
+ */
+async function studentTokenAlive(token: Record<string, unknown>, route: string): Promise<boolean> {
+  if (typeof token.studentDbId !== "string") return false;
+  try {
+    const check = await checkStudentToken(
+      {
+        studentDbId: token.studentDbId,
+        sid: token.sid as string | undefined,
+        sref: token.sref as string | undefined,
+        did: token.did as string | undefined,
+        authAt: token.authAt as number | undefined,
+        iat: typeof token.iat === "number" ? token.iat : undefined,
+      },
+      async () => null
+    );
+    // Ids and the reason only — never the token, cookie or session secret.
+    if (!check.ok) console.warn(`[auth] ${JSON.stringify({ event: "student-session-rejected", route, student: token.studentDbId, reason: check.reason })}`);
+    return check.ok;
+  } catch (error) {
+    // A database hiccup must not log everyone out; the page re-checks anyway.
+    console.error("[auth] proxy session check failed", { code: (error as { code?: string })?.code ?? "UNKNOWN" });
+    return true;
+  }
+}
 
 /**
  * Platform Controls → Maintenance Mode. While ON, every request outside
@@ -58,11 +92,15 @@ function maintenanceResponse(request: NextRequest, m: MaintenanceState) {
  */
 async function withDeviceCookie(
   request: NextRequest,
-  respond: (init?: { request: { headers: Headers } }) => NextResponse
+  respond: (init?: { request: { headers: Headers } }) => NextResponse,
+  extraHeaders?: Record<string, string>
 ): Promise<NextResponse> {
-  if (await verifyDeviceCookieValue(request.cookies.get(DEVICE_COOKIE_NAME)?.value)) return respond();
-  const value = await mintDeviceCookieValue();
   const headers = new Headers(request.headers);
+  for (const [name, value] of Object.entries(extraHeaders ?? {})) headers.set(name, value);
+  if (await verifyDeviceCookieValue(request.cookies.get(DEVICE_COOKIE_NAME)?.value)) {
+    return extraHeaders ? respond({ request: { headers } }) : respond();
+  }
+  const value = await mintDeviceCookieValue();
   const others = (request.headers.get("cookie") ?? "")
     .split(";")
     .map((c) => c.trim())
@@ -123,21 +161,36 @@ export default async function proxy(request: NextRequest) {
   }
 
   if (pathname.startsWith("/student")) {
+    // Full path + query (not just pathname) so a deep link into a specific
+    // resource (e.g. /student/attempt/resume?paper=<id>) survives the login
+    // round-trip. The RSC cache-buster is not part of the destination.
+    const search = new URLSearchParams(request.nextUrl.search);
+    search.delete("_rsc");
+    const destination = pathname + (search.size > 0 ? `?${search}` : "");
     const token = await getToken({
       req: request,
       secret: process.env.AUTH_SECRET,
-      cookieName: "student-session-token",
+      cookieName: STUDENT_SESSION_COOKIE,
     });
-    if (!token) {
+    // A cookie that still decodes is not proof of a session: logout on
+    // another tab, "log out all devices", a revoked device or a suspended
+    // account all leave a decodable JWT behind. Pages would then reject it
+    // (requireStudent) after the proxy had let it through — the "page
+    // couldn't load" / bounced-to-login reports. Page loads re-check it here
+    // with the same server-side rule the jwt callback uses, so a dead session
+    // goes to /login with its destination intact and the stale cookie is
+    // dropped. Server Actions (POST) keep requireStudentOrLogin().
+    const isPageLoad = request.method === "GET" || request.method === "HEAD";
+    if (!token || (isPageLoad && !(await studentTokenAlive(token, pathname)))) {
       const loginUrl = new URL("/login", request.nextUrl.origin);
-      // Preserve the full path + query (not just pathname) so a deep link
-      // into a specific resource (e.g. /student/attempt/resume?paper=<id>)
-      // survives the login round-trip instead of dropping which resource
-      // the visitor was trying to reach.
-      loginUrl.searchParams.set("callbackUrl", pathname + request.nextUrl.search);
-      return withDeviceCookie(request, () => NextResponse.redirect(loginUrl));
+      loginUrl.searchParams.set("callbackUrl", destination);
+      return withDeviceCookie(request, () => {
+        const response = NextResponse.redirect(loginUrl);
+        if (token) response.cookies.set(STUDENT_SESSION_COOKIE, "", { path: "/", maxAge: 0 });
+        return response;
+      });
     }
-    return withDeviceCookie(request, (init) => NextResponse.next(init));
+    return withDeviceCookie(request, (init) => NextResponse.next(init), { [STUDENT_PATH_HEADER]: destination });
   }
 
   return NextResponse.next();

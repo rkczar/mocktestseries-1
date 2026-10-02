@@ -172,7 +172,7 @@ async function createAttemptFromQuestions(params: {
   answerMode?: AttemptAnswerMode;
 }) {
   if (params.questions.length === 0) {
-    throw new Error("This test has no questions yet. Please try again later.");
+    throw new TestEngineError("UNAVAILABLE", "This test has no questions yet. Please try again later.");
   }
   // Platform Controls → Start New Tests (also Lockdown / Maintenance). This
   // is the only place a TestAttempt row is created, and every start* helper
@@ -188,10 +188,41 @@ async function createAttemptFromQuestions(params: {
   const durationMode = formal ? AttemptDurationMode.FIXED : (params.durationMode ?? AttemptDurationMode.FIXED);
   const answerMode = formal ? AttemptAnswerMode.EXAM : (params.answerMode ?? AttemptAnswerMode.EXAM);
 
+  // What makes an IN_PROGRESS attempt "the same test" for resume — the same
+  // rule each start* helper's findResumableAttempt() uses.
+  const resumeWhere: Prisma.TestAttemptWhereInput | null = params.mockTestId
+    ? { mockTestId: params.mockTestId }
+    : params.customModuleId
+      ? { customModuleId: params.customModuleId }
+      : params.grandTestId
+        ? { grandTestId: params.grandTestId }
+        : params.liveTestId
+          ? { liveTestId: params.liveTestId }
+          : params.previousYearPaperId
+            ? { previousYearPaperId: params.previousYearPaperId }
+            : params.testType === TestType.SUBJECT_TEST && params.subjectId
+              ? { testType: TestType.SUBJECT_TEST, subjectId: params.subjectId }
+              : null;
+
   // The attempt, its frozen question snapshots and one UNANSWERED Answer per
   // question are written in ONE transaction: a half-created attempt (row but
   // no questions) used to be resumable and crashed the player.
-  const attempt = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
+    // Idempotent start. The callers' findResumableAttempt() runs outside any
+    // lock, so a double-clicked Start (or two tabs) used to create one
+    // IN_PROGRESS attempt per request. A transaction-scoped advisory lock per
+    // student+test serializes concurrent starts; the loser re-checks after
+    // the winner commits and resumes the winner's attempt.
+    if (resumeWhere) {
+      const lockKey = `test-start:${params.studentId}:${JSON.stringify(resumeWhere)}`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.testAttempt.findFirst({
+        where: { studentId: params.studentId, status: AttemptStatus.IN_PROGRESS, ...resumeWhere },
+        orderBy: { startedAt: "desc" },
+        include: { liveTest: { select: { endAt: true } }, mockTest: { select: { availableUntil: true } } },
+      });
+      if (existing && !isExpired(toServerTimedAttempt(existing))) return { attempt: existing, created: false };
+    }
     const created = await tx.testAttempt.create({
     data: {
       studentId: params.studentId,
@@ -232,18 +263,32 @@ async function createAttemptFromQuestions(params: {
         status: AnswerStatus.UNANSWERED,
       })),
     });
-    return created;
+    return { attempt: created, created: true };
   }, { timeout: 20_000 });
 
-  await logActivity(params.studentId, "TEST_STARTED", { attemptId: attempt.id, sourceType: params.sourceType });
-  return attempt;
+  if (result.created) {
+    await logActivity(params.studentId, "TEST_STARTED", { attemptId: result.attempt.id, sourceType: params.sourceType });
+  }
+  return result.attempt;
 }
 
+/**
+ * The student's live IN_PROGRESS attempt for this test, if any. An attempt
+ * whose time ran out while the student was away is finalized here (the same
+ * idempotent submit getOwnedAttempt applies on read) and is NOT resumed:
+ * "Start" used to hand back the dead attempt, which was then auto-submitted
+ * on the next page, so the student landed on an old result instead of a test.
+ */
 async function findResumableAttempt(studentId: string, where: Record<string, unknown>) {
-  return prisma.testAttempt.findFirst({
+  const candidates = await prisma.testAttempt.findMany({
     where: { studentId, status: AttemptStatus.IN_PROGRESS, ...where },
     orderBy: { startedAt: "desc" },
+    include: { liveTest: { select: { endAt: true } }, mockTest: { select: { availableUntil: true } } },
   });
+  for (const candidate of candidates) {
+    if (!(await finalizeIfExpired(candidate))) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -279,9 +324,9 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
       },
     },
   });
-  if (!mockTest) throw new Error("This mock test is not available.");
+  if (!mockTest) throw new TestEngineError("UNAVAILABLE", "This mock test is not available.");
   if (!isMockTestAvailable(mockTest)) {
-    throw new Error(
+    throw new TestEngineError("UNAVAILABLE",
       deriveMockTestAvailability(mockTest) === "CLOSED"
         ? "This test window has closed. New attempts are no longer accepted."
         : "This test is not available yet."
@@ -293,7 +338,7 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
       where: { studentId, mockTestId, status: AttemptStatus.SUBMITTED },
       select: { id: true },
     });
-    if (priorSubmission) throw new Error("You have already attempted this test. Retakes are not allowed.");
+    if (priorSubmission) throw new TestEngineError("UNAVAILABLE", "You have already attempted this test. Retakes are not allowed.");
   }
 
   return createAttemptFromQuestions({
@@ -380,7 +425,7 @@ export async function startCustomModuleAttempt(studentId: string, moduleId: stri
     },
     include: CUSTOM_MODULE_QUESTIONS_INCLUDE,
   });
-  if (!customModule) throw new Error("This custom module is not available.");
+  if (!customModule) throw new TestEngineError("UNAVAILABLE", "This custom module is not available.");
   return startFromCustomModuleRow(studentId, customModule);
 }
 
@@ -395,7 +440,7 @@ export async function startSharedCustomModuleAttempt(studentId: string, shareTok
     where: { shareToken, status: { in: [CustomModuleStatus.PUBLISHED, CustomModuleStatus.ACTIVE] } },
     include: CUSTOM_MODULE_QUESTIONS_INCLUDE,
   });
-  if (!customModule) throw new Error("This shared module link is invalid or no longer available.");
+  if (!customModule) throw new TestEngineError("UNAVAILABLE", "This shared module link is invalid or no longer available.");
   return startFromCustomModuleRow(studentId, customModule);
 }
 
@@ -416,7 +461,7 @@ export async function startGrandTestAttempt(studentId: string, grandTestId: stri
     where: { id: grandTestId, status: GrandTestStatus.PUBLISHED },
     include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
   });
-  if (!grandTest) throw new Error("This grand test is not available.");
+  if (!grandTest) throw new TestEngineError("UNAVAILABLE", "This grand test is not available.");
 
   return createAttemptFromQuestions({
     studentId,
@@ -450,13 +495,13 @@ export async function startLiveTestAttempt(studentId: string, liveTestId: string
     where: { id: liveTestId },
     include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
   });
-  if (!liveTest) throw new Error("This live test does not exist.");
+  if (!liveTest) throw new TestEngineError("UNAVAILABLE", "This live test does not exist.");
 
   const state = deriveLiveTestState(liveTest, new Date());
-  if (state === "DRAFT") throw new Error("This live test has not been published yet.");
-  if (state === "CANCELLED") throw new Error("This live test was cancelled.");
-  if (state === "SCHEDULED") throw new Error("This live test has not started yet.");
-  if (state === "ENDED" || state === "RESULT_PUBLISHED") throw new Error("This live test has ended.");
+  if (state === "DRAFT") throw new TestEngineError("UNAVAILABLE", "This live test has not been published yet.");
+  if (state === "CANCELLED") throw new TestEngineError("UNAVAILABLE", "This live test was cancelled.");
+  if (state === "SCHEDULED") throw new TestEngineError("UNAVAILABLE", "This live test has not started yet.");
+  if (state === "ENDED" || state === "RESULT_PUBLISHED") throw new TestEngineError("UNAVAILABLE", "This live test has ended.");
 
   return createAttemptFromQuestions({
     studentId,
@@ -481,7 +526,7 @@ export async function startPreviousYearPaperAttempt(studentId: string, paperId: 
     where: { id: paperId, isActive: true },
     include: { exam: true },
   });
-  if (!paper) throw new Error("This paper is not available.");
+  if (!paper) throw new TestEngineError("UNAVAILABLE", "This paper is not available.");
 
   // Full-paper integrity: the whole published paper in its original order
   // (import order = paper order; code breaks ties). Never sampled or shuffled.
@@ -545,8 +590,8 @@ export async function startSubjectTestAttempt(studentId: string, selection: Subj
 
   const resumable = await findResumableAttempt(studentId, { testType: TestType.SUBJECT_TEST, subjectId: selection.subjectId });
   if (resumable) return resumable;
-  if (!selection.subjectId) throw new Error("A subject is required to start a subject test.");
-  if (!selection.examId) throw new Error("An exam is required to start a subject test.");
+  if (!selection.subjectId) throw new TestEngineError("UNAVAILABLE", "A subject is required to start a subject test.");
+  if (!selection.examId) throw new TestEngineError("UNAVAILABLE", "An exam is required to start a subject test.");
 
   const { questions } = await selectPublishedQuestions({
     examId: selection.examId,

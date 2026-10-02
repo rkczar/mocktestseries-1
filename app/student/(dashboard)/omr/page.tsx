@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { ACTIVE_EXAM_COOKIE } from "@/lib/active-exam";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 
@@ -11,7 +11,7 @@ import { findPracticeOmrSheet } from "@/lib/omr-sheet";
  * (app/api/student/test-resources/[id]), whose access checks apply as usual.
  */
 export default async function StudentOmrPage() {
-  await requireStudent();
+  await requireStudentOrLogin();
   const activeExamId = (await cookies()).get(ACTIVE_EXAM_COOKIE)?.value ?? null;
   const sheet = await findPracticeOmrSheet(activeExamId);
   redirect(sheet ? `/api/student/test-resources/${sheet.id}` : "/student/dashboard");

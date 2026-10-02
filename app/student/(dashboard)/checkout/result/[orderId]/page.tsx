@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
 import { productHref } from "@/lib/payments/product-links";
 import { OrderResultClient } from "./order-result-client";
@@ -16,7 +16,7 @@ export default async function OrderResultPage({
   searchParams: Promise<{ verify?: string }>;
 }) {
   const [{ orderId }, sp] = await Promise.all([params, searchParams]);
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const order = await prisma.paymentOrder.findFirst({
     where: { id: orderId, studentId: student.id },
     select: {

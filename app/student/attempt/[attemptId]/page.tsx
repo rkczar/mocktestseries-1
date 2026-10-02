@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus } from "@prisma/client";
 import { ClipboardList, Clock, ListChecks, AlertTriangle } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { AttemptResetNotice } from "@/components/student/attempt-reset-notice";
 import { getOwnedAttempt } from "@/lib/student-data";
 import { attemptTitle, attemptInstructions } from "@/lib/attempt-title";
@@ -17,7 +17,7 @@ type OwnedAttempt = NonNullable<Awaited<ReturnType<typeof getOwnedAttempt>>>;
 
 export default async function AttemptInstructionsPage({ params }: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = await params;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status === AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}/result`);

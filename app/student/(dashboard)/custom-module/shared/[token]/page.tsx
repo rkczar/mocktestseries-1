@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { HelpCircle, Clock, Share2 } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getCustomModuleByShareToken } from "@/lib/student-data";
 import { startSharedCustomModuleAction } from "../../builder/actions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -11,7 +11,7 @@ import { moduleDurationLabel } from "@/lib/module-duration-label";
 export const metadata = { title: "Shared Module — Mock Test Series.in" };
 
 export default async function SharedCustomModulePage({ params }: { params: Promise<{ token: string }> }) {
-  await requireStudent();
+  await requireStudentOrLogin();
   const { token } = await params;
   const customModule = await getCustomModuleByShareToken(token);
   if (!customModule) notFound();

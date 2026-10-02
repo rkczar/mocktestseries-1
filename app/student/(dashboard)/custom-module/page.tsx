@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { ListChecks, Clock, HelpCircle, Trophy } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import {
   getPublishedCustomModulesForStudent,
   getStudentOwnedCustomModules,
@@ -21,7 +21,7 @@ import { moduleDurationLabel } from "@/lib/module-duration-label";
 export const metadata = { title: "Custom Module — Mock Test Series.in" };
 
 export default async function CustomModuleListPage({ searchParams }: { searchParams: Promise<{ examId?: string }> }) {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const { examId: requestedExamId } = await searchParams;
   const cookieStore = await cookies();
   const activeExamCookie = cookieStore.get(ACTIVE_EXAM_COOKIE)?.value;

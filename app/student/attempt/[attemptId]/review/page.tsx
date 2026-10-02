@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus, TestType } from "@prisma/client";
 import { Clock } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
 import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
@@ -19,7 +19,7 @@ export const metadata = { title: "Review Answers — Mock Test Series.in" };
 
 export default async function AttemptReviewPage({ params }: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = await params;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);

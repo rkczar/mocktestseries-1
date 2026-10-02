@@ -21,6 +21,8 @@ export type EngineErrorCode =
   | "NO_SELECTION"
   | "INVALID_OPTION"
   | "OTHER_DEVICE"
+  /** A test start the student cannot make right now (not released, closed, no questions, retake blocked…). */
+  | "UNAVAILABLE"
   | "INTERNAL";
 
 /** A known, student-safe engine failure. `message` is shown to the student. */

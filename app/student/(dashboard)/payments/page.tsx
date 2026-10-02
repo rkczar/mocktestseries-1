@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
 import { formatInr } from "@/lib/payments/money";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +23,7 @@ const STATUS_LABEL: Record<string, { label: string; variant: "success" | "warnin
 
 /** Every query is scoped by the session's studentId — no other student's orders are reachable. */
 export default async function PaymentsPage() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const orders = await prisma.paymentOrder.findMany({
     where: { studentId: student.id },
     include: {

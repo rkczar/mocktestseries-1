@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getSubjectTestSetup } from "@/lib/student-data";
 import { SubjectTestBuilder } from "./builder";
 import { BackButton } from "@/components/student/back-button";
@@ -15,7 +15,7 @@ export default async function SubjectTestExamPage({
 }) {
   const { examId } = await params;
   const { subjectId } = await searchParams;
-  await requireStudent();
+  await requireStudentOrLogin();
   const setup = await getSubjectTestSetup(examId);
   if (!setup) notFound();
 

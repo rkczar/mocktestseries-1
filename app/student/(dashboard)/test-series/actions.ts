@@ -2,7 +2,7 @@
 
 import { redirect, unstable_rethrow } from "next/navigation";
 import { requireStudentOrLogin } from "@/lib/student-session";
-import { startOrPaywall } from "@/lib/payments/paywall";
+import { startOrExplain, startOrPaywall } from "@/lib/payments/paywall";
 import { startMockTestAttempt, startOfflineOmrEntryAttempt } from "@/lib/test-attempt";
 
 export interface StartMockTestFormState {
@@ -45,6 +45,10 @@ export async function startMockTestFromDetailsAction(
  */
 export async function startOfflineOmrEntryFromTestSeriesAction(mockTestId: string) {
   const student = await requireStudentOrLogin();
-  const attempt = await startOrPaywall(() => startOfflineOmrEntryAttempt(student.id, mockTestId));
+  const attempt = await startOrExplain(() => startOfflineOmrEntryAttempt(student.id, mockTestId), {
+    route: "test-series/omr-entry",
+    studentId: student.id,
+    contentId: mockTestId,
+  });
   redirect(`/student/attempt/${attempt.id}/omr-entry`);
 }

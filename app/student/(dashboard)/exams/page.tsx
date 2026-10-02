@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { GraduationCap } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getActiveExamsCatalog } from "@/lib/student-data";
 import { Card, CardContent } from "@/components/ui/card";
 import { BackButton } from "@/components/student/back-button";
@@ -9,7 +9,7 @@ import { EnrollToggle } from "./enroll-toggle";
 export const metadata = { title: "My Exams — Mock Test Series.in" };
 
 export default async function MyExamsPage({ searchParams }: { searchParams: Promise<{ filter?: string }> }) {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const { filter } = await searchParams;
   const allExams = await getActiveExamsCatalog(student.id);
   const exams = filter === "enrolled" ? allExams.filter((e) => e.isEnrolled) : allExams;

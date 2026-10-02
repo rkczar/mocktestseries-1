@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
 import { ExamSyllabus } from "@/components/student/exam-syllabus";
 import { StartOrUnlock } from "@/components/student/start-or-unlock";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { loadAccessContext, evaluateContentAccess } from "@/lib/payments/access";
 import {
   startMockTestFromExamAction,
@@ -23,7 +23,7 @@ export default async function ExamDetailPage({ params }: { params: Promise<{ exa
   if (!detail) notFound();
 
   const { exam, mockTests, customModules } = detail;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const ctx = await loadAccessContext(student.id);
 
   return (

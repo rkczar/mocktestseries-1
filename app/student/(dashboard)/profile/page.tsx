@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { User, Mail, Phone, Calendar, ShieldCheck, LogOut } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getStudentProfile, getLatestDeletionRequest } from "@/lib/student-data";
 import { formatIst } from "@/lib/ist-time";
 import { studentLogoutAction } from "@/app/student/(dashboard)/actions";
@@ -23,7 +23,7 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 export default async function StudentProfilePage() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const [profile, latestDeletion, deviceOverview] = await Promise.all([
     getStudentProfile(student.id),
     getLatestDeletionRequest(student.id),

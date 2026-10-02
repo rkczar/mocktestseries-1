@@ -1,4 +1,4 @@
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
 import { getEnrolledExams, getScheduledMockTestsForStudent } from "@/lib/student-data";
 import { getStudentExamAccessSummaries, isCheckoutGatewayReady } from "@/lib/payments/student-access";
@@ -14,7 +14,7 @@ const COVERAGE_LABELS = { FULL_SYLLABUS: "Full Syllabus", PARTIAL_SYLLABUS: "Par
 export const metadata = { title: "Test Series — Mock Test Series.in" };
 
 export default async function TestSeriesPage() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const [{ groups }, enrolledExams] = await Promise.all([getScheduledMockTestsForStudent(student.id), getEnrolledExams(student.id)]);
   // Same entitlement decision as the per-test locks below (lib/payments/access.ts).
   const seriesIds = new Set(groups.map((g) => g.series?.id).filter(Boolean));

@@ -176,7 +176,7 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
               </Button>
             ) : firstAttemptablePaper ? (
               <Button asChild size="lg">
-                <Link href={`/student/attempt/resume?paper=${firstAttemptablePaper.id}`}>Start Preparing →</Link>
+                <Link prefetch={false} href={`/student/attempt/resume?paper=${firstAttemptablePaper.id}`}>Start Preparing →</Link>
               </Button>
             ) : (
               <Button asChild size="lg">

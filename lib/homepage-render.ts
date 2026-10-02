@@ -361,7 +361,7 @@ export async function resolveHomepage(
           if (examId) {
             const [summary, comparison, ai] = await Promise.all([examSummaryFor(examId), comparisonFor(examId), getAiSettings()]);
             resolved.examSummary = summary;
-            resolved.freeCards = buildFreeCards(summary, comparison, ai.freeDailyLimit);
+            resolved.freeCards = buildFreeCards(summary, comparison, ai.freeDailyLimit, startFreeHref);
           }
         }
 
@@ -569,7 +569,14 @@ async function buildExamSummary(
  * (the same access engine that gates attempts). A resource appears only when
  * its FREE column is genuinely available.
  */
-export function buildFreeCards(summary: ResolvedExamSummary | null, comparison: SeriesComparison | null, aiFreeDailyLimit: number): ResolvedFreeCard[] {
+export function buildFreeCards(
+  summary: ResolvedExamSummary | null,
+  comparison: SeriesComparison | null,
+  aiFreeDailyLimit: number,
+  // The viewer's "start" destination: the Student Dashboard when signed in,
+  // never the Create Account tab (that sent signed-in students to /login).
+  startHref: string = FREE_SIGNUP_HREF
+): ResolvedFreeCard[] {
   if (!summary) return [];
   const free = new Map((comparison?.derivedRows ?? []).map((r) => [r.key, r.free]));
   const hub = summary.hubHref;
@@ -585,7 +592,7 @@ export function buildFreeCards(summary: ResolvedExamSummary | null, comparison: 
         later > 0
           ? `${summary.freeMocksAvailable} open now, ${later} more on the release schedule — exam-pattern, timed, with results.`
           : "Exam-pattern, timed mock tests with results and review.",
-      href: hub ? `${hub}/mock-test-series` : FREE_SIGNUP_HREF,
+      href: hub ? `${hub}/mock-test-series` : startHref,
     });
   }
   if (summary.papers > 0 && isFreeValue(free.get("pyq-practice"))) {
@@ -594,7 +601,7 @@ export function buildFreeCards(summary: ResolvedExamSummary | null, comparison: 
       title: "Previous Year Papers",
       value: String(summary.papers),
       detail: `${summary.paperYears} year${summary.paperYears === 1 ? "" : "s"} of real papers to attempt online, with results and review.`,
-      href: hub ? `${hub}/previous-year-papers` : FREE_SIGNUP_HREF,
+      href: hub ? `${hub}/previous-year-papers` : startHref,
     });
   }
   if (summary.questions > 0 && isFreeValue(free.get("subject-practice"))) {
@@ -603,7 +610,7 @@ export function buildFreeCards(summary: ResolvedExamSummary | null, comparison: 
       title: "Subject-wise Practice",
       value: summary.subjects > 0 ? `${summary.subjects} subjects` : "All subjects",
       detail: "Build practice tests by subject and topic from the question bank.",
-      href: hub ? `${hub}/question-bank` : FREE_SIGNUP_HREF,
+      href: hub ? `${hub}/question-bank` : startHref,
     });
   }
   if (aiFreeDailyLimit > 0 && isFreeValue(free.get("ai-explanations"))) {
@@ -621,7 +628,7 @@ export function buildFreeCards(summary: ResolvedExamSummary | null, comparison: 
       title: "Results & Analysis",
       value: "Every test",
       detail: "Score, question-by-question review and subject-wise performance.",
-      href: FREE_SIGNUP_HREF,
+      href: startHref,
     });
   }
   return cards;

@@ -1,5 +1,5 @@
 import { Bookmark } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getSavedQuestions } from "@/lib/student-data";
 import { Card, CardContent } from "@/components/ui/card";
 import { BackButton } from "@/components/student/back-button";
@@ -11,7 +11,7 @@ import { unsaveQuestionAction, reportSavedQuestionAction } from "./actions";
 export const metadata = { title: "Saved Questions — Mock Test Series.in" };
 
 export default async function SavedQuestionsPage() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const saved = await getSavedQuestions(student.id);
 
   return (

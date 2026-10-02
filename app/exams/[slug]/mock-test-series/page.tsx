@@ -555,7 +555,7 @@ function ScheduleRow({ test: t }: { test: PublicSeriesTest }) {
       </div>
       {available ? (
         <Button asChild size="sm" className="w-fit shrink-0">
-          <Link href={`/student/attempt/resume?mockTest=${t.id}`}>Start Mock</Link>
+          <Link prefetch={false} href={`/student/attempt/resume?mockTest=${t.id}`}>Start Mock</Link>
         </Button>
       ) : null}
     </div>

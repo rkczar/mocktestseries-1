@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
-import { requireStudent } from "@/lib/student-session";
-import { startOrPaywall } from "@/lib/payments/paywall";
+import { requireStudentOrLogin } from "@/lib/student-session";
+import { startOrExplain } from "@/lib/payments/paywall";
 import { startPreviousYearPaperAttempt, startMockTestAttempt } from "@/lib/test-attempt";
 
 /**
@@ -22,15 +22,23 @@ export default async function ResumeAttemptPage({
   searchParams: Promise<{ paper?: string; mockTest?: string }>;
 }) {
   const { paper, mockTest } = await searchParams;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
 
   if (paper) {
-    const attempt = await startOrPaywall(() => startPreviousYearPaperAttempt(student.id, paper));
+    const attempt = await startOrExplain(() => startPreviousYearPaperAttempt(student.id, paper), {
+      route: "/student/attempt/resume",
+      studentId: student.id,
+      contentId: paper,
+    });
     redirect(`/student/attempt/${attempt.id}`);
   }
 
   if (mockTest) {
-    const attempt = await startOrPaywall(() => startMockTestAttempt(student.id, mockTest));
+    const attempt = await startOrExplain(() => startMockTestAttempt(student.id, mockTest), {
+      route: "/student/attempt/resume",
+      studentId: student.id,
+      contentId: mockTest,
+    });
     redirect(`/student/attempt/${attempt.id}`);
   }
 

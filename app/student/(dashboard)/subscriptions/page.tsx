@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
 import { productHref, entitlementDisplayStatus } from "@/lib/payments/product-links";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +15,7 @@ const fmt = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: 
 const VARIANT = { ACTIVE: "success", LIFETIME: "success", FREE: "info", EXPIRED: "warning", REVOKED: "error" } as const;
 
 export default async function SubscriptionsPage() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const now = new Date();
   const ents = await prisma.studentEntitlement.findMany({
     where: { studentId: student.id },

@@ -81,6 +81,17 @@ Each of these once caused a real production failure.
    Its snapshot and answers are kept, the next Start is a fresh attempt, and
    the attempt pages render `AttemptResetNotice`. SUBMITTED attempts are never
    changed. See `docs/CONTENT-OWNERSHIP.md`.
+9. **Start is idempotent.** `createAttemptFromQuestions` takes a per-student,
+   per-test advisory lock and re-checks for an IN_PROGRESS attempt inside the
+   transaction. Before 2026-10-02 a double-clicked Start (or two tabs) created
+   one attempt per request.
+10. **A timed-out attempt is never resumed.** `findResumableAttempt` finalizes
+    an IN_PROGRESS attempt whose time ran out and starts a fresh one; it used
+    to hand back the dead attempt, which then auto-submitted on the next page.
+11. **A refused start explains itself.** Start refusals are
+    `TestEngineError("UNAVAILABLE")`. Inline forms show the message; plain
+    links and bare forms go through `startOrExplain` (lib/payments/paywall.ts)
+    to `/student/unavailable?test=<reason>`, never the crash screen.
 
 ## Observability
 
@@ -91,7 +102,9 @@ Failed and slow (>1.5s) engine operations log one line each:
 ```
 
 Search the PM2 error logs (`/var/log/mocktestseries/error-*.log`) for
-`[test-engine]`. The log never includes answers, correct labels or secrets.
+`[test-engine]`. Refused starts log `[test-start] {"route","studentId","contentId","code","reason"}`,
+and the proxy logs `[auth] {"event":"student-session-rejected","route","student","reason"}`
+when a page load arrives with a session that was logged out or revoked. The log never includes answers, correct labels or secrets.
 
 ## Regression suite (run both before deploying engine changes)
 
@@ -101,6 +114,9 @@ Both suites run against a **disposable** database. Never point them at productio
 # 0. disposable copy of production + migrations
 createdb mts_engine_scratch && pg_dump --no-owner --no-privileges "$PROD_URL" | psql -q "$SCRATCH_URL"
 DATABASE_URL="$SCRATCH_URL" npx prisma migrate deploy
+# The copy carries LIVE Razorpay keys, AI keys and the SMS provider: scrub them before starting a server on it.
+psql "$SCRATCH_URL" -c "delete from \"Setting\" where key in ('api.razorpay','api.gemini','api.openai')"
+psql "$SCRATCH_URL" -c "update \"Setting\" set value = jsonb_set(value, '{msg91}', '{\"enabled\":false}') where key='auth.providers'"
 
 # 1. server-side engine (~160 checks, includes a 40-student concurrency run)
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-test-engine-core.ts
@@ -112,7 +128,13 @@ DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scr
 BASE=http://localhost:3100 FIXTURE=/tmp/engine-fixture.json NODE_PATH=<dir containing playwright> node scripts/verify-test-engine-ui.mjs
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/test-engine-ui-fixture.ts cleanup <examId> <studentIds…>
 
-# 3. answer-leak guard
+# 3. every critical student journey (login → paid access → start → answer → submit → result → review),
+#    plus a crawl of every page per persona (anonymous, free, paid, admin; MOBILE=1 for a phone)
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/critical-flows-fixture.ts setup > /tmp/flows.json
+BASE=http://localhost:3100 FIXTURE=/tmp/flows.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<dir containing playwright> node scripts/verify-critical-flows.mjs
+BASE=http://localhost:3100 FIXTURE=/tmp/flows.json NODE_PATH=<dir containing playwright> node scripts/verify-site-crawl.mjs
+
+# 4. answer-leak guard
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-p0-answer-reveal.ts
 ```
 

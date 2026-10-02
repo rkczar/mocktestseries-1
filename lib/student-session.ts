@@ -1,6 +1,9 @@
 import "server-only";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { studentServerAuth } from "@/lib/auth-student";
+import { safeStudentCallback } from "@/lib/student-callback";
+import { STUDENT_PATH_HEADER } from "@/lib/student-path";
 
 export class StudentUnauthorizedError extends Error {
   constructor(message = "Not signed in") {
@@ -39,16 +42,21 @@ export async function requireStudent() {
 }
 
 /**
- * requireStudent() for Server Actions: a revoked session (account deleted or
- * suspended while a tab was open — see the jwt callback in
- * lib/auth-student.ts) navigates the client to /login instead of surfacing a
- * generic action error. Route handlers keep requireStudent() and answer 401.
+ * requireStudent() for pages, layouts and Server Actions: a dead session
+ * (logged out elsewhere, device revoked, account suspended — see the jwt
+ * callback in lib/auth-student.ts) navigates to /login with the requested
+ * page as callbackUrl, so signing in again lands exactly where the student
+ * was going. Never an error screen. Route handlers keep requireStudent() and
+ * answer 401.
  */
 export async function requireStudentOrLogin() {
   try {
     return await requireStudent();
   } catch (error) {
-    if (error instanceof StudentUnauthorizedError) redirect("/login");
+    if (error instanceof StudentUnauthorizedError) {
+      const destination = safeStudentCallback((await headers()).get(STUDENT_PATH_HEADER));
+      redirect(`/login?callbackUrl=${encodeURIComponent(destination)}`);
+    }
     throw error;
   }
 }

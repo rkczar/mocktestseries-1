@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { BookOpen, ChevronRight } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getSubjectTestExams } from "@/lib/student-data";
 import { Card, CardContent } from "@/components/ui/card";
 import { BackButton } from "@/components/student/back-button";
@@ -8,7 +8,7 @@ import { BackButton } from "@/components/student/back-button";
 export const metadata = { title: "Subject Test — Mock Test Series.in" };
 
 export default async function SubjectTestPage() {
-  await requireStudent();
+  await requireStudentOrLogin();
   const exams = await getSubjectTestExams();
 
   return (

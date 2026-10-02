@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus } from "@prisma/client";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getContentAccess, describeAttemptContent } from "@/lib/payments/access";
 import { AccessLocked } from "@/components/student/access-locked";
 import { AttemptResetNotice } from "@/components/student/attempt-reset-notice";
@@ -20,7 +20,7 @@ export const metadata = { title: "Enter OMR Answers — Mock Test Series.in" };
  */
 export default async function OmrEntryPage({ params }: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = await params;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status === AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}/result`);

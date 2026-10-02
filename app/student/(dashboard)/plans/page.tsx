@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
 import { getPaymentModeForStudent } from "@/lib/payments/settings";
 import { computeProductPrice, describeAccessDuration } from "@/lib/payments/pricing";
@@ -14,7 +14,7 @@ export const metadata = { title: "Plans & Pricing — Mock Test Series.in" };
 export const dynamic = "force-dynamic";
 
 export default async function PlansPage() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const now = new Date();
   const [mode, products, entitlements] = await Promise.all([
     getPaymentModeForStudent(student.id),

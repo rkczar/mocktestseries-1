@@ -1,7 +1,7 @@
 import { AttemptSourceType } from "@prisma/client";
 import Link from "next/link";
 import { History as HistoryIcon } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getStudentAttemptHistory } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import { isMockResultReleased } from "@/lib/mock-test-schedule";
@@ -34,7 +34,7 @@ export default async function StudentHistoryPage({
   searchParams: Promise<{ type?: string }>;
 }) {
   const { type } = await searchParams;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const sourceType = TYPE_FILTERS.some((f) => f.value === type) ? (type as AttemptSourceType) : undefined;
   const attempts = await getStudentAttemptHistory(student.id, { sourceType });
 

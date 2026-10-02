@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Clock, AlertTriangle, HelpCircle } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getCustomModuleDetailForStudent } from "@/lib/student-data";
 import { startCustomModuleFromExamAction } from "@/app/student/(dashboard)/exams/[examId]/actions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -14,7 +14,7 @@ export const metadata = { title: "Custom Module — Mock Test Series.in" };
 
 export default async function CustomModuleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const detail = await getCustomModuleDetailForStudent(id, student.id);
   if (!detail) notFound();
 

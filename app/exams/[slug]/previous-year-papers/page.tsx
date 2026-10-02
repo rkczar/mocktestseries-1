@@ -132,7 +132,7 @@ export default async function ExamPreviousYearPapersPage({ params }: { params: P
                   ) : null}
                   <div className="mt-auto flex flex-wrap items-center gap-3 pt-1">
                     <Button asChild size="sm">
-                      <Link href={`/student/attempt/resume?paper=${p.id}`}>Attempt paper</Link>
+                      <Link prefetch={false} href={`/student/attempt/resume?paper=${p.id}`}>Attempt paper</Link>
                     </Button>
                     {p.indexable ? (
                       <Link href={pyqYearPath(exam.publicSlug!, p.year)} className="inline-flex items-center gap-1 text-sm font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">

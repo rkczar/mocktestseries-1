@@ -1,15 +1,8 @@
-import { redirect } from "next/navigation";
-import { requireStudent, StudentUnauthorizedError } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { StudentShell } from "@/components/student/shell";
 
 export default async function StudentDashboardLayout({ children }: { children: React.ReactNode }) {
-  let student;
-  try {
-    student = await requireStudent();
-  } catch (error) {
-    if (error instanceof StudentUnauthorizedError) redirect("/login");
-    throw error;
-  }
+  const student = await requireStudentOrLogin();
 
   return (
     <StudentShell student={student}>

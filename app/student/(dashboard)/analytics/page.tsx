@@ -1,5 +1,5 @@
 import { CheckCircle2, XCircle, MinusCircle, Target } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getStudentAnalytics } from "@/lib/student-data";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { BackButton } from "@/components/student/back-button";
@@ -7,7 +7,7 @@ import { BackButton } from "@/components/student/back-button";
 export const metadata = { title: "Analytics — Mock Test Series.in" };
 
 export default async function StudentAnalyticsPage() {
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const analytics = await getStudentAnalytics(student.id);
 
   return (

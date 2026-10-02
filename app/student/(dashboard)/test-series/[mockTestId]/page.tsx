@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AlertTriangle, CalendarClock, Clock, ListChecks, Lock } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getMockTestDetailForStudent } from "@/lib/student-data";
 import { AVAILABILITY_LABELS, isMockResultReleased } from "@/lib/mock-test-schedule";
 import { loadAccessContext, evaluateContentAccess, type AccessProductRef } from "@/lib/payments/access";
@@ -47,7 +47,7 @@ async function purchaseOptions(refs: AccessProductRef[], renew: boolean) {
  */
 export default async function MockTestDetailsPage({ params }: { params: Promise<{ mockTestId: string }> }) {
   const { mockTestId } = await params;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const detail = await getMockTestDetailForStudent(student.id, mockTestId);
   if (!detail) notFound();
 

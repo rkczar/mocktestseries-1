@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus, TestType } from "@prisma/client";
 import { CheckCircle2, Clock, MinusCircle, Trophy, XCircle } from "lucide-react";
-import { requireStudent } from "@/lib/student-session";
+import { requireStudentOrLogin } from "@/lib/student-session";
 import { getOwnedAttempt } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import { prisma } from "@/lib/prisma";
@@ -22,7 +22,7 @@ export const metadata = { title: "Test Result — Mock Test Series.in" };
 
 export default async function AttemptResultPage({ params }: { params: Promise<{ attemptId: string }> }) {
   const { attemptId } = await params;
-  const student = await requireStudent();
+  const student = await requireStudentOrLogin();
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);
