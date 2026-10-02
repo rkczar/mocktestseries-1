@@ -81,7 +81,7 @@ export default async function LoginPage({
 
         <LoginScreen
           callbackUrl={callbackUrl}
-          defaultMode={tab === "register" ? "register" : "signin"}
+          defaultMode={tab === "register" ? "register" : tab === "forgot" ? "forgot" : "signin"}
           defaultMethod={tab === "otp" ? "otp" : "password"}
           pageConfig={pageConfig}
           providerConfig={providerConfig}

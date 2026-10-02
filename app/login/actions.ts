@@ -19,6 +19,7 @@ import {
   resetPasswordWithToken,
   PasswordResetError,
 } from "@/lib/password-reset";
+import { queueWelcomeEmail } from "@/lib/email/events";
 
 export interface AuthFormState {
   error?: string;
@@ -112,6 +113,7 @@ export async function registerWithPasswordAction(
     data: { studentId: student.id, activity: "REGISTERED", metadata: { method: "password" } },
   });
   await ensureDefaultExamEnrollmentSafely(student.id);
+  await queueWelcomeEmail(student.id);
 
   try {
     await studentSignIn("password", { identifier: email, password, redirectTo: callbackUrl });

@@ -20,6 +20,7 @@ import {
   revokeSessionBySecret,
   type AdmittedSignIn,
 } from "@/lib/student-devices";
+import { queueFirstLoginEmail, queueWelcomeEmail } from "@/lib/email/events";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
@@ -111,6 +112,7 @@ export const {
         await prisma.studentActivity.create({
           data: { studentId: student.id, activity: "LOGIN", metadata: { method: "password" } },
         });
+        await queueFirstLoginEmail(student.id);
 
         return {
           id: student.id,
@@ -186,6 +188,8 @@ export const {
           await prisma.studentLoginAttempt.create({
             data: { identifier: mobile, ipAddress, success: true, method: attemptMethod, studentId: student.id },
           });
+          await queueWelcomeEmail(student.id);
+          await queueFirstLoginEmail(student.id);
 
           return {
             id: student.id,
@@ -214,6 +218,7 @@ export const {
         await prisma.studentLoginAttempt.create({
           data: { identifier: mobile, ipAddress, success: true, method: attemptMethod, studentId: student.id },
         });
+        await queueFirstLoginEmail(student.id);
 
         return {
           id: student.id,
@@ -327,6 +332,8 @@ export const {
       await prisma.studentLoginAttempt.create({
         data: { identifier: email ?? "unknown", ipAddress, success: true, method: "GOOGLE", studentId: student.id },
       });
+      if (resolved.created) await queueWelcomeEmail(student.id);
+      await queueFirstLoginEmail(student.id);
 
       user.id = student.id;
       user.studentId = student.studentId;

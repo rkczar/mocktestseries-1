@@ -511,7 +511,7 @@ export function LoginScreen({
   notice,
 }: {
   callbackUrl: string;
-  defaultMode: "signin" | "register";
+  defaultMode: "signin" | "register" | "forgot";
   defaultMethod: "password" | "otp";
   pageConfig: LoginPageConfig;
   providerConfig: AuthProviderPublicConfig;

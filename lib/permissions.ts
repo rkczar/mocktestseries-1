@@ -87,6 +87,11 @@ export const PERMISSIONS = {
   // every change — is MASTER_ADMIN-only and enforced server-side.
   PLATFORM_CONTROLS_VIEW: "platform-controls:view",
   PLATFORM_CONTROLS_MANAGE: "platform-controls:manage",
+  // Outbound email (Admin -> Communications -> Email): compose, campaigns,
+  // template edits, test emails and the production-sending switch.
+  // MASTER_ADMIN-only, enforced server-side on every action. Reading the
+  // Email tabs (logs, campaigns, settings status) uses COMMUNICATIONS_VIEW.
+  EMAIL_MANAGE: "email:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

@@ -8,6 +8,7 @@ import { isStudentAuthEligible } from "@/lib/student-lifecycle";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { assertOtpVerifyAllowed, AuthRateLimitError } from "@/lib/auth-rate-limit";
 import { logoutAllStudentSessions } from "@/lib/student-devices";
+import { queueForgotPasswordEmail, queuePasswordChangedEmail } from "@/lib/email/events";
 
 /**
  * Student Forgot Password — the one reset path, built on the existing phone
@@ -90,7 +91,10 @@ export async function requestPasswordReset(identifier: string, ipAddress: string
   if (!student) return {};
 
   try {
-    return await requestOtp(student.mobile, OtpPurpose.RESET_PASSWORD, ipAddress);
+    const sent = await requestOtp(student.mobile, OtpPurpose.RESET_PASSWORD, ipAddress);
+    // Security notice to the account's own email (if any); the code itself stays SMS-only.
+    await queueForgotPasswordEmail(student.id);
+    return sent;
   } catch (error) {
     // Cooldown / send-cap only happen for a real account — answering them
     // differently would reveal the account exists, so they read as "sent".
@@ -180,4 +184,5 @@ export async function resetPasswordWithToken(token: string, newPassword: string)
   // A reset means the old password may be known to someone else: sign out
   // every existing session. Registered devices keep their slots.
   await logoutAllStudentSessions(record.studentId, { system: "PASSWORD_RESET" }, { reason: "PASSWORD_RESET" });
+  await queuePasswordChangedEmail(record.studentId, record.id);
 }

@@ -1,0 +1,8 @@
+# mocktestseries email — installed as /etc/cron.d/mocktestseries-email (source: ops/email/ in the repo).
+# Email queue worker: every minute, one run of up to ~55 s drains queued email (EmailDeliveryLog)
+# at the admin-configured rate. flock keeps exactly one worker running. Without RESEND_API_KEY it
+# sends nothing (automatic email is recorded as SKIPPED, campaigns stay queued).
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * root cd /var/www/mocktestseries-current && flock -n /run/mocktestseries-email.lock env NODE_OPTIONS=--conditions=react-server /usr/bin/npx --no-install tsx scripts/email-worker.ts >> /var/log/mocktestseries/email-worker.log 2>&1

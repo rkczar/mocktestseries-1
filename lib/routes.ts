@@ -35,6 +35,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Terms and Conditions", route: "/terms", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
   { pageName: "Refund & Cancellation Policy", route: "/refund-policy", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
   { pageName: "Contact Us", route: "/contact", module: "Website", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
+  { pageName: "Email Preferences", route: "/email/preferences", module: "Communications", userType: "PUBLIC", authRequired: false, parentRoute: "/", status: "CONNECTED" },
 
   // Admin auth
   { pageName: "Admin Login", route: "/admin/login", module: "Admin Auth", userType: "ADMIN", authRequired: false, status: "CONNECTED" },

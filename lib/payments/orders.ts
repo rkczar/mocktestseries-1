@@ -20,6 +20,7 @@ import { computeProductPrice, computeAccessWindow, describeAccessDuration, type 
 import { evaluateCoupon, lockCoupon, normalizeCouponCode, COUPON_REJECTION_MESSAGES, type CouponRejection } from "@/lib/payments/coupons";
 import { canStudentAccessProduct, type AccessResult } from "@/lib/payments/access";
 import { issueInvoiceTx } from "@/lib/payments/invoices";
+import { queueInvoiceEmailTx, queuePaymentSuccessEmailTx } from "@/lib/email/events";
 import {
   RazorpayApiError,
   captureRazorpayPayment,
@@ -562,7 +563,9 @@ export async function recordTrustedPayment(orderId: string, p: RzpPayment, via: 
         data: { status: CouponRedemptionStatus.CONSUMED, consumedAt: now },
       });
       await grantEntitlementTx(tx, order.id, EntitlementSource.PURCHASE, now);
-      await issueInvoiceTx(tx, order.id, { gatewayPaymentId: p.id, method: safeMethodLabel(p.method), paidAt: now });
+      const invoice = await issueInvoiceTx(tx, order.id, { gatewayPaymentId: p.id, method: safeMethodLabel(p.method), paidAt: now });
+      // Outbox: the receipt email is queued in the same transaction that marks the order PAID.
+      await queuePaymentSuccessEmailTx(tx, order, invoice, p.id);
       return "PAID";
     },
     { timeout: 20_000 }
@@ -722,11 +725,12 @@ export async function ensureFulfilment(orderId: string): Promise<"REPAIRED" | "N
       repaired = true;
     }
     if (!order.invoice && (order.amountPaise > 0 || policy.invoiceZeroValueOrders)) {
-      await issueInvoiceTx(tx, order.id, {
+      const invoice = await issueInvoiceTx(tx, order.id, {
         gatewayPaymentId: captured.gatewayPaymentId,
         method: captured.method,
         paidAt: captured.capturedAt ?? order.paidAt ?? new Date(),
       });
+      await queueInvoiceEmailTx(tx, order, invoice, captured.gatewayPaymentId);
       repaired = true;
     }
     return repaired ? "REPAIRED" : "NOTHING_TO_DO";

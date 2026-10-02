@@ -76,6 +76,7 @@ model AdminUser {
   revokedStudentDevices  StudentDevice[]       @relation("StudentDeviceRevokedBy")
   revokedStudentSessions StudentSession[]      @relation("StudentSessionRevokedBy")
   deviceSecurityEvents   DeviceSecurityEvent[]
+  createdEmailCampaigns  EmailCampaign[]       @relation("EmailCampaignCreatedBy")
 }
 
 model LoginAttempt {
@@ -182,6 +183,7 @@ model Exam {
   bulkImportRuns     BulkImportRun[]
   testResources      TestResource[]
   products           Product[]
+  emailCampaigns     EmailCampaign[]
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +544,10 @@ model Student {
   sessionsValidAfter DateTime?
   // Last Admin "Reset Device Limit" (history lives in DeviceSecurityEvent).
   deviceLimitResetAt DateTime?
+  // Set exactly once, by an atomic claim, when the FIRST_LOGIN email is
+  // queued (lib/email/events.ts). Backfilled for pre-email accounts so they
+  // never receive it.
+  firstLoginEmailAt  DateTime?
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
@@ -563,6 +569,8 @@ model Student {
   devices                 StudentDevice[]
   sessions                StudentSession[]
   deviceSecurityEvents    DeviceSecurityEvent[]
+  emailPreference         EmailPreference?
+  emailDeliveries         EmailDeliveryLog[]
 
   entitlements      StudentEntitlement[]
   couponRedemptions CouponRedemption[]
@@ -2590,4 +2598,164 @@ model BackupArtifactCheck {
   detail     String?
   sha256     String?
   checkedAt  DateTime           @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Email — outbound email (Admin → Communications → Email). One provider
+// abstraction (lib/email/service.ts, Resend today), a PostgreSQL-backed queue
+// (EmailDeliveryLog rows, drained by scripts/email-worker.ts) and admin-editable
+// templates. Every send — automatic, campaign or test — is one
+// EmailDeliveryLog row whose UNIQUE idempotencyKey makes a duplicate event,
+// a retried Razorpay webhook or a re-run campaign unable to queue twice.
+// ---------------------------------------------------------------------------
+
+enum EmailTemplateKey {
+  WELCOME
+  FIRST_LOGIN
+  PAYMENT_SUCCESS
+  INVOICE
+  PASSWORD_RESET
+  FORGOT_PASSWORD
+  TEST_ANNOUNCEMENT
+  GENERAL_ANNOUNCEMENT
+  CUSTOM
+}
+
+// TRANSACTIONAL (account, security, payment) ignores the promotional
+// opt-out; PROMOTIONAL (announcements, campaigns) honours it.
+enum EmailCategory {
+  TRANSACTIONAL
+  PROMOTIONAL
+}
+
+enum EmailStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  FAILED
+  BOUNCED
+  COMPLAINED
+  // Never handed to the provider: sending off, template disabled,
+  // no address, opted out or suppressed. failureReason says which.
+  SKIPPED
+  CANCELLED
+}
+
+enum EmailCampaignStatus {
+  DRAFT
+  SENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum EmailAudience {
+  INDIVIDUAL
+  SELECTED
+  ALL
+  PAID
+  FREE
+  EXAM
+}
+
+/// Admin-edited copy for one template key. An absent row means the built-in
+/// default from lib/email/templates.ts.
+model EmailTemplate {
+  id               String           @id @default(cuid())
+  key              EmailTemplateKey @unique
+  subject          String
+  heading          String
+  bodyHtml         String
+  ctaText          String?
+  ctaUrl           String?
+  enabled          Boolean          @default(true)
+  updatedByAdminId String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+}
+
+model EmailCampaign {
+  id               String              @id @default(cuid())
+  name             String
+  templateKey      EmailTemplateKey    @default(CUSTOM)
+  subject          String
+  heading          String
+  bodyHtml         String
+  ctaText          String?
+  ctaUrl           String?
+  audience         EmailAudience
+  examId           String?
+  exam             Exam?               @relation(fields: [examId], references: [id], onDelete: SetNull)
+  // INDIVIDUAL / SELECTED only: Student.id values.
+  studentIds       String[]            @default([])
+  status           EmailCampaignStatus @default(DRAFT)
+  // Frozen when queued (rows actually created); counts by status are read
+  // live from EmailDeliveryLog.
+  recipientCount   Int                 @default(0)
+  createdByAdminId String?
+  createdByAdmin   AdminUser?          @relation("EmailCampaignCreatedBy", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  queuedByAdminId  String?
+  queuedAt         DateTime?
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  deliveries EmailDeliveryLog[]
+
+  @@index([status, createdAt])
+}
+
+/// One row per email: the queue entry while QUEUED/SENDING and the delivery
+/// record afterwards.
+model EmailDeliveryLog {
+  id                String           @id @default(cuid())
+  // e.g. "welcome:<studentId>", "payment:<orderId>", "campaign:<id>:<studentId>".
+  idempotencyKey    String           @unique
+  templateKey       EmailTemplateKey
+  category          EmailCategory
+  campaignId        String?
+  campaign          EmailCampaign?   @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  studentId         String?
+  student           Student?         @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  toEmail           String?
+  subject           String?
+  // Safe template variables only (names, amounts, ids, URLs) — never secrets.
+  variables         Json?
+  status            EmailStatus      @default(QUEUED)
+  attempts          Int              @default(0)
+  nextAttemptAt     DateTime         @default(now())
+  lockedAt          DateTime?
+  provider          String?
+  providerMessageId String?          @unique
+  failureReason     String?
+  lastEventType     String?
+  isTest            Boolean          @default(false)
+  createdByAdminId  String?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([campaignId, status])
+  @@index([studentId, createdAt])
+  @@index([createdAt])
+  @@index([toEmail])
+}
+
+/// Per-student email preferences. Absent row = subscribed, not suppressed.
+model EmailPreference {
+  id                String    @id @default(cuid())
+  studentId         String    @unique
+  student           Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  promotionalOptOut Boolean   @default(false)
+  optedOutAt        DateTime?
+  // Set from provider events (hard bounce / spam complaint). A suppressed
+  // address gets no email except password/security/payment messages, and
+  // no email at all after a hard bounce.
+  suppressedAt      DateTime?
+  suppressionReason String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 }

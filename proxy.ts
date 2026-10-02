@@ -45,6 +45,7 @@ async function studentTokenAlive(token: Record<string, unknown>, route: string):
  *   - Admin (pages, admin auth, admin APIs): the recovery path.
  *   - /api/health: the watchdog and the deploy script's health checks.
  *   - /api/webhooks: Razorpay capture/refund fulfilment for existing orders.
+ *   - Email unsubscribe / preferences: one-click unsubscribe must always work.
  *   - Checkout + invoices: verification and receipts for in-flight orders
  *     (creating a NEW order is refused by createCheckoutOrder itself).
  *   - /student/attempt: a student mid-test can save and submit; starting a
@@ -59,6 +60,8 @@ const MAINTENANCE_ALLOW = [
   "/api/admin",
   "/api/health",
   "/api/webhooks",
+  "/api/email/unsubscribe",
+  "/email/preferences",
   "/api/student/invoices",
   "/student/checkout",
   "/student/attempt",
