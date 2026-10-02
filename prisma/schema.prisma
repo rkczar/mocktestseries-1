@@ -1533,6 +1533,10 @@ model TestAttempt {
   @@index([liveTestId])
   @@index([mockTestId, isLeaderboardAttempt, status])
   @@index([activeDeviceId])
+  // Admin → Analytics → Question Insights reads submitted attempts by
+  // submission window (Today / Yesterday / 7d / 30d); without this a
+  // "Today" view would scan every attempt ever taken.
+  @@index([status, submittedAt])
 }
 
 model TestAttemptQuestion {

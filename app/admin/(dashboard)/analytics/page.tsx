@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { getPlatformAnalytics } from "@/lib/admin-analytics";
 import { StatCard } from "@/components/admin/stat-card";
+import { AnalyticsSubnav } from "@/components/admin/analytics-subnav";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
 export const metadata = { title: "Analytics — Mock Test Series.in Admin" };
@@ -132,6 +133,8 @@ export default async function AnalyticsPage() {
           exam, subject, and difficulty.
         </p>
       </div>
+
+      <AnalyticsSubnav active="platform" />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <StatCard label="Total Students" value={a.totalStudents} />
