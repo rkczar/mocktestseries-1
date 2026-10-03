@@ -118,17 +118,13 @@ export default async function ResumeAttemptPage({
         </Card>
       ) : null}
 
-      <Card>
-        <CardContent className="pt-5 text-sm text-[var(--color-muted-foreground)]">
-          <ul className="list-disc space-y-1 pl-5">
-            <li>The timer starts when you press Start Test and cannot be paused. The test auto-submits when time runs out.</li>
-            <li>You can move between questions and change answers until you submit, except answers you have checked.</li>
-            {summary.negativeMarking > 0 ? <li>Each wrong answer deducts {summary.negativeMarking} mark(s).</li> : null}
-          </ul>
-        </CardContent>
-      </Card>
-
-      <PreTestSetup kind={summary.kind} testId={summary.id} questionCount={summary.questionCount} standardMinutes={summary.standardMinutes} />
+      <PreTestSetup
+        kind={summary.kind}
+        testId={summary.id}
+        questionCount={summary.questionCount}
+        standardMinutes={summary.standardMinutes}
+        notes={summary.negativeMarking > 0 ? <li>Each wrong answer deducts {summary.negativeMarking} mark(s).</li> : null}
+      />
     </div>
   );
 }

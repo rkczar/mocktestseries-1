@@ -22,15 +22,14 @@ Test types only supply data and configuration. There is no per-type player.
 - **UniversalTestSetup** (`components/student/universal-test-setup.tsx`) is the
   one pre-test configuration form, used by **Custom Module** and **Subject
   Test**: subject, topic, source, year, difficulty, question count (1 up to
-  the eligible pool, never padded), time mode (1 min/question default,
-  unlimited, custom) and answer mode (exam, instant). Filters never appear
-  inside the running player.
+  the eligible pool, never padded), answer mode (exam, instant) and — for
+  exam mode only — time (1 min/question default, unlimited, custom). Filters
+  never appear inside the running player.
 - **Pre-Test Setup** (`components/student/pre-test-setup.tsx`, since
   2026-10-03) is the same choice for a NEW **Mock Test** (hosted on the Mock
   details page) or **Previous Year Paper** (hosted on
-  `/student/attempt/resume?paper=`): time = Standard (the admin duration,
-  `FIXED`) / 1 min per question / Custom (1–600), never Unlimited; answers =
-  after the test (`EXAM`, default) / after each question (`INSTANT`). Every
+  `/student/attempt/resume?paper=`), using the answer-mode-first model below.
+  Every
   in-app and public Start for these tests goes through
   `/student/attempt/resume`, which never writes: `previewFormalTestStart` runs
   the start's own gates (entitlement → resume → availability/policy → Platform
@@ -38,6 +37,25 @@ Test types only supply data and configuration. There is no per-type player.
   setup. The setup posts to `startConfiguredTestAction`. Both setup forms share
   `components/student/test-mode-fields.tsx` and parse through
   `lib/attempt-config.ts#parseAttemptConfigForm`.
+- **The one answer-mode-first model** (`lib/attempt-config.ts`, rendered by
+  `components/student/test-mode-fields.tsx`, since 2026-10-03):
+
+  | Student choice | Mode | Time | During the attempt |
+  |---|---|---|---|
+  | Show answers after completing the test (`EXAM`, default) | **Exam Mode** | timed: Mock/PYQ Standard (admin duration, `FIXED`) / 1 min per question / Custom 1–600; Subject/Custom 1 min per question / Unlimited / Custom | normal secure exam: answers editable, no key, no explanation, no Ask AI until Review |
+  | Show answer after each question (`INSTANT`) | **Practice Mode** | always `UNLIMITED`: no duration choice, no countdown, no time-based auto-submit | tapping an option commits + locks it on the server; the SAME question then shows Correct/Incorrect, the correct answer and the review tools; no Check Answer button; Next is manual |
+
+  The setup shows the duration only for Exam Mode, and its notes follow the
+  chosen mode (Practice Mode never shows timer rules). The parser ignores any
+  posted time field for `INSTANT`, and `createAttemptFromQuestions` forces
+  `UNLIMITED` for a formal Practice Mode attempt and refuses Exam Mode
+  Unlimited, so a stale or crafted form can't get a timed practice attempt or
+  an untimed formal exam. **Legacy:** attempts frozen by b5f4ea4 as INSTANT
+  with a timer keep their timer (no data rewrite); Custom Module retakes reuse
+  the module's frozen config (an old INSTANT + timed module stays timed;
+  modules created now in Practice Mode store `UNLIMITED`). **Test on the
+  Go** is a deliberate quick-start preset: Exam Mode, 1 min per question, no
+  setup.
 - **UniversalTestPlayer** (`run/test-player.tsx`) runs every attempt.
 - **Policy is per test type and enforced server-side.** Mock Test, Previous
   Year Paper, Grand and Live are *formal*: admin-defined question set.
@@ -89,13 +107,18 @@ Each of these once caused a real production failure.
    deadline and no time-based auto-submit.
 6. **Answers are only revealed after the server authorizes it.** A correct
    label is serialized only for a question the server has already revealed in
-   an INSTANT attempt ("Show answer after each question"): the student must
-   commit with Check Answer first; selecting/saving reveals nothing. INSTANT is
+   an INSTANT attempt ("Show answer after each question"). In Practice Mode
+   the option tap IS the commit: it never goes through the save queue; it
+   calls `revealAnswerAction`, and the player shows nothing until the server
+   confirms. Opening, navigating to or skipping a question reveals nothing;
+   a plain save never reveals. INSTANT is
    possible for student-built practice (`instantAnswerAllowed`) and for a
    configurable Mock/PYQ (`studentConfigAllowed`); never Grand/Live, OMR entry,
    held-key mocks or admin modules. Revealing freezes the chosen option
    (`Answer.revealedAt`), so a student can't reveal and then switch to the
-   correct option. After a reveal the player reuses the Review tools (Ask AI
+   correct option. The update is conditional (`revealedAt IS NULL`), so two
+   tabs or a double tap racing on one question commit exactly one answer and
+   every response reports that one. After a reveal the player reuses the Review tools (Ask AI
    hook, WhatsApp share, Save, Report); Ask AI is authorized for exactly those
    revealed questions by `getAnswerRevealStatuses` (any other running or held
    attempt containing the question still wins). Scoring is the one
@@ -170,7 +193,19 @@ DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scr
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-pre-test-setup.ts
 #    …and in a browser (uses the step-2 fixture: setupToken / examModeToken / mockId / paperId)
 BASE=http://localhost:3100 FIXTURE=/tmp/engine-fixture.json NODE_PATH=<dir containing playwright> node scripts/verify-pre-test-setup-ui.mjs
+
+# 6. Practice Mode vs Exam Mode release gate (100-question Mock on a phone, PYQ,
+#    Subject, Custom, held key, Standard/1-min/Custom timers + timeout, themes × widths)
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/practice-mode-ui-fixture.ts setup > /tmp/pm.json
+BASE=http://localhost:3100 FIXTURE=/tmp/pm.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<dir containing playwright> node scripts/verify-practice-mode-ui.mjs
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/practice-mode-ui-fixture.ts cleanup <examId> <studentIds…>
 ```
+
+Browser suites that need the server-rendered player payload (answer-leak
+checks) fetch it from inside the page. The hydrated DOM (`page.content()`)
+no longer contains it, and Playwright's `page.request` drops the Secure
+device cookie over http, so the server sees a new device (`OTHER_DEVICE`)
+or a signed-out session.
 
 The UI suite covers the builder, 1-, 2- and 10-question tests on desktop and a
 touch phone, Mock/PYQ/Subject through the same player, and the following:

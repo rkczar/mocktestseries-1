@@ -212,22 +212,29 @@ async function createAttemptFromQuestions(params: {
   // Formal-test policy overrides any practice capability a caller passes:
   // Mock / PYQ / Grand / Live run in EXAM mode on their fixed timing unless
   // the caller passes a Pre-Test Setup choice it was allowed to offer
-  // (studentConfigAllowed). Even then UNLIMITED is never possible here.
+  // (studentConfigAllowed). Then Practice Mode (INSTANT) is always UNLIMITED
+  // whatever time was posted, and Exam Mode is always timed.
   const formal = isFormalSource(params.sourceType);
   let durationMode = formal ? AttemptDurationMode.FIXED : (params.durationMode ?? AttemptDurationMode.FIXED);
   let answerMode = formal ? AttemptAnswerMode.EXAM : (params.answerMode ?? AttemptAnswerMode.EXAM);
   let durationMinutes = params.durationMinutes;
   if (formal && params.studentConfig) {
     const choice = params.studentConfig;
-    if (choice.durationMode === "UNLIMITED") throw new TestEngineError("NOT_ALLOWED", "Choose a valid time option.");
-    durationMode = AttemptDurationMode[choice.durationMode];
-    // Standard = the admin-configured duration; the others follow the
-    // EFFECTIVE (de-duplicated, actually frozen) question count.
-    durationMinutes =
-      durationMode === AttemptDurationMode.FIXED
-        ? params.durationMinutes
-        : practiceDurationMinutes(durationMode, questions.length, choice.customMinutes);
-    answerMode = choice.answerMode === "INSTANT" ? AttemptAnswerMode.INSTANT : AttemptAnswerMode.EXAM;
+    if (choice.answerMode === "INSTANT") {
+      answerMode = AttemptAnswerMode.INSTANT;
+      durationMode = AttemptDurationMode.UNLIMITED;
+      durationMinutes = 0;
+    } else {
+      if (choice.durationMode === "UNLIMITED") throw new TestEngineError("NOT_ALLOWED", "Choose a valid test duration.");
+      answerMode = AttemptAnswerMode.EXAM;
+      durationMode = AttemptDurationMode[choice.durationMode];
+      // Standard = the admin-configured duration; the others follow the
+      // EFFECTIVE (de-duplicated, actually frozen) question count.
+      durationMinutes =
+        durationMode === AttemptDurationMode.FIXED
+          ? params.durationMinutes
+          : practiceDurationMinutes(durationMode, questions.length, choice.customMinutes);
+    }
   }
 
   // What makes an IN_PROGRESS attempt "the same test" for resume — the same
@@ -913,7 +920,7 @@ export async function revealAnswer(
   selectedOptionLabel: string,
   seq?: number
 ): Promise<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean }> {
-  if (!selectedOptionLabel) throw new TestEngineError("NO_SELECTION", "Choose an option before checking the answer.");
+  if (!selectedOptionLabel) throw new TestEngineError("NO_SELECTION", "Choose an option to check your answer.");
   const { attempt, attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, selectedOptionLabel);
   if (!(await instantRevealPermitted(attempt))) {
     throw new TestEngineError("NOT_ALLOWED", "Answers are shown after you submit this test.");

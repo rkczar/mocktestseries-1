@@ -1,18 +1,22 @@
 /**
  * TEST ENGINE CORE — HIGH RISK SHARED PATH (see ops/TEST-ENGINE.md).
  *
- * The ONE student-facing attempt configuration model: time mode + answer
- * review mode, chosen before a NEW attempt exists and frozen onto it
- * (TestAttempt.durationMode / durationMinutes / answerMode). Pure — no
- * prisma, no server-only — so the setup forms (client) and every start
- * action (server) share the exact same choices, labels and validation.
+ * The ONE student-facing attempt configuration model, chosen before a NEW
+ * attempt exists and frozen onto it (TestAttempt.durationMode /
+ * durationMinutes / answerMode). Pure — no prisma, no server-only — so the
+ * setup forms (client) and every start action (server) share the exact same
+ * choices, labels and validation.
  *
- * Which time modes a test offers is per test type:
- *  - Mock Test / Previous Year Paper: Standard (the admin-configured
- *    duration, FIXED), 1 minute per question, Custom. Never Unlimited — these
- *    tests have no unlimited concept and none is invented here.
- *  - Custom Module / Subject Test practice: 1 minute per question,
+ * The student picks the answer review mode FIRST; time only exists for it:
+ *  - EXAM ("Show answers after completing the test"): timed. The student
+ *    then chooses a duration. Mock Test / Previous Year Paper offer Standard
+ *    (the admin-configured duration, FIXED), 1 minute per question, Custom;
+ *    Custom Module / Subject Test practice offer 1 minute per question,
  *    Unlimited, Custom (unchanged from before).
+ *  - INSTANT ("Show answer after each question"): Practice Mode. Always
+ *    UNLIMITED — no duration choice, no countdown, no time-based
+ *    auto-submit. Tapping an option commits + locks it on the server and the
+ *    same question then shows its answer.
  * The server re-validates every value; the forms only collect choices.
  */
 
@@ -22,8 +26,12 @@ export const MAX_CUSTOM_DURATION_MINUTES = 600;
 export type TimeMode = "FIXED" | "PER_QUESTION" | "CUSTOM" | "UNLIMITED";
 export type AnswerReviewMode = "EXAM" | "INSTANT";
 
+/** Exam Mode duration choices for Mock Test / Previous Year Paper. */
 export const FORMAL_TIME_MODES = ["FIXED", "PER_QUESTION", "CUSTOM"] as const satisfies readonly TimeMode[];
+/** Exam Mode duration choices for Custom Module / Subject Test practice. */
 export const PRACTICE_TIME_MODES = ["PER_QUESTION", "UNLIMITED", "CUSTOM"] as const satisfies readonly TimeMode[];
+/** Practice Mode ("Show answer after each question") is always untimed. */
+export const INSTANT_TIME_MODE = "UNLIMITED" as const satisfies TimeMode;
 
 export const TIME_MODE_LABELS: Record<TimeMode, string> = {
   FIXED: "Standard test time",
@@ -36,12 +44,12 @@ export const ANSWER_MODE_OPTIONS: readonly { value: AnswerReviewMode; label: str
   {
     value: "EXAM",
     label: "Show answers after completing the test",
-    hint: "Exam style: answers and explanations appear in Review after you submit.",
+    hint: "Complete the test first, then review answers and explanations.",
   },
   {
     value: "INSTANT",
     label: "Show answer after each question",
-    hint: "Choose an option and tap “Check Answer”. That locks your answer, then shows the correct answer and explanation.",
+    hint: "Select an answer to immediately check it and learn before moving on.",
   },
 ];
 
@@ -60,8 +68,11 @@ export function parseCustomMinutes(raw: unknown): number | null {
 }
 
 /**
- * Reads + validates the setup form fields (`durationMode`, `customMinutes`,
- * `answerMode`). `defaultMode` is used only when the field is absent.
+ * Reads + validates the setup form fields (`answerMode`, then — for EXAM
+ * only — `durationMode` + `customMinutes`). `allowed` / `defaultMode` are
+ * the EXAM duration choices of the test type; `defaultMode` is used only
+ * when the field is absent. INSTANT ignores any posted time field (a stale
+ * form, a crafted POST) and is always UNLIMITED.
  */
 export function parseAttemptConfigForm(
   formData: FormData,
@@ -72,9 +83,13 @@ export function parseAttemptConfigForm(
     const value = formData.get(key);
     return typeof value === "string" ? value.trim() : "";
   };
+  const answerRaw = read("answerMode") || "EXAM";
+  if (answerRaw !== "EXAM" && answerRaw !== "INSTANT") return { ok: false, error: "Choose how you want to review answers." };
+  if (answerRaw === "INSTANT") return { ok: true, config: { durationMode: INSTANT_TIME_MODE, answerMode: "INSTANT" } };
+
   const durationRaw = read("durationMode") || defaultMode;
   const durationMode = allowed.find((m) => m === durationRaw);
-  if (!durationMode) return { ok: false, error: "Choose a valid time option." };
+  if (!durationMode) return { ok: false, error: "Choose a valid test duration." };
 
   let customMinutes: number | undefined;
   if (durationMode === "CUSTOM") {
@@ -84,10 +99,7 @@ export function parseAttemptConfigForm(
     }
     customMinutes = parsed;
   }
-
-  const answerRaw = read("answerMode") || "EXAM";
-  if (answerRaw !== "EXAM" && answerRaw !== "INSTANT") return { ok: false, error: "Choose when to see the answers." };
-  return { ok: true, config: { durationMode, customMinutes, answerMode: answerRaw } };
+  return { ok: true, config: { durationMode, customMinutes, answerMode: "EXAM" } };
 }
 
 /** Minutes a choice resolves to for display (the server computes the frozen value itself). */

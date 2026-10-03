@@ -67,6 +67,23 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
   const retakeBlocked = mockTest.attemptPolicy === "SINGLE_ATTEMPT" && latestSubmittedAttempt !== null;
   const questionCount = mockTest._count.questions;
 
+  // The same branch order as `action` below: the Pre-Test Setup is offered
+  // only when nothing earlier (resume, paywall, window, retake, empty) wins.
+  const showSetup =
+    !inProgressAttempt &&
+    access.allowed &&
+    availability !== "UPCOMING" &&
+    availability !== "CLOSED" &&
+    !retakeBlocked &&
+    questionCount > 0 &&
+    studentConfigAllowed(AttemptSourceType.MOCK_TEST, mockTest);
+  const testRules = (
+    <>
+      {mockTest.negativeMarking > 0 ? <li>Each wrong answer deducts {mockTest.negativeMarking} mark(s).</li> : null}
+      {mockTest.attemptPolicy === "SINGLE_ATTEMPT" ? <li>Only one attempt is allowed for this test.</li> : null}
+    </>
+  );
+
   let action: React.ReactNode;
   if (inProgressAttempt && access.allowed) {
     action = <StartMockForm mockTestId={mockTest.id} label="Resume Test" />;
@@ -119,9 +136,11 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
         No questions published yet
       </Button>
     );
-  } else if (studentConfigAllowed(AttemptSourceType.MOCK_TEST, mockTest)) {
-    // Pre-Test Setup (time + answer review) before the attempt exists; the
-    // server re-runs every gate above when it is submitted.
+  } else if (showSetup) {
+    // Pre-Test Setup (answer review, then duration for Exam Mode) before the
+    // attempt exists; the server re-runs every gate above when it is submitted.
+    // Its notes follow the chosen mode, so the static timer rules below are
+    // shown only for a mock without a setup.
     action = (
       <PreTestSetup
         kind="MOCK_TEST"
@@ -129,6 +148,7 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
         questionCount={questionCount}
         standardMinutes={mockTest.durationMinutes}
         submitLabel={latestSubmittedAttempt ? "Practice Again" : "Start Test"}
+        notes={testRules}
       />
     );
   } else {
@@ -226,17 +246,18 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
         </Card>
       ) : null}
 
-      <Card>
-        <CardContent className="pt-5 text-sm text-[var(--color-muted-foreground)]">
-          <ul className="list-disc space-y-1 pl-5">
-            <li>The timer starts when you press Start Test and cannot be paused.</li>
-            <li>The test auto-submits when time runs out.</li>
-            <li>You can navigate between questions and change answers until you submit.</li>
-            {mockTest.negativeMarking > 0 ? <li>Each wrong answer deducts {mockTest.negativeMarking} mark(s).</li> : null}
-            {mockTest.attemptPolicy === "SINGLE_ATTEMPT" ? <li>Only one attempt is allowed for this test.</li> : null}
-          </ul>
-        </CardContent>
-      </Card>
+      {showSetup ? null : (
+        <Card>
+          <CardContent className="pt-5 text-sm text-[var(--color-muted-foreground)]">
+            <ul className="list-disc space-y-1 pl-5">
+              <li>The timer starts when you press Start Test and cannot be paused.</li>
+              <li>The test auto-submits when time runs out.</li>
+              <li>You can navigate between questions and change answers until you submit.</li>
+              {testRules}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       {action}
 

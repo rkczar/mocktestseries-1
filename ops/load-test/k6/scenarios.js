@@ -52,6 +52,25 @@ function action(path, id, args, token, trend) {
   return r;
 }
 
+// A useActionState form action (prevState, formData). React's reply encoding:
+// the FormData fields are "_1_<name>" and must come BEFORE the root part "0".
+function formAction(path, id, fields, token, trend) {
+  const boundary = "----mtsk6" + Math.random().toString(36).slice(2);
+  const part = (name, value) => `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
+  const body = Object.entries(fields).map(([k, v]) => part(`_1_${k}`, v)).join("") + part("0", '[{},"$K1"]') + `--${boundary}--\r\n`;
+  const r = http.post(`${BASE}${path}`, body, {
+    headers: { ...cookie(token), "Next-Action": id, Accept: "text/x-component", "Content-Type": `multipart/form-data; boundary=${boundary}`, Origin: BASE },
+    redirects: 0,
+    tags: { name: trend },
+  });
+  lat[trend].add(r.timings.duration);
+  // Success redirects (303) to the new attempt; a refusal answers 200 with {"error":...}.
+  const ok = r.status === 303 || (r.status === 200 && !/"error":/.test(r.body || ""));
+  if (!ok) appErrors.add(1, { op: trend, status: String(r.status) });
+  check(r, { [`${trend} ok`]: () => ok });
+  return r;
+}
+
 function page(path, token) {
   const r = http.get(`${BASE}${path}`, { headers: cookie(token), redirects: 0, tags: { name: path.replace(/c[a-z0-9]{24}/g, ":id") } });
   lat.page.add(r.timings.duration);
@@ -80,9 +99,12 @@ const ops = {
     action(`/student/attempt/${a.attemptId}/run`, F.actions.attemptHeartbeatAction, [a.attemptId], a.token, "heartbeat");
   },
   start() {
-    // Each iteration starts a fresh attempt for a distinct student (no double-start).
+    // Each iteration starts a fresh attempt for a distinct student (no double-start),
+    // through the Pre-Test Setup action exactly as the browser posts it: Exam Mode
+    // (answers after the test) + Standard time, the leaderboard-eligible formal exam.
     const s = F.students[exec.scenario.iterationInTest % F.students.length];
-    action(`/student/test-series/${F.mocks[0]}`, F.actions.startMockTestFromDetailsAction, [F.mocks[0]], s.token, "start");
+    formAction(`/student/test-series/${F.mocks[0]}`, F.actions.startConfiguredTestAction,
+      { kind: "MOCK_TEST", testId: F.mocks[0], answerMode: "EXAM", durationMode: "FIXED" }, s.token, "start");
   },
   submit() {
     const a = F.inProgress[exec.scenario.iterationInTest % F.inProgress.length];

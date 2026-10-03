@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
 import { QuestionCountPresets } from "@/components/student/question-count-presets";
-import { AnswerModeField, TimeModeField } from "@/components/student/test-mode-fields";
+import { AttemptModeFields } from "@/components/student/test-mode-fields";
 import { PRACTICE_TIME_MODES } from "@/lib/attempt-config";
 
 /**
@@ -20,8 +20,8 @@ import { PRACTICE_TIME_MODES } from "@/lib/attempt-config";
  *
  * Formal tests (Mock Test, full Previous Year Paper) never use this form:
  * their question set is admin-defined. Their Pre-Test Setup
- * (components/student/pre-test-setup.tsx) shares the same Time / Answer
- * review fields (components/student/test-mode-fields.tsx).
+ * (components/student/pre-test-setup.tsx) shares the same answer review →
+ * duration fields (components/student/test-mode-fields.tsx).
  */
 
 const DIFFICULTIES = ["EASY", "MEDIUM", "HARD"] as const;
@@ -320,9 +320,7 @@ export function UniversalTestSetup({
             </p>
           </div>
 
-          <TimeModeField modes={PRACTICE_TIME_MODES} defaultMode="PER_QUESTION" questionCount={count} />
-
-          <AnswerModeField className="flex flex-col gap-1.5 sm:col-span-2" />
+          <AttemptModeFields timeModes={PRACTICE_TIME_MODES} defaultTimeMode="PER_QUESTION" questionCount={count} />
         </CardContent>
       </Card>
 

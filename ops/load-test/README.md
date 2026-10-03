@@ -53,6 +53,7 @@ Re-run `sign-in.ts` after `prepare-attempts.ts` or any submit scenario. Submit
 consumes in-progress attempts, so run it last or re-prepare. Server-action ids
 change on every build, so re-seed or re-read them after rebuilding.
 
-The FormData-based start action (`startMockTestFromDetailsAction`) is not
-driven over HTTP yet. Mass starts are measured at function level by
-`burst-engine.ts`.
+The `start` scenario posts the Pre-Test Setup form action
+(`startConfiguredTestAction`) as multipart FormData, explicitly choosing
+answers after the test + Standard time (the formal, leaderboard-eligible
+exam). Mass starts are also measured at function level by `burst-engine.ts`.

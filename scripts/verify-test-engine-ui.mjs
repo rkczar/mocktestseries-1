@@ -78,9 +78,12 @@ async function build(page, { count, durationMode = "PER_QUESTION", customMinutes
   const count_ = page.locator('input[name="count"]');
   await count_.fill(String(count));
   await count_.blur();
-  await page.locator(`input[name="durationMode"][value="${durationMode}"]`).check();
-  if (customMinutes) await page.locator('input[name="customMinutes"]').fill(String(customMinutes));
+  // Answer review first; only "answers after the test" then asks for a duration.
   await page.locator(`input[name="answerMode"][value="${answerMode}"]`).check();
+  if (answerMode === "EXAM") {
+    await page.locator(`input[name="durationMode"][value="${durationMode}"]`).check();
+    if (customMinutes) await page.locator('input[name="customMinutes"]').fill(String(customMinutes));
+  }
   await page.getByRole("button", { name: /Create & Start/ }).click();
   await page.waitForURL(/\/student\/attempt\/[^/]+$/, { timeout: 20000 });
   const attemptId = page.url().split("/").pop();
@@ -228,27 +231,25 @@ async function main() {
       check("exam mode: no Check Answer button", (await page.getByRole("button", { name: "Check Answer" }).count()) === 0);
       await submit(page);
 
-      await build(page, { count: 2, answerMode: "INSTANT" });
-      check("instant: no answer key before Check Answer", !/correctLabel/.test(await page.content()));
-      const checkBtn = page.getByRole("button", { name: "Check Answer" });
-      check("instant: Check Answer disabled until an option is chosen", await checkBtn.isDisabled());
-      await pick(page, "A"); // fixture: B is always correct
-      check("instant: tapping an option does NOT reveal", (await page.locator("[data-testid=reveal-result]").count()) === 0);
-      await checkBtn.click();
+      const inst = await build(page, { count: 2, answerMode: "INSTANT" });
+      check("instant: untimed (no time limit, no countdown)", /No time limit/.test(inst.instructions) && /No time limit/.test(await page.locator("[data-testid=timer]").innerText()));
+      check("instant: no answer key before an option is tapped", !/correctLabel/.test(await page.content()));
+      check("instant: no Check Answer button", (await page.getByRole("button", { name: "Check Answer" }).count()) === 0);
+      await option(page, "A").click(); // fixture: B is always correct
       await page.waitForSelector("[data-testid=reveal-result]");
       const verdict = await page.locator("[data-testid=reveal-result]").innerText();
-      check("instant: shows Incorrect + correct option", /Incorrect/.test(verdict) && /correct answer: B/.test(verdict), verdict);
+      check("instant: tapping an option commits + shows Incorrect + correct option", /Incorrect/.test(verdict) && /correct answer: B/.test(verdict), verdict);
       check("instant: options locked after reveal", await option(page, "B").locator("input").isDisabled());
+      check("instant: stays on the same question (no auto-advance)", (await position(page)) === 0);
       await page.reload();
       await page.waitForSelector("[data-testid=test-player]");
       check("instant: reveal persists across refresh", /Incorrect/.test(await page.locator("[data-testid=reveal-result]").innerText()));
       check("instant: answer still A after refresh (not switchable)", (await isPicked(page, "A")) && (await option(page, "B").locator("input").isDisabled()));
       const html = await page.content();
       check("instant: only the revealed question's key is in the payload", (html.match(/correctLabel/g) || []).length >= 1 && (await page.getByRole("button", { name: "Go to question 2" }).count()) === 1);
-      await next(page);
+      await page.getByRole("button", { name: /^Next/ }).click();
       check("instant: Q2 not revealed", (await page.locator("[data-testid=reveal-result]").count()) === 0);
-      await pick(page, "B");
-      await page.getByRole("button", { name: "Check Answer" }).click();
+      await option(page, "B").click();
       await page.waitForSelector("[data-testid=reveal-result]");
       check("instant: correct pick shows Correct", /Correct/.test(await page.locator("[data-testid=reveal-result]").innerText()));
       await submit(page);

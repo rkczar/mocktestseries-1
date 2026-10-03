@@ -97,14 +97,16 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
               </>
             )}
             {instant ? (
-              <li>
-                Answers are shown after each question: choose an option, then tap “Check Answer”. Checking locks that answer and
-                shows the correct answer and explanation.
-              </li>
+              <>
+                <li>Select an option to check your answer. Once checked, that answer is locked.</li>
+                <li>You then see the correct answer and explanation before moving on.</li>
+              </>
             ) : (
-              <li>Answers and explanations are shown in Review after the test.</li>
+              <>
+                <li>Answers and explanations are shown in Review after the test.</li>
+                <li>You can navigate between questions and change answers until you submit.</li>
+              </>
             )}
-            <li>You can navigate between questions and change answers until you submit.</li>
             {attempt.negativeMarking > 0 ? <li>Each wrong answer deducts {attempt.negativeMarking} mark(s).</li> : null}
           </ul>
         </CardContent>

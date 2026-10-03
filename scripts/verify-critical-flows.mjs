@@ -52,6 +52,19 @@ function check(label, passed, detail) {
 
 const browser = await chromium.launch();
 
+/**
+ * A request made by the page itself (fetch, redirects followed): it carries
+ * the browser's own cookies. Playwright's page.request drops the Secure
+ * device cookie over plain http, so the server saw a new, signed-out device.
+ */
+async function inPage(page, url) {
+  return page.evaluate(async (u) => {
+    const r = await fetch(u, { credentials: "same-origin" });
+    const at = new URL(r.url);
+    return { status: r.status, at: at.pathname + at.search, type: r.headers.get("content-type") ?? "" };
+  }, url);
+}
+
 async function newPage({ mobile = false } = {}) {
   const ctx = await browser.newContext(mobile ? { ...devices["Pixel 7"] } : { viewport: { width: 1366, height: 900 } });
   const page = await ctx.newPage();
@@ -333,8 +346,8 @@ try {
     await page.goto(`${BASE}/student/live-tests`);
     check("/student/live-tests (retired) → Test Series", path(page.url()) === "/student/test-series" && !(await crashed(page)), path(page.url()));
     // Retired page: forwards to the Practice OMR sheet download.
-    const omr = await page.request.get(`${BASE}/student/omr`);
-    check("/student/omr downloads the OMR sheet", omr.status() === 200 && /pdf|octet-stream/.test(omr.headers()["content-type"] ?? ""), { status: omr.status(), type: omr.headers()["content-type"] });
+    const omr = await inPage(page, `${BASE}/student/omr`);
+    check("/student/omr downloads the OMR sheet", omr.status === 200 && /pdf|octet-stream/.test(omr.type), omr);
     check("T10 no errors", clean(page), page.errors);
     await page.context().close();
   }
@@ -344,16 +357,16 @@ try {
     const page = await newPage();
     await login(page, F.students.expired.email);
     // The start link never creates an attempt: it resumes, or opens the Pre-Test Setup.
-    const rs = await Promise.all(Array.from({ length: 6 }, () => page.request.get(`${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`, { maxRedirects: 0 })));
-    const targets = new Set(rs.map((r) => r.headers()["location"]));
+    const rs = await Promise.all(Array.from({ length: 6 }, () => inPage(page, `${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`)));
+    const targets = new Set(rs.map((r) => r.at));
     check("6 concurrent start links → the one setup page", targets.size === 1 && [...targets][0] === `/student/test-series/${F.freeMockId}`, [...targets]);
     const none = await db(`select count(*)::int n from "TestAttempt" where "studentId"='${F.students.expired.id}' and "mockTestId"='${F.freeMockId}'`);
     if (none) check("no attempt written before Start is pressed", none[0].n === 0, none);
     // Concurrent configured starts (server action) are covered by scripts/verify-pre-test-setup.ts.
     await page.goto(`${BASE}/student/test-series/${F.freeMockId}`);
     const oldId = await startFromSetup(page);
-    const again = await Promise.all(Array.from({ length: 6 }, () => page.request.get(`${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`, { maxRedirects: 0 })));
-    const resumed = new Set(again.map((r) => r.headers()["location"]));
+    const again = await Promise.all(Array.from({ length: 6 }, () => inPage(page, `${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`)));
+    const resumed = new Set(again.map((r) => r.at));
     check("6 concurrent start links while running → the SAME attempt", resumed.size === 1 && [...resumed][0] === `/student/attempt/${oldId}`, [...resumed]);
     const rows = await db(`select count(*)::int n from "TestAttempt" where "studentId"='${F.students.expired.id}' and "mockTestId"='${F.freeMockId}' and status='IN_PROGRESS'`);
     if (rows) check("one IN_PROGRESS row in the database", rows[0].n === 1, rows);
@@ -361,8 +374,8 @@ try {
     console.log("T11b Start after the time ran out → a fresh setup, not the dead attempt");
     if (rows && oldId) {
       await db(`update "TestAttempt" set "startedAt" = now() - interval '2 days' where id='${oldId}'`);
-      const res = await page.request.get(`${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`, { maxRedirects: 0 });
-      check("Start offers a NEW setup (dead attempt not resumed)", res.headers()["location"] === `/student/test-series/${F.freeMockId}`, res.headers()["location"]);
+      const res = await inPage(page, `${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`);
+      check("Start offers a NEW setup (dead attempt not resumed)", res.at === `/student/test-series/${F.freeMockId}`, res.at);
       const [old] = await db(`select status from "TestAttempt" where id='${oldId}'`);
       check("the timed-out attempt was finalized (SUBMITTED), not left dangling", old.status === "SUBMITTED", old);
     }

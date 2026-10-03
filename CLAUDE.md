@@ -30,10 +30,16 @@ route when `/student/attempt/[attemptId]/*` can do the job, never send correct
 answers to the client before an authorized reveal, and run the focused
 test-engine regression after any shared-player change. Custom Module and
 Subject Test configure through `components/student/universal-test-setup.tsx`.
-Mock Test and PYQ show the Pre-Test Setup (`components/student/pre-test-setup.tsx`):
-Standard / 1 min per question / Custom time and answers after the test / after
-each question, frozen on the attempt. Both forms share
-`components/student/test-mode-fields.tsx` + `lib/attempt-config.ts`. Grand/Live,
+Mock Test and PYQ show the Pre-Test Setup (`components/student/pre-test-setup.tsx`).
+Both forms share `components/student/test-mode-fields.tsx` + `lib/attempt-config.ts`
+and ask the answer review mode FIRST; the choice is frozen on the attempt:
+- **EXAM MODE** — "Show answers after completing the test" → timed → Standard /
+  1 min per question / Custom → normal secure exam behavior (Custom Module /
+  Subject Test: 1 min per question / Unlimited / Custom).
+- **PRACTICE MODE** — "Show answer after each question" → untimed/unlimited → no
+  duration selection → selecting an option commits and locks it on the server →
+  the same question immediately reveals answer/review → no separate Check Answer
+  button, no auto-advance. Grand/Live,
 OMR entry and mocks with a held answer key (window, delayed release) stay formal
 EXAM + admin timing — enforced server-side in `lib/test-attempt.ts`
 (`studentConfigAllowed`), never by hiding UI.

@@ -24,6 +24,11 @@
  *  4. Navigation (Next / Previous / palette) is purely local and never waits
  *     on the network, so it cannot hang.
  *  5. The countdown is derived from a fixed deadline, not decremented state.
+ *  6. Practice Mode ("Show answer after each question", INSTANT): tapping an
+ *     option IS the check. It never goes through the save queue: the tap is
+ *     sent to revealAnswerAction, the server commits + locks that first
+ *     answer and only then returns the correct label for THAT question. The
+ *     same question then shows its review state; nothing auto-advances.
  */
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
@@ -69,7 +74,7 @@ export interface PlayerQuestion {
   saved: boolean;
   /**
    * "Show answer after each question" only: the admin WhatsApp share text
-   * (question + options, never the answer). Shown after the answer is checked.
+   * (question + options, never the answer). Shown once the answer is committed.
    */
   shareText?: string | null;
 }
@@ -179,7 +184,9 @@ export function TestPlayer({
   const [reveals, setReveals] = useState<Record<string, RevealState>>(() =>
     Object.fromEntries(questions.filter((q) => q.reveal).map((q) => [q.questionId, q.reveal as RevealState]))
   );
-  const [revealing, setRevealing] = useState<string | null>(null);
+  /** Practice Mode: the one option tap waiting for the server to commit + reveal it. */
+  const [checking, setChecking] = useState<{ questionId: string; label: string } | null>(null);
+  const checkingRef = useRef(false);
   const [revealError, setRevealError] = useState<{ questionId: string; message: string } | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, SaveStatus>>({});
   const [problem, setProblem] = useState<Problem | null>(null);
@@ -368,12 +375,21 @@ export function TestPlayer({
     }
   };
 
-  const checkAnswer = (questionId: string) => {
-    const selected = statesRef.current[questionId]?.selected;
-    if (!selected || revealing || reveals[questionId]) return;
-    setRevealing(questionId);
+  /**
+   * Practice Mode: the student tapped an option. The server commits that
+   * answer and locks it in the same conditional update that stamps
+   * revealedAt (first commit wins — a second tab or a double tap gets the
+   * already-frozen answer back), and only then returns the correct label for
+   * this one question. Until it confirms, nothing is revealed and nothing is
+   * written to local answer state, so a failed check leaves the question
+   * open to try again.
+   */
+  const checkAnswer = (questionId: string, label: string) => {
+    if (submittedRef.current || checkingRef.current || reveals[questionId]) return;
+    checkingRef.current = true;
+    setChecking({ questionId, label });
     setRevealError(null);
-    withTimeout(revealAnswerAction(attemptId, questionId, selected, getQueue().nextSeq()), SAVE_TIMEOUT_MS)
+    withTimeout(revealAnswerAction(attemptId, questionId, label, getQueue().nextSeq()), SAVE_TIMEOUT_MS)
       .then((result) => {
         if (result.ok) {
           setReveals((prev) => ({ ...prev, [questionId]: { correctLabel: result.correctLabel } }));
@@ -387,10 +403,22 @@ export function TestPlayer({
           finishRef.current("auto");
           return;
         }
+        if (result.code === "OTHER_DEVICE") {
+          queueRef.current?.stop();
+          setProblem({ kind: "other-device", message: OTHER_DEVICE_NOTICE });
+          return;
+        }
+        if (result.code === "NOT_EDITABLE") {
+          router.replace(`/student/attempt/${attemptId}/result`);
+          return;
+        }
         setRevealError({ questionId, message: result.message });
       })
-      .catch(() => setRevealError({ questionId, message: "Could not check the answer. Please try again." }))
-      .finally(() => setRevealing(null));
+      .catch(() => setRevealError({ questionId, message: "Could not check the answer. Tap an option to try again." }))
+      .finally(() => {
+        checkingRef.current = false;
+        setChecking(null);
+      });
   };
 
   if (questions.length === 0) {
@@ -408,6 +436,9 @@ export function TestPlayer({
   const question = questions[Math.min(current, questions.length - 1)];
   const state = states[question.questionId] ?? { selected: null, marked: false, visited: true };
   const reveal = reveals[question.questionId] ?? null;
+  const checkingHere = checking?.questionId === question.questionId ? checking.label : null;
+  /** Practice Mode question waiting for its first committed answer: options are the check action. */
+  const practiceOpen = instantMode && !reveal && !question.malformed;
   const qSave = saveStatus[question.questionId];
   const isLast = current === questions.length - 1;
 
@@ -540,7 +571,7 @@ export function TestPlayer({
             ) : (
               <div className="mt-5 flex flex-col gap-2.5" role="radiogroup" aria-label={`Question ${current + 1} options`}>
                 {question.options.map((opt, idx) => {
-                  const selected = state.selected === opt.label;
+                  const selected = (checkingHere ?? state.selected) === opt.label;
                   const isCorrect = reveal ? opt.label === reveal.correctLabel : false;
                   const isWrongPick = reveal ? selected && !isCorrect : false;
                   return (
@@ -550,7 +581,7 @@ export function TestPlayer({
                       data-label={opt.label}
                       className={cn(
                         "flex items-start gap-3 rounded-[var(--radius-card)] border p-3 transition-colors",
-                        reveal ? "cursor-default" : "cursor-pointer",
+                        reveal || checkingHere ? "cursor-default" : "cursor-pointer",
                         isCorrect
                           ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
                           : isWrongPick
@@ -566,8 +597,11 @@ export function TestPlayer({
                         value={opt.label}
                         className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
                         checked={selected}
-                        disabled={!!reveal || submitting}
-                        onChange={() => setAnswer(question.questionId, { selected: opt.label })}
+                        disabled={!!reveal || !!checking || submitting}
+                        // Practice Mode commits on the tap itself (also a tap on an option a
+                        // legacy attempt pre-selected without checking). Exam Mode only selects.
+                        onClick={practiceOpen ? () => checkAnswer(question.questionId, opt.label) : undefined}
+                        onChange={practiceOpen ? () => {} : () => setAnswer(question.questionId, { selected: opt.label })}
                       />
                       <span className="min-w-0 text-sm text-[var(--color-foreground)]">
                         <span className="font-semibold">{opt.label}.</span> {opt.text}
@@ -609,16 +643,9 @@ export function TestPlayer({
                     )}
                   </p>
                 ) : (
-                  <div>
-                    <Button
-                      variant="outline"
-                      onClick={() => checkAnswer(question.questionId)}
-                      disabled={!state.selected || revealing === question.questionId || submitting}
-                    >
-                      {revealing === question.questionId ? "Checking…" : "Check Answer"}
-                    </Button>
-                    <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">Checking locks your answer for this question.</p>
-                  </div>
+                  <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="practice-hint" aria-live="polite">
+                    {checkingHere ? "Checking your answer…" : "Select an option to check your answer. Your first answer is final."}
+                  </p>
                 )}
                 {reveal ? (
                   <RevealedReviewTools
@@ -643,7 +670,7 @@ export function TestPlayer({
               <Button
                 variant="outline"
                 onClick={() => setAnswer(question.questionId, { selected: null, marked: false })}
-                disabled={!!reveal || submitting || question.malformed}
+                disabled={!!reveal || !!checking || submitting || question.malformed}
               >
                 Clear Response
               </Button>
@@ -651,7 +678,7 @@ export function TestPlayer({
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
-                disabled={submitting}
+                disabled={submitting || !!checkingHere}
                 onClick={() => {
                   setAnswer(question.questionId, { marked: !state.marked });
                   goTo(current + 1);
@@ -665,7 +692,7 @@ export function TestPlayer({
                 </Button>
               ) : (
                 <Button onClick={() => goTo(current + 1)}>
-                  Save & Next <ChevronRight className="h-4 w-4" aria-hidden />
+                  {instantMode ? "Next" : "Save & Next"} <ChevronRight className="h-4 w-4" aria-hidden />
                 </Button>
               )}
             </div>
@@ -740,9 +767,9 @@ export function TestPlayer({
 
 /**
  * "Show answer after each question": the review tools for ONE question the
- * server has already revealed (the student committed their answer with Check
- * Answer). Reuses the Review page's own pieces — the correct-answer line, the
- * Ask AI hook (explanation + variants; the server authorizes it through the
+ * server has already revealed (the student's tap committed and locked it).
+ * Reuses the Review page's own pieces — the correct-answer line, the Ask AI
+ * hook (explanation + variants; the server authorizes it through the
  * same answer-reveal rule and AI quota, and nothing is fetched until the
  * student taps it) and the WhatsApp share button (question + options only).
  * Save / Report stay in the question header for every mode.

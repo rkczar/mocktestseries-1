@@ -1,15 +1,19 @@
 /**
  * Pre-Test Setup regression (server side, TEST ENGINE CORE).
  *
- * The student's time mode + answer review mode for a NEW Mock Test / PYQ
- * attempt, frozen onto the attempt, and the "Show answer after each
- * question" reveal path:
- *  - config parsing/validation (lib/attempt-config.ts);
- *  - preview writes nothing; Standard / 1 min per question / Custom frozen;
- *    Unlimited impossible for formal tests;
+ * The student's answer review mode (+ duration for Exam Mode only) for a
+ * NEW Mock Test / PYQ attempt, frozen onto the attempt, and the "Show answer
+ * after each question" (Practice Mode) commit path:
+ *  - config parsing/validation (lib/attempt-config.ts): Practice Mode needs
+ *    and accepts no duration and is always UNLIMITED;
+ *  - preview writes nothing; Exam Mode Standard / 1 min per question / Custom
+ *    frozen; Exam Mode Unlimited impossible for formal tests;
+ *  - Practice Mode: no deadline, never expires, no time-based auto-submit;
  *  - resume/refresh/re-start can never change a running attempt's config;
- *  - no answer key before a committed Check Answer, the reveal freezes the
- *    answer, Ask AI unlocks for that question only;
+ *  - no answer key before the tapped option is committed, the commit freezes
+ *    the first answer (concurrent taps: one deterministic winner), Ask AI
+ *    unlocks for that question only;
+ *  - b5f4ea4-era timed INSTANT attempts keep their timer and still reveal;
  *  - held-answer-key mocks, Grand/Live and OMR stay formal (even tampered);
  *  - same scoring in both modes; only Standard + after-test ranks;
  *  - concurrent start = one attempt; concurrent submit = one submission;
@@ -121,13 +125,22 @@ async function main() {
     {
       const d = parseAttemptConfigForm(form({}), FORMAL_TIME_MODES, "FIXED");
       check("formal default = Standard + answers after the test", d.ok && d.config.durationMode === "FIXED" && d.config.answerMode === "EXAM");
-      const ok = parseAttemptConfigForm(form({ durationMode: "CUSTOM", customMinutes: "45", answerMode: "INSTANT" }), FORMAL_TIME_MODES, "FIXED");
-      check("custom 45 + instant parsed", ok.ok && ok.config.customMinutes === 45 && ok.config.answerMode === "INSTANT");
+      const ok = parseAttemptConfigForm(form({ durationMode: "CUSTOM", customMinutes: "45", answerMode: "EXAM" }), FORMAL_TIME_MODES, "FIXED");
+      check("exam + custom 45 parsed", ok.ok && ok.config.customMinutes === 45 && ok.config.answerMode === "EXAM" && ok.config.durationMode === "CUSTOM");
+      const inst = parseAttemptConfigForm(form({ answerMode: "INSTANT" }), FORMAL_TIME_MODES, "FIXED");
+      check("practice mode needs no duration → UNLIMITED", inst.ok && inst.config.answerMode === "INSTANT" && inst.config.durationMode === "UNLIMITED" && inst.config.customMinutes === undefined);
+      const staleFields: Record<string, string>[] = [{ durationMode: "FIXED" }, { durationMode: "PER_QUESTION" }, { durationMode: "CUSTOM", customMinutes: "600" }, { durationMode: "CUSTOM", customMinutes: "junk" }];
+      for (const stale of staleFields) {
+        const r = parseAttemptConfigForm(form({ answerMode: "INSTANT", ...stale }), FORMAL_TIME_MODES, "FIXED");
+        check(`practice mode ignores a posted time field ${JSON.stringify(stale)} → UNLIMITED`, r.ok && r.config.durationMode === "UNLIMITED");
+      }
+      const pi = parseAttemptConfigForm(form({ answerMode: "INSTANT", durationMode: "PER_QUESTION" }), PRACTICE_TIME_MODES, "PER_QUESTION");
+      check("subject/custom practice mode → UNLIMITED too", pi.ok && pi.config.durationMode === "UNLIMITED");
       for (const bad of ["0", "-5", "abc", "", "12.5", "1e3", "NaN", String(MAX_CUSTOM_DURATION_MINUTES + 1), "99999"]) {
         const r = parseAttemptConfigForm(form({ durationMode: "CUSTOM", customMinutes: bad }), FORMAL_TIME_MODES, "FIXED");
         check(`custom minutes "${bad}" rejected`, !r.ok);
       }
-      check("formal: Unlimited is not offered/accepted", !parseAttemptConfigForm(form({ durationMode: "UNLIMITED" }), FORMAL_TIME_MODES, "FIXED").ok);
+      check("formal exam mode: Unlimited is not offered/accepted", !parseAttemptConfigForm(form({ durationMode: "UNLIMITED" }), FORMAL_TIME_MODES, "FIXED").ok);
       check("practice: Standard is not offered/accepted", !parseAttemptConfigForm(form({ durationMode: "FIXED" }), PRACTICE_TIME_MODES, "PER_QUESTION").ok);
       check("unknown answer mode rejected", !parseAttemptConfigForm(form({ answerMode: "REVEAL_ALL" }), FORMAL_TIME_MODES, "FIXED").ok);
     }
@@ -184,8 +197,11 @@ async function main() {
     let instantScore = 0;
     const responses: Record<string, string | null> = {};
     {
+      // Even a stale/crafted FIXED time is overridden: Practice Mode is untimed.
       const a = await startMockTestAttempt(sInst, mock.id, undefined, cfg("FIXED", "INSTANT"));
-      check("INSTANT frozen on the mock attempt", a.answerMode === "INSTANT" && a.durationMode === "FIXED");
+      check("practice mode frozen on the mock attempt: INSTANT + UNLIMITED, 0 minutes", a.answerMode === "INSTANT" && a.durationMode === "UNLIMITED" && a.durationMinutes === 0);
+      const timed = toServerTimedAttempt({ ...a, startedAt: new Date(Date.now() - 30 * 86_400_000) });
+      check("practice mode: no deadline (30 days later still not expired)", timed.unlimited === true && remainingSecondsFor(timed) > 10 ** 9);
       const rows = await prisma.testAttemptQuestion.findMany({ where: { attemptId: a.id }, orderBy: { order: "asc" }, include: { answer: true } });
       const [q1, q2, q3, q4] = rows.map((r) => r.questionId);
 
@@ -200,6 +216,12 @@ async function main() {
 
       const r1 = await revealAnswer(a.id, sInst, q1, wrongOf(q1), 2);
       check("commit wrong answer → incorrect + correct label returned", !r1.isCorrect && r1.correctLabel === correctOf(q1) && r1.selectedOptionLabel === wrongOf(q1));
+      const afterQ1 = toPlayerQuestions(
+        await prisma.testAttemptQuestion.findMany({ where: { attemptId: a.id }, orderBy: { order: "asc" }, include: { answer: true } }),
+        { instantMode: true }
+      );
+      check("after Q1 commit: ONLY Q1 carries its key (no preload of others)", afterQ1[0].reveal?.correctLabel === correctOf(q1) && afterQ1.slice(1).every((p) => p.reveal === null));
+      check("re-tapping the correct option after the reveal returns the frozen wrong answer", (await revealAnswer(a.id, sInst, q1, correctOf(q1), 3)).selectedOptionLabel === wrongOf(q1));
       check("committed answer is final (switching to the key refused)", (await outcome(() => saveAnswer(a.id, sInst, q1, correctOf(q1), false, 3))) === "LOCKED");
       check("mark-for-review still allowed after commit", (await outcome(() => saveAnswer(a.id, sInst, q1, wrongOf(q1), true, 4))) === "OK");
       const r2 = await revealAnswer(a.id, sInst, q2, correctOf(q2), 5);
@@ -227,7 +249,7 @@ async function main() {
     {
       const sExam = await mkStudent("EXAM");
       const a = await startMockTestAttempt(sExam, mock.id, undefined, cfg("FIXED", "EXAM"));
-      check("after-test mode: Check Answer refused", (await outcome(() => revealAnswer(a.id, sExam, bank[0].id, wrongOf(bank[0].id), 1))) === "NOT_ALLOWED");
+      check("after-test mode: reveal refused", (await outcome(() => revealAnswer(a.id, sExam, bank[0].id, wrongOf(bank[0].id), 1))) === "NOT_ALLOWED");
       let seq = 10;
       for (const [qid, label] of Object.entries(responses)) if (label) await saveAnswer(a.id, sExam, qid, label, false, seq++);
       const rows = await prisma.testAttemptQuestion.findMany({ where: { attemptId: a.id }, include: { answer: true } });
@@ -236,6 +258,11 @@ async function main() {
       const sub = await submitAttempt(a.id, sExam);
       check("identical responses → identical score in both modes", sub.score === instantScore, { exam: sub.score, instant: instantScore });
       check("Standard + after-test first submission IS the leaderboard attempt", sub.isLeaderboardAttempt === true);
+    }
+    {
+      const sid = await mkStudent("CRANK");
+      const c = await startMockTestAttempt(sid, mock.id, undefined, cfg("CUSTOM", "EXAM", 20));
+      check("custom-time attempt does not rank", (await submitAttempt(c.id, sid)).isLeaderboardAttempt === false);
     }
     {
       // First submission practice-configured, later Standard one ranks.
@@ -305,6 +332,27 @@ async function main() {
       const ids = new Set(starts.map((s) => s.id));
       check("4 concurrent configured starts → ONE attempt", ids.size === 1 && (await prisma.testAttempt.count({ where: { studentId: sid } })) === 1);
       const id = starts[0].id;
+      await submitAttempt(id, sid);
+    }
+    {
+      // Practice Mode: two tabs tap different options on the same unanswered question at once.
+      const sid = await mkStudent("RACE");
+      const a = await startMockTestAttempt(sid, mock.id, undefined, cfg("FIXED", "INSTANT"));
+      const q = bank[1].id;
+      const taps = await Promise.all([revealAnswer(a.id, sid, q, wrongOf(q), 1), revealAnswer(a.id, sid, q, correctOf(q), 2), revealAnswer(a.id, sid, q, wrongOf(q), 3)]);
+      const stored = await prisma.answer.findFirstOrThrow({ where: { attemptId: a.id, attemptQuestion: { questionId: q } } });
+      check("concurrent taps: every response reports the ONE committed answer", taps.every((t) => t.selectedOptionLabel === stored.selectedOptionLabel) && !!stored.revealedAt);
+      check("concurrent taps: no later save can replace it", (await outcome(() => saveAnswer(a.id, sid, q, stored.selectedOptionLabel === correctOf(q) ? wrongOf(q) : correctOf(q), false, 99))) === "LOCKED");
+      const sub = await submitAttempt(a.id, sid);
+      check("concurrent taps: the committed answer is the scored one", sub.correctCount === (stored.selectedOptionLabel === correctOf(q) ? 1 : 0) && sub.incorrectCount === (stored.selectedOptionLabel === correctOf(q) ? 0 : 1));
+    }
+    {
+      const sid = await mkStudent("DBL2");
+      const starts = await Promise.all([
+        startMockTestAttempt(sid, mock.id, undefined, cfg("FIXED", "EXAM")),
+        startMockTestAttempt(sid, mock.id, undefined, cfg("FIXED", "EXAM")),
+      ]);
+      const id = starts[0].id;
       await saveAnswer(id, sid, bank[0].id, correctOf(bank[0].id), false, 1);
       const logsBefore = await prisma.studentActivity.count({ where: { studentId: sid, activity: "TEST_SUBMITTED" } });
       const subs = await Promise.all([submitAttempt(id, sid), submitAttempt(id, sid), submitAttempt(id, sid)]);
@@ -317,19 +365,42 @@ async function main() {
     console.log("\n--- Timeout ---");
     {
       const sid = await mkStudent("TMO");
-      const a = await startMockTestAttempt(sid, mock.id, undefined, cfg("PER_QUESTION", "INSTANT"));
+      const a = await startMockTestAttempt(sid, mock.id, undefined, cfg("PER_QUESTION", "EXAM"));
       await prisma.testAttempt.update({ where: { id: a.id }, data: { startedAt: new Date(Date.now() - 6 * 60_000) } });
       check("after 1-min/question window: save refused (EXPIRED)", (await outcome(() => saveAnswer(a.id, sid, bank[0].id, "A", false, 1))) === "EXPIRED");
       check("after window: reveal refused (EXPIRED)", (await outcome(() => revealAnswer(a.id, sid, bank[0].id, "A", 2))) === "EXPIRED");
       const p = await previewFormalTestStart(sid, { kind: "MOCK_TEST", id: mock.id });
       const old = await prisma.testAttempt.findUniqueOrThrow({ where: { id: a.id } });
       check("timed-out attempt finalized, never resumed → fresh setup", !p.resume && old.status === "SUBMITTED");
+
+      const prac = await startMockTestAttempt(sid, mock.id, undefined, cfg("FIXED", "INSTANT"));
+      await prisma.testAttempt.update({ where: { id: prac.id }, data: { startedAt: new Date(Date.now() - 7 * 86_400_000) } });
+      check("practice mode a week later: commit still works (never EXPIRED)", (await outcome(() => revealAnswer(prac.id, sid, bank[0].id, wrongOf(bank[0].id), 3))) === "OK");
+      const p2 = await previewFormalTestStart(sid, { kind: "MOCK_TEST", id: mock.id });
+      check("practice mode a week later: resumed, not auto-submitted", p2.resume?.id === prac.id);
+      await submitAttempt(prac.id, sid);
+    }
+
+    console.log("\n--- b5f4ea4-era timed INSTANT attempt (legacy semantics kept) ---");
+    {
+      // Simulates a running attempt created by b5f4ea4: INSTANT with a timer.
+      const sid = await mkStudent("LEGI");
+      const a = await startMockTestAttempt(sid, mock.id, undefined, cfg("FIXED", "INSTANT"));
+      await prisma.testAttempt.update({ where: { id: a.id }, data: { durationMode: "PER_QUESTION", durationMinutes: 5 } });
+      const resumed = await startMockTestAttempt(sid, mock.id, undefined, cfg("FIXED", "EXAM"));
+      check("legacy timed INSTANT: resume keeps PER_QUESTION 5 min + INSTANT (no rewrite)", resumed.id === a.id && resumed.durationMode === "PER_QUESTION" && resumed.durationMinutes === 5 && resumed.answerMode === "INSTANT");
+      const left = remainingSecondsFor(toServerTimedAttempt(resumed));
+      check("legacy timed INSTANT: still counts down (not converted to unlimited)", left > 0 && left <= 300, left);
+      check("legacy timed INSTANT: per-question commit still works", (await outcome(() => revealAnswer(a.id, sid, bank[0].id, wrongOf(bank[0].id), 1))) === "OK");
+      await prisma.testAttempt.update({ where: { id: a.id }, data: { startedAt: new Date(Date.now() - 6 * 60_000) } });
+      check("legacy timed INSTANT: its timer still ends it (EXPIRED)", (await outcome(() => revealAnswer(a.id, sid, bank[1].id, wrongOf(bank[1].id), 2))) === "EXPIRED");
     }
 
     console.log("\n--- Legacy in-progress attempts (pre-feature rows) ---");
     {
       const legacy = await prisma.testAttempt.findMany({
-        where: { status: AttemptStatus.IN_PROGRESS, sourceType: { in: ["MOCK_TEST", "PREVIOUS_YEAR_PAPER"] }, studentId: { notIn: students } },
+        // Started before Pre-Test Setup shipped (b5f4ea4, 2026-10-03 09:43 UTC).
+        where: { status: AttemptStatus.IN_PROGRESS, sourceType: { in: ["MOCK_TEST", "PREVIOUS_YEAR_PAPER"] }, studentId: { notIn: students }, startedAt: { lt: new Date("2026-10-03T09:40:00Z") } },
         include: { questions: { include: { answer: true } } },
         take: 25,
       });
@@ -355,12 +426,15 @@ async function main() {
       const sid = await mkStudent("PYQ");
       const p = await previewFormalTestStart(sid, { kind: "PREVIOUS_YEAR_PAPER", id: paper.id });
       check("PYQ preview: configurable, standard = configured exam duration (60 when unset)", !p.resume && p.summary.configurable && p.summary.standardMinutes === (paper.exam.durationMinutes ?? 60));
+      const e = await startPreviousYearPaperAttempt(sid, paper.id, cfg("PER_QUESTION", "EXAM"));
+      check("PYQ exam mode: 1 min/question = whole paper's count", e.durationMode === "PER_QUESTION" && e.durationMinutes === e.totalQuestions && e.totalQuestions === paper._count.questions);
+      await submitAttempt(e.id, sid);
       const a = await startPreviousYearPaperAttempt(sid, paper.id, cfg("PER_QUESTION", "INSTANT"));
-      check("PYQ: 1 min/question = whole paper's count", a.durationMode === "PER_QUESTION" && a.durationMinutes === a.totalQuestions && a.totalQuestions === paper._count.questions);
+      check("PYQ practice mode: UNLIMITED, whole paper", a.durationMode === "UNLIMITED" && a.answerMode === "INSTANT" && a.totalQuestions === paper._count.questions);
       const first = await prisma.testAttemptQuestion.findFirstOrThrow({ where: { attemptId: a.id }, orderBy: { order: "asc" } });
       const snap = first.questionSnapshot as { options: { label: string }[]; correctLabel: string };
       const r = await revealAnswer(a.id, sid, first.questionId, snap.options[0].label, 1);
-      check("PYQ: Check Answer works in instant mode", r.correctLabel === snap.correctLabel);
+      check("PYQ: tapping an option commits + reveals in practice mode", r.correctLabel === snap.correctLabel && r.selectedOptionLabel === snap.options[0].label);
       await submitAttempt(a.id, sid);
       const legacy = await startPreviousYearPaperAttempt(sid, paper.id);
       check("PYQ without a choice = legacy FIXED + EXAM", legacy.durationMode === "FIXED" && legacy.answerMode === "EXAM");
