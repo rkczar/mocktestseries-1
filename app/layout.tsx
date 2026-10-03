@@ -11,6 +11,7 @@ import { PUBLIC_BRAND_NAME } from "@/lib/brand";
 import { getSiteUrl } from "@/lib/site-url";
 import { defaultSocialImage, socialMetadata } from "@/lib/social-metadata";
 import { PwaProvider, PWA_INSTALL_CAPTURE_SCRIPT } from "@/components/pwa/pwa-provider";
+import { GoogleAnalytics } from "@/components/analytics/google-analytics";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -78,6 +79,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="min-h-full flex flex-col">
         <PwaProvider>{children}</PwaProvider>
+        <GoogleAnalytics />
       </body>
     </html>
   );
