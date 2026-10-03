@@ -35,6 +35,8 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { TextSizeControl } from "@/components/theme/text-size-control";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
+import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
+import { useAskAi } from "@/components/student/explanation-panel";
 import { cn } from "@/lib/utils";
 import { AnswerSaveQueue, type SaveStatus } from "@/lib/answer-save-queue";
 import {
@@ -65,6 +67,11 @@ export interface PlayerQuestion {
   selectedOptionLabel: string | null;
   markForReview: boolean;
   saved: boolean;
+  /**
+   * "Show answer after each question" only: the admin WhatsApp share text
+   * (question + options, never the answer). Shown after the answer is checked.
+   */
+  shareText?: string | null;
 }
 
 interface QuestionState {
@@ -600,7 +607,6 @@ export function TestPlayer({
                         <XCircle className="h-4 w-4" aria-hidden /> Incorrect — correct answer: {reveal.correctLabel}
                       </>
                     )}
-                    <span className="font-normal text-[var(--color-muted-foreground)]">· Full explanation in Review after you submit.</span>
                   </p>
                 ) : (
                   <div>
@@ -614,6 +620,14 @@ export function TestPlayer({
                     <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">Checking locks your answer for this question.</p>
                   </div>
                 )}
+                {reveal ? (
+                  <RevealedReviewTools
+                    key={question.questionId}
+                    questionId={question.questionId}
+                    correctOption={question.options.find((o) => o.label === reveal.correctLabel) ?? null}
+                    shareText={question.shareText ?? null}
+                  />
+                ) : null}
                 {revealError?.questionId === question.questionId ? (
                   <p className="text-sm text-[var(--color-error)]">{revealError.message}</p>
                 ) : null}
@@ -720,6 +734,46 @@ export function TestPlayer({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * "Show answer after each question": the review tools for ONE question the
+ * server has already revealed (the student committed their answer with Check
+ * Answer). Reuses the Review page's own pieces — the correct-answer line, the
+ * Ask AI hook (explanation + variants; the server authorizes it through the
+ * same answer-reveal rule and AI quota, and nothing is fetched until the
+ * student taps it) and the WhatsApp share button (question + options only).
+ * Save / Report stay in the question header for every mode.
+ */
+function RevealedReviewTools({
+  questionId,
+  correctOption,
+  shareText,
+}: {
+  questionId: string;
+  correctOption: PlayerOption | null;
+  shareText: string | null;
+}) {
+  const { trigger: askAiTrigger, panel: askAiPanel } = useAskAi(questionId);
+  return (
+    <div className="flex flex-col gap-3" data-testid="revealed-review-tools">
+      {correctOption ? (
+        <p className="text-sm font-medium text-[var(--color-success)]">
+          Correct Answer: {correctOption.label}. {correctOption.text}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        {askAiTrigger}
+        {/* Wrapped so the shared button (flex-1 in the Review header) sizes to its label here. */}
+        {shareText ? (
+          <div>
+            <WhatsAppShareButton text={shareText} />
+          </div>
+        ) : null}
+      </div>
+      {askAiPanel}
     </div>
   );
 }

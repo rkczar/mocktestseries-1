@@ -25,13 +25,31 @@ Test types only supply data and configuration. There is no per-type player.
   the eligible pool, never padded), time mode (1 min/question default,
   unlimited, custom) and answer mode (exam, instant). Filters never appear
   inside the running player.
+- **Pre-Test Setup** (`components/student/pre-test-setup.tsx`, since
+  2026-10-03) is the same choice for a NEW **Mock Test** (hosted on the Mock
+  details page) or **Previous Year Paper** (hosted on
+  `/student/attempt/resume?paper=`): time = Standard (the admin duration,
+  `FIXED`) / 1 min per question / Custom (1–600), never Unlimited; answers =
+  after the test (`EXAM`, default) / after each question (`INSTANT`). Every
+  in-app and public Start for these tests goes through
+  `/student/attempt/resume`, which never writes: `previewFormalTestStart` runs
+  the start's own gates (entitlement → resume → availability/policy → Platform
+  Controls) and either resumes the running attempt untouched or shows the
+  setup. The setup posts to `startConfiguredTestAction`. Both setup forms share
+  `components/student/test-mode-fields.tsx` and parse through
+  `lib/attempt-config.ts#parseAttemptConfigForm`.
 - **UniversalTestPlayer** (`run/test-player.tsx`) runs every attempt.
 - **Policy is per test type and enforced server-side.** Mock Test, Previous
-  Year Paper, Grand and Live are *formal*: admin-defined question set and
-  timing, `answerMode = EXAM`, `durationMode = FIXED`.
-  `createAttemptFromQuestions` forces this for formal sources whatever a
-  caller passes, and `revealAnswer` refuses formal attempts. Hiding buttons
-  is never the control.
+  Year Paper, Grand and Live are *formal*: admin-defined question set.
+  `createAttemptFromQuestions` forces `EXAM` + `FIXED` admin timing for formal
+  sources unless the caller passes a Pre-Test Setup choice it was allowed to
+  offer (`studentConfigAllowed`: PYQ, and Mock Tests with IMMEDIATE result
+  release and no Fixed Window). Grand/Live, Offline OMR entry and mocks whose
+  answer key is held never get a choice, and `revealAnswer` re-checks this on
+  every reveal (an admin holding the key mid-attempt stops further reveals).
+  Hiding buttons is never the control.
+- **Leaderboard**: only a mock attempt taken with Standard time and answers
+  after the test can become `isLeaderboardAttempt`.
 - **PYQ full paper** freezes the whole published paper in original order
   (question `createdAt`, then `code`). It is never sampled or shuffled.
   PYQ-only practice goes through Custom Module with Source = PYQ.
@@ -71,20 +89,30 @@ Each of these once caused a real production failure.
    deadline and no time-based auto-submit.
 6. **Answers are only revealed after the server authorizes it.** A correct
    label is serialized only for a question the server has already revealed in
-   an INSTANT attempt. INSTANT is only possible for student-built practice
-   (`instantAnswerAllowed`): never Mock, PYQ, Grand/Live or admin modules.
-   Revealing freezes the chosen option (`Answer.revealedAt`), so a student
-   can't reveal and then switch to the correct option.
+   an INSTANT attempt ("Show answer after each question"): the student must
+   commit with Check Answer first; selecting/saving reveals nothing. INSTANT is
+   possible for student-built practice (`instantAnswerAllowed`) and for a
+   configurable Mock/PYQ (`studentConfigAllowed`); never Grand/Live, OMR entry,
+   held-key mocks or admin modules. Revealing freezes the chosen option
+   (`Answer.revealedAt`), so a student can't reveal and then switch to the
+   correct option. After a reveal the player reuses the Review tools (Ask AI
+   hook, WhatsApp share, Save, Report); Ask AI is authorized for exactly those
+   revealed questions by `getAnswerRevealStatuses` (any other running or held
+   attempt containing the question still wins). Scoring is the one
+   `submitAttempt` for both modes.
 7. **A malformed snapshot is a skippable notice**, never a crash.
 8. **Content corrections never rewrite a snapshot.** An IN_PROGRESS attempt
    frozen from wrong content is set to `ABANDONED` and gets an AuditLog row.
    Its snapshot and answers are kept, the next Start is a fresh attempt, and
    the attempt pages render `AttemptResetNotice`. SUBMITTED attempts are never
    changed. See `docs/CONTENT-OWNERSHIP.md`.
-9. **Start is idempotent.** `createAttemptFromQuestions` takes a per-student,
+9. **Start is idempotent; so is submit.** `createAttemptFromQuestions` takes a per-student,
    per-test advisory lock and re-checks for an IN_PROGRESS attempt inside the
    transaction. Before 2026-10-02 a double-clicked Start (or two tabs) created
    one attempt per request.
+    `submitAttempt` flips IN_PROGRESS → SUBMITTED conditionally, so concurrent
+    submits grade once-equivalently and log one submission; an ABANDONED
+    attempt is never turned into a result by a stale tab.
 10. **A timed-out attempt is never resumed.** `findResumableAttempt` finalizes
     an IN_PROGRESS attempt whose time ran out and starts a fresh one; it used
     to hand back the dead attempt, which then auto-submitted on the next page.
@@ -136,6 +164,12 @@ BASE=http://localhost:3100 FIXTURE=/tmp/flows.json NODE_PATH=<dir containing pla
 
 # 4. answer-leak guard
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-p0-answer-reveal.ts
+
+# 5. Pre-Test Setup (server: config, reveal/AI gate, held keys, OMR, scoring parity,
+#    leaderboard, concurrent start/submit, timeout, legacy rows, payment, pause)
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-pre-test-setup.ts
+#    …and in a browser (uses the step-2 fixture: setupToken / examModeToken / mockId / paperId)
+BASE=http://localhost:3100 FIXTURE=/tmp/engine-fixture.json NODE_PATH=<dir containing playwright> node scripts/verify-pre-test-setup-ui.mjs
 ```
 
 The UI suite covers the builder, 1-, 2- and 10-question tests on desktop and a

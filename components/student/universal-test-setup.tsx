@@ -5,10 +5,11 @@ import { useFormStatus } from "react-dom";
 import { AlertTriangle, ArrowRight, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
 import { QuestionCountPresets } from "@/components/student/question-count-presets";
+import { AnswerModeField, TimeModeField } from "@/components/student/test-mode-fields";
+import { PRACTICE_TIME_MODES } from "@/lib/attempt-config";
 
 /**
  * UniversalTestSetup — the ONE pre-test configuration form for configurable
@@ -17,24 +18,13 @@ import { QuestionCountPresets } from "@/components/student/question-count-preset
  * it plus durationMode / answerMode onto a TestAttempt, and the attempt then
  * runs in the one universal player (app/student/attempt/[attemptId]/run).
  *
- * Formal tests (Mock Test, full Previous Year Paper, Grand/Live) never use
- * this form: their question set and timing are admin-defined.
+ * Formal tests (Mock Test, full Previous Year Paper) never use this form:
+ * their question set is admin-defined. Their Pre-Test Setup
+ * (components/student/pre-test-setup.tsx) shares the same Time / Answer
+ * review fields (components/student/test-mode-fields.tsx).
  */
 
 const DIFFICULTIES = ["EASY", "MEDIUM", "HARD"] as const;
-
-const DURATION_MODES = [
-  { value: "PER_QUESTION", label: "1 minute per question", hint: "Time = number of questions (default)" },
-  { value: "UNLIMITED", label: "Unlimited time", hint: "No countdown, no auto-submit" },
-  { value: "CUSTOM", label: "Custom time", hint: "Set the total minutes yourself" },
-] as const;
-type DurationMode = (typeof DURATION_MODES)[number]["value"];
-
-const ANSWER_MODES = [
-  { value: "EXAM", label: "Exam mode", hint: "Answers are shown after you submit (default)" },
-  { value: "INSTANT", label: "Practice — instant answer", hint: "Check each answer with “Check Answer” before moving on" },
-] as const;
-type AnswerMode = (typeof ANSWER_MODES)[number]["value"];
 
 interface Topic {
   id: string;
@@ -115,9 +105,6 @@ export function UniversalTestSetup({
   const [source, setSource] = useState("");
   const [difficulty, setDifficulty] = useState<string[]>([]);
   const [count, setCount] = useState(10);
-  const [durationMode, setDurationMode] = useState<DurationMode>("PER_QUESTION");
-  const [customMinutes, setCustomMinutes] = useState("30");
-  const [answerMode, setAnswerMode] = useState<AnswerMode>("EXAM");
   const [available, setAvailable] = useState<number | null>(null);
   const [state, formAction] = useActionState<TestSetupFormState, FormData>(action, {});
   const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
@@ -333,65 +320,9 @@ export function UniversalTestSetup({
             </p>
           </div>
 
-          <fieldset className="flex flex-col gap-1.5">
-            <legend className="mb-1.5 text-sm font-medium text-[var(--color-foreground)]">Time</legend>
-            {DURATION_MODES.map((m) => (
-              <label key={m.value} className="flex cursor-pointer items-start gap-2 text-sm">
-                <input
-                  type="radio"
-                  name="durationMode"
-                  value={m.value}
-                  checked={durationMode === m.value}
-                  onChange={() => setDurationMode(m.value)}
-                  className="mt-1 accent-[var(--color-primary)]"
-                />
-                <span>
-                  <span className="font-medium text-[var(--color-foreground)]">{m.label}</span>
-                  <span className="block text-xs text-[var(--color-muted-foreground)]">{m.hint}</span>
-                </span>
-              </label>
-            ))}
-            {durationMode === "CUSTOM" ? (
-              <div className="flex items-center gap-2 pl-6">
-                <Input
-                  id="customMinutes"
-                  name="customMinutes"
-                  type="number"
-                  min={1}
-                  max={600}
-                  required
-                  value={customMinutes}
-                  onChange={(e) => setCustomMinutes(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
-                  className="w-24"
-                />
-                <span className="text-xs text-[var(--color-muted-foreground)]">minutes total (1–600)</span>
-              </div>
-            ) : durationMode === "PER_QUESTION" ? (
-              <p className="pl-6 text-xs text-[var(--color-muted-foreground)]">
-                {count} question{count === 1 ? "" : "s"} = {count} minute{count === 1 ? "" : "s"}
-              </p>
-            ) : null}
-          </fieldset>
+          <TimeModeField modes={PRACTICE_TIME_MODES} defaultMode="PER_QUESTION" questionCount={count} />
 
-          <fieldset className="flex flex-col gap-1.5 sm:col-span-2">
-            <legend className="mb-1.5 text-sm font-medium text-[var(--color-foreground)]">Answer mode</legend>
-            {ANSWER_MODES.map((m) => (
-              <label key={m.value} className="flex cursor-pointer items-start gap-2 text-sm">
-                <input
-                  type="radio"
-                  name="answerMode"
-                  value={m.value}
-                  checked={answerMode === m.value}
-                  onChange={() => setAnswerMode(m.value)}
-                  className="mt-1 accent-[var(--color-primary)]"
-                />
-                <span>
-                  <span className="font-medium text-[var(--color-foreground)]">{m.label}</span>
-                  <span className="block text-xs text-[var(--color-muted-foreground)]">{m.hint}</span>
-                </span>
-              </label>
-            ))}
-          </fieldset>
+          <AnswerModeField className="flex flex-col gap-1.5 sm:col-span-2" />
         </CardContent>
       </Card>
 

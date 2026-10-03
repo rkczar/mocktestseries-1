@@ -3,22 +3,22 @@
 import { redirect } from "next/navigation";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { startOrExplain } from "@/lib/payments/paywall";
-import {
-  startMockTestAttempt,
-  startPreviousYearPaperAttempt,
-  startCustomModuleAttempt,
-} from "@/lib/test-attempt";
+import { startCustomModuleAttempt } from "@/lib/test-attempt";
 
+/**
+ * Mock Test / Previous Year Paper Start: never creates the attempt here. The
+ * canonical start page (/student/attempt/resume) resumes a running attempt
+ * or shows the Pre-Test Setup first, behind the same entitlement, Platform
+ * Controls and availability gates.
+ */
 export async function startMockTestFromExamAction(mockTestId: string) {
-  const student = await requireStudentOrLogin();
-  const attempt = await startOrExplain(() => startMockTestAttempt(student.id, mockTestId), { route: "exams/[examId]", studentId: student.id, contentId: mockTestId });
-  redirect(`/student/attempt/${attempt.id}`);
+  await requireStudentOrLogin();
+  redirect(`/student/attempt/resume?mockTest=${encodeURIComponent(mockTestId)}`);
 }
 
 export async function startPaperFromExamAction(paperId: string) {
-  const student = await requireStudentOrLogin();
-  const attempt = await startOrExplain(() => startPreviousYearPaperAttempt(student.id, paperId), { route: "exams/[examId]", studentId: student.id, contentId: paperId });
-  redirect(`/student/attempt/${attempt.id}`);
+  await requireStudentOrLogin();
+  redirect(`/student/attempt/resume?paper=${encodeURIComponent(paperId)}`);
 }
 
 export async function startCustomModuleFromExamAction(moduleId: string) {

@@ -3,19 +3,23 @@
 import { redirect, unstable_rethrow } from "next/navigation";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { startOrExplain, startOrPaywall } from "@/lib/payments/paywall";
-import { startMockTestAttempt, startOfflineOmrEntryAttempt } from "@/lib/test-attempt";
+import { previewFormalTestStart, startMockTestAttempt, startOfflineOmrEntryAttempt } from "@/lib/test-attempt";
 
 export interface StartMockTestFormState {
   error?: string;
 }
 
 /**
- * "Start Test" / "Resume Test" on the Mock Test Details page. The student has
- * already read the instructions there, so this goes straight to the player.
+ * "Resume Test" (and "Start Test" for a mock that offers no Pre-Test Setup)
+ * on the Mock Test Details page. The student has already read the
+ * instructions there, so this goes straight to the player.
  * startMockTestAttempt stays the only gate (entitlement → resume existing
  * IN_PROGRESS attempt → availability window → attempt policy); a payment
  * error still redirects to checkout, and any other refusal (e.g. the window
  * closed while the page was open) is shown inline instead of an error page.
+ * When no attempt is running any more (it timed out meanwhile) and this mock
+ * offers a Pre-Test Setup, the page is reloaded to show it instead of
+ * silently starting a new attempt with default choices.
  */
 export async function startMockTestFromDetailsAction(
   _prev: StartMockTestFormState,
@@ -27,9 +31,11 @@ export async function startMockTestFromDetailsAction(
 
   let attempt: Awaited<ReturnType<typeof startMockTestAttempt>>;
   try {
+    const preview = await startOrPaywall(() => previewFormalTestStart(student.id, { kind: "MOCK_TEST", id: mockTestId }));
+    if (!preview.resume && preview.summary.configurable) redirect(`/student/test-series/${encodeURIComponent(mockTestId)}`);
     attempt = await startOrPaywall(() => startMockTestAttempt(student.id, mockTestId));
   } catch (error) {
-    unstable_rethrow(error); // the paywall redirect must propagate
+    unstable_rethrow(error); // the paywall / setup redirect must propagate
 
     return { error: error instanceof Error ? error.message : "Could not start this test." };
   }

@@ -10,7 +10,9 @@ import { remainingSecondsFor, toServerTimedAttempt } from "@/lib/test-attempt";
 import { toPlayerQuestions } from "@/lib/test-player-data";
 import { claimAttemptLease } from "@/lib/attempt-device-lease";
 import { TestOpenElsewhere } from "@/components/student/test-open-elsewhere";
-import { TestPlayer } from "./test-player";
+import { prisma } from "@/lib/prisma";
+import { getWhatsAppShareConfig, buildQuestionShareText } from "@/lib/whatsapp-share-config";
+import { TestPlayer, type PlayerQuestion } from "./test-player";
 
 export const metadata = { title: "Test in Progress — Mock Test Series.in" };
 
@@ -41,7 +43,32 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
     attempt.questions.map((tq) => tq.questionId)
   );
 
-  const questions = toPlayerQuestions(attempt.questions, { instantMode, savedIds });
+  let questions: PlayerQuestion[] = toPlayerQuestions(attempt.questions, { instantMode, savedIds });
+
+  // "Show answer after each question": the same admin WhatsApp share text the
+  // Review page builds (question + options only, never the correct answer),
+  // offered by the player once a question has been checked.
+  if (instantMode) {
+    const whatsapp = await getWhatsAppShareConfig();
+    if (whatsapp.enabled) {
+      const subjects = await prisma.question.findMany({
+        where: { id: { in: questions.map((q) => q.questionId) } },
+        select: { id: true, subject: { select: { name: true } } },
+      });
+      const subjectById = new Map(subjects.map((row) => [row.id, row.subject.name]));
+      questions = questions.map((q) => ({
+        ...q,
+        shareText: q.malformed
+          ? null
+          : buildQuestionShareText({
+              template: whatsapp.template,
+              examName: attempt.exam.name,
+              subjectName: subjectById.get(q.questionId) ?? "",
+              question: { text: q.text, imageUrl: q.imageUrl, options: q.options },
+            }),
+      }));
+    }
+  }
 
   const title = attemptTitle(attempt);
 

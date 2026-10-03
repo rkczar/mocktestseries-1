@@ -104,6 +104,13 @@ async function startFromOverview(page) {
   await page.waitForSelector("[data-testid=test-player]", { timeout: 30000 });
   return attemptId;
 }
+/** Pre-Test Setup (Mock details page / PYQ start page) → Start Test with the formal defaults → player. */
+async function startFromSetup(page) {
+  await page.waitForSelector("[data-testid=pre-test-setup]", { timeout: 30000 });
+  await tap(page, page.locator("[data-testid=pre-test-setup]").getByRole("button", { name: /Start Test|Practice Again/ }));
+  await page.waitForSelector("[data-testid=test-player]", { timeout: 30000 });
+  return page.url().split("/attempt/")[1].split("/")[0];
+}
 async function answerAndCheckPersist(page, label = "A") {
   await tap(page, option(page, label));
   await settled(page);
@@ -142,7 +149,11 @@ try {
     await anon.waitForURL(/\/login/);
     check("Start Mock (logged out) → /login?callbackUrl=<resume url>", new URL(anon.url()).searchParams.get("callbackUrl") === `/student/attempt/resume?mockTest=${F.freeMockId}`, path(anon.url()));
     await fillLogin(anon, F.students.free.email);
-    check("after login → that mock's attempt (not the dashboard)", /^\/student\/attempt\/[^/]+$/.test(path(anon.url())) && /Test Overview/.test(await anon.locator("body").innerText()), path(anon.url()));
+    check(
+      "after login → that mock's Pre-Test Setup (not the dashboard)",
+      path(anon.url()) === `/student/test-series/${F.freeMockId}` && (await anon.locator("[data-testid=pre-test-setup]").count()) === 1,
+      path(anon.url())
+    );
     check("T1 no errors", clean(page) && clean(anon), [...page.errors, ...anon.errors]);
     await page.context().close();
     await anon.context().close();
@@ -163,7 +174,7 @@ try {
     check("stale cookie → /login with the destination, not a crash", path(b.url()).startsWith("/login") && new URL(b.url()).searchParams.get("callbackUrl") === `/student/attempt/resume?mockTest=${F.paidMockId}` && !(await crashed(b)), path(b.url()));
     check("stale cookie dropped", !(await b.context().cookies()).some((c) => c.name === "student-session-token"));
     await fillLogin(b, F.students.paid.email);
-    check("re-login → the paid mock's attempt", /^\/student\/attempt\/[^/]+$/.test(path(b.url())), path(b.url()));
+    check("re-login → the paid mock's Pre-Test Setup", path(b.url()) === `/student/test-series/${F.paidMockId}` && (await b.locator("[data-testid=pre-test-setup]").count()) === 1, path(b.url()));
     await b.goto(`${BASE}/student/dashboard`);
     check("dashboard renders after re-login", !(await crashed(b)) && path(b.url()) === "/student/dashboard", path(b.url()));
     check("T1b no errors", clean(a) && clean(b), [...a.errors, ...b.errors]);
@@ -268,7 +279,7 @@ try {
     await login(page, F.students.free.email);
     await page.goto(`${BASE}/exams/${F.examSlug}/previous-year-papers`);
     await page.locator(`a[href="/student/attempt/resume?paper=${F.paperId}"]`).first().click();
-    const attemptId = await startFromOverview(page);
+    const attemptId = await startFromSetup(page);
     check("PYQ opens in the Test Player", /Question 1 of/.test(await page.locator("[data-testid=question-position]").innerText()));
     await page.goto(`${BASE}/student/attempt/resume?paper=${F.paperId}`);
     check("second Start resumes the same PYQ attempt", path(page.url()) === `/student/attempt/${attemptId}`, path(page.url()));
@@ -328,23 +339,30 @@ try {
     await page.context().close();
   }
 
-  console.log("T11 Concurrent Start → exactly one attempt");
+  console.log("T11 Concurrent Start → no attempt before setup, then exactly one attempt");
   {
     const page = await newPage();
     await login(page, F.students.expired.email);
+    // The start link never creates an attempt: it resumes, or opens the Pre-Test Setup.
     const rs = await Promise.all(Array.from({ length: 6 }, () => page.request.get(`${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`, { maxRedirects: 0 })));
     const targets = new Set(rs.map((r) => r.headers()["location"]));
-    check("6 concurrent Starts redirect to ONE attempt", targets.size === 1 && [...targets][0]?.startsWith("/student/attempt/"), [...targets]);
+    check("6 concurrent start links → the one setup page", targets.size === 1 && [...targets][0] === `/student/test-series/${F.freeMockId}`, [...targets]);
+    const none = await db(`select count(*)::int n from "TestAttempt" where "studentId"='${F.students.expired.id}' and "mockTestId"='${F.freeMockId}'`);
+    if (none) check("no attempt written before Start is pressed", none[0].n === 0, none);
+    // Concurrent configured starts (server action) are covered by scripts/verify-pre-test-setup.ts.
+    await page.goto(`${BASE}/student/test-series/${F.freeMockId}`);
+    const oldId = await startFromSetup(page);
+    const again = await Promise.all(Array.from({ length: 6 }, () => page.request.get(`${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`, { maxRedirects: 0 })));
+    const resumed = new Set(again.map((r) => r.headers()["location"]));
+    check("6 concurrent start links while running → the SAME attempt", resumed.size === 1 && [...resumed][0] === `/student/attempt/${oldId}`, [...resumed]);
     const rows = await db(`select count(*)::int n from "TestAttempt" where "studentId"='${F.students.expired.id}' and "mockTestId"='${F.freeMockId}' and status='IN_PROGRESS'`);
     if (rows) check("one IN_PROGRESS row in the database", rows[0].n === 1, rows);
 
-    console.log("T11b Start after the time ran out → a fresh attempt, not the dead one");
-    const oldId = [...targets][0]?.split("/").pop();
+    console.log("T11b Start after the time ran out → a fresh setup, not the dead attempt");
     if (rows && oldId) {
       await db(`update "TestAttempt" set "startedAt" = now() - interval '2 days' where id='${oldId}'`);
       const res = await page.request.get(`${BASE}/student/attempt/resume?mockTest=${F.freeMockId}`, { maxRedirects: 0 });
-      const newId = res.headers()["location"]?.split("/").pop();
-      check("Start returns a NEW attempt", !!newId && newId !== oldId, { oldId, newId });
+      check("Start offers a NEW setup (dead attempt not resumed)", res.headers()["location"] === `/student/test-series/${F.freeMockId}`, res.headers()["location"]);
       const [old] = await db(`select status from "TestAttempt" where id='${oldId}'`);
       check("the timed-out attempt was finalized (SUBMITTED), not left dangling", old.status === "SUBMITTED", old);
     }
@@ -371,7 +389,7 @@ try {
     await login(page, F.students.paid.email);
     await page.goto(`${BASE}/exams/${F.examSlug}/mock-test-series`);
     await tap(page, page.locator(`a[href="/student/attempt/resume?mockTest=${F.freeMockId}"]`).first());
-    await startFromOverview(page);
+    await startFromSetup(page);
     check("mobile: answer persists across refresh", await answerAndCheckPersist(page, "D"));
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     check("mobile: player has no horizontal overflow", overflow <= 1, overflow);

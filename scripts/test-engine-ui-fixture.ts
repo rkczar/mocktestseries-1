@@ -90,13 +90,21 @@ async function setup() {
     data: { questionSnapshot: { code: "BROKEN", text: "Broken question", imageUrl: null, difficulty: "MEDIUM", options: [{ label: "A", text: "only", imageUrl: null }], correctLabel: "A" } },
   });
 
+  // Pre-Test Setup UI (scripts/verify-pre-test-setup-ui.mjs): students with no attempt yet.
+  const setupStudent = await mkStudent("SETUP");
+  const examModeStudent = await mkStudent("EXAMMODE");
+
   const crowdAttempts: { token: string; attemptId: string }[] = [];
   for (const c of crowd) crowdAttempts.push({ token: c.token, attemptId: (await startMockTestAttempt(c.id, mock.id)).id });
 
   console.log(
     JSON.stringify({
       examId: exam.id,
-      studentIds: [main.id, mal.id, ...crowd.map((c) => c.id)],
+      studentIds: [main.id, mal.id, setupStudent.id, examModeStudent.id, ...crowd.map((c) => c.id)],
+      mockId: mock.id,
+      paperId: paper.id,
+      setupToken: setupStudent.token,
+      examModeToken: examModeStudent.token,
       token: main.token,
       malToken: mal.token,
       mockAttemptId: mockAttempt.id,

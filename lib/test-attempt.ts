@@ -25,12 +25,14 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/student-data";
 import { isExpired, elapsedSecondsFor, remainingSecondsFor, type ServerTimedAttempt } from "@/lib/attempt-timing";
 import { deriveLiveTestState } from "@/lib/live-test";
-import { deriveMockTestAvailability, isMockTestAvailable, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
+import { deriveMockTestAvailability, isMockTestAvailable, isMockResultReleased, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
 import { assertContentAccess } from "@/lib/payments/access";
 import { TestEngineError } from "@/lib/test-engine-log";
+import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
 
-export { remainingSecondsFor, InsufficientQuestionsError, TestEngineError };
+export { remainingSecondsFor, InsufficientQuestionsError, TestEngineError, MAX_CUSTOM_DURATION_MINUTES };
+export type { AttemptConfigChoice } from "@/lib/attempt-config";
 export type { QuestionSelectionFilters } from "@/lib/question-selection";
 
 export interface QuestionSnapshot {
@@ -51,9 +53,6 @@ export interface QuestionWithOptions {
   options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean; order?: number }[];
 }
 
-/** Hard ceiling for a student-entered CUSTOM duration (minutes). */
-export const MAX_CUSTOM_DURATION_MINUTES = 600;
-
 /**
  * Minutes for a student-practice duration mode, computed ONCE at attempt
  * creation from the effective (actually frozen) question count:
@@ -73,9 +72,10 @@ export function practiceDurationMinutes(mode: AttemptDurationMode, questionCount
 }
 
 /**
- * Instant (per-question) answer reveal is a student-practice capability only.
- * Mock Tests, PYQ papers, Grand/Live tests and admin-authored custom modules
- * are ALWAYS exam mode, whatever a caller asks for.
+ * Instant (per-question) answer reveal for the practice sources (Subject Test,
+ * student-owned Custom Module). Admin-authored custom modules are always exam
+ * mode. Formal tests (Mock / PYQ) decide through studentConfigAllowed below;
+ * Grand/Live never reveal.
  */
 export function instantAnswerAllowed(sourceType: AttemptSourceType, opts: { studentOwnedModule?: boolean } = {}): boolean {
   if (sourceType === AttemptSourceType.SUBJECT_TEST) return true;
@@ -84,9 +84,10 @@ export function instantAnswerAllowed(sourceType: AttemptSourceType, opts: { stud
 }
 
 /**
- * Formal tests: admin-defined question set, admin-defined timing, EXAM mode
- * only. Enforced where every attempt is created (createAttemptFromQuestions)
- * and again on reveal — never just by hiding UI.
+ * Formal tests: admin-defined question set; admin-defined timing and EXAM
+ * mode unless the student's Pre-Test Setup choice is allowed
+ * (studentConfigAllowed). Enforced where every attempt is created
+ * (createAttemptFromQuestions) and again on reveal — never just by hiding UI.
  */
 const FORMAL_SOURCES: ReadonlySet<AttemptSourceType> = new Set([
   AttemptSourceType.MOCK_TEST,
@@ -96,6 +97,26 @@ const FORMAL_SOURCES: ReadonlySet<AttemptSourceType> = new Set([
 ]);
 export function isFormalSource(sourceType: AttemptSourceType): boolean {
   return FORMAL_SOURCES.has(sourceType);
+}
+
+/**
+ * Pre-Test Setup for formal tests: may the student choose the time mode
+ * (Standard / 1 min per question / Custom) and the answer review mode for a
+ * NEW attempt? Only for a Previous Year Paper, or a Mock Test whose answer
+ * key is public the moment it is submitted (IMMEDIATE release, no shared
+ * Fixed Window). A scheduled/competitive mock (window, AFTER_WINDOW or
+ * CUSTOM_DATE release) keeps the formal EXAM + admin timing, because a
+ * per-question reveal there would leak a held answer key. Grand/Live never.
+ */
+export function studentConfigAllowed(
+  sourceType: AttemptSourceType,
+  mockTest?: { resultReleaseMode: string; availableUntil: Date | null } | null
+): boolean {
+  if (sourceType === AttemptSourceType.PREVIOUS_YEAR_PAPER) return true;
+  if (sourceType === AttemptSourceType.MOCK_TEST) {
+    return !!mockTest && mockTest.resultReleaseMode === "IMMEDIATE" && mockTest.availableUntil === null;
+  }
+  return false;
 }
 
 /** Legacy source-grouping → production-facing test type, kept in one place. */
@@ -170,6 +191,12 @@ async function createAttemptFromQuestions(params: {
   entryMode?: AttemptEntryMode;
   durationMode?: AttemptDurationMode;
   answerMode?: AttemptAnswerMode;
+  /**
+   * Formal tests only: the student's Pre-Test Setup choice. Callers pass it
+   * only after studentConfigAllowed() said yes; without it a formal attempt
+   * is exactly the legacy FIXED admin duration + EXAM mode.
+   */
+  studentConfig?: AttemptConfigChoice;
 }) {
   if (params.questions.length === 0) {
     throw new TestEngineError("UNAVAILABLE", "This test has no questions yet. Please try again later.");
@@ -183,10 +210,25 @@ async function createAttemptFromQuestions(params: {
   const questions = params.questions.filter((q, i, all) => all.findIndex((x) => x.id === q.id) === i);
 
   // Formal-test policy overrides any practice capability a caller passes:
-  // Mock / PYQ / Grand / Live always run in EXAM mode on their fixed timing.
+  // Mock / PYQ / Grand / Live run in EXAM mode on their fixed timing unless
+  // the caller passes a Pre-Test Setup choice it was allowed to offer
+  // (studentConfigAllowed). Even then UNLIMITED is never possible here.
   const formal = isFormalSource(params.sourceType);
-  const durationMode = formal ? AttemptDurationMode.FIXED : (params.durationMode ?? AttemptDurationMode.FIXED);
-  const answerMode = formal ? AttemptAnswerMode.EXAM : (params.answerMode ?? AttemptAnswerMode.EXAM);
+  let durationMode = formal ? AttemptDurationMode.FIXED : (params.durationMode ?? AttemptDurationMode.FIXED);
+  let answerMode = formal ? AttemptAnswerMode.EXAM : (params.answerMode ?? AttemptAnswerMode.EXAM);
+  let durationMinutes = params.durationMinutes;
+  if (formal && params.studentConfig) {
+    const choice = params.studentConfig;
+    if (choice.durationMode === "UNLIMITED") throw new TestEngineError("NOT_ALLOWED", "Choose a valid time option.");
+    durationMode = AttemptDurationMode[choice.durationMode];
+    // Standard = the admin-configured duration; the others follow the
+    // EFFECTIVE (de-duplicated, actually frozen) question count.
+    durationMinutes =
+      durationMode === AttemptDurationMode.FIXED
+        ? params.durationMinutes
+        : practiceDurationMinutes(durationMode, questions.length, choice.customMinutes);
+    answerMode = choice.answerMode === "INSTANT" ? AttemptAnswerMode.INSTANT : AttemptAnswerMode.EXAM;
+  }
 
   // What makes an IN_PROGRESS attempt "the same test" for resume — the same
   // rule each start* helper's findResumableAttempt() uses.
@@ -237,7 +279,7 @@ async function createAttemptFromQuestions(params: {
       subjectId: params.subjectId,
       topicIds: params.topicIds && params.topicIds.length > 0 ? params.topicIds : undefined,
       selection: (params.selection ?? undefined) as Prisma.InputJsonValue | undefined,
-      durationMinutes: params.durationMinutes,
+      durationMinutes,
       durationMode,
       answerMode,
       negativeMarking: params.negativeMarking,
@@ -291,6 +333,39 @@ async function findResumableAttempt(studentId: string, where: Record<string, unk
   return null;
 }
 
+type CreateAttemptParams = Parameters<typeof createAttemptFromQuestions>[0];
+type ResumableAttempt = NonNullable<Awaited<ReturnType<typeof findResumableAttempt>>>;
+
+/** What the Pre-Test Setup screen shows before any attempt exists. Display only. */
+export interface TestStartSummary {
+  kind: "MOCK_TEST" | "PREVIOUS_YEAR_PAPER";
+  id: string;
+  title: string;
+  examName: string;
+  questionCount: number;
+  /** The admin-configured ("Standard") duration in minutes. */
+  standardMinutes: number;
+  negativeMarking: number;
+  instructions: string | null;
+  /** False = formal fixed exam: no choices are offered (studentConfigAllowed). */
+  configurable: boolean;
+}
+
+/**
+ * Every gate a formal start passes, in order, WITHOUT writing anything:
+ * entitlement → resume an IN_PROGRESS attempt → availability → policy. Both
+ * the real start (start*Attempt) and the Pre-Test Setup preview run this
+ * same plan, so the setup screen can never be reached past a gate the start
+ * itself would refuse, and there is exactly one implementation of the gates.
+ */
+type StartPlan =
+  | { resume: ResumableAttempt }
+  | { resume: null; create: CreateAttemptParams; summary: TestStartSummary };
+
+function uniqueQuestionCount(questions: { id: string }[]): number {
+  return new Set(questions.map((q) => q.id)).size;
+}
+
 /**
  * Starts (or resumes) a Mock Test attempt. `availableFrom` is enforced here,
  * server-side, as the ONLY gate — no TestAttempt/TestAttemptQuestion row
@@ -301,14 +376,14 @@ async function findResumableAttempt(studentId: string, where: Record<string, unk
  * attempt exists for this student+test; MULTIPLE_PRACTICE (the default)
  * keeps today's unrestricted-retake behavior.
  */
-export async function startMockTestAttempt(studentId: string, mockTestId: string, entryMode: AttemptEntryMode = AttemptEntryMode.ONLINE) {
+async function planMockTestStart(studentId: string, mockTestId: string, entryMode: AttemptEntryMode): Promise<StartPlan> {
   // Payment/entitlement gate runs BEFORE resume too, so an attempt started
   // while the content was free can't be resumed once it requires payment.
   const gate = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { examId: true, testSeriesId: true, accessType: true } });
   if (gate) await assertContentAccess(studentId, { kind: "MOCK_TEST", id: mockTestId, ...gate });
 
   const resumable = await findResumableAttempt(studentId, { mockTestId });
-  if (resumable) return resumable;
+  if (resumable) return { resume: resumable };
 
   const mockTest = await prisma.mockTest.findFirst({
     // A published mock inside an unpublished (draft/archived) series is not live.
@@ -317,6 +392,8 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
     // it auto-saved as Draft (missing image / no correct answer), which stay
     // reserved in the test's order until an admin reviews and publishes them.
     include: {
+      exam: { select: { name: true, instructions: true } },
+      testSeries: { select: { instructions: true } },
       questions: {
         where: { question: { status: QuestionStatus.PUBLISHED } },
         orderBy: { order: "asc" },
@@ -341,16 +418,76 @@ export async function startMockTestAttempt(studentId: string, mockTestId: string
     if (priorSubmission) throw new TestEngineError("UNAVAILABLE", "You have already attempted this test. Retakes are not allowed.");
   }
 
+  const questions = mockTest.questions.map((mq) => mq.question as unknown as QuestionWithOptions);
+  return {
+    resume: null,
+    create: {
+      studentId,
+      sourceType: AttemptSourceType.MOCK_TEST,
+      examId: mockTest.examId,
+      mockTestId: mockTest.id,
+      durationMinutes: mockTest.durationMinutes,
+      negativeMarking: mockTest.negativeMarking,
+      questions,
+      entryMode,
+    },
+    summary: {
+      kind: "MOCK_TEST",
+      id: mockTest.id,
+      title: mockTest.title,
+      examName: mockTest.exam.name,
+      questionCount: uniqueQuestionCount(questions),
+      standardMinutes: mockTest.durationMinutes,
+      negativeMarking: mockTest.negativeMarking,
+      instructions: mockTest.instructions ?? mockTest.testSeries?.instructions ?? mockTest.exam.instructions ?? null,
+      // Offline OMR entry is bulk answer keying from a printed paper: always
+      // the formal exam (no per-question reveal while transcribing a sheet).
+      configurable: entryMode === AttemptEntryMode.ONLINE && studentConfigAllowed(AttemptSourceType.MOCK_TEST, mockTest),
+    },
+  };
+}
+
+/**
+ * Applies a plan. A resumable attempt is always returned untouched (its
+ * frozen configuration wins over whatever was submitted now); otherwise the
+ * student's choice is applied only when the plan allows configuration.
+ */
+async function executeStartPlan(plan: StartPlan, config?: AttemptConfigChoice | null) {
+  if (plan.resume) return plan.resume;
   return createAttemptFromQuestions({
-    studentId,
-    sourceType: AttemptSourceType.MOCK_TEST,
-    examId: mockTest.examId,
-    mockTestId: mockTest.id,
-    durationMinutes: mockTest.durationMinutes,
-    negativeMarking: mockTest.negativeMarking,
-    questions: mockTest.questions.map((mq) => mq.question as unknown as QuestionWithOptions),
-    entryMode,
+    ...plan.create,
+    studentConfig: plan.summary.configurable && config ? config : undefined,
   });
+}
+
+/**
+ * Pre-Test Setup preview: the same gates as the real start, plus Platform
+ * Controls → Start New Tests, but nothing is written. Returns the attempt to
+ * resume when one is running (no setup is shown for it), else the summary.
+ * Throws exactly what the start would (PaymentRequiredError,
+ * PlatformPausedError, TestEngineError) so callers reuse startOrExplain.
+ */
+export async function previewFormalTestStart(
+  studentId: string,
+  target: { kind: "MOCK_TEST" | "PREVIOUS_YEAR_PAPER"; id: string }
+): Promise<{ resume: ResumableAttempt } | { resume: null; summary: TestStartSummary }> {
+  const plan =
+    target.kind === "MOCK_TEST"
+      ? await planMockTestStart(studentId, target.id, AttemptEntryMode.ONLINE)
+      : await planPreviousYearPaperStart(studentId, target.id);
+  if (plan.resume) return { resume: plan.resume };
+  await assertPlatformOpen("tests");
+  if (plan.summary.questionCount === 0) throw new TestEngineError("UNAVAILABLE", "This test has no questions yet. Please try again later.");
+  return { resume: null, summary: plan.summary };
+}
+
+export async function startMockTestAttempt(
+  studentId: string,
+  mockTestId: string,
+  entryMode: AttemptEntryMode = AttemptEntryMode.ONLINE,
+  config?: AttemptConfigChoice | null
+) {
+  return executeStartPlan(await planMockTestStart(studentId, mockTestId, entryMode), config);
 }
 
 /**
@@ -515,12 +652,12 @@ export async function startLiveTestAttempt(studentId: string, liveTestId: string
   });
 }
 
-export async function startPreviousYearPaperAttempt(studentId: string, paperId: string) {
+async function planPreviousYearPaperStart(studentId: string, paperId: string): Promise<StartPlan> {
   const gate = await prisma.previousYearPaper.findUnique({ where: { id: paperId }, select: { examId: true } });
   if (gate) await assertContentAccess(studentId, { kind: "PREVIOUS_YEAR_PAPER", id: paperId, examId: gate.examId });
 
   const resumable = await findResumableAttempt(studentId, { previousYearPaperId: paperId });
-  if (resumable) return resumable;
+  if (resumable) return { resume: resumable };
 
   const paper = await prisma.previousYearPaper.findFirst({
     where: { id: paperId, isActive: true },
@@ -530,21 +667,40 @@ export async function startPreviousYearPaperAttempt(studentId: string, paperId: 
 
   // Full-paper integrity: the whole published paper in its original order
   // (import order = paper order; code breaks ties). Never sampled or shuffled.
-  const questions = await prisma.question.findMany({
+  const questions = (await prisma.question.findMany({
     where: { previousYearPaperId: paperId, status: QuestionStatus.PUBLISHED },
     orderBy: [{ createdAt: "asc" }, { code: "asc" }],
     include: { options: true },
-  });
+  })) as unknown as QuestionWithOptions[];
 
-  return createAttemptFromQuestions({
-    studentId,
-    sourceType: AttemptSourceType.PREVIOUS_YEAR_PAPER,
-    examId: paper.examId,
-    previousYearPaperId: paper.id,
-    durationMinutes: paper.exam.durationMinutes ?? 60,
-    negativeMarking: paper.exam.negativeMarking ?? 0,
-    questions: questions as unknown as QuestionWithOptions[],
-  });
+  const standardMinutes = paper.exam.durationMinutes ?? 60;
+  return {
+    resume: null,
+    create: {
+      studentId,
+      sourceType: AttemptSourceType.PREVIOUS_YEAR_PAPER,
+      examId: paper.examId,
+      previousYearPaperId: paper.id,
+      durationMinutes: standardMinutes,
+      negativeMarking: paper.exam.negativeMarking ?? 0,
+      questions,
+    },
+    summary: {
+      kind: "PREVIOUS_YEAR_PAPER",
+      id: paper.id,
+      title: paper.year ? `${paper.title} (${paper.year})` : paper.title,
+      examName: paper.exam.name,
+      questionCount: uniqueQuestionCount(questions),
+      standardMinutes,
+      negativeMarking: paper.exam.negativeMarking ?? 0,
+      instructions: paper.exam.instructions ?? null,
+      configurable: studentConfigAllowed(AttemptSourceType.PREVIOUS_YEAR_PAPER),
+    },
+  };
+}
+
+export async function startPreviousYearPaperAttempt(studentId: string, paperId: string, config?: AttemptConfigChoice | null) {
+  return executeStartPlan(await planPreviousYearPaperStart(studentId, paperId), config);
 }
 
 export interface SubjectTestSelection extends QuestionSelectionFilters {
@@ -724,6 +880,25 @@ export async function saveAnswer(
 }
 
 /**
+ * May this IN_PROGRESS attempt reveal a question's answer right now? Only
+ * when it was frozen INSTANT at creation. Grand/Live never. A formal Mock
+ * additionally needs its answer key to be public right now: if an admin
+ * switched the mock to a held result (window / AFTER_WINDOW / CUSTOM_DATE)
+ * after the attempt started, the reveal is refused rather than leaking a key
+ * the Review page itself would still hold back.
+ */
+async function instantRevealPermitted(attempt: { id: string; sourceType: AttemptSourceType; answerMode: AttemptAnswerMode }): Promise<boolean> {
+  if (attempt.answerMode !== AttemptAnswerMode.INSTANT) return false;
+  if (attempt.sourceType === AttemptSourceType.GRAND_TEST || attempt.sourceType === AttemptSourceType.LIVE_TEST) return false;
+  if (attempt.sourceType !== AttemptSourceType.MOCK_TEST) return true;
+  const row = await prisma.testAttempt.findUnique({
+    where: { id: attempt.id },
+    select: { mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true } } },
+  });
+  return !!row?.mockTest && studentConfigAllowed(AttemptSourceType.MOCK_TEST, row.mockTest) && isMockResultReleased(row.mockTest);
+}
+
+/**
  * Server-authorized per-question answer reveal (INSTANT answer mode only).
  * The correct label never reaches the client before this succeeds. The
  * student's chosen option is recorded and frozen in the SAME conditional
@@ -740,7 +915,7 @@ export async function revealAnswer(
 ): Promise<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean }> {
   if (!selectedOptionLabel) throw new TestEngineError("NO_SELECTION", "Choose an option before checking the answer.");
   const { attempt, attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, selectedOptionLabel);
-  if (attempt.answerMode !== AttemptAnswerMode.INSTANT || isFormalSource(attempt.sourceType)) {
+  if (!(await instantRevealPermitted(attempt))) {
     throw new TestEngineError("NOT_ALLOWED", "Answers are shown after you submit this test.");
   }
 
@@ -781,7 +956,9 @@ export async function submitAttempt(attemptId: string, studentId: string) {
     },
   });
   if (!attempt) throw new Error("Attempt not found.");
-  if (attempt.status === AttemptStatus.SUBMITTED) return attempt;
+  // SUBMITTED: idempotent. ABANDONED (content-reset): kept exactly as it was,
+  // never graded or turned into a result by a stale tab's submit.
+  if (attempt.status !== AttemptStatus.IN_PROGRESS) return attempt;
 
   let correctCount = 0;
   let incorrectCount = 0;
@@ -823,8 +1000,12 @@ export async function submitAttempt(attemptId: string, studentId: string) {
   // browser, one in-flight submit at a time via the IN_PROGRESS uniqueness
   // findResumableAttempt already enforces), so a plain existence check here
   // is sufficient without extra locking.
+  // Only an attempt taken as the real exam (Standard time + answers after the
+  // test) can rank: a 1-min/question, custom-time or answer-after-each-question
+  // attempt is practice, like a retake, and never displaces/creates a rank.
   let isLeaderboardAttempt = false;
-  if (attempt.sourceType === AttemptSourceType.MOCK_TEST && attempt.mockTestId) {
+  const examConditions = attempt.durationMode === AttemptDurationMode.FIXED && attempt.answerMode === AttemptAnswerMode.EXAM;
+  if (attempt.sourceType === AttemptSourceType.MOCK_TEST && attempt.mockTestId && examConditions) {
     const priorLeaderboardAttempt = await prisma.testAttempt.findFirst({
       where: { studentId, mockTestId: attempt.mockTestId, status: AttemptStatus.SUBMITTED, isLeaderboardAttempt: true },
       select: { id: true },
@@ -832,10 +1013,14 @@ export async function submitAttempt(attemptId: string, studentId: string) {
     isLeaderboardAttempt = !priorLeaderboardAttempt;
   }
 
-  await prisma.$transaction([
+  // The status flip is conditional on IN_PROGRESS: two concurrent submits
+  // (double click, timeout + manual, two tabs) grade the same frozen answers
+  // to the same values, and only the one that actually flips the status logs
+  // the submission.
+  const results = await prisma.$transaction([
     ...updates,
-    prisma.testAttempt.update({
-      where: { id: attemptId },
+    prisma.testAttempt.updateMany({
+      where: { id: attemptId, status: AttemptStatus.IN_PROGRESS },
       data: {
         status: AttemptStatus.SUBMITTED,
         submittedAt: new Date(),
@@ -850,7 +1035,8 @@ export async function submitAttempt(attemptId: string, studentId: string) {
     }),
   ]);
 
-  await logActivity(studentId, "TEST_SUBMITTED", { attemptId, score, maxScore });
+  const flipped = (results[results.length - 1] as { count: number }).count === 1;
+  if (flipped) await logActivity(studentId, "TEST_SUBMITTED", { attemptId, score, maxScore });
 
   return prisma.testAttempt.findUniqueOrThrow({ where: { id: attemptId } });
 }

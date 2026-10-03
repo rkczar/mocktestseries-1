@@ -1,6 +1,7 @@
 import "server-only";
 import { LIVE_MOCK_TEST_WHERE, isMockResultReleased, type MockResultReleaseRow } from "@/lib/mock-test-schedule";
 import {
+  AttemptAnswerMode,
   AttemptSourceType,
   AttemptStatus,
   CustomModuleStatus,
@@ -576,8 +577,9 @@ export function isAttemptAnswerKeyHeld(
 
 /**
  * Why a question's answer may or may not be shown to this student:
- *  - REVEALABLE  — it is in one of their SUBMITTED attempts whose answer key is released,
- *                  and in no IN_PROGRESS or still-held attempt of theirs.
+ *  - REVEALABLE  — it is in one of their SUBMITTED attempts whose answer key is released
+ *                  (or the server already revealed it to them after they committed an answer
+ *                  in a running INSTANT attempt), and in no other IN_PROGRESS or held attempt.
  *  - IN_PROGRESS — it is part of a test they are still taking.
  *  - RESULT_HELD — it is in a submitted test whose result isn't released yet.
  *  - NO_ACCESS   — they never legitimately reviewed it (no submitted attempt contains it).
@@ -607,10 +609,12 @@ export async function getAnswerRevealStatuses(
     },
     select: {
       questionId: true,
+      answer: { select: { revealedAt: true } },
       attempt: {
         select: {
           status: true,
           testType: true,
+          answerMode: true,
           mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true } },
           liveTest: { select: { status: true } },
         },
@@ -620,10 +624,22 @@ export async function getAnswerRevealStatuses(
 
   // Any blocking attempt wins over a released one: a question retaken in a
   // new, still-running test must stay locked until that test is over too.
+  // The one exception is a question the server already revealed inside a
+  // running "Show answer after each question" (INSTANT) attempt: the student
+  // committed their answer and saw the key, so that row counts as REVEALABLE
+  // (revealAnswer only stamps revealedAt after its own authorization). Any
+  // OTHER running or held attempt containing the question still wins.
   const RANK: Record<AnswerRevealStatus, number> = { NO_ACCESS: 0, REVEALABLE: 1, RESULT_HELD: 2, IN_PROGRESS: 3 };
   for (const row of rows) {
+    const committedReveal =
+      row.attempt.status === AttemptStatus.IN_PROGRESS &&
+      row.attempt.answerMode === AttemptAnswerMode.INSTANT &&
+      !!row.answer?.revealedAt &&
+      !isAttemptAnswerKeyHeld(row.attempt, now);
     const next: AnswerRevealStatus =
-      row.attempt.status === AttemptStatus.IN_PROGRESS
+      committedReveal
+        ? "REVEALABLE"
+        : row.attempt.status === AttemptStatus.IN_PROGRESS
         ? "IN_PROGRESS"
         : isAttemptAnswerKeyHeld(row.attempt, now)
           ? "RESULT_HELD"

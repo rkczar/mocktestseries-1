@@ -15,6 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BackButton } from "@/components/student/back-button";
 import { StartMockForm } from "./start-mock-form";
+import { PreTestSetup } from "@/components/student/pre-test-setup";
+import { studentConfigAllowed } from "@/lib/test-attempt";
+import { AttemptSourceType } from "@prisma/client";
 import { accessLockLabel } from "@/lib/payments/access-labels";
 
 export const metadata = { title: "Mock Test — Mock Test Series.in" };
@@ -115,6 +118,18 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
       <Button size="lg" disabled className="w-full">
         No questions published yet
       </Button>
+    );
+  } else if (studentConfigAllowed(AttemptSourceType.MOCK_TEST, mockTest)) {
+    // Pre-Test Setup (time + answer review) before the attempt exists; the
+    // server re-runs every gate above when it is submitted.
+    action = (
+      <PreTestSetup
+        kind="MOCK_TEST"
+        testId={mockTest.id}
+        questionCount={questionCount}
+        standardMinutes={mockTest.durationMinutes}
+        submitLabel={latestSubmittedAttempt ? "Practice Again" : "Start Test"}
+      />
     );
   } else {
     action = <StartMockForm mockTestId={mockTest.id} label={latestSubmittedAttempt ? "Practice Again" : "Start Test"} />;

@@ -5,8 +5,8 @@
  * of scripts/verify-test-engine-core.ts:
  *  - Subject Test: 1 / 2 / N questions, all three time modes frozen on the
  *    attempt (unlimited = genuinely untimed), exam + instant answer modes.
- *  - Mock Test: admin-defined count + duration, EXAM/FIXED only; reveal is
- *    refused even if the stored attempt were tampered to INSTANT.
+ *  - Mock Test started without a Pre-Test Setup choice: admin-defined count +
+ *    duration, EXAM/FIXED; reveal refused (choices: verify-pre-test-setup.ts).
  *  - PYQ: the full published paper in original order, EXAM only.
  *  - History: a submitted attempt is untouched by a retake (new attempt).
  *  - Dashboard layout normalization / strict parsing.
@@ -159,9 +159,10 @@ async function main() {
       const lbl = (q.questionSnapshot as { options: { label: string }[] }).options[0].label;
       await saveAnswer(a.id, sid, q.questionId, lbl, false, 1);
       check("mock: Check Answer refused", (await code(() => revealAnswer(a.id, sid, q.questionId, lbl, 2))) === "NOT_ALLOWED");
-      // Defense in depth: even a tampered attempt row can't reveal on a formal test.
-      await prisma.testAttempt.update({ where: { id: a.id }, data: { answerMode: AttemptAnswerMode.INSTANT } });
-      check("mock: tampered INSTANT still refused server-side", (await code(() => revealAnswer(a.id, sid, q.questionId, lbl, 3))) === "NOT_ALLOWED");
+      // Since the Pre-Test Setup (2026-10-03) a student may choose "Show answer
+      // after each question" on an IMMEDIATE-release mock, so INSTANT on a mock
+      // is no longer impossible by itself. The held-key / Grand / Live refusals
+      // (incl. a tampered row) live in scripts/verify-pre-test-setup.ts.
       check("mock/PYQ/grand/live are formal sources", ["MOCK_TEST", "PREVIOUS_YEAR_PAPER", "GRAND_TEST", "LIVE_TEST"].every((s) => isFormalSource(s as never)) && !isFormalSource("SUBJECT_TEST" as never) && !isFormalSource("CUSTOM_MODULE" as never));
       const after = JSON.stringify(await prisma.mockTest.findUnique({ where: { id: mock.id }, include: { questions: { orderBy: { order: "asc" } } } }));
       check("mock definition untouched by attempts", before === after);

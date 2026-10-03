@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { AttemptAnswerMode, AttemptDurationMode, type QuestionDifficulty, type QuestionSource } from "@prisma/client";
 import { requireStudentOrLogin } from "@/lib/student-session";
-import { startSubjectTestAttempt, MAX_CUSTOM_DURATION_MINUTES, type SubjectTestSelection } from "@/lib/test-attempt";
+import { parseAttemptConfigForm, PRACTICE_TIME_MODES } from "@/lib/attempt-config";
+import { startSubjectTestAttempt, type SubjectTestSelection } from "@/lib/test-attempt";
 import {
   countPublishedQuestions,
   InsufficientQuestionsError,
@@ -29,8 +30,6 @@ function optionalInt(raw: string): number | undefined {
   return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
-/** The student-facing time choices — the same three as Custom Module (UniversalTestSetup). */
-const STUDENT_DURATION_MODES = [AttemptDurationMode.PER_QUESTION, AttemptDurationMode.UNLIMITED, AttemptDurationMode.CUSTOM] as const;
 const MAX_SUBJECT_TEST_QUESTIONS = 200;
 
 /**
@@ -57,17 +56,12 @@ export async function startSubjectTestAction(
     return { error: `Question count must be between 1 and ${MAX_SUBJECT_TEST_QUESTIONS}.` };
   }
 
-  const durationModeRaw = str(formData, "durationMode") || AttemptDurationMode.PER_QUESTION;
-  const durationMode = STUDENT_DURATION_MODES.find((m) => m === durationModeRaw);
-  if (!durationMode) return { error: "Choose a valid time option." };
-  let customMinutes: number | undefined;
-  if (durationMode === AttemptDurationMode.CUSTOM) {
-    customMinutes = Number(str(formData, "customMinutes"));
-    if (!Number.isInteger(customMinutes) || customMinutes < 1 || customMinutes > MAX_CUSTOM_DURATION_MINUTES) {
-      return { error: `Custom time must be a whole number of minutes between 1 and ${MAX_CUSTOM_DURATION_MINUTES}.` };
-    }
-  }
-  const answerMode = str(formData, "answerMode") === AttemptAnswerMode.INSTANT ? AttemptAnswerMode.INSTANT : AttemptAnswerMode.EXAM;
+  // Time + answer review: the one shared parser (lib/attempt-config.ts).
+  const parsedConfig = parseAttemptConfigForm(formData, PRACTICE_TIME_MODES, "PER_QUESTION");
+  if (!parsedConfig.ok) return { error: parsedConfig.error };
+  const durationMode = AttemptDurationMode[parsedConfig.config.durationMode];
+  const customMinutes = parsedConfig.config.customMinutes;
+  const answerMode = AttemptAnswerMode[parsedConfig.config.answerMode];
 
   const topicId = str(formData, "topicId");
   const sourceRaw = str(formData, "source");

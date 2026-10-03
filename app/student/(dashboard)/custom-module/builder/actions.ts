@@ -3,10 +3,11 @@
 import { redirect } from "next/navigation";
 import { AttemptAnswerMode, AttemptDurationMode, type QuestionDifficulty, type QuestionSource } from "@prisma/client";
 import { requireStudentOrLogin } from "@/lib/student-session";
+import { parseAttemptConfigForm, PRACTICE_TIME_MODES } from "@/lib/attempt-config";
 import { startOrExplain } from "@/lib/payments/paywall";
 import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 import { prisma } from "@/lib/prisma";
-import { startCustomModuleAttempt, startSharedCustomModuleAttempt, MAX_CUSTOM_DURATION_MINUTES } from "@/lib/test-attempt";
+import { startCustomModuleAttempt, startSharedCustomModuleAttempt } from "@/lib/test-attempt";
 import { ensureCustomModuleShareToken, getSubjectTestSetup } from "@/lib/student-data";
 import {
   selectPublishedQuestions,
@@ -16,8 +17,6 @@ import {
   type QuestionSelectionFilters,
 } from "@/lib/question-selection";
 
-/** The student-facing duration choices (TestAttempt.durationMode, frozen at start). */
-const STUDENT_DURATION_MODES = [AttemptDurationMode.PER_QUESTION, AttemptDurationMode.UNLIMITED, AttemptDurationMode.CUSTOM] as const;
 const MAX_MODULE_QUESTIONS = 200;
 
 export interface CustomModuleBuilderState {
@@ -61,17 +60,12 @@ export async function createCustomModuleAction(
   }
 
   // Exactly three duration modes; default 1 minute per question.
-  const durationModeRaw = str(formData, "durationMode") || AttemptDurationMode.PER_QUESTION;
-  const durationMode = STUDENT_DURATION_MODES.find((m) => m === durationModeRaw);
-  if (!durationMode) return { error: "Choose a valid time option." };
-  let customMinutes: number | null = null;
-  if (durationMode === AttemptDurationMode.CUSTOM) {
-    customMinutes = Number(str(formData, "customMinutes"));
-    if (!Number.isInteger(customMinutes) || customMinutes < 1 || customMinutes > MAX_CUSTOM_DURATION_MINUTES) {
-      return { error: `Custom time must be a whole number of minutes between 1 and ${MAX_CUSTOM_DURATION_MINUTES}.` };
-    }
-  }
-  const answerMode = str(formData, "answerMode") === AttemptAnswerMode.INSTANT ? AttemptAnswerMode.INSTANT : AttemptAnswerMode.EXAM;
+  // Time + answer review: the one shared parser (lib/attempt-config.ts).
+  const parsedConfig = parseAttemptConfigForm(formData, PRACTICE_TIME_MODES, "PER_QUESTION");
+  if (!parsedConfig.ok) return { error: parsedConfig.error };
+  const durationMode = AttemptDurationMode[parsedConfig.config.durationMode];
+  const customMinutes = parsedConfig.config.customMinutes ?? null;
+  const answerMode = AttemptAnswerMode[parsedConfig.config.answerMode];
 
   const subjectId = str(formData, "subjectId");
   const topicId = str(formData, "topicId");

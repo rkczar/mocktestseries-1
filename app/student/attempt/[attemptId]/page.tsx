@@ -97,8 +97,13 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
               </>
             )}
             {instant ? (
-              <li>Practice mode: after choosing an option, tap “Check Answer” to see if you were right. Checking locks that answer.</li>
-            ) : null}
+              <li>
+                Answers are shown after each question: choose an option, then tap “Check Answer”. Checking locks that answer and
+                shows the correct answer and explanation.
+              </li>
+            ) : (
+              <li>Answers and explanations are shown in Review after the test.</li>
+            )}
             <li>You can navigate between questions and change answers until you submit.</li>
             {attempt.negativeMarking > 0 ? <li>Each wrong answer deducts {attempt.negativeMarking} mark(s).</li> : null}
           </ul>
