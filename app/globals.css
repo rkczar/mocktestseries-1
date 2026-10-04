@@ -295,11 +295,13 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ---------------------------------------------------------------------- */
 /* AI actions — Ask AI / AI Question Variant / upgrade CTA. A gradient     */
-/* hairline border (info blue → soft violet) with a slow "breathing" glow  */
-/* behind it, so AI actions read as special without flashing. Only the    */
-/* opacity of a pseudo-element is animated (compositor-only). Panel        */
-/* chips/headings reuse the same border but stay still. Eye-Saver keeps    */
-/* it grayscale; reduced-motion users get the static glow.                 */
+/* hairline border (info blue → soft violet) plus a continuous breathing  */
+/* glow on the button itself: normal → stronger halo, brighter border and */
+/* fill → normal, every 2.6s (ease-in-out). box-shadow and filter never   */
+/* move the box: no layout shift, and the button stays a still target    */
+/* (a scale pulse kept it "unstable" for clicks/automation).              */
+/* Panel chips/headings reuse the border but stay still. Eye-Saver keeps  */
+/* it single-hue; reduced-motion users get a static glow instead.         */
 /* ---------------------------------------------------------------------- */
 .ai-action,
 .ai-chip {
@@ -315,29 +317,16 @@ h1, h2, h3, h4, h5, h6 {
   --ai-hue-b: var(--color-info);
 }
 .ai-action {
-  position: relative;
-  isolation: isolate;
   color: var(--color-foreground);
-}
-.ai-action::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  z-index: -1;
-  border-radius: inherit;
-  pointer-events: none;
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--ai-hue-b) 22%, transparent),
-    0 0 14px 1px color-mix(in srgb, var(--ai-hue-b) 42%, transparent);
-  opacity: 0.3;
-  animation: ai-breathe 3.6s ease-in-out infinite;
+    0 0 0 1px color-mix(in srgb, var(--ai-hue-b) 25%, transparent),
+    0 0 8px 0 color-mix(in srgb, var(--ai-hue-b) 25%, transparent);
+  animation: ai-breathe 2.6s ease-in-out infinite;
+  will-change: box-shadow, filter;
 }
 .ai-action:hover,
 .ai-action[aria-expanded="true"] {
-  --ai-fill: color-mix(in srgb, var(--ai-hue-b) 12%, var(--color-card));
-}
-.ai-action:hover::after {
-  animation-play-state: paused;
+  --ai-fill: color-mix(in srgb, var(--ai-hue-b) 14%, var(--color-card));
 }
 .ai-action-icon {
   color: var(--ai-hue-b);
@@ -345,10 +334,16 @@ h1, h2, h3, h4, h5, h6 {
 @keyframes ai-breathe {
   0%,
   100% {
-    opacity: 0.22;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--ai-hue-b) 25%, transparent),
+      0 0 8px 0 color-mix(in srgb, var(--ai-hue-b) 25%, transparent);
+    filter: brightness(1);
   }
   50% {
-    opacity: 0.8;
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--ai-hue-b) 50%, transparent),
+      0 0 22px 4px color-mix(in srgb, var(--ai-hue-b) 55%, transparent);
+    filter: brightness(1.15);
   }
 }
 .ai-chip[aria-pressed="true"] {
@@ -372,8 +367,10 @@ h1, h2, h3, h4, h5, h6 {
   color: color-mix(in srgb, var(--ai-hue-b) 70%, var(--color-foreground));
 }
 @media (prefers-reduced-motion: reduce) {
-  .ai-action::after {
+  .ai-action {
     animation: none;
-    opacity: 0.45;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--ai-hue-b) 40%, transparent),
+      0 0 14px 2px color-mix(in srgb, var(--ai-hue-b) 40%, transparent);
   }
 }

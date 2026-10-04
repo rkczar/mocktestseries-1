@@ -16,7 +16,8 @@
  *    clicked, double-clicked or toggled; one usage-status read per page;
  *  - analytics events fire without question text;
  *  - Attempt Review + Saved Questions use the same actions; reduced motion
- *    switches the glow off; no console errors; no sideways scroll.
+ *    switches the glow off; both AI buttons run the ai-breathe glow (box-shadow and
+ *    brightness sampled at start vs mid-breath, no layout shift); no console errors; no sideways scroll.
  *
  *   BASE=http://127.0.0.1:3111 FIXTURE=/path/aiux.json DATABASE_URL=<scratch> \
  *     NODE_PATH=<dir with playwright> node scripts/verify-ai-actions-ux.mjs
@@ -55,6 +56,41 @@ const views = (persona) =>
       encoding: "utf8",
     }).trim().split("\n").pop()
   );
+
+/**
+ * Reads the AI button's running animation and samples its computed glow at
+ * the start and the middle of a breath (seeking the CSS animation, so the
+ * check doesn't depend on timing), plus its layout box before and after.
+ */
+async function glowSamples(page, testId) {
+  return page.evaluate(async (testId) => {
+    const el = document.querySelector(`[data-testid=${testId}]`);
+    const cs = getComputedStyle(el);
+    const anim = el.getAnimations().find((a) => a.animationName === "ai-breathe");
+    const box = () => [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight].join(",");
+    const before = box();
+    const sample = async (t) => {
+      anim.pause();
+      anim.currentTime = t;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const c = getComputedStyle(el);
+      return { boxShadow: c.boxShadow, filter: c.filter, transform: c.transform };
+    };
+    const duration = parseFloat(cs.animationDuration) * 1000;
+    const out = { name: cs.animationName, duration, iterations: cs.animationIterationCount, timing: cs.animationTimingFunction };
+    if (!anim) return { ...out, changed: {}, layoutStable: false };
+    const a = await sample(0);
+    const b = await sample(duration / 2);
+    anim.play();
+    return {
+      ...out,
+      start: a,
+      peak: b,
+      changed: { boxShadow: a.boxShadow !== b.boxShadow, filter: a.filter !== b.filter, transform: a.transform !== b.transform },
+      layoutStable: box() === before,
+    };
+  }, testId);
+}
 
 async function newContext(browser, token, { device = "desktop", theme, reducedMotion } = {}) {
   const opts =
@@ -421,8 +457,12 @@ async function main() {
       await page.getByTestId("ask-ai-button").click();
       await page.waitForSelector("[data-testid=ai-panel] >> text=Fixture concept");
       check(`${device}/${theme}: open panel causes no sideways scroll`, (await overflow(page)) <= 1);
-      const anim = await page.evaluate(() => getComputedStyle(document.querySelector("[data-testid=ask-ai-button]"), "::after").animationName);
-      check(`${device}/${theme}: glow animates (ai-breathe)`, anim === "ai-breathe", anim);
+      for (const id of ["ask-ai-button", "ai-variant-button"]) {
+        const g = await glowSamples(page, id);
+        check(`${device}/${theme}: ${id} runs ai-breathe (name, non-zero duration, infinite)`, g.name === "ai-breathe" && g.duration > 0 && g.iterations === "infinite", g);
+        check(`${device}/${theme}: ${id} box-shadow + brightness change over time`, g.changed.boxShadow && g.changed.filter, g);
+        check(`${device}/${theme}: ${id} glow causes no layout shift`, g.layoutStable, g);
+      }
       await shot(page, `FG-${device}-${theme}`);
       check(`${device}/${theme}: no console errors`, page.errors.length === 0, page.errors);
       await submit(page);
@@ -437,7 +477,7 @@ async function main() {
       await page.getByRole("button", { name: /Start Test|Practice Again/ }).click();
       await page.waitForURL(/\/run$/, { timeout: 30000 });
       await answer(page, 3);
-      const anim = await page.evaluate(() => getComputedStyle(document.querySelector("[data-testid=ask-ai-button]"), "::after").animationName);
+      const anim = await page.evaluate(() => getComputedStyle(document.querySelector("[data-testid=ask-ai-button]")).animationName);
       check("prefers-reduced-motion: glow animation off", anim === "none", anim);
       await submit(page);
       await ctx.close();
