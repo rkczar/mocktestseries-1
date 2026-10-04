@@ -13,6 +13,8 @@ import { getExamMockSeriesSummary } from "@/lib/mock-series";
 import { displayExamName } from "@/lib/exam-display";
 import { examPageMetadata } from "@/lib/exam-seo";
 import { formatShare, getExamPyqInsights, pyqYearPath, type PaperInsight } from "@/lib/exam-pyq-insights";
+import { examShortName, getPaperNote } from "@/lib/exam-editorial-facts";
+import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 
 /**
  * One previous year's paper(s) for an exam. Exists only for years whose
@@ -45,11 +47,17 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const questions = data.papers.reduce((sum, p) => sum + p.questionCount, 0);
   const subjects = new Set(data.papers.flatMap((p) => p.subjects.map((s) => s.name))).size;
   const top = data.papers[0].subjects[0].name;
+  // A paper labelled by its recruitment cycle but held the next year is also searched for by the year it was held.
+  const note = getPaperNote(data.exam.code, data.year);
   return examPageMetadata({
     exam: data.exam,
     path: pyqYearPath(data.exam.publicSlug!, data.year),
-    title: `${baseName} ${data.year} Question Paper: Subject-wise Analysis`,
-    description: `${baseName} ${data.year} question paper: ${questions} questions across ${subjects} subjects, led by ${top}. Subject-wise analysis and an online attempt in the exam format.`,
+    title: note
+      ? `${baseName} ${data.year} Question Paper (Exam Held ${note.heldMonth})`
+      : `${baseName} ${data.year} Question Paper: Subject-wise Analysis`,
+    description: note
+      ? `${baseName} ${data.year} question paper (${note.cycle}), the exam held on ${note.heldOn}: ${questions} questions across ${subjects} subjects, led by ${top}. Subject-wise analysis and an online attempt.`
+      : `${baseName} ${data.year} question paper: ${questions} questions across ${subjects} subjects, led by ${top}. Subject-wise analysis and an online attempt in the exam format.`,
   });
 }
 
@@ -78,6 +86,9 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
   const seriesHref = mockSeriesSummary.mockSeries ? mockSeriesSummary.href : null;
   const baseline = new Map(insights.weightage.map((w) => [w.name, w.share]));
   const otherYears = insights.indexableYears.filter((y) => y !== year);
+  const note = getPaperNote(exam.code, year);
+  const short = examShortName(exam.code, baseName);
+  const hasAnalysis = hasPyqAnalysis(insights);
 
   return (
     <PublicPageShell>
@@ -94,12 +105,21 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
             ]}
           />
           <h1 className="mt-3 text-3xl tracking-[-0.02em] text-[var(--color-foreground)] sm:text-4xl">
-            {baseName} {year} Question Paper
+            {baseName} {year} Question Paper{note ? ` (Held ${note.heldMonth})` : ""}
           </h1>
           <p className="mt-3 max-w-2xl leading-relaxed text-[var(--color-muted-foreground)]">
             A subject-wise look at the {year} paper, compared with all {insights.papers.filter((p) => p.questionCount > 0).length} past papers on
             this site, and a timed online attempt in the exam format.
           </p>
+          {note ? (
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--color-muted-foreground)]">
+              This is the {note.cycle} paper. The exam was held on {note.heldOn} (source:{" "}
+              <a href={note.sourceUrl} rel="noopener" target="_blank" className="underline underline-offset-4">
+                {note.sourceLabel}
+              </a>
+              ), so if you are looking for the {short} {note.heldMonth.slice(-4)} question paper, this is it.
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -112,6 +132,7 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
           const { heavier, lighter } = standouts(paper, baseline);
           const facts = [
             { label: "Paper", value: paper.title },
+            ...(note ? [{ label: "Exam held", value: `${note.heldOn} (${note.cycle})` }] : []),
             { label: "Questions", value: String(paper.questionCount) },
             { label: "Subjects represented", value: String(paper.subjects.length) },
             { label: "Most questions", value: `${paper.subjects[0].name} (${paper.subjects[0].count})` },
@@ -140,7 +161,19 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
                   baseline={baseline}
                   caption={`${baseName} ${year} questions by subject`}
                 />
-                <p className="mt-3 text-xs text-[var(--color-muted-foreground)]">Subjects follow this site&apos;s question-bank classification.</p>
+                <p className="mt-3 text-xs text-[var(--color-muted-foreground)]">
+                  Subjects follow this site&apos;s question-bank classification.
+                  {hasAnalysis ? (
+                    <>
+                      {" "}
+                      Compare every year side by side in the{" "}
+                      <Link href={examInsightPath(exam.publicSlug!, "analysis")} className="font-medium text-[var(--color-foreground)] underline underline-offset-4">
+                        {short} previous year paper analysis
+                      </Link>
+                      .
+                    </>
+                  ) : null}
+                </p>
               </ExamSection>
 
               {heavier.length > 0 || lighter.length > 0 ? (
@@ -200,10 +233,13 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
         ) : null}
 
         <ExamSection id="keep-preparing" title="Keep preparing">
-          <ul className="grid gap-3 sm:grid-cols-3">
+          <ul className={`grid gap-3 sm:grid-cols-2 ${hasAnalysis ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
             {[
               { href: base, title: name, body: "Dates, eligibility, pattern and preparation plan." },
-              { href: `${base}/syllabus`, title: "Syllabus", body: "Every subject and topic, with past-paper weightage." },
+              { href: `${base}/syllabus`, title: "Syllabus", body: "Every subject with its topic-wise list." },
+              ...(hasAnalysis
+                ? [{ href: examInsightPath(exam.publicSlug!, "weightage"), title: "Subject-wise weightage", body: "Each subject's share of all past-paper questions." }]
+                : []),
               seriesHref
                 ? { href: seriesHref, title: "Mock test series", body: "Fresh full-length mocks in the exam pattern." }
                 : { href: `${base}/question-bank`, title: "Question bank", body: "Subject-wise practice questions." },

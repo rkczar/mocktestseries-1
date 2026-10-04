@@ -18,6 +18,7 @@ import { getExamMockSeriesSummary } from "@/lib/mock-series";
 import { displayExamName } from "@/lib/exam-display";
 import { examPageMetadata } from "@/lib/exam-seo";
 import { formatShare, getExamPyqInsights, pyqYearPath } from "@/lib/exam-pyq-insights";
+import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 
 type PublicExam = NonNullable<Awaited<ReturnType<typeof getPublicExamBySlug>>>;
 
@@ -80,6 +81,9 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
   const topSubjects = insights.weightage.slice(0, 3);
   const inEveryPaper = papers.length > 1 ? insights.weightage.filter((w) => w.papers === papers.length).length : 0;
   const years = papers.map((p) => p.year);
+  // The weightage / paper-analysis / strategy pages exist only with enough PYQ data.
+  const hasAnalysis = hasPyqAnalysis(insights);
+  const insightLink = "font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline";
 
   const webPageJsonLd = {
     "@context": "https://schema.org",
@@ -123,8 +127,8 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
               topSubjects.reduce((sum, s) => sum + s.share, 0)
             )} of the questions.${inEveryPaper > 0 ? ` ${inEveryPaper} subjects appeared in every paper, so cover breadth as well as depth.` : ""}`
           : "Cover every subject, then go deeper where past papers concentrate.",
-      href: `${base}/syllabus`,
-      link: "Subject-wise syllabus",
+      href: hasAnalysis ? examInsightPath(exam.publicSlug!, "weightage") : `${base}/syllabus`,
+      link: hasAnalysis ? "Subject-wise weightage" : "Subject-wise syllabus",
     },
     {
       title: "Solve previous papers under exam conditions",
@@ -288,9 +292,23 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
             id="syllabus"
             title="Syllabus and subjects"
             intro={
-              topSubjects.length > 0
-                ? `Across ${papers.length} previous papers, ${topSubjects.map((s) => `${s.name} (${formatShare(s.share)})`).join(", ")} carried the most questions.`
-                : undefined
+              topSubjects.length > 0 ? (
+                <>
+                  Across {papers.length} previous papers, {topSubjects.map((s) => `${s.name} (${formatShare(s.share)})`).join(", ")} carried the most
+                  questions
+                  {hasAnalysis ? (
+                    <>
+                      {" "}
+                      (see the{" "}
+                      <Link href={examInsightPath(exam.publicSlug!, "weightage")} className={insightLink}>
+                        subject-wise weightage of past papers
+                      </Link>
+                      )
+                    </>
+                  ) : null}
+                  .
+                </>
+              ) : undefined
             }
             action={{ href: `${base}/syllabus`, label: "Subject-wise syllabus" }}
           >
@@ -328,6 +346,15 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
                 </li>
               ))}
             </ul>
+            {hasAnalysis ? (
+              <p className="mt-4 text-sm text-[var(--color-muted-foreground)]">
+                How the papers compare, year by year:{" "}
+                <Link href={examInsightPath(exam.publicSlug!, "analysis")} className={insightLink}>
+                  previous year paper analysis
+                </Link>
+                .
+              </p>
+            ) : null}
           </ExamSection>
         ) : null}
 
@@ -340,7 +367,11 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
           </ExamSection>
         ) : null}
 
-        <ExamSection id="preparation" title={`How to prepare for ${name}`}>
+        <ExamSection
+          id="preparation"
+          title={`How to prepare for ${name}`}
+          action={hasAnalysis ? { href: examInsightPath(exam.publicSlug!, "strategy"), label: "Full preparation strategy" } : undefined}
+        >
           <ol className="grid gap-3 md:grid-cols-2">
             {steps.map((step, i) => (
               <li key={step.title} className="flex gap-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">

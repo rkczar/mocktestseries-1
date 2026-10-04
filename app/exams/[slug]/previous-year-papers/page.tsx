@@ -14,6 +14,8 @@ import { getExamMockSeriesSummary } from "@/lib/mock-series";
 import { displayExamName } from "@/lib/exam-display";
 import { examPageMetadata } from "@/lib/exam-seo";
 import { formatShare, getExamPyqInsights, pyqYearPath, type ExamPyqInsights } from "@/lib/exam-pyq-insights";
+import { getPaperNote } from "@/lib/exam-editorial-facts";
+import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 
 function yearSpan(insights: ExamPyqInsights): string {
   const years = insights.papers.filter((p) => p.questionCount > 0).map((p) => p.year);
@@ -54,6 +56,10 @@ export default async function ExamPreviousYearPapersPage({ params }: { params: P
   const span = yearSpan(insights);
   const top = insights.weightage.slice(0, 3);
   const seriesHref = mockSeriesSummary.mockSeries ? mockSeriesSummary.href : null;
+  // With enough data the full subject table lives on the weightage page; this page keeps the top rows.
+  const hasAnalysis = hasPyqAnalysis(insights);
+  const weightageRows = hasAnalysis ? insights.weightage.slice(0, 5) : insights.weightage;
+  const paperNotes = new Map(papers.map((p) => [p.year, getPaperNote(exam.code, p.year)]));
 
   const faq =
     papers.length > 0
@@ -64,7 +70,7 @@ export default async function ExamPreviousYearPapersPage({ params }: { params: P
           },
           {
             question: "Which subjects have the most questions in past papers?",
-            answer: `Across all ${papers.length} papers, ${top.map((s) => `${s.name} (${s.count} questions, ${formatShare(s.share)})`).join(", ")} had the most questions. The subject-wise table on this page lists every subject. Subjects follow this site's question-bank classification.`,
+            answer: `Across all ${papers.length} papers, ${top.map((s) => `${s.name} (${s.count} questions, ${formatShare(s.share)})`).join(", ")} had the most questions. ${hasAnalysis ? "The subject-wise weightage page lists every subject" : "The subject-wise table on this page lists every subject"}. Subjects follow this site's question-bank classification.`,
           },
           {
             question: "Can I download these papers as PDFs?",
@@ -125,6 +131,11 @@ export default async function ExamPreviousYearPapersPage({ params }: { params: P
                     </h3>
                     <span className="shrink-0 text-xs tabular-nums text-[var(--color-muted-foreground)]">{p.questionCount} Qs</span>
                   </div>
+                  {paperNotes.get(p.year) ? (
+                    <p className="-mt-2 text-xs text-[var(--color-muted-foreground)]">
+                      {paperNotes.get(p.year)!.cycle}, exam held {paperNotes.get(p.year)!.heldOn}
+                    </p>
+                  ) : null}
                   {p.subjects.length > 0 ? (
                     <p className="text-sm leading-relaxed text-[var(--color-muted-foreground)]">
                       {p.subjects.length} subjects · most questions from {p.subjects.slice(0, 2).map((s) => `${s.name} (${s.count})`).join(" and ")}
@@ -150,11 +161,19 @@ export default async function ExamPreviousYearPapersPage({ params }: { params: P
         {insights.weightage.length > 0 ? (
           <ExamSection
             id="subject-weightage"
-            title="Subject-wise questions across all papers"
-            intro={`How the ${insights.totalQuestions} questions in these ${papers.length} papers are spread across subjects. Use it to decide where revision time goes first.`}
-            action={{ href: `${base}/syllabus`, label: "Syllabus with topics" }}
+            title={hasAnalysis ? "Subjects with the most questions" : "Subject-wise questions across all papers"}
+            intro={
+              hasAnalysis
+                ? `The ${weightageRows.length} largest of ${insights.weightage.length} subjects across the ${insights.totalQuestions} questions in these ${papers.length} papers.`
+                : `How the ${insights.totalQuestions} questions in these ${papers.length} papers are spread across subjects. Use it to decide where revision time goes first.`
+            }
+            action={
+              hasAnalysis
+                ? { href: examInsightPath(exam.publicSlug!, "weightage"), label: "Full subject-wise weightage" }
+                : { href: `${base}/syllabus`, label: "Syllabus with topics" }
+            }
           >
-            <SubjectWeightageTable rows={insights.weightage} total={insights.totalQuestions} caption={`${name} previous year questions by subject`} showPapers />
+            <SubjectWeightageTable rows={weightageRows} total={insights.totalQuestions} caption={`${name} previous year questions by subject`} showPapers />
             <p className="mt-3 text-xs text-[var(--color-muted-foreground)]">
               Subjects follow this site&apos;s question-bank classification. &ldquo;Papers&rdquo; is the number of papers with at least one question from that subject.
             </p>
@@ -182,6 +201,16 @@ export default async function ExamPreviousYearPapersPage({ params }: { params: P
             <Link href={`${base}/exam-pattern`} className="font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
               Exam pattern
             </Link>
+            {hasAnalysis ? (
+              <>
+                <Link href={examInsightPath(exam.publicSlug!, "analysis")} className="font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
+                  Year-by-year paper analysis
+                </Link>
+                <Link href={examInsightPath(exam.publicSlug!, "strategy")} className="font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
+                  Preparation strategy
+                </Link>
+              </>
+            ) : null}
             {seriesHref ? (
               <Link href={seriesHref} className="font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
                 {name} mock test series

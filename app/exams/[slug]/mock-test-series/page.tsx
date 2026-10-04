@@ -22,6 +22,8 @@ import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
 import { OfferPrice, SeriesCounts } from "@/components/public-exam/mock-series-promo";
 import { PlanComparison } from "@/components/payments/plan-comparison";
+import { getExamPyqInsights } from "@/lib/exam-pyq-insights";
+import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 
 /**
  * Canonical Mock Test Series landing page (/exams/[slug]/mock-test-series).
@@ -93,6 +95,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
   ]);
   const studentId = session?.user?.studentId ? (session.user.id ?? null) : null;
   const cta = await getSeriesCta(studentId, offer);
+  const hasAnalysis = hasPyqAnalysis(await getExamPyqInsights(exam.id));
 
   const name = seriesTitle(exam.name, mockSeries?.series.name);
   const pageUrl = `${siteUrl}${mockSeriesPath(examSlug)}`;
@@ -161,7 +164,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
   ];
 
   const jsonLd: object[] = [
-    { "@context": "https://schema.org", "@type": "WebPage", name, url: pageUrl, isPartOf: { "@type": "WebSite", url: siteUrl } },
+    { "@context": "https://schema.org", "@type": "WebPage", name, url: pageUrl, isPartOf: { "@type": "WebSite", "@id": `${siteUrl}/#website` } },
     {
       "@context": "https://schema.org",
       "@type": "FAQPage",
@@ -457,19 +460,26 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
 
         {/* RELATED */}
         <section>
-          <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Related {exam.name} Resources</h2>
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Related {displayExamName(exam.name)} Resources</h2>
+          <div className={`mt-5 grid gap-3 sm:grid-cols-2 ${hasAnalysis ? "lg:grid-cols-4" : "lg:grid-cols-5"}`}>
             <Related href={hub} icon={<BookOpen className="h-4 w-4" aria-hidden />} title="Exam overview" />
             <Related href={`${hub}/previous-year-papers`} icon={<FileText className="h-4 w-4" aria-hidden />} title="Previous year papers" />
             <Related href={`${hub}/syllabus`} icon={<ListChecks className="h-4 w-4" aria-hidden />} title="Syllabus" />
             <Related href={`${hub}/exam-pattern`} icon={<Target className="h-4 w-4" aria-hidden />} title="Exam pattern" />
             <Related href={`${hub}/question-bank`} icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} title="Question bank" />
+            {hasAnalysis ? (
+              <>
+                <Related href={examInsightPath(examSlug, "weightage")} icon={<BarChart3 className="h-4 w-4" aria-hidden />} title="Subject-wise weightage" />
+                <Related href={examInsightPath(examSlug, "analysis")} icon={<FileText className="h-4 w-4" aria-hidden />} title="Previous year paper analysis" />
+                <Related href={examInsightPath(examSlug, "strategy")} icon={<Target className="h-4 w-4" aria-hidden />} title="Preparation strategy" />
+              </>
+            ) : null}
           </div>
         </section>
 
         {/* FINAL CTA */}
         <section className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-center">
-          <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Start your {exam.name} mock practice</h2>
+          <h2 className="text-2xl font-semibold text-[var(--color-foreground)]">Start your {displayExamName(exam.name)} mock practice</h2>
           <div className="mx-auto mt-4 flex w-fit justify-center">
             <OfferPrice offer={offer} />
           </div>

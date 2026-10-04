@@ -14,17 +14,28 @@ import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
 import { MockSeriesPromo } from "@/components/public-exam/mock-series-promo";
 import { getExamMockSeriesSummary } from "@/lib/mock-series";
+import { getExamPublicStats } from "@/lib/exam-public";
+import { examShortName } from "@/lib/exam-editorial-facts";
+import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
+
+/** "RUHS MO 2026" — the short exam name students search with, plus the exam year. */
+function syllabusName(exam: { code: string; name: string; year: number | null }): string {
+  const display = displayExamName(exam.name);
+  const short = examShortName(exam.code, display.replace(/\s\d{4}$/, ""));
+  return exam.year ? `${short} ${exam.year}` : short;
+}
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
   const exam = await getPublicExamBySlug(slug);
   if (!exam) return {};
   const name = displayExamName(exam.name);
+  const stats = await getExamPublicStats(exam.id);
   return examPageMetadata({
     exam,
     path: `/exams/${exam.publicSlug}/syllabus`,
-    title: `${name} Syllabus & Subject Weightage`,
-    description: `Subject and topic-wise ${name} syllabus, with how many questions each subject carried in previous year papers, so you know where revision time pays off.`,
+    title: `${syllabusName(exam)} Syllabus: Subject & Topic-wise List`,
+    description: `${name} syllabus, subject and topic-wise: ${stats.subjects} subjects and ${stats.topics} topics, each with practice questions. Confirm the official syllabus in the notification.`,
   });
 }
 
@@ -63,7 +74,7 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
               { label: "Syllabus" },
             ]}
           />
-          <h1 className="mt-3 text-3xl tracking-[-0.02em] text-[var(--color-foreground)] sm:text-4xl">{name} Syllabus</h1>
+          <h1 className="mt-3 text-3xl tracking-[-0.02em] text-[var(--color-foreground)] sm:text-4xl">{syllabusName(exam)} Syllabus: Subject &amp; Topic-wise List</h1>
           {exam.syllabusDescription ? (
             <p className="mt-2 max-w-2xl text-[var(--color-muted-foreground)]">{exam.syllabusDescription}</p>
           ) : (
@@ -85,17 +96,32 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
             <Link href={`/exams/${exam.publicSlug}/previous-year-papers`} className="font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
               {pastPapers} previous year papers
             </Link>{" "}
-            (this site&apos;s subject classification). Confirm the official syllabus in the conducting authority&apos;s notification.
+            (this site&apos;s subject classification).
+            {hasPyqAnalysis(insights) ? (
+              <>
+                {" "}
+                For the full breakdown and how it changed over the years, see the{" "}
+                <Link href={examInsightPath(exam.publicSlug!, "weightage")} className="font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
+                  subject-wise weightage
+                </Link>
+                .
+              </>
+            ) : null}{" "}
+            Confirm the official syllabus in the conducting authority&apos;s notification.
           </p>
         ) : null}
         {subjects.length === 0 ? (
           <p className="text-sm text-[var(--color-muted-foreground)]">Syllabus not published for this exam yet.</p>
         ) : (
+          <section aria-labelledby="subjects-heading">
+          <h2 id="subjects-heading" className="mb-4 text-xl font-semibold text-[var(--color-foreground)]">
+            Subjects and topics
+          </h2>
           <div className="flex flex-col gap-3">
             {subjects.map((s) => (
               <details key={s.id} className="group rounded-[var(--radius-card)] border border-[var(--color-border)] p-4 open:pb-5" open>
                 <summary className="flex cursor-pointer list-none items-center justify-between marker:content-none">
-                  <span className="text-base font-semibold text-[var(--color-foreground)]">{s.name}</span>
+                  <h3 className="text-base font-semibold text-[var(--color-foreground)]">{s.name}</h3>
                   <span className="text-right text-xs text-[var(--color-muted-foreground)]">
                     {s.topics.length} topics · {s._count.questions} questions
                     {weightBySubject.has(s.name) ? (
@@ -126,6 +152,7 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
               </details>
             ))}
           </div>
+          </section>
         )}
         <div className="mt-10">
           <MockSeriesPromo summary={mockSeriesSummary} blurb="Each mock states exactly which subjects and topics it covers, so you can match practice to this syllabus." />

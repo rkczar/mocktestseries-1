@@ -3,10 +3,11 @@ import { cn } from "@/lib/utils";
 
 export interface ExamSubNavProps {
   slug: string;
-  active: "overview" | "syllabus" | "previous-year-papers" | "mock-test-series" | "question-bank" | "exam-pattern";
+  /** Omitted on pages that aren't one of the tabs (e.g. the analysis pages). */
+  active?: "overview" | "syllabus" | "previous-year-papers" | "mock-test-series" | "question-bank" | "exam-pattern";
 }
 
-const TABS: { key: ExamSubNavProps["active"]; label: string; href: (slug: string) => string }[] = [
+const TABS: { key: NonNullable<ExamSubNavProps["active"]>; label: string; href: (slug: string) => string }[] = [
   { key: "overview", label: "Overview", href: (s) => `/exams/${s}` },
   { key: "mock-test-series", label: "Mock Test Series", href: (s) => `/exams/${s}/mock-test-series` },
   { key: "syllabus", label: "Syllabus", href: (s) => `/exams/${s}/syllabus` },

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
@@ -11,6 +12,8 @@ import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
 import { MockSeriesPromo } from "@/components/public-exam/mock-series-promo";
 import { getExamMockSeriesSummary } from "@/lib/mock-series";
+import { getExamPyqInsights } from "@/lib/exam-pyq-insights";
+import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -31,8 +34,9 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
   if (!exam) notFound();
   const mockSeriesSummary = await getExamMockSeriesSummary(exam);
 
-  const siteUrl = await getSiteUrl();
+  const [siteUrl, pyqInsights] = await Promise.all([getSiteUrl(), getExamPyqInsights(exam.id)]);
   const name = displayExamName(exam.name);
+  const hasAnalysis = hasPyqAnalysis(pyqInsights);
 
   const confirmedFacts: { label: string; value: string }[] = [];
   if (exam.conductingAuthority) confirmedFacts.push({ label: "Conducting Authority", value: exam.conductingAuthority });
@@ -97,6 +101,19 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
         {confirmedFacts.length === 0 && !exam.examPatternInfo ? (
           <p className="text-sm text-[var(--color-muted-foreground)]">
             Exam pattern details haven&apos;t been published yet for {name}.
+          </p>
+        ) : null}
+        {hasAnalysis ? (
+          <p className="mt-8 max-w-3xl text-sm leading-relaxed text-[var(--color-muted-foreground)]">
+            The pattern tells you the format; past papers show where the questions come from. See the{" "}
+            <Link href={examInsightPath(exam.publicSlug!, "weightage")} className="font-medium text-[var(--color-foreground)] underline underline-offset-4">
+              subject-wise weightage of previous papers
+            </Link>{" "}
+            and a{" "}
+            <Link href={examInsightPath(exam.publicSlug!, "strategy")} className="font-medium text-[var(--color-foreground)] underline underline-offset-4">
+              preparation strategy built for this pattern
+            </Link>
+            .
           </p>
         ) : null}
         <div className="mt-10">

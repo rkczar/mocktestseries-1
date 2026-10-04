@@ -12,6 +12,8 @@ import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
 import { MockSeriesPromo } from "@/components/public-exam/mock-series-promo";
 import { getExamMockSeriesSummary } from "@/lib/mock-series";
+import { getExamPyqInsights } from "@/lib/exam-pyq-insights";
+import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -32,11 +34,13 @@ export default async function ExamQuestionBankPage({ params }: { params: Promise
   if (!exam) notFound();
   const mockSeriesSummary = await getExamMockSeriesSummary(exam);
 
-  const [subjects, stats, siteUrl] = await Promise.all([
+  const [subjects, stats, siteUrl, pyqInsights] = await Promise.all([
     getExamSubjectsWithCounts(exam.id),
     getExamPublicStats(exam.id),
     getSiteUrl(),
+    getExamPyqInsights(exam.id),
   ]);
+  const hasAnalysis = hasPyqAnalysis(pyqInsights);
   const name = displayExamName(exam.name);
 
   return (
@@ -56,6 +60,16 @@ export default async function ExamQuestionBankPage({ params }: { params: Promise
           <p className="mt-2 max-w-2xl text-[var(--color-muted-foreground)]">
             {stats.questions} published questions across {stats.subjects} subjects, each with an AI-powered explanation available
             once you sign in.
+            {hasAnalysis ? (
+              <>
+                {" "}
+                Not sure where to start? The{" "}
+                <Link href={examInsightPath(exam.publicSlug!, "weightage")} className="font-medium text-[var(--color-foreground)] underline underline-offset-4">
+                  subject-wise weightage
+                </Link>{" "}
+                shows which subjects carried the most past-paper questions.
+              </>
+            ) : null}
           </p>
         </div>
       </div>
