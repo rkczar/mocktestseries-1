@@ -16,11 +16,14 @@
  *  - keyboard Enter works, touch targets ≥ 44px on phones, safe-area padding,
  *    no sideways scroll, no console / hydration errors.
  * Mobile card layout (360 / 375 / 390 / 412 / 430 px, short and very long
- * question + options): Save / Report / Share sit once, below the AI actions
- * and Correct Answer (Save + Report side by side, Share full width under them),
- * not in the header; nothing clips or overflows; the whole card — tools
- * included — scrolls fully clear of the bar; Save and Report still work. At
- * desktop the tools stay in the header band beside "Question N of M".
+ * question + options): header → question → options → result → Correct Answer
+ * (one uninterrupted block) → Ask AI | AI Question Variant (+ usage) → Save |
+ * Report → Share on WhatsApp → AI panel. Tools render once, not in the header;
+ * Theme / Text Size appear once (global header only); nothing clips or
+ * overflows; the whole card scrolls fully clear of the bar; opening Ask AI or
+ * the Variant never moves the buttons, the panel opens below Share and is
+ * scrolled into view; Save and Report still work. At desktop the tools stay in
+ * the header band and the AI row sits beside Correct / Incorrect, as before.
  * Needs the scratch DB's `question.whatsapp_share` Setting enabled.
  *
  *   BASE=http://127.0.0.1:3111 FIXTURE=/path/aiux.json DATABASE_URL=<scratch> \
@@ -140,6 +143,7 @@ async function runDevice(browser, device, attemptId) {
   // Long explanation: open Ask AI (cached fixture explanation).
   await page.getByTestId("ask-ai-button").click();
   await page.waitForSelector("[data-testid=ai-panel] >> text=Fixture concept", { timeout: 20000 });
+  await page.waitForTimeout(900); // phone auto-scrolls to the opened panel
   check(`${device}: Ask AI still works on review`, (await page.locator("[data-testid=ai-panel]").count()) === 1);
   // Make sure the card is long, like a real long explanation.
   await page.evaluate(() => {
@@ -240,7 +244,7 @@ async function mobileLayout(browser, width, attemptId, long) {
       const card = document.querySelector("[data-testid=review-nav]").previousElementSibling;
       const qp = card.querySelector("p.whitespace-pre-wrap");
       qp.textContent = "A 34-year-old presents with progressive dyspnoea, ".repeat(25) + "Supercalifragilisticexpialidocious-unbroken-token-" + "x".repeat(60);
-      card.querySelectorAll("[data-testid=review-answer-header]")[0].parentElement.querySelectorAll(".mt-4.flex.flex-col > div").forEach((o, i) => {
+      card.querySelectorAll("[data-testid=review-options] > div").forEach((o, i) => {
         o.firstChild.nextSibling.textContent = ` Option ${i + 1}: ` + "a very long distractor describing a management step in detail, ".repeat(6);
       });
     });
@@ -260,7 +264,12 @@ async function mobileLayout(browser, width, attemptId, long) {
       headerHasTools: header.contains(tools) || !!header.querySelector("button"),
       question: r(card.querySelector("p.whitespace-pre-wrap")),
       questionFont: parseFloat(getComputedStyle(card.querySelector("p.whitespace-pre-wrap")).fontSize),
+      options: r(card.querySelector("[data-testid=review-options]")),
+      result: r(card.querySelector("[data-testid=review-answer-header] > p")),
       ai: r(card.querySelector("[data-testid=ask-ai-button]")),
+      usage: r(card.querySelector("[data-testid=ai-usage]")),
+      themeVisible: [...document.querySelectorAll("button[aria-label*='Switch to']")].filter((b) => b.offsetParent !== null).length,
+      textSizeVisible: [...document.querySelectorAll("button[aria-label^='Text size']")].filter((b) => b.offsetParent !== null).length,
       variant: r(card.querySelector("[data-testid=ai-variant-button]")),
       answer: r(answerLine),
       tools: r(tools),
@@ -276,7 +285,15 @@ async function mobileLayout(browser, width, attemptId, long) {
   check(`${tag}: no clipped / off-screen buttons`, L.clipped.length === 0, L.clipped);
   check(`${tag}: one tools group, one nav bar`, L.toolsCount === 1 && L.navCount === 1, L);
   check(`${tag}: header holds no Save/Report/Share`, !L.headerHasTools);
-  check(`${tag}: order header → question → AI → answer → tools`, L.header.bottom <= L.question.top && L.question.bottom < L.ai.top && L.ai.bottom <= L.answer.top && L.answer.bottom <= L.tools.top, L);
+  check(`${tag}: Theme + Text Size shown once (global header)`, L.themeVisible === 1 && L.textSizeVisible === 1, [L.themeVisible, L.textSizeVisible]);
+  check(
+    `${tag}: order header → question → options → result → Correct Answer → AI → tools`,
+    L.header.bottom <= L.question.top && L.question.bottom <= L.options.top && L.options.bottom <= L.result.top && L.result.bottom <= L.answer.top && L.answer.bottom <= L.ai.top && L.ai.bottom <= L.tools.top,
+    L
+  );
+  check(`${tag}: nothing between options and Correct Answer but the result line`, L.answer.top - L.options.bottom < L.result.height + 32, { gap: L.answer.top - L.options.bottom });
+  check(`${tag}: usage stays with the AI actions, above Save/Report`, !L.usage || (L.usage.top >= L.ai.bottom && L.usage.bottom <= L.tools.top), L.usage);
+  check(`${tag}: Ask AI + Variant side by side`, Math.abs(L.ai.top - L.variant.top) < 1 && L.variant.left > L.ai.right, { ai: L.ai, variant: L.variant });
   check(`${tag}: Save + Report side by side, Share full width below`, Math.abs(L.save.top - L.report.top) < 1 && L.share && L.share.top >= L.save.bottom && L.share.width > L.save.width * 1.6, { save: L.save, report: L.report, share: L.share });
   check(`${tag}: tool buttons ≥ 40px tall`, L.save.height >= 40 && L.report.height >= 40 && L.share.height >= 40, [L.save.height, L.report.height, L.share.height]);
   check(`${tag}: larger question text (≥ 17px)`, L.questionFont >= 16.9, L.questionFont);
@@ -323,6 +340,52 @@ async function mobileLayout(browser, width, attemptId, long) {
     await page.keyboard.press("Escape");
     check(`${tag}: Share link is a wa.me link`, /wa\.me|whatsapp/.test((await tools.locator("a").getAttribute("href")) ?? ""));
   }
+  // AI panels open BELOW the whole action area; the buttons never move.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const pos = () =>
+    page.evaluate(() => {
+      const y = (sel) => {
+        const el = document.querySelector(sel);
+        return el ? el.getBoundingClientRect().top + window.scrollY : null;
+      };
+      const panel = document.querySelector("[data-testid=ai-panel]");
+      const tools = document.querySelector("[data-testid=review-question-tools]");
+      const navTop = document.querySelector("[data-testid=review-nav]").getBoundingClientRect().top;
+      return {
+        ai: y("[data-testid=ask-ai-button]"),
+        save: y("[data-testid=review-question-tools] button"),
+        toolsBottom: tools.getBoundingClientRect().bottom + window.scrollY,
+        panelTop: panel ? panel.getBoundingClientRect().top + window.scrollY : null,
+        panelInView: panel ? panel.getBoundingClientRect().top < navTop && panel.getBoundingClientRect().bottom > 0 : false,
+        panelLabel: panel ? panel.querySelector(".ai-heading")?.textContent.trim() : null,
+      };
+    });
+  const before = await pos();
+  await page.getByTestId("ask-ai-button").click();
+  await page.waitForSelector("[data-testid=ai-panel] >> text=Fixture concept", { timeout: 20000 });
+  await page.waitForTimeout(900); // smooth scroll settles
+  let after = await pos();
+  check(`${tag}: Ask AI → buttons did not move`, Math.abs(after.ai - before.ai) < 1 && Math.abs(after.save - before.save) < 1, { before, after });
+  check(`${tag}: Ask AI → explanation below Save/Report/Share`, after.panelTop >= after.toolsBottom, after);
+  check(`${tag}: Ask AI → explanation scrolled into view`, after.panelInView, after);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.getByTestId("ai-variant-button").click();
+  await page.waitForFunction(() => /AI Question Variant/.test(document.querySelector("[data-testid=ai-panel] .ai-heading")?.textContent ?? ""), null, { timeout: 20000 });
+  await page.waitForTimeout(900);
+  after = await pos();
+  check(`${tag}: Variant → buttons did not move`, Math.abs(after.ai - before.ai) < 1 && Math.abs(after.save - before.save) < 1, { before, after });
+  check(`${tag}: Variant → content below Save/Report/Share`, after.panelLabel === "AI Question Variant" && after.panelTop >= after.toolsBottom, after);
+  const ov = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check(`${tag}: no sideways scroll with AI panel open`, ov <= 0, ov);
+  // End of the AI panel scrolls clear of the bar.
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const tail = await page.evaluate(() => ({
+    panelBottom: document.querySelector("[data-testid=ai-panel]").getBoundingClientRect().bottom,
+    navTop: document.querySelector("[data-testid=review-nav]").getBoundingClientRect().top,
+  }));
+  check(`${tag}: AI panel end never under the bar`, tail.panelBottom <= tail.navTop + 0.5, tail);
+  await shot(page, `mobile-${width}-${long ? "long" : "short"}-variant`);
+
   check(`${tag}: no console / hydration errors`, errors.length === 0, errors);
   await ctx.close();
 }
@@ -337,12 +400,16 @@ async function desktopLayout(browser, attemptId) {
     const header = card.firstElementChild;
     const tools = card.querySelector("[data-testid=review-question-tools]");
     const q = card.querySelector("p.whitespace-pre-wrap");
-    const opt = card.querySelector(".mt-4.flex.flex-col > div");
-    return { header: r(header), tools: r(tools), q: r(q), qFont: getComputedStyle(q).fontSize, qLh: getComputedStyle(q).lineHeight, optFont: getComputedStyle(opt).fontSize, optLh: getComputedStyle(opt).lineHeight, card: r(card), btnH: [...tools.querySelectorAll("button")].map((b) => b.getBoundingClientRect().height) };
+    const opt = card.querySelector("[data-testid=review-options] > div");
+    const ah = card.querySelector("[data-testid=review-answer-header]");
+    const answerLine = [...card.querySelectorAll("p")].find((p) => /^Correct Answer:/.test(p.textContent.trim()));
+    return { header: r(header), tools: r(tools), q: r(q), qFont: getComputedStyle(q).fontSize, qLh: getComputedStyle(q).lineHeight, optFont: getComputedStyle(opt).fontSize, optLh: getComputedStyle(opt).lineHeight, card: r(card), ah: r(ah), ai: r(card.querySelector("[data-testid=ask-ai-button]")), result: r(ah.querySelector("p")), answer: r(answerLine), themeVisible: [...document.querySelectorAll("button[aria-label*='Switch to']")].filter((b) => b.offsetParent !== null).length, btnH: [...tools.querySelectorAll("button")].map((b) => b.getBoundingClientRect().height) };
   });
   console.log("  desktop layout", JSON.stringify({ qFont: L.qFont, qLh: L.qLh, optFont: L.optFont, optLh: L.optLh, btnH: L.btnH }));
   check("desktop: tools in the header band, right side, same row", Math.abs(L.tools.top - L.header.top) < 1 && Math.abs(L.tools.bottom - L.header.bottom) < 1 && L.tools.right <= L.card.right && L.tools.left > L.header.left, L);
   check("desktop: tools above the question", L.tools.bottom <= L.q.top);
+  check("desktop: AI actions on the Correct/Incorrect row, Correct Answer below", Math.abs(L.ai.top + L.ai.height / 2 - (L.result.top + L.result.height / 2)) < 8 && L.ai.right <= L.card.right && L.answer.top >= L.ah.bottom, L);
+  check("desktop: page controls (Theme / Text Size) still shown beside Back", L.themeVisible === 2, L.themeVisible);
   check("desktop: question/option type unchanged (15px / 14px, sm Save/Report)", L.qFont === "15px" && L.optFont === "14px" && L.btnH.every((h) => h === 32), L);
   await shot(page, "desktop-layout");
   await ctx.close();

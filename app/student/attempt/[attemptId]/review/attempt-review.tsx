@@ -106,13 +106,30 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
 function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index: number; total: number }) {
   const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(q.questionId, "attempt_review", q.attemptId);
   const correctOption = q.snapshot.options.find((opt) => opt.label === q.snapshot.correctLabel);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelOpen = askAiPanel !== null;
+
+  // On a phone the AI panel opens BELOW the whole action area, so it can start
+  // off-screen: bring it into view when it first opens (the loading state, then
+  // the content, fill the same spot). Phone only, and only when it isn't already visible.
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!panelOpen || !el || !window.matchMedia("(max-width: 767.98px)").matches) return;
+    const navTop = document.querySelector("[data-testid=review-nav]")?.getBoundingClientRect().top ?? window.innerHeight;
+    if (el.getBoundingClientRect().top > navTop - 96) {
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      el.scrollIntoView({ block: "start", behavior: reduce ? "instant" : "smooth" });
+    }
+  }, [panelOpen]);
 
   return (
-    // Save / Report / Share render ONCE. Mobile (< md): a single column — header, question, options, answer, AI, then
-    // these tools last, so the question gets the screen. md+: a grid puts the tools back in the header band, beside
-    // "Question N of M" (both cells carry the band's background + rule, so it reads as one strip, as before).
-    <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] md:grid md:grid-cols-[1fr_auto]">
-      <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-info)]/5 px-4 py-3 md:col-start-1 md:row-start-1 md:pl-5 md:pr-0">
+    // Everything renders ONCE. md+ (unchanged): a grid puts Save / Report / Share in the header band beside "Question N
+    // of M" (both cells carry the band's background + rule, so it reads as one strip), then the body block. Below md the
+    // body and its row wrappers become `display: contents`, so each piece is a flex item of this column and `order`
+    // gives the phone flow: header → question → options → result → Correct Answer → AI actions (+ usage) → Save /
+    // Report → Share → AI panel. Nothing moves when the panel opens; it appears under the action area.
+    <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] max-md:pb-4 md:grid md:grid-cols-[1fr_auto]">
+      <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-info)]/5 px-4 py-3 max-md:order-1 md:col-start-1 md:row-start-1 md:pl-5 md:pr-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-[var(--color-foreground)]">
             Question {index + 1} of {total}
@@ -131,7 +148,7 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
       </div>
       <div
         data-testid="review-question-tools"
-        className="grid grid-cols-2 gap-2 px-4 pb-4 max-md:order-last [&>button]:h-10 md:col-start-2 md:row-start-1 md:flex md:flex-wrap md:items-center md:justify-end md:border-b md:border-[var(--color-border)] md:bg-[var(--color-info)]/5 md:py-3 md:pl-3 md:pr-5 md:[&>button]:h-8"
+        className="grid grid-cols-2 gap-2 px-4 max-md:order-8 max-md:mt-3 [&>button]:h-10 md:col-start-2 md:row-start-1 md:flex md:flex-wrap md:items-center md:justify-end md:border-b md:border-[var(--color-border)] md:bg-[var(--color-info)]/5 md:py-3 md:pl-3 md:pr-5 md:[&>button]:h-8"
       >
         <SaveQuestionButton initialSaved={q.saved} onToggle={q.saveAction} />
         <ReportQuestionDialog onSubmit={q.reportAction} />
@@ -142,8 +159,8 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
         ) : null}
       </div>
 
-      <div className="p-4 md:col-span-2 md:row-start-2 md:p-5">
-        <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)] max-md:text-[length:calc(1.0625rem*var(--text-scale))] max-md:leading-[1.65]">
+      <div className="max-md:contents md:col-span-2 md:row-start-2 md:p-5">
+        <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)] max-md:order-2 max-md:px-4 max-md:pt-4 max-md:text-[length:calc(1.0625rem*var(--text-scale))] max-md:leading-[1.65]">
           {q.snapshot.text}
         </p>
         {q.snapshot.imageUrl ? (
@@ -151,11 +168,11 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
           <img
             src={q.snapshot.imageUrl}
             alt=""
-            className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+            className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain max-md:order-2 max-md:mx-4 max-md:max-w-[calc(100%-2rem)] max-md:self-start"
           />
         ) : null}
 
-        <div className="mt-4 flex flex-col gap-2.5 md:gap-2">
+        <div className="mt-4 flex flex-col gap-2.5 max-md:order-3 max-md:px-4 md:gap-2" data-testid="review-options">
           {q.snapshot.options.map((opt) => {
             const isSelected = q.selected === opt.label;
             const isAnswer = opt.label === q.snapshot.correctLabel;
@@ -189,11 +206,11 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
           })}
         </div>
 
-        {/* Answer header: Correct / Incorrect on the left, the AI actions on the right (wrapping under it on narrow screens), then usage and the correct answer. */}
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2" data-testid="review-answer-header">
+        {/* md+: Correct / Incorrect on the left, the AI actions on the right, then usage and the correct answer. Phone: see the card comment. */}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-md:contents" data-testid="review-answer-header">
           <p
             className={cn(
-              "flex items-center gap-2 text-sm font-semibold",
+              "flex items-center gap-2 text-sm font-semibold max-md:order-4 max-md:mt-4 max-md:px-4",
               q.isCorrect === true && "text-[var(--color-success)]",
               q.isCorrect === false && "text-[var(--color-error)]",
               q.isCorrect === null && "text-[var(--color-muted-foreground)]"
@@ -208,19 +225,21 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
             )}
             {q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered"}
           </p>
-          {askAiActions}
+          <div className="max-md:order-6 max-md:mt-4 max-md:px-4 max-md:[&_button]:h-10 max-md:[&_button]:flex-1">{askAiActions}</div>
         </div>
-        <div className="mt-2 flex flex-col gap-2">
-          {usageNotice}
+        <div className="mt-2 flex flex-col gap-2 max-md:contents">
+          <div className="empty:hidden max-md:order-7 max-md:mt-2 max-md:px-4">{usageNotice}</div>
           {correctOption ? (
-            <p className="text-sm font-medium text-[var(--color-success)]">
+            <p className="text-sm font-medium text-[var(--color-success)] max-md:order-5 max-md:mt-2 max-md:px-4">
               Correct Answer: {correctOption.label}. {correctOption.text}
             </p>
           ) : null}
         </div>
 
-        {/* The one highlighted AI area — explanation (with its styles) or AI Question Variant, opened by the two AI actions above. Never a separate page/card. */}
-        {askAiPanel}
+        {/* The one highlighted AI area — explanation (with its styles) or AI Question Variant, opened by the two AI actions. Never a separate page/card. */}
+        <div ref={panelRef} className="empty:hidden max-md:order-9 max-md:scroll-mt-20 max-md:px-4">
+          {askAiPanel}
+        </div>
       </div>
     </div>
   );
