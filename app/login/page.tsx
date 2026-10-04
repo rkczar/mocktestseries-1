@@ -38,7 +38,9 @@ export default async function LoginPage({
         ? pausedMessage(platform, "login")
         : error === "RegistrationPaused"
           ? pausedMessage(platform, "registrations")
-          : undefined;
+          : error
+            ? "Sign-in didn't complete. Please try again."
+            : undefined;
 
   const showLeft = pageConfig.splitLayout && pageConfig.leftPanelEnabled;
 

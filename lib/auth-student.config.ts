@@ -18,7 +18,10 @@ import type { NextAuthConfig } from "next-auth";
 export const studentAuthConfig = {
   basePath: "/api/student-auth",
   session: { strategy: "jwt" },
-  pages: { signIn: "/login" },
+  // Auth.js errors (e.g. a Google `invalid_grant` when a sign-in code is reused
+  // or expired) return to /login?error=<type> with a friendly notice instead of
+  // Auth.js's unbranded HTTP 500 error page.
+  pages: { signIn: "/login", error: "/login" },
   trustHost: true,
   providers: [],
   cookies: {
