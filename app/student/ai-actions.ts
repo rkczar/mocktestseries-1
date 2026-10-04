@@ -14,7 +14,12 @@ import {
   logActivity,
   checkAiAccessQuota,
   logAiAccess,
+  getAiAccessStatus,
 } from "@/lib/student-data";
+import { prisma } from "@/lib/prisma";
+import { getPaymentModeForStudent } from "@/lib/payments/settings";
+import { computeProductPrice } from "@/lib/payments/pricing";
+import { formatInr } from "@/lib/payments/money";
 
 const LOCKED_MESSAGES: Record<Exclude<AnswerRevealStatus, "REVEALABLE">, string> = {
   IN_PROGRESS: "Ask AI is available once you've submitted this test.",
@@ -55,7 +60,7 @@ export async function getExplanationAction(questionId: string) {
   // provider, and reopening an already-counted question today is always free.
   const quota = await checkAiAccessQuota(student.id, questionId);
   if (!quota.allowed) {
-    return { ok: false as const, error: "Daily AI limit reached." };
+    return { ok: false as const, error: "Daily AI limit reached.", limitReached: true as const };
   }
 
   const cached = await getStoredAiExplanation(questionId);
@@ -103,7 +108,7 @@ export async function getExplanationVariantAction(questionId: string, variantId:
 
   const quota = await checkAiAccessQuota(student.id, questionId);
   if (!quota.allowed) {
-    return { ok: false as const, error: "Daily AI limit reached." };
+    return { ok: false as const, error: "Daily AI limit reached.", limitReached: true as const };
   }
 
   const cached = await getStoredAiExplanationVariant(questionId, variantId);
@@ -154,7 +159,7 @@ export async function getQuestionVariantsAction(questionId: string) {
 
   const quota = await checkAiAccessQuota(student.id, questionId);
   if (!quota.allowed) {
-    return { ok: false as const, error: "Daily AI limit reached." };
+    return { ok: false as const, error: "Daily AI limit reached.", limitReached: true as const };
   }
 
   const target = await getDefaultVariantTarget();
@@ -188,4 +193,43 @@ export async function getQuestionVariantsAction(questionId: string) {
     console.error("getQuestionVariantsAction failed", error);
     return { ok: false as const, error: "We couldn't generate practice questions right now.", canRetry: true as const };
   }
+}
+
+/**
+ * The AI usage label + upgrade CTA next to the Ask AI buttons. Read-only:
+ * remaining credits come from the same server ledger checkAiAccessQuota
+ * enforces (lib/student-data.ts#getAiAccessStatus), so nothing here can
+ * grant or consume access — every Ask AI action still re-checks on its own.
+ * The upgrade target is the existing Plans → Checkout flow; the price shown
+ * is the cheapest active PAID product priced by the one pricing function
+ * (computeProductPrice — checkout re-prices server-side anyway), and only
+ * while purchases are actually open (payment mode PAID).
+ */
+export async function getAiUsageStatusAction() {
+  const student = await requireStudentOrLogin();
+  const [status, mode] = await Promise.all([getAiAccessStatus(student.id), getPaymentModeForStudent(student.id)]);
+
+  let upgrade: { href: string; priceLabel: string | null } | null = null;
+  if (!status.paidPlan) {
+    upgrade = { href: "/student/plans", priceLabel: null };
+    if (mode === "PAID") {
+      const now = new Date();
+      const products = await prisma.product.findMany({ where: { isActive: true, isVisible: true, accessType: "PAID" } });
+      const cheapest = products
+        .map((p) => ({ code: p.code, price: computeProductPrice(p, now) }))
+        .filter((p) => !p.price.isFree && p.price.pricePaise > 0)
+        .sort((a, b) => a.price.pricePaise - b.price.pricePaise)[0];
+      if (cheapest) upgrade = { href: `/student/checkout/${encodeURIComponent(cheapest.code)}`, priceLabel: formatInr(cheapest.price.pricePaise) };
+    }
+  }
+
+  return {
+    ok: true as const,
+    /** null = unlimited for this student's plan. */
+    remainingToday: status.remainingToday,
+    subscription: status.remainingToday === null ? ("unlimited" as const) : status.paidPlan ? ("paid" as const) : ("free" as const),
+    /** Upgrade copy may promise "Unlimited AI" only when the paid plan really is unlimited. */
+    paidPlanUnlimited: status.paidPlanUnlimited,
+    upgrade,
+  };
 }

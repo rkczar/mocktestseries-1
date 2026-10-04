@@ -847,6 +847,46 @@ export interface AiAccessQuota {
   alreadyViewedToday: boolean;
 }
 
+/** Today's (IST) AI access ledger + plan limit — the one read behind both checkAiAccessQuota and getAiAccessStatus. */
+async function readAiAccessToday(studentId: string) {
+  const [settings, paidPlan] = await Promise.all([getAiSettings(), hasPaidAiPlan(studentId)]);
+  const limit = paidPlan ? settings.paidDailyLimit : settings.freeDailyLimit;
+  const todayStart = istStartOfDay(new Date());
+
+  const viewedToday = await prisma.studentActivity.findMany({
+    where: { studentId, activity: "AI_EXPLANATION_VIEWED", createdAt: { gte: todayStart } },
+    select: { metadata: true },
+  });
+  const distinctQuestionIds = new Set(
+    viewedToday.map((a) => (a.metadata as { questionId?: string } | null)?.questionId).filter((id): id is string => Boolean(id))
+  );
+  return { settings, paidPlan, limit, distinctQuestionIds };
+}
+
+export interface AiAccessStatus {
+  /** Plan decided by hasPaidAiPlan — the same entitlement test checkAiAccessQuota applies. */
+  paidPlan: boolean;
+  /** Credits left today before opening any NEW question; null = unlimited for this student's plan. */
+  remainingToday: number | null;
+  /** paidDailyLimit is null — only then may upgrade copy promise "Unlimited AI". */
+  paidPlanUnlimited: boolean;
+}
+
+/**
+ * Read-only view of the same daily ledger checkAiAccessQuota enforces — for
+ * showing "N AI uses remaining today" before the student clicks anything.
+ * Never consumes a credit and never decides access: every Ask AI action
+ * still calls checkAiAccessQuota itself.
+ */
+export async function getAiAccessStatus(studentId: string): Promise<AiAccessStatus> {
+  const { settings, paidPlan, limit, distinctQuestionIds } = await readAiAccessToday(studentId);
+  return {
+    paidPlan,
+    remainingToday: limit === null ? null : Math.max(0, limit - distinctQuestionIds.size),
+    paidPlanUnlimited: settings.paidDailyLimit === null,
+  };
+}
+
 /**
  * Student-facing daily AI access entitlement (spec: "STUDENT AI ACCESS ≠
  * PROVIDER API CALL"). Counts DISTINCT questions the student has opened
@@ -860,17 +900,7 @@ export interface AiAccessQuota {
  * questions are all served through this one quota.
  */
 export async function checkAiAccessQuota(studentId: string, questionId: string): Promise<AiAccessQuota> {
-  const [settings, paidPlan] = await Promise.all([getAiSettings(), hasPaidAiPlan(studentId)]);
-  const limit = paidPlan ? settings.paidDailyLimit : settings.freeDailyLimit;
-  const todayStart = istStartOfDay(new Date());
-
-  const viewedToday = await prisma.studentActivity.findMany({
-    where: { studentId, activity: "AI_EXPLANATION_VIEWED", createdAt: { gte: todayStart } },
-    select: { metadata: true },
-  });
-  const distinctQuestionIds = new Set(
-    viewedToday.map((a) => (a.metadata as { questionId?: string } | null)?.questionId).filter((id): id is string => Boolean(id))
-  );
+  const { limit, distinctQuestionIds } = await readAiAccessToday(studentId);
   const alreadyViewedToday = distinctQuestionIds.has(questionId);
   const usedToday = distinctQuestionIds.size;
 

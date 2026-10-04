@@ -292,3 +292,88 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--color-foreground);
   min-width: 1.25rem;
 }
+
+/* ---------------------------------------------------------------------- */
+/* AI actions — Ask AI / AI Question Variant / upgrade CTA. A gradient     */
+/* hairline border (info blue → soft violet) with a slow "breathing" glow  */
+/* behind it, so AI actions read as special without flashing. Only the    */
+/* opacity of a pseudo-element is animated (compositor-only). Panel        */
+/* chips/headings reuse the same border but stay still. Eye-Saver keeps    */
+/* it grayscale; reduced-motion users get the static glow.                 */
+/* ---------------------------------------------------------------------- */
+.ai-action,
+.ai-chip {
+  --ai-hue-a: var(--color-info);
+  --ai-hue-b: color-mix(in srgb, #a78bfa 75%, var(--color-info));
+  --ai-fill: var(--color-card);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--ai-fill), var(--ai-fill)) padding-box,
+    linear-gradient(120deg, var(--ai-hue-a), var(--ai-hue-b)) border-box;
+}
+:root[data-theme="eyesaver"] :is(.ai-action, .ai-chip, .ai-panel) {
+  --ai-hue-b: var(--color-info);
+}
+.ai-action {
+  position: relative;
+  isolation: isolate;
+  color: var(--color-foreground);
+}
+.ai-action::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ai-hue-b) 22%, transparent),
+    0 0 14px 1px color-mix(in srgb, var(--ai-hue-b) 42%, transparent);
+  opacity: 0.3;
+  animation: ai-breathe 3.6s ease-in-out infinite;
+}
+.ai-action:hover,
+.ai-action[aria-expanded="true"] {
+  --ai-fill: color-mix(in srgb, var(--ai-hue-b) 12%, var(--color-card));
+}
+.ai-action:hover::after {
+  animation-play-state: paused;
+}
+.ai-action-icon {
+  color: var(--ai-hue-b);
+}
+@keyframes ai-breathe {
+  0%,
+  100% {
+    opacity: 0.22;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+.ai-chip[aria-pressed="true"] {
+  --ai-fill: color-mix(in srgb, var(--ai-hue-b) 14%, var(--color-card));
+  color: var(--color-foreground);
+}
+.ai-chip:not([aria-pressed="true"]) {
+  background:
+    linear-gradient(var(--ai-fill), var(--ai-fill)) padding-box,
+    linear-gradient(120deg, color-mix(in srgb, var(--ai-hue-a) 35%, var(--color-border)), color-mix(in srgb, var(--ai-hue-b) 35%, var(--color-border))) border-box;
+}
+.ai-panel {
+  --ai-hue-a: var(--color-info);
+  --ai-hue-b: color-mix(in srgb, #a78bfa 75%, var(--color-info));
+  border: 1px solid color-mix(in srgb, var(--ai-hue-b) 28%, var(--color-border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ai-hue-b) 7%, transparent), transparent 5rem),
+    color-mix(in srgb, var(--ai-hue-a) 4%, transparent);
+}
+.ai-heading {
+  color: color-mix(in srgb, var(--ai-hue-b) 70%, var(--color-foreground));
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-action::after {
+    animation: none;
+    opacity: 0.45;
+  }
+}

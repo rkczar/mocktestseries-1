@@ -625,36 +625,36 @@ export function TestPlayer({
             {instantMode && !question.malformed ? (
               <div className="mt-4 flex flex-col gap-2" data-testid="instant-panel">
                 {reveal ? (
-                  <p
-                    data-testid="reveal-result"
-                    className={cn(
-                      "flex items-center gap-2 text-sm font-semibold",
-                      state.selected === reveal.correctLabel ? "text-[var(--color-success)]" : "text-[var(--color-error)]"
-                    )}
-                  >
-                    {state.selected === reveal.correctLabel ? (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" aria-hidden /> Correct
-                      </>
-                    ) : (
-                      <>
-                        <XCircle className="h-4 w-4" aria-hidden /> Incorrect — correct answer: {reveal.correctLabel}
-                      </>
-                    )}
-                  </p>
-                ) : (
-                  <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="practice-hint" aria-live="polite">
-                    {checkingHere ? "Checking your answer…" : "Select an option to check your answer. Your first answer is final."}
-                  </p>
-                )}
-                {reveal ? (
                   <RevealedReviewTools
                     key={question.questionId}
                     questionId={question.questionId}
                     correctOption={question.options.find((o) => o.label === reveal.correctLabel) ?? null}
                     shareText={question.shareText ?? null}
+                    result={
+                      <p
+                        data-testid="reveal-result"
+                        className={cn(
+                          "flex items-center gap-2 text-sm font-semibold",
+                          state.selected === reveal.correctLabel ? "text-[var(--color-success)]" : "text-[var(--color-error)]"
+                        )}
+                      >
+                        {state.selected === reveal.correctLabel ? (
+                          <>
+                            <CheckCircle2 className="h-4 w-4" aria-hidden /> Correct
+                          </>
+                        ) : (
+                          <>
+                            <XCircle className="h-4 w-4" aria-hidden /> Incorrect — correct answer: {reveal.correctLabel}
+                          </>
+                        )}
+                      </p>
+                    }
                   />
-                ) : null}
+                ) : (
+                  <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="practice-hint" aria-live="polite">
+                    {checkingHere ? "Checking your answer…" : "Select an option to check your answer. Your first answer is final."}
+                  </p>
+                )}
                 {revealError?.questionId === question.questionId ? (
                   <p className="text-sm text-[var(--color-error)]">{revealError.message}</p>
                 ) : null}
@@ -778,28 +778,34 @@ function RevealedReviewTools({
   questionId,
   correctOption,
   shareText,
+  result,
 }: {
   questionId: string;
   correctOption: PlayerOption | null;
   shareText: string | null;
+  /** The Correct / Incorrect line — shares its row with the AI actions. */
+  result: React.ReactNode;
 }) {
-  const { trigger: askAiTrigger, panel: askAiPanel } = useAskAi(questionId);
+  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(questionId, "practice_player");
   return (
     <div className="flex flex-col gap-3" data-testid="revealed-review-tools">
+      {/* Correct ✓ on the left, the AI actions on the right — wrapping under it on narrow screens. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        {result}
+        {askAiActions}
+      </div>
+      {usageNotice}
       {correctOption ? (
         <p className="text-sm font-medium text-[var(--color-success)]">
           Correct Answer: {correctOption.label}. {correctOption.text}
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center gap-2">
-        {askAiTrigger}
-        {/* Wrapped so the shared button (flex-1 in the Review header) sizes to its label here. */}
-        {shareText ? (
-          <div>
-            <WhatsAppShareButton text={shareText} />
-          </div>
-        ) : null}
-      </div>
+      {/* Wrapped so the shared button (flex-1 in the Review header) sizes to its label here. */}
+      {shareText ? (
+        <div className="flex">
+          <WhatsAppShareButton text={shareText} />
+        </div>
+      ) : null}
       {askAiPanel}
     </div>
   );

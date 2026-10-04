@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ReportType } from "@prisma/client";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, MinusCircle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
@@ -60,12 +60,12 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
 }
 
 function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index: number; total: number }) {
-  const { trigger: askAiTrigger, panel: askAiPanel } = useAskAi(q.questionId);
+  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(q.questionId, "attempt_review");
   const correctOption = q.snapshot.options.find((opt) => opt.label === q.snapshot.correctLabel);
 
   return (
     <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)]">
-      {/* Highlighted question header — Question N on the left, the four review actions grouped together on the right, wrapping cleanly on mobile. */}
+      {/* Highlighted question header — Question N on the left, the review actions grouped together on the right, wrapping cleanly on mobile. Ask AI lives with the answer below. */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-info)]/5 px-5 py-3">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-[var(--color-foreground)]">
@@ -86,7 +86,6 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
           <SaveQuestionButton initialSaved={q.saved} onToggle={q.saveAction} />
           <ReportQuestionDialog onSubmit={q.reportAction} />
           {q.shareText ? <WhatsAppShareButton text={q.shareText} /> : null}
-          {askAiTrigger}
         </div>
       </div>
 
@@ -135,13 +134,37 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
           })}
         </div>
 
-        {correctOption ? (
-          <p className="mt-3 text-sm font-medium text-[var(--color-success)]">
-            Correct Answer: {correctOption.label}. {correctOption.text}
+        {/* Answer header: Correct / Incorrect on the left, the AI actions on the right (wrapping under it on narrow screens), then usage and the correct answer. */}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2" data-testid="review-answer-header">
+          <p
+            className={cn(
+              "flex items-center gap-2 text-sm font-semibold",
+              q.isCorrect === true && "text-[var(--color-success)]",
+              q.isCorrect === false && "text-[var(--color-error)]",
+              q.isCorrect === null && "text-[var(--color-muted-foreground)]"
+            )}
+          >
+            {q.isCorrect === true ? (
+              <CheckCircle2 className="h-4 w-4" aria-hidden />
+            ) : q.isCorrect === false ? (
+              <XCircle className="h-4 w-4" aria-hidden />
+            ) : (
+              <MinusCircle className="h-4 w-4" aria-hidden />
+            )}
+            {q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered"}
           </p>
-        ) : null}
+          {askAiActions}
+        </div>
+        <div className="mt-2 flex flex-col gap-2">
+          {usageNotice}
+          {correctOption ? (
+            <p className="text-sm font-medium text-[var(--color-success)]">
+              Correct Answer: {correctOption.label}. {correctOption.text}
+            </p>
+          ) : null}
+        </div>
 
-        {/* The one highlighted AI area — default explanation + up to 5 variant tabs, rendered by the same hook whose trigger sits in the header above. Never a separate page/card. */}
+        {/* The one highlighted AI area — explanation (with its styles) or AI Question Variant, opened by the two AI actions above. Never a separate page/card. */}
         {askAiPanel}
       </div>
     </div>
