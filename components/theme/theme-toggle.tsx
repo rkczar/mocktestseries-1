@@ -48,8 +48,12 @@ function applyTheme(theme: Theme) {
   notify();
 }
 
-/** One compact button: each click cycles Day → Night → Eye Saver → Day. No menu. */
-export function ThemeToggle({ className }: { className?: string }) {
+/**
+ * One compact button: each click cycles Day → Night → Eye Saver → Day. No menu.
+ * `glow` opts this instance into the admin-controlled premium glow
+ * (THEME_TOGGLE) — set by student surfaces only, never the running test.
+ */
+export function ThemeToggle({ className, glow = false }: { className?: string; glow?: boolean }) {
   const theme = useSyncExternalStore(subscribe, readThemeFromDom, getServerSnapshot);
   const Icon = ICONS[theme];
   const next = nextTheme(theme);
@@ -61,8 +65,10 @@ export function ThemeToggle({ className }: { className?: string }) {
       aria-label={`${LABELS[theme]}. Switch to ${LABELS[next]}.`}
       title={`${LABELS[theme]} — click for ${LABELS[next]}`}
       data-theme-current={theme}
+      data-glow-target={glow ? "THEME_TOGGLE" : undefined}
       suppressHydrationWarning
       className={cn(
+        glow && "premium-glow",
         "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground)] transition-colors hover:bg-[var(--color-card)] focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]",
         className
       )}

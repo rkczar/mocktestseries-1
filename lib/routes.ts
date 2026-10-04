@@ -144,6 +144,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Security", route: "/admin/settings/security", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "CONNECTED" },
   { pageName: "API Management", route: "/admin/settings/authentication", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "CONNECTED" },
   { pageName: "Notifications", route: "/admin/settings/notifications", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "DRAFT" },
+  { pageName: "Glow Effects", route: "/admin/settings/glow-effects", module: "Settings", userType: "ADMIN", authRequired: true, parentRoute: "/admin/settings/general", status: "CONNECTED" },
 
   // Student Auth — a fully separate next-auth instance/cookie from Admin (see lib/auth-student.ts)
   { pageName: "Student Login / Register", route: "/login", module: "Student Auth", userType: "STUDENT", authRequired: false, parentRoute: "/", status: "CONNECTED" },

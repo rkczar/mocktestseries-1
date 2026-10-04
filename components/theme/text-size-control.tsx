@@ -57,7 +57,8 @@ function applyTextSize(size: TextSize) {
   notify();
 }
 
-export function TextSizeControl({ className }: { className?: string }) {
+/** `glow` opts this instance into the admin-controlled premium glow (TEXT_SIZE), like ThemeToggle. */
+export function TextSizeControl({ className, glow = false }: { className?: string; glow?: boolean }) {
   const size = useSyncExternalStore(subscribe, readTextSizeFromDom, getServerSnapshot);
 
   return (
@@ -67,8 +68,10 @@ export function TextSizeControl({ className }: { className?: string }) {
           type="button"
           aria-label={`Text size: ${TEXT_SIZE_LABELS[size]}. Click to change.`}
           title={`Text size: ${TEXT_SIZE_LABELS[size]}`}
+          data-glow-target={glow ? "TEXT_SIZE" : undefined}
           suppressHydrationWarning
           className={cn(
+            glow && "premium-glow",
             "inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] text-xs font-bold text-[var(--color-foreground)] transition-colors hover:bg-[var(--color-card)] focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]",
             className
           )}

@@ -233,7 +233,8 @@ export function useAskAi(questionId: string, source: AskAiSource, reviewAttemptI
         type="button"
         variant="outline"
         size="sm"
-        className="ai-action"
+        className="ai-action premium-glow"
+        data-glow-target="ASK_AI"
         onClick={openExplanation}
         disabled={isPending}
         aria-expanded={view === "explanation"}
@@ -246,7 +247,8 @@ export function useAskAi(questionId: string, source: AskAiSource, reviewAttemptI
         type="button"
         variant="outline"
         size="sm"
-        className="ai-action"
+        className="ai-action premium-glow"
+        data-glow-target="AI_QUESTION_VARIANT"
         onClick={openQuestionVariants}
         disabled={variantsLoading}
         aria-expanded={view === "variants"}

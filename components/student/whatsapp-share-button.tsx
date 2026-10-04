@@ -14,7 +14,7 @@ import { whatsAppShareUrl } from "@/lib/whatsapp-share-template";
 export function WhatsAppShareButton({ text }: { text: string }) {
   const href = whatsAppShareUrl(text);
   return (
-    <Button asChild variant="outline" className="flex-1">
+    <Button asChild variant="outline" className="premium-glow flex-1" data-glow-target="WHATSAPP_SHARE">
       <a href={href} target="_blank" rel="noopener noreferrer">
         <MessageCircle className="h-4 w-4" aria-hidden /> Share on WhatsApp
       </a>

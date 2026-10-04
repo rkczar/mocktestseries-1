@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import GeneralSettingsPage from "./general/page";
 import ApiManagementPage from "./authentication/page";
 import NotificationsPage from "./notifications/page";
+import GlowEffectsPage from "./glow-effects/page";
 
 export const metadata = { title: "Settings — Mock Test Series.in Admin" };
 
@@ -38,7 +39,7 @@ export default function SettingsControlCenter() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Settings</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          General settings, API management, and notifications.
+          General settings, API management, notifications, and glow effects.
         </p>
       </div>
 
@@ -48,6 +49,7 @@ export default function SettingsControlCenter() {
           { value: "general", label: "General", content: <GeneralSettingsPage /> },
           { value: "authentication", label: "Authentication", content: <ApiManagementPage /> },
           { value: "notifications", label: "Notifications", content: <NotificationsPage /> },
+          { value: "glow-effects", label: "Glow Effects", content: <GlowEffectsPage /> },
           { value: "security", label: "Security", content: <SecurityCrossLink /> },
         ]}
       />

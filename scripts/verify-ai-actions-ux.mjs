@@ -16,7 +16,7 @@
  *    clicked, double-clicked or toggled; one usage-status read per page;
  *  - analytics events fire without question text;
  *  - Attempt Review + Saved Questions use the same actions; reduced motion
- *    switches the glow off; both AI buttons run the ai-breathe glow (box-shadow and
+ *    switches the glow off; both AI buttons run the premium-glow glow (box-shadow and
  *    brightness sampled at start vs mid-breath, no layout shift); no console errors; no sideways scroll.
  *
  *   BASE=http://127.0.0.1:3111 FIXTURE=/path/aiux.json DATABASE_URL=<scratch> \
@@ -66,7 +66,7 @@ async function glowSamples(page, testId) {
   return page.evaluate(async (testId) => {
     const el = document.querySelector(`[data-testid=${testId}]`);
     const cs = getComputedStyle(el);
-    const anim = el.getAnimations().find((a) => a.animationName === "ai-breathe");
+    const anim = el.getAnimations().find((a) => a.animationName === "premium-glow");
     const box = () => [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight].join(",");
     const before = box();
     const sample = async (t) => {
@@ -459,7 +459,7 @@ async function main() {
       check(`${device}/${theme}: open panel causes no sideways scroll`, (await overflow(page)) <= 1);
       for (const id of ["ask-ai-button", "ai-variant-button"]) {
         const g = await glowSamples(page, id);
-        check(`${device}/${theme}: ${id} runs ai-breathe (name, non-zero duration, infinite)`, g.name === "ai-breathe" && g.duration > 0 && g.iterations === "infinite", g);
+        check(`${device}/${theme}: ${id} runs premium-glow (name, non-zero duration, infinite)`, g.name === "premium-glow" && g.duration > 0 && g.iterations === "infinite", g);
         check(`${device}/${theme}: ${id} box-shadow + brightness change over time`, g.changed.boxShadow && g.changed.filter, g);
         check(`${device}/${theme}: ${id} glow causes no layout shift`, g.layoutStable, g);
       }

@@ -6,6 +6,8 @@ import "./globals.css";
 import { THEME_COOKIE, isTheme } from "@/lib/theme";
 import { TEXT_SIZE_COOKIE, isTextSize } from "@/lib/text-size";
 import { getAppearance, appearanceToCssVariables } from "@/lib/appearance";
+import { premiumGlowToCss } from "@/lib/premium-glow";
+import { getPremiumGlowConfig } from "@/lib/premium-glow-settings";
 import { getSeoSettings } from "@/lib/seo-settings";
 import { PUBLIC_BRAND_NAME } from "@/lib/brand";
 import { getSiteUrl } from "@/lib/site-url";
@@ -47,7 +49,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   const textSizeCookie = cookieStore.get(TEXT_SIZE_COOKIE)?.value;
   const textSize = isTextSize(textSizeCookie) ? textSizeCookie : "md";
 
-  const appearance = await getAppearance();
+  // Premium Glow rides in the same <style> as Appearance: one cached read
+  // per render, so glowing buttons never fetch their own settings.
+  const [appearance, premiumGlow] = await Promise.all([getAppearance(), getPremiumGlowConfig()]);
   const seo = await getSeoSettings();
 
   const siteUrl = seo.canonicalBase.replace(/\/+$/, "");
@@ -73,7 +77,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     >
       <head>
         <meta name="theme-color" content={theme === "light" ? "#fbfbfc" : "#000000"} />
-        <style dangerouslySetInnerHTML={{ __html: appearanceToCssVariables(appearance) }} />
+        <style dangerouslySetInnerHTML={{ __html: appearanceToCssVariables(appearance) + premiumGlowToCss(premiumGlow) }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(organizationJsonLd) }} />
         <script dangerouslySetInnerHTML={{ __html: PWA_INSTALL_CAPTURE_SCRIPT }} />
       </head>

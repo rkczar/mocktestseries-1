@@ -22,7 +22,7 @@ const ADMIN_PAGES = new Set([
   "/admin/questions", "/admin/questions/add", "/admin/questions/bulk-import", "/admin/questions/bulk-import/history", "/admin/questions/queries",
   "/admin/questions/reports", "/admin/questions/saved-questions", "/admin/questions/templates", "/admin/questions/whatsapp-share",
   "/admin/security", "/admin/seo",
-  "/admin/settings", "/admin/settings/authentication", "/admin/settings/general", "/admin/settings/notifications", "/admin/settings/security",
+  "/admin/settings", "/admin/settings/authentication", "/admin/settings/general", "/admin/settings/glow-effects", "/admin/settings/notifications", "/admin/settings/security",
   "/admin/students", "/admin/students/attempted", "/admin/students/deleted", "/admin/students/deletion-requests", "/admin/students/enrollment", "/admin/students/history",
   "/admin/system",
   "/admin/tests", "/admin/tests/builder", "/admin/tests/custom", "/admin/tests/grand", "/admin/tests/live", "/admin/tests/mock", "/admin/tests/random", "/admin/tests/scheduled",

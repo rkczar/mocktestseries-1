@@ -10,8 +10,8 @@ import { cn } from "@/lib/utils";
 export function AccessibilityControls({ className }: { className?: string }) {
   return (
     <div className={cn("flex shrink-0 items-center gap-2", className)}>
-      <ThemeToggle />
-      <TextSizeControl />
+      <ThemeToggle glow />
+      <TextSizeControl glow />
     </div>
   );
 }

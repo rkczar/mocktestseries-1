@@ -67,8 +67,8 @@ export function StudentHeader({
         </nav>
 
         <div className="flex shrink-0 items-center gap-2">
-          <ThemeToggle />
-          <TextSizeControl />
+          <ThemeToggle glow />
+          <TextSizeControl glow />
 
           <NotificationBell announcements={announcements} />
 

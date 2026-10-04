@@ -295,13 +295,9 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ---------------------------------------------------------------------- */
 /* AI actions — Ask AI / AI Question Variant / upgrade CTA. A gradient     */
-/* hairline border (info blue → soft violet) plus a continuous breathing  */
-/* glow on the button itself: normal → stronger halo, brighter border and */
-/* fill → normal, every 2.6s (ease-in-out). box-shadow and filter never   */
-/* move the box: no layout shift, and the button stays a still target    */
-/* (a scale pulse kept it "unstable" for clicks/automation).              */
-/* Panel chips/headings reuse the border but stay still. Eye-Saver keeps  */
-/* it single-hue; reduced-motion users get a static glow instead.         */
+/* hairline border (info blue → the admin glow color). The breathing glow */
+/* itself is the shared .premium-glow below. Panel chips/headings reuse   */
+/* the border but stay still. Eye-Saver keeps it single-hue.              */
 /* ---------------------------------------------------------------------- */
 .ai-action,
 .ai-chip {
@@ -317,12 +313,8 @@ h1, h2, h3, h4, h5, h6 {
   --ai-hue-b: var(--color-info);
 }
 .ai-action {
+  --ai-hue-b: var(--premium-glow-color, #9592fa);
   color: var(--color-foreground);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--ai-hue-b) 25%, transparent),
-    0 0 8px 0 color-mix(in srgb, var(--ai-hue-b) 25%, transparent);
-  animation: ai-breathe 2.6s ease-in-out infinite;
-  will-change: box-shadow, filter;
 }
 .ai-action:hover,
 .ai-action[aria-expanded="true"] {
@@ -330,21 +322,6 @@ h1, h2, h3, h4, h5, h6 {
 }
 .ai-action-icon {
   color: var(--ai-hue-b);
-}
-@keyframes ai-breathe {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--ai-hue-b) 25%, transparent),
-      0 0 8px 0 color-mix(in srgb, var(--ai-hue-b) 25%, transparent);
-    filter: brightness(1);
-  }
-  50% {
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--ai-hue-b) 50%, transparent),
-      0 0 22px 4px color-mix(in srgb, var(--ai-hue-b) 55%, transparent);
-    filter: brightness(1.15);
-  }
 }
 .ai-chip[aria-pressed="true"] {
   --ai-fill: color-mix(in srgb, var(--ai-hue-b) 14%, var(--color-card));
@@ -366,11 +343,51 @@ h1, h2, h3, h4, h5, h6 {
 .ai-heading {
   color: color-mix(in srgb, var(--ai-hue-b) 70%, var(--color-foreground));
 }
+
+/* ---------------------------------------------------------------------- */
+/* Premium Glow — ONE breathing glow for the allowlisted student buttons  */
+/* (data-glow-target: ASK_AI, AI_QUESTION_VARIANT, WHATSAPP_SHARE,         */
+/* THEME_TOGGLE, TEXT_SIZE). Color, strength and speed come from the      */
+/* --premium-glow-* variables the root layout emits from Admin → Settings */
+/* → Glow Effects (lib/premium-glow.ts); the fallbacks here are the       */
+/* shipped defaults (Medium / Normal / violet). A switched-off target or  */
+/* the master switch sets --premium-glow-animation:none and a 0% halo on  */
+/* the element — the button itself is untouched. Only box-shadow and      */
+/* filter animate: no layout shift, and the button stays a still click    */
+/* target. Reduced-motion users always get a static glow, whatever the    */
+/* admin setting.                                                         */
+/* ---------------------------------------------------------------------- */
+.premium-glow {
+  --pg-c: var(--premium-glow-color, #9592fa);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pg-c) var(--premium-glow-rest, 25%), transparent),
+    0 0 8px 0 color-mix(in srgb, var(--pg-c) var(--premium-glow-rest, 25%), transparent);
+  animation: var(--premium-glow-animation, premium-glow) var(--premium-glow-duration, 2.5s) ease-in-out infinite;
+  will-change: box-shadow, filter;
+}
+:root[data-theme="eyesaver"] .premium-glow {
+  --pg-c: var(--color-info);
+}
+@keyframes premium-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--pg-c) var(--premium-glow-rest, 25%), transparent),
+      0 0 8px 0 color-mix(in srgb, var(--pg-c) var(--premium-glow-rest, 25%), transparent);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow:
+      0 0 0 var(--premium-glow-ring, 2px) color-mix(in srgb, var(--pg-c) calc(var(--premium-glow-peak, 55%) - 5%), transparent),
+      0 0 var(--premium-glow-blur, 22px) var(--premium-glow-spread, 4px) color-mix(in srgb, var(--pg-c) var(--premium-glow-peak, 55%), transparent);
+    filter: brightness(var(--premium-glow-brightness, 1.15));
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  .ai-action {
+  .premium-glow {
     animation: none;
     box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--ai-hue-b) 40%, transparent),
-      0 0 14px 2px color-mix(in srgb, var(--ai-hue-b) 40%, transparent);
+      0 0 0 1px color-mix(in srgb, var(--pg-c) calc(var(--premium-glow-rest, 25%) * 1.6), transparent),
+      0 0 14px 2px color-mix(in srgb, var(--pg-c) calc(var(--premium-glow-rest, 25%) * 1.6), transparent);
   }
 }
