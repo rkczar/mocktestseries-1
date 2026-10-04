@@ -60,13 +60,18 @@ function loadCheckoutScript(): Promise<boolean> {
 }
 
 function useCountdown(target: string | null) {
-  const [now, setNow] = useState(() => Date.now());
+  // null until mounted: the server's clock and the browser's first render
+  // differ by at least a second, so rendering a time on the server makes
+  // hydration fail (React #418). The countdown appears right after mount.
+  const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
     if (!target) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    const tick = () => setNow(Date.now());
+    tick();
+    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [target]);
-  if (!target) return null;
+  if (!target || now === null) return null;
   const ms = new Date(target).getTime() - now;
   if (ms <= 0) return "Deal ended";
   const d = Math.floor(ms / 86_400_000);
@@ -194,7 +199,7 @@ export function CheckoutClient({ product, price, access, renewal, gatewayReady, 
               <BadgeCheck className="h-4 w-4" aria-hidden />
               {access.coveredBy ? `Already included in your ${access.coveredBy} access — no purchase needed. ` : null}
               {access.expiresAt
-                ? `You have access until ${new Date(access.expiresAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}.`
+                ? `You have access until ${new Date(access.expiresAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })}.`
                 : "You have lifetime access."}
             </p>
           ) : null}
