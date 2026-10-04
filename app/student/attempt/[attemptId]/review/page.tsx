@@ -68,6 +68,7 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
   const questions: ReviewQuestionView[] = attempt.questions.map((tq) => {
     const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
     return {
+      attemptId,
       attemptQuestionId: tq.id,
       questionId: tq.questionId,
       snapshot,

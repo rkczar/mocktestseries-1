@@ -15,6 +15,7 @@ import {
   checkAiAccessQuota,
   logAiAccess,
   getAiAccessStatus,
+  isQuestionReviewableInAttempt,
 } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
 import { getPaymentModeForStudent } from "@/lib/payments/settings";
@@ -35,8 +36,20 @@ const LOCKED_MESSAGES: Record<Exclude<AnswerRevealStatus, "REVEALABLE">, string>
  * attempt. Any other question id — never attempted, draft, paid, another
  * test's — is refused before cache reads or provider calls.
  */
-async function answerLockMessage(studentId: string, questionId: unknown): Promise<string | null> {
+async function answerLockMessage(studentId: string, questionId: unknown, reviewAttemptId?: unknown): Promise<string | null> {
   if (typeof questionId !== "string" || questionId.length === 0 || questionId.length > 64) return LOCKED_MESSAGES.NO_ACCESS;
+  // Opened from a submitted attempt's Review page: that page already shows
+  // this question's answer, so a different running attempt containing the
+  // same question must not lock it here (lib/student-data.ts
+  // #isQuestionReviewableInAttempt re-checks ownership, SUBMITTED and release).
+  if (
+    typeof reviewAttemptId === "string" &&
+    reviewAttemptId.length > 0 &&
+    reviewAttemptId.length <= 64 &&
+    (await isQuestionReviewableInAttempt(studentId, reviewAttemptId, questionId))
+  ) {
+    return null;
+  }
   const status = await getAnswerRevealStatus(studentId, questionId);
   return status === "REVEALABLE" ? null : LOCKED_MESSAGES[status];
 }
@@ -46,13 +59,13 @@ async function answerLockMessage(studentId: string, questionId: unknown): Promis
  * (attempt review, Saved Questions) — the explanation is cached per Question,
  * not per attempt or per page, so one action serves all of them.
  */
-export async function getExplanationAction(questionId: string) {
+export async function getExplanationAction(questionId: string, reviewAttemptId?: string) {
   const student = await requireStudentOrLogin();
 
   // Neither caller carries an attemptId, so this is the one place that can
   // catch an unreviewed, still-running or held question regardless of which
   // surface asked — blocks both a fresh generation and a cache read.
-  const locked = await answerLockMessage(student.id, questionId);
+  const locked = await answerLockMessage(student.id, questionId, reviewAttemptId);
   if (locked) return { ok: false as const, error: locked };
 
   // Daily AI ACCESS quota (spec: student access ≠ provider call) — checked
@@ -96,14 +109,14 @@ export async function getExplanationAction(questionId: string) {
  * target differs (lib/ai-explanation-variants.ts, keyed by question+variant
  * instead of just question).
  */
-export async function getExplanationVariantAction(questionId: string, variantId: string) {
+export async function getExplanationVariantAction(questionId: string, variantId: string, reviewAttemptId?: string) {
   const student = await requireStudentOrLogin();
 
   if (!EXPLANATION_VARIANTS.some((v) => v.id === variantId)) {
     return { ok: false as const, error: "Unknown AI variant." };
   }
 
-  const locked = await answerLockMessage(student.id, questionId);
+  const locked = await answerLockMessage(student.id, questionId, reviewAttemptId);
   if (locked) return { ok: false as const, error: locked };
 
   const quota = await checkAiAccessQuota(student.id, questionId);
@@ -146,7 +159,7 @@ export async function getExplanationVariantAction(questionId: string, variantId:
  * All metadata (exam/subject/topic, codes, answers) is derived server-side
  * from the source row — the client supplies only the question id.
  */
-export async function getQuestionVariantsAction(questionId: string) {
+export async function getQuestionVariantsAction(questionId: string, reviewAttemptId?: string) {
   const student = await requireStudentOrLogin();
   if (typeof questionId !== "string" || questionId.length === 0 || questionId.length > 64) {
     return { ok: false as const, error: "Unknown question." };
@@ -154,7 +167,7 @@ export async function getQuestionVariantsAction(questionId: string) {
 
   // Reachable only for a question the student legitimately reviews (the
   // canonical answer-reveal rule — saved-only or never-attempted ids fail).
-  const locked = await answerLockMessage(student.id, questionId);
+  const locked = await answerLockMessage(student.id, questionId, reviewAttemptId);
   if (locked) return { ok: false as const, error: locked };
 
   const quota = await checkAiAccessQuota(student.id, questionId);

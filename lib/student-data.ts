@@ -653,6 +653,31 @@ export async function getAnswerRevealStatus(studentId: string, questionId: strin
   return (await getAnswerRevealStatuses(studentId, [questionId], now)).get(questionId) ?? "NO_ACCESS";
 }
 
+/**
+ * True when `questionId` belongs to this student's own SUBMITTED attempt
+ * `attemptId` and that attempt's answer key is released — exactly when the
+ * attempt's Review page (app/student/attempt/[attemptId]/review) already
+ * shows the correct answer. Ask AI opened FROM that review uses this so a
+ * second, still-running attempt that happens to contain the same question
+ * doesn't show "available once you've submitted this test" on a test that
+ * is submitted; nothing becomes visible that the review page isn't showing.
+ */
+export async function isQuestionReviewableInAttempt(studentId: string, attemptId: string, questionId: string, now: Date = new Date()): Promise<boolean> {
+  const row = await prisma.testAttemptQuestion.findFirst({
+    where: { questionId, attemptId, attempt: { studentId, status: AttemptStatus.SUBMITTED } },
+    select: {
+      attempt: {
+        select: {
+          testType: true,
+          mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true } },
+          liveTest: { select: { status: true } },
+        },
+      },
+    },
+  });
+  return !!row && !isAttemptAnswerKeyHeld(row.attempt, now);
+}
+
 /** Subset of `questionIds` whose answers this student may see (REVEALABLE). */
 export async function getAnswerRevealableQuestionIds(studentId: string, questionIds: string[], now: Date = new Date()): Promise<Set<string>> {
   const statuses = await getAnswerRevealStatuses(studentId, questionIds, now);

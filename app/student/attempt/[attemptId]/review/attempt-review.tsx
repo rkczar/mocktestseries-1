@@ -12,6 +12,7 @@ import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button"
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 
 export interface ReviewQuestionView {
+  attemptId: string;
   attemptQuestionId: string;
   questionId: string;
   snapshot: QuestionSnapshot;
@@ -60,7 +61,7 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
 }
 
 function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index: number; total: number }) {
-  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(q.questionId, "attempt_review");
+  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(q.questionId, "attempt_review", q.attemptId);
   const correctOption = q.snapshot.options.find((opt) => opt.label === q.snapshot.correctLabel);
 
   return (
