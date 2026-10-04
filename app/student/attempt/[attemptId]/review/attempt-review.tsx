@@ -108,9 +108,11 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
   const correctOption = q.snapshot.options.find((opt) => opt.label === q.snapshot.correctLabel);
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)]">
-      {/* Highlighted question header — Question N on the left, the review actions grouped together on the right, wrapping cleanly on mobile. Ask AI lives with the answer below. */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-info)]/5 px-5 py-3">
+    // Save / Report / Share render ONCE. Mobile (< md): a single column — header, question, options, answer, AI, then
+    // these tools last, so the question gets the screen. md+: a grid puts the tools back in the header band, beside
+    // "Question N of M" (both cells carry the band's background + rule, so it reads as one strip, as before).
+    <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] md:grid md:grid-cols-[1fr_auto]">
+      <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-info)]/5 px-4 py-3 md:col-start-1 md:row-start-1 md:pl-5 md:pr-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-[var(--color-foreground)]">
             Question {index + 1} of {total}
@@ -126,15 +128,24 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
             {q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered"}
           </span>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <SaveQuestionButton initialSaved={q.saved} onToggle={q.saveAction} />
-          <ReportQuestionDialog onSubmit={q.reportAction} />
-          {q.shareText ? <WhatsAppShareButton text={q.shareText} /> : null}
-        </div>
+      </div>
+      <div
+        data-testid="review-question-tools"
+        className="grid grid-cols-2 gap-2 px-4 pb-4 max-md:order-last [&>button]:h-10 md:col-start-2 md:row-start-1 md:flex md:flex-wrap md:items-center md:justify-end md:border-b md:border-[var(--color-border)] md:bg-[var(--color-info)]/5 md:py-3 md:pl-3 md:pr-5 md:[&>button]:h-8"
+      >
+        <SaveQuestionButton initialSaved={q.saved} onToggle={q.saveAction} />
+        <ReportQuestionDialog onSubmit={q.reportAction} />
+        {q.shareText ? (
+          <div className="col-span-2 flex md:contents">
+            <WhatsAppShareButton text={q.shareText} />
+          </div>
+        ) : null}
       </div>
 
-      <div className="p-5">
-        <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">{q.snapshot.text}</p>
+      <div className="p-4 md:col-span-2 md:row-start-2 md:p-5">
+        <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)] max-md:text-[length:calc(1.0625rem*var(--text-scale))] max-md:leading-[1.65]">
+          {q.snapshot.text}
+        </p>
         {q.snapshot.imageUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -144,7 +155,7 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
           />
         ) : null}
 
-        <div className="mt-4 flex flex-col gap-2">
+        <div className="mt-4 flex flex-col gap-2.5 md:gap-2">
           {q.snapshot.options.map((opt) => {
             const isSelected = q.selected === opt.label;
             const isAnswer = opt.label === q.snapshot.correctLabel;
@@ -152,7 +163,7 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
               <div
                 key={opt.label}
                 className={cn(
-                  "rounded-[var(--radius-card)] border p-3 text-sm",
+                  "rounded-[var(--radius-card)] border p-3 text-sm max-md:text-[length:calc(1rem*var(--text-scale))] max-md:leading-relaxed",
                   isAnswer
                     ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
                     : isSelected

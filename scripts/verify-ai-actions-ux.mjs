@@ -403,7 +403,10 @@ async function main() {
       await waitUsage(page);
       const header = page.locator(".border-b").filter({ hasText: /Question 1 of/ }).first();
       check("review: Ask AI removed from the question header", (await header.getByRole("button", { name: /Ask AI/ }).count()) === 0);
-      check("review: Save / Report still in the header", (await header.getByRole("button", { name: /Save/ }).count()) === 1 && (await header.getByRole("button", { name: /Report/ }).count()) === 1);
+      // Save / Report render once in their own cell of the header band (desktop) — same row as "Question 1 of".
+      const tools = page.getByTestId("review-question-tools");
+      const [hb, tb] = [await header.boundingBox(), await tools.boundingBox()];
+      check("review: Save / Report still in the header", (await tools.getByRole("button", { name: /Save/ }).count()) === 1 && (await tools.getByRole("button", { name: /Report/ }).count()) === 1 && Math.abs(hb.y - tb.y) < 1 && tb.x > hb.x, { hb, tb });
       check("review: exactly one Ask AI + one Variant button", (await page.getByRole("button", { name: /Ask AI/ }).count()) === 1 && (await page.getByRole("button", { name: "AI Question Variant" }).count()) === 1);
       const L = await layout(page);
       check("review desktop: status + AI actions on one row above Correct Answer", Math.abs(mid(L.result) - mid(L.ask)) < 8 && L.answer.top > L.ask.bottom, L);

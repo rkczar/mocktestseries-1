@@ -15,6 +15,13 @@
  *    heading back under the sticky header; from the page top it doesn't jump;
  *  - keyboard Enter works, touch targets ≥ 44px on phones, safe-area padding,
  *    no sideways scroll, no console / hydration errors.
+ * Mobile card layout (360 / 375 / 390 / 412 / 430 px, short and very long
+ * question + options): Save / Report / Share sit once, below the AI actions
+ * and Correct Answer (Save + Report side by side, Share full width under them),
+ * not in the header; nothing clips or overflows; the whole card — tools
+ * included — scrolls fully clear of the bar; Save and Report still work. At
+ * desktop the tools stay in the header band beside "Question N of M".
+ * Needs the scratch DB's `question.whatsapp_share` Setting enabled.
  *
  *   BASE=http://127.0.0.1:3111 FIXTURE=/path/aiux.json DATABASE_URL=<scratch> \
  *     NODE_PATH=<dir with playwright> node scripts/verify-review-nav.mjs
@@ -217,12 +224,140 @@ async function runDevice(browser, device, attemptId) {
   await ctx.close();
 }
 
+async function mobileLayout(browser, width, attemptId, long) {
+  const tag = `${width}px ${long ? "long" : "short"}`;
+  const ctx = await browser.newContext({ ...devices["Pixel 7"], viewport: { width, height: 800 } });
+  await ctx.addCookies([{ name: "student-session-token", value: F.tokens.fresh, url: BASE }]);
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
+  await page.goto(`${BASE}/student/attempt/${attemptId}/review`);
+  await page.waitForSelector("[data-testid=review-question-tools]");
+  await page.waitForLoadState("networkidle").catch(() => {});
+  if (long) {
+    await page.evaluate(() => {
+      const card = document.querySelector("[data-testid=review-nav]").previousElementSibling;
+      const qp = card.querySelector("p.whitespace-pre-wrap");
+      qp.textContent = "A 34-year-old presents with progressive dyspnoea, ".repeat(25) + "Supercalifragilisticexpialidocious-unbroken-token-" + "x".repeat(60);
+      card.querySelectorAll("[data-testid=review-answer-header]")[0].parentElement.querySelectorAll(".mt-4.flex.flex-col > div").forEach((o, i) => {
+        o.firstChild.nextSibling.textContent = ` Option ${i + 1}: ` + "a very long distractor describing a management step in detail, ".repeat(6);
+      });
+    });
+  }
+  const L = await page.evaluate(() => {
+    const r = (el) => el && el.getBoundingClientRect().toJSON();
+    const card = document.querySelector("[data-testid=review-nav]").previousElementSibling.firstElementChild;
+    const tools = card.querySelector("[data-testid=review-question-tools]");
+    const header = card.firstElementChild;
+    const btn = (re) => [...tools.querySelectorAll("button,a")].find((b) => re.test(b.textContent.trim()));
+    const answerLine = [...card.querySelectorAll("p")].find((p) => /^Correct Answer:/.test(p.textContent.trim()));
+    const clipped = [...card.querySelectorAll("button,a")].filter((b) => b.scrollWidth > b.clientWidth + 1 || b.getBoundingClientRect().right > window.innerWidth || b.getBoundingClientRect().left < 0).map((b) => b.textContent.trim());
+    return {
+      vw: window.innerWidth,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      header: r(header),
+      headerHasTools: header.contains(tools) || !!header.querySelector("button"),
+      question: r(card.querySelector("p.whitespace-pre-wrap")),
+      questionFont: parseFloat(getComputedStyle(card.querySelector("p.whitespace-pre-wrap")).fontSize),
+      ai: r(card.querySelector("[data-testid=ask-ai-button]")),
+      variant: r(card.querySelector("[data-testid=ai-variant-button]")),
+      answer: r(answerLine),
+      tools: r(tools),
+      save: r(btn(/^Save/)),
+      report: r(btn(/^Report/)),
+      share: r(btn(/WhatsApp/)),
+      toolsCount: document.querySelectorAll("[data-testid=review-question-tools]").length,
+      navCount: document.querySelectorAll("[data-testid=review-nav]").length,
+      clipped,
+    };
+  });
+  check(`${tag}: no sideways scroll`, L.overflow <= 0, L.overflow);
+  check(`${tag}: no clipped / off-screen buttons`, L.clipped.length === 0, L.clipped);
+  check(`${tag}: one tools group, one nav bar`, L.toolsCount === 1 && L.navCount === 1, L);
+  check(`${tag}: header holds no Save/Report/Share`, !L.headerHasTools);
+  check(`${tag}: order header → question → AI → answer → tools`, L.header.bottom <= L.question.top && L.question.bottom < L.ai.top && L.ai.bottom <= L.answer.top && L.answer.bottom <= L.tools.top, L);
+  check(`${tag}: Save + Report side by side, Share full width below`, Math.abs(L.save.top - L.report.top) < 1 && L.share && L.share.top >= L.save.bottom && L.share.width > L.save.width * 1.6, { save: L.save, report: L.report, share: L.share });
+  check(`${tag}: tool buttons ≥ 40px tall`, L.save.height >= 40 && L.report.height >= 40 && L.share.height >= 40, [L.save.height, L.report.height, L.share.height]);
+  check(`${tag}: larger question text (≥ 17px)`, L.questionFont >= 16.9, L.questionFont);
+
+  // Bar visible at the top; scroll to the end → tools fully clear of the bar.
+  const vis = await page.evaluate(() => document.querySelector("[data-testid=review-nav]").getBoundingClientRect().bottom <= window.innerHeight + 0.5);
+  check(`${tag}: Previous/Next visible without scrolling`, vis);
+  await page.evaluate(() => {
+    const navEl = document.querySelector("[data-testid=review-nav]");
+    const tools = document.querySelector("[data-testid=review-question-tools]");
+    window.scrollBy(0, tools.getBoundingClientRect().bottom - (window.innerHeight - navEl.offsetHeight));
+  });
+  const end = await page.evaluate(() => {
+    const navEl = document.querySelector("[data-testid=review-nav]");
+    const share = [...document.querySelectorAll("[data-testid=review-question-tools] a")].find((a) => /WhatsApp/.test(a.textContent));
+    const r = share.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.bottom - 3);
+    return { shareBottom: r.bottom, navTop: navEl.getBoundingClientRect().top, hitIsShare: !!hit?.closest("a") && hit.closest("a") === share };
+  });
+  check(`${tag}: Share (last tool) scrolls fully clear of the bar and is tappable`, end.shareBottom <= end.navTop + 0.5 && end.hitIsShare, end);
+  if (long) {
+    // Mid-question: the bar stays pinned while the long question is read.
+    await page.evaluate(() => window.scrollTo(0, 300));
+    const pinned = await page.evaluate(() => Math.abs(document.querySelector("[data-testid=review-nav]").getBoundingClientRect().bottom - window.innerHeight) < 1.5);
+    check(`${tag}: bar pinned while reading the long question`, pinned);
+  }
+  await shot(page, `mobile-${width}-${long ? "long" : "short"}`);
+
+  if (width === 390 && !long) {
+    // Functionality intact from the new spot.
+    const tools = page.getByTestId("review-question-tools");
+    const saveBtn = tools.getByRole("button", { name: /^Save/ });
+    const before = (await saveBtn.innerText()).trim();
+    await saveBtn.click();
+    await page.waitForFunction((b) => {
+      const t = [...document.querySelectorAll("[data-testid=review-question-tools] button")].find((x) => /^Save/.test(x.textContent.trim()));
+      return t && t.textContent.trim() !== b && !t.disabled;
+    }, before);
+    check(`${tag}: Save toggles from the bottom tools`, true);
+    await tools.getByRole("button", { name: /^Save/ }).click(); // restore
+    await page.waitForTimeout(800);
+    await tools.getByRole("button", { name: "Report" }).click();
+    check(`${tag}: Report dialog opens`, await page.getByRole("dialog").isVisible());
+    await page.keyboard.press("Escape");
+    check(`${tag}: Share link is a wa.me link`, /wa\.me|whatsapp/.test((await tools.locator("a").getAttribute("href")) ?? ""));
+  }
+  check(`${tag}: no console / hydration errors`, errors.length === 0, errors);
+  await ctx.close();
+}
+
+async function desktopLayout(browser, attemptId) {
+  const { ctx, page } = await newPage(browser, "desktop");
+  await page.goto(`${BASE}/student/attempt/${attemptId}/review`);
+  await page.waitForSelector("[data-testid=review-question-tools]");
+  const L = await page.evaluate(() => {
+    const r = (el) => el.getBoundingClientRect().toJSON();
+    const card = document.querySelector("[data-testid=review-nav]").previousElementSibling.firstElementChild;
+    const header = card.firstElementChild;
+    const tools = card.querySelector("[data-testid=review-question-tools]");
+    const q = card.querySelector("p.whitespace-pre-wrap");
+    const opt = card.querySelector(".mt-4.flex.flex-col > div");
+    return { header: r(header), tools: r(tools), q: r(q), qFont: getComputedStyle(q).fontSize, qLh: getComputedStyle(q).lineHeight, optFont: getComputedStyle(opt).fontSize, optLh: getComputedStyle(opt).lineHeight, card: r(card), btnH: [...tools.querySelectorAll("button")].map((b) => b.getBoundingClientRect().height) };
+  });
+  console.log("  desktop layout", JSON.stringify({ qFont: L.qFont, qLh: L.qLh, optFont: L.optFont, optLh: L.optLh, btnH: L.btnH }));
+  check("desktop: tools in the header band, right side, same row", Math.abs(L.tools.top - L.header.top) < 1 && Math.abs(L.tools.bottom - L.header.bottom) < 1 && L.tools.right <= L.card.right && L.tools.left > L.header.left, L);
+  check("desktop: tools above the question", L.tools.bottom <= L.q.top);
+  check("desktop: question/option type unchanged (15px / 14px, sm Save/Report)", L.qFont === "15px" && L.optFont === "14px" && L.btnH.every((h) => h === 32), L);
+  await shot(page, "desktop-layout");
+  await ctx.close();
+}
+
 async function main() {
   const browser = await chromium.launch();
   try {
     const attemptId = await submitAttempt(browser);
     console.log(`submitted attempt ${attemptId}`);
     for (const d of ["desktop", "tablet", "phone", "landscape"]) await runDevice(browser, d, attemptId);
+    console.log("\n--- mobile card layout ---");
+    for (const w of [360, 375, 390, 412, 430]) for (const long of [false, true]) await mobileLayout(browser, w, attemptId, long);
+    console.log("\n--- desktop card layout ---");
+    await desktopLayout(browser, attemptId);
   } finally {
     await browser.close();
   }
