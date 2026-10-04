@@ -152,7 +152,8 @@ async function main() {
   const actions = ["getExplanationAction", "getExplanationVariantAction", "getQuestionVariantsAction"];
   for (const name of actions) {
     const body = aiSource.slice(aiSource.indexOf(`export async function ${name}`));
-    const gateAt = body.indexOf("answerLockMessage(student.id, questionId)");
+    // Prefix match: the gate also takes the optional reviewAttemptId (5c342c2).
+    const gateAt = body.indexOf("answerLockMessage(student.id, questionId");
     const firstAiCall = Math.min(
       ...["getStoredAiExplanation", "getOrCreateExplanation", "getStoredAiExplanationVariant", "getActiveVariants", "checkAiAccessQuota"]
         .map((f) => body.indexOf(`${f}(`))

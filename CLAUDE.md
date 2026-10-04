@@ -1,5 +1,24 @@
 @AGENTS.md
 
+## Production is feature-frozen (since the 2026-10-04 freeze audit)
+
+Every future task changes ONLY what was asked:
+
+1. State the exact requested scope before editing.
+2. Record the baseline: `git rev-parse HEAD` and `readlink -f /var/www/mocktestseries-current`.
+3. List the files/components you expect to change.
+4. No unrelated refactors, cleanup, renames, dependency bumps or formatting passes.
+5. Preserve DB schema, Server Action and API contracts unless the task requires otherwise.
+6. Run the focused regression for the boundary you touched (test engine → ops/TEST-ENGINE.md;
+   payments → scripts/verify-payments.ts; auth/RBAC → scripts/verify-student-devices*.ts +
+   verify-platform-controls.ts; any page → scripts/verify-site-crawl.mjs).
+7. Final-diff gate before EVERY commit: run `git diff --stat` and `git diff --name-only`
+   (plus `--cached` once staged) and confirm in your reply that each listed file belongs to
+   the requested task. Anything else is reverted or explained first.
+8. If an unrelated change turns out to be necessary, stop and explain it before making it.
+9. Deploy only after that regression passes, via `ops/deploy/mocktestseries-deploy.sh <full sha>`.
+10. Report the new production SHA (`readlink -f /var/www/mocktestseries-current`).
+
 ## Skill routing
 
 When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
