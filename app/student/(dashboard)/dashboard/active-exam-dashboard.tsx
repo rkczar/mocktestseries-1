@@ -119,6 +119,7 @@ export function ActiveExamDashboard({
   announcements = null,
   accessPanels = {},
   footer = null,
+  reviewCard = null,
 }: {
   enrolledExams: ExamOption[];
   initialActiveExamId: string | null;
@@ -136,6 +137,8 @@ export function ActiveExamDashboard({
   accessPanels?: Record<string, React.ReactNode>;
   /** Lower-priority server-rendered content (subscription status), rendered last. */
   footer?: React.ReactNode;
+  /** "Share your experience" review block (review-card.tsx); null when the student isn't eligible yet. */
+  reviewCard?: React.ReactNode;
 }) {
   const [activeExamId, setActiveExamId] = useState(initialActiveExamId);
   const [metrics, setMetrics] = useState(initialMetrics);
@@ -325,6 +328,7 @@ export function ActiveExamDashboard({
     ),
     "subscription-status": footer,
     "install-app": <InstallAppCard />,
+    "share-review": reviewCard,
   };
 
   const sectionHeading: Partial<Record<StudentDashboardGroup, { id: string; title: React.ReactNode }>> = {

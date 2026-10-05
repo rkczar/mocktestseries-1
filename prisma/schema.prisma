@@ -77,6 +77,9 @@ model AdminUser {
   revokedStudentSessions StudentSession[]      @relation("StudentSessionRevokedBy")
   deviceSecurityEvents   DeviceSecurityEvent[]
   createdEmailCampaigns  EmailCampaign[]       @relation("EmailCampaignCreatedBy")
+  createdReviews         Review[]              @relation("ReviewCreatedBy")
+  approvedReviews        Review[]              @relation("ReviewApprovedBy")
+  editedReviews          Review[]              @relation("ReviewEditedBy")
 }
 
 model LoginAttempt {
@@ -571,6 +574,7 @@ model Student {
   deviceSecurityEvents    DeviceSecurityEvent[]
   emailPreference         EmailPreference?
   emailDeliveries         EmailDeliveryLog[]
+  review                  Review?
 
   entitlements      StudentEntitlement[]
   couponRedemptions CouponRedemption[]
@@ -2762,4 +2766,64 @@ model EmailPreference {
   suppressionReason String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Student Reviews / Testimonials (Admin -> Reviews, homepage "What Students
+// Say"). Provenance is enforced by CHECK constraints in the migration, not
+// only in code: a STUDENT_SUBMITTED row always carries its studentId and an
+// ADMIN_ADDED row never can, so an admin testimonial can never qualify for
+// the "Verified Student" badge; and only an APPROVED row may be published.
+// ---------------------------------------------------------------------------
+
+enum ReviewSource {
+  STUDENT_SUBMITTED
+  ADMIN_ADDED
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Review {
+  id           String       @id @default(cuid())
+  source       ReviewSource
+  status       ReviewStatus @default(PENDING)
+  isPublished  Boolean      @default(false)
+  isFeatured   Boolean      @default(false)
+  displayOrder Int          @default(0)
+
+  // What the homepage shows (admin-editable).
+  displayName String
+  rating      Int
+  comment     String
+  examName    String?
+
+  // One review per student; null for ADMIN_ADDED (CHECK constraint).
+  studentId String?  @unique
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  // The student's own submission, kept verbatim when an admin edits the
+  // displayed fields. Null for ADMIN_ADDED.
+  originalDisplayName String?
+  originalRating      Int?
+  originalComment     String?
+
+  createdById  String?
+  createdBy    AdminUser? @relation("ReviewCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+  approvedById String?
+  approvedBy   AdminUser? @relation("ReviewApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  rejectedAt   DateTime?
+  editedAt     DateTime?
+  editedById   String?
+  editedBy     AdminUser? @relation("ReviewEditedBy", fields: [editedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([status, isPublished, isFeatured, displayOrder])
+  @@index([source, status])
+  @@index([createdAt])
 }

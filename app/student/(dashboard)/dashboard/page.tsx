@@ -21,6 +21,8 @@ import { ensureDefaultExamEnrollment } from "@/lib/default-enrollment";
 import { InstallAppBanner } from "@/components/pwa/install-app";
 import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
 import { getStudentDashboardLayout } from "@/lib/student-dashboard-layout";
+import { getStudentReviewState } from "@/lib/student-review";
+import { StudentReviewCard } from "./review-card";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
@@ -51,7 +53,7 @@ export default async function StudentDashboardPage() {
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet, layout, accessSummaries] = await Promise.all([
+  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet, layout, accessSummaries, reviewState] = await Promise.all([
     activeExamId
       ? Promise.all([
           getExamScopedDashboardMetrics(student.id, activeExamId),
@@ -63,6 +65,8 @@ export default async function StudentDashboardPage() {
     findPracticeOmrSheet(activeExamId),
     getStudentDashboardLayout(),
     getStudentExamAccessSummaries(student.id, enrolledExams),
+    // Never let the optional review block break the dashboard.
+    getStudentReviewState(student.id).catch(() => null),
   ]);
   // Server-rendered per exam; the client picks the active exam's card, so an
   // exam switch never shows another exam's access state.
@@ -120,6 +124,7 @@ export default async function StudentDashboardPage() {
         }
         accessPanels={accessPanels}
         footer={<SubscriptionStatusCard studentId={student.id} excludeProductIds={coveredProductIds} />}
+        reviewCard={reviewState ? <StudentReviewCard state={reviewState} /> : null}
       />
       <FloatingWhatsAppSupport surface="dashboard" />
     </div>

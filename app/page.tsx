@@ -8,6 +8,8 @@ import { faqItems } from "@/components/homepage/growth-sections";
 import { requirePageVisible } from "@/lib/page-visibility";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 import { getStudentSession } from "@/lib/student-session";
+import { getHomepageReviewsSafe } from "@/lib/reviews";
+import { ReviewsSection } from "@/components/homepage/reviews-section";
 import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-support";
 import { BRAND_NAME, PUBLIC_BRAND_NAME } from "@/lib/brand";
 import { safeJsonLd } from "@/lib/json-ld";
@@ -41,7 +43,12 @@ export default async function Home() {
   const [published, session, siteUrl] = await Promise.all([getPublishedHomepage(), getStudentSession(), getSiteUrl()]);
   const config = published ?? getFallbackHomepage();
   const studentId = session?.user?.studentId ? (session.user.id ?? null) : null;
-  const [homepage, omrSheet] = await Promise.all([resolveHomepage(config, { studentId }), findPracticeOmrSheet()]);
+  const [homepage, omrSheet, reviews] = await Promise.all([
+    resolveHomepage(config, { studentId }),
+    findPracticeOmrSheet(),
+    // Cached, time-boxed and never throws: no reviews / an error just hides the section.
+    getHomepageReviewsSafe(),
+  ]);
 
   // WebSite markup names the site for Google's site-name system: the public
   // brand, with the domain-style wordmark as an alternate name.
@@ -75,7 +82,12 @@ export default async function Home() {
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(websiteJsonLd) }} />
       {faqJsonLd ? <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(faqJsonLd) }} /> : null}
-      <HomepageView homepage={homepage} omrResourceId={omrSheet?.id ?? null} studentSignedIn={Boolean(studentId)} />
+      <HomepageView
+        homepage={homepage}
+        omrResourceId={omrSheet?.id ?? null}
+        studentSignedIn={Boolean(studentId)}
+        reviewsSection={reviews ? <ReviewsSection settings={reviews.settings} reviews={reviews.reviews} /> : null}
+      />
       <FloatingWhatsAppSupport surface="homepage" />
     </>
   );

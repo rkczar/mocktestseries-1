@@ -56,6 +56,10 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "Communications", route: "/admin/communications", module: "Communications", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Communication Detail", route: "/admin/communications/[id]", module: "Communications", userType: "ADMIN", authRequired: true, parentRoute: "/admin/communications", status: "CONNECTED" },
 
+  // Reviews — student reviews moderation + manual testimonials for the
+  // homepage "What Students Say" section (lib/reviews.ts).
+  { pageName: "Reviews", route: "/admin/reviews", module: "Reviews", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
+
   // Exams (minimal working CRUD ships this slice)
   { pageName: "Manage Exams", route: "/admin/exams", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Previous Year Papers", route: "/admin/exams/previous-year-papers", module: "Exams", userType: "ADMIN", authRequired: true, parentRoute: "/admin/exams", status: "CONNECTED" },

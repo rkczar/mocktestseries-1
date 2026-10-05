@@ -18,7 +18,7 @@ import {
 } from "./sections";
 import { FreeStartSection, ExamGuideSection, FaqSection } from "./growth-sections";
 import type { HomepageSectionKey } from "@prisma/client";
-import type { ComponentType, ReactNode } from "react";
+import { Fragment, type ComponentType, type ReactNode } from "react";
 
 type Section = ResolvedHomepage["sections"][number];
 type SectionComponentProps = { content: Record<string, unknown>; resolved: Section["resolved"] };
@@ -44,10 +44,13 @@ export function HomepageView({
   homepage,
   omrResourceId = null,
   studentSignedIn = false,
+  reviewsSection = null,
 }: {
   homepage: ResolvedHomepage;
   omrResourceId?: string | null;
   studentSignedIn?: boolean;
+  /** Server-rendered "What Students Say" (components/homepage/reviews-section.tsx); null hides it. */
+  reviewsSection?: ReactNode;
 }) {
   const byKey = new Map(homepage.sections.map((s) => [s.key, s]));
   const header = byKey.get("HEADER");
@@ -91,8 +94,19 @@ export function HomepageView({
             </section>
           ) : null;
 
+          // Student reviews: after the platform/features content, right
+          // before the pricing offer (else the closing CTA), else at the end.
+          const reviewsBeforeKey =
+            (["MOCK_TEST_PROMOTION", "TEST_SERIES", "CTA"] as const).find((k) => bodySections.some((s) => s.key === k)) ?? null;
+          let reviewsInserted = !reviewsSection;
+          const reviewsNode = reviewsSection ? <Fragment key="student-reviews">{reviewsSection}</Fragment> : null;
+
           const nodes: ReactNode[] = [];
           for (const section of bodySections) {
+            if (!reviewsInserted && section.key === reviewsBeforeKey) {
+              nodes.push(reviewsNode);
+              reviewsInserted = true;
+            }
             const Component = SECTION_COMPONENTS[section.key];
             if (Component) {
               nodes.push(<Component key={section.key} content={section.content} resolved={section.resolved} />);
@@ -107,6 +121,7 @@ export function HomepageView({
             }
           }
           if (!omrInserted) nodes.push(omrSection);
+          if (!reviewsInserted) nodes.push(reviewsNode);
           if (!tryAiNowInserted) nodes.push(<AskAiDemoSection key="try-ai-now" />);
           return nodes;
         })()}
