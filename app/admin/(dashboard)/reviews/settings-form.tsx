@@ -17,6 +17,7 @@ const TOGGLES: { name: keyof ReviewsSectionSettings; label: string; hint: string
   { name: "showExam", label: "Show exam name", hint: "Exam line under the name." },
   { name: "showVerified", label: "Show Verified badge", hint: "Only ever on genuine student-submitted reviews." },
   { name: "preferFeatured", label: "Prefer Featured reviews", hint: "Featured reviews first, then by display order." },
+  { name: "showOnDashboard", label: "Show Reviews on Student Dashboard", hint: "Same published reviews, compact, above Access & Subscription." },
 ];
 
 /** Homepage display settings, stored in the Setting table (website.reviews_section). */

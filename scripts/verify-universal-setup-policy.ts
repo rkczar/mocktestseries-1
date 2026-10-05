@@ -203,8 +203,9 @@ async function main() {
     check("empty setting → default layout", JSON.stringify(normalizeStudentDashboardLayout(null)) === JSON.stringify(DEFAULT_STUDENT_DASHBOARD_LAYOUT));
     const partial = normalizeStudentDashboardLayout([{ id: "previous-year-papers", visible: false }, { id: "bogus", visible: true }, { id: "performance-summary", visible: true }, { id: "performance-summary", visible: false }]);
     check("normalize: unknown ids dropped, duplicates collapsed", partial.length === ids.length && new Set(partial.map((b) => b.id)).size === ids.length);
-    // access-status is registered first, so a layout saved before it existed gains it on top.
-    check("normalize: saved order + hidden state kept", partial[0].id === "access-status" && partial[1].id === "previous-year-papers" && partial[1].visible === false);
+    // access-status is registered first, so a layout saved before it existed gains it on top —
+    // preceded only by its anchored "student-reviews" block (registry insertBefore).
+    check("normalize: saved order + hidden state kept", partial[0].id === "student-reviews" && partial[1].id === "access-status" && partial[2].id === "previous-year-papers" && partial[2].visible === false);
     check("strict parse rejects incomplete / unknown / non-boolean", parseSubmittedLayout([{ id: "mock-tests", visible: true }]) === null && parseSubmittedLayout(ids.map((id) => ({ id, visible: "yes" }))) === null && parseSubmittedLayout([...ids.slice(1), "x"].map((id) => ({ id, visible: true }))) === null);
     check("strict parse accepts a full permutation", parseSubmittedLayout([...ids].reverse().map((id) => ({ id, visible: id !== "weak-topics" })))?.[0].id === ids[ids.length - 1]);
   } finally {

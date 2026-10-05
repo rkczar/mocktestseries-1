@@ -23,6 +23,8 @@ import { FloatingWhatsAppSupport } from "@/components/support/floating-whatsapp-
 import { getStudentDashboardLayout } from "@/lib/student-dashboard-layout";
 import { getStudentReviewState } from "@/lib/student-review";
 import { StudentReviewCard } from "./review-card";
+import { getDashboardReviewsSafe } from "@/lib/reviews";
+import { ReviewsSection } from "@/components/homepage/reviews-section";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
@@ -53,7 +55,7 @@ export default async function StudentDashboardPage() {
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet, layout, accessSummaries, reviewState] = await Promise.all([
+  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet, layout, accessSummaries, reviewState, publicReviews] = await Promise.all([
     activeExamId
       ? Promise.all([
           getExamScopedDashboardMetrics(student.id, activeExamId),
@@ -67,6 +69,8 @@ export default async function StudentDashboardPage() {
     getStudentExamAccessSummaries(student.id, enrolledExams),
     // Never let the optional review block break the dashboard.
     getStudentReviewState(student.id).catch(() => null),
+    // Same cached query as the homepage section; never throws, null hides the block.
+    getDashboardReviewsSafe(),
   ]);
   // Server-rendered per exam; the client picks the active exam's card, so an
   // exam switch never shows another exam's access state.
@@ -125,6 +129,9 @@ export default async function StudentDashboardPage() {
         accessPanels={accessPanels}
         footer={<SubscriptionStatusCard studentId={student.id} excludeProductIds={coveredProductIds} />}
         reviewCard={reviewState ? <StudentReviewCard state={reviewState} /> : null}
+        reviewsSection={
+          publicReviews ? <ReviewsSection settings={publicReviews.settings} reviews={publicReviews.reviews} variant="dashboard" /> : null
+        }
       />
       <FloatingWhatsAppSupport surface="dashboard" />
     </div>

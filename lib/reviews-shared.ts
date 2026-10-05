@@ -38,6 +38,8 @@ export interface ReviewsSectionSettings {
   showExam: boolean;
   showVerified: boolean;
   preferFeatured: boolean;
+  /** Also show the published reviews on the Student Dashboard (above Access & Subscription). */
+  showOnDashboard: boolean;
 }
 
 export const DEFAULT_REVIEWS_SECTION_SETTINGS: ReviewsSectionSettings = {
@@ -52,6 +54,7 @@ export const DEFAULT_REVIEWS_SECTION_SETTINGS: ReviewsSectionSettings = {
   showExam: true,
   showVerified: true,
   preferFeatured: true,
+  showOnDashboard: true,
 };
 
 /** Any stored value -> a complete, valid settings object (unknown/invalid fields fall back to defaults). */
@@ -72,6 +75,7 @@ export function normalizeReviewsSectionSettings(raw: unknown): ReviewsSectionSet
     showExam: bool("showExam"),
     showVerified: bool("showVerified"),
     preferFeatured: bool("preferFeatured"),
+    showOnDashboard: bool("showOnDashboard"),
   };
 }
 

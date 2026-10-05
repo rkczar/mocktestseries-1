@@ -270,6 +270,7 @@ const settingsSchema = z.object({
   showExam: checkbox,
   showVerified: checkbox,
   preferFeatured: checkbox,
+  showOnDashboard: checkbox,
 });
 
 export async function saveReviewsSettingsAction(formData: FormData): Promise<ReviewActionResult> {

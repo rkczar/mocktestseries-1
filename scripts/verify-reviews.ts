@@ -8,13 +8,25 @@
  * `setup` also leaves a fixture for scripts/verify-reviews.mjs (browser/HTTP)
  * and prints it as JSON; `cleanup` removes it.
  *
- *   DATABASE_URL=<scratch> NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-reviews.ts [setup|cleanup]
+ * `dashboard-setup <ai-actions-ux fixture.json>` prepares the Student
+ * Dashboard suite (scripts/verify-reviews-dashboard.mjs) on a *payverify*
+ * scratch DB already seeded by scripts/ai-actions-ux-fixture.ts: 4 published
+ * + 1 hidden ADMIN_ADDED reviews, one approved STUDENT_SUBMITTED review by the
+ * fixture's "nine" student (enrolled in the fixture exam), a PAID product for
+ * that exam (so Access & Subscription renders), payment mode PAID, the production dashboard layout
+ * saved before the reviews block existed, and the two QA admins.
+ *
+ *   DATABASE_URL=<scratch> NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-reviews.ts [setup|cleanup|dashboard-setup <fixture>]
  */
 import "dotenv/config";
 import argon2 from "argon2";
 import { prisma } from "@/lib/prisma";
 import { nextStudentId } from "@/lib/student-id";
+import { readFileSync } from "node:fs";
 import { computeHomepageReviews } from "@/lib/reviews";
+import { setPaymentMode } from "@/lib/payments/settings";
+import { normalizeStudentDashboardLayout } from "@/lib/student-dashboard-layout";
+import { DEFAULT_STUDENT_DASHBOARD_LAYOUT, STUDENT_DASHBOARD_BLOCKS } from "@/lib/student-dashboard-blocks";
 import {
   DEFAULT_REVIEWS_SECTION_SETTINGS,
   REVIEWS_SECTION_SETTING_KEY,
@@ -100,13 +112,70 @@ async function unitChecks() {
   const n = normalizeReviewsSectionSettings({ maxReviews: 999, speed: "WARP", heading: "  ", enabled: "yes", subtitle: "<b>Hi</b>" });
   check("settings: invalid fields fall back", n.maxReviews === 12 && n.speed === "NORMAL" && n.heading === "What Students Say" && n.enabled === true);
   check("settings: subtitle sanitized", n.subtitle === "Hi");
+  // Student Dashboard block placement: the production layout saved before the block existed.
+  const prodSaved = PRODUCTION_SAVED_LAYOUT.map((id) => ({ id, visible: true }));
+  const prod = normalizeStudentDashboardLayout(prodSaved).map((b) => b.id);
+  check("dashboard: reviews block directly above access-status in the saved production layout", prod[prod.indexOf("access-status") - 1] === "student-reviews", prod);
+  check("dashboard: every other block keeps its saved order", JSON.stringify(prod.filter((id) => id !== "student-reviews" && id !== "share-review")) === JSON.stringify(prodSaved.map((b) => b.id)), prod);
+  const moved = normalizeStudentDashboardLayout([{ id: "access-status", visible: true }, { id: "weak-topics", visible: true }]).map((b) => b.id);
+  check("dashboard: follows access-status wherever the admin put it", moved[0] === "student-reviews" && moved[1] === "access-status", moved);
+  const def = DEFAULT_STUDENT_DASHBOARD_LAYOUT.map((b) => b.id);
+  check("dashboard: default layout also places it directly above access-status", def[def.indexOf("access-status") - 1] === "student-reviews" && def.length === STUDENT_DASHBOARD_BLOCKS.length);
+  check("dashboard: access-status stays first in the registry", STUDENT_DASHBOARD_BLOCKS[0].id === "access-status");
+  const hidden = normalizeStudentDashboardLayout([...prodSaved, { id: "student-reviews", visible: false }]);
+  check("dashboard: an admin-hidden reviews block stays hidden", hidden.find((b) => b.id === "student-reviews")?.visible === false);
   check("settings: null -> defaults", JSON.stringify(normalizeReviewsSectionSettings(null)) === JSON.stringify(DEFAULT_REVIEWS_SECTION_SETTINGS));
+}
+
+const PRODUCTION_SAVED_LAYOUT = ["performance-summary", "practice-omr", "custom-module", "analytics-progress", "previous-year-papers", "mock-tests", "subject-test", "test-schedule", "test-on-the-go", "subjects", "continue-attempt", "recent-activity", "weak-topics", "access-status", "subscription-status", "install-app"];
+
+async function createAdmins(passwordHash: string) {
+  const masterRole = await prisma.role.findUnique({ where: { name: "MASTER_ADMIN" }, select: { id: true } });
+  const fullRole = await prisma.role.findUnique({ where: { name: "FULL_ADMIN" }, select: { id: true } });
+  if (!masterRole || !fullRole) throw new Error("Roles missing — run prisma/seed.ts on the scratch DB first.");
+  await prisma.adminUser.create({ data: { name: "QA Reviews Master", username: `${TAG}-master`, passwordHash, roleId: masterRole.id } });
+  await prisma.adminUser.create({ data: { name: "QA Reviews Full", username: `${TAG}-full`, passwordHash, roleId: fullRole.id } });
+}
+
+async function dashboardSetup(fixturePath: string) {
+  if (!/payverify/.test(process.env.DATABASE_URL ?? "")) throw new Error("dashboard-setup needs a *payverify* scratch DB (it sets payment mode PAID).");
+  const fx = JSON.parse(readFileSync(fixturePath, "utf8")) as { examId: string; students: { nine: string } };
+  await createAdmins(await argon2.hash(PASSWORD));
+  const now = new Date();
+  const admin = (displayName: string, rating: number, comment: string, extra: { isPublished?: boolean; isFeatured?: boolean; displayOrder?: number; examName?: string } = {}) =>
+    prisma.review.create({ data: { source: "ADMIN_ADDED", status: "APPROVED", isPublished: true, approvedAt: now, displayName, rating, comment, ...extra } });
+  await admin("Anita Verma", 5, "The full-length mock tests felt exactly like the real exam. Highly recommended.", { isFeatured: true, examName: "RUHS Medical Officer" });
+  await admin("Rohit K.", 4, "PYQ explanations are clear and the analytics help me fix weak topics.", { displayOrder: 1 });
+  await admin("Meena S.", 5, "Ask AI explanations saved me hours of searching through textbooks during revision.", { displayOrder: 2 });
+  await admin("Karan P.", 4, "Daily practice with subject tests kept me consistent.", { displayOrder: 3 });
+  await admin("Hidden Person", 5, "This hidden testimonial must never appear anywhere.", { isPublished: false });
+  const comment = "Genuine student review from a verified account.";
+  await prisma.review.create({
+    data: { source: "STUDENT_SUBMITTED", status: "APPROVED", isPublished: true, displayOrder: 4, studentId: fx.students.nine, approvedAt: now, displayName: "Nine S.", rating: 5, comment, originalDisplayName: "Nine S.", originalRating: 5, originalComment: comment },
+  });
+  const series = await prisma.testSeries.create({ data: { examId: fx.examId, name: "QA Dash Series", status: "PUBLISHED", testCount: 4 } });
+  await prisma.mockTest.create({ data: { examId: fx.examId, testSeriesId: series.id, title: "QA Dash Paid", durationMinutes: 30, status: "PUBLISHED", accessType: "PAID", order: 99 } });
+  await prisma.product.deleteMany({ where: { code: "qa-dash" } });
+  await prisma.product.create({
+    data: { code: "qa-dash", name: "QA Complete Series", productType: "TEST_SERIES", examId: fx.examId, testSeriesId: series.id, accessType: "PAID", mrpPaise: 199900, sellingPricePaise: 79900, accessDurationType: "DAYS", accessDays: 180 },
+  });
+  // An active exam is what makes Access & Subscription render on the dashboard.
+  await prisma.studentExamEnrollment.upsert({
+    where: { studentId_examId: { studentId: fx.students.nine, examId: fx.examId } },
+    create: { studentId: fx.students.nine, examId: fx.examId },
+    update: {},
+  });
+  await setPaymentMode("PAID", undefined);
+  const layout = PRODUCTION_SAVED_LAYOUT.map((id) => ({ id, visible: true }));
+  await prisma.setting.upsert({ where: { key: "website.student_dashboard_layout" }, create: { key: "website.student_dashboard_layout", value: layout }, update: { value: layout } });
+  console.log(JSON.stringify({ password: PASSWORD, master: `${TAG}-master` }));
 }
 
 async function main() {
   const mode = process.argv[2] ?? "check";
   await cleanup();
   if (mode === "cleanup") return;
+  if (mode === "dashboard-setup") return dashboardSetup(process.argv[3]);
 
   await unitChecks();
 
@@ -169,7 +238,10 @@ async function main() {
   check("settings: showVerified off hides badge", reviews.every((r) => !r.verified));
   check("settings: showExam off hides exam", reviews.every((r) => r.exam === null));
   await prisma.setting.update({ where: { key: REVIEWS_SECTION_SETTING_KEY }, data: { value: { ...DEFAULT_REVIEWS_SECTION_SETTINGS, enabled: false } } });
-  check("settings: section off -> no reviews", (await computeHomepageReviews()).reviews.length === 0);
+  const homepageOff = await computeHomepageReviews();
+  check("settings: homepage off, dashboard on -> data still computed for the dashboard", homepageOff.reviews.length > 0 && !homepageOff.settings.enabled && homepageOff.settings.showOnDashboard);
+  await prisma.setting.update({ where: { key: REVIEWS_SECTION_SETTING_KEY }, data: { value: { ...DEFAULT_REVIEWS_SECTION_SETTINGS, enabled: false, showOnDashboard: false } } });
+  check("settings: both surfaces off -> no reviews", (await computeHomepageReviews()).reviews.length === 0);
 
   // Leave a clean state for the browser suite: no reviews, default settings.
   await prisma.review.deleteMany({});
@@ -178,11 +250,7 @@ async function main() {
   void adminFeatured;
 
   if (mode === "setup") {
-    const masterRole = await prisma.role.findUnique({ where: { name: "MASTER_ADMIN" }, select: { id: true } });
-    const fullRole = await prisma.role.findUnique({ where: { name: "FULL_ADMIN" }, select: { id: true } });
-    if (!masterRole || !fullRole) throw new Error("Roles missing — run prisma/seed.ts on the scratch DB first.");
-    await prisma.adminUser.create({ data: { name: "QA Reviews Master", username: `${TAG}-master`, passwordHash, roleId: masterRole.id } });
-    await prisma.adminUser.create({ data: { name: "QA Reviews Full", username: `${TAG}-full`, passwordHash, roleId: fullRole.id } });
+    await createAdmins(passwordHash);
     console.log(
       JSON.stringify({
         password: PASSWORD,

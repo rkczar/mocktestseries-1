@@ -22,12 +22,15 @@ export function ReviewsMarquee({
   animate,
   speedPx,
   direction,
+  compact = false,
 }: {
   header: ReactNode;
   children: ReactNode;
   animate: boolean;
   speedPx: number;
   direction: "RTL" | "LTR";
+  /** Student Dashboard copy: no page gutter of its own, tighter spacing. */
+  compact?: boolean;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -167,7 +170,7 @@ export function ReviewsMarquee({
 
   return (
     <>
-      <div className="mx-auto flex w-full max-w-6xl items-end justify-between gap-4 px-4 sm:px-6">
+      <div className={compact ? "flex items-center justify-between gap-3" : "mx-auto flex w-full max-w-6xl items-end justify-between gap-4 px-4 sm:px-6"}>
         {header}
         {animate ? (
           <button
@@ -175,7 +178,7 @@ export function ReviewsMarquee({
             onClick={() => setUserPaused((p) => !p)}
             aria-pressed={userPaused}
             aria-label={userPaused ? "Play reviews auto-scroll" : "Pause reviews auto-scroll"}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-muted-foreground)] transition-colors hover:text-[var(--color-foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] motion-reduce:hidden"
+            className={`${compact ? "h-8 w-8" : "h-9 w-9"} inline-flex shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-muted-foreground)] transition-colors hover:text-[var(--color-foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] motion-reduce:hidden`}
           >
             {userPaused ? <Play className="h-4 w-4" aria-hidden /> : <Pause className="h-4 w-4" aria-hidden />}
           </button>
@@ -184,13 +187,16 @@ export function ReviewsMarquee({
       <div
         ref={viewportRef}
         className={cn(
-          "mt-8 sm:mt-10",
+          compact ? "mt-3" : "mt-8 sm:mt-10",
           animate
             ? "overflow-hidden [touch-action:pan-y] [mask-image:linear-gradient(to_right,transparent,#000_4%,#000_96%,transparent)] motion-reduce:snap-x motion-reduce:snap-mandatory motion-reduce:overflow-x-auto motion-reduce:[mask-image:none] motion-reduce:[touch-action:auto]"
             : "snap-x snap-mandatory overflow-x-auto"
         )}
       >
-        <div ref={trackRef} className="relative flex w-max pl-4 will-change-transform sm:pl-6 motion-reduce:will-change-auto">
+        <div
+          ref={trackRef}
+          className={cn("relative flex w-max will-change-transform motion-reduce:will-change-auto", compact ? "pl-0" : "pl-4 sm:pl-6")}
+        >
           {children}
         </div>
       </div>

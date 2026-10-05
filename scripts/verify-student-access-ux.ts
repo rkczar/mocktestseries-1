@@ -181,7 +181,8 @@ async function main() {
   console.log("\nG. Dashboard block");
   check("access-status registered first", STUDENT_DASHBOARD_BLOCKS[0].id === "access-status");
   const legacy = normalizeStudentDashboardLayout([{ id: "performance-summary", visible: true }, { id: "subscription-status", visible: false }]);
-  check("Saved layouts gain access-status at the top, visible", legacy[0].id === "access-status" && legacy[0].visible);
+  // Only the anchored "student-reviews" block (registry insertBefore: access-status) may precede it.
+  check("Saved layouts gain access-status at the top, visible", legacy[0].id === "student-reviews" && legacy[1].id === "access-status" && legacy[1].visible);
 
   await prisma.$disconnect();
   console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);

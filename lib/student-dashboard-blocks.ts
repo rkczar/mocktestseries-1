@@ -31,7 +31,10 @@ export const STUDENT_DASHBOARD_BLOCKS = [
   { id: "subscription-status", label: "Subscription Status", group: "account", card: false, description: "Other active plans not covered by Access & Subscription" },
   { id: "install-app", label: "Install MockTestSeries", group: "account", card: false, description: "Install-as-app prompt; shown only on browsers that support installing, never inside the installed app" },
   { id: "share-review", label: "Share your experience", group: "account", card: false, description: "Write a review (1–5 stars + comment) after completing a test; shows its moderation status once submitted" },
-] as const satisfies readonly { id: string; label: string; group: StudentDashboardGroup; card: boolean; description: string }[];
+  // Registered last so access-status stays first; `insertBefore` places it
+  // directly above Access & Subscription in the default and in saved layouts.
+  { id: "student-reviews", label: "What Students Say", group: "account", card: false, insertBefore: "access-status", description: "Published reviews from Admin → Reviews (compact carousel); hidden when none are published or the Reviews setting is off" },
+] as const satisfies readonly { id: string; label: string; group: StudentDashboardGroup; card: boolean; description: string; insertBefore?: string }[];
 
 export type StudentDashboardBlockId = (typeof STUDENT_DASHBOARD_BLOCKS)[number]["id"];
 export type StudentDashboardLayout = { id: StudentDashboardBlockId; visible: boolean }[];
@@ -45,5 +48,19 @@ export function studentDashboardBlock(id: StudentDashboardBlockId) {
   return STUDENT_DASHBOARD_BLOCKS.find((b) => b.id === id)!;
 }
 
-/** Default: Access & Subscription → Overview → Practice & Tests → Previous Year Papers → Recent Activity → account. */
-export const DEFAULT_STUDENT_DASHBOARD_LAYOUT: StudentDashboardLayout = STUDENT_DASHBOARD_BLOCKS.map((b) => ({ id: b.id, visible: true }));
+/** The registry position a block is placed before when it is new to a layout (else: after its preceding neighbour). */
+export function studentDashboardBlockAnchor(id: StudentDashboardBlockId): StudentDashboardBlockId | null {
+  const block = studentDashboardBlock(id) as { insertBefore?: StudentDashboardBlockId };
+  return block.insertBefore ?? null;
+}
+
+/** Default: (What Students Say) → Access & Subscription → Overview → Practice & Tests → Previous Year Papers → Recent Activity → account. */
+export const DEFAULT_STUDENT_DASHBOARD_LAYOUT: StudentDashboardLayout = (() => {
+  const layout: StudentDashboardLayout = STUDENT_DASHBOARD_BLOCKS.filter((b) => !("insertBefore" in b)).map((b) => ({ id: b.id, visible: true }));
+  for (const b of STUDENT_DASHBOARD_BLOCKS) {
+    if (!("insertBefore" in b)) continue;
+    const at = layout.findIndex((e) => e.id === b.insertBefore);
+    layout.splice(at < 0 ? layout.length : at, 0, { id: b.id, visible: true });
+  }
+  return layout;
+})();

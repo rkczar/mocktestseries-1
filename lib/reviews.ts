@@ -31,12 +31,14 @@ export async function saveReviewsSectionSettings(settings: ReviewsSectionSetting
  * Only APPROVED + published reviews, and never one whose student account is
  * no longer active (deleted/suspended). "Verified" is derived here from the
  * stored provenance — STUDENT_SUBMITTED with its student attached, which the
- * database guarantees can never be true of an ADMIN_ADDED row. Uncached;
- * exported for scripts/verify-reviews.ts — the homepage uses getHomepageReviewsSafe().
+ * database guarantees can never be true of an ADMIN_ADDED row. One result
+ * serves both surfaces (homepage + Student Dashboard), each gated by its own
+ * switch. Uncached; exported for scripts/verify-reviews.ts — pages use
+ * getHomepageReviewsSafe() / getDashboardReviewsSafe().
  */
 export async function computeHomepageReviews(): Promise<{ settings: ReviewsSectionSettings; reviews: PublicReview[] }> {
   const settings = await getReviewsSectionSettings();
-  if (!settings.enabled) return { settings, reviews: [] };
+  if (!settings.enabled && !settings.showOnDashboard) return { settings, reviews: [] };
 
   const rows = await prisma.review.findMany({
     where: {
@@ -65,29 +67,44 @@ export async function computeHomepageReviews(): Promise<{ settings: ReviewsSecti
   return { settings, reviews };
 }
 
-const cachedHomepageReviews = unstable_cache(computeHomepageReviews, ["homepage-reviews"], {
+// "v2": the cached shape gained settings.showOnDashboard and reviews are now
+// computed when only the dashboard is on — never reuse a pre-v2 entry.
+const cachedPublicReviews = unstable_cache(computeHomepageReviews, ["public-reviews-v2"], {
   tags: [HOMEPAGE_REVIEWS_TAG],
   revalidate: 300,
 });
 
+type PublicReviews = { settings: ReviewsSectionSettings; reviews: PublicReview[] };
+
 /**
- * Homepage entry point. Cached, bounded by a short timeout, and never
- * throws: a slow or failing reviews query hides the section instead of
- * delaying or breaking the homepage.
+ * Cached, bounded by a short timeout, and never throws: a slow or failing
+ * reviews query hides the section instead of delaying or breaking the page.
  */
-export async function getHomepageReviewsSafe(timeoutMs = 1500): Promise<{ settings: ReviewsSectionSettings; reviews: PublicReview[] } | null> {
+async function getPublicReviewsSafe(surface: "homepage" | "dashboard", timeoutMs: number): Promise<PublicReviews | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
     });
-    const result = await Promise.race([cachedHomepageReviews(), timeout]);
-    if (!result || !result.settings.enabled || result.reviews.length === 0) return null;
-    return result;
+    const result = await Promise.race([cachedPublicReviews(), timeout]);
+    if (!result || result.reviews.length === 0) return null;
+    const settings = normalizeReviewsSectionSettings(result.settings);
+    const on = surface === "homepage" ? settings.enabled : settings.showOnDashboard;
+    return on ? { settings, reviews: result.reviews } : null;
   } catch (error) {
-    console.error("[reviews] homepage reviews unavailable", error);
+    console.error(`[reviews] ${surface} reviews unavailable`, error);
     return null;
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** Homepage "What Students Say" (Admin → Reviews → Reviews section). */
+export function getHomepageReviewsSafe(timeoutMs = 1500): Promise<PublicReviews | null> {
+  return getPublicReviewsSafe("homepage", timeoutMs);
+}
+
+/** Student Dashboard block "student-reviews" (Admin → Reviews → Show Reviews on Student Dashboard). Same cached data as the homepage. */
+export function getDashboardReviewsSafe(timeoutMs = 1000): Promise<PublicReviews | null> {
+  return getPublicReviewsSafe("dashboard", timeoutMs);
 }

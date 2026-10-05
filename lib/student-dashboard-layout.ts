@@ -4,6 +4,8 @@ import {
   STUDENT_DASHBOARD_BLOCKS,
   DEFAULT_STUDENT_DASHBOARD_LAYOUT,
   isStudentDashboardBlockId,
+  studentDashboardBlockAnchor,
+  type StudentDashboardBlockId,
   type StudentDashboardLayout,
 } from "@/lib/student-dashboard-blocks";
 
@@ -35,14 +37,24 @@ export function normalizeStudentDashboardLayout(raw: unknown): StudentDashboardL
     seen.add(id);
     out.push({ id, visible: (entry as { visible?: unknown }).visible !== false });
   }
-  DEFAULT_STUDENT_DASHBOARD_LAYOUT.forEach((block, defaultIndex) => {
-    if (seen.has(block.id)) return;
-    // Insert after the nearest preceding default neighbour that is present.
-    const before = DEFAULT_STUDENT_DASHBOARD_LAYOUT.slice(0, defaultIndex).map((b) => b.id).reverse();
-    const anchor = before.map((id) => out.findIndex((b) => b.id === id)).find((i) => i >= 0);
-    out.splice(anchor === undefined ? 0 : anchor + 1, 0, { id: block.id, visible: true });
+  // Anchored blocks (registry `insertBefore`) go in last, so their anchor
+  // is already placed: they land directly before it, wherever the admin
+  // moved it. Every other new block keeps the original rule.
+  const pending = DEFAULT_STUDENT_DASHBOARD_LAYOUT.map((block, defaultIndex) => ({ block, defaultIndex })).filter(({ block }) => !seen.has(block.id));
+  const anchored = (id: StudentDashboardBlockId) => studentDashboardBlockAnchor(id) !== null;
+  for (const { block, defaultIndex } of [...pending.filter((p) => !anchored(p.block.id)), ...pending.filter((p) => anchored(p.block.id))]) {
+    const anchorId = studentDashboardBlockAnchor(block.id);
+    const anchorAt = anchorId ? out.findIndex((b) => b.id === anchorId) : -1;
+    if (anchorAt >= 0) {
+      out.splice(anchorAt, 0, { id: block.id, visible: true });
+    } else {
+      // Insert after the nearest preceding default neighbour that is present.
+      const before = DEFAULT_STUDENT_DASHBOARD_LAYOUT.slice(0, defaultIndex).map((b) => b.id).reverse();
+      const anchor = before.map((id) => out.findIndex((b) => b.id === id)).find((i) => i >= 0);
+      out.splice(anchor === undefined ? 0 : anchor + 1, 0, { id: block.id, visible: true });
+    }
     seen.add(block.id);
-  });
+  }
   return out;
 }
 
