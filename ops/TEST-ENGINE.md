@@ -206,7 +206,30 @@ DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scr
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-exam-live-gate.ts setup > /tmp/elg.json
 BASE=http://localhost:3100 FIXTURE=/tmp/elg.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<dir containing playwright> node scripts/verify-exam-live-gate.mjs
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-exam-live-gate.ts cleanup /tmp/elg.json
+
+# 8. rich content (NEET Phase 1): renderer, PLAIN compatibility, snapshot v2, explanation leak gate
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-rich-content.ts
+npx tsx scripts/verify-rich-content-plain.tsx
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-rich-content.ts setup > /tmp/rc.json
+BASE=http://localhost:3100 FIXTURE=/tmp/rc.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<dir containing playwright> node scripts/verify-rich-content.mjs
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-rich-content.ts cleanup /tmp/rc.json
 ```
+
+## Rich content and snapshot v2 (since NEET Phase 1)
+
+- `Question.contentFormat` is `PLAIN` (default, every legacy row) or `RICH_V1`.
+  PLAIN text is never parsed: `components/content/rich-text.tsx` renders it as
+  the same text node as before. RICH_V1 text, option text and the explanation
+  carry `$…$`, `$$…$$` and `\ce{…}`, rendered on the server only by
+  `lib/rich-content.ts` (KaTeX + mhchem, `trust:false`); students never get a
+  math runtime.
+- A question freezes to **snapshot v1** (unchanged keys) unless it is RICH_V1
+  or has a human `explanation`; then it freezes to **v2** = v1 keys + `v:2`,
+  `contentFormat`, `explanation`, `assets`. Readers treat a missing `v` as v1.
+- `explanation` (and EXPLANATION images) are answer-key data, like
+  `correctLabel`: `toPlayerQuestions` puts them only inside `reveal`, and
+  `revealAnswer` returns them with the correct label. Review shows them after
+  submit; Saved Questions only when the answer is REVEALABLE.
 
 Every start (and resume-by-id) first runs `assertExamLive(examId)`: an exam
 with `isActive = false` is private, whatever its papers, tests or question

@@ -7,6 +7,7 @@ import { revealAnswer, saveAnswer, submitAttempt } from "@/lib/test-attempt";
 import { toggleSavedQuestion, reportQuestion } from "@/lib/student-data";
 import { logEngine, SLOW_OP_MS, TestEngineError, type EngineErrorCode, type EngineOp } from "@/lib/test-engine-log";
 import { claimAttemptLease, OTHER_DEVICE_MESSAGE } from "@/lib/attempt-device-lease";
+import type { ExplanationView } from "@/lib/rich-content-types";
 
 /**
  * TEST ENGINE CORE — HIGH RISK SHARED PATH (see ops/TEST-ENGINE.md).
@@ -75,7 +76,7 @@ export async function revealAnswerAction(
   questionId: string,
   selectedOptionLabel: string,
   seq?: number
-): Promise<EngineResult<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean }>> {
+): Promise<EngineResult<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean; explanation?: ExplanationView }>> {
   const student = await requireStudentOrLogin();
   return runEngineOp("reveal", { attemptId, questionId }, async () => {
     await assertAttemptDevice(attemptId, student);

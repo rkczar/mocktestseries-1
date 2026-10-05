@@ -14,6 +14,12 @@ const nextConfig: NextConfig = {
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), usb=()" },
         ],
       },
+      {
+        // Self-hosted KaTeX CSS/fonts (components/content/rich-text.tsx): the
+        // directory name carries the version, so the files never change.
+        source: "/vendor/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
+      },
     ];
   },
   async redirects() {

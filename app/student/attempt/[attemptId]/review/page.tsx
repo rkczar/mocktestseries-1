@@ -9,6 +9,7 @@ import { formatIst } from "@/lib/ist-time";
 import { getWhatsAppShareConfig, buildQuestionShareText } from "@/lib/whatsapp-share-config";
 import { BackButton } from "@/components/student/back-button";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
+import { explanationView, richQuestionView } from "@/lib/rich-content";
 import { Card, CardContent } from "@/components/ui/card";
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
 import { StudentShell } from "@/components/student/shell";
@@ -67,6 +68,10 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
 
   const questions: ReviewQuestionView[] = attempt.questions.map((tq) => {
     const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
+    // Snapshot v2 only (v1/PLAIN add no keys). The answer key is already
+    // released on this page (held results returned above), and so is the explanation.
+    const rich = richQuestionView(snapshot);
+    const explanation = explanationView(snapshot);
     return {
       attemptId,
       attemptQuestionId: tq.id,
@@ -90,6 +95,8 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
         : null,
       saveAction: toggleSaveQuestionAction.bind(null, tq.questionId),
       reportAction: reportAttemptQuestionAction.bind(null, attemptId, tq.questionId),
+      ...(rich ? { rich } : {}),
+      ...(explanation ? { explanation } : {}),
     };
   });
 

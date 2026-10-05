@@ -31,11 +31,20 @@ import { assertContentAccess } from "@/lib/payments/access";
 import { assertExamLive } from "@/lib/exam-live";
 import { TestEngineError } from "@/lib/test-engine-log";
 import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
+import { explanationView, toSnapshotAssets, type SnapshotAsset } from "@/lib/rich-content";
+import type { ContentFormat, ExplanationView } from "@/lib/rich-content-types";
 
 export { remainingSecondsFor, InsufficientQuestionsError, TestEngineError, MAX_CUSTOM_DURATION_MINUTES };
 export type { AttemptConfigChoice } from "@/lib/attempt-config";
 export type { QuestionSelectionFilters } from "@/lib/question-selection";
 
+/**
+ * A frozen question. v1 (no `v` key) is the original shape and is still what
+ * every PLAIN question without an explanation freezes to, byte for byte.
+ * v2 adds the rich-content keys; readers treat a missing `v` as v1 and ignore
+ * keys they don't know. `correctLabel` and `explanation` are answer-key data:
+ * lib/test-player-data.ts strips both until an authorized reveal.
+ */
 export interface QuestionSnapshot {
   code: string;
   text: string;
@@ -43,6 +52,10 @@ export interface QuestionSnapshot {
   difficulty: string;
   options: { label: string; text: string; imageUrl: string | null }[];
   correctLabel: string;
+  v?: 2;
+  contentFormat?: ContentFormat;
+  explanation?: string | null;
+  assets?: SnapshotAsset[];
 }
 
 export interface QuestionWithOptions {
@@ -52,6 +65,8 @@ export interface QuestionWithOptions {
   imageUrl: string | null;
   difficulty: string;
   options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean; order?: number }[];
+  contentFormat?: ContentFormat;
+  explanation?: string | null;
 }
 
 /**
@@ -152,11 +167,16 @@ export function toServerTimedAttempt(attempt: {
   };
 }
 
-function toSnapshot(question: QuestionWithOptions): QuestionSnapshot {
+/** Snapshot v2 is written only when a question has rich content or an explanation. */
+function needsSnapshotV2(question: QuestionWithOptions): boolean {
+  return question.contentFormat === "RICH_V1" || (typeof question.explanation === "string" && question.explanation.trim() !== "");
+}
+
+function toSnapshot(question: QuestionWithOptions, assets: SnapshotAsset[] = []): QuestionSnapshot {
   // Options are frozen in their authored order (then label) — several start
   // paths load options without an orderBy, which previously froze e.g. B,A,C,D.
   const options = [...question.options].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.label.localeCompare(b.label));
-  return {
+  const v1: QuestionSnapshot = {
     code: question.code,
     text: question.text,
     imageUrl: question.imageUrl,
@@ -164,6 +184,24 @@ function toSnapshot(question: QuestionWithOptions): QuestionSnapshot {
     options: options.map((o) => ({ label: o.label, text: o.text, imageUrl: o.imageUrl })),
     correctLabel: question.options.find((o) => o.isCorrect)?.label ?? "",
   };
+  if (!needsSnapshotV2(question)) return v1;
+  return {
+    ...v1,
+    v: 2,
+    contentFormat: question.contentFormat === "RICH_V1" ? "RICH_V1" : "PLAIN",
+    explanation: question.explanation?.trim() ? question.explanation : null,
+    assets: question.contentFormat === "RICH_V1" ? assets : [],
+  };
+}
+
+/** QuestionAsset rows for the RICH_V1 questions being frozen (no query when there are none). */
+async function loadSnapshotAssets(questions: QuestionWithOptions[]): Promise<Map<string, SnapshotAsset[]>> {
+  const richIds = questions.filter((q) => q.contentFormat === "RICH_V1").map((q) => q.id);
+  const byQuestion = new Map<string, SnapshotAsset[]>();
+  if (richIds.length === 0) return byQuestion;
+  const rows = await prisma.questionAsset.findMany({ where: { questionId: { in: richIds } } });
+  for (const id of richIds) byQuestion.set(id, toSnapshotAssets(rows.filter((r) => r.questionId === id)));
+  return byQuestion;
 }
 
 /**
@@ -241,6 +279,8 @@ async function createAttemptFromQuestions(params: {
     }
   }
 
+  const snapshotAssets = await loadSnapshotAssets(questions);
+
   // What makes an IN_PROGRESS attempt "the same test" for resume — the same
   // rule each start* helper's findResumableAttempt() uses.
   const resumeWhere: Prisma.TestAttemptWhereInput | null = params.mockTestId
@@ -303,7 +343,7 @@ async function createAttemptFromQuestions(params: {
         attemptId: created.id,
         questionId: q.id,
         order,
-        questionSnapshot: toSnapshot(q) as never,
+        questionSnapshot: toSnapshot(q, snapshotAssets.get(q.id)) as never,
       })),
     });
     const rows = await tx.testAttemptQuestion.findMany({ where: { attemptId: created.id }, select: { id: true, questionId: true } });
@@ -928,7 +968,7 @@ export async function revealAnswer(
   questionId: string,
   selectedOptionLabel: string,
   seq?: number
-): Promise<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean }> {
+): Promise<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean; explanation?: ExplanationView }> {
   if (!selectedOptionLabel) throw new TestEngineError("NO_SELECTION", "Choose an option to check your answer.");
   const { attempt, attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, selectedOptionLabel);
   if (!(await instantRevealPermitted(attempt))) {
@@ -954,11 +994,15 @@ export async function revealAnswer(
     select: { selectedOptionLabel: true, revealedAt: true },
   });
   if (!answer?.revealedAt) throw new TestEngineError("NOT_EDITABLE", "This test has already been submitted.");
-  const correctLabel = (attemptQuestion.questionSnapshot as unknown as QuestionSnapshot).correctLabel ?? "";
+  const snapshot = attemptQuestion.questionSnapshot as unknown as QuestionSnapshot;
+  const correctLabel = snapshot.correctLabel ?? "";
+  // A v2 human explanation is released together with the answer key, only here.
+  const explanation = explanationView(snapshot);
   return {
     selectedOptionLabel: answer.selectedOptionLabel,
     correctLabel,
     isCorrect: !!answer.selectedOptionLabel && answer.selectedOptionLabel === correctLabel,
+    ...(explanation ? { explanation } : {}),
   };
 }
 

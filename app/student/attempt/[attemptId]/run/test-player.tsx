@@ -42,6 +42,10 @@ import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
 import { useAskAi } from "@/components/student/explanation-panel";
+import { RichText } from "@/components/content/rich-text";
+import { QuestionMedia } from "@/components/content/question-media";
+import { HumanExplanation } from "@/components/content/human-explanation";
+import type { ExplanationView, RenderedHtml, RichQuestionView } from "@/lib/rich-content-types";
 import { cn } from "@/lib/utils";
 import { AnswerSaveQueue, type SaveStatus } from "@/lib/answer-save-queue";
 import {
@@ -67,8 +71,8 @@ export interface PlayerQuestion {
   options: PlayerOption[];
   /** Snapshot failed validation (too few / duplicate options): shown as a skippable notice. */
   malformed: boolean;
-  /** Present only once the server has revealed this question (INSTANT mode). */
-  reveal: { correctLabel: string } | null;
+  /** Present only once the server has revealed this question (INSTANT mode); the explanation travels only here. */
+  reveal: { correctLabel: string; explanation?: ExplanationView } | null;
   selectedOptionLabel: string | null;
   markForReview: boolean;
   saved: boolean;
@@ -77,6 +81,8 @@ export interface PlayerQuestion {
    * (question + options, never the answer). Shown once the answer is committed.
    */
   shareText?: string | null;
+  /** RICH_V1 only: server-rendered text/options + question/option images. Absent for PLAIN. */
+  rich?: RichQuestionView;
 }
 
 interface QuestionState {
@@ -87,6 +93,7 @@ interface QuestionState {
 
 interface RevealState {
   correctLabel: string;
+  explanation?: ExplanationView;
 }
 
 type Status = "current" | "answered-marked" | "marked" | "answered" | "visited" | "not-visited";
@@ -392,7 +399,10 @@ export function TestPlayer({
     withTimeout(revealAnswerAction(attemptId, questionId, label, getQueue().nextSeq()), SAVE_TIMEOUT_MS)
       .then((result) => {
         if (result.ok) {
-          setReveals((prev) => ({ ...prev, [questionId]: { correctLabel: result.correctLabel } }));
+          setReveals((prev) => ({
+            ...prev,
+            [questionId]: { correctLabel: result.correctLabel, ...(result.explanation ? { explanation: result.explanation } : {}) },
+          }));
           // The server's frozen choice is the truth; any queued older save is now moot.
           getQueue().drop(questionId);
           commitStates({ ...statesRef.current, [questionId]: { ...statesRef.current[questionId], selected: result.selectedOptionLabel } });
@@ -553,8 +563,10 @@ export function TestPlayer({
               </div>
             </div>
 
-            <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">{question.text}</p>
-            {question.imageUrl ? (
+            <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">
+              <RichText text={question.text} html={question.rich?.textHtml} />
+            </p>
+            {question.imageUrl && !question.rich?.assets.some((a) => a.role === "QUESTION") ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={question.imageUrl}
@@ -562,6 +574,7 @@ export function TestPlayer({
                 className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
               />
             ) : null}
+            {question.rich ? <QuestionMedia className="mt-3" assets={question.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
 
             {question.malformed ? (
               <div role="alert" data-testid="malformed-question" className="mt-5 rounded-[var(--radius-card)] border border-[var(--color-warning)]/50 bg-[var(--color-warning)]/10 p-4 text-sm text-[var(--color-foreground)]">
@@ -604,13 +617,20 @@ export function TestPlayer({
                         onChange={practiceOpen ? () => {} : () => setAnswer(question.questionId, { selected: opt.label })}
                       />
                       <span className="min-w-0 text-sm text-[var(--color-foreground)]">
-                        <span className="font-semibold">{opt.label}.</span> {opt.text}
-                        {opt.imageUrl ? (
+                        <span className="font-semibold">{opt.label}.</span> <RichText text={opt.text} html={question.rich?.optionHtml[opt.label]} />
+                        {opt.imageUrl && !question.rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === opt.label) ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
                             src={opt.imageUrl}
                             alt=""
                             className="pointer-events-none mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                          />
+                        ) : null}
+                        {question.rich ? (
+                          <QuestionMedia
+                            className="pointer-events-none mt-2"
+                            size="option"
+                            assets={question.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === opt.label)}
                           />
                         ) : null}
                       </span>
@@ -629,6 +649,8 @@ export function TestPlayer({
                     key={question.questionId}
                     questionId={question.questionId}
                     correctOption={question.options.find((o) => o.label === reveal.correctLabel) ?? null}
+                    correctOptionHtml={question.rich?.optionHtml[reveal.correctLabel] ?? null}
+                    explanation={reveal.explanation ?? null}
                     shareText={question.shareText ?? null}
                     result={
                       <p
@@ -777,11 +799,17 @@ export function TestPlayer({
 function RevealedReviewTools({
   questionId,
   correctOption,
+  correctOptionHtml,
+  explanation,
   shareText,
   result,
 }: {
   questionId: string;
   correctOption: PlayerOption | null;
+  /** RICH_V1 only: the correct option's rendered text. */
+  correctOptionHtml: RenderedHtml | null;
+  /** The human explanation, released by the server with this reveal (snapshot v2 only). */
+  explanation: ExplanationView | null;
   shareText: string | null;
   /** The Correct / Incorrect line — shares its row with the AI actions. */
   result: React.ReactNode;
@@ -797,9 +825,10 @@ function RevealedReviewTools({
       {usageNotice}
       {correctOption ? (
         <p className="text-sm font-medium text-[var(--color-success)]">
-          Correct Answer: {correctOption.label}. {correctOption.text}
+          Correct Answer: {correctOption.label}. <RichText text={correctOption.text} html={correctOptionHtml} />
         </p>
       ) : null}
+      {explanation ? <HumanExplanation explanation={explanation} /> : null}
       {/* Wrapped so the shared button (flex-1 in the Review header) sizes to its label here. */}
       {shareText ? (
         <div className="flex">

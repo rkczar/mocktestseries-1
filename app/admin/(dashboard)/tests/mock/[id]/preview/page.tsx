@@ -3,6 +3,10 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { RichText } from "@/components/content/rich-text";
+import { QuestionMedia } from "@/components/content/question-media";
+import { HumanExplanation } from "@/components/content/human-explanation";
+import { liveRichViews } from "@/lib/rich-content";
 
 export const metadata = { title: "Preview Mock Test — Mock Test Series.in Admin" };
 
@@ -34,6 +38,9 @@ export default async function MockTestPreviewPage({ params }: { params: Promise<
               status: true,
               subject: { select: { name: true } },
               options: { orderBy: { order: "asc" }, select: { label: true, text: true, imageUrl: true, isCorrect: true } },
+              contentFormat: true,
+              explanation: true,
+              assets: { select: { role: true, optionLabel: true, order: true, storageKey: true, alt: true, caption: true, width: true, height: true, darkBacking: true } },
             },
           },
         },
@@ -42,7 +49,11 @@ export default async function MockTestPreviewPage({ params }: { params: Promise<
   });
   if (!mockTest) notFound();
 
-  const served = mockTest.questions.map((q) => q.question).filter((q) => q.status === "PUBLISHED");
+  // Admin view: the answer key and the human explanation are both shown.
+  const served = mockTest.questions
+    .map((q) => q.question)
+    .filter((q) => q.status === "PUBLISHED")
+    .map((q) => ({ ...q, ...liveRichViews(q) }));
   const hidden = mockTest.questions.length - served.length;
 
   return (
@@ -81,22 +92,29 @@ export default async function MockTestPreviewPage({ params }: { params: Promise<
                     <strong className="text-[var(--color-foreground)]">Q{i + 1}</strong> {q.code} · {q.subject.name}
                     <Badge variant="neutral">answer key visible to admin only</Badge>
                   </p>
-                  <p className="whitespace-pre-wrap text-[var(--color-foreground)]">{q.text}</p>
-                  {q.imageUrl ? (
+                  <p className="whitespace-pre-wrap text-[var(--color-foreground)]">
+                    <RichText text={q.text} html={q.rich?.textHtml} />
+                  </p>
+                  {q.imageUrl && !q.rich?.assets.some((a) => a.role === "QUESTION") ? (
                     // eslint-disable-next-line @next/next/no-img-element -- admin preview of an uploaded question image
                     <img src={q.imageUrl} alt={`${q.code} image`} className="max-h-60 w-fit rounded border border-[var(--color-border)]" />
                   ) : null}
+                  {q.rich ? <QuestionMedia assets={q.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
                   <ul className="flex flex-col gap-1">
                     {q.options.map((o) => (
                       <li key={o.label} className={o.isCorrect ? "font-medium text-[var(--color-success)]" : "text-[var(--color-foreground)]"}>
-                        {o.label}. {o.text} {o.isCorrect ? "✓" : ""}
-                        {o.imageUrl ? (
+                        {o.label}. <RichText text={o.text} html={q.rich?.optionHtml[o.label]} /> {o.isCorrect ? "✓" : ""}
+                        {o.imageUrl && !q.rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === o.label) ? (
                           // eslint-disable-next-line @next/next/no-img-element -- admin preview of an uploaded option image
                           <img src={o.imageUrl} alt={`${q.code} option ${o.label}`} className="mt-1 max-h-32 w-fit rounded border border-[var(--color-border)]" />
+                        ) : null}
+                        {q.rich ? (
+                          <QuestionMedia className="mt-1" size="option" assets={q.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === o.label)} />
                         ) : null}
                       </li>
                     ))}
                   </ul>
+                  {q.explanation ? <HumanExplanation explanation={q.explanation} /> : null}
                 </CardContent>
               </Card>
             </li>

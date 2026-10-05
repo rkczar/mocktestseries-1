@@ -955,10 +955,22 @@ model Question {
   reviewReason        String?
   importBatchId       String?
   importBatch         BulkImportRun?     @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  // Rich scientific content (NEET Phase 1). PLAIN = today's exact rendering:
+  // text is never parsed. RICH_V1 = text, option text and explanation may
+  // carry inline $…$ / display $$…$$ LaTeX and \ce{…} chemistry (KaTeX +
+  // mhchem), and images come from QuestionAsset. See lib/rich-content.ts.
+  contentFormat       QuestionContentFormat @default(PLAIN)
+  // Human-authored explanation. Answer-key data: never sent to a student
+  // before an authorized reveal/review (same rule as the correct option).
+  explanation         String?
+  // Editorial workflow (later phase). NULL = legacy question, no workflow;
+  // orthogonal to `status`, which stays the only student-facing gate.
+  editorialStage      EditorialStage?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
   options               QuestionOption[]
+  assets                QuestionAsset[]
   mockTestQuestions     MockTestQuestion[]
   customModuleQuestions CustomModuleQuestion[]
   grandTestQuestions    GrandTestQuestion[]
@@ -993,6 +1005,51 @@ model QuestionOption {
   order      Int      @default(0)
 
   @@index([questionId])
+}
+
+enum QuestionContentFormat {
+  PLAIN
+  RICH_V1
+}
+
+enum QuestionAssetRole {
+  QUESTION
+  OPTION
+  EXPLANATION
+}
+
+enum EditorialStage {
+  DRAFT
+  NEEDS_REVIEW
+  VERIFIED
+  READY_TO_PUBLISH
+}
+
+// One image belonging to a RICH_V1 question: question figures, per-option
+// images (role OPTION + optionLabel) and explanation diagrams, ordered.
+// Files are immutable and content-addressed (`storageKey`, e.g.
+// "q/<sha256>.webp" under the /media/ root): a replacement is a NEW row, and
+// a file is never deleted while an attempt snapshot may reference it.
+model QuestionAsset {
+  id          String            @id @default(cuid())
+  questionId  String
+  question    Question          @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  role        QuestionAssetRole
+  optionLabel String?
+  order       Int               @default(0)
+  storageKey  String
+  mime        String
+  width       Int
+  height      Int
+  bytes       Int
+  sha256      String
+  alt         String
+  caption     String?
+  darkBacking Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+
+  @@index([questionId, role, order])
+  @@index([sha256])
 }
 
 // ---------------------------------------------------------------------------

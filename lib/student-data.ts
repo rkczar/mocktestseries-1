@@ -19,6 +19,8 @@ import { toIstDateString, istStartOfDay } from "@/lib/ist-time";
 import { getAiSettings } from "@/lib/ai-settings";
 import { attemptTitle } from "@/lib/attempt-title";
 import { createDeletionRequest } from "@/lib/student-lifecycle";
+import { liveRichViews } from "@/lib/rich-content";
+import type { ExplanationView, RichQuestionView } from "@/lib/rich-content-types";
 
 /**
  * Every function here takes the authenticated studentId as a required
@@ -712,6 +714,10 @@ export interface SavedQuestionView {
   answerRevealed: boolean;
   lockReason: Exclude<AnswerRevealStatus, "REVEALABLE"> | null;
   options: { label: string; text: string; imageUrl: string | null; isCorrect?: boolean }[];
+  /** RICH_V1 only: server-rendered text/options + question/option images. */
+  rich?: RichQuestionView;
+  /** Human explanation — attached ONLY when answerRevealed, like isCorrect. */
+  explanation?: ExplanationView;
 }
 
 /**
@@ -736,6 +742,9 @@ export async function getSavedQuestions(studentId: string): Promise<SavedQuestio
           subject: { select: { name: true } },
           topic: { select: { name: true } },
           options: { orderBy: { order: "asc" }, select: { label: true, text: true, imageUrl: true, isCorrect: true } },
+          contentFormat: true,
+          explanation: true,
+          assets: { select: { role: true, optionLabel: true, order: true, storageKey: true, alt: true, caption: true, width: true, height: true, darkBacking: true } },
         },
       },
     },
@@ -745,6 +754,8 @@ export async function getSavedQuestions(studentId: string): Promise<SavedQuestio
   return rows.map(({ question: q }) => {
     const status = statuses.get(q.id) ?? "NO_ACCESS";
     const answerRevealed = status === "REVEALABLE";
+    // The explanation is answer-key data: it never leaves the server while the key is locked.
+    const views = liveRichViews({ ...q, explanation: answerRevealed ? q.explanation : null });
     return {
       id: q.id,
       code: q.code,
@@ -760,6 +771,8 @@ export async function getSavedQuestions(studentId: string): Promise<SavedQuestio
           ? { label: o.label, text: o.text, imageUrl: o.imageUrl, isCorrect: o.isCorrect }
           : { label: o.label, text: o.text, imageUrl: o.imageUrl }
       ),
+      ...(views.rich ? { rich: views.rich } : {}),
+      ...(answerRevealed && views.explanation ? { explanation: views.explanation } : {}),
     };
   });
 }

@@ -10,6 +10,10 @@ import { ReportQuestionDialog } from "@/components/student/report-question-dialo
 import { useAskAi } from "@/components/student/explanation-panel";
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
+import { RichText } from "@/components/content/rich-text";
+import { QuestionMedia } from "@/components/content/question-media";
+import { HumanExplanation } from "@/components/content/human-explanation";
+import type { ExplanationView, RichQuestionView } from "@/lib/rich-content-types";
 
 export interface ReviewQuestionView {
   attemptId: string;
@@ -21,6 +25,10 @@ export interface ReviewQuestionView {
   saved: boolean;
   /** Pre-rendered from the Admin WhatsApp Share template; null when the feature is disabled. */
   shareText: string | null;
+  /** Snapshot v2 RICH_V1 only: server-rendered text/options + images. */
+  rich?: RichQuestionView;
+  /** Snapshot v2 only: the human explanation (this page is the authorized review). */
+  explanation?: ExplanationView;
   saveAction: () => Promise<void>;
   reportAction: (reportType: ReportType, message: string) => Promise<void>;
 }
@@ -161,9 +169,9 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
 
       <div className="max-md:contents md:col-span-2 md:row-start-2 md:p-5">
         <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)] max-md:order-2 max-md:px-4 max-md:pt-4 max-md:text-[length:calc(1.0625rem*var(--text-scale))] max-md:leading-[1.65]">
-          {q.snapshot.text}
+          <RichText text={q.snapshot.text} html={q.rich?.textHtml} />
         </p>
-        {q.snapshot.imageUrl ? (
+        {q.snapshot.imageUrl && !q.rich?.assets.some((a) => a.role === "QUESTION") ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={q.snapshot.imageUrl}
@@ -171,6 +179,7 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
             className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain max-md:order-2 max-md:mx-4 max-md:max-w-[calc(100%-2rem)] max-md:self-start"
           />
         ) : null}
+        {q.rich ? <QuestionMedia className="mt-3 max-md:order-2 max-md:px-4" assets={q.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
 
         <div className="mt-4 flex flex-col gap-2.5 max-md:order-3 max-md:px-4 md:gap-2" data-testid="review-options">
           {q.snapshot.options.map((opt) => {
@@ -188,18 +197,21 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
                       : "border-[var(--color-border)]"
                 )}
               >
-                <span className="font-semibold">{opt.label}.</span> {opt.text}
+                <span className="font-semibold">{opt.label}.</span> <RichText text={opt.text} html={q.rich?.optionHtml[opt.label]} />
                 {isAnswer ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
                 {isSelected && !isAnswer ? (
                   <span className="ml-2 text-xs font-medium text-[var(--color-error)]">Your answer</span>
                 ) : null}
-                {opt.imageUrl ? (
+                {opt.imageUrl && !q.rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === opt.label) ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={opt.imageUrl}
                     alt=""
                     className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
                   />
+                ) : null}
+                {q.rich ? (
+                  <QuestionMedia className="mt-2" size="option" assets={q.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === opt.label)} />
                 ) : null}
               </div>
             );
@@ -231,9 +243,10 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
           <div className="empty:hidden max-md:order-7 max-md:mt-2 max-md:px-4">{usageNotice}</div>
           {correctOption ? (
             <p className="text-sm font-medium text-[var(--color-success)] max-md:order-5 max-md:mt-2 max-md:px-4">
-              Correct Answer: {correctOption.label}. {correctOption.text}
+              Correct Answer: {correctOption.label}. <RichText text={correctOption.text} html={q.rich?.optionHtml[correctOption.label]} />
             </p>
           ) : null}
+          {q.explanation ? <HumanExplanation className="max-md:order-5 max-md:mx-4 max-md:mt-3" explanation={q.explanation} /> : null}
         </div>
 
         {/* The one highlighted AI area — explanation (with its styles) or AI Question Variant, opened by the two AI actions. Never a separate page/card. */}

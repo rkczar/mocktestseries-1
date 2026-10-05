@@ -6,6 +6,9 @@ import { BackButton } from "@/components/student/back-button";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import { ExplanationPanel } from "@/components/student/explanation-panel";
+import { RichText } from "@/components/content/rich-text";
+import { QuestionMedia } from "@/components/content/question-media";
+import { HumanExplanation } from "@/components/content/human-explanation";
 import { unsaveQuestionAction, reportSavedQuestionAction } from "./actions";
 
 export const metadata = { title: "Saved Questions — Mock Test Series.in" };
@@ -40,8 +43,10 @@ export default async function SavedQuestionsPage() {
                 <span className="font-mono text-xs text-[var(--color-muted-foreground)]">{q.code}</span>
               </div>
 
-              <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">{q.text}</p>
-              {q.imageUrl ? (
+              <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">
+                <RichText text={q.text} html={q.rich?.textHtml} />
+              </p>
+              {q.imageUrl && !q.rich?.assets.some((a) => a.role === "QUESTION") ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={q.imageUrl}
@@ -49,6 +54,7 @@ export default async function SavedQuestionsPage() {
                   className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
                 />
               ) : null}
+              {q.rich ? <QuestionMedia className="mt-3" assets={q.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
 
               <div className="mt-4 flex flex-col gap-2">
                 {q.options.map((opt) => (
@@ -60,15 +66,18 @@ export default async function SavedQuestionsPage() {
                         : "rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-sm"
                     }
                   >
-                    <span className="font-semibold">{opt.label}.</span> {opt.text}
+                    <span className="font-semibold">{opt.label}.</span> <RichText text={opt.text} html={q.rich?.optionHtml[opt.label]} />
                     {opt.isCorrect ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
-                    {opt.imageUrl ? (
+                    {opt.imageUrl && !q.rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === opt.label) ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={opt.imageUrl}
                         alt=""
                         className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
                       />
+                    ) : null}
+                    {q.rich ? (
+                      <QuestionMedia className="mt-2" size="option" assets={q.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === opt.label)} />
                     ) : null}
                   </div>
                 ))}
@@ -79,6 +88,7 @@ export default async function SavedQuestionsPage() {
                 <ReportQuestionDialog onSubmit={reportSavedQuestionAction.bind(null, q.id)} />
               </div>
 
+              {q.answerRevealed && q.explanation ? <HumanExplanation className="mt-4" explanation={q.explanation} /> : null}
               {q.answerRevealed ? (
                 <ExplanationPanel questionId={q.id} />
               ) : (
