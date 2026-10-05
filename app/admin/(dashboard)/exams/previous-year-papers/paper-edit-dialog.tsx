@@ -32,12 +32,15 @@ export function PaperEditDialog({
   year,
   paperCode,
   order,
+  durationMinutes,
 }: {
   id: string;
   title: string;
   year: number;
   paperCode: string | null;
   order: number;
+  /** Stored paper duration; null = not set yet (falls back to the Exam's duration, then 120). */
+  durationMinutes: number | null;
 }) {
   const [state, formAction] = useActionState<PaperFormState, FormData>(editPaperAction, {});
   const [open, setOpen] = useState(false);
@@ -73,10 +76,28 @@ export function PaperEditDialog({
               <Input id={`paper-code-${id}`} name="paperCode" defaultValue={paperCode ?? ""} placeholder="e.g. Code 12" />
             </div>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`paper-order-${id}`}>Display Order</Label>
-            <Input id={`paper-order-${id}`} name="order" type="number" min={0} defaultValue={order} />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`paper-order-${id}`}>Display Order</Label>
+              <Input id={`paper-order-${id}`} name="order" type="number" min={0} defaultValue={order} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`paper-duration-${id}`}>Duration (minutes)</Label>
+              <Input
+                id={`paper-duration-${id}`}
+                name="durationMinutes"
+                type="number"
+                min={1}
+                max={600}
+                step={1}
+                defaultValue={durationMinutes ?? 120}
+                required
+              />
+            </div>
           </div>
+          <p className="text-xs text-[var(--color-muted-foreground)]">
+            Standard Mode time for new attempts. Attempts already started keep their original duration.
+          </p>
           {state.error ? <p className="text-sm text-[var(--color-error)]">{state.error}</p> : null}
           <DialogFooter>
             <DialogClose asChild>

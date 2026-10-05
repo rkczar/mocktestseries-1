@@ -24,7 +24,7 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
   const paper = await prisma.previousYearPaper.findUnique({
     where: { id: paperId },
     include: {
-      exam: { select: { id: true, name: true } },
+      exam: { select: { id: true, name: true, durationMinutes: true } },
       questions: {
         orderBy: { code: "asc" },
         include: { subject: { select: { name: true } }, topic: { select: { name: true } }, options: { select: { isCorrect: true } } },
@@ -65,6 +65,10 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
             <Info label="Exam" value={paper.exam.name} />
             <Info label="Year" value={String(paper.year)} />
             <Info label="Paper Code" value={paper.paperCode ?? "—"} />
+            <Info
+              label="Duration (Standard Mode)"
+              value={`${paper.durationMinutes ?? paper.exam.durationMinutes ?? 120} minutes${paper.durationMinutes == null ? " (default — not set on this paper)" : ""}`}
+            />
             <Info
               label="Question Count"
               value={`${paper._count.questions} published${paper.questions.length > paper._count.questions ? ` (+${paper.questions.length - paper._count.questions} draft/archived)` : ""}`}

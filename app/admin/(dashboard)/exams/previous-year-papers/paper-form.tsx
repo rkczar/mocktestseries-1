@@ -47,6 +47,10 @@ export function PaperForm({ exams, defaultExamId }: { exams: { id: string; name:
         <Label htmlFor="paperCode">Paper Code (optional)</Label>
         <Input id="paperCode" name="paperCode" placeholder="e.g. Code 12" />
       </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="durationMinutes">Duration (minutes)</Label>
+        <Input id="durationMinutes" name="durationMinutes" type="number" min={1} max={600} step={1} defaultValue={120} required />
+      </div>
       <div className="flex items-end sm:col-span-2 lg:col-span-4">
         <SubmitButton />
         {state.error ? <p className="ml-3 text-sm text-[var(--color-error)]">{state.error}</p> : null}

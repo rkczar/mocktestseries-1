@@ -288,6 +288,10 @@ model PreviousYearPaper {
   // Distinguishes multiple papers/sets within the same exam+year (e.g. "Code
   // 12"). Optional — many exams only ever have one paper per year.
   paperCode String?
+  // Standard Mode duration for this paper. Null falls back to the Exam's
+  // durationMinutes, then 120 (lib/test-attempt.ts). Frozen onto each NEW
+  // TestAttempt at start; existing attempts keep their own snapshot.
+  durationMinutes Int?
   isActive  Boolean  @default(true)
   order     Int      @default(0)
   createdAt DateTime @default(now())

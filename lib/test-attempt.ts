@@ -680,7 +680,8 @@ async function planPreviousYearPaperStart(studentId: string, paperId: string): P
     include: { options: true },
   })) as unknown as QuestionWithOptions[];
 
-  const standardMinutes = paper.exam.durationMinutes ?? 60;
+  // Paper-level duration wins; frozen onto the NEW attempt only (history is immutable).
+  const standardMinutes = paper.durationMinutes ?? paper.exam.durationMinutes ?? 120;
   return {
     resume: null,
     create: {

@@ -7,11 +7,21 @@ import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { QuestionSource } from "@prisma/client";
 
+// Standard Mode duration for the paper (Pre-Test Setup "Standard"). Changing
+// it only affects attempts started afterwards — each attempt freezes its own.
+const DEFAULT_PAPER_DURATION_MINUTES = 120;
+const durationSchema = z.coerce
+  .number({ message: "Duration must be a number" })
+  .int("Duration must be a whole number of minutes")
+  .min(1, "Duration must be at least 1 minute")
+  .max(600, "Duration can be at most 600 minutes");
+
 const schema = z.object({
   examId: z.string().min(1, "Select an exam"),
   year: z.coerce.number().int().min(1990).max(2100),
   title: z.string().min(2).max(200),
   paperCode: z.string().trim().max(60).optional(),
+  durationMinutes: durationSchema,
 });
 
 export interface PaperFormState {
@@ -32,6 +42,7 @@ export async function createPaperAction(_prev: PaperFormState, formData: FormDat
     year: formData.get("year"),
     title: formData.get("title"),
     paperCode: formData.get("paperCode"),
+    durationMinutes: formData.get("durationMinutes") || DEFAULT_PAPER_DURATION_MINUTES,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
 
@@ -59,6 +70,7 @@ const editSchema = z.object({
   title: z.string().min(2).max(200),
   paperCode: z.string().trim().max(60).optional(),
   order: z.coerce.number().int().min(0).max(100000).optional().default(0),
+  durationMinutes: durationSchema,
 });
 
 export async function editPaperAction(_prev: PaperFormState, formData: FormData): Promise<PaperFormState> {
@@ -69,20 +81,29 @@ export async function editPaperAction(_prev: PaperFormState, formData: FormData)
     title: formData.get("title"),
     paperCode: formData.get("paperCode"),
     order: formData.get("order"),
+    durationMinutes: formData.get("durationMinutes"),
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
 
   const { id, ...data } = parsed.data;
+  const before = await prisma.previousYearPaper.findUnique({ where: { id }, select: { durationMinutes: true } });
   const paper = await prisma.previousYearPaper.update({
     where: { id },
-    data: { year: data.year, title: data.title, paperCode: data.paperCode || null, order: data.order },
+    data: { year: data.year, title: data.title, paperCode: data.paperCode || null, order: data.order, durationMinutes: data.durationMinutes },
   });
 
   await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "PYP_UPDATED", entityType: "PreviousYearPaper", entityId: paper.id },
+    data: {
+      actorId: session.user.id,
+      action: "PYP_UPDATED",
+      entityType: "PreviousYearPaper",
+      entityId: paper.id,
+      metadata: { durationMinutes: { from: before?.durationMinutes ?? null, to: data.durationMinutes } },
+    },
   });
 
   revalidatePaperPages();
+  revalidatePath(`/admin/exams/previous-year-papers/${id}`);
   return { success: true };
 }
 

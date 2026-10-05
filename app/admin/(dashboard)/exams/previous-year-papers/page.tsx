@@ -76,6 +76,7 @@ export default async function PreviousYearPapersPage({
                   <th className="py-2 pr-4">Year</th>
                   <th className="py-2 pr-4">Code</th>
                   <th className="py-2 pr-4">Questions</th>
+                  <th className="py-2 pr-4">Duration</th>
                   <th className="py-2 pr-4">Active</th>
                   <th className="py-2 pr-4" />
                 </tr>
@@ -92,10 +93,11 @@ export default async function PreviousYearPapersPage({
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{paper.year}</td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{paper.paperCode ?? "—"}</td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{paper._count.questions}</td>
+                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{paper.durationMinutes ?? paper.exam.durationMinutes ?? 120} min</td>
                     <td className="py-2.5 pr-4"><PaperToggle paperId={paper.id} isActive={paper.isActive} /></td>
                     <td className="py-2.5 pr-4">
                       <div className="flex items-center justify-end gap-1">
-                        <PaperEditDialog id={paper.id} title={paper.title} year={paper.year} paperCode={paper.paperCode} order={paper.order} />
+                        <PaperEditDialog id={paper.id} title={paper.title} year={paper.year} paperCode={paper.paperCode} order={paper.order} durationMinutes={paper.durationMinutes} />
                         <PaperDeleteDialog paperId={paper.id} paperTitle={paper.title} />
                       </div>
                     </td>
