@@ -3,7 +3,7 @@ import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { BulkImportStatus } from "@prisma/client";
-import { executeBulkImport, MockTargetError } from "@/lib/bulk-import-execute";
+import { executeBulkImport, ImportBlockedError, MockTargetError } from "@/lib/bulk-import-execute";
 
 /**
  * Final "Import Questions" step: operates on an ALREADY-PERSISTED run+rows
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
   try {
     const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
 
-    const body = (await request.json()) as { runId?: string; allowExceedTarget?: boolean };
+    const body = (await request.json()) as { runId?: string; allowExceedTarget?: boolean; acknowledgeWarnings?: boolean };
     runId = body.runId;
 
     if (!runId) {
@@ -33,13 +33,19 @@ export async function POST(request: NextRequest) {
 
     if (run.mockTestId) await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
 
-    const result = await executeBulkImport({ runId, adminUserId: session.user.id!, allowExceedTarget: body.allowExceedTarget === true });
+    const result = await executeBulkImport({
+      runId,
+      adminUserId: session.user.id!,
+      allowExceedTarget: body.allowExceedTarget === true,
+      acknowledgeWarnings: body.acknowledgeWarnings === true,
+    });
 
     return NextResponse.json({
       success: true,
       runId: result.runId,
       attempted: result.attempted,
       successCount: result.successCount,
+      assetCount: result.assetCount,
       skippedCount: result.skippedCount,
       replacedCount: result.replacedCount,
       failedCount: result.failedCount,
@@ -54,7 +60,7 @@ export async function POST(request: NextRequest) {
     if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
     // A refused Mock Test target is a pre-flight rejection: nothing was
     // written, so the run must stay READY (not be marked FAILED).
-    if (error instanceof MockTargetError) {
+    if (error instanceof MockTargetError || error instanceof ImportBlockedError) {
       return NextResponse.json({ error: error.message, code: error.code, details: error.details }, { status: 409 });
     }
     console.error("POST /api/admin/questions/bulk-import/import error:", error);

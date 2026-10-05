@@ -13,13 +13,15 @@ import {
 import {
   runExamContextFor,
   buildTaxonomyLookups,
-  resolveRow,
-  validateImportRows,
   mergeRowData,
   type BulkImportRow as ParsedRowShape,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
 import { linkSubjectToExam, linkSubTopicToExam, linkTopicToExam } from "@/lib/exam-taxonomy";
+import { loadRichContext, resolveImportRow, type RichContext } from "@/lib/rich-import/validate";
+import { allImageRefs, composeQuestionText, fallbackAlt, type ManifestQuestion } from "@/lib/rich-import/manifest";
+import { discardBundleFiles, verifyEntryMedia } from "@/lib/rich-import/bundle";
+import { EditorialStage, QuestionAssetRole, QuestionContentFormat } from "@prisma/client";
 
 const OPTION_LABELS = ["A", "B", "C", "D"] as const;
 
@@ -48,6 +50,69 @@ export interface ExecuteImportOptions {
   onlyValid?: boolean;
   /** Mock Test target only: the admin explicitly accepted exceeding the test's expected question count. */
   allowExceedTarget?: boolean;
+  /** RICH runs: the admin explicitly reviewed the WARNING rows (required to import them). */
+  acknowledgeWarnings?: boolean;
+}
+
+/** Refused before anything is written (rich gate, or another import of this run is already running). */
+export class ImportBlockedError extends Error {
+  constructor(
+    message: string,
+    readonly code: "ALREADY_RUNNING" | "ROWS_HAVE_ERRORS" | "WARNINGS_UNACKNOWLEDGED" | "IMAGES_PENDING",
+    readonly details?: Record<string, number>
+  ) {
+    super(message);
+    this.name = "ImportBlockedError";
+  }
+}
+
+const EXECUTION_LEASE_MS = 10 * 60_000;
+
+/** A row another transaction already committed: skipped, never re-marked. */
+class RowAlreadyClaimed extends Error {}
+
+/** One QuestionAsset per image reference, from media the bundle step already processed (Phase 2 engine). */
+interface PreparedAsset {
+  role: QuestionAssetRole;
+  optionLabel: string | null;
+  order: number;
+  storageKey: string;
+  mime: string;
+  width: number;
+  height: number;
+  bytes: number;
+  sha256: string;
+  alt: string;
+  caption: string | null;
+}
+
+async function prepareRichAssets(m: ManifestQuestion, ctx: RichContext): Promise<PreparedAsset[]> {
+  const out: PreparedAsset[] = [];
+  const nextOrder = new Map<string, number>();
+  for (const ref of allImageRefs(m)) {
+    const entry = (ctx.index.get(ref.filename.toLowerCase()) ?? [])[0];
+    if (!entry || !(await verifyEntryMedia(entry))) {
+      throw new Error(`${ref.field}: the processed media for "${ref.filename}" is no longer available — re-process the bundle images, then import again.`);
+    }
+    // List-entry images become QUESTION figures after the stem's own figures.
+    const slot = `${ref.role}|${ref.optionLabel ?? ""}`;
+    const order = nextOrder.get(slot) ?? 0;
+    nextOrder.set(slot, order + 1);
+    out.push({
+      role: ref.role as QuestionAssetRole,
+      optionLabel: ref.role === "OPTION" ? ref.optionLabel : null,
+      order,
+      storageKey: entry.storageKey!,
+      mime: entry.mime ?? "image/webp",
+      width: entry.width!,
+      height: entry.height!,
+      bytes: entry.bytes!,
+      sha256: entry.sha256!,
+      alt: ref.decorative ? "" : ref.alt && ref.alt.length >= 3 ? ref.alt.slice(0, 500) : fallbackAlt(ref),
+      caption: ref.caption,
+    });
+  }
+  return out;
 }
 
 /** Thrown before anything is written when a Mock Test target can't accept this import as-is. */
@@ -138,6 +203,8 @@ export interface ExecuteImportResult {
   /** Mock Test target only: reconciled total of this run's questions now in the test. */
   attachedCount: number;
   mockTestId: string | null;
+  /** RICH runs: QuestionAsset references written by this call. */
+  assetCount: number;
 }
 
 /**
@@ -149,10 +216,29 @@ export interface ExecuteImportResult {
  * the "Import Valid Only" bulk action so they share identical semantics.
  */
 export async function executeBulkImport(options: ExecuteImportOptions): Promise<ExecuteImportResult> {
-  const { runId, adminUserId, rowIds, onlyValid, allowExceedTarget } = options;
-
-  const run = await prisma.bulkImportRun.findUnique({ where: { id: runId } });
+  const run = await prisma.bulkImportRun.findUnique({ where: { id: options.runId } });
   if (!run) throw new Error("Import run not found");
+  // Execution lease: a double click / retry / second tab while this run is
+  // importing is refused instead of processing the same PENDING rows twice.
+  const leased = await prisma.bulkImportRun.updateMany({
+    where: { id: run.id, OR: [{ executingAt: null }, { executingAt: { lt: new Date(Date.now() - EXECUTION_LEASE_MS) } }] },
+    data: { executingAt: new Date() },
+  });
+  if (leased.count === 0) throw new ImportBlockedError("This import is already running (another click or tab). Wait for it to finish, then refresh.", "ALREADY_RUNNING");
+  try {
+    return await executeLeased(run, options);
+  } finally {
+    await prisma.bulkImportRun.update({ where: { id: run.id }, data: { executingAt: null } }).catch(() => undefined);
+  }
+}
+
+async function executeLeased(
+  run: NonNullable<Awaited<ReturnType<typeof prisma.bulkImportRun.findUnique>>>,
+  options: ExecuteImportOptions
+): Promise<ExecuteImportResult> {
+  const { runId, adminUserId, rowIds, onlyValid, allowExceedTarget } = options;
+  const richCtx = await loadRichContext(runId);
+  if (richCtx) await checkRichGate(runId, { rowIds, onlyValid, acknowledgeWarnings: options.acknowledgeWarnings === true });
   // Mock Test target: validated up front, before any row is written.
   const mockTarget = await checkMockTarget(run, { runId, rowIds, onlyValid, allowExceedTarget });
 
@@ -169,6 +255,7 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
   const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
   const runExamContext = runExamContextFor(lookups.exams, run);
 
+  let assetCount = 0;
   let successCount = 0;
   let skippedCount = 0;
   let replacedCount = 0;
@@ -210,8 +297,8 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
 
   for (const row of rows) {
     const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
-    const [shapeParsed] = validateImportRows([merged]);
-    const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
+    const resolved = await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx);
+    const manifest = richCtx ? resolved.manifest ?? null : null;
 
     if (resolved.severity === ImportRowSeverity.ERROR) {
       if (onlyValid) continue; // leave untouched — user asked for valid rows only
@@ -264,14 +351,55 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
     // No valid Correct Answer means no option can be marked correct — never
     // silently Publish a question with no right answer (Section 5), no
     // matter what status the row/admin requested.
-    if (resolved.forceDraft) {
+    if (resolved.forceDraft && !manifest) {
       effectiveStatus = QuestionStatus.DRAFT;
       reviewReason = reviewReason ?? "Auto-saved as Draft: no valid Correct Answer was provided";
     }
 
+    // RICH: import is never publish. Always DRAFT; editorial stage NEEDS_REVIEW
+    // when anything needs a human look, else DRAFT — never VERIFIED.
+    let rich: { m: ManifestQuestion; assets: PreparedAsset[]; stage: EditorialStage } | null = null;
+    if (manifest && richCtx) {
+      effectiveStatus = QuestionStatus.DRAFT;
+      const authorReason = manifest.review.required ? `Author: ${manifest.review.reason ?? "flagged for review"}` : null;
+      const systemReason = resolved.warnings[0] ?? null;
+      reviewReason = [authorReason, systemReason].filter(Boolean).join(" · ").slice(0, 1000) || null;
+      const stage = manifest.review.required || resolved.warnings.length > 0 || resolved.reviewRequired ? EditorialStage.NEEDS_REVIEW : EditorialStage.DRAFT;
+      try {
+        rich = { m: manifest, assets: await prepareRichAssets(manifest, richCtx), stage };
+      } catch (error) {
+        failedCount++;
+        await prisma.bulkImportRow.update({
+          where: { id: row.id },
+          data: { status: BulkImportRowStatus.FAILED, errorMessage: error instanceof Error ? error.message : "Image preparation failed" },
+        });
+        continue;
+      }
+    }
+    const questionText = rich ? composeQuestionText(rich.m) : merged.questionText;
+    const optionText = (label: (typeof OPTION_LABELS)[number]) =>
+      rich ? rich.m.options.find((o) => o.label === label)!.text : (merged[`option${label}` as keyof ParsedRowShape] as string);
+    const isCorrect = (label: string) => (rich ? rich.m.correct.includes(label) : merged.correctAnswer === label);
+    const richFields = rich
+      ? {
+          contentFormat: rich.m.contentFormat === "RICH_V1" ? QuestionContentFormat.RICH_V1 : QuestionContentFormat.PLAIN,
+          explanation: rich.m.explanation,
+          editorialStage: rich.stage,
+          reviewRequired: rich.stage === EditorialStage.NEEDS_REVIEW,
+          reviewReason: rich.stage === EditorialStage.NEEDS_REVIEW ? reviewReason : null,
+        }
+      : {};
+    const writeAssets = async (tx: Prisma.TransactionClient, questionId: string) => {
+      if (!rich) return;
+      // References only: files are immutable and shared; frozen attempts keep theirs.
+      await tx.questionAsset.deleteMany({ where: { questionId } });
+      if (rich.assets.length) await tx.questionAsset.createMany({ data: rich.assets.map((a) => ({ ...a, questionId })) });
+    };
+
     // Section 21: when the run itself is scoped to a Previous Year Paper,
     // link every successfully imported question to it (unless the row
     // already resolved a more specific paper of its own).
+    // RICH: rd.previousYearPaperId already IS the run target / Paper Code paper (resolveRichRow).
     const previousYearPaperId = rd.previousYearPaperId ?? run.previousYearPaperId ?? null;
     const source = run.previousYearPaperId && !rd.previousYearPaperId ? QuestionSource.PYQ : rd.source;
 
@@ -302,6 +430,9 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
           });
           return result;
         };
+        // A row claimed by a concurrent transaction is skipped, never written twice.
+        const claimed = await tx.bulkImportRow.updateMany({ where: { id: row.id, status: BulkImportRowStatus.PENDING }, data: { updatedAt: new Date() } });
+        if (claimed.count === 0) throw new RowAlreadyClaimed();
         // Canonical taxonomy: a shared record the exam doesn't link yet is
         // linked (never copied) before a question of this exam uses it.
         const linkTaxonomy = async () => {
@@ -309,7 +440,7 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
           else if (rd.topicId) await linkTopicToExam(tx, rd.examId, rd.topicId);
           else await linkSubjectToExam(tx, rd.examId, rd.subjectId!);
         };
-        const dedupKey = runKey(rd.examId, rd.subjectId!, merged.questionText);
+        const dedupKey = runKey(rd.examId, rd.subjectId!, questionText);
         const runMatch = seenInRun.get(dedupKey);
         const isDuplicate = rd.isDuplicate || Boolean(runMatch);
         const duplicateQuestionId = runMatch?.id ?? rd.duplicateQuestionId;
@@ -336,13 +467,14 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
                 subjectId: rd.subjectId!,
                 topicId: rd.topicId,
                 subTopicId: rd.subTopicId,
-                text: merged.questionText,
-                imageUrl: merged.image || null,
+                text: questionText,
+                imageUrl: rich ? null : merged.image || null,
                 difficulty: rd.difficulty,
                 status: effectiveStatus,
                 importBatchId: runId,
                 reviewRequired: resolved.reviewRequired,
                 reviewReason,
+                ...richFields,
               },
             });
             await tx.questionOption.deleteMany({ where: { questionId: updated.id } });
@@ -350,11 +482,12 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
               data: OPTION_LABELS.map((label, order) => ({
                 questionId: updated.id,
                 label,
-                text: merged[`option${label}` as keyof ParsedRowShape] as string,
-                isCorrect: merged.correctAnswer === label,
+                text: optionText(label),
+                isCorrect: isCorrect(label),
                 order,
               })),
             });
+            await writeAssets(tx, updated.id);
             const attached = await attachInTx(tx, updated.id);
             return finishRow({ kind: "REPLACED" as const, questionId: updated.id, questionCode: updated.code, attached });
           }
@@ -371,8 +504,8 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
             topicId: rd.topicId,
             subTopicId: rd.subTopicId,
             previousYearPaperId,
-            text: merged.questionText,
-            imageUrl: merged.image || null,
+            text: questionText,
+            imageUrl: rich ? null : merged.image || null,
             difficulty: rd.difficulty,
             status: effectiveStatus,
             source,
@@ -380,17 +513,19 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
             importBatchId: runId,
             reviewRequired: resolved.reviewRequired,
             reviewReason,
+            ...richFields,
           },
         });
         await tx.questionOption.createMany({
           data: OPTION_LABELS.map((label, order) => ({
             questionId: created.id,
             label,
-            text: merged[`option${label}` as keyof ParsedRowShape] as string,
-            isCorrect: merged.correctAnswer === label,
+            text: optionText(label),
+            isCorrect: isCorrect(label),
             order,
           })),
         });
+        await writeAssets(tx, created.id);
         // The id is only remembered for later rows AFTER this transaction
         // commits (below): if attaching or the provenance write throws, the
         // row (and its new Question) rolls back, and no later row may reuse
@@ -399,7 +534,8 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
         return finishRow({ kind: "SUCCESS" as const, questionId: created.id, questionCode: created.code, attached });
       });
 
-      seenInRun.set(runKey(rd.examId, rd.subjectId, merged.questionText), { id: outcome.questionId, code: outcome.questionCode ?? "" });
+      seenInRun.set(runKey(rd.examId, rd.subjectId, questionText), { id: outcome.questionId, code: outcome.questionCode ?? "" });
+      if (rich && outcome.kind !== "SKIPPED") assetCount += rich.assets.length;
       if (outcome.attached) attachedNow++;
       if (outcome.kind === "SUCCESS") successCount++;
       else if (outcome.kind === "SKIPPED") skippedCount++;
@@ -408,6 +544,7 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
       if (resolved.reviewRequired) reviewRequiredCount++;
 
     } catch (error) {
+      if (error instanceof RowAlreadyClaimed) continue;
       // A genuine system/transaction failure for this one row — never let it
       // abort rows that already succeeded (each row commits independently).
       failedCount++;
@@ -434,6 +571,7 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
       failedCount: { increment: failedCount },
       draftCount: { increment: draftCount },
       reviewRequiredCount: { increment: reviewRequiredCount },
+      ...(richCtx ? { assetCount: { increment: assetCount }, formatCounts: (await richFormatCounts(runId)) as unknown as Prisma.InputJsonValue } : {}),
       status:
         remainingPending > 0
           ? BulkImportStatus.READY
@@ -445,6 +583,10 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
   });
 
   const attachedCount = mockTarget ? await reconcileMockAttachment(runId) : 0;
+
+  // RICH: once nothing is pending, the private staging archive has served its
+  // purpose (every referenced image is an immutable MediaObject by now).
+  if (richCtx?.bundle && remainingPending === 0) await discardBundleFiles(richCtx.bundle.id).catch(() => undefined);
 
   await prisma.auditLog.create({
     data: {
@@ -459,12 +601,14 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
         failedCount,
         draftCount,
         reviewRequiredCount,
+        ...(richCtx ? { importMode: "RICH", assetCount } : {}),
         ...(mockTarget ? { mockTestId: mockTarget.id, attachedNow, attachedCount } : {}),
       },
     },
   });
 
   return {
+    assetCount,
     attachedNow,
     attachedCount,
     mockTestId: mockTarget?.id ?? null,
@@ -478,4 +622,41 @@ export async function executeBulkImport(options: ExecuteImportOptions): Promise<
     reviewRequiredCount,
     status: updatedRun.status,
   };
+}
+
+/**
+ * RICH gate (before anything is written): ERROR rows block "Import Questions"
+ * (fix or Remove them — or use the explicit "Import Valid Only"), WARNING rows
+ * need an explicit acknowledgement, and every referenced image must be processed.
+ */
+async function checkRichGate(runId: string, scope: { rowIds?: string[]; onlyValid?: boolean; acknowledgeWarnings: boolean }) {
+  const where = { runId, removedFromImport: false, status: BulkImportRowStatus.PENDING, ...(scope.rowIds ? { id: { in: scope.rowIds } } : {}) };
+  const [errorRows, warningRows] = await Promise.all([
+    prisma.bulkImportRow.count({ where: { ...where, severity: ImportRowSeverity.ERROR } }),
+    prisma.bulkImportRow.count({ where: { ...where, severity: ImportRowSeverity.WARNING } }),
+  ]);
+  if (errorRows > 0 && !scope.onlyValid) {
+    throw new ImportBlockedError(`${errorRows} row(s) still have errors. Fix or Remove them (or use "Import Valid Only") — nothing was imported.`, "ROWS_HAVE_ERRORS", { errorRows });
+  }
+  if (warningRows > 0 && !scope.onlyValid && !scope.acknowledgeWarnings) {
+    throw new ImportBlockedError(`${warningRows} row(s) have warnings. Review them and confirm to import — nothing was imported yet.`, "WARNINGS_UNACKNOWLEDGED", { warningRows });
+  }
+}
+
+/** PLAIN / RICH_V1 / image counts of a RICH run's imported questions (for Import History). */
+export async function richFormatCounts(runId: string) {
+  const rows = await prisma.bulkImportRow.findMany({
+    where: { runId, status: { in: [BulkImportRowStatus.SUCCESS, BulkImportRowStatus.REPLACED] }, questionId: { not: null } },
+    select: { questionId: true },
+  });
+  const ids = rows.map((r) => r.questionId!);
+  if (ids.length === 0) return { PLAIN: 0, RICH_V1: 0, withImages: 0, questionImages: 0, optionImages: 0, explanationImages: 0 };
+  const [formats, assets] = await Promise.all([
+    prisma.question.groupBy({ by: ["contentFormat"], where: { id: { in: ids } }, _count: true }),
+    prisma.questionAsset.groupBy({ by: ["role"], where: { questionId: { in: ids } }, _count: true }),
+  ]);
+  const withImages = await prisma.question.count({ where: { id: { in: ids }, assets: { some: {} } } });
+  const fmt = (f: string) => formats.find((x) => x.contentFormat === f)?._count ?? 0;
+  const role = (r: string) => assets.find((x) => x.role === r)?._count ?? 0;
+  return { PLAIN: fmt("PLAIN"), RICH_V1: fmt("RICH_V1"), withImages, questionImages: role("QUESTION"), optionImages: role("OPTION"), explanationImages: role("EXPLANATION") };
 }

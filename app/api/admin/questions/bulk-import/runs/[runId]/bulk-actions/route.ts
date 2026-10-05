@@ -5,15 +5,14 @@ import { prisma } from "@/lib/prisma";
 import {
   runExamContextFor,
   buildTaxonomyLookups,
-  resolveRow,
-  validateImportRows,
   mergeRowData,
   IMPORT_ROW_EDITABLE_KEYS,
   type BulkImportRow as ParsedRowShape,
   type RunExamContext,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
-import { MockTargetError, executeBulkImport, recomputeRunCounts } from "@/lib/bulk-import-execute";
+import { loadRichContext, resolveImportRow } from "@/lib/rich-import/validate";
+import { ImportBlockedError, MockTargetError, executeBulkImport, recomputeRunCounts } from "@/lib/bulk-import-execute";
 import { QuestionStatus } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 
@@ -64,11 +63,16 @@ async function applyColumnEdit(
 ): Promise<number> {
   const rows = await prisma.bulkImportRow.findMany({ where: { id: { in: rowIds }, runId, removedFromImport: false } });
   const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
+  // Column edits change codes/QNos the batch checks count, so the context is built from the edited rows.
+  const richCtx = await loadRichContext(runId).then(async (ctx) => {
+    if (!ctx) return null;
+    for (const row of rows) await prisma.bulkImportRow.update({ where: { id: row.id }, data: { editedData: edit(((row.editedData as Record<string, unknown> | null) ?? {}) as Record<string, unknown>) as unknown as Prisma.InputJsonValue } });
+    return loadRichContext(runId);
+  });
   await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
     const nextEdited = edit(((row.editedData as Record<string, unknown> | null) ?? {}) as Record<string, unknown>);
     const merged = mergeRowData(row.rawData, nextEdited) as ParsedRowShape;
-    const [shapeParsed] = validateImportRows([merged]);
-    const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
+    const resolved = await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx);
     await prisma.bulkImportRow.update({
       where: { id: row.id },
       data: {
@@ -78,6 +82,7 @@ async function applyColumnEdit(
         warnings: resolved.warnings as unknown as Prisma.InputJsonValue,
         errorMessage: resolved.errors.length > 0 ? resolved.errors.join(", ") : null,
         reviewRequired: resolved.reviewRequired,
+        ...(richCtx ? { infos: (resolved.infos ?? []) as unknown as Prisma.InputJsonValue } : {}),
       },
     });
   });
@@ -162,10 +167,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       case "REVALIDATE": {
         const rows = await prisma.bulkImportRow.findMany({ where: { id: { in: targetRowIds }, runId, removedFromImport: false } });
         const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
+        const richCtx = await loadRichContext(runId);
         await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
           const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
-          const [shapeParsed] = validateImportRows([merged]);
-          const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
+          const resolved = await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx);
           await prisma.bulkImportRow.update({
             where: { id: row.id },
             data: {
@@ -174,6 +179,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
               warnings: resolved.warnings as unknown as Prisma.InputJsonValue,
               errorMessage: resolved.errors.length > 0 ? resolved.errors.join(", ") : null,
               reviewRequired: resolved.reviewRequired,
+              ...(richCtx ? { infos: (resolved.infos ?? []) as unknown as Prisma.InputJsonValue } : {}),
             },
           });
         });
@@ -241,7 +247,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ success: true, action, ...resultSummary });
   } catch (error) {
     if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
-    if (error instanceof MockTargetError) {
+    if (error instanceof MockTargetError || error instanceof ImportBlockedError) {
       return NextResponse.json({ error: error.message, code: error.code, details: error.details }, { status: 409 });
     }
     console.error("POST /api/admin/questions/bulk-import/runs/[runId]/bulk-actions error:", error);

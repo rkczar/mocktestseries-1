@@ -43,6 +43,10 @@ export async function GET(request: NextRequest) {
     const importedFrom = searchParams.get("importedFrom") || undefined; // ISO date, filters Question.createdAt
     const importedTo = searchParams.get("importedTo") || undefined;
     const idsOnly = searchParams.get("idsOnly") === "true";
+    // NEET Phase 3 filters (absent = no filter, so existing callers are unaffected).
+    const contentFormat = searchParams.get("contentFormat");
+    const editorialStage = searchParams.get("editorialStage");
+    const hasRichMedia = searchParams.get("hasRichMedia");
 
     // Build where clause
     const where: Prisma.QuestionWhereInput = {};
@@ -65,6 +69,11 @@ export async function GET(request: NextRequest) {
       where.reviewRequired = reviewRequiredParam === "true";
     }
     if (importBatchId) where.importBatchId = importBatchId;
+    if (contentFormat === "PLAIN" || contentFormat === "RICH_V1") where.contentFormat = contentFormat;
+    if (editorialStage === "NONE") where.editorialStage = null;
+    else if (editorialStage && ["DRAFT", "NEEDS_REVIEW", "VERIFIED", "READY_TO_PUBLISH"].includes(editorialStage)) where.editorialStage = editorialStage as Prisma.QuestionWhereInput["editorialStage"];
+    if (hasRichMedia === "true") where.assets = { some: {} };
+    else if (hasRichMedia === "false") where.assets = { none: {} };
     if (importedFrom || importedTo) {
       where.createdAt = {
         ...(importedFrom ? { gte: new Date(importedFrom) } : {}),

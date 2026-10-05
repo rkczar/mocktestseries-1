@@ -123,6 +123,12 @@ async function ImportDetailsContent({
               <span className="text-sm text-[var(--color-muted-foreground)]">Format:</span>
               <span className="text-sm font-medium">{run.format ?? "—"}</span>
             </div>
+            {run.importMode === "RICH" ? (
+              <div className="flex justify-between">
+                <span className="text-sm text-[var(--color-muted-foreground)]">Import mode:</span>
+                <span className="text-sm font-medium">Rich content (always DRAFT)</span>
+              </div>
+            ) : null}
             <div className="flex justify-between">
               <span className="text-sm text-[var(--color-muted-foreground)]">Exam / Year:</span>
               <span className="text-sm font-medium">{run.exam ? `${run.exam.name}${run.examYear ? ` ${run.examYear}` : ""}` : "—"}</span>
@@ -195,6 +201,16 @@ async function ImportDetailsContent({
               <Stat label="Drafts" value={run.draftCount} />
               <Stat label="Failed" value={run.failedCount} cls="text-[var(--color-error)]" />
               {run.mockTestId ? <Stat label="Attached to Mock Test" value={run.attachedCount} cls="text-[var(--color-success)]" /> : null}
+              {run.importMode === "RICH" ? (
+                <>
+                  <Stat label="Image References" value={run.assetCount} />
+                  <Stat label="RICH_V1" value={(run.formatCounts as { RICH_V1?: number } | null)?.RICH_V1 ?? 0} />
+                  <Stat label="PLAIN" value={(run.formatCounts as { PLAIN?: number } | null)?.PLAIN ?? 0} />
+                  <Stat label="With Images" value={(run.formatCounts as { withImages?: number } | null)?.withImages ?? 0} />
+                  <Stat label="Option Images" value={(run.formatCounts as { optionImages?: number } | null)?.optionImages ?? 0} />
+                  <Stat label="Explanation Images" value={(run.formatCounts as { explanationImages?: number } | null)?.explanationImages ?? 0} />
+                </>
+              ) : null}
             </div>
             {summary && (summary.laterDeleted + summary.laterArchived + summary.laterProtected > 0 || run.lastRollbackAt) ? (
               <div className="mt-4 border-t border-[var(--color-border)] pt-3">

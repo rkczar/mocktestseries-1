@@ -133,6 +133,7 @@ async function ImportHistoryContent({ page, q }: { page: number; q: string }) {
                       <td className="py-2.5 pr-4">
                         <div className="font-medium">{run.label || <span className="font-mono text-xs text-[var(--color-muted-foreground)]">{run.id.slice(0, 8)}</span>}</div>
                         {run.format && <Badge variant="neutral">{run.format}</Badge>}
+                        {run.importMode === "RICH" ? <Badge variant="info">RICH</Badge> : null}
                       </td>
                       <td className="py-2.5 pr-4 max-w-xs truncate">{run.filename}</td>
                       <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">

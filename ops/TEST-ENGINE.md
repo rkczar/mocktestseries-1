@@ -219,6 +219,20 @@ DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scr
 STORAGE_DIR=/tmp/media-scratch DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-media-engine.ts
 STORAGE_DIR=/tmp/media-scratch DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-media-engine.ts setup > /tmp/med.json
 BASE=<nginx origin> NEXT_DIRECT=http://127.0.0.1:3100 FIXTURE=/tmp/med.json STORAGE_DIR=/tmp/media-scratch FX_DIR=<dir with fixture PNGs> DATABASE_URL="$SCRATCH_URL" ADMIN_USER=… ADMIN_PASS=… NODE_PATH=<dir containing playwright> node scripts/verify-media-engine.mjs
+
+# 10. rich import (NEET Phase 3): ZIP security, manifest, validation, idempotency, commit, snapshot,
+#     leak gate, REPLACE history, rollback, legacy behaviour. STORAGE_DIR / IMPORT_STAGING_DIR disposable.
+#     Browser + scale halves need the step-9 scratch nginx (production limits: 20 MB body, 60 s timeout).
+npx tsx scripts/rich-import-fixtures.ts /tmp/rifx
+STORAGE_DIR=/tmp/media-scratch IMPORT_STAGING_DIR=/tmp/ri-staging DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-rich-import.ts
+…same env… npx tsx scripts/verify-rich-import.ts setup > /tmp/ri.json
+PHASE=import BASE=<nginx origin> FIXTURE=/tmp/ri.json FX_DIR=/tmp/rifx ADMIN_USER=… ADMIN_PASS=… FULL_ADMIN_USER=… DATABASE_URL="$SCRATCH_URL" NODE_PATH=<playwright> node scripts/verify-rich-import.mjs
+…same env… npx tsx scripts/verify-rich-import.ts attempts /tmp/ri.json
+PHASE=player …same… node scripts/verify-rich-import.mjs
+PKG=pilot45|scale180|stress180 SERVER_PID=<next pid> STORAGE_DIR=/tmp/media-scratch …same… node scripts/verify-rich-import-scale.mjs
+…same env… npx tsx scripts/verify-rich-import.ts cleanup /tmp/ri.json
+# legacy parity: run from a worktree of the previous release and from HEAD, outputs must be identical
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/legacy-import-parity.ts /tmp/rifx > out.json
 ```
 
 ## Rich content and snapshot v2 (since NEET Phase 1)
@@ -241,6 +255,11 @@ BASE=<nginx origin> NEXT_DIRECT=http://127.0.0.1:3100 FIXTURE=/tmp/med.json STOR
   replacing/removing an image never changes a past attempt. The player
   preloads only the NEXT question's images (`preloadImages`), and every image
   has a reserved box from its stored width/height (no layout shift).
+
+Bulk Import has a Rich mode (NEET Phase 3, docs/RICH-IMPORT.md). Rich imports create ordinary
+RICH_V1 SINGLE_CORRECT questions (always DRAFT) with QuestionAsset references to Phase 2 media, so
+they freeze to the same snapshot v2 and go through the same player/reveal/review paths. Standard
+(legacy) imports are unchanged.
 
 Every start (and resume-by-id) first runs `assertExamLive(examId)`: an exam
 with `isActive = false` is private, whatever its papers, tests or question

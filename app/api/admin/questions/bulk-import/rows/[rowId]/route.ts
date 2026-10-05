@@ -5,12 +5,11 @@ import { prisma } from "@/lib/prisma";
 import {
   runExamContextFor,
   buildTaxonomyLookups,
-  resolveRow,
-  validateImportRows,
   mergeRowData,
   type BulkImportRow as ParsedRowShape,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
+import { loadRichContext, resolveImportRow } from "@/lib/rich-import/validate";
 import { recomputeRunCounts } from "@/lib/bulk-import-execute";
 import { QuestionStatus } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
@@ -58,14 +57,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const shouldRevalidate = editedData !== undefined || revalidate === true;
     if (shouldRevalidate) {
       const merged = mergeRowData(saved.rawData, saved.editedData) as ParsedRowShape;
-      const [shapeParsed] = validateImportRows([merged]);
       const [lookups, imageIndex, run] = await Promise.all([
         buildTaxonomyLookups(prisma),
         getImageFilenameIndex(),
         prisma.bulkImportRun.findUnique({ where: { id: existing.runId }, select: { examId: true, mockTestId: true } }),
       ]);
       const runExamContext = runExamContextFor(lookups.exams, run);
-      const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
+      const richCtx = await loadRichContext(existing.runId);
+      const resolved = await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx);
 
       const finalReviewRequired = explicitReviewRequired !== undefined ? explicitReviewRequired || resolved.reviewRequired : resolved.reviewRequired;
 
@@ -77,6 +76,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           warnings: resolved.warnings as unknown as Prisma.InputJsonValue,
           errorMessage: resolved.errors.length > 0 ? resolved.errors.join(", ") : null,
           reviewRequired: finalReviewRequired,
+          ...(richCtx ? { infos: (resolved.infos ?? []) as unknown as Prisma.InputJsonValue } : {}),
         },
       });
     } else if (explicitReviewRequired !== undefined) {

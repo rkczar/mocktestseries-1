@@ -97,6 +97,16 @@ question*. The structure is presentation that the importer must preserve:
 - Insights: `MULTIPLE_CORRECT_OPTIONS` stays a defect only for `SINGLE_CORRECT`.
 - OMR: MSQ/MTF tests are online-only until an OMR layout exists.
 
+## 5b. Phase 3 status (rich importer, implemented)
+
+- The import manifest carries `questionType` and `correct: string[]` (lib/rich-import/manifest.ts).
+- `MULTIPLE_CORRECT` rows are parsed and shown, then **blocked** with
+  "MULTIPLE_CORRECT ENGINE NOT YET ENABLED" — never converted to single-correct.
+- `MATCH_THE_FOLLOWING` imports as single-correct coded options; List I / List II are structured in
+  staging and stored as readable lines in the question text, list images as captioned QUESTION assets.
+- No schema change was needed: `Question.questionType` / `matchSpec` / `LIST_ITEM` stay proposals
+  (§2, §4) until structured MTF rendering or MSQ scoring is approved.
+
 ## 6. Phasing
 
 1. Phase 3 (import): import and preserve `questionType` + `matchSpec` + list

@@ -1926,6 +1926,26 @@ enum BulkImportDuplicateStrategy {
   ADD_AS_NEW
 }
 
+/**
+ * LEGACY = the original CSV/XLS/XLSX import, unchanged (plain text questions,
+ * best-effort image filename matching). RICH = NEET Phase 3: the same engine
+ * with the rich columns (Content Format, Question Type, image references,
+ * explanation, review flags), an optional ZIP image bundle and stricter,
+ * capability-aware validation (lib/rich-import/*). Every pre-Phase-3 run is LEGACY.
+ */
+enum BulkImportMode {
+  LEGACY
+  RICH
+}
+
+enum ImportBundleStatus {
+  UPLOADING
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+
 model BulkImportRun {
   id                  String                      @id @default(cuid())
   adminUserId         String
@@ -1973,6 +1993,21 @@ model BulkImportRun {
   // live on BulkImportRow.rollbackAction; the run itself is never deleted.
   lastRollbackAt      DateTime?
   lastRollbackById    String?
+  // NEET Phase 3 (rich import). All additive with legacy-safe defaults.
+  importMode          BulkImportMode              @default(LEGACY)
+  // Client-generated key of the upload request: a retried/double-submitted
+  // upload returns the run it already created instead of a second run.
+  idempotencyKey      String?                     @unique
+  // Optional ZIP image bundle of a RICH run (one bundle belongs to one run).
+  bundleId            String?                     @unique
+  bundle              ImportBundle?               @relation(fields: [bundleId], references: [id], onDelete: SetNull)
+  // QuestionAsset references written by this run, and per-format row counts
+  // ({ PLAIN, RICH_V1, withImages, questionImages, optionImages, explanationImages }).
+  assetCount          Int                         @default(0)
+  formatCounts        Json?
+  // Execution lease: set while an "Import Questions" call is running, so a
+  // second concurrent call (double click, retry) is refused, not run twice.
+  executingAt         DateTime?
 
   rows              BulkImportRow[]
   importedQuestions Question[]
@@ -1998,6 +2033,8 @@ model BulkImportRow {
   // legacy errorMessage above — powers the Validate & Preview Workspace.
   errors            Json?
   warnings          Json?
+  // RICH runs only: informational messages (never affect severity).
+  infos             Json?
   rawData           Json
   // Admin's inline corrections overlaid onto rawData before
   // import/revalidation; null until the row has been edited.
@@ -2019,6 +2056,37 @@ model BulkImportRow {
   @@index([questionId])
   @@index([runId, status])
   @@index([runId, severity])
+}
+
+// One uploaded ZIP image bundle of a RICH bulk import (NEET Phase 3). The
+// archive lives in private staging storage (lib/rich-import/bundle.ts, never
+// under /media/ or public storage) and is read entry by entry; nothing is
+// extracted to disk. `entries` is the inspected directory plus each image's
+// processing result (MediaObject sha256 / storageKey). No local path is stored.
+model ImportBundle {
+  id             String             @id @default(cuid())
+  createdById    String
+  filename       String
+  declaredBytes  Int
+  receivedBytes  Int                @default(0)
+  chunkCount     Int                @default(0)
+  sha256         String?
+  status         ImportBundleStatus @default(UPLOADING)
+  entryCount     Int                @default(0)
+  imageCount     Int                @default(0)
+  expandedBytes  Int                @default(0)
+  processedCount Int                @default(0)
+  invalidCount   Int                @default(0)
+  entries        Json?
+  errorMessage   String?
+  // Processing lease (one worker at a time across PM2 instances).
+  processingAt   DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  run BulkImportRun?
+
+  @@index([createdById, createdAt])
 }
 
 // ---------------------------------------------------------------------------

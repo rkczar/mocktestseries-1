@@ -5,12 +5,11 @@ import { prisma } from "@/lib/prisma";
 import {
   runExamContextFor,
   buildTaxonomyLookups,
-  resolveRow,
-  validateImportRows,
   mergeRowData,
   type BulkImportRow as ParsedRowShape,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
+import { loadRichContext, resolveImportRow } from "@/lib/rich-import/validate";
 import { BulkImportStatus, ImportRowSeverity } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 
@@ -61,6 +60,7 @@ export async function POST(request: NextRequest) {
 
     const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
     const runExamContext = runExamContextFor(lookups.exams, run);
+    const richCtx = await loadRichContext(runId);
 
     let validCount = 0;
     let invalidCount = 0;
@@ -70,8 +70,7 @@ export async function POST(request: NextRequest) {
 
     await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
       const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
-      const [shapeParsed] = validateImportRows([merged]);
-      const resolved = await resolveRow(prisma, lookups, shapeParsed, imageIndex, runExamContext);
+      const resolved = await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx);
 
       if (resolved.severity === ImportRowSeverity.ERROR) invalidCount++;
       else validCount++;
@@ -87,6 +86,7 @@ export async function POST(request: NextRequest) {
           warnings: resolved.warnings as unknown as Prisma.InputJsonValue,
           errorMessage: resolved.errors.length > 0 ? resolved.errors.join(", ") : null,
           reviewRequired: resolved.reviewRequired,
+          ...(richCtx ? { infos: (resolved.infos ?? []) as unknown as Prisma.InputJsonValue } : {}),
         },
       });
     });

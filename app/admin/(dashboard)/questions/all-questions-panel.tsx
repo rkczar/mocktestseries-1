@@ -76,6 +76,9 @@ export async function AllQuestionsPanel({
     hasImage: hasImage || "",
     reviewRequired: reviewRequired || "",
     importBatchId: importBatchId || "",
+    contentFormat: "",
+    editorialStage: "",
+    hasRichMedia: "",
     importedFrom: importedFrom || "",
     importedTo: importedTo || "",
   };

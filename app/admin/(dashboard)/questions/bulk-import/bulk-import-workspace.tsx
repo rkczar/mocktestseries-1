@@ -13,6 +13,15 @@ import { SelectNative } from "@/components/ui/select-native";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertCircle, CheckCircle, FileSpreadsheet, Download, RefreshCw } from "lucide-react";
+import {
+  RichImportConfirm,
+  RichPreviewDialog,
+  RichSummaryCard,
+  RichUploadHelp,
+  processRunImages,
+  uploadImageBundle,
+  type RichSummaryData,
+} from "./rich-import-panels";
 
 interface ExamOption {
   id: string;
@@ -79,6 +88,15 @@ interface RowData {
   optionCImageFilename?: string;
   optionDImageFilename?: string;
   status: string;
+  // RICH runs only
+  contentFormat?: string;
+  questionType?: string;
+  paperCode?: string;
+  explanationImages?: string;
+  reviewFlag?: string;
+  reviewReason?: string;
+  listI?: string;
+  listII?: string;
 }
 
 interface ImageMatch {
@@ -103,6 +121,7 @@ interface StagedRow {
   reviewRequired: boolean;
   targetStatus: string | null;
   imageMatches: ImageMatch[];
+  infos?: string[];
 }
 
 interface RunSummary {
@@ -123,6 +142,8 @@ interface RunSummary {
 
 interface RunInfo {
   id: string;
+  importMode?: "LEGACY" | "RICH";
+  assetCount?: number;
   filename: string;
   format: string | null;
   label: string | null;
@@ -253,6 +274,13 @@ export function BulkImportWorkspace({
     attachedCount?: number;
   } | null>(null);
   const [allowExceedTarget, setAllowExceedTarget] = useState(false);
+  // NEET Phase 3 (RICH runs only)
+  const [importMode, setImportMode] = useState<"LEGACY" | "RICH">("LEGACY");
+  const [bundleFile, setBundleFile] = useState<File | null>(null);
+  const [rich, setRich] = useState<RichSummaryData | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+  const [previewRowId, setPreviewRowId] = useState<string | null>(null);
+  const [confirmImport, setConfirmImport] = useState(false);
 
   // --- Upload form state -----------------------------------------------
   const [file, setFile] = useState<File | null>(null);
@@ -292,6 +320,7 @@ export function BulkImportWorkspace({
         if (!res.ok) throw new Error((await res.json()).error || "Failed to load import run");
         const data = await res.json();
         setRun(data.run);
+        setRich(data.rich ?? null);
         setRows(data.rows);
         setSummary(data.summary);
         setTotalPages(data.totalPages);
@@ -328,7 +357,21 @@ export function BulkImportWorkspace({
     setUploading(true);
     setError(null);
     try {
+      // RICH: the image bundle goes first (chunked), so its id rides on the upload.
+      let bundleId: string | null = null;
+      if (importMode === "RICH" && bundleFile) {
+        const bundle = await uploadImageBundle(bundleFile, setProgress);
+        if (bundle.status === "FAILED") throw new Error(`The image bundle was refused: ${bundle.errorMessage ?? "invalid archive"}`);
+        bundleId = bundle.bundleId;
+      }
+      setProgress(importMode === "RICH" ? "Uploading spreadsheet…" : null);
       const formData = new FormData();
+      if (importMode === "RICH") {
+        formData.append("importMode", "RICH");
+        if (bundleId) formData.append("bundleId", bundleId);
+      }
+      // Same key on a retry = the same run (no duplicate batch from a lost response).
+      formData.append("idempotencyKey", crypto.randomUUID());
       formData.append("file", file);
       if (label) formData.append("label", label);
       formData.append("examId", examId);
@@ -346,6 +389,8 @@ export function BulkImportWorkspace({
 
       setUploading(false);
       setValidating(true);
+      if (importMode === "RICH" && bundleId) await processRunImages(data.runId, setProgress);
+      setProgress(null);
       const validateRes = await fetch("/api/admin/questions/bulk-import/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -362,6 +407,28 @@ export function BulkImportWorkspace({
     } finally {
       setUploading(false);
       setValidating(false);
+      setProgress(null);
+    }
+  };
+
+  /** RICH: process images referenced after an edit, then revalidate every row. */
+  const handleProcessImages = async () => {
+    if (!runId) return;
+    setError(null);
+    try {
+      setProgress("Processing images…");
+      await processRunImages(runId, setProgress);
+      setProgress("Revalidating…");
+      await fetch(`/api/admin/questions/bulk-import/runs/${runId}/bulk-actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "REVALIDATE", rowIds: [] }),
+      });
+      await loadRun(runId, { page, filter });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Image processing failed");
+    } finally {
+      setProgress(null);
     }
   };
 
@@ -372,6 +439,9 @@ export function BulkImportWorkspace({
     setSummary(null);
     setImportResult(null);
     setFile(null);
+    setBundleFile(null);
+    setRich(null);
+    setImportMode("LEGACY");
     setLabel("");
     setExamId(initial.fromMock ? initial.examId : "");
     setExamYear("");
@@ -497,15 +567,22 @@ export function BulkImportWorkspace({
     }
   };
 
-  const handleImport = async () => {
+  const isRichRun = run?.importMode === "RICH";
+  const handleImport = async (acknowledgeWarnings = false) => {
     if (!runId) return;
+    // RICH: warnings need an explicit acknowledgement first.
+    if (isRichRun && !acknowledgeWarnings && (summary?.warnings ?? 0) > 0) {
+      setConfirmImport(true);
+      return;
+    }
+    setConfirmImport(false);
     setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/admin/questions/bulk-import/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId, allowExceedTarget }),
+        body: JSON.stringify({ runId, allowExceedTarget, ...(isRichRun ? { acknowledgeWarnings } : {}) }),
       });
       if (!res.ok) throw new Error((await res.json()).error || "Import failed");
       const data = await res.json();
@@ -705,6 +782,25 @@ export function BulkImportWorkspace({
               </Alert>
             )}
 
+            <fieldset className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] p-3" data-testid="import-mode">
+              <legend className="px-1 text-xs font-medium text-[var(--color-foreground)]">Import Mode</legend>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="importMode" value="LEGACY" checked={importMode === "LEGACY"} onChange={() => setImportMode("LEGACY")} />
+                  Standard (text questions)
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="importMode" value="RICH" checked={importMode === "RICH"} onChange={() => setImportMode("RICH")} />
+                  Rich content (formulas, chemistry, images)
+                </label>
+              </div>
+              {importMode === "RICH" ? (
+                <p className="text-[11px] text-[var(--color-muted-foreground)]">
+                  Upload the rich XLSX and, if questions have images, the ZIP image bundle. Rich questions are always imported as DRAFT.
+                </p>
+              ) : null}
+            </fieldset>
+
             <label
               htmlFor="file-upload"
               className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-border)] bg-[var(--color-muted)] p-8 transition ${
@@ -718,6 +814,26 @@ export function BulkImportWorkspace({
               <span className="text-xs text-[var(--color-muted-foreground)] mt-1">CSV, XLS, XLSX (Max 10MB)</span>
               <input id="file-upload" type="file" accept=".csv,.xls,.xlsx" onChange={handleFileSelect} className="hidden" disabled={!examId} />
             </label>
+
+            {importMode === "RICH" ? (
+              <label
+                htmlFor="bundle-upload"
+                className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-border)] bg-[var(--color-muted)] p-6 transition ${
+                  examId ? "cursor-pointer hover:bg-[var(--color-surface)]" : "cursor-not-allowed opacity-50"
+                }`}
+              >
+                <span className="text-sm font-medium text-[var(--color-foreground)]">{bundleFile ? bundleFile.name : "Image bundle (optional): click to choose a .zip"}</span>
+                <span className="mt-1 text-xs text-[var(--color-muted-foreground)]">PNG, JPEG, WebP or AVIF inside a ZIP (max 200 MB, 8 MB per image)</span>
+                <input
+                  id="bundle-upload"
+                  type="file"
+                  accept=".zip,application/zip"
+                  onChange={(e) => setBundleFile(e.target.files?.[0] ?? null)}
+                  className="hidden"
+                  disabled={!examId}
+                />
+              </label>
+            ) : null}
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
               <div className="flex flex-col gap-1">
@@ -738,6 +854,8 @@ export function BulkImportWorkspace({
                 </SelectNative>
               </div>
             </div>
+
+            {importMode === "RICH" ? <RichUploadHelp /> : null}
 
             <div className="rounded-lg bg-[var(--color-muted)] p-4">
               <h4 className="text-sm font-medium mb-2">Columns recognized:</h4>
@@ -765,7 +883,7 @@ export function BulkImportWorkspace({
             </div>
 
             <Button onClick={handleUpload} disabled={!file || !examId || targetIncomplete || uploading || validating}>
-              {uploading ? "Uploading..." : validating ? "Validating..." : "Upload & Validate"}
+              {progress ?? (uploading ? "Uploading..." : validating ? "Validating..." : "Upload & Validate")}
             </Button>
           </CardContent>
         </Card>
@@ -883,6 +1001,8 @@ export function BulkImportWorkspace({
             </CardContent>
           </Card>
 
+          {isRichRun && rich ? <RichSummaryCard rich={rich} onProcess={handleProcessImages} processing={progress} /> : null}
+
           {run.mockTest && summary ? <MockImportPreview run={run} summary={summary} allowExceed={allowExceedTarget} onAllowExceed={setAllowExceedTarget} /> : null}
 
           {importResult && (
@@ -981,8 +1101,13 @@ export function BulkImportWorkspace({
                 </a>
               </Button>
               <div className="ml-auto">
-                <Button onClick={handleImport} disabled={loading || summary?.total === 0}>
-                  Import Questions
+                <Button
+                  onClick={() => handleImport()}
+                  disabled={loading || summary?.total === 0 || (isRichRun && ((summary?.errors ?? 0) > 0 || (rich?.pendingImages ?? 0) > 0))}
+                  title={isRichRun && (summary?.errors ?? 0) > 0 ? "Fix or Remove the rows with errors first (or use Import Valid Only)." : undefined}
+                  data-testid="import-questions"
+                >
+                  {isRichRun ? "Import as Draft" : "Import Questions"}
                 </Button>
               </div>
             </div>
@@ -1015,6 +1140,7 @@ export function BulkImportWorkspace({
                   <th className="px-3 py-2 text-left">Subject</th>
                   <th className="px-3 py-2 text-left">Topic</th>
                   <th className="px-3 py-2 text-left">SubTopic</th>
+                  {isRichRun ? <th className="px-3 py-2 text-left">Format</th> : null}
                   <th className="px-3 py-2 text-left">Answer</th>
                   <th className="px-3 py-2 text-left">Difficulty</th>
                   <th className="px-3 py-2 text-left">Source</th>
@@ -1040,6 +1166,12 @@ export function BulkImportWorkspace({
                     <td className="px-3 py-2">{row.merged.subject}</td>
                     <td className="px-3 py-2">{row.merged.topic}</td>
                     <td className="px-3 py-2">{row.merged.subTopic}</td>
+                    {isRichRun ? (
+                      <td className="px-3 py-2 text-xs">
+                        {row.merged.contentFormat || "PLAIN"}
+                        {row.merged.questionType ? <div className="text-[var(--color-muted-foreground)]">{row.merged.questionType}</div> : null}
+                      </td>
+                    ) : null}
                     <td className="px-3 py-2">{row.merged.correctAnswer}</td>
                     <td className="px-3 py-2">{row.merged.difficulty}</td>
                     <td className="px-3 py-2">{row.merged.source}</td>
@@ -1049,7 +1181,7 @@ export function BulkImportWorkspace({
                       ) : (
                         <div className="flex flex-col gap-0.5">
                           {row.imageMatches.map((m) => (
-                            <Badge key={m.field} variant={m.status === "FOUND" ? "success" : "warning"}>
+                            <Badge key={`${m.field}-${m.filename}`} variant={m.status === "FOUND" ? "success" : isRichRun ? "error" : "warning"} title={m.filename}>
                               {m.field}: {m.status}
                             </Badge>
                           ))}
@@ -1061,11 +1193,22 @@ export function BulkImportWorkspace({
                       <div className="flex flex-col gap-1">
                         <Badge variant={SEVERITY_VARIANT[row.severity]}>{row.severity}</Badge>
                         {row.reviewRequired && <Badge variant="info">Review</Badge>}
+                        {isRichRun && (row.errors.length > 0 || row.warnings.length > 0) ? (
+                          <span className="max-w-[260px] text-[11px] leading-snug text-[var(--color-muted-foreground)]" title={[...row.errors, ...row.warnings].join("\n")}>
+                            {row.errors[0] ?? row.warnings[0]}
+                            {row.errors.length + row.warnings.length > 1 ? ` (+${row.errors.length + row.warnings.length - 1} more)` : ""}
+                          </span>
+                        ) : null}
                         {row.removedFromImport && <Badge variant="neutral">Removed</Badge>}
                       </div>
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
+                        {isRichRun ? (
+                          <Button size="compact" variant="outline" onClick={() => setPreviewRowId(row.id)} data-testid="preview-row">
+                            Preview
+                          </Button>
+                        ) : null}
                         <Button size="compact" variant="outline" onClick={() => setEditingRow(row)}>
                           Edit
                         </Button>
@@ -1093,7 +1236,7 @@ export function BulkImportWorkspace({
                 ))}
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={15} className="px-3 py-8 text-center text-[var(--color-muted-foreground)]">
+                    <td colSpan={isRichRun ? 16 : 15} className="px-3 py-8 text-center text-[var(--color-muted-foreground)]">
                       {loading ? "Loading..." : "No rows match this filter."}
                     </td>
                   </tr>
@@ -1147,8 +1290,12 @@ export function BulkImportWorkspace({
         </>
       )}
 
+      {previewRowId ? <RichPreviewDialog rowId={previewRowId} onClose={() => setPreviewRowId(null)} /> : null}
+      {confirmImport ? <RichImportConfirm warnings={summary?.warnings ?? 0} onCancel={() => setConfirmImport(false)} onConfirm={() => handleImport(true)} /> : null}
+
       {editingRow && (
         <RowEditDialog
+          rich={isRichRun}
           row={editingRow}
           onClose={() => setEditingRow(null)}
           onSave={async (edited, extra) => {
@@ -1162,10 +1309,13 @@ export function BulkImportWorkspace({
 }
 
 function RowEditDialog({
+  rich = false,
   row,
   onClose,
   onSave,
 }: {
+  /** RICH run: show the rich columns and keep Correct as free text (multi-answer stays visible, never coerced). */
+  rich?: boolean;
   row: StagedRow;
   onClose: () => void;
   onSave: (edited: Partial<RowData>, extra: Record<string, unknown>) => Promise<void>;
@@ -1238,11 +1388,15 @@ function RowEditDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Correct Answer">
-              <SelectNative value={form.correctAnswer} onChange={(e) => update("correctAnswer", e.target.value)}>
-                {["A", "B", "C", "D"].map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </SelectNative>
+              {rich ? (
+                <Input value={form.correctAnswer} onChange={(e) => update("correctAnswer", e.target.value.toUpperCase())} placeholder="A" />
+              ) : (
+                <SelectNative value={form.correctAnswer} onChange={(e) => update("correctAnswer", e.target.value)}>
+                  {["A", "B", "C", "D"].map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </SelectNative>
+              )}
             </Field>
             <Field label="Difficulty">
               <SelectNative value={form.difficulty} onChange={(e) => update("difficulty", e.target.value)}>
@@ -1273,6 +1427,36 @@ function RowEditDialog({
             <Field label="Option C Image Filename"><Input value={form.optionCImageFilename || ""} onChange={(e) => update("optionCImageFilename", e.target.value)} /></Field>
             <Field label="Option D Image Filename"><Input value={form.optionDImageFilename || ""} onChange={(e) => update("optionDImageFilename", e.target.value)} /></Field>
           </div>
+
+          {rich ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Content Format">
+                  <SelectNative value={form.contentFormat || "PLAIN"} onChange={(e) => update("contentFormat", e.target.value)}>
+                    {["PLAIN", "RICH_V1"].map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </SelectNative>
+                </Field>
+                <Field label="Question Type">
+                  <SelectNative value={form.questionType || "SINGLE_CORRECT"} onChange={(e) => update("questionType", e.target.value)}>
+                    {["SINGLE_CORRECT", "MATCH_THE_FOLLOWING", "MULTIPLE_CORRECT"].map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </SelectNative>
+                </Field>
+                <Field label="Paper Code"><Input value={form.paperCode || ""} onChange={(e) => update("paperCode", e.target.value)} /></Field>
+                <Field label="QNo"><Input value={form.questionNumber || ""} onChange={(e) => update("questionNumber", e.target.value)} /></Field>
+                <Field label="Review Required"><Input value={form.reviewFlag || ""} onChange={(e) => update("reviewFlag", e.target.value)} placeholder="TRUE / FALSE" /></Field>
+                <Field label="Review Reason"><Input value={form.reviewReason || ""} onChange={(e) => update("reviewReason", e.target.value)} /></Field>
+              </div>
+              <Field label="Explanation Images (file.png :: alt | …)"><Input value={form.explanationImages || ""} onChange={(e) => update("explanationImages", e.target.value)} /></Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="List I"><Textarea value={form.listI || ""} onChange={(e) => update("listI", e.target.value)} rows={3} /></Field>
+                <Field label="List II"><Textarea value={form.listII || ""} onChange={(e) => update("listII", e.target.value)} rows={3} /></Field>
+              </div>
+            </>
+          ) : null}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>

@@ -41,7 +41,24 @@ export interface BulkImportRow {
   optionCImageFilename?: string;
   optionDImageFilename?: string;
   status: string;
+  // ---- RICH mode only (NEET Phase 3, lib/rich-import/*). Never set by a
+  // LEGACY parse, so legacy rows keep exactly their previous shape. ----
+  contentFormat?: string;
+  questionType?: string;
+  paperCode?: string;
+  explanationImages?: string;
+  /** "Review Required" column (TRUE/YES/1/Y). */
+  reviewFlag?: string;
+  reviewReason?: string;
+  /** Match the Following: List I / List II entries ("A. …" per line or "|"-separated). */
+  listI?: string;
+  listII?: string;
+  /** Headers of cells that held a spreadsheet FORMULA (refused in RICH mode, never evaluated). */
+  formulaCells?: string[];
 }
+
+/** LEGACY = the original importer, unchanged. RICH = NEET Phase 3 rich columns + image bundle. */
+export type ImportParseMode = "LEGACY" | "RICH";
 
 export interface ParsedImportRow {
   rowNumber: number;
@@ -185,6 +202,29 @@ const COLUMN_ALIASES: Record<string, string[]> = {
 };
 
 /**
+ * Extra headers recognized ONLY for RICH runs. Kept out of COLUMN_ALIASES so a
+ * legacy file that happens to carry e.g. a "Question Type" or "Review
+ * Required" column (the Template Builder writes both) parses exactly as
+ * before — those columns stay ignored in LEGACY mode.
+ */
+const RICH_COLUMN_ALIASES: Record<string, string[]> = {
+  topic: ["chapter", "chapter_topic", "chapter/topic"],
+  questionImageFilename: ["questionImages", "question_images", "questionImageFilenames"],
+  optionAImageFilename: ["optionAImages", "option_a_images"],
+  optionBImageFilename: ["optionBImages", "option_b_images"],
+  optionCImageFilename: ["optionCImages", "option_c_images"],
+  optionDImageFilename: ["optionDImages", "option_d_images"],
+  contentFormat: ["contentFormat", "content_format"],
+  questionType: ["questionType", "question_type"],
+  paperCode: ["paperCode", "paper_code"],
+  explanationImages: ["explanationImages", "explanation_images", "explanationImage", "explanation_image"],
+  reviewFlag: ["reviewRequired", "review_required"],
+  reviewReason: ["reviewReason", "review_reason"],
+  listI: ["listI", "list_i", "list1"],
+  listII: ["listII", "list_ii", "list2"],
+};
+
+/**
  * BulkImportRow keys that are safe to bulk-edit from the Bulk Import Preview's
  * "Manage Columns" control (SET_COLUMN / CLEAR_COLUMN / IGNORE_COLUMN /
  * KEEP_COLUMN bulk actions). Excludes `rowNumber`, which is structural, not a
@@ -214,6 +254,15 @@ export const IMPORT_ROW_EDITABLE_KEYS: (keyof BulkImportRow)[] = [
   "optionCImageFilename",
   "optionDImageFilename",
   "status",
+  // RICH-only columns (inert for LEGACY rows).
+  "contentFormat",
+  "questionType",
+  "paperCode",
+  "explanationImages",
+  "reviewFlag",
+  "reviewReason",
+  "listI",
+  "listII",
 ];
 
 /**
@@ -237,12 +286,18 @@ export const REQUIRED_IMPORT_COLUMNS: (keyof BulkImportRow)[] = [
   "optionD",
 ];
 
-function normalizeColumnName(header: string): string {
+function normalizeColumnName(header: string, mode: ImportParseMode = "LEGACY"): string {
   const normalized = header.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 
   for (const [key, aliases] of Object.entries(COLUMN_ALIASES)) {
     if (aliases.some(alias => alias.toLowerCase().replace(/[^a-z0-9]/g, "") === normalized)) {
       return key;
+    }
+  }
+
+  if (mode === "RICH") {
+    for (const [key, aliases] of Object.entries(RICH_COLUMN_ALIASES)) {
+      if (aliases.some((alias) => alias.toLowerCase().replace(/[^a-z0-9]/g, "") === normalized)) return key;
     }
   }
 
@@ -254,16 +309,17 @@ function normalizeColumnName(header: string): string {
 // ---------------------------------------------------------------------------
 
 export async function parseImportFile(
-  file: File
+  file: File,
+  mode: ImportParseMode = "LEGACY"
 ): Promise<{ rows: BulkImportRow[]; errors: string[] }> {
   const errors: string[] = [];
   const filename = file.name.toLowerCase();
 
   try {
     if (filename.endsWith(".csv")) {
-      return await parseCSV(file);
+      return await parseCSV(file, mode);
     } else if (filename.endsWith(".xlsx") || filename.endsWith(".xls")) {
-      return await parseExcel(file);
+      return await parseExcel(file, mode);
     } else {
       errors.push("Unsupported file format. Please upload CSV, XLS, or XLSX files.");
       return { rows: [], errors };
@@ -284,7 +340,7 @@ export function detectImportFileFormat(filename: string): "CSV" | "XLS" | "XLSX"
   return null;
 }
 
-async function parseCSV(file: File): Promise<{ rows: BulkImportRow[]; errors: string[] }> {
+async function parseCSV(file: File, mode: ImportParseMode): Promise<{ rows: BulkImportRow[]; errors: string[] }> {
   const errors: string[] = [];
   const text = await file.text();
 
@@ -292,10 +348,10 @@ async function parseCSV(file: File): Promise<{ rows: BulkImportRow[]; errors: st
     Papa.parse<Record<string, string>>(text, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: normalizeColumnName,
+      transformHeader: (h: string) => normalizeColumnName(h, mode),
       complete: (results: Papa.ParseResult<Record<string, string>>) => {
         const rows = results.data
-          .map((row, index) => mapRowData(row, index + 2)) // +2 for header + 1-indexed
+          .map((row, index) => mapRowData(row, index + 2, mode)) // +2 for header + 1-indexed
           .filter((row): row is BulkImportRow => row !== null);
 
         if (results.errors.length > 0) {
@@ -312,12 +368,17 @@ async function parseCSV(file: File): Promise<{ rows: BulkImportRow[]; errors: st
   });
 }
 
-async function parseExcel(file: File): Promise<{ rows: BulkImportRow[]; errors: string[] }> {
+async function parseExcel(file: File, mode: ImportParseMode): Promise<{ rows: BulkImportRow[]; errors: string[] }> {
   const errors: string[] = [];
   const buffer = await file.arrayBuffer();
 
   try {
-    const workbook = XLSX.read(buffer, { type: "array" });
+    // RICH: workbook content is DATA. Formulas are read as text (cellFormula)
+    // only to be refused per cell — SheetJS never evaluates them, and macros
+    // / VBA projects are not loaded at all.
+    const workbook = mode === "RICH"
+      ? XLSX.read(buffer, { type: "array", cellFormula: true, cellHTML: false, bookVBA: false, cellStyles: false })
+      : XLSX.read(buffer, { type: "array" });
     const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
 
     if (!firstSheet) {
@@ -335,8 +396,10 @@ async function parseExcel(file: File): Promise<{ rows: BulkImportRow[]; errors: 
       return { rows: [], errors };
     }
 
-    const headers = jsonData[0].map((h: unknown) => normalizeColumnName(String(h)));
+    const rawHeaders = jsonData[0].map((h: unknown) => String(h));
+    const headers = rawHeaders.map((h) => normalizeColumnName(h, mode));
     const rows: BulkImportRow[] = [];
+    const range = mode === "RICH" && firstSheet["!ref"] ? XLSX.utils.decode_range(firstSheet["!ref"]) : null;
 
     for (let i = 1; i < jsonData.length; i++) {
       const rowData: Record<string, string> = {};
@@ -344,7 +407,15 @@ async function parseExcel(file: File): Promise<{ rows: BulkImportRow[]; errors: 
         rowData[header] = String((jsonData[i] as unknown[])[index] ?? "").trim();
       });
 
-      const mapped = mapRowData(rowData, i + 1);
+      const mapped = mapRowData(rowData, i + 1, mode);
+      if (mapped && range) {
+        const formulaCells: string[] = [];
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const cell = firstSheet[XLSX.utils.encode_cell({ r: range.s.r + i, c })] as { f?: string } | undefined;
+          if (cell?.f) formulaCells.push(rawHeaders[c - range.s.c]?.trim() || XLSX.utils.encode_col(c));
+        }
+        if (formulaCells.length) mapped.formulaCells = formulaCells;
+      }
       if (mapped) {
         rows.push(mapped);
       }
@@ -357,13 +428,13 @@ async function parseExcel(file: File): Promise<{ rows: BulkImportRow[]; errors: 
   }
 }
 
-function mapRowData(row: Record<string, string>, rowNumber: number): BulkImportRow | null {
+function mapRowData(row: Record<string, string>, rowNumber: number, mode: ImportParseMode = "LEGACY"): BulkImportRow | null {
   // Skip completely empty rows
   if (Object.values(row).every((val) => !val || val.trim() === "")) {
     return null;
   }
 
-  return {
+  const base: BulkImportRow = {
     rowNumber,
     exam: row.exam?.trim() || "",
     examYear: row.examYear?.trim() || "",
@@ -388,6 +459,19 @@ function mapRowData(row: Record<string, string>, rowNumber: number): BulkImportR
     optionCImageFilename: row.optionCImageFilename?.trim() || undefined,
     optionDImageFilename: row.optionDImageFilename?.trim() || undefined,
     status: row.status?.trim() || "",
+  };
+  if (mode !== "RICH") return base;
+  const opt = (v: string | undefined) => v?.trim() || undefined;
+  return {
+    ...base,
+    contentFormat: opt(row.contentFormat),
+    questionType: opt(row.questionType),
+    paperCode: opt(row.paperCode),
+    explanationImages: opt(row.explanationImages),
+    reviewFlag: opt(row.reviewFlag),
+    reviewReason: opt(row.reviewReason),
+    listI: opt(row.listI),
+    listII: opt(row.listII),
   };
 }
 
@@ -580,7 +664,14 @@ export async function resolveRow(
   lookups: TaxonomyLookups,
   parsedRow: ParsedImportRow,
   imageIndex?: Map<string, string>,
-  runExamContext?: RunExamContext | null
+  runExamContext?: RunExamContext | null,
+  /**
+   * RICH runs only (lib/rich-import/validate.ts): the exact Previous Year
+   * Paper this row belongs to (run target / Paper Code). When given, it
+   * replaces the legacy exam + year inference, which picks an arbitrary paper
+   * when an exam has several papers in one year. LEGACY callers never pass it.
+   */
+  paperOverride?: { paperId: string } | null
 ): Promise<ValidatedImportRow> {
   const errors = [...parsedRow.errors];
   const warnings = [...parsedRow.warnings];
@@ -757,7 +848,10 @@ export async function resolveRow(
   let previousYearPaperId: string | null = null;
   let source: QuestionSource = QuestionSource.QUESTION_BANK;
 
-  if (data.source.toUpperCase() === "PYQ" || data.source.toLowerCase().includes("previous year")) {
+  if (paperOverride && !runExamContext?.mockTarget) {
+    source = QuestionSource.PYQ;
+    previousYearPaperId = paperOverride.paperId;
+  } else if (data.source.toUpperCase() === "PYQ" || data.source.toLowerCase().includes("previous year")) {
     const examSubstituted = Boolean(fileExam && fileExam.id !== exam.id);
     if (runExamContext?.mockTarget || examSubstituted) {
       warnings.push(

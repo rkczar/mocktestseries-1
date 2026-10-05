@@ -105,6 +105,9 @@ export function AllQuestionsPanelClient({
   const [hasImage, setHasImage] = useState(initialFilters.hasImage || "");
   const [reviewRequired, setReviewRequired] = useState(initialFilters.reviewRequired || "");
   const [importBatchId, setImportBatchId] = useState(initialFilters.importBatchId || "");
+  const [contentFormat, setContentFormat] = useState(initialFilters.contentFormat || "");
+  const [editorialStage, setEditorialStage] = useState(initialFilters.editorialStage || "");
+  const [hasRichMedia, setHasRichMedia] = useState(initialFilters.hasRichMedia || "");
   const [importedFrom, setImportedFrom] = useState(initialFilters.importedFrom || "");
   const [importedTo, setImportedTo] = useState(initialFilters.importedTo || "");
 
@@ -131,6 +134,9 @@ export function AllQuestionsPanelClient({
         hasImage,
         reviewRequired,
         importBatchId,
+        contentFormat,
+        editorialStage,
+        hasRichMedia,
         importedFrom,
         importedTo,
         refreshNonce,
@@ -150,6 +156,9 @@ export function AllQuestionsPanelClient({
       hasImage,
       reviewRequired,
       importBatchId,
+      contentFormat,
+      editorialStage,
+      hasRichMedia,
       importedFrom,
       importedTo,
       refreshNonce,
@@ -299,6 +308,9 @@ export function AllQuestionsPanelClient({
     setHasImage("");
     setReviewRequired("");
     setImportBatchId("");
+    setContentFormat("");
+    setEditorialStage("");
+    setHasRichMedia("");
     setImportedFrom("");
     setImportedTo("");
     setPage(1);
@@ -506,6 +518,51 @@ export function AllQuestionsPanelClient({
               <option value="">Review: any</option>
               <option value="true">Needs review</option>
               <option value="false">Not flagged</option>
+            </select>
+
+            <select
+              value={contentFormat}
+              onChange={(e) => {
+                setContentFormat(e.target.value);
+                setPage(1);
+              }}
+              aria-label="Content format"
+              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
+            >
+              <option value="">Format: any</option>
+              <option value="PLAIN">PLAIN</option>
+              <option value="RICH_V1">RICH_V1</option>
+            </select>
+
+            <select
+              value={editorialStage}
+              onChange={(e) => {
+                setEditorialStage(e.target.value);
+                setPage(1);
+              }}
+              aria-label="Editorial stage"
+              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
+            >
+              <option value="">Editorial stage: any</option>
+              <option value="NONE">No stage (legacy)</option>
+              <option value="DRAFT">Draft</option>
+              <option value="NEEDS_REVIEW">Needs review</option>
+              <option value="VERIFIED">Verified</option>
+              <option value="READY_TO_PUBLISH">Ready to publish</option>
+            </select>
+
+            <select
+              value={hasRichMedia}
+              onChange={(e) => {
+                setHasRichMedia(e.target.value);
+                setPage(1);
+              }}
+              aria-label="Has rich media"
+              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
+            >
+              <option value="">Rich media: any</option>
+              <option value="true">Has rich media</option>
+              <option value="false">No rich media</option>
             </select>
 
             <select

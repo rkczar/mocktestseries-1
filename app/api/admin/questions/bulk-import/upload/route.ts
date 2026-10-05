@@ -3,10 +3,12 @@ import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { parseImportFile, detectImportFileFormat, type BulkImportRow } from "@/lib/bulk-import";
-import { BulkImportDuplicateStrategy, BulkImportStatus, BulkImportRowStatus, ImportRowSeverity } from "@prisma/client";
+import { BulkImportDuplicateStrategy, BulkImportMode, BulkImportStatus, BulkImportRowStatus, ImportBundleStatus, ImportRowSeverity } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 
 const VALID_STRATEGIES = ["SKIP", "REPLACE", "ADD_AS_NEW"];
+/** RICH batches: a full 180-question NEET paper with room to spare; bounded so validation stays fast. */
+const RICH_MAX_ROWS = 500;
 
 /**
  * Persists a BulkImportRun + one BulkImportRow per parsed row at UPLOAD
@@ -35,6 +37,20 @@ export async function POST(request: NextRequest) {
     const duplicateStrategy = (
       duplicateStrategyRaw && VALID_STRATEGIES.includes(duplicateStrategyRaw) ? duplicateStrategyRaw : "SKIP"
     ) as BulkImportDuplicateStrategy;
+    // NEET Phase 3: RICH mode is opt-in per upload; anything else is the unchanged LEGACY import.
+    const importMode = formData.get("importMode") === "RICH" ? BulkImportMode.RICH : BulkImportMode.LEGACY;
+    const bundleId = importMode === BulkImportMode.RICH ? (formData.get("bundleId") as string | null)?.trim() || null : null;
+    const idempotencyKeyRaw = (formData.get("idempotencyKey") as string | null)?.trim() || null;
+    const idempotencyKey = idempotencyKeyRaw && /^[A-Za-z0-9-]{16,64}$/.test(idempotencyKeyRaw) ? idempotencyKeyRaw : null;
+
+    // A retried upload (lost response, double click) returns the run it already created.
+    if (idempotencyKey) {
+      const previous = await prisma.bulkImportRun.findUnique({ where: { idempotencyKey }, select: { id: true, adminUserId: true, filename: true, format: true, totalRows: true } });
+      if (previous) {
+        if (previous.adminUserId !== session.user.id) return NextResponse.json({ error: "Duplicate upload key." }, { status: 409 });
+        return NextResponse.json({ success: true, runId: previous.id, filename: previous.filename, format: previous.format, total: previous.totalRows, parseErrors: [], reused: true });
+      }
+    }
 
     if (!file) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
@@ -60,12 +76,26 @@ export async function POST(request: NextRequest) {
     if (!format) {
       return NextResponse.json({ error: "Unsupported file format. Please upload CSV, XLS, or XLSX files." }, { status: 400 });
     }
+    if (importMode === BulkImportMode.RICH && format === "XLS") {
+      return NextResponse.json({ error: "Rich imports take the canonical XLSX template (or CSV). Save the workbook as .xlsx." }, { status: 400 });
+    }
+
+    if (bundleId) {
+      const bundle = await prisma.importBundle.findUnique({ where: { id: bundleId }, select: { createdById: true, status: true, errorMessage: true, run: { select: { id: true } } } });
+      if (!bundle || bundle.createdById !== session.user.id) return NextResponse.json({ error: "Image bundle not found." }, { status: 400 });
+      if (bundle.run) return NextResponse.json({ error: "This image bundle is already attached to another import." }, { status: 409 });
+      if (bundle.status === ImportBundleStatus.FAILED) return NextResponse.json({ error: `The image bundle was refused: ${bundle.errorMessage ?? "invalid archive"}` }, { status: 400 });
+      if (bundle.status === ImportBundleStatus.UPLOADING) return NextResponse.json({ error: "The image bundle upload is not complete yet." }, { status: 409 });
+    }
 
     // Parse the file
-    const { rows, errors: parseErrors } = await parseImportFile(file);
+    const { rows, errors: parseErrors } = await parseImportFile(file, importMode);
 
     if (rows.length === 0) {
       return NextResponse.json({ error: "Failed to parse file", details: parseErrors }, { status: 400 });
+    }
+    if (importMode === BulkImportMode.RICH && rows.length > RICH_MAX_ROWS) {
+      return NextResponse.json({ error: `A rich import holds at most ${RICH_MAX_ROWS} questions (this file has ${rows.length}). Split it into separate imports.` }, { status: 400 });
     }
 
     const exam = await prisma.exam.findUnique({ where: { id: examId }, select: { id: true } });
@@ -107,6 +137,8 @@ export async function POST(request: NextRequest) {
           totalRows: rows.length,
           duplicateStrategy,
           status: BulkImportStatus.UPLOADED,
+          ...(importMode === BulkImportMode.RICH ? { importMode, bundleId } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
         },
       });
 
@@ -130,7 +162,7 @@ export async function POST(request: NextRequest) {
         action: "BULK_IMPORT_UPLOADED",
         entityType: "BulkImportRun",
         entityId: run.id,
-        metadata: { filename: file.name, totalRows: rows.length, format, label, examId, examYear, previousYearPaperId, mockTestId, importSource, duplicateStrategy },
+        metadata: { filename: file.name, totalRows: rows.length, format, label, examId, examYear, previousYearPaperId, mockTestId, importSource, duplicateStrategy, ...(importMode === BulkImportMode.RICH ? { importMode, bundleId } : {}) },
       },
     });
 
@@ -144,6 +176,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     if (error instanceof UnauthorizedError) return NextResponse.json({ error: error.message }, { status: 403 });
+    // Two simultaneous submissions with the same key: the loser gets the winner's run.
+    if ((error as { code?: string })?.code === "P2002") {
+      return NextResponse.json({ error: "This upload was already received — refresh Import History." }, { status: 409 });
+    }
     console.error("POST /api/admin/questions/bulk-import/upload error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to process upload" },
