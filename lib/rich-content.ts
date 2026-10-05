@@ -1,6 +1,7 @@
 import "server-only";
 import katex from "katex";
 import "katex/contrib/mhchem";
+import { MEDIA_URL_PREFIX, mediaUrl } from "@/lib/media-storage";
 import type {
   AssetRole,
   AssetView,
@@ -170,14 +171,9 @@ export function renderText(format: unknown, text: string): RenderedText {
 // Assets (QuestionAsset → snapshot → student view)
 // ---------------------------------------------------------------------------
 
-/** Public URL root for immutable media, served by nginx (ops/nginx/README.md). */
-export const MEDIA_URL_PREFIX = "/media/";
-const STORAGE_KEY = /^[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_.-]*)*\.(webp|png|jpe?g|avif)$/i;
-
-/** storageKey → public URL; null for anything that isn't a safe relative raster path. */
+/** storageKey → public URL; null for anything that isn't a safe relative raster path (lib/media-storage.ts). */
 export function assetUrl(storageKey: unknown): string | null {
-  if (typeof storageKey !== "string" || !STORAGE_KEY.test(storageKey) || storageKey.includes("..")) return null;
-  return MEDIA_URL_PREFIX + storageKey;
+  return mediaUrl(storageKey);
 }
 
 /** What snapshot v2 freezes for one asset. */

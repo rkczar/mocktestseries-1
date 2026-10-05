@@ -21,7 +21,7 @@ serves from a release directory.
 | Path | Directory | Use |
 |---|---|---|
 | `/storage/question-images/` | `/var/www/mocktestseries-shared/storage/question-images/` | today's `Question.imageUrl` / `QuestionOption.imageUrl` URLs (random-UUID names) |
-| `/media/` | `/var/www/mocktestseries-shared/storage/media/` | reserved for the future immutable, content-addressed assets (e.g. `/media/q/<sha256>.webp`) |
+| `/media/` | `/var/www/mocktestseries-shared/storage/media/` | immutable, content-addressed rich-question media `/media/q/<aa>/<sha256>.webp` (lib/media-storage.ts) |
 
 `/storage/test-resources/` is deliberately **not** included. Paper and
 Solution PDFs stay behind Next (`proxy.ts` limits them to admins, and students
@@ -62,16 +62,18 @@ nginx -t && systemctl reload nginx
 nginx -t && systemctl reload nginx
 ```
 
-## Image history safety (Phase 2 must fix)
+## Image history safety (fixed in NEET Phase 2)
 
-`TestAttemptQuestion.questionSnapshot` stores only the image **URL**.
-`app/api/admin/questions/images/route.ts` currently unlinks the old file when an
-image is replaced (`previousUrl`) or removed (DELETE). Any submitted attempt
-whose snapshot points at that file then shows a broken image in Review
-forever.
+`TestAttemptQuestion.questionSnapshot` stores image URLs/keys, so a file an
+attempt froze must outlive any later edit.
 
-No production question has an image yet, so nothing is affected today. Phase 2
-replaces this with immutable, content-addressed assets: replace = a new file,
-and a file is garbage-collected only when no question and no snapshot
-references it. Do not add any new code path that deletes or overwrites a media
-file before then.
+- **Rich media (`/media/`)**: `lib/media-storage.ts` writes immutable,
+  content-addressed files `q/<aa>/<sha256>.webp` (hard-link into place, never
+  overwritten, verified on reuse). There is no delete. Replacing an image on a
+  question creates a NEW file + reference; removing drops the reference only.
+  `MediaObject` lists every physical file.
+- **Legacy images (`/storage/question-images/`)**: the admin route no longer
+  unlinks the old file on replace or remove.
+- A future garbage collector must check `QuestionAsset`, legacy `imageUrl`
+  columns AND every `TestAttemptQuestion.questionSnapshot` before deleting
+  anything. None exists today, by design.

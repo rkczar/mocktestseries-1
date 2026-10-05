@@ -11,7 +11,7 @@ import { useAskAi } from "@/components/student/explanation-panel";
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 import { RichText } from "@/components/content/rich-text";
-import { QuestionMedia } from "@/components/content/question-media";
+import { QuestionMedia, preloadImages } from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
 import type { ExplanationView, RichQuestionView } from "@/lib/rich-content-types";
 
@@ -60,6 +60,13 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
     const card = cardRef.current;
     if (card && card.getBoundingClientRect().top < 80) card.scrollIntoView({ block: "start", behavior: "instant" });
   }, [index]);
+
+  // RICH_V1 media: warm the next question's images only (never the whole review).
+  useEffect(() => {
+    const next = questions[index + 1];
+    if (next?.rich) preloadImages(next.rich.assets.map((a) => a.url));
+    if (next?.explanation) preloadImages(next.explanation.assets.map((a) => a.url));
+  }, [index, questions]);
 
   if (!q) return null;
 

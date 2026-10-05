@@ -213,6 +213,12 @@ npx tsx scripts/verify-rich-content-plain.tsx
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-rich-content.ts setup > /tmp/rc.json
 BASE=http://localhost:3100 FIXTURE=/tmp/rc.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<dir containing playwright> node scripts/verify-rich-content.mjs
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-rich-content.ts cleanup /tmp/rc.json
+
+# 9. scientific media (NEET Phase 2): validation, immutable storage, dedup, history, viewer, preload, CLS.
+#    STORAGE_DIR must be a disposable directory; the browser half needs nginx in front (see the .mjs header).
+STORAGE_DIR=/tmp/media-scratch DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-media-engine.ts
+STORAGE_DIR=/tmp/media-scratch DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-media-engine.ts setup > /tmp/med.json
+BASE=<nginx origin> NEXT_DIRECT=http://127.0.0.1:3100 FIXTURE=/tmp/med.json STORAGE_DIR=/tmp/media-scratch FX_DIR=<dir with fixture PNGs> DATABASE_URL="$SCRATCH_URL" ADMIN_USER=… ADMIN_PASS=… NODE_PATH=<dir containing playwright> node scripts/verify-media-engine.mjs
 ```
 
 ## Rich content and snapshot v2 (since NEET Phase 1)
@@ -230,6 +236,11 @@ DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scr
   `correctLabel`: `toPlayerQuestions` puts them only inside `reveal`, and
   `revealAnswer` returns them with the correct label. Review shows them after
   submit; Saved Questions only when the answer is REVEALABLE.
+- Media (Phase 2): RICH_V1 images are `QuestionAsset` rows pointing at
+  immutable files (`lib/media-storage.ts`); v2 snapshots freeze their keys, so
+  replacing/removing an image never changes a past attempt. The player
+  preloads only the NEXT question's images (`preloadImages`), and every image
+  has a reserved box from its stored width/height (no layout shift).
 
 Every start (and resume-by-id) first runs `assertExamLive(examId)`: an exam
 with `isActive = false` is private, whatever its papers, tests or question

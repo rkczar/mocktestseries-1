@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -10,7 +10,6 @@ import {
   publicUrlFor,
   questionImagesDir,
   randomImageFilename,
-  resolveQuestionImagePath,
 } from "@/lib/question-images";
 
 /**
@@ -61,12 +60,9 @@ export async function POST(request: NextRequest) {
 
     const url = publicUrlFor(filename);
 
-    // Best-effort: clean up whatever this upload is replacing. Never fails
-    // the request if the old file is already gone.
-    if (previousUrl) {
-      const previousPath = resolveQuestionImagePath(previousUrl);
-      if (previousPath) await unlink(previousPath).catch(() => {});
-    }
+    // The replaced file is deliberately KEPT: submitted attempts froze its URL
+    // in their snapshots, and review must keep showing the original image
+    // (NEET Phase 2 / audit R3). Only the question's reference changes.
 
     await prisma.auditLog.create({
       data: {
@@ -88,7 +84,10 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** Removes a previously uploaded image. Disk removal is best-effort; the audit log always records the intent. */
+/**
+ * Records the removal of an image from a question. The FILE is kept (attempt
+ * snapshots may reference it — audit R3); the form clears the reference.
+ */
 export async function DELETE(request: NextRequest) {
   let session;
   try {
@@ -106,8 +105,6 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "No image URL provided" }, { status: 400 });
     }
 
-    const absolutePath = resolveQuestionImagePath(url);
-    if (absolutePath) await unlink(absolutePath).catch(() => {});
 
     await prisma.auditLog.create({
       data: {

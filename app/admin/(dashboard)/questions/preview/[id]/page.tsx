@@ -8,6 +8,8 @@ import { RichText } from "@/components/content/rich-text";
 import { QuestionMedia } from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
 import { liveRichViews } from "@/lib/rich-content";
+import { mediaUrl } from "@/lib/media-storage";
+import { MediaManager } from "./media-manager";
 
 export const metadata = { title: "Preview Question — Mock Test Series.in Admin" };
 
@@ -34,7 +36,10 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
       exam: { select: { name: true } },
       subject: { select: { name: true } },
       options: { orderBy: { order: "asc" }, select: { label: true, text: true, imageUrl: true, isCorrect: true } },
-      assets: { select: { role: true, optionLabel: true, order: true, storageKey: true, alt: true, caption: true, width: true, height: true, darkBacking: true } },
+      assets: {
+        orderBy: [{ role: "asc" }, { optionLabel: "asc" }, { order: "asc" }],
+        select: { id: true, role: true, optionLabel: true, order: true, storageKey: true, alt: true, caption: true, width: true, height: true, bytes: true, sha256: true, darkBacking: true },
+      },
     },
   });
   if (!q) notFound();
@@ -83,6 +88,14 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
           {explanation ? <HumanExplanation explanation={explanation} /> : null}
         </CardContent>
       </Card>
+      <MediaManager
+        questionId={q.id}
+        status={q.status}
+        contentFormat={q.contentFormat}
+        explanation={q.explanation}
+        optionLabels={q.options.map((o) => o.label)}
+        assets={q.assets.map((a) => ({ ...a, url: mediaUrl(a.storageKey) }))}
+      />
     </div>
   );
 }

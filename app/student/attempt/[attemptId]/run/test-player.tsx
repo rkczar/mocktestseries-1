@@ -43,7 +43,7 @@ import { ReportQuestionDialog } from "@/components/student/report-question-dialo
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
 import { useAskAi } from "@/components/student/explanation-panel";
 import { RichText } from "@/components/content/rich-text";
-import { QuestionMedia } from "@/components/content/question-media";
+import { QuestionMedia, preloadImages } from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
 import type { ExplanationView, RenderedHtml, RichQuestionView } from "@/lib/rich-content-types";
 import { cn } from "@/lib/utils";
@@ -295,6 +295,14 @@ export function TestPlayer({
 
   // Stop the queue's retry timers when the player unmounts.
   useEffect(() => () => queueRef.current?.stop(), []);
+
+  // RICH_V1 media: warm the cache for the NEXT question's figures and option
+  // images only (never the whole paper). PLAIN questions have no `rich`, so
+  // this does nothing for them. Explanation images are never in the payload.
+  useEffect(() => {
+    const next = questions[current + 1]?.rich;
+    if (next) preloadImages(next.assets.map((a) => a.url));
+  }, [current, questions]);
 
   // ---- One Active Test Device: keep this device's lease alive ----------------
   // Side effect in an effect (never in a state updater — ops/TEST-ENGINE.md #1).
@@ -574,7 +582,7 @@ export function TestPlayer({
                 className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
               />
             ) : null}
-            {question.rich ? <QuestionMedia className="mt-3" assets={question.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
+            {question.rich ? <QuestionMedia key={question.questionId} className="mt-3" priority assets={question.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
 
             {question.malformed ? (
               <div role="alert" data-testid="malformed-question" className="mt-5 rounded-[var(--radius-card)] border border-[var(--color-warning)]/50 bg-[var(--color-warning)]/10 p-4 text-sm text-[var(--color-foreground)]">
@@ -628,8 +636,9 @@ export function TestPlayer({
                         ) : null}
                         {question.rich ? (
                           <QuestionMedia
-                            className="pointer-events-none mt-2"
+                            className="mt-2"
                             size="option"
+                            priority
                             assets={question.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === opt.label)}
                           />
                         ) : null}

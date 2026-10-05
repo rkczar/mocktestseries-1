@@ -1052,6 +1052,30 @@ model QuestionAsset {
   @@index([sha256])
 }
 
+// One immutable, content-addressed media FILE (NEET Phase 2). `sha256` is the
+// hash of the delivered (processed) bytes and names the file
+// (storageKey "q/<aa>/<sha256>.webp" under the /media/ root, see
+// lib/media-storage.ts). Many QuestionAsset rows may point at the same file.
+// App code never deletes or rewrites a MediaObject or its file: old attempt
+// snapshots keep rendering whatever they froze.
+model MediaObject {
+  sha256         String   @id
+  storageKey     String   @unique
+  mime           String
+  width          Int
+  height         Int
+  bytes          Int
+  originalSha256 String
+  originalMime   String
+  originalWidth  Int
+  originalHeight Int
+  originalBytes  Int
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  @@index([originalSha256])
+}
+
 // ---------------------------------------------------------------------------
 // Mock Tests / Test Series
 // ---------------------------------------------------------------------------
