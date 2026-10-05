@@ -199,7 +199,18 @@ BASE=http://localhost:3100 FIXTURE=/tmp/engine-fixture.json NODE_PATH=<dir conta
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/practice-mode-ui-fixture.ts setup > /tmp/pm.json
 BASE=http://localhost:3100 FIXTURE=/tmp/pm.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<dir containing playwright> node scripts/verify-practice-mode-ui.mjs
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/practice-mode-ui-fixture.ts cleanup <examId> <studentIds…>
+
+# 7. inactive-exam draft-leak gate (lib/exam-live.ts): an inactive exam with an active paper,
+#    PUBLISHED questions, a mock and modules is never readable/startable by direct id
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-exam-live-gate.ts
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-exam-live-gate.ts setup > /tmp/elg.json
+BASE=http://localhost:3100 FIXTURE=/tmp/elg.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<dir containing playwright> node scripts/verify-exam-live-gate.mjs
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-exam-live-gate.ts cleanup /tmp/elg.json
 ```
+
+Every start (and resume-by-id) first runs `assertExamLive(examId)`: an exam
+with `isActive = false` is private, whatever its papers, tests or question
+statuses say. Admin tools never call it.
 
 Browser suites that need the server-rendered player payload (answer-leak
 checks) fetch it from inside the page. The hydrated DOM (`page.content()`)

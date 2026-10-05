@@ -419,7 +419,8 @@ async function main() {
     console.log("\n--- PYQ ---");
     {
       const paper = await prisma.previousYearPaper.findFirstOrThrow({
-        where: { isActive: true, questions: { some: { status: QuestionStatus.PUBLISHED } } },
+        // A paper students can actually take: inactive exams are refused by assertExamLive.
+        where: { isActive: true, exam: { isActive: true }, questions: { some: { status: QuestionStatus.PUBLISHED } } },
         orderBy: { year: "desc" },
         include: { exam: true, _count: { select: { questions: { where: { status: QuestionStatus.PUBLISHED } } } } },
       });

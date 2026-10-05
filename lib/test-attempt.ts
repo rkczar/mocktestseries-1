@@ -28,6 +28,7 @@ import { deriveLiveTestState } from "@/lib/live-test";
 import { deriveMockTestAvailability, isMockTestAvailable, isMockResultReleased, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
 import { assertContentAccess } from "@/lib/payments/access";
+import { assertExamLive } from "@/lib/exam-live";
 import { TestEngineError } from "@/lib/test-engine-log";
 import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
 
@@ -201,6 +202,9 @@ async function createAttemptFromQuestions(params: {
   if (params.questions.length === 0) {
     throw new TestEngineError("UNAVAILABLE", "This test has no questions yet. Please try again later.");
   }
+  // Inactive (private / pre-launch) exams never get a new attempt, whatever
+  // path reached here. Each start* also checks this before resume.
+  await assertExamLive(params.examId);
   // Platform Controls → Start New Tests (also Lockdown / Maintenance). This
   // is the only place a TestAttempt row is created, and every start* helper
   // returns an existing IN_PROGRESS attempt before reaching it, so resume,
@@ -387,6 +391,7 @@ async function planMockTestStart(studentId: string, mockTestId: string, entryMod
   // Payment/entitlement gate runs BEFORE resume too, so an attempt started
   // while the content was free can't be resumed once it requires payment.
   const gate = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { examId: true, testSeriesId: true, accessType: true } });
+  if (gate) await assertExamLive(gate.examId);
   if (gate) await assertContentAccess(studentId, { kind: "MOCK_TEST", id: mockTestId, ...gate });
 
   const resumable = await findResumableAttempt(studentId, { mockTestId });
@@ -518,6 +523,7 @@ type CustomModuleWithQuestions = Awaited<
 >;
 
 async function startFromCustomModuleRow(studentId: string, customModule: CustomModuleWithQuestions) {
+  await assertExamLive(customModule.examId);
   await assertContentAccess(studentId, {
     kind: "CUSTOM_MODULE",
     id: customModule.id,
@@ -661,6 +667,7 @@ export async function startLiveTestAttempt(studentId: string, liveTestId: string
 
 async function planPreviousYearPaperStart(studentId: string, paperId: string): Promise<StartPlan> {
   const gate = await prisma.previousYearPaper.findUnique({ where: { id: paperId }, select: { examId: true } });
+  if (gate) await assertExamLive(gate.examId);
   if (gate) await assertContentAccess(studentId, { kind: "PREVIOUS_YEAR_PAPER", id: paperId, examId: gate.examId });
 
   const resumable = await findResumableAttempt(studentId, { previousYearPaperId: paperId });
@@ -750,6 +757,7 @@ function subjectTestTiming(selection: SubjectTestSelection, effectiveCount: numb
  * for the server-side window (see lib/attempt-timing.ts).
  */
 export async function startSubjectTestAttempt(studentId: string, selection: SubjectTestSelection) {
+  if (selection.examId) await assertExamLive(selection.examId);
   if (selection.examId) await assertContentAccess(studentId, { kind: "SUBJECT_TEST", id: null, examId: selection.examId });
 
   const resumable = await findResumableAttempt(studentId, { testType: TestType.SUBJECT_TEST, subjectId: selection.subjectId });

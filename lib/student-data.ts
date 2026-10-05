@@ -210,7 +210,7 @@ export type ScheduledMockTestRow = Awaited<ReturnType<typeof getScheduledMockTes
 export async function getMockTestDetailForStudent(studentId: string, mockTestId: string) {
   const { deriveMockTestAvailability } = await import("@/lib/mock-test-schedule");
   const mockTest = await prisma.mockTest.findFirst({
-    where: { id: mockTestId, ...LIVE_MOCK_TEST_WHERE },
+    where: { id: mockTestId, ...LIVE_MOCK_TEST_WHERE, exam: { isActive: true } },
     include: {
       exam: { select: { id: true, name: true, instructions: true } },
       testSeries: { select: { id: true, name: true, instructions: true } },
@@ -308,6 +308,7 @@ export async function getCustomModuleDetailForStudent(moduleId: string, studentI
       id: moduleId,
       status: { in: VISIBLE_CUSTOM_MODULE_STATUSES },
       OR: [{ isStudentOwned: false }, { createdByStudentId: studentId }],
+      exam: { isActive: true },
     },
     include: { exam: true, _count: { select: { questions: true } } },
   });
@@ -346,7 +347,7 @@ export async function getStudentOwnedCustomModules(studentId: string) {
 /** Looked up by the unguessable share token only — never by id — so a private module can't be reached by guessing. */
 export async function getCustomModuleByShareToken(shareToken: string) {
   return prisma.customModule.findFirst({
-    where: { shareToken, status: { in: VISIBLE_CUSTOM_MODULE_STATUSES } },
+    where: { shareToken, status: { in: VISIBLE_CUSTOM_MODULE_STATUSES }, exam: { isActive: true } },
     include: { exam: true, _count: { select: { questions: true } } },
   });
 }
@@ -371,7 +372,8 @@ export async function ensureCustomModuleShareToken(moduleId: string, studentId: 
 
 export async function getPreviousYearPaperForStudent(paperId: string, studentId: string) {
   const paper = await prisma.previousYearPaper.findFirst({
-    where: { id: paperId, isActive: true },
+    // An inactive (private / pre-launch) exam hides its papers even by direct id.
+    where: { id: paperId, isActive: true, exam: { isActive: true } },
     include: { exam: true, _count: { select: PAPER_PUBLISHED_QUESTION_COUNT } },
   });
   if (!paper) return null;
@@ -393,7 +395,7 @@ export async function getPreviousYearPaperForStudent(paperId: string, studentId:
  */
 export async function getDashboardPreviousYearPapers(studentId: string, examId: string) {
   const papers = await prisma.previousYearPaper.findMany({
-    where: { examId, isActive: true, questions: { some: { status: QuestionStatus.PUBLISHED } } },
+    where: { examId, isActive: true, exam: { isActive: true }, questions: { some: { status: QuestionStatus.PUBLISHED } } },
     orderBy: [{ year: "desc" }, { order: "asc" }, { title: "asc" }],
     select: {
       id: true,

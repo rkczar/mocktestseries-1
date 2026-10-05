@@ -11,6 +11,7 @@ import {
   NoQuestionsAvailableError,
   type QuestionSelectionFilters,
 } from "@/lib/question-selection";
+import { isExamLive } from "@/lib/exam-live";
 
 const SOURCES: QuestionSource[] = ["QUESTION_BANK", "PYQ"];
 const DIFFICULTIES = ["EASY", "MEDIUM", "HARD"] as const;
@@ -99,6 +100,7 @@ export async function startSubjectTestAction(
 /** Live "how many questions are in scope" count for the setup screen — only the setup's own filters are honoured. */
 export async function countAvailableQuestionsAction(filters: QuestionSelectionFilters): Promise<number> {
   await requireStudentOrLogin();
+  if (!(await isExamLive(filters.examId))) return 0;
   return countPublishedQuestions({
     examId: filters.examId,
     subjectId: filters.subjectId,

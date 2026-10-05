@@ -412,13 +412,14 @@ export async function resolveHomepage(
           const maxCards = Number.isFinite(Number(maxCardsRaw)) && Number(maxCardsRaw) > 0 ? Number(maxCardsRaw) : undefined;
 
           if (explicitIds.length > 0) {
+            // Papers of an inactive (private / pre-launch) exam never render, even when listed by id.
             resolved.papers = await prisma.previousYearPaper.findMany({
-              where: { id: { in: explicitIds }, isActive: true },
+              where: { id: { in: explicitIds }, isActive: true, exam: { isActive: true } },
               orderBy: { year: "desc" },
             });
           } else if (examId) {
             resolved.papers = await prisma.previousYearPaper.findMany({
-              where: { examId, isActive: true },
+              where: { examId, isActive: true, exam: { isActive: true } },
               orderBy: [{ year: "desc" }, { order: "asc" }],
               take: maxCards,
             });

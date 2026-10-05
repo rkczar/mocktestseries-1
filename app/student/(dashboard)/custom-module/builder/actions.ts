@@ -9,6 +9,7 @@ import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@
 import { prisma } from "@/lib/prisma";
 import { startCustomModuleAttempt, startSharedCustomModuleAttempt } from "@/lib/test-attempt";
 import { ensureCustomModuleShareToken, getSubjectTestSetup } from "@/lib/student-data";
+import { isExamLive, EXAM_NOT_LIVE_MESSAGE } from "@/lib/exam-live";
 import {
   selectPublishedQuestions,
   countPublishedQuestions,
@@ -51,6 +52,8 @@ export async function createCustomModuleAction(
 
   const examId = str(formData, "examId");
   if (!examId) return { error: "Exam is required." };
+  // Checked before the module row is written: an inactive exam never gets a module.
+  if (!(await isExamLive(examId))) return { error: EXAM_NOT_LIVE_MESSAGE };
 
   // Any whole number from 1 up to the platform maximum — the real limit is
   // the eligible pool, checked against the database below.
@@ -139,6 +142,7 @@ function buildModuleTitle(filters: QuestionSelectionFilters): string {
 /** Live "how many questions are in scope" count for the builder screen. */
 export async function countCustomModuleQuestionsAction(filters: QuestionSelectionFilters): Promise<number> {
   await requireStudentOrLogin();
+  if (!(await isExamLive(filters.examId))) return 0;
   return countPublishedQuestions({
     examId: filters.examId,
     subjectId: filters.subjectId,
