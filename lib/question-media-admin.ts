@@ -2,6 +2,7 @@ import "server-only";
 import { QuestionAssetRole, QuestionContentFormat, QuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MediaValidationError, storeScientificImage } from "@/lib/media-processing";
+import { matchAssetKey, readMatchSpec } from "@/lib/question-types";
 
 /**
  * Admin operations on a RICH_V1 question's media (NEET Phase 2). Minimum
@@ -45,7 +46,7 @@ export function normalizeAlt(alt: unknown, decorative: unknown): string {
 }
 
 function parseRole(role: unknown): QuestionAssetRole {
-  if (typeof role !== "string" || !ROLES.has(role)) throw new QuestionMediaError("Role must be QUESTION, OPTION or EXPLANATION.");
+  if (typeof role !== "string" || !ROLES.has(role)) throw new QuestionMediaError("Role must be QUESTION, OPTION, EXPLANATION or LIST_ITEM.");
   return role as QuestionAssetRole;
 }
 
@@ -65,7 +66,10 @@ function parseCaption(caption: unknown): string | null {
 const parseBool = (v: unknown, fallback: boolean) => (v === undefined || v === null || v === "" ? fallback : v === true || v === "true" || v === "1" || v === "on");
 
 async function loadRichQuestion(questionId: string) {
-  const q = await prisma.question.findUnique({ where: { id: questionId }, select: { id: true, contentFormat: true, options: { select: { label: true } } } });
+  const q = await prisma.question.findUnique({
+    where: { id: questionId },
+    select: { id: true, contentFormat: true, questionType: true, matchSpec: true, options: { select: { label: true } } },
+  });
   if (!q) throw new QuestionMediaError("Question not found.", 404);
   if (q.contentFormat !== QuestionContentFormat.RICH_V1) throw new QuestionMediaError("Images can only be attached to RICH_V1 questions.");
   return q;
@@ -77,12 +81,27 @@ function slotFor(role: QuestionAssetRole, optionLabel: unknown, labels: string[]
   return optionLabel;
 }
 
+/**
+ * LIST_ITEM (NEET Phase 4): a Match the Following entry image. The key must
+ * name an entry that exists in this question's List I / List II ("I:A", "II:III").
+ */
+function listKeyFor(role: QuestionAssetRole, listKey: unknown, q: { questionType: string; matchSpec: unknown }): string | null {
+  if (role !== QuestionAssetRole.LIST_ITEM) return null;
+  const spec = q.questionType === "MATCH_THE_FOLLOWING" ? readMatchSpec(q.matchSpec) : null;
+  if (!spec) throw new QuestionMediaError("List images need a Match the Following question with List I / List II saved.");
+  const keys = [...spec.listI.map((e) => matchAssetKey("I", e.key)), ...spec.listII.map((e) => matchAssetKey("II", e.key))];
+  if (typeof listKey !== "string" || !keys.includes(listKey)) throw new QuestionMediaError(`List images need an existing entry (${keys.join(", ")}).`);
+  return listKey;
+}
+
 export async function attachQuestionAsset(input: {
   questionId: string;
   actorId: string | null;
   file: { bytes: Buffer; filename: string | null; mime: string | null };
   role: unknown;
   optionLabel?: unknown;
+  /** LIST_ITEM only: "I:A" / "II:III". */
+  listKey?: unknown;
   order?: unknown;
   alt?: unknown;
   decorative?: unknown;
@@ -99,12 +118,13 @@ export async function attachQuestionAsset(input: {
 
   const role = replacing ? replacing.role : parseRole(input.role);
   const optionLabel = replacing ? replacing.optionLabel : slotFor(role, input.optionLabel, q.options.map((o) => o.label));
+  const listKey = replacing ? replacing.listKey : listKeyFor(role, input.listKey, q);
   const alt = normalizeAlt(input.alt, input.decorative);
   const caption = parseCaption(input.caption);
   const darkBacking = parseBool(input.darkBacking, replacing?.darkBacking ?? true);
   let order = replacing ? replacing.order : parseOrder(input.order);
   if (order === null) {
-    const last = await prisma.questionAsset.findFirst({ where: { questionId: q.id, role, optionLabel }, orderBy: { order: "desc" }, select: { order: true } });
+    const last = await prisma.questionAsset.findFirst({ where: { questionId: q.id, role, optionLabel, listKey }, orderBy: { order: "desc" }, select: { order: true } });
     order = last ? last.order + 1 : 0;
   }
 
@@ -123,6 +143,7 @@ export async function attachQuestionAsset(input: {
         questionId: q.id,
         role,
         optionLabel,
+        listKey,
         order: order!,
         storageKey: media.storageKey,
         mime: media.mime,
@@ -145,6 +166,7 @@ export async function attachQuestionAsset(input: {
           assetId: created.id,
           role,
           optionLabel,
+          ...(listKey ? { listKey } : {}),
           order: created.order,
           storageKey: media.storageKey,
           sha256: media.sha256,

@@ -185,7 +185,7 @@ function StatTile({ icon, label, value }: { icon: React.ReactNode; label: string
 
 type AttemptQuestionRow = {
   questionId: string;
-  answer: { isCorrect: boolean | null; selectedOptionLabel: string | null } | null;
+  answer: { isCorrect: boolean | null; selectedOptionLabel: string | null; selectedLabels?: string[] | null } | null;
 };
 
 type QuestionMeta = {
@@ -231,7 +231,8 @@ function buildPerformanceBreakdown(questions: AttemptQuestionRow[], meta: Questi
   for (const q of questions) {
     const m = metaById.get(q.questionId);
     const subjectName = m?.subject?.name ?? "Uncategorized";
-    const attempted = q.answer?.selectedOptionLabel != null;
+    // MULTIPLE_CORRECT (NEET Phase 4) answers live in selectedLabels; selectedOptionLabel stays null for them.
+    const attempted = q.answer?.selectedOptionLabel != null || (q.answer?.selectedLabels?.length ?? 0) > 0;
     const correct = q.answer?.isCorrect === true;
     const incorrect = q.answer?.isCorrect === false;
 

@@ -9,7 +9,8 @@ import { formatIst } from "@/lib/ist-time";
 import { getWhatsAppShareConfig, buildQuestionShareText } from "@/lib/whatsapp-share-config";
 import { BackButton } from "@/components/student/back-button";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
-import { explanationView, richQuestionView } from "@/lib/rich-content";
+import { explanationView, matchView, richQuestionView } from "@/lib/rich-content";
+import { snapshotQuestionType, snapshotShareFields } from "@/lib/question-types";
 import { Card, CardContent } from "@/components/ui/card";
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
 import { StudentShell } from "@/components/student/shell";
@@ -72,6 +73,9 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
     // released on this page (held results returned above), and so is the explanation.
     const rich = richQuestionView(snapshot);
     const explanation = explanationView(snapshot);
+    // Snapshot v3 (NEET Phase 4) only — SINGLE_CORRECT rows get no new keys.
+    const type = snapshotQuestionType(snapshot);
+    const match = type === "MATCH_THE_FOLLOWING" ? matchView(snapshot) : null;
     return {
       attemptId,
       attemptQuestionId: tq.id,
@@ -90,6 +94,7 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
               text: snapshot.text,
               imageUrl: snapshot.imageUrl,
               options: snapshot.options.map((o) => ({ label: o.label, text: o.text, imageUrl: o.imageUrl })),
+              ...snapshotShareFields(snapshot),
             },
           })
         : null,
@@ -97,6 +102,8 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
       reportAction: reportAttemptQuestionAction.bind(null, attemptId, tq.questionId),
       ...(rich ? { rich } : {}),
       ...(explanation ? { explanation } : {}),
+      ...(type === "MULTIPLE_CORRECT" ? { selectedLabels: tq.answer?.selectedLabels ?? [] } : {}),
+      ...(match ? { match } : {}),
     };
   });
 

@@ -19,8 +19,8 @@ import { toIstDateString, istStartOfDay } from "@/lib/ist-time";
 import { getAiSettings } from "@/lib/ai-settings";
 import { attemptTitle } from "@/lib/attempt-title";
 import { createDeletionRequest } from "@/lib/student-lifecycle";
-import { liveRichViews } from "@/lib/rich-content";
-import type { ExplanationView, RichQuestionView } from "@/lib/rich-content-types";
+import { liveMatchView, liveRichViews } from "@/lib/rich-content";
+import type { ExplanationView, MatchView, RichQuestionView } from "@/lib/rich-content-types";
 
 /**
  * Every function here takes the authenticated studentId as a required
@@ -718,6 +718,10 @@ export interface SavedQuestionView {
   rich?: RichQuestionView;
   /** Human explanation — attached ONLY when answerRevealed, like isCorrect. */
   explanation?: ExplanationView;
+  /** NEET Phase 4, advanced types only (absent = SINGLE_CORRECT). */
+  questionType?: "MULTIPLE_CORRECT" | "MATCH_THE_FOLLOWING";
+  /** MATCH_THE_FOLLOWING only: List I / List II (presentation, not answer-key data). */
+  match?: MatchView;
 }
 
 /**
@@ -744,7 +748,9 @@ export async function getSavedQuestions(studentId: string): Promise<SavedQuestio
           options: { orderBy: { order: "asc" }, select: { label: true, text: true, imageUrl: true, isCorrect: true } },
           contentFormat: true,
           explanation: true,
-          assets: { select: { role: true, optionLabel: true, order: true, storageKey: true, alt: true, caption: true, width: true, height: true, darkBacking: true } },
+          questionType: true,
+          matchSpec: true,
+          assets: { select: { role: true, optionLabel: true, listKey: true, order: true, storageKey: true, alt: true, caption: true, width: true, height: true, darkBacking: true } },
         },
       },
     },
@@ -756,6 +762,7 @@ export async function getSavedQuestions(studentId: string): Promise<SavedQuestio
     const answerRevealed = status === "REVEALABLE";
     // The explanation is answer-key data: it never leaves the server while the key is locked.
     const views = liveRichViews({ ...q, explanation: answerRevealed ? q.explanation : null });
+    const match = liveMatchView(q);
     return {
       id: q.id,
       code: q.code,
@@ -773,6 +780,8 @@ export async function getSavedQuestions(studentId: string): Promise<SavedQuestio
       ),
       ...(views.rich ? { rich: views.rich } : {}),
       ...(answerRevealed && views.explanation ? { explanation: views.explanation } : {}),
+      ...(q.questionType !== "SINGLE_CORRECT" ? { questionType: q.questionType } : {}),
+      ...(match ? { match } : {}),
     };
   });
 }

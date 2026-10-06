@@ -21,7 +21,9 @@ import {
   toManifestQuestion,
   type ManifestImageRef,
   type ManifestQuestion,
+  manifestMatchSpec,
 } from "@/lib/rich-import/manifest";
+import { MIN_MULTIPLE_CORRECT, matchSpecIssues, readMatchSpec } from "@/lib/question-types";
 
 /**
  * Capability-aware validation for RICH runs (NEET Phase 3).
@@ -219,7 +221,7 @@ export async function resolveRichRow(
   }
   // The legacy image index (shared-storage filename lookup) is never consulted:
   // rich images come only from this run's bundle.
-  const resolved = await resolveRow(db, lookups, richShape(shape, m), undefined, runExamContext, paper ? { paperId: paper.id } : null);
+  const resolved = await matchAwareDuplicate(db, m, await resolveRow(db, lookups, richShape(shape, m), undefined, runExamContext, paper ? { paperId: paper.id } : null));
 
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -240,12 +242,12 @@ export async function resolveRichRow(
   if (merged.image) errors.push(`Image: the legacy image URL column is not used by rich imports. Put the file in the ZIP and reference it under "Question Images".`);
 
   // Question type / answer key
-  if (!m.questionType) errors.push(`Question Type: "${merged.questionType}" is not supported. Use SINGLE_CORRECT (or MCQ), or MATCH_THE_FOLLOWING.`);
-  else if (m.questionType === "MULTIPLE_CORRECT") {
-    errors.push("Question Type: MULTIPLE_CORRECT ENGINE NOT YET ENABLED — this row was parsed (answers " + (m.correct.join(", ") || "none") + ") but cannot be imported until multiple-correct scoring is approved. It is never converted to single-correct.");
-  }
+  if (!m.questionType) errors.push(`Question Type: "${merged.questionType}" is not supported. Use SINGLE_CORRECT (or MCQ), MULTIPLE_CORRECT, or MATCH_THE_FOLLOWING.`);
   if (m.correct.length === 0 && !m.parseIssues.some((i) => i.field === "Correct")) errors.push("Correct: the correct answer is missing. Use one letter A–D.");
-  else if (m.correct.length > 1 && m.questionType !== "MULTIPLE_CORRECT") errors.push(`Correct: ${m.correct.join(", ")} lists ${m.correct.length} answers, but a ${m.questionType ?? "single-correct"} question has exactly one.`);
+  else if (m.questionType === "MULTIPLE_CORRECT") {
+    // NEET Phase 4: the whole set is the key (all-or-nothing). Never narrowed to one answer.
+    if (m.correct.length < MIN_MULTIPLE_CORRECT) errors.push(`Correct: a MULTIPLE_CORRECT question needs at least ${MIN_MULTIPLE_CORRECT} correct options (got ${m.correct.join(", ") || "none"}). Use SINGLE_CORRECT for one answer.`);
+  } else if (m.correct.length > 1) errors.push(`Correct: ${m.correct.join(", ")} lists ${m.correct.length} answers, but a ${m.questionType ?? "single-correct"} question has exactly one.`);
 
   // Content format
   const rich = m.contentFormat === "RICH_V1";
@@ -291,8 +293,13 @@ export async function resolveRichRow(
 
   // Match the Following
   if (m.questionType === "MATCH_THE_FOLLOWING") {
-    if (!m.match) warnings.push("List I / List II: no structured lists given — the lists must then be written in the Question Text itself.");
+    if (!m.match) errors.push("List I / List II: a MATCH_THE_FOLLOWING question needs both lists (List I and List II columns).");
     else if (m.match.listI.length < 2 || m.match.listII.length < 2) errors.push("List I / List II: each list needs at least two entries.");
+    else {
+      // Structural rules shared with the admin form (keys, limits). Image-only entries are fine.
+      const imageKeys = new Set([...m.match.listI, ...m.match.listII].flatMap((e) => e.images.map((r) => r.listKey ?? "")));
+      for (const issue of matchSpecIssues(manifestMatchSpec(m), imageKeys)) if (!/appears twice|needs text or an image/.test(issue)) errors.push(`List I / List II: ${issue}`);
+    }
     if (m.match) for (const e of [...m.match.listI, ...m.match.listII]) if (e.text.length > RICH_TEXT_LIMITS.listEntry) errors.push(`List entry ${e.key}: longer than ${RICH_TEXT_LIMITS.listEntry} characters.`);
   } else if (m.match) {
     warnings.push(`List I / List II: lists were given but Question Type is ${m.questionType ?? "unknown"}, not MATCH_THE_FOLLOWING. They will still be appended to the question text.`);
@@ -395,4 +402,29 @@ export function richImageMatches(m: ManifestQuestion, ctx: RichContext): RichIma
 /** Bundle images that no row references (a WARNING at batch level; they are never processed). */
 export function unusedBundleImages(ctx: RichContext, referenced: Set<string>): string[] {
   return (ctx.bundle?.entries ?? []).filter((e) => (e.kind === "IMAGE" || e.kind === "UNSUPPORTED") && !referenced.has(e.basename.toLowerCase())).map((e) => e.name);
+}
+
+/**
+ * MATCH_THE_FOLLOWING (NEET Phase 4) stores only the stem as Question.text, and
+ * Match stems repeat ("Match List I with List II"). A text-only duplicate is
+ * therefore kept only when an existing Match question with the same stem also
+ * has the SAME lists; otherwise the row is not a duplicate. Code / paper+QNo
+ * duplicates are untouched.
+ */
+async function matchAwareDuplicate<T extends ValidatedImportRow>(db: ValidationDb, m: ManifestQuestion, resolved: T): Promise<T> {
+  const rd = resolved.resolvedData;
+  if (m.questionType !== "MATCH_THE_FOLLOWING" || !m.match || !rd?.isDuplicate || rd.duplicateReason !== "Potential duplicate text" || !rd.subjectId) return resolved;
+  const spec = JSON.stringify(manifestMatchSpec(m));
+  const candidates = await db.question.findMany({
+    where: { examId: rd.examId, subjectId: rd.subjectId, text: m.text, questionType: "MATCH_THE_FOLLOWING" },
+    select: { id: true, matchSpec: true },
+    take: 200,
+  });
+  const hit = candidates.find((c) => JSON.stringify(readMatchSpec(c.matchSpec)) === spec);
+  if (hit) return { ...resolved, resolvedData: { ...rd, duplicateQuestionId: hit.id } };
+  return {
+    ...resolved,
+    warnings: resolved.warnings.filter((w) => w !== "Possible duplicate: Potential duplicate text"),
+    resolvedData: { ...rd, isDuplicate: false, duplicateQuestionId: undefined, duplicateReason: undefined },
+  };
 }

@@ -430,7 +430,8 @@ async function main() {
     const withUnknown = { ...expectedV1, futureKey: { a: 1 }, explanationHtml: "<script>x</script>" };
     const unk = toPlayerQuestions([{ questionId: "x", questionSnapshot: withUnknown, answer: null }], { instantMode: true })[0];
     check("v1 + unknown keys: serialized like v1, unknown keys dropped", !("rich" in unk) && !JSON.stringify(unk).includes("futureKey") && !JSON.stringify(unk).includes("explanationHtml") && unk.text === PLAIN_TRICKY);
-    const v3 = { ...expectedV1, v: 3, contentFormat: "RICH_V1", explanation: "secret" };
+    // v3 is a real version since NEET Phase 4 (advanced question types); v4 is the "future" probe now.
+    const v3 = { ...expectedV1, v: 4, contentFormat: "RICH_V1", explanation: "secret" };
     const u3 = toPlayerQuestions([{ questionId: "x", questionSnapshot: v3, answer: { selectedOptionLabel: "A", status: "ANSWERED", revealedAt: new Date() } }], { instantMode: true })[0];
     check("unknown version is read as v1 (no rich, no explanation)", !("rich" in u3) && !JSON.stringify(u3).includes("secret"));
     const garbage = { ...expectedV1, v: 2, contentFormat: "RICH_V1", assets: "nope", explanation: 42 };

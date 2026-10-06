@@ -9,6 +9,7 @@ import { ExplanationPanel } from "@/components/student/explanation-panel";
 import { RichText } from "@/components/content/rich-text";
 import { QuestionMedia } from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
+import { MatchLists } from "@/components/content/match-lists";
 import { unsaveQuestionAction, reportSavedQuestionAction } from "./actions";
 
 export const metadata = { title: "Saved Questions — Mock Test Series.in" };
@@ -55,6 +56,10 @@ export default async function SavedQuestionsPage() {
                 />
               ) : null}
               {q.rich ? <QuestionMedia className="mt-3" assets={q.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
+              {q.match ? <MatchLists className="mt-4" match={q.match} /> : null}
+              {q.questionType === "MULTIPLE_CORRECT" ? (
+                <p className="mt-4 text-xs font-medium text-[var(--color-muted-foreground)]">More than one option may be correct.</p>
+              ) : null}
 
               <div className="mt-4 flex flex-col gap-2">
                 {q.options.map((opt) => (
@@ -89,7 +94,7 @@ export default async function SavedQuestionsPage() {
               </div>
 
               {q.answerRevealed && q.explanation ? <HumanExplanation className="mt-4" explanation={q.explanation} /> : null}
-              {q.answerRevealed ? (
+              {q.answerRevealed && q.questionType ? null : q.answerRevealed ? (
                 <ExplanationPanel questionId={q.id} />
               ) : (
                 <p className="mt-4 text-xs text-[var(--color-muted-foreground)]">

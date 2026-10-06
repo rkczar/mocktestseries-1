@@ -27,6 +27,8 @@ export type SaveStatus = "saving" | "retrying" | "failed";
 export interface AnswerValue {
   selected: string | null;
   marked: boolean;
+  /** MULTIPLE_CORRECT questions only (NEET Phase 4): the whole selected set — the queue treats it as one value, latest wins. */
+  labels?: string[];
 }
 
 export interface SaveQueueOptions {
@@ -167,7 +169,7 @@ export class AnswerSaveQueue {
       timer = setTimeout(() => resolve({ ok: false, code: "TIMEOUT" }), this.opts.timeoutMs);
     });
     Promise.race([
-      this.opts.send(questionId, { selected: sending.selected, marked: sending.marked }, sending.seq).catch(
+      this.opts.send(questionId, { selected: sending.selected, marked: sending.marked, ...(sending.labels ? { labels: sending.labels } : {}) }, sending.seq).catch(
         (): SaveResult => ({ ok: false, code: "NETWORK" })
       ),
       timeout,

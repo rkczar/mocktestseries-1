@@ -19,7 +19,7 @@ export const RICH_HEADERS: { header: string; required: "REQUIRED" | "OPTIONAL" |
   { header: "Subject", required: "REQUIRED", note: "Exact existing Subject name. Unknown names are ERRORS — the importer never creates taxonomy." },
   { header: "Chapter/Topic", required: "OPTIONAL", note: "Exact existing Topic under the Subject (the old header 'Topic' also works)." },
   { header: "Sub-topic", required: "OPTIONAL", note: "Exact existing Sub-topic under the Topic." },
-  { header: "Question Type", required: "OPTIONAL", note: "SINGLE_CORRECT (default, also 'MCQ') or MATCH_THE_FOLLOWING (coded options, single-correct scoring). MULTIPLE_CORRECT is parsed but BLOCKED: the engine is not enabled yet." },
+  { header: "Question Type", required: "OPTIONAL", note: "SINGLE_CORRECT (default, also 'MCQ'), MULTIPLE_CORRECT (two or more correct options, all-or-nothing scoring; online tests only, not OMR) or MATCH_THE_FOLLOWING (List I / List II + coded options, single-correct scoring)." },
   { header: "Content Format", required: "OPTIONAL", note: "PLAIN (default — text is shown literally) or RICH_V1 ($…$, $$…$$, \\ce{…}, \\pu{…} render; images allowed)." },
   { header: "Question Text", required: "REQUIRED", note: "The stem. Line breaks are kept. RICH_V1: inline $v^2=u^2+2as$, display $$E=mc^2$$, chemistry \\ce{2H2 + O2 -> 2H2O}; write \\$ for a literal dollar." },
   { header: "Question Images", required: "OPTIONAL", note: "File names from the ZIP, separated by | . Optional alt text after :: (e.g. Q12-fig1.png :: Circuit with two resistors). Use ':: decorative' for purely decorative images. Max 8." },
@@ -31,7 +31,7 @@ export const RICH_HEADERS: { header: string; required: "REQUIRED" | "OPTIONAL" |
   { header: "Option C Image", required: "OPTIONAL", note: "" },
   { header: "Option D", required: "CONDITIONAL", note: "" },
   { header: "Option D Image", required: "OPTIONAL", note: "" },
-  { header: "Correct", required: "REQUIRED", note: "One letter A–D. (Several letters, e.g. A,C, only for MULTIPLE_CORRECT — currently blocked.)" },
+  { header: "Correct", required: "REQUIRED", note: "One letter A–D. MULTIPLE_CORRECT: every correct letter, comma separated (e.g. A,B,D — at least two, each once)." },
   { header: "Explanation", required: "OPTIONAL", note: "Shown to students only after review/reveal. Formulas allowed (RICH_V1). Missing = WARNING." },
   { header: "Explanation Images", required: "OPTIONAL", note: "Images for the explanation (max 8), same format as Question Images." },
   { header: "Difficulty", required: "OPTIONAL", note: "EASY, MEDIUM or HARD. Blank = MEDIUM (WARNING); anything else = ERROR." },
@@ -39,8 +39,8 @@ export const RICH_HEADERS: { header: string; required: "REQUIRED" | "OPTIONAL" |
   { header: "Review Required", required: "OPTIONAL", note: "TRUE/FALSE. TRUE puts the question in editorial stage NEEDS_REVIEW." },
   { header: "Review Reason", required: "CONDITIONAL", note: "Why it needs review (OCR uncertainty, image needs verification, answer key conflict, …)." },
   { header: "Status", required: "OPTIONAL", note: "Rich imports are ALWAYS saved as DRAFT. PUBLISHED/ARCHIVED is recorded as a WARNING, never applied. Publish later from Question Management." },
-  { header: "List I", required: "CONDITIONAL", note: "MATCH_THE_FOLLOWING only. One entry per line (or | separated), each starting with its key: 'A. text'. Entry image: 'B. text @@ file.png :: alt'." },
-  { header: "List II", required: "CONDITIONAL", note: "MATCH_THE_FOLLOWING only. 'I. text' per line." },
+  { header: "List I", required: "CONDITIONAL", note: "Required for MATCH_THE_FOLLOWING (2–10 entries). One entry per line (or | separated), each starting with its key: 'A. text'. Entry image: 'B. text @@ file.png :: alt' (RICH_V1)." },
+  { header: "List II", required: "CONDITIONAL", note: "Required for MATCH_THE_FOLLOWING. 'I. text' per line, same rules as List I." },
 ];
 
 const EXAMPLES: Record<string, string>[] = [
@@ -51,6 +51,7 @@ const EXAMPLES: Record<string, string>[] = [
   { Code: "SAMPLE-005", QNo: "5", Subject: "<Subject>", "Chapter/Topic": "<Topic>", "Content Format": "RICH_V1", "Question Text": "Which figure is a triangle?", "Option A": "", "Option A Image": "SAMPLE-005-A.png :: A circle", "Option B": "", "Option B Image": "SAMPLE-005-B.png :: A square", "Option C": "", "Option C Image": "SAMPLE-005-C.png :: A triangle", "Option D": "", "Option D Image": "SAMPLE-005-D.png :: A hexagon", Correct: "C", Explanation: "Three sides.", Difficulty: "EASY" },
   { Code: "SAMPLE-006", QNo: "6", Subject: "<Subject>", "Chapter/Topic": "<Topic>", "Content Format": "RICH_V1", "Question Text": "Figures 1 and 2 show the same circuit before and after a change. Which statement is true?", "Question Images": "SAMPLE-004-Q1.png :: Circuit before | SAMPLE-006-Q2.png :: Circuit after", "Option A": "Current increases", "Option B": "Current decreases", "Option C": "No change", "Option D": "Cannot say", Correct: "B", Explanation: "More resistance, less current.", "Explanation Images": "SAMPLE-004-EXP1.png :: decorative", Difficulty: "HARD", "Review Required": "TRUE", "Review Reason": "image needs verification" },
   { Code: "SAMPLE-007", QNo: "7", Subject: "<Subject>", "Chapter/Topic": "<Topic>", "Question Type": "MATCH_THE_FOLLOWING", "Content Format": "RICH_V1", "Question Text": "Match List I with List II.", "List I": "A. \\ce{CH4}\nB. \\ce{C2H4}\nC. \\ce{C2H2}\nD. \\ce{C6H6}", "List II": "I. Benzene\nII. Methane\nIII. Ethene\nIV. Ethyne", "Option A": "A-II, B-III, C-IV, D-I", "Option B": "A-I, B-II, C-III, D-IV", "Option C": "A-III, B-IV, C-I, D-II", "Option D": "A-IV, B-I, C-II, D-III", Correct: "A", Explanation: "Methane, ethene, ethyne, benzene.", Difficulty: "MEDIUM" },
+  { Code: "SAMPLE-008", QNo: "8", Subject: "<Subject>", "Chapter/Topic": "<Topic>", "Question Type": "MULTIPLE_CORRECT", "Content Format": "RICH_V1", "Question Text": "Which of the following are noble gases? (More than one option may be correct.)", "Option A": "\ce{He}", "Option B": "\ce{Ne}", "Option C": "\ce{N2}", "Option D": "\ce{Ar}", Correct: "A,B,D", Explanation: "He, Ne and Ar are group 18 elements; \ce{N2} is not.", Difficulty: "EASY" },
 ];
 
 export function richTemplateXlsx(): Buffer {

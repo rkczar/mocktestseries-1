@@ -9,6 +9,7 @@ import { SelectNative } from "@/components/ui/select-native";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ImageUploadField } from "./image-upload-field";
 import { createQuestionAction, updateQuestionAction, type QuestionFormState } from "./actions";
+import { QUESTION_TYPES, QUESTION_TYPE_LABEL, matchLinesFromEntries, readMatchSpec, toQuestionType, type QuestionTypeName } from "@/lib/question-types";
 
 export interface ExamTree {
   id: string;
@@ -37,6 +38,9 @@ export interface QuestionDefaults {
   reviewRequired?: boolean;
   reviewReason?: string | null;
   options: { label: string; text: string; imageUrl?: string | null; isCorrect: boolean }[];
+  /** NEET Phase 4; absent = SINGLE_CORRECT. */
+  questionType?: string;
+  matchSpec?: unknown;
 }
 
 function SubmitButton({ editing }: { editing: boolean }) {
@@ -68,6 +72,10 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
   const optionImageUrl = (label: string) => defaults?.options.find((o) => o.label === label)?.imageUrl ?? null;
   const correctLabel = defaults?.options.find((o) => o.isCorrect)?.label ?? "A";
   const [reviewRequired, setReviewRequired] = useState(defaults?.reviewRequired ?? false);
+  const [questionType, setQuestionType] = useState<QuestionTypeName>(toQuestionType(defaults?.questionType));
+  const multi = questionType === "MULTIPLE_CORRECT";
+  const isCorrectDefault = (label: string) => defaults?.options.find((o) => o.label === label)?.isCorrect ?? false;
+  const defaultMatch = readMatchSpec(defaults?.matchSpec);
 
   return (
     <form action={formAction} className="flex flex-col gap-5">
@@ -186,6 +194,17 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
         </div>
       </div>
 
+      <div className="flex flex-col gap-1.5 sm:max-w-xs">
+        <Label htmlFor="questionType">Question Type</Label>
+        <SelectNative id="questionType" name="questionType" value={questionType} onChange={(e) => setQuestionType(toQuestionType(e.target.value))}>
+          {QUESTION_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {QUESTION_TYPE_LABEL[t]}
+            </option>
+          ))}
+        </SelectNative>
+      </div>
+
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="text">Question Text</Label>
         <textarea
@@ -206,23 +225,64 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
         defaultUrl={defaults?.imageUrl}
       />
 
+      {questionType === "MATCH_THE_FOLLOWING" ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="match-fields">
+          {(
+            [
+              ["matchListI", "List I", defaultMatch?.listI, "A. Insulin\nB. Thyroxine"],
+              ["matchListII", "List II", defaultMatch?.listII, "I. Pancreas\nII. Thyroid"],
+            ] as const
+          ).map(([name, title, entries, placeholder]) => (
+            <div key={name} className="flex flex-col gap-1.5">
+              <Label htmlFor={name}>{title} — one entry per line, starting with its key</Label>
+              <textarea
+                id={name}
+                name={name}
+                rows={5}
+                defaultValue={entries ? matchLinesFromEntries(entries) : ""}
+                placeholder={placeholder}
+                className="w-full rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 font-mono text-sm text-[var(--color-foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+              />
+            </div>
+          ))}
+          <p className="text-xs text-[var(--color-muted-foreground)] sm:col-span-2">
+            The options below are the coded answers (e.g. &ldquo;A-II, B-I, C-IV, D-III&rdquo;); exactly one is correct. Entry images are added from the question preview.
+          </p>
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-4">
-        <Label>Options — mark the correct answer (each option needs text, an image, or both)</Label>
+        <Label>
+          {multi
+            ? "Options — tick every correct option (at least two; each option needs text, an image, or both)"
+            : "Options — mark the correct answer (each option needs text, an image, or both)"}
+        </Label>
         {(["A", "B", "C", "D"] as const).map((label) => (
           <div
             key={label}
             className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 sm:flex-row sm:items-start"
           >
             <div className="flex items-center gap-3 sm:pt-2.5">
-              <input
-                type="radio"
-                name="correctOption"
-                value={label}
-                defaultChecked={correctLabel === label}
-                required
-                className="h-4 w-4"
-                aria-label={`Option ${label} is correct`}
-              />
+              {multi ? (
+                <input
+                  type="checkbox"
+                  name="correctOptions"
+                  value={label}
+                  defaultChecked={isCorrectDefault(label)}
+                  className="h-4 w-4"
+                  aria-label={`Option ${label} is correct`}
+                />
+              ) : (
+                <input
+                  type="radio"
+                  name="correctOption"
+                  value={label}
+                  defaultChecked={correctLabel === label}
+                  required
+                  className="h-4 w-4"
+                  aria-label={`Option ${label} is correct`}
+                />
+              )}
               <span className="w-6 shrink-0 text-sm font-medium text-[var(--color-muted-foreground)]">{label}</span>
             </div>
             <div className="flex-1">

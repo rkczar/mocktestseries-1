@@ -33,6 +33,16 @@ import { TestEngineError } from "@/lib/test-engine-log";
 import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
 import { explanationView, toSnapshotAssets, type SnapshotAsset } from "@/lib/rich-content";
 import type { ContentFormat, ExplanationView } from "@/lib/rich-content-types";
+import {
+  gradeLabelSet,
+  normalizeLabelSet,
+  readMatchSpec,
+  snapshotCorrectLabels,
+  snapshotQuestionType,
+  toQuestionType,
+  type MatchSpec,
+  type QuestionTypeName,
+} from "@/lib/question-types";
 
 export { remainingSecondsFor, InsufficientQuestionsError, TestEngineError, MAX_CUSTOM_DURATION_MINUTES };
 export type { AttemptConfigChoice } from "@/lib/attempt-config";
@@ -44,6 +54,11 @@ export type { QuestionSelectionFilters } from "@/lib/question-selection";
  * v2 adds the rich-content keys; readers treat a missing `v` as v1 and ignore
  * keys they don't know. `correctLabel` and `explanation` are answer-key data:
  * lib/test-player-data.ts strips both until an authorized reveal.
+ * v3 (NEET Phase 4) is written ONLY for MULTIPLE_CORRECT / MATCH_THE_FOLLOWING
+ * questions: every v2 key + `questionType`, and `correctLabels` (MULTIPLE_CORRECT,
+ * answer-key data; its `correctLabel` is "" so no reader can mistake one option
+ * for the key) or `matchSpec` (MATCH_THE_FOLLOWING, presentation). SINGLE_CORRECT
+ * questions never freeze to v3.
  */
 export interface QuestionSnapshot {
   code: string;
@@ -52,10 +67,13 @@ export interface QuestionSnapshot {
   difficulty: string;
   options: { label: string; text: string; imageUrl: string | null }[];
   correctLabel: string;
-  v?: 2;
+  v?: 2 | 3;
   contentFormat?: ContentFormat;
   explanation?: string | null;
   assets?: SnapshotAsset[];
+  questionType?: QuestionTypeName;
+  correctLabels?: string[];
+  matchSpec?: MatchSpec | null;
 }
 
 export interface QuestionWithOptions {
@@ -67,6 +85,8 @@ export interface QuestionWithOptions {
   options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean; order?: number }[];
   contentFormat?: ContentFormat;
   explanation?: string | null;
+  questionType?: string;
+  matchSpec?: unknown;
 }
 
 /**
@@ -184,6 +204,21 @@ function toSnapshot(question: QuestionWithOptions, assets: SnapshotAsset[] = [])
     options: options.map((o) => ({ label: o.label, text: o.text, imageUrl: o.imageUrl })),
     correctLabel: question.options.find((o) => o.isCorrect)?.label ?? "",
   };
+  const type = toQuestionType(question.questionType);
+  if (type !== "SINGLE_CORRECT") {
+    // Advanced types only (NEET Phase 4): v3 = every v2 key + the type's own frozen data.
+    return {
+      ...v1,
+      correctLabel: type === "MULTIPLE_CORRECT" ? "" : v1.correctLabel,
+      v: 3,
+      contentFormat: question.contentFormat === "RICH_V1" ? "RICH_V1" : "PLAIN",
+      explanation: question.explanation?.trim() ? question.explanation : null,
+      assets: question.contentFormat === "RICH_V1" ? assets : [],
+      questionType: type,
+      ...(type === "MULTIPLE_CORRECT" ? { correctLabels: options.filter((o) => o.isCorrect).map((o) => o.label) } : {}),
+      ...(type === "MATCH_THE_FOLLOWING" ? { matchSpec: readMatchSpec(question.matchSpec) } : {}),
+    };
+  }
   if (!needsSnapshotV2(question)) return v1;
   return {
     ...v1,
@@ -551,6 +586,12 @@ export async function startMockTestAttempt(
  * answer-only entry screen instead of the question player.
  */
 export async function startOfflineOmrEntryAttempt(studentId: string, mockTestId: string) {
+  // An OMR sheet has one bubble per question: a multiple-correct answer can't be
+  // entered from it (NEET Phase 4), so such a mock is online-only.
+  const multi = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { questionType: "MULTIPLE_CORRECT" } } });
+  if (multi > 0) {
+    throw new TestEngineError("UNAVAILABLE", "This test has multiple-correct questions, which can't be entered from an OMR sheet. Take it online instead.");
+  }
   return startMockTestAttempt(studentId, mockTestId, AttemptEntryMode.OFFLINE_OMR_ENTRY);
 }
 
@@ -868,7 +909,7 @@ async function loadEditableQuestion(attemptId: string, studentId: string, questi
   }
   const attemptQuestion = await prisma.testAttemptQuestion.findUnique({
     where: { attemptId_questionId: { attemptId, questionId } },
-    select: { id: true, questionSnapshot: true, answer: { select: { selectedOptionLabel: true, revealedAt: true, status: true } } },
+    select: { id: true, questionSnapshot: true, answer: { select: { selectedOptionLabel: true, selectedLabels: true, revealedAt: true, status: true } } },
   });
   if (!attemptQuestion) throw new TestEngineError("NOT_IN_ATTEMPT", "Question does not belong to this attempt.");
   if (label !== null) {
@@ -913,6 +954,10 @@ export async function saveAnswer(
 ): Promise<{ applied: boolean }> {
   const label = selectedOptionLabel || null;
   const { attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, label);
+  // A multiple-correct question is saved only as a label set (saveAnswerLabels).
+  if (snapshotQuestionType(attemptQuestion.questionSnapshot as unknown as QuestionSnapshot) === "MULTIPLE_CORRECT") {
+    throw new TestEngineError("INVALID_OPTION", "This question takes one or more options.");
+  }
   const saveSeq = typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : Date.now();
   const status = answerStatusFor(label, markForReview);
 
@@ -971,6 +1016,9 @@ export async function revealAnswer(
 ): Promise<{ selectedOptionLabel: string | null; correctLabel: string; isCorrect: boolean; explanation?: ExplanationView }> {
   if (!selectedOptionLabel) throw new TestEngineError("NO_SELECTION", "Choose an option to check your answer.");
   const { attempt, attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, selectedOptionLabel);
+  if (snapshotQuestionType(attemptQuestion.questionSnapshot as unknown as QuestionSnapshot) === "MULTIPLE_CORRECT") {
+    throw new TestEngineError("INVALID_OPTION", "This question takes one or more options.");
+  }
   if (!(await instantRevealPermitted(attempt))) {
     throw new TestEngineError("NOT_ALLOWED", "Answers are shown after you submit this test.");
   }
@@ -1006,6 +1054,104 @@ export async function revealAnswer(
   };
 }
 
+/**
+ * MULTIPLE_CORRECT only (NEET Phase 4): persist one answer as a label SET.
+ * Same contract as saveAnswer — one conditional UPDATE guarded by the
+ * monotonic `seq`, IN_PROGRESS and not-revealed, so a stale or replayed
+ * request never overwrites a newer set and exactly one Answer row exists.
+ * The set is validated against the frozen options and stored normalized
+ * (unique, option order); `[]` is "no answer". selectedOptionLabel stays null.
+ */
+export async function saveAnswerLabels(
+  attemptId: string,
+  studentId: string,
+  questionId: string,
+  labels: unknown,
+  markForReview: boolean,
+  seq?: number
+): Promise<{ applied: boolean }> {
+  const { attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, null);
+  const set = multiLabelSet(attemptQuestion.questionSnapshot, labels);
+  const saveSeq = typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : Date.now();
+  const status = answerStatusFor(set.length ? set[0] : null, markForReview);
+  const revealed = !!attemptQuestion.answer?.revealedAt;
+  if (revealed && !sameStoredSet(attemptQuestion.answer?.selectedLabels, set)) {
+    throw new TestEngineError("LOCKED", "This answer was already checked and can no longer be changed.");
+  }
+  const result = await prisma.answer.updateMany({
+    where: {
+      attemptQuestionId: attemptQuestion.id,
+      saveSeq: { lt: saveSeq },
+      attempt: { status: AttemptStatus.IN_PROGRESS },
+      ...(revealed ? { selectedLabels: { equals: set } } : { revealedAt: null }),
+    },
+    data: { selectedLabels: set, selectedOptionLabel: null, status, answeredAt: set.length ? new Date() : null, saveSeq },
+  });
+  return { applied: result.count === 1 };
+}
+
+/**
+ * MULTIPLE_CORRECT Practice Mode check (NEET Phase 4): the student's set is
+ * committed and frozen in the same conditional update that stamps revealedAt
+ * (first commit wins), and only then is the full correct set returned.
+ */
+export async function revealAnswerLabels(
+  attemptId: string,
+  studentId: string,
+  questionId: string,
+  labels: unknown,
+  seq?: number
+): Promise<{ selectedLabels: string[]; correctLabels: string[]; isCorrect: boolean; explanation?: ExplanationView }> {
+  const { attempt, attemptQuestion } = await loadEditableQuestion(attemptId, studentId, questionId, null);
+  const set = multiLabelSet(attemptQuestion.questionSnapshot, labels);
+  if (set.length === 0) throw new TestEngineError("NO_SELECTION", "Choose at least one option to check your answer.");
+  if (!(await instantRevealPermitted(attempt))) {
+    throw new TestEngineError("NOT_ALLOWED", "Answers are shown after you submit this test.");
+  }
+  const marked =
+    attemptQuestion.answer?.status === AnswerStatus.ANSWERED_AND_MARKED || attemptQuestion.answer?.status === AnswerStatus.MARKED_FOR_REVIEW;
+  const now = new Date();
+  await prisma.answer.updateMany({
+    where: { attemptQuestionId: attemptQuestion.id, revealedAt: null, attempt: { status: AttemptStatus.IN_PROGRESS } },
+    data: {
+      selectedLabels: set,
+      selectedOptionLabel: null,
+      status: answerStatusFor(set[0], marked),
+      answeredAt: now,
+      revealedAt: now,
+      saveSeq: typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : now.getTime(),
+    },
+  });
+  const answer = await prisma.answer.findUnique({ where: { attemptQuestionId: attemptQuestion.id }, select: { selectedLabels: true, revealedAt: true } });
+  if (!answer?.revealedAt) throw new TestEngineError("NOT_EDITABLE", "This test has already been submitted.");
+  const snapshot = attemptQuestion.questionSnapshot as unknown as QuestionSnapshot;
+  const correctLabels = snapshotCorrectLabels(snapshot);
+  const selectedLabels = answer.selectedLabels ?? [];
+  const explanation = explanationView(snapshot);
+  return {
+    selectedLabels,
+    correctLabels,
+    isCorrect: gradeLabelSet(selectedLabels, correctLabels) === true,
+    ...(explanation ? { explanation } : {}),
+  };
+}
+
+/** The validated, normalized label set for a MULTIPLE_CORRECT snapshot; anything else is refused. */
+function multiLabelSet(rawSnapshot: unknown, labels: unknown): string[] {
+  const snapshot = rawSnapshot as QuestionSnapshot;
+  if (snapshotQuestionType(snapshot) !== "MULTIPLE_CORRECT" || !Array.isArray(snapshot?.options)) {
+    throw new TestEngineError("INVALID_OPTION", "This question takes a single option.");
+  }
+  const set = normalizeLabelSet(labels, snapshot.options.map((o) => o.label));
+  if (!set.ok) throw new TestEngineError("INVALID_OPTION", "That option is not part of this question.");
+  return set.labels;
+}
+
+function sameStoredSet(stored: string[] | null | undefined, set: string[]): boolean {
+  const a = stored ?? [];
+  return a.length === set.length && a.every((l, i) => l === set[i]);
+}
+
 export async function submitAttempt(attemptId: string, studentId: string) {
   const attempt = await prisma.testAttempt.findFirst({
     where: { id: attemptId, studentId },
@@ -1030,7 +1176,13 @@ export async function submitAttempt(attemptId: string, studentId: string) {
     const selected = answer?.selectedOptionLabel ?? null;
     let isCorrect: boolean | null = null;
 
-    if (!selected) {
+    if (snapshotQuestionType(snapshot) === "MULTIPLE_CORRECT") {
+      // ALL-OR-NOTHING on the frozen set, order-independent; [] = unanswered.
+      isCorrect = gradeLabelSet(answer?.selectedLabels ?? [], snapshotCorrectLabels(snapshot));
+      if (isCorrect === null) unansweredCount += 1;
+      else if (isCorrect) correctCount += 1;
+      else incorrectCount += 1;
+    } else if (!selected) {
       unansweredCount += 1;
     } else if (selected === snapshot.correctLabel) {
       isCorrect = true;

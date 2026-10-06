@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { formatIst, istStartOfDay, parseIstDateTimeLocal } from "@/lib/ist-time";
 import { SHARE_SITE_URL, examDisplayName } from "@/lib/whatsapp-share-template";
-import { answerKeyIssue, buildCopyBlocks, hasAnyImage, type CopyBlockSize, type CopyIssue, type CopyQuestion } from "@/lib/question-insights-format";
+import { answerKeyIssue, answerKeyString, buildCopyBlocks, hasAnyImage, type CopyBlockSize, type CopyIssue, type CopyQuestion } from "@/lib/question-insights-format";
 
 /**
  * Admin → Analytics → Question Insights: which questions students struggled
@@ -323,7 +323,11 @@ async function answerStatsFor(ids: string[], f: InsightFilters, r: ResolvedRange
 async function snapshotKeysFor(ids: string[], f: InsightFilters, r: ResolvedRange): Promise<Map<string, string[]>> {
   if (ids.length === 0) return new Map();
   const rows = await prisma.$queryRaw<{ qid: string; key: string }[]>`
-    SELECT DISTINCT a."questionId" AS qid, COALESCE(tq."questionSnapshot"->>'correctLabel', '') AS key
+    SELECT DISTINCT a."questionId" AS qid,
+           -- A v3 MULTIPLE_CORRECT snapshot freezes its key as the correctLabels set (sorted "A,B,D"); every other snapshot as before.
+           COALESCE(CASE WHEN tq."questionSnapshot"->>'questionType' = 'MULTIPLE_CORRECT' AND tq."questionSnapshot"->>'v' = '3'
+                         THEN (SELECT string_agg(x, ',' ORDER BY x) FROM jsonb_array_elements_text(tq."questionSnapshot"->'correctLabels') x)
+                         ELSE tq."questionSnapshot"->>'correctLabel' END, '') AS key
     ${answeredBase(f, r, Prisma.sql` JOIN "TestAttemptQuestion" tq ON tq.id = a."attemptQuestionId"`)} AND a."questionId" IN (${idList(ids)})`;
   const map = new Map<string, string[]>();
   for (const row of rows) map.set(row.qid, [...(map.get(row.qid) ?? []), row.key]);
@@ -485,6 +489,7 @@ export async function getInsightRows(f: InsightFilters, r: ResolvedRange): Promi
         topic: { select: { name: true } },
         subTopic: { select: { name: true } },
         options: { select: { label: true, isCorrect: true, imageUrl: true } },
+        questionType: true,
       },
     }),
     answerStatsFor(ids, f, r),
@@ -498,8 +503,8 @@ export async function getInsightRows(f: InsightFilters, r: ResolvedRange): Promi
     const q = byId.get(qid);
     if (!q) continue;
     const s = stats.get(qid);
-    const keyIssue = answerKeyIssue(q.options);
-    const currentKey = keyIssue ? null : q.options.find((o) => o.isCorrect)!.label;
+    const keyIssue = answerKeyIssue(q.options, q.questionType);
+    const currentKey = keyIssue ? null : answerKeyString(q.options);
     const rep = ranked.reported?.get(qid);
     const cnt = ranked.counted?.get(qid);
     rows.push({
@@ -593,6 +598,8 @@ export async function prepareQuestionCopy(params: {
         exam: { select: { id: true, name: true, year: true } },
         options: { orderBy: [{ order: "asc" }, { label: "asc" }], select: { label: true, text: true, imageUrl: true, isCorrect: true } },
         aiExplanation: { select: { status: true, isStale: true, content: true } },
+        questionType: true,
+        matchSpec: true,
       },
     }),
     answerStatsFor(ids, params.filters, params.range),
@@ -615,6 +622,7 @@ export async function prepareQuestionCopy(params: {
       text: q.text,
       imageUrl: q.imageUrl,
       options: q.options,
+      ...(q.questionType !== "SINGLE_CORRECT" ? { questionType: q.questionType, matchSpec: q.matchSpec } : {}),
       wrongPct: s && s.attempts > 0 ? (s.wrong / s.attempts) * 100 : null,
       explanation: concept,
     };
@@ -637,7 +645,7 @@ export async function prepareQuestionCopy(params: {
     noAttemptCodes: included.filter((q) => q.wrongPct === null).map((q) => q.code),
     keyChangedCodes: included
       .filter((q) => {
-        const current = q.options.find((o) => o.isCorrect)!.label;
+        const current = answerKeyString(q.options);
         return (keys.get(q.id) ?? []).some((k) => k !== current);
       })
       .map((q) => q.code),

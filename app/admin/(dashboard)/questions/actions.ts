@@ -2,13 +2,14 @@
 
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
-import { QuestionDifficulty, QuestionSource, QuestionStatus, type Prisma } from "@prisma/client";
+import { Prisma, QuestionDifficulty, QuestionSource, QuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { isSubjectLinked, isTopicLinked, isSubTopicLinked } from "@/lib/exam-taxonomy";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { allocateQuestionCode, questionCodeScope, resolveQuestionCodeInput } from "@/lib/question-code";
 import { flagExplanationStaleIfExists } from "@/lib/ai-explanation";
+import { correctCountIssue, matchAssetKey, matchSpecIssues, parseMatchLines, QUESTION_TYPES, type MatchSpec } from "@/lib/question-types";
 
 const OPTION_LABELS = ["A", "B", "C", "D"] as const;
 
@@ -39,7 +40,12 @@ const questionSchema = z
     optionCImageUrl: z.string().trim().optional().default(""),
     optionD: z.string().trim().optional().default(""),
     optionDImageUrl: z.string().trim().optional().default(""),
-    correctOption: z.enum(OPTION_LABELS),
+    // NEET Phase 4. Missing = SINGLE_CORRECT, so the legacy form posts exactly as before.
+    questionType: z.enum(QUESTION_TYPES).optional().default("SINGLE_CORRECT"),
+    correctOption: z.enum(OPTION_LABELS).optional(),
+    correctOptions: z.array(z.enum(OPTION_LABELS)).optional().default([]),
+    matchListI: z.string().optional().default(""),
+    matchListII: z.string().optional().default(""),
     reviewRequired: z.string().optional(),
     reviewReason: z.string().trim().max(500).optional().default(""),
   })
@@ -59,7 +65,47 @@ const questionSchema = z
         });
       }
     }
+    const correct = correctLabelsOf(data);
+    const issue = correctCountIssue(data.questionType, correct.length, OPTION_LABELS.length);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ["correctOption"] });
+    if (data.questionType === "MULTIPLE_CORRECT" && new Set(data.correctOptions).size !== data.correctOptions.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A correct option is listed twice.", path: ["correctOptions"] });
+    }
   });
+
+type QuestionFormData = z.infer<typeof questionSchema>;
+
+/** The correct labels the form submitted: the radio (single / match) or the checkbox set (multiple). */
+function correctLabelsOf(data: Pick<QuestionFormData, "questionType" | "correctOption" | "correctOptions">): string[] {
+  if (data.questionType === "MULTIPLE_CORRECT") return [...new Set(data.correctOptions)];
+  return data.correctOption ? [data.correctOption] : [];
+}
+
+/**
+ * MATCH_THE_FOLLOWING: List I / List II textareas → a validated spec. Entry
+ * images (LIST_ITEM assets, added from the preview's media manager) count as
+ * content, so an image-only entry is allowed once its image exists.
+ */
+async function matchSpecFromForm(data: QuestionFormData, questionId: string | null): Promise<{ spec: MatchSpec | null; error?: string }> {
+  if (data.questionType !== "MATCH_THE_FOLLOWING") return { spec: null };
+  const listI = parseMatchLines(data.matchListI);
+  const listII = parseMatchLines(data.matchListII);
+  const lineIssue = listI.issues[0] ?? listII.issues[0];
+  if (lineIssue) return { spec: null, error: lineIssue };
+  const spec: MatchSpec = { v: 1, listI: listI.entries, listII: listII.entries };
+  const images = questionId
+    ? await prisma.questionAsset.findMany({ where: { questionId, role: "LIST_ITEM" }, select: { listKey: true } })
+    : [];
+  const issues = matchSpecIssues(spec, new Set(images.map((a) => a.listKey ?? "")));
+  return issues.length ? { spec: null, error: issues[0] } : { spec };
+}
+
+/** Keeps the image check honest: every LIST_ITEM key must still name an entry. */
+async function orphanListImages(questionId: string, spec: MatchSpec | null): Promise<string[]> {
+  const images = await prisma.questionAsset.findMany({ where: { questionId, role: "LIST_ITEM" }, select: { listKey: true } });
+  const keys = new Set(spec ? [...spec.listI.map((e) => matchAssetKey("I", e.key)), ...spec.listII.map((e) => matchAssetKey("II", e.key))] : []);
+  return images.map((a) => a.listKey ?? "").filter((k) => !keys.has(k));
+}
 
 export interface QuestionFormState {
   error?: string;
@@ -97,7 +143,11 @@ function parseQuestionForm(formData: FormData) {
     optionCImageUrl: formData.get("optionCImageUrl") || "",
     optionD: formData.get("optionD") || "",
     optionDImageUrl: formData.get("optionDImageUrl") || "",
-    correctOption: formData.get("correctOption"),
+    correctOption: formData.get("correctOption") || undefined,
+    questionType: formData.get("questionType") || undefined,
+    correctOptions: formData.getAll("correctOptions"),
+    matchListI: formData.get("matchListI") || "",
+    matchListII: formData.get("matchListII") || "",
     reviewRequired: formData.get("reviewRequired") || undefined,
     reviewReason: formData.get("reviewReason") || undefined,
   });
@@ -150,8 +200,9 @@ async function assertHierarchyConsistency(
 async function upsertOptions(
   db: Pick<Prisma.TransactionClient, "questionOption">,
   questionId: string,
-  data: z.infer<typeof questionSchema>
+  data: QuestionFormData
 ) {
+  const correct = correctLabelsOf(data);
   const byLabel: Record<(typeof OPTION_LABELS)[number], { text: string; imageUrl: string | null }> = {
     A: { text: data.optionA, imageUrl: data.optionAImageUrl || null },
     B: { text: data.optionB, imageUrl: data.optionBImageUrl || null },
@@ -166,7 +217,7 @@ async function upsertOptions(
       label,
       text: byLabel[label].text,
       imageUrl: byLabel[label].imageUrl,
-      isCorrect: data.correctOption === label,
+      isCorrect: correct.includes(label),
       order,
     })),
   });
@@ -174,15 +225,17 @@ async function upsertOptions(
 
 /** True if the question text or any option's text/correctness actually changed — see updateQuestionAction's cache-staleness flag. */
 function hasMaterialQuestionChange(
-  before: { text: string; options: { label: string; text: string; isCorrect: boolean }[] },
-  data: z.infer<typeof questionSchema>
+  before: { text: string; questionType?: string; options: { label: string; text: string; isCorrect: boolean }[] },
+  data: QuestionFormData
 ): boolean {
   if (before.text.trim() !== data.text.trim()) return true;
+  if ((before.questionType ?? "SINGLE_CORRECT") !== data.questionType) return true;
+  const correct = correctLabelsOf(data);
   const byLabel: Record<string, { text: string; isCorrect: boolean }> = {
-    A: { text: data.optionA, isCorrect: data.correctOption === "A" },
-    B: { text: data.optionB, isCorrect: data.correctOption === "B" },
-    C: { text: data.optionC, isCorrect: data.correctOption === "C" },
-    D: { text: data.optionD, isCorrect: data.correctOption === "D" },
+    A: { text: data.optionA, isCorrect: correct.includes("A") },
+    B: { text: data.optionB, isCorrect: correct.includes("B") },
+    C: { text: data.optionC, isCorrect: correct.includes("C") },
+    D: { text: data.optionD, isCorrect: correct.includes("D") },
   };
   if (before.options.length !== OPTION_LABELS.length) return true;
   return before.options.some((o) => {
@@ -217,6 +270,8 @@ export async function createQuestionAction(
 
   const hierarchyError = await assertHierarchyConsistency(prisma, { examId, subjectId, topicId, subTopicId });
   if (hierarchyError) return { error: hierarchyError };
+  const match = await matchSpecFromForm(parsed.data, null);
+  if (match.error) return { error: match.error };
 
   const isReviewRequired = reviewRequired === "on";
 
@@ -248,6 +303,8 @@ export async function createQuestionAction(
         examYear: finalYear,
         reviewRequired: isReviewRequired,
         reviewReason: isReviewRequired ? reviewReason || null : null,
+        questionType: parsed.data.questionType,
+        matchSpec: match.spec ? (match.spec as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
       },
     });
 
@@ -297,6 +354,10 @@ export async function updateQuestionAction(
 
   const hierarchyError = await assertHierarchyConsistency(prisma, { examId, subjectId, topicId, subTopicId });
   if (hierarchyError) return { error: hierarchyError };
+  const match = await matchSpecFromForm(parsed.data, questionId);
+  if (match.error) return { error: match.error };
+  const orphans = await orphanListImages(questionId, match.spec);
+  if (orphans.length) return { error: `Remove the list image for ${orphans[0]} first (its entry is no longer in the list).` };
 
   const isReviewRequired = reviewRequired === "on";
 
@@ -307,7 +368,7 @@ export async function updateQuestionAction(
   // unchanged".
   const before = await prisma.question.findUnique({
     where: { id: questionId },
-    select: { text: true, options: { select: { label: true, text: true, isCorrect: true }, orderBy: { label: "asc" } } },
+    select: { text: true, questionType: true, options: { select: { label: true, text: true, isCorrect: true }, orderBy: { label: "asc" } } },
   });
 
   await prisma.$transaction(async (tx) => {
@@ -332,6 +393,8 @@ export async function updateQuestionAction(
         status,
         reviewRequired: isReviewRequired,
         reviewReason: isReviewRequired ? reviewReason || null : null,
+        questionType: parsed.data.questionType,
+        matchSpec: match.spec ? (match.spec as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
       },
     });
 

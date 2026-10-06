@@ -966,6 +966,12 @@ model Question {
   // Editorial workflow (later phase). NULL = legacy question, no workflow;
   // orthogonal to `status`, which stays the only student-facing gate.
   editorialStage      EditorialStage?
+  // NEET Phase 4. Every existing row is SINGLE_CORRECT (the legacy path, unchanged).
+  // MULTIPLE_CORRECT: QuestionOption.isCorrect marks >= 2 options; all-or-nothing scoring.
+  // MATCH_THE_FOLLOWING: List I / List II live in `matchSpec`; the four coded options
+  // ("A-II, B-I, …") are ordinary single-correct options. See docs/NEET-QUESTION-TYPES.md.
+  questionType        QuestionType       @default(SINGLE_CORRECT)
+  matchSpec           Json?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -1016,6 +1022,14 @@ enum QuestionAssetRole {
   QUESTION
   OPTION
   EXPLANATION
+  /// Match the Following list entry image; `listKey` names the entry ("I:A", "II:III").
+  LIST_ITEM
+}
+
+enum QuestionType {
+  SINGLE_CORRECT
+  MULTIPLE_CORRECT
+  MATCH_THE_FOLLOWING
 }
 
 enum EditorialStage {
@@ -1036,6 +1050,8 @@ model QuestionAsset {
   question    Question          @relation(fields: [questionId], references: [id], onDelete: Cascade)
   role        QuestionAssetRole
   optionLabel String?
+  /// LIST_ITEM only: "I:<key>" or "II:<key>" (NEET Phase 4).
+  listKey     String?
   order       Int               @default(0)
   storageKey  String
   mime        String
@@ -1652,6 +1668,10 @@ model Answer {
   student             Student             @relation(fields: [studentId], references: [id], onDelete: Cascade)
   questionId          String
   selectedOptionLabel String?
+  // MULTIPLE_CORRECT only (NEET Phase 4): the chosen labels, normalized (unique,
+  // option order). SINGLE_CORRECT / MATCH keep using selectedOptionLabel; for them
+  // this stays the empty default, so no historical row changes.
+  selectedLabels      String[]            @default([])
   isCorrect           Boolean?
   status              AnswerStatus        @default(UNANSWERED)
   answeredAt          DateTime?

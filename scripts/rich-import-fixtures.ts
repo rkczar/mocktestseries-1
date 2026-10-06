@@ -212,6 +212,12 @@ export async function failures(prefix = "SYN-FAIL"): Promise<{ rows: FixtureRow[
     { ...base(`${prefix}-013`, 13), "Question Text": "Unclosed $x^2 and \\frac{1}{ broken $\\frac{1}{$", "Explanation": "" },
     { ...base(`${prefix}-014`, 14), "Question Images": "../etc/passwd.png" },
     { ...base(`${prefix}-015`, 15), Status: "PUBLISHED" },
+    // NEET Phase 4 malformed advanced types
+    { ...base(`${prefix}-016`, 16), "Question Type": "MULTIPLE_CORRECT", Correct: "B" },
+    { ...base(`${prefix}-017`, 17), "Question Type": "MULTIPLE_CORRECT", Correct: "A,A,C" },
+    { ...base(`${prefix}-018`, 18), "Question Type": "MATCH_THE_FOLLOWING", "List I": "A. one\nB. two" },
+    { ...base(`${prefix}-019`, 19), "Question Type": "MATCH_THE_FOLLOWING", "List I": "A. one\nA. two", "List II": "I. x\nII. y" },
+    { ...base(`${prefix}-020`, 20), "Question Type": "MATCH_THE_FOLLOWING", Correct: "A,B", "List I": "A. one\nB. two", "List II": "I. x\nII. y" },
   ];
   return { rows, files };
 }

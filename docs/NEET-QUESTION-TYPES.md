@@ -1,6 +1,63 @@
-# Future question types: readiness and design (NEET Phase 2 analysis)
+# Question types: SINGLE_CORRECT, MULTIPLE_CORRECT, MATCH_THE_FOLLOWING
 
-Status: **design only, nothing implemented.** Today every question is single
+Status: **implemented in NEET Phase 4** (migration `20261005220000_advanced_question_types`).
+§0 is the as-built reference; §1–§6 are the Phase 2 analysis kept for history.
+
+## 0. As built (Phase 4)
+
+**Schema (additive only).** `Question.questionType QuestionType @default(SINGLE_CORRECT)`
+(every existing row via the column default — no row rewrite), `Question.matchSpec Json?`,
+`Answer.selectedLabels String[] @default([])`, `QuestionAssetRole.LIST_ITEM` +
+`QuestionAsset.listKey`. No Answer, snapshot or option row is rewritten.
+
+**SINGLE_CORRECT is the legacy path, byte for byte.** Same radio UI, `selectedOptionLabel`,
+`saveAnswer`/`revealAnswer`, `selected === correctLabel` scoring, snapshot v1/v2, payload keys,
+share text. Every advanced behaviour is an explicit capability branch on the frozen type.
+
+**Shared helpers.** `lib/question-types.ts` (pure): type parsing, `normalizeLabelSet`,
+`gradeLabelSet` (all-or-nothing, `[]` = unanswered), `correctCountIssue`, match-spec
+validation/parsing, `snapshotQuestionType` / `snapshotCorrectLabels`, share fields.
+
+**MULTIPLE_CORRECT.** Key = `QuestionOption.isCorrect` (≥ 2). Answer = `Answer.selectedLabels`
+(unique, option order; `selectedOptionLabel` stays null). `saveAnswerLabels` /
+`revealAnswerLabels` (Server Actions `saveAnswerLabelsAction` / `revealAnswerLabelsAction`) reuse
+the seq / IN_PROGRESS / revealedAt conditional-UPDATE contract; the single and multi APIs refuse each
+other's type. Player: real checkboxes in a `role=group` (never radios), whole set is one queued value
+(latest wins). Practice Mode: an explicit **Check answer** commits + locks the set (one tap can't be
+an answer), then the full correct set is returned and each option shows selected-correct /
+selected-wrong (✗) / missed (dashed). Scoring: exact set → +1, non-empty other set → −negativeMarking,
+`[]` → unanswered. Review / Saved / admin preview show every correct option.
+
+**MATCH_THE_FOLLOWING.** `matchSpec = {v:1, listI:[{key,text}], listII:[…]}`; entry text follows the
+question's contentFormat (RichText), entry images are `LIST_ITEM` assets with `listKey` `I:A`.
+Rendered by `components/content/match-lists.tsx` (two columns from md, stacked on phones) in the
+player, Review, Saved Questions and admin preview. The four coded options are ordinary
+single-correct options: radio UI, single reveal, single scoring, OMR unchanged.
+
+**Snapshot v3** — only for the two advanced types: every v2 key + `questionType`, and
+`correctLabels` (MSQ; `correctLabel` is `""`) or `matchSpec` (MTF). v1/v2 are untouched and read
+as SINGLE_CORRECT. `toPlayerQuestions` adds `questionType` / `selectedLabels` / `match` only for v3
+and `reveal.correctLabels` only after an authorized reveal.
+
+**Guards.** OMR entry refuses a mock containing an MSQ (online only). Ask AI explanations, AI
+explanation variants and AI question variants refuse non-SINGLE questions (student actions before
+quota/cache; library loaders too) and the UI hides Ask AI for them. Question Insights:
+`MULTIPLE_CORRECT_OPTIONS` stays a defect for SINGLE/MATCH; MSQ needs ≥ 2 (`TOO_FEW_CORRECT_OPTIONS`);
+"key changed" compares sorted sets. WhatsApp share adds the MTF lists / an MSQ note, never the answer.
+
+**Authoring.** Admin question form: Question Type select; MSQ ticks ≥ 2 checkboxes; MTF List I /
+List II textareas ("A. text" per line), entry images from the preview media manager (List entry
+image). Rich importer: see docs/RICH-IMPORT.md. Legacy (Standard) import is SINGLE_CORRECT; a legacy
+REPLACE writes SINGLE_CORRECT because its content is single-correct.
+
+**Not in Phase 4:** partial credit / ScoringScheme, `Answer.marks`, drag-to-match, OMR layout for
+MSQ, AI for advanced types.
+
+Tests: `scripts/verify-question-types.ts` (server) + `.mjs` (browser), ops/TEST-ENGINE.md step 11.
+
+---
+
+*Phase 2 analysis (historical):* Today every question is single
 correct, and RUHS MO must stay exactly that. This records what Phase 3/4 needs
 for `MULTIPLE_CORRECT` and `MATCH_THE_FOLLOWING` without making RUHS depend on
 NEET behaviour.

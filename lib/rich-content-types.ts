@@ -6,7 +6,7 @@
  */
 
 export type ContentFormat = "PLAIN" | "RICH_V1";
-export type AssetRole = "QUESTION" | "OPTION" | "EXPLANATION";
+export type AssetRole = "QUESTION" | "OPTION" | "EXPLANATION" | "LIST_ITEM";
 
 /**
  * HTML produced ONLY by lib/rich-content.ts#renderRichHtml (escaped text +
@@ -19,6 +19,8 @@ export type RenderedHtml = string & { readonly __renderedByRichContent: true };
 export interface AssetView {
   role: AssetRole;
   optionLabel: string | null;
+  /** LIST_ITEM (Match the Following entry image) only: "I:A" / "II:III". */
+  listKey?: string | null;
   order: number;
   url: string;
   alt: string;
@@ -46,4 +48,17 @@ export interface RichQuestionView {
   optionHtml: Record<string, RenderedHtml>;
   /** QUESTION and OPTION assets only — EXPLANATION assets travel with the explanation. */
   assets: AssetView[];
+}
+
+/** One Match the Following entry, rendered on the server (text follows the question's format). */
+export interface MatchItemView {
+  key: string;
+  body: RenderedText;
+  assets: AssetView[];
+}
+
+/** List I / List II of a MATCH_THE_FOLLOWING question. Presentation only — never answer-key data. */
+export interface MatchView {
+  listI: MatchItemView[];
+  listII: MatchItemView[];
 }

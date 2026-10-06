@@ -18,6 +18,7 @@ import {
   isQuestionReviewableInAttempt,
 } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
+import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { getPaymentModeForStudent } from "@/lib/payments/settings";
 import { computeProductPrice } from "@/lib/payments/pricing";
 import { formatInr } from "@/lib/payments/money";
@@ -67,6 +68,8 @@ export async function getExplanationAction(questionId: string, reviewAttemptId?:
   // surface asked — blocks both a fresh generation and a cache read.
   const locked = await answerLockMessage(student.id, questionId, reviewAttemptId);
   if (locked) return { ok: false as const, error: locked };
+  const unsupported = await aiUnsupportedTypeMessage(questionId);
+  if (unsupported) return { ok: false as const, error: unsupported };
 
   // Daily AI ACCESS quota (spec: student access ≠ provider call) — checked
   // before cache/generation so an exhausted student never reaches the
@@ -118,6 +121,8 @@ export async function getExplanationVariantAction(questionId: string, variantId:
 
   const locked = await answerLockMessage(student.id, questionId, reviewAttemptId);
   if (locked) return { ok: false as const, error: locked };
+  const unsupported = await aiUnsupportedTypeMessage(questionId);
+  if (unsupported) return { ok: false as const, error: unsupported };
 
   const quota = await checkAiAccessQuota(student.id, questionId);
   if (!quota.allowed) {
@@ -169,6 +174,8 @@ export async function getQuestionVariantsAction(questionId: string, reviewAttemp
   // canonical answer-reveal rule — saved-only or never-attempted ids fail).
   const locked = await answerLockMessage(student.id, questionId, reviewAttemptId);
   if (locked) return { ok: false as const, error: locked };
+  const unsupported = await aiUnsupportedTypeMessage(questionId);
+  if (unsupported) return { ok: false as const, error: unsupported };
 
   const quota = await checkAiAccessQuota(student.id, questionId);
   if (!quota.allowed) {
@@ -245,4 +252,14 @@ export async function getAiUsageStatusAction() {
     paidPlanUnlimited: status.paidPlanUnlimited,
     upgrade,
   };
+}
+
+/**
+ * NEET Phase 4: Ask AI models one correct option, so a MULTIPLE_CORRECT or
+ * MATCH_THE_FOLLOWING question is refused before quota or cache (a cached
+ * explanation from before a type change would claim a single answer).
+ */
+async function aiUnsupportedTypeMessage(questionId: string): Promise<string | null> {
+  const row = await prisma.question.findUnique({ where: { id: questionId }, select: { questionType: true } });
+  return row && row.questionType !== "SINGLE_CORRECT" ? AI_UNSUPPORTED_TYPE_MESSAGE : null;
 }

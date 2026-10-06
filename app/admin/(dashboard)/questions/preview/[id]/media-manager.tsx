@@ -14,8 +14,10 @@ import { Button } from "@/components/ui/button";
 
 export interface ManagedAsset {
   id: string;
-  role: "QUESTION" | "OPTION" | "EXPLANATION";
+  role: "QUESTION" | "OPTION" | "EXPLANATION" | "LIST_ITEM";
   optionLabel: string | null;
+  /** LIST_ITEM only (NEET Phase 4): "I:A" / "II:III". */
+  listKey?: string | null;
   order: number;
   url: string | null;
   alt: string;
@@ -42,6 +44,8 @@ export function MediaManager(props: {
   contentFormat: "PLAIN" | "RICH_V1";
   explanation: string | null;
   optionLabels: string[];
+  /** MATCH_THE_FOLLOWING only: the entries a list image can belong to ("I:A", …). */
+  listKeys?: string[];
   assets: ManagedAsset[];
 }) {
   const router = useRouter();
@@ -116,7 +120,7 @@ export function MediaManager(props: {
               <AssetRow key={a.id} asset={a} busy={busy} base={base} run={run} />
             ))}
           </ul>
-          <UploadForm base={base} busy={busy} run={run} optionLabels={props.optionLabels} />
+          <UploadForm base={base} busy={busy} run={run} optionLabels={props.optionLabels} listKeys={props.listKeys ?? []} />
         </>
       )}
     </section>
@@ -148,7 +152,8 @@ function AssetRow({ asset: a, busy, base, run }: { asset: ManagedAsset; busy: bo
         <div className="text-xs text-[var(--color-muted-foreground)]">
           <p className="font-semibold text-[var(--color-foreground)]">
             {a.role}
-            {a.optionLabel ? ` ${a.optionLabel}` : ""} · #{a.order}
+            {a.optionLabel ? ` ${a.optionLabel}` : ""}
+            {a.listKey ? ` ${a.listKey}` : ""} · #{a.order}
           </p>
           <p>
             {a.width}×{a.height} · {(a.bytes / 1024).toFixed(0)} KiB · {a.sha256.slice(0, 12)}…
@@ -224,7 +229,7 @@ function AssetRow({ asset: a, busy, base, run }: { asset: ManagedAsset; busy: bo
   );
 }
 
-function UploadForm({ base, busy, run, optionLabels }: { base: string; busy: boolean; run: Run; optionLabels: string[] }) {
+function UploadForm({ base, busy, run, optionLabels, listKeys }: { base: string; busy: boolean; run: Run; optionLabels: string[]; listKeys: string[] }) {
   const [role, setRole] = useState("QUESTION");
   return (
     <form
@@ -243,7 +248,17 @@ function UploadForm({ base, busy, run, optionLabels }: { base: string; busy: boo
         <option value="QUESTION">Question image</option>
         <option value="OPTION">Option image</option>
         <option value="EXPLANATION">Explanation image</option>
+        {listKeys.length ? <option value="LIST_ITEM">List entry image</option> : null}
       </select>
+      {role === "LIST_ITEM" ? (
+        <select name="listKey" className={input} aria-label="List entry">
+          {listKeys.map((k) => (
+            <option key={k} value={k}>
+              List {k.replace(":", " – ")}
+            </option>
+          ))}
+        </select>
+      ) : null}
       {role === "OPTION" ? (
         <select name="optionLabel" className={input} aria-label="Option">
           {optionLabels.map((l) => (

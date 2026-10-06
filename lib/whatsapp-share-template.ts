@@ -179,6 +179,18 @@ export interface ShareableQuestion {
   text: string;
   imageUrl?: string | null;
   options: { label: string; text: string; imageUrl?: string | null }[];
+  /** NEET Phase 4: absent / SINGLE_CORRECT shares exactly as before. */
+  questionType?: string | null;
+  /** MATCH_THE_FOLLOWING only: List I / List II (presentation, never the answer). */
+  matchLists?: { listI: { key: string; text: string }[]; listII: { key: string; text: string }[] } | null;
+}
+
+export const MULTIPLE_CORRECT_SHARE_NOTE = "(More than one option may be correct.)";
+
+function shareMatchLists(lists: NonNullable<ShareableQuestion["matchLists"]>): string {
+  const block = (title: string, entries: { key: string; text: string }[]) =>
+    [`*${title}*`, ...entries.map((e) => `${e.key}. ${toShareText(e.text) || "(image)"}`)].join("\n");
+  return `${block("List I", lists.listI)}\n\n${block("List II", lists.listII)}`;
 }
 
 export const IMAGE_QUESTION_NOTE = "🖼️ This question has an image — view it on the website.";
@@ -204,6 +216,11 @@ export function buildQuestionShareText(params: {
   // snapshot's correctLabel) can ever reach the message.
   let questionText = toShareText(question.text);
   if (question.imageUrl) questionText = questionText ? `${questionText}\n\n${IMAGE_QUESTION_NOTE}` : IMAGE_QUESTION_NOTE;
+  // Advanced types (NEET Phase 4) add context only — never the answer.
+  if (question.questionType === "MATCH_THE_FOLLOWING" && question.matchLists) {
+    questionText = `${questionText}\n\n${shareMatchLists(question.matchLists)}`;
+  }
+  if (question.questionType === "MULTIPLE_CORRECT") questionText = `${questionText}\n\n${MULTIPLE_CORRECT_SHARE_NOTE}`;
   const options = formatShareOptions(question.options.map((o) => ({ label: o.label, text: o.text, imageUrl: o.imageUrl })));
   return renderWhatsAppShareText(resolveWhatsAppShareTemplate(params.template), {
     heading: examShareHeading(params.examName),

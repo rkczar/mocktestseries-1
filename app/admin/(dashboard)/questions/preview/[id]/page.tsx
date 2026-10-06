@@ -7,7 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { RichText } from "@/components/content/rich-text";
 import { QuestionMedia } from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
-import { liveRichViews } from "@/lib/rich-content";
+import { liveMatchView, liveRichViews } from "@/lib/rich-content";
+import { MatchLists } from "@/components/content/match-lists";
+import { QUESTION_TYPE_LABEL, matchAssetKey, readMatchSpec, toQuestionType } from "@/lib/question-types";
 import { mediaUrl } from "@/lib/media-storage";
 import { MediaManager } from "./media-manager";
 
@@ -33,17 +35,22 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
       contentFormat: true,
       editorialStage: true,
       explanation: true,
+      questionType: true,
+      matchSpec: true,
       exam: { select: { name: true } },
       subject: { select: { name: true } },
       options: { orderBy: { order: "asc" }, select: { label: true, text: true, imageUrl: true, isCorrect: true } },
       assets: {
         orderBy: [{ role: "asc" }, { optionLabel: "asc" }, { order: "asc" }],
-        select: { id: true, role: true, optionLabel: true, order: true, storageKey: true, alt: true, caption: true, width: true, height: true, bytes: true, sha256: true, darkBacking: true },
+        select: { id: true, role: true, optionLabel: true, listKey: true, order: true, storageKey: true, alt: true, caption: true, width: true, height: true, bytes: true, sha256: true, darkBacking: true },
       },
     },
   });
   if (!q) notFound();
   const { rich, explanation } = liveRichViews(q);
+  const match = liveMatchView(q);
+  const spec = q.questionType === "MATCH_THE_FOLLOWING" ? readMatchSpec(q.matchSpec) : null;
+  const listKeys = spec ? [...spec.listI.map((e) => matchAssetKey("I", e.key)), ...spec.listII.map((e) => matchAssetKey("II", e.key))] : [];
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
@@ -51,6 +58,7 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
         <span className="font-mono">{q.code}</span> · {q.exam.name} · {q.subject.name}
         <Badge variant="neutral">{q.status}</Badge>
         <Badge variant="neutral">{q.contentFormat}</Badge>
+        {q.questionType !== "SINGLE_CORRECT" ? <Badge variant="neutral">{QUESTION_TYPE_LABEL[toQuestionType(q.questionType)]}</Badge> : null}
         {q.editorialStage ? <Badge variant="neutral">{q.editorialStage}</Badge> : null}
       </div>
       <Card>
@@ -63,6 +71,7 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
             <img src={q.imageUrl} alt={`${q.code} image`} className="max-h-72 w-fit rounded border border-[var(--color-border)]" />
           ) : null}
           {rich ? <QuestionMedia assets={rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
+          {match ? <MatchLists match={match} /> : null}
           <ul className="flex flex-col gap-2">
             {q.options.map((o) => (
               <li
@@ -94,6 +103,7 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
         contentFormat={q.contentFormat}
         explanation={q.explanation}
         optionLabels={q.options.map((o) => o.label)}
+        listKeys={listKeys}
         assets={q.assets.map((a) => ({ ...a, url: mediaUrl(a.storageKey) }))}
       />
     </div>

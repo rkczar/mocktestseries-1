@@ -13,7 +13,9 @@ import type { QuestionSnapshot } from "@/lib/test-attempt";
 import { RichText } from "@/components/content/rich-text";
 import { QuestionMedia, preloadImages } from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
-import type { ExplanationView, RichQuestionView } from "@/lib/rich-content-types";
+import type { ExplanationView, MatchView, RichQuestionView } from "@/lib/rich-content-types";
+import { MatchLists } from "@/components/content/match-lists";
+import { formatLabelSet, snapshotCorrectLabels, snapshotQuestionType } from "@/lib/question-types";
 
 export interface ReviewQuestionView {
   attemptId: string;
@@ -29,6 +31,10 @@ export interface ReviewQuestionView {
   rich?: RichQuestionView;
   /** Snapshot v2 only: the human explanation (this page is the authorized review). */
   explanation?: ExplanationView;
+  /** MULTIPLE_CORRECT (snapshot v3) only: the submitted label set. */
+  selectedLabels?: string[];
+  /** MATCH_THE_FOLLOWING (snapshot v3) only: server-rendered List I / List II. */
+  match?: MatchView;
   saveAction: () => Promise<void>;
   reportAction: (reportType: ReportType, message: string) => Promise<void>;
 }
@@ -66,6 +72,7 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
     const next = questions[index + 1];
     if (next?.rich) preloadImages(next.rich.assets.map((a) => a.url));
     if (next?.explanation) preloadImages(next.explanation.assets.map((a) => a.url));
+    if (next?.match) preloadImages([...next.match.listI, ...next.match.listII].flatMap((i) => i.assets.map((a) => a.url)));
   }, [index, questions]);
 
   if (!q) return null;
@@ -121,6 +128,12 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
 function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index: number; total: number }) {
   const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(q.questionId, "attempt_review", q.attemptId);
   const correctOption = q.snapshot.options.find((opt) => opt.label === q.snapshot.correctLabel);
+  // MULTIPLE_CORRECT (NEET Phase 4): the frozen correct SET vs the submitted set. SINGLE_CORRECT / MATCH use the lines above.
+  const multi = snapshotQuestionType(q.snapshot) === "MULTIPLE_CORRECT";
+  const correctSet = multi ? snapshotCorrectLabels(q.snapshot) : [];
+  const selectedSet = multi ? (q.selectedLabels ?? []) : [];
+  // Ask AI explains single-correct questions only (the server refuses the rest too).
+  const askAiAllowed = snapshotQuestionType(q.snapshot) === "SINGLE_CORRECT";
   const panelRef = useRef<HTMLDivElement>(null);
   const panelOpen = askAiPanel !== null;
 
@@ -187,9 +200,43 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
           />
         ) : null}
         {q.rich ? <QuestionMedia className="mt-3 max-md:order-2 max-md:px-4" assets={q.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
+        {q.match ? <MatchLists className="mt-4 max-md:order-2 max-md:mx-4" match={q.match} /> : null}
 
         <div className="mt-4 flex flex-col gap-2.5 max-md:order-3 max-md:px-4 md:gap-2" data-testid="review-options">
-          {q.snapshot.options.map((opt) => {
+          {multi ? q.snapshot.options.map((opt) => {
+            const isSelected = selectedSet.includes(opt.label);
+            const isAnswer = correctSet.includes(opt.label);
+            const state = isAnswer && isSelected ? "selected-correct" : isSelected ? "selected-incorrect" : isAnswer ? "missed-correct" : "none";
+            return (
+              <div
+                key={opt.label}
+                data-state={state}
+                className={cn(
+                  "rounded-[var(--radius-card)] border p-3 text-sm max-md:text-[length:calc(1rem*var(--text-scale))] max-md:leading-relaxed",
+                  state === "selected-correct" && "border-[var(--color-success)] bg-[var(--color-success)]/10",
+                  state === "missed-correct" && "border-dashed border-[var(--color-success)]",
+                  state === "selected-incorrect" && "border-[var(--color-error)] bg-[var(--color-error)]/10",
+                  state === "none" && "border-[var(--color-border)]"
+                )}
+              >
+                <span className="font-semibold">{opt.label}.</span> <RichText text={opt.text} html={q.rich?.optionHtml[opt.label]} />
+                {state === "selected-correct" ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Your answer · Correct</span> : null}
+                {state === "missed-correct" ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer · Missed</span> : null}
+                {state === "selected-incorrect" ? <span className="ml-2 text-xs font-medium text-[var(--color-error)]">Your answer · Incorrect</span> : null}
+                {opt.imageUrl && !q.rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === opt.label) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={opt.imageUrl}
+                    alt=""
+                    className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                  />
+                ) : null}
+                {q.rich ? (
+                  <QuestionMedia className="mt-2" size="option" assets={q.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === opt.label)} />
+                ) : null}
+              </div>
+            );
+          }) : q.snapshot.options.map((opt) => {
             const isSelected = q.selected === opt.label;
             const isAnswer = opt.label === q.snapshot.correctLabel;
             return (
@@ -244,11 +291,17 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
             )}
             {q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered"}
           </p>
-          <div className="max-md:order-6 max-md:mt-4 max-md:px-4 max-md:[&_button]:h-10 max-md:[&_button]:flex-1">{askAiActions}</div>
+          <div className="max-md:order-6 max-md:mt-4 max-md:px-4 max-md:[&_button]:h-10 max-md:[&_button]:flex-1">{askAiAllowed ? askAiActions : null}</div>
         </div>
         <div className="mt-2 flex flex-col gap-2 max-md:contents">
-          <div className="empty:hidden max-md:order-7 max-md:mt-2 max-md:px-4">{usageNotice}</div>
-          {correctOption ? (
+          <div className="empty:hidden max-md:order-7 max-md:mt-2 max-md:px-4">{askAiAllowed ? usageNotice : null}</div>
+          {multi ? (
+            <div className="text-sm font-medium max-md:order-5 max-md:mt-2 max-md:px-4" data-testid="review-answer-sets">
+              <p className="text-[var(--color-foreground)]">Your answer: {selectedSet.length ? formatLabelSet(selectedSet) : "Not answered"}</p>
+              <p className="text-[var(--color-success)]">Correct answer: {formatLabelSet(correctSet)}</p>
+              <p className="mt-0.5 text-xs font-normal text-[var(--color-muted-foreground)]">Marked correct only when every correct option, and nothing else, is selected.</p>
+            </div>
+          ) : correctOption ? (
             <p className="text-sm font-medium text-[var(--color-success)] max-md:order-5 max-md:mt-2 max-md:px-4">
               Correct Answer: {correctOption.label}. <RichText text={correctOption.text} html={q.rich?.optionHtml[correctOption.label]} />
             </p>
@@ -258,7 +311,7 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
 
         {/* The one highlighted AI area — explanation (with its styles) or AI Question Variant, opened by the two AI actions. Never a separate page/card. */}
         <div ref={panelRef} className="empty:hidden max-md:order-9 max-md:scroll-mt-20 max-md:px-4">
-          {askAiPanel}
+          {askAiAllowed ? askAiPanel : null}
         </div>
       </div>
     </div>

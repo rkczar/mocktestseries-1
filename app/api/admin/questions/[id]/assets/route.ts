@@ -9,7 +9,7 @@ import { attachQuestionAsset, QuestionMediaError, removeQuestionAsset, updateQue
 /**
  * RICH_V1 question media (NEET Phase 2) — admin only (QUESTIONS_MANAGE).
  *   GET    → the question's asset references
- *   POST   multipart: file, role, optionLabel?, order?, alt | decorative, caption?, darkBacking?, replaceAssetId?
+ *   POST   multipart: file, role, optionLabel?, listKey? (LIST_ITEM), order?, alt | decorative, caption?, darkBacking?, replaceAssetId?
  *   PATCH  json: { assetId, alt?, decorative?, caption?, order?, darkBacking? }
  *   DELETE json: { assetId } — removes the reference only; the immutable file is kept.
  * Storage keys/paths are never accepted from the client.
@@ -32,10 +32,11 @@ function fail(error: unknown, op: string) {
   return NextResponse.json({ error: "Something went wrong." }, { status: 500 });
 }
 
-const view = (a: { id: string; role: string; optionLabel: string | null; order: number; storageKey: string; alt: string; caption: string | null; width: number; height: number; bytes: number; sha256: string; darkBacking: boolean }) => ({
+const view = (a: { id: string; role: string; optionLabel: string | null; listKey?: string | null; order: number; storageKey: string; alt: string; caption: string | null; width: number; height: number; bytes: number; sha256: string; darkBacking: boolean }) => ({
   id: a.id,
   role: a.role,
   optionLabel: a.optionLabel,
+  listKey: a.listKey ?? null,
   order: a.order,
   url: mediaUrl(a.storageKey),
   storageKey: a.storageKey,
@@ -78,6 +79,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
       file: { bytes: Buffer.from(await file.arrayBuffer()), filename: file.name || null, mime: file.type || null },
       role: str("role"),
       optionLabel: str("optionLabel"),
+      listKey: str("listKey"),
       order: str("order"),
       alt: str("alt"),
       decorative: str("decorative"),

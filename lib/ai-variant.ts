@@ -1,6 +1,7 @@
 import "server-only";
 import { AiGenerationStatus, AiSlot, AiVariantType, Prisma, QuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { assertAiGenerationOpen, generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult, type AiGenerationOptions } from "@/lib/ai-provider";
 import { isPlatformOpen } from "@/lib/platform-controls";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, type ExplanationContent } from "@/lib/ai-explanation";
@@ -119,6 +120,7 @@ Respond with ONLY a JSON object (no markdown fences) shaped exactly like:
 async function loadSource(sourceQuestionId: string): Promise<SourceQuestion> {
   const source = await prisma.question.findUnique({ where: { id: sourceQuestionId }, include: { options: { orderBy: { order: "asc" } } } });
   if (!source) throw new InvalidVariantSourceError("Source question not found.");
+  if (source.questionType !== "SINGLE_CORRECT") throw new InvalidVariantSourceError(AI_UNSUPPORTED_TYPE_MESSAGE);
   if (source.parentQuestionId) throw new InvalidVariantSourceError("AI variants are generated from the original question, not from another variant.");
   if (source.status !== QuestionStatus.PUBLISHED) throw new InvalidVariantSourceError("AI variants are only available for published questions.");
   if (source.options.filter((o) => o.isCorrect).length !== 1) throw new InvalidVariantSourceError("The source question has no single correct answer configured.");

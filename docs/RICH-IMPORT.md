@@ -38,20 +38,20 @@ Download it from the upload form (Rich mode → *Rich XLSX template*), which als
 | Subject | **required** | existing Subject (never created) |
 | Chapter/Topic | optional | existing Topic (old header `Topic` also works) |
 | Sub-topic | optional | existing Sub-topic |
-| Question Type | optional | `SINGLE_CORRECT` (default, `MCQ`), `MATCH_THE_FOLLOWING`; `MULTIPLE_CORRECT` is parsed but **blocked** |
+| Question Type | optional | `SINGLE_CORRECT` (default, `MCQ`), `MULTIPLE_CORRECT` (`MSQ`), `MATCH_THE_FOLLOWING` (`MTF`) — NEET Phase 4 |
 | Content Format | optional | `PLAIN` (default; text literal) or `RICH_V1` |
 | Question Text | **required** | line breaks kept |
 | Question Images | optional | images from the ZIP (max 8) |
 | Option A–D | conditional | text; may be empty only when that option has an image |
 | Option A–D Image | optional | max 3 per option |
-| Correct | **required** | one letter A–D |
+| Correct | **required** | one letter A–D; `MULTIPLE_CORRECT`: every correct letter, e.g. `A,B,D` (≥ 2, each once) |
 | Explanation | optional (WARNING if missing) | shown only after review/reveal |
 | Explanation Images | optional | max 8 |
 | Difficulty | optional | EASY / MEDIUM / HARD (blank → MEDIUM, WARNING; other → ERROR) |
 | Source | optional | `PYQ` or blank |
 | Review Required / Review Reason | optional | TRUE → editorial stage NEEDS_REVIEW, reason preserved |
 | Status | optional | always saved DRAFT; PUBLISHED/ARCHIVED → WARNING only |
-| List I / List II | conditional | Match the Following lists |
+| List I / List II | conditional | **required** for `MATCH_THE_FOLLOWING` (2–10 entries each) |
 
 These rich columns are recognized **only in Rich mode**; a Standard file that happens to carry
 e.g. `Question Type` or `Review Required` (the Template Builder writes both) still ignores them.
@@ -76,10 +76,23 @@ PLAIN text containing formula markup gets a WARNING (it will show literally).
 
 `List I`: one entry per line (or `|`), each starting with its key — `A. \ce{CH4}`; an entry image goes
 after `@@`: `B. Alkene @@ list-b.png :: Ethene`. Options stay four coded single-correct options
-("A-II, B-III, …"), so scoring/OMR/analytics are unchanged. Staging keeps the structure (manifest
-`match`); the stored question text is stem + "List I …" + "List II …" lines (rendered with preserved
-line breaks); entry images are QUESTION assets captioned "List I (B)". A structured `matchSpec`
-column is not added yet (proposal: docs/NEET-QUESTION-TYPES.md §4).
+("A-II, B-III, …"), so scoring/OMR/analytics are unchanged.
+
+Since NEET Phase 4 a `MATCH_THE_FOLLOWING` row stores the **stem only** as question text and the
+lists in `Question.matchSpec` (`{v:1, listI:[{key,text}], listII:[…]}`, entry text follows the row's
+Content Format); entry images become `LIST_ITEM` assets with `listKey` `I:B` / `II:III` (caption
+"List I (B)" kept). Validation: both lists, 2–10 entries, valid unique keys (A–Z, I–X, 1–99), text or
+an image per entry, referenced images present, exactly one correct coded option. Lists given on a
+non-MTF row keep the Phase 3 behaviour (appended to the text as lines, captioned QUESTION figures,
+WARNING). Duplicate detection: a stem-only text match is a duplicate only when the existing Match
+question also has identical lists (Match stems repeat); in-run dedup uses stem + lists.
+
+### Multiple correct (NEET Phase 4)
+
+`Question Type = MULTIPLE_CORRECT` with `Correct = A,B,D` imports `isCorrect` on A, B and D (the
+canonical key; no second source). Fewer than two answers, an unknown letter or a repeated letter
+(`A,A,C`) is an ERROR — never narrowed or silently de-duplicated. Scoring is all-or-nothing; MSQ
+tests are online-only (OMR entry refuses a mock containing one).
 
 ## Image bundle (ZIP)
 
@@ -101,8 +114,8 @@ column is not added yet (proposal: docs/NEET-QUESTION-TYPES.md §4).
 ## Validation severities
 
 - **ERROR** (row cannot import): unknown/misplaced taxonomy, exam mismatch, missing/invalid/multiple
-  answer, unsupported Question Type or Content Format, MULTIPLE_CORRECT (*"MULTIPLE_CORRECT ENGINE
-  NOT YET ENABLED"*), images on PLAIN, missing / ambiguous / unsupported / corrupt / unprocessed
+  answer, unsupported Question Type or Content Format, MULTIPLE_CORRECT with < 2 / repeated answers,
+  MATCH_THE_FOLLOWING without valid lists or with ≠ 1 correct option, images on PLAIN, missing / ambiguous / unsupported / corrupt / unprocessed
   image, malformed image reference, duplicate Code or QNo in the file, unknown/mismatched Paper Code
   or Year, several papers in a year without a Paper Code, spreadsheet formula cell, text over limits,
   REPLACE of a non-draft or non-rich question.
@@ -168,9 +181,9 @@ report (`scripts/verify-rich-import-scale.mjs`).
 
 ## Not in Phase 3
 
-- `MULTIPLE_CORRECT` scoring (manifest already carries `correct: string[]`; rows are blocked).
-- `Question.questionType` / `matchSpec` columns (not needed: MTF is single-correct coded options).
-- Snapshot v3 (rich imports freeze the existing v2).
+- (Phase 4 added: `MULTIPLE_CORRECT` import + scoring, `Question.questionType` / `matchSpec`,
+  `LIST_ITEM` assets, snapshot v3 for advanced types — see docs/NEET-QUESTION-TYPES.md.)
+- Partial-credit MSQ schemes, drag-to-match.
 - Real NEET media bulk import — waits for the off-site backup (`mts-offsite`).
 
 ## Tests

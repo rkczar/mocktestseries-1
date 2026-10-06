@@ -7,10 +7,13 @@ import type {
   AssetView,
   ContentFormat,
   ExplanationView,
+  MatchItemView,
+  MatchView,
   RenderedHtml,
   RenderedText,
   RichQuestionView,
 } from "@/lib/rich-content-types";
+import { matchAssetKey, readMatchSpec, type MatchEntry } from "@/lib/question-types";
 
 /**
  * The ONE rich scientific-content renderer (NEET Phase 1). Server-only: KaTeX
@@ -180,6 +183,8 @@ export function assetUrl(storageKey: unknown): string | null {
 export interface SnapshotAsset {
   role: AssetRole;
   optionLabel: string | null;
+  /** LIST_ITEM only (the key is absent for every other role, so v2 snapshots freeze exactly as before). */
+  listKey?: string;
   order: number;
   storageKey: string;
   url: string;
@@ -193,6 +198,7 @@ export interface SnapshotAsset {
 export interface AssetRowLike {
   role: string;
   optionLabel: string | null;
+  listKey?: string | null;
   order: number;
   storageKey: string;
   alt: string;
@@ -202,20 +208,23 @@ export interface AssetRowLike {
   darkBacking: boolean;
 }
 
-const ROLE_RANK: Record<AssetRole, number> = { QUESTION: 0, OPTION: 1, EXPLANATION: 2 };
+const ROLE_RANK: Record<AssetRole, number> = { QUESTION: 0, OPTION: 1, EXPLANATION: 2, LIST_ITEM: 3 };
 
 function isRole(v: unknown): v is AssetRole {
-  return v === "QUESTION" || v === "OPTION" || v === "EXPLANATION";
+  return v === "QUESTION" || v === "OPTION" || v === "EXPLANATION" || v === "LIST_ITEM";
 }
+
+const LIST_KEY = /^(?:I|II):[A-Z0-9]{1,4}$/;
 
 export function toSnapshotAssets(rows: AssetRowLike[]): SnapshotAsset[] {
   return rows
-    .filter((r) => isRole(r.role))
+    .filter((r) => isRole(r.role) && (r.role !== "LIST_ITEM" || (typeof r.listKey === "string" && LIST_KEY.test(r.listKey))))
     .map((r) => ({ r, url: assetUrl(r.storageKey) }))
     .filter((x): x is { r: AssetRowLike; url: string } => x.url !== null)
     .map(({ r, url }) => ({
       role: r.role as AssetRole,
       optionLabel: r.role === "OPTION" ? r.optionLabel : null,
+      ...(r.role === "LIST_ITEM" ? { listKey: r.listKey as string } : {}),
       order: r.order,
       storageKey: r.storageKey,
       url,
@@ -225,7 +234,13 @@ export function toSnapshotAssets(rows: AssetRowLike[]): SnapshotAsset[] {
       height: r.height,
       darkBacking: r.darkBacking,
     }))
-    .sort((a, b) => ROLE_RANK[a.role] - ROLE_RANK[b.role] || (a.optionLabel ?? "").localeCompare(b.optionLabel ?? "") || a.order - b.order);
+    .sort(
+      (a, b) =>
+        ROLE_RANK[a.role] - ROLE_RANK[b.role] ||
+        (a.optionLabel ?? "").localeCompare(b.optionLabel ?? "") ||
+        (a.listKey ?? "").localeCompare(b.listKey ?? "") ||
+        a.order - b.order
+    );
 }
 
 /** Defensive read of snapshot assets: unknown/garbled entries are dropped, never thrown. */
@@ -234,12 +249,14 @@ export function readAssets(raw: unknown): AssetView[] {
   const out: AssetView[] = [];
   for (const a of raw as Record<string, unknown>[]) {
     if (!a || typeof a !== "object" || !isRole(a.role)) continue;
+    if (a.role === "LIST_ITEM" && !(typeof a.listKey === "string" && LIST_KEY.test(a.listKey))) continue;
     const url = assetUrl(a.storageKey) ?? (typeof a.url === "string" && a.url.startsWith(MEDIA_URL_PREFIX) ? assetUrl(a.url.slice(MEDIA_URL_PREFIX.length)) : null);
     if (!url) continue;
     const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
     out.push({
       role: a.role,
       optionLabel: a.role === "OPTION" && typeof a.optionLabel === "string" ? a.optionLabel : null,
+      ...(a.role === "LIST_ITEM" ? { listKey: a.listKey as string } : {}),
       order: typeof a.order === "number" ? a.order : 0,
       url,
       alt: typeof a.alt === "string" ? a.alt : "",
@@ -266,8 +283,9 @@ export interface SnapshotV2Like {
   options?: unknown;
 }
 
-export function snapshotVersion(s: SnapshotV2Like | null | undefined): 1 | 2 {
-  return s?.v === 2 ? 2 : 1;
+/** v3 (NEET Phase 4, advanced question types only) carries every v2 key. */
+export function snapshotVersion(s: SnapshotV2Like | null | undefined): 1 | 2 | 3 {
+  return s?.v === 3 ? 3 : s?.v === 2 ? 2 : 1;
 }
 
 /**
@@ -276,7 +294,7 @@ export function snapshotVersion(s: SnapshotV2Like | null | undefined): 1 | 2 {
  * before. Never includes the answer key or the explanation.
  */
 export function richQuestionView(s: SnapshotV2Like | null | undefined): RichQuestionView | null {
-  if (!s || snapshotVersion(s) !== 2 || !isRichFormat(s.contentFormat)) return null;
+  if (!s || snapshotVersion(s) === 1 || !isRichFormat(s.contentFormat)) return null;
   const options = Array.isArray(s.options) ? (s.options as { label?: unknown; text?: unknown }[]) : [];
   const optionHtml: Record<string, RenderedHtml> = {};
   for (const o of options) {
@@ -285,7 +303,8 @@ export function richQuestionView(s: SnapshotV2Like | null | undefined): RichQues
   return {
     textHtml: renderRichHtml(typeof s.text === "string" ? s.text : ""),
     optionHtml,
-    assets: readAssets(s.assets).filter((a) => a.role !== "EXPLANATION"),
+    // EXPLANATION images travel with the explanation, LIST_ITEM images inside the match view.
+    assets: readAssets(s.assets).filter((a) => a.role !== "EXPLANATION" && a.role !== "LIST_ITEM"),
   };
 }
 
@@ -295,11 +314,43 @@ export function richQuestionView(s: SnapshotV2Like | null | undefined): RichQues
  * question) — this is answer-key data, like correctLabel.
  */
 export function explanationView(s: SnapshotV2Like | null | undefined): ExplanationView | null {
-  if (!s || snapshotVersion(s) !== 2) return null;
+  if (!s || snapshotVersion(s) === 1) return null;
   const text = typeof s.explanation === "string" && s.explanation.trim() ? s.explanation : null;
   const assets = readAssets(s.assets).filter((a) => a.role === "EXPLANATION");
   if (!text && assets.length === 0) return null;
   return { body: text ? renderText(s.contentFormat, text) : null, assets };
+}
+
+/**
+ * List I / List II of a v3 MATCH_THE_FOLLOWING snapshot (or a live row passed
+ * through liveMatchView), rendered on the server: entry text follows the
+ * question's contentFormat, entry images are the LIST_ITEM assets. null for
+ * every other question and for a malformed spec.
+ */
+export function matchView(s: (SnapshotV2Like & { questionType?: unknown; matchSpec?: unknown }) | null | undefined): MatchView | null {
+  if (!s || snapshotVersion(s) !== 3 || s.questionType !== "MATCH_THE_FOLLOWING") return null;
+  const spec = readMatchSpec(s.matchSpec);
+  if (!spec) return null;
+  const assets = isRichFormat(s.contentFormat) ? readAssets(s.assets).filter((a) => a.role === "LIST_ITEM") : [];
+  const items = (list: "I" | "II", entries: MatchEntry[]): MatchItemView[] =>
+    entries.map((e) => ({
+      key: e.key,
+      body: renderText(s.contentFormat, e.text),
+      assets: assets.filter((a) => a.listKey === matchAssetKey(list, e.key)),
+    }));
+  return { listI: items("I", spec.listI), listII: items("II", spec.listII) };
+}
+
+/** The match view of a LIVE question row (Saved Questions, admin preview). */
+export function liveMatchView(q: { questionType?: unknown; matchSpec?: unknown; contentFormat?: unknown; assets?: AssetRowLike[] }): MatchView | null {
+  if (q.questionType !== "MATCH_THE_FOLLOWING") return null;
+  return matchView({
+    v: 3,
+    questionType: q.questionType,
+    matchSpec: q.matchSpec,
+    contentFormat: q.contentFormat,
+    assets: isRichFormat(q.contentFormat) ? toSnapshotAssets(q.assets ?? []) : [],
+  });
 }
 
 /** The same two views for a LIVE question row (Saved Questions, admin preview). */

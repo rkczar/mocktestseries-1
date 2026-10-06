@@ -46,6 +46,8 @@ export default async function AddQuestionPage({
       reviewRequired: question.reviewRequired,
       reviewReason: question.reviewReason,
       options: question.options,
+      questionType: question.questionType,
+      matchSpec: question.matchSpec,
     };
   }
 

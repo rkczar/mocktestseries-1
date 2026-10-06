@@ -20,7 +20,7 @@ import type { BulkImportRow } from "@/lib/bulk-import";
 
 export type ManifestContentFormat = "PLAIN" | "RICH_V1";
 export type ManifestQuestionType = "SINGLE_CORRECT" | "MULTIPLE_CORRECT" | "MATCH_THE_FOLLOWING";
-export type ManifestImageRole = "QUESTION" | "OPTION" | "EXPLANATION";
+export type ManifestImageRole = "QUESTION" | "OPTION" | "EXPLANATION" | "LIST_ITEM";
 
 export const OPTION_LABELS = ["A", "B", "C", "D"] as const;
 export type OptionLabel = (typeof OPTION_LABELS)[number];
@@ -39,6 +39,8 @@ export interface ManifestImageRef {
   field: string;
   /** Match the Following list image: caption such as "List I (A)". */
   caption: string | null;
+  /** LIST_ITEM only (MATCH_THE_FOLLOWING, NEET Phase 4): "I:A" / "II:III". */
+  listKey?: string | null;
 }
 
 export interface ManifestMatchEntry {
@@ -61,8 +63,8 @@ export interface ManifestQuestion {
   text: string;
   options: { label: OptionLabel; text: string; images: ManifestImageRef[] }[];
   /**
-   * Correct option labels. An ARRAY on purpose: MULTIPLE_CORRECT is parsed and
-   * represented already, even though only SINGLE_CORRECT may be imported today.
+   * Correct option labels, sorted. MULTIPLE_CORRECT (NEET Phase 4) carries the
+   * whole set; every other type exactly one.
    */
   correct: string[];
   explanation: string | null;
@@ -148,6 +150,12 @@ export function parseCorrect(v: string | undefined): string[] | null {
   return [...new Set(parts)].sort();
 }
 
+/** "A,A" / "B, b": a label given twice (never silently de-duplicated into a valid key). */
+export function hasRepeatedLabel(v: string | undefined): boolean {
+  const parts = (v ?? "").trim().toUpperCase().split(/\s*(?:,|\||;|\/|\+|&|\bAND\b|\s)\s*/).filter(Boolean);
+  return new Set(parts).size !== parts.length;
+}
+
 export function parseBoolFlag(v: string | undefined): boolean | null {
   const key = (v ?? "").trim().toLowerCase();
   if (!key) return false;
@@ -191,6 +199,9 @@ export function parseMatchList(cell: string | undefined, list: "I" | "II", issue
 export function toManifestQuestion(d: BulkImportRow): ManifestQuestion {
   const issues: ManifestQuestion["parseIssues"] = [];
   const correct = parseCorrect(d.correctAnswer);
+  if (correct !== null && hasRepeatedLabel(d.correctAnswer)) {
+    issues.push({ field: "Correct", message: `"${d.correctAnswer}" lists the same option twice. Give each correct option once.` });
+  }
   if (correct === null) issues.push({ field: "Correct", message: `"${d.correctAnswer}" is not a valid answer. Use one letter A–D (e.g. "B"), or several separated by commas for multiple-correct.` });
   const review = parseBoolFlag(d.reviewFlag);
   if (review === null) issues.push({ field: "Review Required", message: `"${d.reviewFlag}" is not TRUE/FALSE (or YES/NO).` });
@@ -207,8 +218,15 @@ export function toManifestQuestion(d: BulkImportRow): ManifestQuestion {
     images: parseImageCell(optionCols[label], "OPTION", `Option ${label} Image`, label, issues),
   }));
 
-  const listI = parseMatchList(d.listI, "I", issues);
-  const listII = parseMatchList(d.listII, "II", issues);
+  const questionType = parseQuestionType(d.questionType);
+  // A MATCH_THE_FOLLOWING entry image is a LIST_ITEM of that entry; lists on any
+  // other type stay captioned QUESTION figures appended to the text (Phase 3).
+  const asListItems = (entries: ManifestMatchEntry[], list: "I" | "II") =>
+    questionType === "MATCH_THE_FOLLOWING"
+      ? entries.map((e) => ({ ...e, images: e.images.map((r) => ({ ...r, role: "LIST_ITEM" as const, listKey: `${list}:${e.key}` })) }))
+      : entries;
+  const listI = asListItems(parseMatchList(d.listI, "I", issues), "I");
+  const listII = asListItems(parseMatchList(d.listII, "II", issues), "II");
 
   return {
     rowNumber: d.rowNumber,
@@ -218,7 +236,7 @@ export function toManifestQuestion(d: BulkImportRow): ManifestQuestion {
     year: d.examYear,
     paperCode: d.paperCode?.trim() || null,
     taxonomy: { subject: d.subject, topic: d.topic, subTopic: d.subTopic },
-    questionType: parseQuestionType(d.questionType),
+    questionType,
     contentFormat: parseContentFormat(d.contentFormat),
     text: d.questionText,
     options,
@@ -245,13 +263,29 @@ export function allImageRefs(m: ManifestQuestion): ManifestImageRef[] {
 }
 
 /**
- * The stored question text. A Match the Following question keeps its stem and
- * gets its structured lists appended as readable lines (the Test Player and
- * Review show question text with preserved line breaks). Until a structured
- * `matchSpec` column is approved (docs/NEET-QUESTION-TYPES.md §4), this is the
- * faithful production rendering of the staged structure.
+ * The stored question text. A MATCH_THE_FOLLOWING question (NEET Phase 4)
+ * stores only its stem: List I / List II live in Question.matchSpec and render
+ * through the shared MatchLists component. Lists given on any other type are
+ * still appended as readable lines (Phase 3 behaviour).
  */
 export function composeQuestionText(m: ManifestQuestion): string {
+  if (m.questionType === "MATCH_THE_FOLLOWING" && m.match) return m.text;
+  return matchIdentityText(m);
+}
+
+/** The structured spec stored for a MATCH_THE_FOLLOWING row (null otherwise). */
+export function manifestMatchSpec(m: ManifestQuestion): { v: 1; listI: { key: string; text: string }[]; listII: { key: string; text: string }[] } | null {
+  if (m.questionType !== "MATCH_THE_FOLLOWING" || !m.match) return null;
+  const strip = (entries: ManifestMatchEntry[]) => entries.map((e) => ({ key: e.key, text: e.text }));
+  return { v: 1, listI: strip(m.match.listI), listII: strip(m.match.listII) };
+}
+
+/**
+ * Stem + lists as one string: the duplicate-detection identity of a row. Two
+ * Match questions share a stem ("Match List I with List II") far more often
+ * than their lists, so the stem alone must never make them duplicates.
+ */
+export function matchIdentityText(m: ManifestQuestion): string {
   if (!m.match || (m.match.listI.length === 0 && m.match.listII.length === 0)) return m.text;
   const block = (title: string, entries: ManifestMatchEntry[]) =>
     entries.length ? `${title}\n${entries.map((e) => `${e.key}. ${e.text || "(see figure)"}`).join("\n")}` : "";

@@ -29,6 +29,11 @@
  *     sent to revealAnswerAction, the server commits + locks that first
  *     answer and only then returns the correct label for THAT question. The
  *     same question then shows its review state; nothing auto-advances.
+ *  7. MULTIPLE_CORRECT (NEET Phase 4) is a capability branch, not a fork:
+ *     checkboxes instead of radios, the whole label set is one queued value
+ *     (latest set wins, same seq rule), and in Practice Mode the set is
+ *     committed by an explicit "Check answer" (one tap can't be the answer).
+ *     SINGLE_CORRECT / MATCH_THE_FOLLOWING keep the radio path above unchanged.
  */
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
@@ -45,13 +50,16 @@ import { useAskAi } from "@/components/student/explanation-panel";
 import { RichText } from "@/components/content/rich-text";
 import { QuestionMedia, preloadImages } from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
-import type { ExplanationView, RenderedHtml, RichQuestionView } from "@/lib/rich-content-types";
+import { MatchLists } from "@/components/content/match-lists";
+import type { ExplanationView, MatchView, RenderedHtml, RichQuestionView } from "@/lib/rich-content-types";
 import { cn } from "@/lib/utils";
 import { AnswerSaveQueue, type SaveStatus } from "@/lib/answer-save-queue";
 import {
   attemptHeartbeatAction,
   revealAnswerAction,
+  revealAnswerLabelsAction,
   saveAnswerAction,
+  saveAnswerLabelsAction,
   submitAttemptAction,
   toggleSaveQuestionAction,
   reportAttemptQuestionAction,
@@ -72,7 +80,7 @@ export interface PlayerQuestion {
   /** Snapshot failed validation (too few / duplicate options): shown as a skippable notice. */
   malformed: boolean;
   /** Present only once the server has revealed this question (INSTANT mode); the explanation travels only here. */
-  reveal: { correctLabel: string; explanation?: ExplanationView } | null;
+  reveal: { correctLabel: string; correctLabels?: string[]; explanation?: ExplanationView } | null;
   selectedOptionLabel: string | null;
   markForReview: boolean;
   saved: boolean;
@@ -83,18 +91,30 @@ export interface PlayerQuestion {
   shareText?: string | null;
   /** RICH_V1 only: server-rendered text/options + question/option images. Absent for PLAIN. */
   rich?: RichQuestionView;
+  /** Advanced types only (NEET Phase 4); absent = SINGLE_CORRECT. */
+  questionType?: "MULTIPLE_CORRECT" | "MATCH_THE_FOLLOWING";
+  /** MULTIPLE_CORRECT only: the saved label set. */
+  selectedLabels?: string[];
+  /** MATCH_THE_FOLLOWING only: List I / List II. */
+  match?: MatchView;
 }
 
 interface QuestionState {
   selected: string | null;
   marked: boolean;
   visited: boolean;
+  /** MULTIPLE_CORRECT only: the selected set, in option order. */
+  labels?: string[];
 }
 
 interface RevealState {
   correctLabel: string;
+  /** MULTIPLE_CORRECT only: the full correct set. */
+  correctLabels?: string[];
   explanation?: ExplanationView;
 }
+
+const isAnswered = (s: QuestionState | undefined) => !!s && (!!s.selected || (s.labels?.length ?? 0) > 0);
 
 type Status = "current" | "answered-marked" | "marked" | "answered" | "visited" | "not-visited";
 
@@ -127,7 +147,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * build's Server Action id) replays them instead of losing them. The server
  * still validates every replayed save (ownership, IN_PROGRESS, window, seq).
  */
-type PendingAnswers = Record<string, { selected: string | null; marked: boolean }>;
+type PendingAnswers = Record<string, { selected: string | null; marked: boolean; labels?: string[] }>;
 const pendingKey = (attemptId: string) => `mts-pending-answers:${attemptId}`;
 
 function readPending(attemptId: string): PendingAnswers {
@@ -185,7 +205,15 @@ export function TestPlayer({
   const [, startSubmitTransition] = useTransition();
   const [states, setStates] = useState<Record<string, QuestionState>>(() =>
     Object.fromEntries(
-      questions.map((q, i) => [q.questionId, { selected: q.selectedOptionLabel, marked: q.markForReview, visited: i === 0 }])
+      questions.map((q, i) => [
+        q.questionId,
+        {
+          selected: q.selectedOptionLabel,
+          marked: q.markForReview,
+          visited: i === 0,
+          ...(q.questionType === "MULTIPLE_CORRECT" ? { labels: q.selectedLabels ?? [] } : {}),
+        },
+      ])
     )
   );
   const [reveals, setReveals] = useState<Record<string, RevealState>>(() =>
@@ -214,7 +242,10 @@ export function TestPlayer({
   const getQueue = useCallback((): AnswerSaveQueue => {
     if (!queueRef.current) {
       queueRef.current = new AnswerSaveQueue({
-        send: async (questionId, value, seq) => saveAnswerAction(attemptId, questionId, value.selected, value.marked, seq),
+        send: async (questionId, value, seq) =>
+          value.labels
+            ? saveAnswerLabelsAction(attemptId, questionId, value.labels, value.marked, seq)
+            : saveAnswerAction(attemptId, questionId, value.selected, value.marked, seq),
         onStatus: (questionId, status) =>
           setSaveStatus((prev) => {
             if ((prev[questionId] ?? null) === status) return prev;
@@ -302,6 +333,8 @@ export function TestPlayer({
   useEffect(() => {
     const next = questions[current + 1]?.rich;
     if (next) preloadImages(next.assets.map((a) => a.url));
+    const nextMatch = questions[current + 1]?.match;
+    if (nextMatch) preloadImages([...nextMatch.listI, ...nextMatch.listII].flatMap((i) => i.assets.map((a) => a.url)));
   }, [current, questions]);
 
   // ---- One Active Test Device: keep this device's lease alive ----------------
@@ -349,8 +382,9 @@ export function TestPlayer({
     const next = { ...statesRef.current };
     for (const [questionId, answer] of entries) {
       if (questions.find((q) => q.questionId === questionId)?.reveal) continue; // frozen by the server
-      next[questionId] = { ...next[questionId], selected: answer.selected, marked: answer.marked };
-      getQueue().enqueue(questionId, { selected: answer.selected, marked: answer.marked });
+      const labels = Array.isArray(answer.labels) ? { labels: answer.labels } : {};
+      next[questionId] = { ...next[questionId], selected: answer.selected, marked: answer.marked, ...labels };
+      getQueue().enqueue(questionId, { selected: answer.selected, marked: answer.marked, ...labels });
     }
     queueMicrotask(() => commitStates(next));
     // Mount-only: replays the previous page load's unsaved answers exactly once.
@@ -372,13 +406,24 @@ export function TestPlayer({
   }, [retryAllSaves]);
 
   // ---- Answer + navigation handlers (pure state, side effects after) ---------
-  const setAnswer = (questionId: string, patch: Partial<Pick<QuestionState, "selected" | "marked">>) => {
-    if (submittedRef.current || (reveals[questionId] && patch.selected !== undefined)) return;
+  const setAnswer = (questionId: string, patch: Partial<Pick<QuestionState, "selected" | "marked" | "labels">>) => {
+    if (submittedRef.current || (reveals[questionId] && (patch.selected !== undefined || patch.labels !== undefined))) return;
     const prev = statesRef.current[questionId];
     const next = { ...prev, ...patch };
-    if (next.selected === prev.selected && next.marked === prev.marked) return; // idempotent
+    const sameLabels = (next.labels ?? []).join() === (prev.labels ?? []).join();
+    if (next.selected === prev.selected && next.marked === prev.marked && sameLabels) return; // idempotent
     commitStates({ ...statesRef.current, [questionId]: next });
-    getQueue().enqueue(questionId, { selected: next.selected, marked: next.marked });
+    // A MULTIPLE_CORRECT question always sends its whole set (also for a mark-only change).
+    getQueue().enqueue(questionId, { selected: next.selected, marked: next.marked, ...(next.labels ? { labels: next.labels } : {}) });
+  };
+
+  /** MULTIPLE_CORRECT: toggle one option in the set (kept in option order). */
+  const toggleLabel = (q: PlayerQuestion, label: string) => {
+    const current = statesRef.current[q.questionId]?.labels ?? [];
+    const chosen = new Set(current);
+    if (chosen.has(label)) chosen.delete(label);
+    else chosen.add(label);
+    setAnswer(q.questionId, { labels: q.options.map((o) => o.label).filter((l) => chosen.has(l)) });
   };
 
   const goTo = (index: number) => {
@@ -439,6 +484,56 @@ export function TestPlayer({
       });
   };
 
+  /**
+   * Practice Mode, MULTIPLE_CORRECT: one tap can't be the answer, so the
+   * student commits the whole set with "Check answer". The server freezes
+   * that set with the reveal (first commit wins) and only then returns the
+   * full correct set.
+   */
+  const checkMultiAnswer = (questionId: string) => {
+    const labels = statesRef.current[questionId]?.labels ?? [];
+    if (submittedRef.current || checkingRef.current || reveals[questionId] || labels.length === 0) return;
+    checkingRef.current = true;
+    setChecking({ questionId, label: "" });
+    setRevealError(null);
+    withTimeout(revealAnswerLabelsAction(attemptId, questionId, labels, getQueue().nextSeq()), SAVE_TIMEOUT_MS)
+      .then((result) => {
+        if (result.ok) {
+          setReveals((prev) => ({
+            ...prev,
+            [questionId]: {
+              correctLabel: "",
+              correctLabels: result.correctLabels,
+              ...(result.explanation ? { explanation: result.explanation } : {}),
+            },
+          }));
+          getQueue().drop(questionId);
+          commitStates({ ...statesRef.current, [questionId]: { ...statesRef.current[questionId], labels: result.selectedLabels } });
+          return;
+        }
+        if (result.code === "EXPIRED") {
+          setProblem({ kind: "expired" });
+          finishRef.current("auto");
+          return;
+        }
+        if (result.code === "OTHER_DEVICE") {
+          queueRef.current?.stop();
+          setProblem({ kind: "other-device", message: OTHER_DEVICE_NOTICE });
+          return;
+        }
+        if (result.code === "NOT_EDITABLE") {
+          router.replace(`/student/attempt/${attemptId}/result`);
+          return;
+        }
+        setRevealError({ questionId, message: result.message });
+      })
+      .catch(() => setRevealError({ questionId, message: "Could not check the answer. Try again." }))
+      .finally(() => {
+        checkingRef.current = false;
+        setChecking(null);
+      });
+  };
+
   if (questions.length === 0) {
     return (
       <div className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center gap-4 px-4 text-center">
@@ -464,7 +559,8 @@ export function TestPlayer({
   const seconds = remaining === null ? 0 : remaining % 60;
   const timeLow = remaining !== null && remaining <= 60;
 
-  const answeredCount = questions.filter((q) => states[q.questionId]?.selected).length;
+  const answeredCount = questions.filter((q) => isAnswered(states[q.questionId])).length;
+  const multi = question.questionType === "MULTIPLE_CORRECT";
   const markedCount = questions.filter((q) => states[q.questionId]?.marked).length;
   const unsavedCount = Object.values(saveStatus).filter((s) => s !== "saving").length;
 
@@ -472,9 +568,9 @@ export function TestPlayer({
     if (i === current) return "current";
     const s = states[q.questionId];
     if (!s) return "not-visited";
-    if (s.marked && s.selected) return "answered-marked";
+    if (s.marked && isAnswered(s)) return "answered-marked";
     if (s.marked) return "marked";
-    if (s.selected) return "answered";
+    if (isAnswered(s)) return "answered";
     if (s.visited) return "visited";
     return "not-visited";
   }
@@ -583,12 +679,22 @@ export function TestPlayer({
               />
             ) : null}
             {question.rich ? <QuestionMedia key={question.questionId} className="mt-3" priority assets={question.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
+            {question.match && !question.malformed ? <MatchLists key={`m-${question.questionId}`} className="mt-4" match={question.match} /> : null}
 
             {question.malformed ? (
               <div role="alert" data-testid="malformed-question" className="mt-5 rounded-[var(--radius-card)] border border-[var(--color-warning)]/50 bg-[var(--color-warning)]/10 p-4 text-sm text-[var(--color-foreground)]">
                 This question could not be displayed correctly and cannot be answered. Please report it and continue with
                 the next question — the rest of your test is unaffected.
               </div>
+            ) : multi ? (
+              <MultiCorrectOptions
+                question={question}
+                position={current + 1}
+                labels={state.labels ?? []}
+                correctLabels={reveal?.correctLabels ?? null}
+                disabled={!!reveal || !!checking || submitting}
+                onToggle={(label) => toggleLabel(question, label)}
+              />
             ) : (
               <div className="mt-5 flex flex-col gap-2.5" role="radiogroup" aria-label={`Question ${current + 1} options`}>
                 {question.options.map((opt, idx) => {
@@ -651,7 +757,39 @@ export function TestPlayer({
               </div>
             )}
 
-            {instantMode && !question.malformed ? (
+            {instantMode && !question.malformed && multi ? (
+              <div className="mt-4 flex flex-col gap-2" data-testid="instant-panel">
+                {reveal ? (
+                  <RevealedReviewTools
+                    key={question.questionId}
+                    questionId={question.questionId}
+                    correctOption={null}
+                    correctOptionHtml={null}
+                    explanation={reveal.explanation ?? null}
+                    shareText={question.shareText ?? null}
+                    askAi={false}
+                    result={<MultiRevealResult selected={state.labels ?? []} correct={reveal.correctLabels ?? []} />}
+                  />
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      data-testid="check-answer"
+                      size="sm"
+                      onClick={() => checkMultiAnswer(question.questionId)}
+                      disabled={!!checking || submitting || (state.labels ?? []).length === 0}
+                    >
+                      {checkingHere !== null ? "Checking…" : "Check answer"}
+                    </Button>
+                    <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="practice-hint" aria-live="polite">
+                      Select every correct option, then check. Your checked answer is final.
+                    </p>
+                  </div>
+                )}
+                {revealError?.questionId === question.questionId ? (
+                  <p className="text-sm text-[var(--color-error)]">{revealError.message}</p>
+                ) : null}
+              </div>
+            ) : instantMode && !question.malformed ? (
               <div className="mt-4 flex flex-col gap-2" data-testid="instant-panel">
                 {reveal ? (
                   <RevealedReviewTools
@@ -661,6 +799,7 @@ export function TestPlayer({
                     correctOptionHtml={question.rich?.optionHtml[reveal.correctLabel] ?? null}
                     explanation={reveal.explanation ?? null}
                     shareText={question.shareText ?? null}
+                    askAi={!question.questionType}
                     result={
                       <p
                         data-testid="reveal-result"
@@ -700,7 +839,7 @@ export function TestPlayer({
               </Button>
               <Button
                 variant="outline"
-                onClick={() => setAnswer(question.questionId, { selected: null, marked: false })}
+                onClick={() => setAnswer(question.questionId, multi ? { labels: [], marked: false } : { selected: null, marked: false })}
                 disabled={!!reveal || !!checking || submitting || question.malformed}
               >
                 Clear Response
@@ -811,6 +950,7 @@ function RevealedReviewTools({
   correctOptionHtml,
   explanation,
   shareText,
+  askAi = true,
   result,
 }: {
   questionId: string;
@@ -820,6 +960,8 @@ function RevealedReviewTools({
   /** The human explanation, released by the server with this reveal (snapshot v2 only). */
   explanation: ExplanationView | null;
   shareText: string | null;
+  /** False for advanced question types (NEET Phase 4): Ask AI only explains single-correct questions. */
+  askAi?: boolean;
   /** The Correct / Incorrect line — shares its row with the AI actions. */
   result: React.ReactNode;
 }) {
@@ -829,9 +971,9 @@ function RevealedReviewTools({
       {/* Correct ✓ on the left, the AI actions on the right — wrapping under it on narrow screens. */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         {result}
-        {askAiActions}
+        {askAi ? askAiActions : null}
       </div>
-      {usageNotice}
+      {askAi ? usageNotice : null}
       {correctOption ? (
         <p className="text-sm font-medium text-[var(--color-success)]">
           Correct Answer: {correctOption.label}. <RichText text={correctOption.text} html={correctOptionHtml} />
@@ -844,7 +986,115 @@ function RevealedReviewTools({
           <WhatsAppShareButton text={shareText} />
         </div>
       ) : null}
-      {askAiPanel}
+      {askAi ? askAiPanel : null}
+    </div>
+  );
+}
+
+/**
+ * MULTIPLE_CORRECT options (NEET Phase 4): real checkboxes in a labelled group,
+ * so assistive technology announces a multi-select, never a radio group. Same
+ * option card styling as the radio path. After an authorized reveal each
+ * option shows one of: selected + correct, selected but wrong, correct but missed.
+ */
+function MultiCorrectOptions({
+  question,
+  position,
+  labels,
+  correctLabels,
+  disabled,
+  onToggle,
+}: {
+  question: PlayerQuestion;
+  position: number;
+  labels: string[];
+  /** Present only after the server revealed this question. */
+  correctLabels: string[] | null;
+  disabled: boolean;
+  onToggle: (label: string) => void;
+}) {
+  const hintId = `multi-hint-${question.questionId}`;
+  return (
+    <div className="mt-5 flex flex-col gap-2.5" role="group" aria-label={`Question ${position} options`} aria-describedby={hintId} data-testid="multi-options">
+      <p id={hintId} className="text-xs font-medium text-[var(--color-muted-foreground)]">
+        More than one option may be correct. Select all that apply.
+      </p>
+      {question.options.map((opt, idx) => {
+        const selected = labels.includes(opt.label);
+        const correct = correctLabels ? correctLabels.includes(opt.label) : false;
+        const state = !correctLabels ? null : selected && correct ? "hit" : selected ? "wrong" : correct ? "missed" : null;
+        return (
+          <label
+            key={`${question.questionId}:${idx}:${opt.label}`}
+            data-testid="option"
+            data-label={opt.label}
+            data-state={state ?? undefined}
+            className={cn(
+              "flex items-start gap-3 rounded-[var(--radius-card)] border p-3 transition-colors",
+              disabled ? "cursor-default" : "cursor-pointer",
+              state === "hit"
+                ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
+                : state === "missed"
+                  ? "border-dashed border-[var(--color-success)] bg-[var(--color-success)]/5"
+                  : state === "wrong"
+                    ? "border-[var(--color-error)] bg-[var(--color-error)]/10"
+                    : selected
+                      ? "border-[var(--color-primary)] bg-[var(--color-primary)]/10"
+                      : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
+            )}
+          >
+            <input
+              type="checkbox"
+              name={`q-${question.questionId}`}
+              value={opt.label}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
+              checked={selected}
+              disabled={disabled}
+              onChange={() => onToggle(opt.label)}
+            />
+            <span className="min-w-0 text-sm text-[var(--color-foreground)]">
+              <span className="font-semibold">{opt.label}.</span> <RichText text={opt.text} html={question.rich?.optionHtml[opt.label]} />
+              {opt.imageUrl && !question.rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === opt.label) ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={opt.imageUrl}
+                  alt=""
+                  className="pointer-events-none mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                />
+              ) : null}
+              {question.rich ? (
+                <QuestionMedia
+                  className="mt-2"
+                  size="option"
+                  priority
+                  assets={question.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === opt.label)}
+                />
+              ) : null}
+            </span>
+            {state === "hit" ? <CheckCircle2 className="ml-auto h-5 w-5 shrink-0 text-[var(--color-success)]" aria-label="Correct, selected" /> : null}
+            {state === "wrong" ? <XCircle className="ml-auto h-5 w-5 shrink-0 text-[var(--color-error)]" aria-label="Selected, not correct" /> : null}
+            {state === "missed" ? (
+              <span className="ml-auto shrink-0 text-xs font-medium text-[var(--color-success)]">Missed</span>
+            ) : null}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+/** MULTIPLE_CORRECT reveal line: all-or-nothing verdict plus both sets. */
+function MultiRevealResult({ selected, correct }: { selected: string[]; correct: string[] }) {
+  const right = selected.length === correct.length && selected.every((l) => correct.includes(l));
+  return (
+    <div className="flex flex-col gap-1" data-testid="reveal-result">
+      <p className={cn("flex items-center gap-2 text-sm font-semibold", right ? "text-[var(--color-success)]" : "text-[var(--color-error)]")}>
+        {right ? <CheckCircle2 className="h-4 w-4" aria-hidden /> : <XCircle className="h-4 w-4" aria-hidden />}
+        {right ? "Correct" : "Incorrect"}
+      </p>
+      <p className="text-sm text-[var(--color-foreground)]">
+        Your answer: {selected.join(", ") || "—"} · <span className="font-medium text-[var(--color-success)]">Correct answer: {correct.join(", ")}</span>
+      </p>
     </div>
   );
 }

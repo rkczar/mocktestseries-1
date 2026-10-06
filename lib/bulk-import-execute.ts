@@ -8,7 +8,7 @@ import {
   ImportRowSeverity,
   QuestionSource,
   QuestionStatus,
-  type Prisma,
+  Prisma,
 } from "@prisma/client";
 import {
   runExamContextFor,
@@ -19,9 +19,9 @@ import {
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
 import { linkSubjectToExam, linkSubTopicToExam, linkTopicToExam } from "@/lib/exam-taxonomy";
 import { loadRichContext, resolveImportRow, type RichContext } from "@/lib/rich-import/validate";
-import { allImageRefs, composeQuestionText, fallbackAlt, type ManifestQuestion } from "@/lib/rich-import/manifest";
+import { allImageRefs, composeQuestionText, fallbackAlt, manifestMatchSpec, matchIdentityText, type ManifestQuestion } from "@/lib/rich-import/manifest";
 import { discardBundleFiles, verifyEntryMedia } from "@/lib/rich-import/bundle";
-import { EditorialStage, QuestionAssetRole, QuestionContentFormat } from "@prisma/client";
+import { EditorialStage, QuestionAssetRole, QuestionContentFormat, QuestionType } from "@prisma/client";
 
 const OPTION_LABELS = ["A", "B", "C", "D"] as const;
 
@@ -75,6 +75,8 @@ class RowAlreadyClaimed extends Error {}
 interface PreparedAsset {
   role: QuestionAssetRole;
   optionLabel: string | null;
+  /** LIST_ITEM only (NEET Phase 4). */
+  listKey: string | null;
   order: number;
   storageKey: string;
   mime: string;
@@ -94,13 +96,15 @@ async function prepareRichAssets(m: ManifestQuestion, ctx: RichContext): Promise
     if (!entry || !(await verifyEntryMedia(entry))) {
       throw new Error(`${ref.field}: the processed media for "${ref.filename}" is no longer available — re-process the bundle images, then import again.`);
     }
-    // List-entry images become QUESTION figures after the stem's own figures.
-    const slot = `${ref.role}|${ref.optionLabel ?? ""}`;
+    // MATCH_THE_FOLLOWING list-entry images are LIST_ITEM assets of their entry;
+    // lists on any other type stay QUESTION figures after the stem's own figures.
+    const slot = `${ref.role}|${ref.optionLabel ?? ""}|${ref.listKey ?? ""}`;
     const order = nextOrder.get(slot) ?? 0;
     nextOrder.set(slot, order + 1);
     out.push({
       role: ref.role as QuestionAssetRole,
       optionLabel: ref.role === "OPTION" ? ref.optionLabel : null,
+      listKey: ref.role === "LIST_ITEM" ? (ref.listKey ?? null) : null,
       order,
       storageKey: entry.storageKey!,
       mime: entry.mime ?? "image/webp",
@@ -377,6 +381,8 @@ async function executeLeased(
       }
     }
     const questionText = rich ? composeQuestionText(rich.m) : merged.questionText;
+    // In-run duplicate identity: a Match row's stem + lists (its stored text is only the stem).
+    const dedupText = rich ? matchIdentityText(rich.m) : merged.questionText;
     const optionText = (label: (typeof OPTION_LABELS)[number]) =>
       rich ? rich.m.options.find((o) => o.label === label)!.text : (merged[`option${label}` as keyof ParsedRowShape] as string);
     const isCorrect = (label: string) => (rich ? rich.m.correct.includes(label) : merged.correctAnswer === label);
@@ -387,6 +393,9 @@ async function executeLeased(
           editorialStage: rich.stage,
           reviewRequired: rich.stage === EditorialStage.NEEDS_REVIEW,
           reviewReason: rich.stage === EditorialStage.NEEDS_REVIEW ? reviewReason : null,
+          // NEET Phase 4: the row's type; MATCH stores List I / List II structurally.
+          questionType: rich.m.questionType ?? QuestionType.SINGLE_CORRECT,
+          matchSpec: manifestMatchSpec(rich.m) ?? Prisma.DbNull,
         }
       : {};
     const writeAssets = async (tx: Prisma.TransactionClient, questionId: string) => {
@@ -440,7 +449,7 @@ async function executeLeased(
           else if (rd.topicId) await linkTopicToExam(tx, rd.examId, rd.topicId);
           else await linkSubjectToExam(tx, rd.examId, rd.subjectId!);
         };
-        const dedupKey = runKey(rd.examId, rd.subjectId!, questionText);
+        const dedupKey = runKey(rd.examId, rd.subjectId!, dedupText);
         const runMatch = seenInRun.get(dedupKey);
         const isDuplicate = rd.isDuplicate || Boolean(runMatch);
         const duplicateQuestionId = runMatch?.id ?? rd.duplicateQuestionId;
@@ -474,6 +483,8 @@ async function executeLeased(
                 importBatchId: runId,
                 reviewRequired: resolved.reviewRequired,
                 reviewReason,
+                // A legacy row is single-correct content, so a replaced question becomes SINGLE_CORRECT (NEET Phase 4).
+                ...(rich ? {} : { questionType: QuestionType.SINGLE_CORRECT, matchSpec: Prisma.DbNull }),
                 ...richFields,
               },
             });
@@ -534,7 +545,7 @@ async function executeLeased(
         return finishRow({ kind: "SUCCESS" as const, questionId: created.id, questionCode: created.code, attached });
       });
 
-      seenInRun.set(runKey(rd.examId, rd.subjectId, questionText), { id: outcome.questionId, code: outcome.questionCode ?? "" });
+      seenInRun.set(runKey(rd.examId, rd.subjectId, dedupText), { id: outcome.questionId, code: outcome.questionCode ?? "" });
       if (rich && outcome.kind !== "SKIPPED") assetCount += rich.assets.length;
       if (outcome.attached) attachedNow++;
       if (outcome.kind === "SUCCESS") successCount++;

@@ -247,7 +247,21 @@ async function main() {
   check("display equation + circuit: 1 QUESTION asset with author alt", byRow(3).assets.length === 1 && byRow(3).assets[0].role === "QUESTION" && /12 V battery/.test(byRow(3).assets[0].alt));
   check("A–D image options: 4 OPTION assets, empty option text", byRow(8).assets.filter((a) => a.role === "OPTION").map((a) => a.optionLabel).join("") === "ABCD" && byRow(8).options.every((o) => o.text === ""));
   check("two question images + two explanation images (one decorative)", byRow(9).assets.filter((a) => a.role === "QUESTION").length === 2 && byRow(9).assets.filter((a) => a.role === "EXPLANATION").length === 2 && byRow(9).assets.some((a) => a.role === "EXPLANATION" && a.alt === ""));
-  check("MTF: lists composed into text, single correct option, list image captioned", /List I\nA\. \\ce\{CH4\}/.test(byRow(10).text) && /List II\nI\. Benzene/.test(byRow(10).text) && byRow(10).options.filter((o) => o.isCorrect).length === 1 && byRow(10).assets.some((a) => a.caption === "List I (B)"));
+  // NEET Phase 4: MTF stores the stem as text and List I / List II structurally (matchSpec + LIST_ITEM image).
+  {
+    const spec = byRow(10).matchSpec as { listI?: { key: string; text: string }[]; listII?: { key: string; text: string }[] } | null;
+    check(
+      "MTF: stem-only text, structured matchSpec, single correct option, list image is LIST_ITEM I:B",
+      byRow(10).questionType === "MATCH_THE_FOLLOWING" &&
+        !/List I\n/.test(byRow(10).text) &&
+        spec?.listI?.[0]?.text === "\\ce{CH4}" &&
+        spec?.listII?.[0]?.text === "Benzene" &&
+        byRow(10).options.filter((o) => o.isCorrect).length === 1 &&
+        byRow(10).assets.some((a) => a.role === "LIST_ITEM" && a.listKey === "I:B" && a.caption === "List I (B)"),
+      { text: byRow(10).text, spec, assets: byRow(10).assets.map((a) => [a.role, a.listKey, a.caption]) }
+    );
+  }
+  check("non-MTF rows stay SINGLE_CORRECT", [1, 2, 3, 4, 5, 6, 7, 8, 9].every((n) => byRow(n).questionType === "SINGLE_CORRECT"));
   check("Q10 reviewRequired + author reason preserved, stage NEEDS_REVIEW", byRow(10).reviewRequired && /Author: formula needs verification/.test(byRow(10).reviewReason ?? "") && byRow(10).editorialStage === "NEEDS_REVIEW");
   check("explanations stored", qs.every((q) => (q.explanation ?? "").length > 0));
   check("exactly one correct option on every question", qs.every((q) => q.options.filter((o) => o.isCorrect).length === 1));
@@ -292,7 +306,8 @@ async function main() {
   const attRows = await prisma.testAttempt.findUniqueOrThrow({ where: { id: att.id }, include: { questions: { include: { answer: true }, orderBy: { order: "asc" } } } });
   check("attempt froze 10 questions", attRows.questions.length === 10);
   const snaps = attRows.questions.map((q) => q.questionSnapshot as unknown as QuestionSnapshot & { v?: number; assets?: { storageKey: string }[] });
-  check("every imported question freezes snapshot v2 (RICH_V1 or explained)", snaps.every((s) => s.v === 2));
+  // NEET Phase 4: the Match the Following row (10) freezes snapshot v3; every other row v2 as before.
+  check("every imported question freezes snapshot v2 (RICH_V1 or explained); the MTF row v3", snaps.every((s, i) => s.v === (i === 9 ? 3 : 2)), snaps.map((s) => s.v));
   check("snapshots carry storage keys, never image bytes", snaps.every((s) => !JSON.stringify(s).includes("base64")) && snaps.some((s) => (s.assets ?? []).length > 0));
   const payload = JSON.stringify(toPlayerQuestions(attRows.questions, { instantMode: false }));
   check("EXAM payload: no explanation text, no EXPLANATION image, no correct label", !payload.includes("left ventricle pumps") && !payload.includes("R_{23}") && !snaps.flatMap((s) => (s.assets ?? []) as { role?: string; storageKey: string }[]).filter((a) => a.role === "EXPLANATION").some((a) => payload.includes(a.storageKey)) && !/correctLabel/.test(payload));
@@ -360,7 +375,13 @@ async function main() {
     check("duplicate code in file → ERROR on both rows", has(3, /appears 2 times/) && has(4, /appears 2 times/));
     check("invalid correct answer → ERROR", has(5, /Correct: "E" is not a valid answer/));
     check("corrupt image → ERROR", has(6, /corrupt\.png" is not a valid image/), fv[5].errors);
-    check("MULTIPLE_CORRECT → blocked with the explicit engine message", has(7, /MULTIPLE_CORRECT ENGINE NOT YET ENABLED/));
+    // NEET Phase 4: MULTIPLE_CORRECT is importable; malformed keys still refuse.
+    check("MULTIPLE_CORRECT A,C → accepted (no type / answer error)", !fv[6].errors.some((e) => /Question Type|Correct/.test(e)), fv[6].errors);
+    check("MULTIPLE_CORRECT with one answer → ERROR (needs at least two)", has(16, /needs at least 2 correct options/), fv[15]?.errors);
+    check("MULTIPLE_CORRECT with a repeated label → ERROR (never silently de-duplicated)", has(17, /lists the same option twice/), fv[16]?.errors);
+    check("MATCH_THE_FOLLOWING without List II → ERROR", has(18, /needs both lists|each list needs at least two/), fv[17]?.errors);
+    check("MATCH_THE_FOLLOWING with a duplicate list key → ERROR", has(19, /appears twice/), fv[18]?.errors);
+    check("MATCH_THE_FOLLOWING with two correct options → ERROR", has(20, /exactly one/), fv[19]?.errors);
     check("ambiguous filename → ERROR", has(8, /ambiguous/));
     check("unsupported file → ERROR", has(9, /notes\.txt" cannot be used/));
     check("spreadsheet formula cell → ERROR (never evaluated)", has(10, /Spreadsheet formula in "Option A"/), fv[9].errors);
@@ -376,6 +397,24 @@ async function main() {
     check("Import Questions refused while ERROR rows exist; nothing written", !!blockedErr && (await prisma.question.count({ where: { importBatchId: fr.id } })) === 0, blockedErr);
     const onlyValid = await executeBulkImport({ runId: fr.id, adminUserId: admin.id, onlyValid: true });
     check("explicit Import Valid Only skips every ERROR row", onlyValid.failedCount === 0 && (await prisma.question.count({ where: { importBatchId: fr.id } })) === onlyValid.successCount, onlyValid);
+    // NEET Phase 4: a valid MULTIPLE_CORRECT row really imports (own run: the failure rows reuse QNos of earlier imports).
+    {
+      const msqRows = [
+        { "Code": `MSQ-${suffix}-1`, Year: "2025", QNo: "77", Subject: "PHYSICS", "Chapter/Topic": "2. Kinematics", "Question Type": "MULTIPLE_CORRECT", "Content Format": "RICH_V1", "Question Text": `MSQ import probe ${suffix}: which are vectors? $\\vec{v}$`, "Option A": "Velocity", "Option B": "Speed", "Option C": "Force", "Option D": "Displacement", Correct: "D, A, C", Explanation: "Speed is scalar.", Difficulty: "EASY", Source: "PYQ" },
+      ];
+      const mr = await stageRun({ actorId: admin.id, examId: neet.id, file: fileOf("msq.xlsx", toXlsx(msqRows)), mode: "RICH", paperId: paper.id });
+      cleanup.runs.push(mr.id);
+      const mv = await validateRun(mr.id);
+      check("valid MULTIPLE_CORRECT row validates without errors", mv[0].errors.length === 0, mv[0].errors);
+      await executeBulkImport({ runId: mr.id, adminUserId: admin.id, acknowledgeWarnings: true });
+      const mq = await prisma.question.findFirst({ where: { importBatchId: mr.id }, include: { options: true } });
+      check(
+        "MULTIPLE_CORRECT D,A,C imported as MULTIPLE_CORRECT with exactly A, C, D correct (DRAFT)",
+        mq?.questionType === "MULTIPLE_CORRECT" && mq.status === "DRAFT" && mq.options.filter((o) => o.isCorrect).map((o) => o.label).sort().join() === "A,C,D",
+        mq && { type: mq.questionType, correct: mq.options.filter((o) => o.isCorrect).map((o) => o.label) }
+      );
+      if (mq) await prisma.question.delete({ where: { id: mq.id } });
+    }
   }
 
   // ------------------------------------------------------------------ E2

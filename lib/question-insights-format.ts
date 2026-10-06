@@ -10,6 +10,7 @@
  * individual performance.
  */
 import { toShareText } from "@/lib/whatsapp-share-template";
+import { MIN_MULTIPLE_CORRECT, readMatchSpec } from "@/lib/question-types";
 
 export const COPY_SITE_NAME = "MockTestSeries.in";
 export const COPY_SEPARATOR = "━━━━━━━━━━━━━━━━━━";
@@ -27,21 +28,40 @@ export interface CopyQuestion {
   wrongPct: number | null;
   /** Existing cached explanation text, or null — never generated for the copy. */
   explanation: string | null;
+  /** NEET Phase 4; absent = SINGLE_CORRECT. */
+  questionType?: string;
+  /** MATCH_THE_FOLLOWING only: List I / List II, printed above the options. */
+  matchSpec?: unknown;
 }
 
-export type CopyIssue = "NO_CORRECT_OPTION" | "MULTIPLE_CORRECT_OPTIONS";
+export type CopyIssue = "NO_CORRECT_OPTION" | "MULTIPLE_CORRECT_OPTIONS" | "TOO_FEW_CORRECT_OPTIONS";
 
-/** Exactly one option must be marked correct; anything else is a data issue and must never be posted with an invented answer. */
-export function answerKeyIssue(options: { isCorrect: boolean }[]): CopyIssue | null {
+/**
+ * Exactly one option must be marked correct (SINGLE_CORRECT / MATCH_THE_FOLLOWING);
+ * a MULTIPLE_CORRECT question needs at least two (NEET Phase 4). Anything else is
+ * a data issue and must never be posted with an invented answer.
+ */
+export function answerKeyIssue(options: { isCorrect: boolean }[], questionType?: string | null): CopyIssue | null {
   const correct = options.filter((o) => o.isCorrect).length;
   if (correct === 0) return "NO_CORRECT_OPTION";
+  if (questionType === "MULTIPLE_CORRECT") return correct < MIN_MULTIPLE_CORRECT ? "TOO_FEW_CORRECT_OPTIONS" : null;
   if (correct > 1) return "MULTIPLE_CORRECT_OPTIONS";
   return null;
+}
+
+/** The current answer key as one comparable string ("B", or "A,B,D" for a multiple-correct set). */
+export function answerKeyString(options: { label: string; isCorrect: boolean }[]): string {
+  return options
+    .filter((o) => o.isCorrect)
+    .map((o) => o.label)
+    .sort()
+    .join(",");
 }
 
 export const COPY_ISSUE_LABEL: Record<CopyIssue, string> = {
   NO_CORRECT_OPTION: "No correct option set",
   MULTIPLE_CORRECT_OPTIONS: "More than one correct option",
+  TOO_FEW_CORRECT_OPTIONS: "Multiple-correct question with fewer than two correct options",
 };
 
 function optionText(o: { text: string; imageUrl: string | null }): string {
@@ -58,12 +78,23 @@ export function hasAnyImage(q: { imageUrl: string | null; options: { imageUrl: s
 }
 
 function renderQuestion(q: CopyQuestion, n: number, includeExplanation: boolean): string {
-  const correct = q.options.find((o) => o.isCorrect)!;
   const lines: string[] = [`Q${n}. ${toShareText(q.text)}`];
   if (hasAnyImage(q)) lines.push("", `🖼 This question has an image — view it on ${COPY_SITE_NAME}`);
+  const match = q.questionType === "MATCH_THE_FOLLOWING" ? readMatchSpec(q.matchSpec) : null;
+  if (match) {
+    for (const [title, entries] of [["List I", match.listI], ["List II", match.listII]] as const) {
+      lines.push("", title, ...entries.map((e) => `${e.key}. ${toShareText(e.text) || "(image — see website)"}`));
+    }
+  }
+  if (q.questionType === "MULTIPLE_CORRECT") lines.push("", "(More than one option may be correct.)");
   lines.push("");
   for (const o of q.options) lines.push(`${o.label.trim()}. ${optionText(o)}`.trimEnd());
-  lines.push("", `✅ Correct Answer: ${correct.label.trim()}. ${optionText(correct)}`.trimEnd());
+  if (q.questionType === "MULTIPLE_CORRECT") {
+    lines.push("", `✅ Correct Answers: ${q.options.filter((o) => o.isCorrect).map((o) => o.label.trim()).join(", ")}`);
+  } else {
+    const correct = q.options.find((o) => o.isCorrect)!;
+    lines.push("", `✅ Correct Answer: ${correct.label.trim()}. ${optionText(correct)}`.trimEnd());
+  }
   if (q.wrongPct !== null) lines.push(`📊 ${formatPct(q.wrongPct)} students answered incorrectly.`);
   if (includeExplanation && q.explanation) lines.push("", `💡 Explanation: ${toShareText(q.explanation)}`);
   return lines.join("\n");
@@ -99,7 +130,7 @@ export function buildCopyBlocks(params: {
   const excluded: BuildCopyResult["excluded"] = [];
   const valid: CopyQuestion[] = [];
   for (const q of params.questions) {
-    const issue = answerKeyIssue(q.options);
+    const issue = answerKeyIssue(q.options, q.questionType);
     if (issue) excluded.push({ id: q.id, code: q.code, issue });
     else valid.push(q);
   }

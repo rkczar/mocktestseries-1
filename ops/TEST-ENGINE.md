@@ -233,6 +233,15 @@ PKG=pilot45|scale180|stress180 SERVER_PID=<next pid> STORAGE_DIR=/tmp/media-scra
 …same env… npx tsx scripts/verify-rich-import.ts cleanup /tmp/ri.json
 # legacy parity: run from a worktree of the previous release and from HEAD, outputs must be identical
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/legacy-import-parity.ts /tmp/rifx > out.json
+
+# 11. advanced question types (NEET Phase 4): snapshot v3, label-set save/seq/race, all-or-nothing matrix,
+#     negative marking, practice reveal lock, exam leak gate, history after edits, OMR / AI guards, insights,
+#     share text, importer manifest. Browser half: checkboxes, autosave, Match lists, 360 px light/dark, 180-question perf
+#     (needs the step-9 scratch nginx; REAL_MEDIA=1 stores real figures in STORAGE_DIR).
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-question-types.ts
+STORAGE_DIR=/tmp/media-scratch REAL_MEDIA=1 …same env… npx tsx scripts/verify-question-types.ts setup > /tmp/qt.json
+BASE=<nginx origin> FIXTURE=/tmp/qt.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<playwright> node scripts/verify-question-types.mjs
+…same env… npx tsx scripts/verify-question-types.ts cleanup /tmp/qt.json
 ```
 
 ## Rich content and snapshot v2 (since NEET Phase 1)
@@ -260,6 +269,13 @@ Bulk Import has a Rich mode (NEET Phase 3, docs/RICH-IMPORT.md). Rich imports cr
 RICH_V1 SINGLE_CORRECT questions (always DRAFT) with QuestionAsset references to Phase 2 media, so
 they freeze to the same snapshot v2 and go through the same player/reveal/review paths. Standard
 (legacy) imports are unchanged.
+
+**Question types (NEET Phase 4, docs/NEET-QUESTION-TYPES.md).** `Question.questionType` defaults to
+`SINGLE_CORRECT`, which keeps every path above unchanged. `MULTIPLE_CORRECT` freezes **snapshot v3**
+(`correctLabels`, `correctLabel: ""`) and saves `Answer.selectedLabels` through `saveAnswerLabels` /
+`revealAnswerLabels` (same seq + revealedAt contract); the player shows checkboxes and Practice Mode
+commits with an explicit Check answer. Scoring is all-or-nothing, `[]` = unanswered. `MATCH_THE_FOLLOWING`
+freezes v3 with `matchSpec` and is otherwise a single-correct question. OMR entry refuses mocks with an MSQ.
 
 Every start (and resume-by-id) first runs `assertExamLive(examId)`: an exam
 with `isActive = false` is private, whatever its papers, tests or question

@@ -1,6 +1,7 @@
 import "server-only";
 import { AiGenerationStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { assertAiGenerationOpen, generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, validateExplanationContent, isTruncatedOrMalformedJson, type ExplanationContent, type QuestionForExplanation } from "@/lib/ai-explanation";
@@ -59,6 +60,9 @@ async function loadCanonicalQuestion(questionId: string): Promise<QuestionForExp
     include: { options: { orderBy: { order: "asc" } } },
   });
   if (!question) throw new Error("Question not found.");
+  // NEET Phase 4: the prompt assumes one correct option and no List I / List II, so
+  // advanced types are refused rather than explained with a false single answer.
+  if (question.questionType !== "SINGLE_CORRECT") throw new Error(AI_UNSUPPORTED_TYPE_MESSAGE);
   const correct = question.options.find((o) => o.isCorrect);
   if (!correct) throw new Error("This question has no correct option configured.");
   return {

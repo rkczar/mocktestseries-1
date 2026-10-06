@@ -8,6 +8,7 @@ import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import { remainingSecondsFor, toServerTimedAttempt } from "@/lib/test-attempt";
 import { toPlayerQuestions } from "@/lib/test-player-data";
+import { snapshotShareFields } from "@/lib/question-types";
 import { claimAttemptLease } from "@/lib/attempt-device-lease";
 import { TestOpenElsewhere } from "@/components/student/test-open-elsewhere";
 import { prisma } from "@/lib/prisma";
@@ -56,6 +57,7 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
         select: { id: true, subject: { select: { name: true } } },
       });
       const subjectById = new Map(subjects.map((row) => [row.id, row.subject.name]));
+      const snapshotById = new Map(attempt.questions.map((tq) => [tq.questionId, tq.questionSnapshot as { v?: unknown; questionType?: unknown; matchSpec?: unknown }]));
       questions = questions.map((q) => ({
         ...q,
         shareText: q.malformed
@@ -64,7 +66,7 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
               template: whatsapp.template,
               examName: attempt.exam.name,
               subjectName: subjectById.get(q.questionId) ?? "",
-              question: { text: q.text, imageUrl: q.imageUrl, options: q.options },
+              question: { text: q.text, imageUrl: q.imageUrl, options: q.options, ...snapshotShareFields(snapshotById.get(q.questionId)) },
             }),
       }));
     }
