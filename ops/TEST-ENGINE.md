@@ -83,6 +83,23 @@ Test types only supply data and configuration. There is no per-type player.
   PYQ-only practice goes through Custom Module with Source = PYQ.
 - **History is immutable.** Retake/Reattempt always creates a new attempt.
 
+## Live CBT (since 2026-10-06)
+
+A Live CBT is a Mock Test with a Fixed Window plus optional per-test enrollment
+(`lib/live-cbt.ts`, `MockTestEnrollment`). `planMockTestStart` refuses an
+unenrolled student when `enrollmentEnabled` (refusal key `not-enrolled`);
+enrolling never creates an attempt. Saving a mock as a Fixed Window defaults it to
+Single Attempt + results after the window. A Solution PDF never unlocks before
+the result release (`canAccessTestResource(resultReleased)`). The window-end
+sweep (`scripts/finalize-live-attempts.ts`, cron `ops/live-cbt/`) finalizes
+abandoned attempts through the same idempotent `finalizeIfExpired`.
+`submitAttempt` writes `isCorrect` with one `updateMany` per value (same rows,
+~5 statements instead of one per question) and the client's
+`transactionOptions.maxWait` is 25 s, so a whole cohort can submit at one
+deadline (load test: 400 simultaneous candidates, 0 errors). Regression:
+`scripts/verify-live-cbt.ts` and `scripts/verify-live-cbt-ui.mjs`
+(fixture `scripts/live-cbt-ui-fixture.ts`, needs a disposable `STORAGE_DIR`).
+
 ## Frozen per attempt
 
 When an attempt is created, these are fixed on it and never re-derived:

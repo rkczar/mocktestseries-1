@@ -4,7 +4,7 @@ import path from "node:path";
 import { AttemptSourceType, AttemptStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireStudent, StudentUnauthorizedError } from "@/lib/student-session";
-import { hasMockTestReleased } from "@/lib/mock-test-schedule";
+import { hasMockTestReleased, isMockResultReleased } from "@/lib/mock-test-schedule";
 import { canAccessTestResource } from "@/lib/test-resources-access";
 import { resolveTestResourcePath } from "@/lib/test-resources";
 import { getContentAccess, accessDeniedMessage } from "@/lib/payments/access";
@@ -39,12 +39,24 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   let mockTestAvailable = true;
   let hasSubmittedAttempt = false;
+  let resultReleased = true;
   if (resource.mockTestId) {
     const mockTest = await prisma.mockTest.findUnique({
       where: { id: resource.mockTestId },
-      select: { status: true, availableFrom: true, examId: true, testSeriesId: true, accessType: true },
+      select: {
+        status: true,
+        availableFrom: true,
+        availableUntil: true,
+        resultReleaseMode: true,
+        resultReleaseAt: true,
+        examId: true,
+        testSeriesId: true,
+        accessType: true,
+      },
     });
     mockTestAvailable = mockTest ? hasMockTestReleased(mockTest) : false;
+    // A held result (Fixed Window "after the window", custom date) also holds the Solution PDF.
+    resultReleased = mockTest ? isMockResultReleased(mockTest) : false;
 
     // Paper/Solution PDFs of a paid mock test are protected content: the
     // same entitlement gate as starting the test (OMR sheets are not).
@@ -82,6 +94,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     isActive: resource.isActive,
     mockTestAvailable,
     hasSubmittedAttempt,
+    resultReleased,
   });
   if (!allowed) return NextResponse.json({ error: "This resource is not available yet." }, { status: 403 });
 

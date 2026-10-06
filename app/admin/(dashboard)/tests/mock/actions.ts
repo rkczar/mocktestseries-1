@@ -201,6 +201,12 @@ function readIst(formData: FormData, key: string): { value: Date | null; invalid
  * Release clears the end. A result release of "after window closes" is only
  * valid with a Fixed Window; switching away from one refuses rather than
  * silently leaving results locked on a window that no longer exists.
+ *
+ * Live CBT safe defaults: the save that turns a mock INTO a Fixed Window also
+ * sets Single Attempt and "Result release: after the window closes", so an
+ * early finisher can't see answers or retake inside the window. Only on that
+ * transition — the admin may change either afterwards in Step 5, and
+ * ordinary (non-window) mocks are never touched.
  */
 export async function updateMockTestScheduleAction(mockTestId: string, _prev: ScheduleFormState, formData: FormData): Promise<ScheduleFormState> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
@@ -212,27 +218,66 @@ export async function updateMockTestScheduleAction(mockTestId: string, _prev: Sc
 
   const existing = await prisma.mockTest.findUnique({
     where: { id: mockTestId },
-    select: { resultReleaseMode: true, resultReleaseAt: true },
+    select: { resultReleaseMode: true, resultReleaseAt: true, availableUntil: true },
   });
   if (!existing) return { error: "Mock test not found." };
 
   const availableFrom = mode === "AVAILABLE_NOW" ? null : from.value;
   const availableUntil = mode === "FIXED_WINDOW" ? until.value : null;
-  const error = validateMockSchedule({ mode, availableFrom, availableUntil, ...existing });
+  const becomesLive = mode === "FIXED_WINDOW" && existing.availableUntil === null;
+  const liveDefaults = becomesLive
+    ? { attemptPolicy: "SINGLE_ATTEMPT" as const, resultReleaseMode: "AFTER_WINDOW" as const, resultReleaseAt: null }
+    : {};
+  const error = validateMockSchedule({
+    mode,
+    availableFrom,
+    availableUntil,
+    resultReleaseMode: becomesLive ? "AFTER_WINDOW" : existing.resultReleaseMode,
+    resultReleaseAt: becomesLive ? null : existing.resultReleaseAt,
+  });
   if (error) return { error };
 
-  await prisma.mockTest.update({ where: { id: mockTestId }, data: { availableFrom, availableUntil } });
+  await prisma.mockTest.update({ where: { id: mockTestId }, data: { availableFrom, availableUntil, ...liveDefaults } });
   await prisma.auditLog.create({
     data: {
       actorId: session.user.id,
       action: "MOCK_TEST_SCHEDULE_UPDATED",
       entityType: "MockTest",
       entityId: mockTestId,
-      metadata: { mode, availableFrom, availableUntil },
+      metadata: { mode, availableFrom, availableUntil, ...(becomesLive ? { liveDefaults: "SINGLE_ATTEMPT + AFTER_WINDOW" } : {}) },
     },
   });
 
   revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`);
+  return { success: true };
+}
+
+/**
+ * Live CBT enrollment (lib/live-cbt.ts). Enrollment Enabled ON = a student
+ * must enroll before starting; OFF = unchanged Mock Test behaviour. Open /
+ * close are optional (blank open = open now, blank close = when the test
+ * window closes). Existing enrollments are never deleted here.
+ */
+export async function updateMockTestEnrollmentAction(mockTestId: string, _prev: ScheduleFormState, formData: FormData): Promise<ScheduleFormState> {
+  const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
+  const enrollmentEnabled = formData.get("enrollmentEnabled") === "on";
+  const showEnrolledCount = formData.get("showEnrolledCount") === "on";
+  const opens = readIst(formData, "enrollmentOpensAt");
+  const closes = readIst(formData, "enrollmentClosesAt");
+  if (opens.invalid || closes.invalid) return { error: "Invalid enrollment date/time." };
+  if (opens.value && closes.value && closes.value.getTime() <= opens.value.getTime()) return { error: "Enrollment must close after it opens." };
+  const existing = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { availableUntil: true } });
+  if (!existing) return { error: "Mock test not found." };
+  if (closes.value && existing.availableUntil && closes.value.getTime() > existing.availableUntil.getTime()) {
+    return { error: "Enrollment can't close after the test window ends." };
+  }
+
+  const data = { enrollmentEnabled, showEnrolledCount, enrollmentOpensAt: opens.value, enrollmentClosesAt: closes.value };
+  await prisma.mockTest.update({ where: { id: mockTestId }, data });
+  await prisma.auditLog.create({
+    data: { actorId: session.user.id, action: "MOCK_TEST_ENROLLMENT_UPDATED", entityType: "MockTest", entityId: mockTestId, metadata: data },
+  });
+  revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`, `/student/test-series/${mockTestId}`);
   return { success: true };
 }
 

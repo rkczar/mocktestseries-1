@@ -22,6 +22,9 @@ import {
 import { mockSeriesPath } from "@/lib/mock-series";
 import { AccessResultForm, ScheduleForm } from "./schedule-form";
 import { RankingSettingsForm } from "@/components/admin/ranking-settings-form";
+import { EnrollmentForm } from "./enrollment-form";
+import { countMockTestEnrollments } from "@/lib/live-cbt";
+import { getSiteUrl } from "@/lib/site-url";
 import { getRankingConfig } from "@/lib/leaderboard";
 import { MockDetailsForm } from "../mock-details-form";
 import { MockTestStatusSelect } from "../status-select";
@@ -45,6 +48,7 @@ const STEPS = [
   ["questions", "3 Questions"],
   ["schedule", "4 Schedule & Availability"],
   ["access", "5 Access & Result"],
+  ["live", "Live CBT & Enrollment"],
   ["ranking", "Ranking & Leaderboard"],
   ["publish", "6 Review & Publish"],
 ] as const;
@@ -89,7 +93,11 @@ export default async function MockTestDetailPage({
     },
   });
   if (!mockTest) notFound();
-  const ranking = await getRankingConfig({ kind: "MOCK_TEST", id: mockTest.id });
+  const [ranking, enrolledCount, siteUrl] = await Promise.all([
+    getRankingConfig({ kind: "MOCK_TEST", id: mockTest.id }),
+    countMockTestEnrollments(mockTest.id),
+    getSiteUrl(),
+  ]);
 
   const [bankExams, bankPapers, subjects, importRun, examSeries, coverageProducts] = await Promise.all([
     // Add From Question Bank source pickers — small reference lists only; the
@@ -342,6 +350,69 @@ export default async function MockTestDetailPage({
               resultReleaseAtValue: mockTest.resultReleaseAt ? toIstDateTimeLocalValue(mockTest.resultReleaseAt) : "",
             }}
           />
+        </CardContent>
+      </Card>
+
+      <Card id="live" className="scroll-mt-20">
+        <CardHeader>
+          <CardTitle>Live CBT &amp; Enrollment</CardTitle>
+          <CardDescription>
+            A Live CBT is this Mock Test with a Fixed Window — same player, scoring, result, review, Ask AI and leaderboard.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2" data-testid="live-cbt-summary">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">Live CBT / Fixed Window</p>
+            <ul className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
+              <li>
+                Start: <strong>{mockTest.availableFrom ? formatIst(mockTest.availableFrom) : "—"}</strong>
+              </li>
+              <li>
+                End: <strong>{mockTest.availableUntil ? formatIst(mockTest.availableUntil) : "—"}</strong>
+              </li>
+              <li>
+                Attempts: <strong>{mockTest.attemptPolicy === "SINGLE_ATTEMPT" ? "Single attempt" : "Multiple practice attempts"}</strong>
+              </li>
+              <li>
+                Result release: <strong>{RESULT_RELEASE_LABELS[mockTest.resultReleaseMode]}</strong>
+              </li>
+            </ul>
+            {mode !== "FIXED_WINDOW" ? (
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                Not a Live CBT yet: choose <a href="#schedule" className="text-[var(--color-primary)] hover:underline">Fixed Window in Step 4</a>. Saving it
+                sets Single Attempt and &quot;After test window closes&quot; automatically.
+              </p>
+            ) : (
+              <>
+                {mockTest.resultReleaseMode === "IMMEDIATE" ? (
+                  <p className="flex items-start gap-1.5 text-xs text-[var(--color-warning)]">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /> Results release immediately: an early finisher sees score and answers while
+                    the window is still open. Use &quot;After test window closes&quot; in <a href="#access" className="underline">Step 5</a>.
+                  </p>
+                ) : null}
+                {mockTest.attemptPolicy === "MULTIPLE_PRACTICE" ? (
+                  <p className="flex items-start gap-1.5 text-xs text-[var(--color-warning)]">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /> Multiple attempts are allowed inside the window (retakes are never ranked).
+                  </p>
+                ) : null}
+              </>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">Enrollment</p>
+            <EnrollmentForm
+              mockTestId={mockTest.id}
+              enrolledCount={enrolledCount}
+              shareUrl={`${siteUrl}/student/test-series/${mockTest.id}`}
+              readOnly={!canManage}
+              values={{
+                enrollmentEnabled: mockTest.enrollmentEnabled,
+                showEnrolledCount: mockTest.showEnrolledCount,
+                opensAtValue: mockTest.enrollmentOpensAt ? toIstDateTimeLocalValue(mockTest.enrollmentOpensAt) : "",
+                closesAtValue: mockTest.enrollmentClosesAt ? toIstDateTimeLocalValue(mockTest.enrollmentClosesAt) : "",
+              }}
+            />
+          </div>
         </CardContent>
       </Card>
 

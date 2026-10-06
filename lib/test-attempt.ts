@@ -392,7 +392,7 @@ async function createAttemptFromQuestions(params: {
       })),
     });
     return { attempt: created, created: true };
-  }, { timeout: 20_000 });
+  }, { timeout: 20_000, maxWait: 20_000 });
 
   if (result.created) {
     await logActivity(params.studentId, "TEST_STARTED", { attemptId: result.attempt.id, sourceType: params.sourceType });
@@ -495,6 +495,16 @@ async function planMockTestStart(studentId: string, mockTestId: string, entryMod
         ? "This test window has closed. New attempts are no longer accepted."
         : "This test is not available yet."
     );
+  }
+
+  // Live CBT enrollment (lib/live-cbt.ts): when enabled, only an enrolled
+  // student may start. Off (every existing mock) = unchanged behaviour.
+  if (mockTest.enrollmentEnabled) {
+    const enrolled = await prisma.mockTestEnrollment.findUnique({
+      where: { mockTestId_studentId: { mockTestId, studentId } },
+      select: { id: true },
+    });
+    if (!enrolled) throw new TestEngineError("UNAVAILABLE", "Enroll in this live test to start it.");
   }
 
   if (mockTest.attemptPolicy === "SINGLE_ATTEMPT") {
@@ -1170,7 +1180,13 @@ export async function submitAttempt(attemptId: string, studentId: string) {
   let incorrectCount = 0;
   let unansweredCount = 0;
 
-  const updates = attempt.questions.map((tq) => {
+  // isCorrect is written with one updateMany per value (true / false / null)
+  // instead of one UPDATE per question: the same final rows, but the submit
+  // transaction holds a pooled connection for ~5 statements instead of ~110 —
+  // what lets a Live CBT's whole cohort auto-submit at the same deadline.
+  const idsByResult = { correct: [] as string[], incorrect: [] as string[], unanswered: [] as string[] };
+  const creates: Prisma.PrismaPromise<unknown>[] = [];
+  for (const tq of attempt.questions) {
     const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
     const answer = tq.answer;
     const selected = answer?.selectedOptionLabel ?? null;
@@ -1192,12 +1208,25 @@ export async function submitAttempt(attemptId: string, studentId: string) {
       incorrectCount += 1;
     }
 
-    return answer
-      ? prisma.answer.update({ where: { id: answer.id }, data: { isCorrect } })
-      : prisma.answer.create({
+    if (answer) idsByResult[isCorrect === true ? "correct" : isCorrect === false ? "incorrect" : "unanswered"].push(answer.id);
+    else {
+      creates.push(
+        prisma.answer.create({
           data: { attemptId, attemptQuestionId: tq.id, studentId, questionId: tq.questionId, isCorrect, status: AnswerStatus.UNANSWERED },
-        });
-  });
+        })
+      );
+    }
+  }
+  const updates: Prisma.PrismaPromise<unknown>[] = [
+    ...([
+      [idsByResult.correct, true],
+      [idsByResult.incorrect, false],
+      [idsByResult.unanswered, null],
+    ] as const)
+      .filter(([ids]) => ids.length > 0)
+      .map(([ids, isCorrect]) => prisma.answer.updateMany({ where: { id: { in: [...ids] }, attemptId }, data: { isCorrect } })),
+    ...creates,
+  ];
 
   const score = correctCount * 1 - incorrectCount * attempt.negativeMarking;
   const maxScore = attempt.totalQuestions;

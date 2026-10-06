@@ -1,0 +1,8 @@
+# mocktestseries Live CBT — installed as /etc/cron.d/mocktestseries-live-cbt (source: ops/live-cbt/ in the repo).
+# Window-end sweep: every minute, one run of up to ~50 s finalizes IN_PROGRESS Mock Test attempts whose
+# Fixed Window has closed (students who closed the browser), so the leaderboard is complete at release.
+# Idempotent: it only calls the engine's conditional finalize. flock keeps exactly one sweep running.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * root cd /var/www/mocktestseries-current && flock -n /run/mocktestseries-live-cbt.lock env NODE_OPTIONS=--conditions=react-server /usr/bin/npx --no-install tsx scripts/finalize-live-attempts.ts >> /var/log/mocktestseries/live-cbt-sweep.log 2>&1

@@ -3,7 +3,11 @@ import { notFound } from "next/navigation";
 import { AlertTriangle, CalendarClock, Clock, ListChecks, Lock } from "lucide-react";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { getMockTestDetailForStudent } from "@/lib/student-data";
-import { AVAILABILITY_LABELS, isMockResultReleased } from "@/lib/mock-test-schedule";
+import { AVAILABILITY_LABELS, isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
+import { countMockTestEnrollments, isEnrolledInMockTest } from "@/lib/live-cbt";
+import { effectiveEnrollmentCloseAt } from "@/lib/live-cbt-core";
+import { LiveCbtPanel } from "./live-cbt-panel";
+import { serverNow } from "@/lib/attempt-timing";
 import { loadAccessContext, evaluateContentAccess, type AccessProductRef } from "@/lib/payments/access";
 import { computeProductPrice } from "@/lib/payments/pricing";
 import { formatInr } from "@/lib/payments/money";
@@ -84,6 +88,16 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
     </>
   );
 
+  // Live CBT (enrollment-enabled mock): enrollment state + public count.
+  const live = mockTest.enrollmentEnabled
+    ? await Promise.all([
+        isEnrolledInMockTest(student.id, mockTest.id),
+        mockTest.showEnrolledCount ? countMockTestEnrollments(mockTest.id) : Promise.resolve(null),
+      ])
+    : null;
+  const releaseInstant = mockResultReleaseInstant(mockTest);
+  const enrollCloseAt = effectiveEnrollmentCloseAt(mockTest);
+
   let action: React.ReactNode;
   if (inProgressAttempt && access.allowed) {
     action = <StartMockForm mockTestId={mockTest.id} label="Resume Test" />;
@@ -111,6 +125,26 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
       <Button size="lg" disabled className="w-full">
         <Lock className="h-4 w-4" aria-hidden /> Not available
       </Button>
+    );
+  } else if (live) {
+    action = (
+      <LiveCbtPanel
+        mockTestId={mockTest.id}
+        serverNow={serverNow().getTime()}
+        startsAt={mockTest.availableFrom?.getTime() ?? null}
+        endsAt={mockTest.availableUntil?.getTime() ?? null}
+        enrolled={live[0]}
+        enrollmentOpensAt={mockTest.enrollmentOpensAt?.getTime() ?? null}
+        enrollmentClosesAt={enrollCloseAt?.getTime() ?? null}
+        submitted={latestSubmittedAttempt ? { attemptId: latestSubmittedAttempt.id, resultReleaseAt: releaseInstant?.getTime() ?? null } : null}
+        labels={{
+          startsAt: mockTest.availableFrom ? formatIst(mockTest.availableFrom) : null,
+          endsAt: mockTest.availableUntil ? formatIst(mockTest.availableUntil) : null,
+          opensAt: mockTest.enrollmentOpensAt ? formatIst(mockTest.enrollmentOpensAt) : null,
+          resultReleaseAt: releaseInstant ? formatIst(releaseInstant) : null,
+        }}
+        canStart={questionCount > 0 && !retakeBlocked}
+      />
     );
   } else if (availability === "UPCOMING") {
     action = (
@@ -181,8 +215,48 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
             </Badge>
           ) : null}
           {inProgressAttempt ? <Badge variant="warning">In progress</Badge> : null}
+          {live ? (
+            <Badge variant="error" data-testid="live-cbt-badge">
+              LIVE CBT
+            </Badge>
+          ) : null}
         </div>
       </div>
+
+      {live ? (
+        <Card data-testid="live-cbt-info">
+          <CardContent className="grid grid-cols-2 gap-3 pt-5 text-sm sm:grid-cols-3">
+            <div>
+              <p className="text-xs text-[var(--color-muted-foreground)]">Starts</p>
+              <p className="font-semibold text-[var(--color-foreground)]">{mockTest.availableFrom ? formatIst(mockTest.availableFrom) : "Open now"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--color-muted-foreground)]">Ends</p>
+              <p className="font-semibold text-[var(--color-foreground)]">{mockTest.availableUntil ? formatIst(mockTest.availableUntil) : "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--color-muted-foreground)]">Duration</p>
+              <p className="font-semibold text-[var(--color-foreground)]">{mockTest.durationMinutes} min</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--color-muted-foreground)]">Questions</p>
+              <p className="font-semibold text-[var(--color-foreground)]">{questionCount}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--color-muted-foreground)]">Marks</p>
+              <p className="font-semibold text-[var(--color-foreground)]">{questionCount}</p>
+            </div>
+            {live[1] !== null ? (
+              <div>
+                <p className="text-xs text-[var(--color-muted-foreground)]">Enrolled</p>
+                <p className="font-semibold text-[var(--color-foreground)]" data-testid="enrolled-count">
+                  {live[1].toLocaleString("en-IN")} student{live[1] === 1 ? "" : "s"} enrolled
+                </p>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>

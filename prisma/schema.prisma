@@ -580,6 +580,7 @@ model Student {
   emailPreference         EmailPreference?
   emailDeliveries         EmailDeliveryLog[]
   review                  Review?
+  mockTestEnrollments     MockTestEnrollment[]
 
   entitlements      StudentEntitlement[]
   couponRedemptions CouponRedemption[]
@@ -1177,6 +1178,15 @@ model MockTest {
   coverageTopicIds    String[]         @default([])
   // Admin's intended question count ("Selected X / Target Y"). Null = no target.
   targetQuestionCount Int?
+  // Live CBT enrollment (lib/live-cbt.ts). OFF = existing behaviour exactly.
+  // ON = a student must hold a MockTestEnrollment to start; enrolling never
+  // creates an attempt. Window: opensAt (null = now) → closesAt (null = the
+  // test's availableUntil, or never for a test without a window).
+  enrollmentEnabled   Boolean          @default(false)
+  enrollmentOpensAt   DateTime?
+  enrollmentClosesAt  DateTime?
+  // Show "X students enrolled" on the student page (counts only, no names).
+  showEnrolledCount   Boolean          @default(false)
   // Reused as "Test Number" — the test's display/sort position within its
   // Test Series (already existed for general ordering; no new field needed).
   order               Int              @default(0)
@@ -1189,6 +1199,7 @@ model MockTest {
   resources     TestResource[]
   bulkImportRuns BulkImportRun[]
   rankingConfig  TestRankingConfig?
+  enrollments    MockTestEnrollment[]
 
   products Product[]
 
@@ -1681,6 +1692,19 @@ model TestRankingConfig {
   updatedByAdminId    String?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
+}
+
+// One row per student per Live CBT (enrollment-enabled Mock Test). Never an attempt.
+model MockTestEnrollment {
+  id         String   @id @default(cuid())
+  mockTestId String
+  mockTest   MockTest @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  enrolledAt DateTime @default(now())
+
+  @@unique([mockTestId, studentId])
+  @@index([studentId])
 }
 
 model TestAttemptQuestion {

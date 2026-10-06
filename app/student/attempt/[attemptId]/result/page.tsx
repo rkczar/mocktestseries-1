@@ -47,7 +47,7 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-primary)]">Result Pending</p>
               <p className="text-sm text-[var(--color-foreground)]">
                 Your answers are saved. Your score, answer review and Ask AI unlock
-                {releaseAt ? <> on <strong>{formatIst(releaseAt)} IST</strong></> : " soon"}.
+                {releaseAt ? <> on <strong>{formatIst(releaseAt)}</strong></> : " soon"}.
               </p>
             </CardContent>
           </Card>

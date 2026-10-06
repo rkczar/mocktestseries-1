@@ -11,6 +11,7 @@ export const TEST_REFUSALS = {
   "live-not-started": "This live test has not started yet.",
   "live-ended": "This live test has ended.",
   "live-cancelled": "This live test was cancelled.",
+  "not-enrolled": "This is a Live CBT with enrollment. Enroll on the test page first — enrolled students can start it once it opens.",
   "not-found": "This test is no longer available. It may have been withdrawn or replaced.",
 } as const;
 
@@ -25,6 +26,7 @@ export function testRefusalKey(message: string): TestRefusalKey {
   if (/has not started yet/i.test(message)) return "live-not-started";
   if (/has ended/i.test(message)) return "live-ended";
   if (/cancelled/i.test(message)) return "live-cancelled";
+  if (/enroll in this live test/i.test(message)) return "not-enrolled";
   return "not-found";
 }
 

@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect, unstable_rethrow } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { startOrExplain, startOrPaywall } from "@/lib/payments/paywall";
 import { previewFormalTestStart, startMockTestAttempt, startOfflineOmrEntryAttempt } from "@/lib/test-attempt";
@@ -57,4 +58,28 @@ export async function startOfflineOmrEntryFromTestSeriesAction(mockTestId: strin
     contentId: mockTestId,
   });
   redirect(`/student/attempt/${attempt.id}/omr-entry`);
+}
+
+export interface EnrollLiveTestState {
+  error?: string;
+  enrolled?: boolean;
+}
+
+/**
+ * "Enroll in Live Test" on the Mock Test Details page (lib/live-cbt.ts).
+ * Creates only a MockTestEnrollment — never a TestAttempt. Idempotent.
+ */
+export async function enrollInLiveTestAction(_prev: EnrollLiveTestState, formData: FormData): Promise<EnrollLiveTestState> {
+  const student = await requireStudentOrLogin();
+  const mockTestId = String(formData.get("mockTestId") ?? "");
+  if (!mockTestId) return { error: "Mock test is required." };
+  const { enrollInMockTest, EnrollmentError } = await import("@/lib/live-cbt");
+  try {
+    await enrollInMockTest(student.id, mockTestId);
+  } catch (error) {
+    if (error instanceof EnrollmentError) return { error: error.message };
+    throw error;
+  }
+  revalidatePath(`/student/test-series/${mockTestId}`);
+  return { enrolled: true };
 }

@@ -35,7 +35,7 @@ const pad = (s: string, n: number) => (s + " " + "lorem ipsum dolor sit amet ".r
 
 function actionIds(): Record<string, string> {
   const m = JSON.parse(readFileSync(".next/server/server-reference-manifest.json", "utf8")) as { node: Record<string, { exportedName?: string; workers: Record<string, unknown> }> };
-  const want: Record<string, string> = { saveAnswerAction: "attempt", attemptHeartbeatAction: "attempt", submitAttemptAction: "attempt", startConfiguredTestAction: "test-series" };
+  const want: Record<string, string> = { saveAnswerAction: "attempt", attemptHeartbeatAction: "attempt", submitAttemptAction: "attempt", startConfiguredTestAction: "test-series", startMockTestFromDetailsAction: "test-series" };
   const out: Record<string, string> = {};
   for (const [id, v] of Object.entries(m.node)) {
     const name = v.exportedName;
