@@ -48,7 +48,7 @@ export default async function AttemptLeaderboardPage({
   const title = attemptTitle(attempt);
   const base = `/student/attempt/${attemptId}/leaderboard`;
   const self = board.self;
-  const tableRows = board.page === 1 ? board.rows.filter((r) => r.rank > 3) : board.rows;
+  const tableRows = board.page === 1 ? board.rows.filter((r) => r.position > 3) : board.rows;
 
   return (
     <StudentShell student={student}>
@@ -91,7 +91,7 @@ export default async function AttemptLeaderboardPage({
         )}
 
         {self && board.nearby.length > 0 ? (
-          <YourPositionCard rows={board.nearby} self={self} myPageHref={`${base}?page=${Math.ceil(self.rank / board.pageSize)}`} />
+          <YourPositionCard rows={board.nearby} self={self} myPageHref={`${base}?page=${Math.ceil(self.position / board.pageSize)}`} />
         ) : null}
 
         {board.totalParticipants === 0 ? (
@@ -107,7 +107,7 @@ export default async function AttemptLeaderboardPage({
                   <CardTitle className="text-base">
                     Ranks {tableRows[0].rank}–{tableRows[tableRows.length - 1].rank}
                   </CardTitle>
-                  <CardDescription>Score, then accuracy, correct answers, time taken and submission time break ties.</CardDescription>
+                  <CardDescription>Ranked by score, then accuracy, then correct answers. Equal performance shares a rank; time taken is not ranked.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <LeaderboardTable rows={tableRows} caption={`Leaderboard ranks ${tableRows[0].rank} to ${tableRows[tableRows.length - 1].rank}`} testId="leaderboard-table" />

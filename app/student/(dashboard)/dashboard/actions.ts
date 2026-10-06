@@ -10,7 +10,8 @@ import {
 } from "@/lib/student-data";
 import { startSubjectTestAttempt, type SubjectTestSelection } from "@/lib/test-attempt";
 import { InsufficientQuestionsError, NoQuestionsAvailableError } from "@/lib/question-selection";
-import { toDashboardMetricsView } from "./metrics-view";
+import { getOverallStanding, OVERALL_MIN_RANKED_TESTS } from "@/lib/leaderboard";
+import { toDashboardMetricsView, toOverallRankView } from "./metrics-view";
 import { getDashboardPaperViews } from "./pyq-view";
 
 export interface TestOnTheGoFormState {
@@ -28,11 +29,12 @@ export async function getActiveExamDashboardDataAction(examId: string) {
   const enrolled = await isStudentEnrolledInExam(student.id, examId);
   if (!enrolled) throw new Error("You are not enrolled in this exam.");
 
-  const [rawMetrics, subjects, nextTestRow, papers] = await Promise.all([
+  const [rawMetrics, subjects, nextTestRow, papers, overall] = await Promise.all([
     getExamScopedDashboardMetrics(student.id, examId),
     getExamSubjectsOverview(examId),
     getNextScheduledTestForStudent(student.id, examId),
     getDashboardPaperViews(student.id, examId),
+    getOverallStanding(examId, student.id),
   ]);
   const nextTest = nextTestRow
     ? {
@@ -44,7 +46,8 @@ export async function getActiveExamDashboardDataAction(examId: string) {
         availableUntil: nextTestRow.mockTest.availableUntil ? nextTestRow.mockTest.availableUntil.toISOString() : null,
       }
     : null;
-  return { metrics: toDashboardMetricsView(rawMetrics), subjects, nextTest, papers };
+  const overallRank = toOverallRankView({ id: examId, name: rawMetrics.examName }, overall, OVERALL_MIN_RANKED_TESTS);
+  return { metrics: { ...toDashboardMetricsView(rawMetrics), overallRank }, subjects, nextTest, papers };
 }
 
 function str(formData: FormData, key: string): string {

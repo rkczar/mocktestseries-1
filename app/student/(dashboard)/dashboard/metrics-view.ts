@@ -15,6 +15,37 @@ export interface DashboardMetricsView {
   inProgress: { id: string; title: string; examName: string } | null;
   weakTopics: { topicId: string; name: string; incorrectCount: number }[];
   savedQuestionsCount: number;
+  /** Overall Rank card (lib/leaderboard.ts#getOverallStanding); null = no Overall-Ranking tests in this exam yet. */
+  overallRank?: OverallRankView | null;
+}
+
+/** Display-only Overall Rank for the active exam — no student ids. */
+export interface OverallRankView {
+  examId: string;
+  examName: string;
+  /** null until the student has `required` ranked Overall-Ranking tests. */
+  rank: number | null;
+  total: number;
+  topPercent: number | null;
+  rankedTests: number;
+  required: number;
+}
+
+export function toOverallRankView(
+  exam: { id: string; name: string },
+  standing: { countedTests: number; totalRanked: number; selfRankedTests: number; self: { rank: number; topPercent: number } | null },
+  required: number
+): OverallRankView | null {
+  if (standing.countedTests === 0) return null;
+  return {
+    examId: exam.id,
+    examName: exam.name,
+    rank: standing.self?.rank ?? null,
+    total: standing.totalRanked,
+    topPercent: standing.self?.topPercent ?? null,
+    rankedTests: standing.selfRankedTests,
+    required,
+  };
 }
 
 interface RawMetrics {

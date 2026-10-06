@@ -130,6 +130,50 @@ try {
     await page.goto(boardUrl(F.attempts.disabled));
     check("disabled leaderboard URL redirects to the result", page.url().endsWith(`/student/attempt/${F.attempts.disabled}/result`), page.url());
 
+    console.log("Shared rank (time does not count)");
+    await page.goto(resultUrl(F.attempts.m5));
+    check("M5: viewer tied on performance with a 3x slower student → both #1", (await page.getByTestId("rank-value").innerText()).replace(/\s+/g, " ").startsWith("#1 /"));
+    await page.goto(boardUrl(F.attempts.m5));
+    const podiumRanks = await page.getByTestId("podium").locator("> *").allInnerTexts();
+    check("M5 podium shows two shared #1 ranks", podiumRanks.filter((t) => /rank #1\b/i.test(t)).length === 2, podiumRanks.map((t) => t.split("\n")[0]));
+
+    console.log("Dashboard Overall Rank card");
+    await page.goto(`${BASE}/student/dashboard`);
+    const card = page.getByTestId("overall-rank-card");
+    await card.waitFor();
+    const ov = E.overall;
+    check(`card: Overall Rank #${ov.rank} / ${ov.total}`, (await page.getByTestId("overall-rank-value").innerText()).replace(/\s+/g, " ") === `#${ov.rank} / ${ov.total}`);
+    const cardText = await card.innerText();
+    check(`card: Top ${ov.topPercent.toFixed(1)}%, ${ov.rankedTests} Ranked Tests, exam name`, cardText.includes(`Top ${ov.topPercent.toFixed(1)}%`) && cardText.includes(String(ov.rankedTests)) && cardText.includes("Ranked Tests") && cardText.includes(F.examName));
+    check("exactly one Overall Rank card on the dashboard", (await page.getByTestId("overall-rank-card").count()) === 1);
+    const dashOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    check(`dashboard: no horizontal scroll at ${viewport.width}px`, dashOverflow <= 0, dashOverflow);
+    await card.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${SHOTS}/${viewport.name}-dashboard-card.png` });
+    await card.click();
+    await page.waitForURL(/\/student\/analytics\?exam=.*#ranking/);
+    check("card opens Ranking & Progress in Analytics", (await page.locator("#ranking").count()) === 1);
+
+    console.log("Ranking & Progress");
+    check("summary: Overall Rank", (await page.getByTestId("rp-overall-rank").innerText()).includes(`#${ov.rank} / ${ov.total}`));
+    check("summary: Top %", (await page.getByTestId("rp-top").innerText()).includes(`${ov.topPercent.toFixed(1)}%`));
+    check("summary: Ranked Tests = 3", (await page.getByTestId("rp-ranked-tests").innerText()).startsWith("3"));
+    check("summary: Best Test Rank #1 (the M5 tie)", (await page.getByTestId("rp-best").innerText()).includes("#1 /"));
+    const histRows = await page.getByTestId("rp-history").locator("tbody tr").allInnerTexts();
+    check("history lists ranked Mock Tests + PYQ (M1, M5, M6, M4-off excluded, PYQ)", histRows.length === 4 && histRows.some((t) => t.includes("PYQ")) && histRows.filter((t) => t.includes("Overall")).length === 3, histRows.length);
+    check("history links to each leaderboard and result", (await page.getByTestId("rp-history").getByRole("link", { name: "Leaderboard" }).count()) === 4 && (await page.getByTestId("rp-history").getByRole("link", { name: "Result" }).count()) === 4);
+    const ovTable = page.getByTestId("overall-table");
+    const youOv = page.locator("[data-testid=overall-table] tr[data-self=true], [data-testid=overall-nearby-table] tr[data-self=true]").first();
+    check("Overall Leaderboard highlights YOU", (await youOv.count()) === 1 && (await youOv.getByText("YOU", { exact: true }).count()) === 1 && (await youOv.innerText()).includes("Rahul K."));
+    check("Overall Leaderboard columns", JSON.stringify((await ovTable.locator("th").allInnerTexts()).map((t) => t.split("\n")[0].toUpperCase())) === JSON.stringify(viewport.isMobile ? ["RANK", "STUDENT", "AVG %ILE", "TESTS"] : ["RANK", "STUDENT", "AVERAGE PERCENTILE", "RANKED TESTS"]), await ovTable.locator("th").allInnerTexts());
+    check("Overall Leaderboard uses First Name + Last Initial", !(await ovTable.innerText()).includes("Surnamezq") && (await ovTable.innerText()).includes("Aspirant"));
+    const anPayload = await serverPayload(page);
+    const anLeaks = F.privateValues.filter((v) => anPayload.includes(v));
+    check("analytics payload: no other student's id / MTS id / email / phone / surname", anLeaks.length === 0, anLeaks.slice(0, 5));
+    const anOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    check(`analytics: no horizontal page scroll at ${viewport.width}px`, anOverflow <= 0, anOverflow);
+    await page.locator("#ranking").screenshot({ path: `${SHOTS}/${viewport.name}-ranking-progress.png` });
+
     console.log("PYQ leaderboard");
     await page.goto(resultUrl(F.attempts.pyq));
     check(`PYQ: #1 / 3, percentile ${fmt(E.pyq.percentile)}, Top ${fmt(E.pyq.topPercent)}%`,
@@ -150,6 +194,14 @@ try {
     check("another student cannot open the viewer's leaderboard URL (404)", res.status() === 404, res.status());
     await page.goto(resultUrl(F.attempts.otherM1));
     check("their own board works and shows their rank (#132)", (await page.getByTestId("rank-value").innerText()).startsWith("#132"));
+    await page.goto(`${BASE}/student/dashboard`);
+    const pending = page.getByTestId("overall-rank-card");
+    check("1 counted test → card says Not available yet + Complete 3 ranked tests", (await pending.innerText()).includes("Not available yet") && (await page.getByTestId("overall-rank-pending").innerText()).includes("Complete 3 ranked tests to receive your rank."));
+    await page.goto(`${BASE}/student/analytics#ranking`);
+    check("analytics: 'Complete 3 ranked tests to receive your Overall Rank'", (await page.getByTestId("rp-pending").innerText()).includes("Complete 3 ranked tests to receive your Overall Rank"));
+    check("analytics: unranked viewer has no YOU row on the overall board", (await page.locator("[data-testid=overall-table] tr[data-self=true]").count()) === 0);
+    const tampered = await page.goto(`${BASE}/student/analytics?exam=not-my-exam#ranking`);
+    check("tampered ?exam= is ignored (falls back to an enrolled exam, no crash)", tampered.status() === 200 && (await page.locator("#ranking").count()) === 1);
     await ctx.close();
   }
 
@@ -162,16 +214,17 @@ try {
     await page.fill("input[name=password]", F.password);
     await Promise.all([page.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), page.locator("form button[type=submit]").click()]);
 
+    await page.goto(`${BASE}/admin/tests/mock/${F.mocks.m2}#ranking`);
+    check("Counts Toward Overall Ranking defaults OFF (a mock never configured)", !(await page.locator("#ranking input[name=countsTowardOverall]").isChecked()));
     await page.goto(`${BASE}/admin/tests/mock/${F.mocks.m1}#ranking`);
     const card = page.locator("#ranking");
     check("Mock editor has a Ranking & Leaderboard card", (await card.count()) === 1);
-    check("Counts Toward Overall Ranking defaults OFF", !(await card.locator("input[name=countsTowardOverall]").isChecked()));
+    check("an Overall-Ranking mock shows Counts Toward Overall ON", await card.locator("input[name=countsTowardOverall]").isChecked());
     check("Access & Result no longer carries a leaderboard checkbox", (await page.locator("#access input[name=leaderboardEnabled]").count()) === 0);
     await card.locator("input[name=leaderboardEnabled]").uncheck();
-    await card.locator("input[name=countsTowardOverall]").check();
     await card.getByRole("button", { name: "Save Ranking Settings" }).click();
     await card.getByText("Saved.").waitFor();
-    check("save → TestRankingConfig off + counts, legacy column mirrored",
+    check("save → TestRankingConfig leaderboard off (counts kept), legacy column mirrored",
       sql(`select "leaderboardEnabled"||','||"countsTowardOverall" from "TestRankingConfig" where "mockTestId"='${F.mocks.m1}'`) === "false,true" &&
       sql(`select "leaderboardEnabled" from "MockTest" where id='${F.mocks.m1}'`) === "f");
     check("audit log written", Number(sql(`select count(*) from "AuditLog" where action='TEST_RANKING_UPDATED' and "entityId"='${F.mocks.m1}'`)) >= 1);
@@ -189,12 +242,16 @@ try {
     check("student: disabled board now shows the neutral note", (await sp.getByTestId("rank-summary-disabled").count()) === 1);
 
     await page.reload();
+    await sp.goto(`${BASE}/student/dashboard`);
+    check("leaderboard off → that mock stops counting: viewer below 3 tests → Not available yet", (await sp.getByTestId("overall-rank-card").innerText()).includes("Not available yet"));
     await card.locator("input[name=leaderboardEnabled]").check();
-    await card.locator("input[name=countsTowardOverall]").uncheck();
     await card.getByRole("button", { name: "Save Ranking Settings" }).click();
     await card.getByText("Saved.").waitFor();
+    check("restored: leaderboard on, still counting", sql(`select "leaderboardEnabled"||','||"countsTowardOverall" from "TestRankingConfig" where "mockTestId"='${F.mocks.m1}'`) === "true,true");
     await sp.goto(resultUrl(F.attempts.official));
     check("re-enabled → student sees rank again", (await sp.getByTestId("rank-value").count()) === 1);
+    await sp.goto(`${BASE}/student/dashboard`);
+    check("re-enabled → Overall Rank back on the dashboard", (await sp.getByTestId("overall-rank-value").count()) === 1);
     await sctx.close();
 
     await page.goto(`${BASE}/admin/exams/previous-year-papers/${F.paperId}`);

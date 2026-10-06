@@ -14,7 +14,8 @@ import { AccessPanel } from "@/components/student/access-panel";
 import { getStudentExamAccessSummaries } from "@/lib/payments/student-access";
 import { ActiveExamDashboard } from "./active-exam-dashboard";
 import { DashboardAnnouncements } from "./dashboard-announcements";
-import { toDashboardMetricsView } from "./metrics-view";
+import { toDashboardMetricsView, toOverallRankView } from "./metrics-view";
+import { getOverallStanding, OVERALL_MIN_RANKED_TESTS } from "@/lib/leaderboard";
 import { getDashboardPaperViews, type DashboardPaperView } from "./pyq-view";
 import { findPracticeOmrSheet } from "@/lib/omr-sheet";
 import { ensureDefaultExamEnrollment } from "@/lib/default-enrollment";
@@ -55,15 +56,17 @@ export default async function StudentDashboardPage() {
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const [[rawExamMetrics, subjects, nextTest, papers], omrSheet, layout, accessSummaries, reviewState, publicReviews] = await Promise.all([
+  const [[rawExamMetrics, subjects, nextTest, papers, overall], omrSheet, layout, accessSummaries, reviewState, publicReviews] = await Promise.all([
     activeExamId
       ? Promise.all([
           getExamScopedDashboardMetrics(student.id, activeExamId),
           getExamSubjectsOverview(activeExamId),
           getNextScheduledTestForStudent(student.id, activeExamId),
           getDashboardPaperViews(student.id, activeExamId),
+          // Overall Rank card; never let it break the dashboard.
+          getOverallStanding(activeExamId, student.id).catch(() => null),
         ])
-      : Promise.all([null, [], getNextScheduledTestForStudent(student.id), [] as DashboardPaperView[]]),
+      : Promise.all([null, [], getNextScheduledTestForStudent(student.id), [] as DashboardPaperView[], null]),
     findPracticeOmrSheet(activeExamId),
     getStudentDashboardLayout(),
     getStudentExamAccessSummaries(student.id, enrolledExams),
@@ -76,7 +79,10 @@ export default async function StudentDashboardPage() {
   // exam switch never shows another exam's access state.
   const accessPanels = Object.fromEntries(accessSummaries.map((s) => [s.exam.id, <AccessPanel key={s.exam.id} summary={s} />]));
   const coveredProductIds = accessSummaries.flatMap((s) => (s.state === "ACTIVE" ? (s.entitlement?.productIds ?? []) : []));
-  const initialMetrics = toDashboardMetricsView(rawExamMetrics ?? globalMetrics);
+  const initialMetrics = {
+    ...toDashboardMetricsView(rawExamMetrics ?? globalMetrics),
+    overallRank: rawExamMetrics && overall ? toOverallRankView({ id: rawExamMetrics.examId, name: rawExamMetrics.examName }, overall, OVERALL_MIN_RANKED_TESTS) : null,
+  };
   const nextTestCard = nextTest
     ? {
         mockTestId: nextTest.mockTest.id,

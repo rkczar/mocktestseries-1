@@ -52,8 +52,8 @@ export function RankingSettingsForm({
             <span>
               <span className="font-medium">Counts Toward Overall Ranking</span>
               <span className="block text-xs text-[var(--color-muted-foreground)]">
-                Off by default. Prepares this test for the exam-level Overall Rank (coming next): average per-test percentile across
-                selected Mock Tests, after at least 3 ranked tests. Students don&apos;t see an Overall Rank yet.
+                Off by default. When on (and the leaderboard is enabled), this test feeds the exam&apos;s Overall Rank: each student&apos;s
+                average percentile across the selected Mock Tests, shown once they have at least 3 ranked tests. Time taken never counts.
               </span>
             </span>
           </label>

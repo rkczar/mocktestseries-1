@@ -113,10 +113,10 @@ export const ATTEMPT_RANKING_STATUS_LABEL: Record<Exclude<AttemptRankingStatus, 
 };
 
 /**
- * Ranking order (ties fall through in this order):
- *   1. score DESC  2. accuracy DESC  3. correctCount DESC
- *   4. timeTakenSeconds ASC  5. submittedAt ASC  6. attempt id ASC
- * Negative = a ranks above b. Mirrors the ORDER BY in lib/leaderboard.ts.
+ * Ranking order: 1. score DESC  2. accuracy DESC  3. correctCount DESC.
+ * Nothing else — time taken and submission time never change a rank.
+ * 0 = equal performance = the SAME rank (competition ranking: 1, 2, 2, 4).
+ * Negative = a ranks above b. Mirrors RANK() in lib/leaderboard.ts.
  */
 export function compareForRank(a: RankableAttempt, b: RankableAttempt): number {
   const score = (b.score ?? 0) - (a.score ?? 0);
@@ -126,14 +126,21 @@ export function compareForRank(a: RankableAttempt, b: RankableAttempt): number {
   const ac = a.correctCount ?? 0, ai = a.incorrectCount ?? 0, bc = b.correctCount ?? 0, bi = b.incorrectCount ?? 0;
   const accuracy = bc * Math.max(ac + ai, 1) - ac * Math.max(bc + bi, 1);
   if (accuracy !== 0) return accuracy;
-  if (bc !== ac) return bc - ac;
-  const time = (a.timeTakenSeconds ?? NO_TIME) - (b.timeTakenSeconds ?? NO_TIME);
-  if (time !== 0) return time;
-  const sub = (a.submittedAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.submittedAt?.getTime() ?? Number.MAX_SAFE_INTEGER);
-  if (sub !== 0) return sub;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  return bc - ac;
 }
-const NO_TIME = 2_147_483_647;
+
+/**
+ * Competition ranks for an already-sorted list: equal neighbours share a rank,
+ * the next distinct one skips (1, 2, 2, 4). `same(a, b)` = equal performance.
+ */
+export function competitionRanks<T>(sorted: T[], same: (a: T, b: T) => boolean): number[] {
+  const ranks: number[] = [];
+  sorted.forEach((item, i) => ranks.push(i > 0 && same(sorted[i - 1], item) ? ranks[i - 1] : i + 1));
+  return ranks;
+}
+
+/** Overall Rank needs at least this many ranked Overall-Ranking Mock Tests. */
+export const OVERALL_MIN_RANKED_TESTS = 3;
 
 /**
  * Percentile and Top %, in tenths so the two always add up to exactly 100:

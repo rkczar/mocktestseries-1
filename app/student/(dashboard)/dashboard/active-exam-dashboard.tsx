@@ -190,6 +190,7 @@ export function ActiveExamDashboard({
         />
       </div>
     ),
+    "overall-rank": metrics.overallRank ? <OverallRankCard view={metrics.overallRank} /> : null,
     "analytics-progress": (
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {OVERVIEW_LINKS.map((link) => (
@@ -496,6 +497,52 @@ function QuickLinkCardBody({ label, icon: Icon, description }: Omit<QuickLink, "
         <p className="text-sm text-[var(--color-muted-foreground)]">{description}</p>
       </CardContent>
     </Card>
+  );
+}
+
+/** One compact Overall Rank card; opens Ranking & Progress in Analytics. */
+function OverallRankCard({ view }: { view: NonNullable<DashboardMetricsView["overallRank"]> }) {
+  const ranked = view.rank !== null;
+  return (
+    <Link href={`/student/analytics?exam=${view.examId}#ranking`} data-testid="overall-rank-card" className="block">
+      <Card className="transition-shadow hover:shadow-md">
+        <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:gap-6">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+          <Trophy className="h-7 w-7 shrink-0 text-[var(--color-accent)]" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]">Overall Rank</p>
+            {ranked ? (
+              <p className="whitespace-nowrap text-xl font-bold text-[var(--color-foreground)]" data-testid="overall-rank-value">
+                #{view.rank!.toLocaleString("en-IN")}{" "}
+                <span className="text-sm font-medium text-[var(--color-muted-foreground)]">/ {view.total.toLocaleString("en-IN")}</span>
+              </p>
+            ) : (
+              <>
+                <p className="text-base font-semibold text-[var(--color-foreground)]">Not available yet</p>
+                <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="overall-rank-pending">
+                  Complete {view.required} ranked tests to receive your rank. ({view.rankedTests} of {view.required} done)
+                </p>
+              </>
+            )}
+            <p className="truncate text-xs text-[var(--color-muted-foreground)]">{view.examName}</p>
+          </div>
+          </div>
+          {ranked ? (
+            <div className="flex gap-6 border-t border-[var(--color-border)] pt-3 text-center sm:border-0 sm:pt-0">
+              <div>
+                <p className="text-lg font-semibold text-[var(--color-foreground)]">Top {view.topPercent!.toFixed(1)}%</p>
+                <p className="text-[11px] text-[var(--color-muted-foreground)]">of ranked students</p>
+              </div>
+              <div>
+                <p className="text-lg font-semibold text-[var(--color-foreground)]">{view.rankedTests}</p>
+                <p className="text-[11px] text-[var(--color-muted-foreground)]">Ranked Tests</p>
+              </div>
+            </div>
+          ) : null}
+          <ArrowRight className="hidden h-4 w-4 text-[var(--color-muted-foreground)] sm:block" aria-hidden />
+        </CardContent>
+      </Card>
+    </Link>
   );
 }
 

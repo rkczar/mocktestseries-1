@@ -16,6 +16,7 @@ export type StudentDashboardGroup = "overview" | "practice" | "pyq" | "recent" |
 export const STUDENT_DASHBOARD_BLOCKS = [
   { id: "access-status", label: "Access & Subscription", group: "account", card: false, description: "Free / Complete Access / Expired state per exam: upgrade offer, Free vs Complete comparison, or active plan with expiry" },
   { id: "performance-summary", label: "Performance Summary", group: "overview", card: false, description: "MCQs today, questions attempted, tests completed, streak, average score" },
+  { id: "overall-rank", label: "Overall Rank", group: "overview", card: false, description: "Active exam's Overall Rank (average percentile over admin-selected Mock Tests, 3+ ranked tests); opens Ranking & Progress. Hidden until a Mock Test counts toward Overall Ranking" },
   { id: "analytics-progress", label: "Analytics & Progress links", group: "overview", card: false, description: "Analytics, History, My Exams, Saved Questions" },
   { id: "test-schedule", label: "Test Schedule · Next Test", group: "practice", card: false, description: "Next scheduled mock test with countdown / Start" },
   { id: "mock-tests", label: "Mock Tests", group: "practice", card: true, description: "Test series & schedule" },

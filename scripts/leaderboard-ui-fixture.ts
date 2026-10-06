@@ -6,6 +6,9 @@
  *   M3  Practice Mode first, then Standard → "Practice used before…"
  *   M4  leaderboard disabled
  *   P   a Previous Year Paper where Rahul is #1 of 3
+ *   M1 + M5 + M6 count toward Overall Rank (M5: Rahul ties #1 with a much
+ *   slower student → shared rank); "Other Viewer" has 1 counted test → no
+ *   Overall Rank yet
  * plus a MASTER_ADMIN for the Ranking settings forms. Prints JSON (incl. every
  * other student's private identifiers, for the payload leak check).
  *
@@ -17,6 +20,7 @@ import argon2 from "argon2";
 import { QuestionStatus, StudentAuthProvider, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { rankPercentiles } from "@/lib/leaderboard-core";
+import { clearOverallRankingCache, getOverallStanding } from "@/lib/leaderboard";
 
 const PASSWORD = "QaLeaderboard!2345";
 const ADMIN_USERNAME = "qa-lb-admin";
@@ -43,6 +47,7 @@ async function cleanup() {
   await prisma.studentActivity.deleteMany({ where: { studentId: { in: ids } } });
   await prisma.studentSession.deleteMany({ where: { studentId: { in: ids } } });
   await prisma.studentDevice.deleteMany({ where: { studentId: { in: ids } } });
+  await prisma.studentExamEnrollment.deleteMany({ where: { studentId: { in: ids } } });
   await prisma.student.deleteMany({ where: { id: { in: ids } } });
   const mocks = await prisma.mockTest.findMany({ where: { title: { startsWith: `${TAG} ` } }, select: { id: true } });
   await prisma.testAttempt.deleteMany({ where: { mockTestId: { in: mocks.map((m) => m.id) } } });
@@ -87,7 +92,9 @@ async function main() {
 
   const mkMock = (k: number) =>
     prisma.mockTest.create({ data: { examId: exam.id, title: `${TAG} Mock ${k}`, durationMinutes: 120, status: "PUBLISHED", accessType: "FREE" } });
-  const [m1, m2, m3, m4] = [await mkMock(1), await mkMock(2), await mkMock(3), await mkMock(4)];
+  const [m1, m2, m3, m4, m5, m6] = [await mkMock(1), await mkMock(2), await mkMock(3), await mkMock(4), await mkMock(5), await mkMock(6)];
+  for (const m of [m1, m5, m6]) await prisma.testRankingConfig.create({ data: { kind: "MOCK_TEST", mockTestId: m.id, countsTowardOverall: true } });
+  for (const id of [viewer.id, other.id]) await prisma.studentExamEnrollment.create({ data: { studentId: id, examId: exam.id } });
   const paper = await prisma.previousYearPaper.create({ data: { examId: exam.id, year: 2002, title: `${TAG} Paper`, durationMinutes: 120 } });
   await prisma.testRankingConfig.create({ data: { kind: "MOCK_TEST", mockTestId: m4.id, leaderboardEnabled: false } });
   await prisma.mockTest.update({ where: { id: m4.id }, data: { leaderboardEnabled: false } });
@@ -142,6 +149,16 @@ async function main() {
   await attempt(others[0].id, { previousYearPaperId: paper.id }, { score: 90, correctCount: 90 });
   const otherM1 = await attempt(other.id, { mockTestId: m1.id }, { score: 10, correctCount: 10, incorrectCount: 90, startedAt: new Date(t0 + 1000) });
 
+  // M5 / M6 (Overall): 130 others again. On M5 Rahul and others[0] tie at 200 — others[0] took 3x as long.
+  const m5Viewer = await attempt(viewer.id, { mockTestId: m5.id }, { score: 200, correctCount: 200, incorrectCount: 0, timeTakenSeconds: 2000 });
+  for (const [k, s] of others.slice(0, 130).entries()) {
+    await attempt(s.id, { mockTestId: m5.id }, k === 0 ? { score: 200, correctCount: 200, incorrectCount: 0, timeTakenSeconds: 6000 } : { score: 199 - k, correctCount: 199 - k, incorrectCount: 0 });
+    await attempt(s.id, { mockTestId: m6.id }, { score: 150 - k, correctCount: 150 - k, incorrectCount: 0 });
+  }
+  await attempt(viewer.id, { mockTestId: m6.id }, { score: 100, correctCount: 100, incorrectCount: 0 });
+  clearOverallRankingCache();
+  const overall = await getOverallStanding(exam.id, viewer.id, { fresh: true });
+
   const total = 133; // 130 + deleted + viewer + other
   console.log(
     JSON.stringify({
@@ -149,10 +166,18 @@ async function main() {
       adminUsername: ADMIN_USERNAME,
       viewer: { email: VIEWER_EMAIL, id: viewer.id, studentId: viewer.studentId, mobile: viewer.mobile },
       other: { email: OTHER_EMAIL, id: other.id },
-      expected: { rank: 128, total, ...rankPercentiles(128, total), pyq: { rank: 1, total: 3, ...rankPercentiles(1, 3) } },
-      mocks: { m1: m1.id, m2: m2.id, m3: m3.id, m4: m4.id },
+      expected: {
+        rank: 128,
+        total,
+        ...rankPercentiles(128, total),
+        pyq: { rank: 1, total: 3, ...rankPercentiles(1, 3) },
+        overall: { rank: overall.self?.rank, total: overall.totalRanked, topPercent: overall.self?.topPercent, rankedTests: overall.selfRankedTests, averagePercentile: overall.self?.averagePercentile },
+      },
+      examId: exam.id,
+      examName: exam.name,
+      mocks: { m1: m1.id, m2: m2.id, m3: m3.id, m4: m4.id, m5: m5.id, m6: m6.id },
       paperId: paper.id,
-      attempts: { official: official.id, retake: retake.id, omr: omr.id, afterPractice: afterPractice.id, disabled: disabled.id, pyq: pyq.id, otherM1: otherM1.id },
+      attempts: { m5: m5Viewer.id, official: official.id, retake: retake.id, omr: omr.id, afterPractice: afterPractice.id, disabled: disabled.id, pyq: pyq.id, otherM1: otherM1.id },
       privateValues: others.flatMap((s) => [s.id, s.studentId, s.email, s.mobile, `Surnamezq`].filter(Boolean)).concat([other.id]),
     })
   );

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { revalidateMockSeriesSurfaces } from "@/lib/mock-series-revalidate";
+import { clearOverallRankingCache } from "@/lib/leaderboard";
 
 export interface RankingFormState {
   error?: string;
@@ -62,7 +63,9 @@ export async function updateTestRankingAction(
     },
   });
 
-  if (kind === "MOCK_TEST") revalidateMockSeriesSurfaces(`/admin/tests/mock/${testId}`);
+  // Overall Rank memo: this process now; other instances within OVERALL_CACHE_MS.
+  clearOverallRankingCache();
+  if (kind === "MOCK_TEST") revalidateMockSeriesSurfaces(`/admin/tests/mock/${testId}`, "/student/analytics");
   else revalidatePath(`/admin/exams/previous-year-papers/${testId}`);
   return { success: true };
 }

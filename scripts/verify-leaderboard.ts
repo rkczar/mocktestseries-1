@@ -23,8 +23,10 @@ import { performance } from "node:perf_hooks";
 import { QuestionStatus, StudentAuthProvider, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  OVERALL_MIN_RANKED_TESTS,
   attemptRankingStatus,
   compareForRank,
+  competitionRanks,
   exposesAnswerKey,
   isCompetitiveAttempt,
   leaderboardDisplayName,
@@ -32,7 +34,17 @@ import {
   studentStanding,
   type RankableAttempt,
 } from "@/lib/leaderboard-core";
-import { getAttemptRanking, getLeaderboard, getRankingConfig, getStudentRankableAttempts, type RankingTestRef } from "@/lib/leaderboard";
+import {
+  clearOverallRankingCache,
+  getAttemptRanking,
+  getLeaderboard,
+  getOverallLeaderboard,
+  getOverallStanding,
+  getRankingConfig,
+  getStudentRankableAttempts,
+  getStudentRankedTests,
+  type RankingTestRef,
+} from "@/lib/leaderboard";
 import { saveAnswer, startMockTestAttempt, startOfflineOmrEntryAttempt, startPreviousYearPaperAttempt, submitAttempt } from "@/lib/test-attempt";
 
 let failures = 0;
@@ -60,15 +72,16 @@ function att(p: Partial<RankableAttempt> & { minute?: number }): RankableAttempt
   };
 }
 
-/** Pure reference: per-student official attempt → ranked order. */
-function referenceRanking(byStudent: Map<string, RankableAttempt[]>): { studentId: string; attemptId: string }[] {
+/** Pure reference: per-student official attempt → competition ranks (display order: rank, then student id). */
+function referenceRanking(byStudent: Map<string, RankableAttempt[]>): { studentId: string; attemptId: string; rank: number }[] {
   const entries: { studentId: string; a: RankableAttempt }[] = [];
   for (const [studentId, list] of byStudent) {
     const s = studentStanding(list);
     if (s.kind === "RANKED") entries.push({ studentId, a: list.find((x) => x.id === s.officialAttemptId)! });
   }
-  entries.sort((x, y) => compareForRank(x.a, y.a));
-  return entries.map((e) => ({ studentId: e.studentId, attemptId: e.a.id }));
+  entries.sort((x, y) => compareForRank(x.a, y.a) || (x.studentId < y.studentId ? -1 : x.studentId > y.studentId ? 1 : 0));
+  const ranks = competitionRanks(entries, (x, y) => compareForRank(x.a, y.a) === 0);
+  return entries.map((e, i) => ({ studentId: e.studentId, attemptId: e.a.id, rank: ranks[i] }));
 }
 
 function letters(n: number, width = 4): string {
@@ -162,27 +175,16 @@ async function main() {
     "accuracy tie → more correct answers first",
     sorted([att({ id: "c2", score: 3, correctCount: 2, incorrectCount: 2 }), att({ id: "c4", score: 3, correctCount: 4, incorrectCount: 4 })])[0] === "c4"
   );
-  check(
-    "correct tie → lower timeTakenSeconds first",
-    sorted([att({ id: "slow", score: 3, correctCount: 3, timeTakenSeconds: 3000 }), att({ id: "fast", score: 3, correctCount: 3, timeTakenSeconds: 2000 })])[0] === "fast"
-  );
-  check(
-    "time tie → earlier submittedAt first",
-    sorted([
-      att({ id: "late", score: 3, correctCount: 3, timeTakenSeconds: 2000, submittedAt: new Date(T0 + 9e6) }),
-      att({ id: "early", score: 3, correctCount: 3, timeTakenSeconds: 2000, submittedAt: new Date(T0 + 1e6) }),
-    ])[0] === "early"
-  );
-  const fullTieA = att({ id: "zzz", score: 3, correctCount: 3, submittedAt: new Date(T0) });
-  const fullTieB = att({ id: "aaa", score: 3, correctCount: 3, submittedAt: new Date(T0) });
-  check("everything identical → attempt id decides, same result in any input order", sorted([fullTieA, fullTieB])[0] === "aaa" && sorted([fullTieB, fullTieA])[0] === "aaa");
-  check(
-    "submittedAt − startedAt is NOT used: a late-finalized attempt with the same timeTaken still ties on time",
-    sorted([
-      att({ id: "lazyfinal", score: 3, correctCount: 3, timeTakenSeconds: 1000, startedAt: new Date(T0), submittedAt: new Date(T0 + 1000) }),
-      att({ id: "quick", score: 3, correctCount: 3, timeTakenSeconds: 1200, startedAt: new Date(T0), submittedAt: new Date(T0 + 500) }),
-    ])[0] === "lazyfinal"
-  );
+  const slow = att({ id: "slow", score: 3, correctCount: 3, timeTakenSeconds: 9000 });
+  const fast = att({ id: "fast", score: 3, correctCount: 3, timeTakenSeconds: 60 });
+  check("TIME DOES NOT AFFECT RANK: same score/accuracy/correct, 60 s vs 9000 s → equal (0)", compareForRank(slow, fast) === 0 && compareForRank(fast, slow) === 0);
+  const late = att({ id: "late", score: 3, correctCount: 3, submittedAt: new Date(T0 + 9e9) });
+  const early = att({ id: "early", score: 3, correctCount: 3, submittedAt: new Date(T0) });
+  check("submission time does not affect rank either → equal (0)", compareForRank(late, early) === 0);
+  check("a much faster attempt with ONE fewer mark still ranks below", compareForRank(att({ score: 2, correctCount: 2, timeTakenSeconds: 1 }), slow) > 0);
+  check("competition ranks: equal performance shares a rank (1, 2, 2, 4)", JSON.stringify(competitionRanks([5, 4, 4, 3], (a, b) => a === b)) === "[1,2,2,4]");
+  check("competition ranks: all equal → all rank 1", JSON.stringify(competitionRanks([7, 7, 7], (a, b) => a === b)) === "[1,1,1]");
+  check("tied students share percentile: #2 of 4 twice → 50.0 / Top 50.0%", rankPercentiles(2, 4).percentile === 50 && rankPercentiles(2, 4).topPercent === 50);
 
   // ===================================================================
   console.log("\n--- Pure: eligibility ---");
@@ -288,7 +290,8 @@ async function main() {
     { name: "Aman Earlier", score: 3, c: 3, i: 0, t: 500, sub: 8 },
     { name: "Zoya Later", score: 3, c: 3, i: 0, t: 500, sub: 10 },
   ];
-  const expectedOrder = ["Hema T.", "Gopal A.", "Farah A.", "Esha M.", "Dev L.", "Chirag F.", "Bina S.", "Aman E.", "Zoya L.", "Ishaan L."];
+  // Chirag/Bina differ only in time (and submission) → shared #6; Aman/Zoya only in submission → shared #8.
+  const expectedRanks: Record<string, number> = { "Hema T.": 1, "Gopal A.": 2, "Farah A.": 3, "Esha M.": 4, "Dev L.": 5, "Chirag F.": 6, "Bina S.": 6, "Aman E.": 8, "Zoya L.": 8, "Ishaan L.": 10 };
   const craftedStudents: string[] = [];
   for (const [k, c] of crafted.entries()) {
     const s = await mkStudent(c.name);
@@ -305,7 +308,13 @@ async function main() {
     });
   }
   const boardA = await getLeaderboard(A, craftedStudents[0]);
-  check("SQL order = score → accuracy → correct → time → submittedAt", JSON.stringify(boardA.rows.map((r) => r.displayName)) === JSON.stringify(expectedOrder), boardA.rows.map((r) => r.displayName));
+  check(
+    "SQL ranks = score → accuracy → correct only; time/submission ties share a rank (6, 6, 8, 8)",
+    boardA.rows.every((r) => expectedRanks[r.displayName] === r.rank) && JSON.stringify(boardA.rows.map((r) => r.rank)) === "[1,2,3,4,5,6,6,8,8,10]",
+    boardA.rows.map((r) => [r.displayName, r.rank])
+  );
+  check("list positions stay unique 1..10 for paging", JSON.stringify(boardA.rows.map((r) => r.position)) === JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+  check("shared rank → shared percentile (#6 twice = 40.0)", boardA.rows[5].percentile === 40 && boardA.rows[6].percentile === 40);
   check("10 participants", boardA.totalParticipants === 10);
   check("viewer (Ishaan, last) is rank 10 with YOU flag, nobody else flagged", boardA.self?.rank === 10 && boardA.rows.filter((r) => r.isSelf).length === 1 && boardA.rows[9].isSelf);
   check("rank 1 percentile 90.0 / Top 10.0%", boardA.rows[0].percentile === 90 && boardA.rows[0].topPercent === 10, boardA.rows[0]);
@@ -435,7 +444,7 @@ async function main() {
   check("no internal id / MTS id / email / phone in the leaderboard payload", leaks.length === 0, leaks);
   const surnames = crafted.map((c) => c.name.split(" ")[1]);
   check("no full surname in the payload (First Name + Last Initial only)", !surnames.some((s) => payload.includes(s)));
-  check("row objects carry only display fields", Object.keys(pv.rows[0]).sort().join(",") === "accuracy,correctCount,displayName,isSelf,percentile,rank,score,timeTakenSeconds,topPercent");
+  check("row objects carry only display fields", Object.keys(pv.rows[0]).sort().join(",") === "accuracy,correctCount,displayName,isSelf,percentile,position,rank,score,timeTakenSeconds,topPercent");
   check("YOU on exactly the viewer (Hema, still rank 1)", pv.rows.filter((r) => r.isSelf).length === 1 && pv.self?.displayName === "Hema T." && pv.self.rank === 1, pv.self);
   check("Former Student keeps its rank (#2) without its name", pv.rows[1]?.displayName === "Former Student" && pv.rows[2]?.displayName === "Former Student");
 
@@ -555,15 +564,18 @@ async function main() {
     const expected = referenceRanking(byStudent);
     const nameOf = new Map(students.map((s) => [s.id, leaderboardDisplayName(s.name, "ACTIVE")]));
     const got = await getLeaderboard(R, students[0].id, { pageSize: 100 });
-    const ok = got.totalParticipants === expected.length && JSON.stringify(got.rows.map((r) => r.displayName)) === JSON.stringify(expected.map((e) => nameOf.get(e.studentId)));
+    const ok =
+      got.totalParticipants === expected.length &&
+      JSON.stringify(got.rows.map((r) => [r.displayName, r.rank])) === JSON.stringify(expected.map((e) => [nameOf.get(e.studentId), e.rank]));
     // Every student's own view agrees on rank and official attempt.
     let selfOk = true;
     for (const s of students.slice(0, 15)) {
       const v = await getLeaderboard(R, s.id, { pageSize: 5 });
       const idx = expected.findIndex((e) => e.studentId === s.id);
-      if (idx < 0 ? v.self !== null : v.self?.rank !== idx + 1 || v.selfOfficialAttemptId !== expected[idx].attemptId) selfOk = false;
+      if (idx < 0 ? v.self !== null : v.self?.rank !== expected[idx].rank || v.selfOfficialAttemptId !== expected[idx].attemptId) selfOk = false;
     }
-    check(`round ${round}: SQL ranking = pure reference (${expected.length} ranked of 60)`, ok && selfOk && expected.length > 5);
+    const ties = expected.filter((e, i) => i > 0 && expected[i - 1].rank === e.rank).length;
+    check(`round ${round}: SQL ranking = pure reference (${expected.length} ranked of 60, ${ties} shared ranks)`, ok && selfOk && expected.length > 5 && ties > 0);
   }
 
   // ---- real (copied production) attempts ------------------------------------
@@ -585,9 +597,9 @@ async function main() {
     const byStudent = new Map<string, RankableAttempt[]>();
     for (const s of all) byStudent.set(s.studentId, await getStudentRankableAttempts(test, s.studentId));
     const expected = referenceRanking(byStudent);
-    for (const [k, e] of expected.entries()) {
+    for (const e of expected) {
       const v = await getLeaderboard(test, e.studentId, { pageSize: 1 });
-      if (v.self?.rank !== k + 1 || v.selfOfficialAttemptId !== e.attemptId || v.totalParticipants !== expected.length) realOk = false;
+      if (v.self?.rank !== e.rank || v.selfOfficialAttemptId !== e.attemptId || v.totalParticipants !== expected.length) realOk = false;
       const official = byStudent.get(e.studentId)!.find((a) => a.id === e.attemptId)!;
       if (official.entryMode !== "ONLINE") omrRanked++;
     }
@@ -598,6 +610,112 @@ async function main() {
   }
   check(`real data: SQL = reference on ${realMocks.length} mocks + ${realPapers.length} papers (${realRanked} ranked)`, realOk);
   check("real data: no OMR attempt ranked", omrRanked === 0);
+
+
+  // ---- Overall Rank ---------------------------------------------------------
+  console.log("\n--- Overall Rank ---");
+  // Earlier sections left mockA counting; this section owns the exam's counted set.
+  await prisma.testRankingConfig.update({ where: { mockTestId: mockA.id }, data: { countsTowardOverall: false } });
+  const ovMocks = [await mkMock("O1"), await mkMock("O2"), await mkMock("O3"), await mkMock("O4")];
+  const o5 = await mkMock("O5-lb-off");
+  const o6 = await mkMock("O6-held");
+  await prisma.mockTest.update({ where: { id: o6.id }, data: { resultReleaseMode: "CUSTOM_DATE", resultReleaseAt: new Date(Date.now() + 30 * 864e5) } });
+  for (const m of ovMocks) await prisma.testRankingConfig.create({ data: { kind: "MOCK_TEST", mockTestId: m.id, countsTowardOverall: true } });
+  await prisma.testRankingConfig.create({ data: { kind: "MOCK_TEST", mockTestId: o5.id, countsTowardOverall: true, leaderboardEnabled: false } });
+  await prisma.testRankingConfig.create({ data: { kind: "MOCK_TEST", mockTestId: o6.id, countsTowardOverall: true } });
+  const paper2 = await prisma.previousYearPaper.create({ data: { examId: exam.id, year: 2003, title: `LBV Paper2 ${suffix}`, durationMinutes: 20 } });
+  const ov: Record<string, string> = {};
+  for (const n of ["Asha Ov", "Bala Ov", "Chitra Ov", "Dinesh Ov", "Eshan Ov", "Farid Ov", "Gita Ov", "Hari Ov", "Pyqstar Ov"]) ov[n.split(" ")[0]] = (await mkStudent(n)).id;
+  const O = (k: number): RankingTestRef => ({ kind: "MOCK_TEST", id: [...ovMocks, o5, o6][k].id });
+  const put = (k: number, who: string, score: number, extra: Partial<Prisma.TestAttemptUncheckedCreateInput> = {}) =>
+    insertAttempt(O(k), { studentId: ov[who], score, correctCount: score, incorrectCount: 0, timeTakenSeconds: 1000, startedAt: new Date(base), submittedAt: new Date(base + 99), ...extra });
+  // Asha and Bala: identical score/accuracy/correct everywhere; Bala always 8x slower and later.
+  const slowB = { timeTakenSeconds: 8000, submittedAt: new Date(base + 9e6) };
+  await put(0, "Asha", 90); await put(0, "Bala", 90, slowB); await put(0, "Chitra", 80); await put(0, "Dinesh", 70); await put(0, "Eshan", 60); await put(0, "Pyqstar", 50); await put(0, "Gita", 5);
+  await put(0, "Farid", 0, { answerMode: "INSTANT", durationMode: "UNLIMITED", startedAt: new Date(base - 864e5), submittedAt: new Date(base - 864e5 + 99) });
+  await put(0, "Farid", 95); // after practice → unranked on O1
+  await put(1, "Asha", 50); await put(1, "Bala", 50, slowB); await put(1, "Chitra", 40); await put(1, "Eshan", 99); await put(1, "Pyqstar", 30); await put(1, "Farid", 60);
+  await put(2, "Asha", 70); await put(2, "Bala", 70, slowB); await put(2, "Eshan", 100, { entryMode: "OFFLINE_OMR_ENTRY" }); await put(2, "Farid", 80); await put(2, "Gita", 10);
+  await put(3, "Asha", 20); await put(3, "Bala", 20, slowB); await put(3, "Farid", 90); await put(3, "Gita", 30); await put(3, "Hari", 40);
+  await put(4, "Dinesh", 100); await put(4, "Asha", 100); // O5: leaderboard off → never counted
+  await put(5, "Dinesh", 100); // O6: result held → not counted yet
+  await insertAttempt({ kind: "PREVIOUS_YEAR_PAPER", id: paper2.id }, { studentId: ov.Pyqstar, score: 100, correctCount: 100, incorrectCount: 0, startedAt: new Date(base), submittedAt: new Date(base + 99) });
+  await insertAttempt({ kind: "PREVIOUS_YEAR_PAPER", id: paper2.id }, { studentId: ov.Chitra, score: 10, correctCount: 10, incorrectCount: 0, startedAt: new Date(base), submittedAt: new Date(base + 99) });
+
+  // Pure reference over the 4 counted mocks.
+  const ovSums = new Map<string, { tests: number; tenths: number }>();
+  for (const m of ovMocks) {
+    const test: RankingTestRef = { kind: "MOCK_TEST", id: m.id };
+    const who = await prisma.testAttempt.findMany({ where: { mockTestId: m.id }, select: { studentId: true }, distinct: ["studentId"] });
+    const byStudent = new Map<string, RankableAttempt[]>();
+    for (const w of who) byStudent.set(w.studentId, await getStudentRankableAttempts(test, w.studentId));
+    const ref = referenceRanking(byStudent);
+    for (const e of ref) {
+      const cur = ovSums.get(e.studentId) ?? { tests: 0, tenths: 0 };
+      cur.tests += 1;
+      cur.tenths += Math.round(rankPercentiles(e.rank, ref.length).percentile * 10);
+      ovSums.set(e.studentId, cur);
+    }
+  }
+  const refEligible = [...ovSums.entries()].filter(([, v]) => v.tests >= OVERALL_MIN_RANKED_TESTS);
+  const cmp = (a: [string, { tests: number; tenths: number }], b: [string, { tests: number; tenths: number }]) => b[1].tenths * a[1].tests - a[1].tenths * b[1].tests;
+  refEligible.sort((a, b) => cmp(a, b) || (a[0] < b[0] ? -1 : 1));
+  const refRanks = competitionRanks(refEligible, (a, b) => cmp(a, b) === 0);
+  const ovBoard = await getOverallLeaderboard(exam.id, ov.Asha, { pageSize: 100, fresh: true });
+  const nameById = new Map(Object.entries(ov).map(([k, id]) => [id, `${k} O.`]));
+  check(
+    "Overall Rank = pure reference (avg per-test percentile, ≥3 tests, competition ranks)",
+    JSON.stringify(ovBoard.rows.map((r) => [r.displayName, r.rank, r.rankedTests, r.averagePercentile])) ===
+      JSON.stringify(refEligible.map(([id, v], i) => [nameById.get(id), refRanks[i], v.tests, Math.round(v.tenths / v.tests) / 10])),
+    { got: ovBoard.rows.map((r) => [r.displayName, r.rank, r.rankedTests, r.averagePercentile]), want: refEligible.map(([id, v], i) => [nameById.get(id), refRanks[i], v.tests]) }
+  );
+  check("4 counted mocks (leaderboard-off and result-held mocks excluded)", ovBoard.countedTests === 4, ovBoard.countedTests);
+  const asha = ovBoard.rows.find((r) => r.displayName === "Asha O.");
+  const bala = ovBoard.rows.find((r) => r.displayName === "Bala O.");
+  check("time does not affect Overall Rank: Asha and Bala (8x slower) share the same rank and average", !!asha && !!bala && asha.rank === bala.rank && asha.averagePercentile === bala.averagePercentile, [asha, bala]);
+  check("YOU only on the viewer", ovBoard.rows.filter((r) => r.isSelf).length === 1 && asha?.isSelf === true);
+  check("eligible = Asha, Bala, Farid, Gita (3+ ranked counted tests)", JSON.stringify(ovBoard.rows.map((r) => r.displayName).sort()) === JSON.stringify(["Asha O.", "Bala O.", "Farid O.", "Gita O."]));
+  const chitra = await getOverallStanding(exam.id, ov.Chitra);
+  check("Chitra: 2 ranked counted tests → no Overall Rank yet (2 of 3), PYQ not counted", chitra.self === null && chitra.selfRankedTests === 2, chitra);
+  const eshan = await getOverallStanding(exam.id, ov.Eshan);
+  check("Eshan: OMR attempt on O3 not counted → 2 tests → not ranked", eshan.self === null && eshan.selfRankedTests === 2, eshan);
+  const farid = ovBoard.rows.find((r) => r.displayName === "Farid O.");
+  check("Farid: practice-first O1 excluded → ranked on O2–O4 only (3 tests)", farid?.rankedTests === 3);
+  const pyqstar = await getOverallStanding(exam.id, ov.Pyqstar);
+  check("PYQ #1 never contributes: Pyqstar has 2 counted tests, no Overall Rank", pyqstar.self === null && pyqstar.selfRankedTests === 2, pyqstar);
+  const dinesh = await getOverallStanding(exam.id, ov.Dinesh);
+  check("Dinesh: leaderboard-off O5 and held O6 not counted → 1 test", dinesh.selfRankedTests === 1 && dinesh.self === null, dinesh);
+  check("Overall Top % = 100 × rank / ranked students", asha !== undefined && asha.topPercent === rankPercentiles(asha.rank, ovBoard.totalRanked).topPercent);
+  const ovPayload = JSON.stringify(ovBoard);
+  check("overall payload: no student id / email / phone / surname", !Object.values(ov).some((id) => ovPayload.includes(id)) && !ovPayload.includes("@") && !ovPayload.includes(" Ov"));
+  check("overall row objects carry only display fields", Object.keys(ovBoard.rows[0]).sort().join(",") === "averagePercentile,displayName,isSelf,position,rank,rankedTests,topPercent");
+
+  // History (Ranking & Progress)
+  const hist = await getStudentRankedTests(exam.id, ov.Asha);
+  check("Asha's history: O1–O4 only (leaderboard-off O5 hidden), all marked Overall", hist.length === 4 && hist.every((h) => h.countsTowardOverall && h.kind === "MOCK_TEST"), hist.map((h) => h.title));
+  let histOk = true;
+  for (const h of hist) {
+    const m = ovMocks.find((x) => h.title === x.title)!;
+    const v = await getLeaderboard({ kind: "MOCK_TEST", id: m.id }, ov.Asha);
+    if (v.self?.rank !== h.rank || v.totalParticipants !== h.total || v.self.percentile !== h.percentile) histOk = false;
+  }
+  check("history rank / total / percentile = each test's leaderboard", histOk);
+  const pyqHist = await getStudentRankedTests(exam.id, ov.Pyqstar);
+  check("PYQ appears in history with its rank but never as Overall", pyqHist.some((h) => h.kind === "PREVIOUS_YEAR_PAPER" && h.rank === 1 && !h.countsTowardOverall));
+
+  // Cache: memoized per process, cleared by the admin save.
+  const cachedBefore = (await getOverallStanding(exam.id, ov.Hari)).totalRanked;
+  await put(0, "Hari", 1); await put(1, "Hari", 1);
+  check("Overall Rank is memoized (no recompute inside the cache window)", (await getOverallStanding(exam.id, ov.Hari)).totalRanked === cachedBefore);
+  clearOverallRankingCache();
+  const hariNow = await getOverallStanding(exam.id, ov.Hari);
+  check("after clearOverallRankingCache, Hari (now 3 tests) is ranked", hariNow.totalRanked === cachedBefore + 1 && hariNow.self !== null && hariNow.selfRankedTests === 3);
+  const window = await getOverallLeaderboard(exam.id, ov.Hari, { pageSize: 1, window: 1 });
+  check("overall Your Position window around the viewer when off-page", window.nearby.some((r) => r.isSelf) && window.nearby.length >= 2 && window.rows.length === 1);
+  await prisma.testRankingConfig.updateMany({ where: { mockTestId: { in: [...ovMocks, o5, o6].map((m) => m.id) } }, data: { countsTowardOverall: false } });
+  clearOverallRankingCache();
+  const none = await getOverallStanding(exam.id, ov.Asha);
+  check("no counted tests → countedTests 0, nobody ranked", none.countedTests === 0 && none.totalRanked === 0 && none.self === null);
 
   // ---- scale ------------------------------------------------------------
   console.log("\n--- Scale: 10,000 participants ---");
@@ -647,17 +765,45 @@ async function main() {
     `EXPLAIN SELECT 1 FROM "TestAttempt" a WHERE a."mockTestId" = $1 AND a."sourceType" = 'MOCK_TEST'`,
     mockB.id
   );
+  // Overall Rank at scale: 10,000 students × 3 counted mocks.
+  const mockS2 = await mkMock("S2");
+  const mockS3 = await mkMock("S3");
+  for (const m of [mockS2, mockS3]) {
+    for (let k = 0; k < big.length; k += 2500) {
+      await prisma.testAttempt.createMany({
+        data: big.slice(k, k + 2500).map((b, j) => ({
+          studentId: b.id, sourceType: "MOCK_TEST" as const, testType: "FULL_MOCK" as const, examId: exam.id, mockTestId: m.id,
+          durationMinutes: 180, totalQuestions: 200, maxScore: 200, status: "SUBMITTED" as const,
+          score: ((k + j) * (m === mockS2 ? 31 : 17)) % 201, correctCount: ((k + j) * (m === mockS2 ? 31 : 17)) % 201, incorrectCount: (k + j) % 5,
+          timeTakenSeconds: 5000, startedAt: new Date(base), submittedAt: new Date(base + 6_000_000),
+        })),
+      });
+    }
+  }
+  for (const m of [mockS, mockS2, mockS3]) await prisma.testRankingConfig.create({ data: { kind: "MOCK_TEST", mockTestId: m.id, countsTowardOverall: true } });
+  const to = performance.now();
+  const bigOverall = await getOverallLeaderboard(exam.id, big[1234].id, { fresh: true });
+  const oms = performance.now() - to;
+  console.log(`  (Overall Rank, 10,000 students × 3 tests: ${oms.toFixed(0)} ms uncached)`);
+  check("Overall Rank for 10,000 students computed in < 3 s (then cached)", oms < 3000 && bigOverall.totalRanked === 10_000 && bigOverall.self !== null, oms);
+  const tc = performance.now();
+  await getOverallStanding(exam.id, big[99].id);
+  check("cached Overall Rank read is instant (< 20 ms)", performance.now() - tc < 20);
+  await prisma.testRankingConfig.deleteMany({ where: { mockTestId: { in: [mockS.id, mockS2.id, mockS3.id] } } });
+  clearOverallRankingCache();
+
   check("a normal-size test reads only its own rows via a mockTestId index", plan.some((p) => /Index|Bitmap/.test(p["QUERY PLAN"])), plan);
 
   // ---- cleanup + read-only proof -------------------------------------------
   console.log("\n--- Cleanup / historical integrity ---");
   const mocks = await prisma.mockTest.findMany({ where: { title: { startsWith: "LBV " } }, select: { id: true } });
   await prisma.testAttempt.deleteMany({ where: { OR: [{ studentId: { in: createdStudents } }, { mockTestId: { in: mocks.map((m) => m.id) } }] } });
-  await prisma.testRankingConfig.deleteMany({ where: { OR: [{ mockTestId: { in: mocks.map((m) => m.id) } }, { previousYearPaperId: paper.id }] } });
+  await prisma.testRankingConfig.deleteMany({ where: { OR: [{ mockTestId: { in: mocks.map((m) => m.id) } }, { previousYearPaperId: { in: [paper.id, paper2.id] } }] } });
   await prisma.mockTest.deleteMany({ where: { id: { in: mocks.map((m) => m.id) } } });
   await prisma.questionOption.deleteMany({ where: { questionId: { in: pyqQs.map((q) => q.id) } } });
   await prisma.question.deleteMany({ where: { id: { in: pyqQs.map((q) => q.id) } } });
-  await prisma.previousYearPaper.delete({ where: { id: paper.id } });
+  await prisma.testAttempt.deleteMany({ where: { previousYearPaperId: paper2.id } });
+  await prisma.previousYearPaper.deleteMany({ where: { id: { in: [paper.id, paper2.id] } } });
   for (let k = 0; k < createdStudents.length; k += 5000) {
     const chunk = createdStudents.slice(k, k + 5000);
     await prisma.studentActivity.deleteMany({ where: { studentId: { in: chunk } } });

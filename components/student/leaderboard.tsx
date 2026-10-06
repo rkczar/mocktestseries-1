@@ -10,7 +10,8 @@ import type { AttemptRanking, LeaderboardRow } from "@/lib/leaderboard";
 /*
  * Leaderboard UI (Ranking Phase 1). Server components only: rows are
  * rendered to markup here and never passed to a client component, and React
- * keys are ranks — no student id reaches the browser.
+ * keys are list positions — no student id reaches the browser. Equal
+ * performance shares a rank (1, 2, 2, 4); time taken is shown, never ranked.
  */
 
 export const RANKING_RULE_NOTE =
@@ -100,16 +101,16 @@ const PODIUM_STYLE = [
 ] as const;
 
 export function LeaderboardPodium({ rows }: { rows: LeaderboardRow[] }) {
-  const top = rows.filter((r) => r.rank <= 3);
+  const top = rows.filter((r) => r.position <= 3);
   if (top.length === 0) return null;
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end" data-testid="podium">
       {top.map((r) => {
-        const style = PODIUM_STYLE[r.rank - 1];
+        const style = PODIUM_STYLE[r.position - 1];
         const Icon = style.icon;
         return (
           <Card
-            key={`podium-${r.rank}`}
+            key={`podium-${r.position}`}
             className={cn(style.order, style.lift, r.isSelf && "border-[var(--color-primary)] bg-[var(--color-primary)]/5")}
             data-self={r.isSelf ? "true" : undefined}
             aria-current={r.isSelf ? "true" : undefined}
@@ -159,7 +160,7 @@ export function LeaderboardTable({ rows, caption, testId }: { rows: LeaderboardR
       <tbody>
         {rows.map((r) => (
           <tr
-            key={`rank-${r.rank}`}
+            key={`row-${r.position}`}
             className={cn(
               "border-b border-[var(--color-border)] last:border-0",
               r.isSelf && "bg-[var(--color-primary)]/10 shadow-[inset_4px_0_0_var(--color-primary)]"

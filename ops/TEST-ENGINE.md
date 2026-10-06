@@ -71,8 +71,13 @@ Test types only supply data and configuration. There is no per-type player.
   attempt columns (never Answer rows, never a write): each student's earliest
   SUBMITTED attempt that is ONLINE + Standard time + answers after the test; a
   student whose earlier attempt exposed the key (Practice Mode, a submitted
-  custom/1-min/OMR attempt) is unranked for that test. `isLeaderboardAttempt` is
-  still set by `submitAttempt` but is legacy: ranking does not read it.
+  custom/1-min/OMR attempt) is unranked for that test. Rank = score, then
+  accuracy, then correct answers; equal performance SHARES a rank and time taken
+  never affects any rank (shown only). Overall Rank (per exam) = average per-test
+  percentile over Mock Tests with Counts Toward Overall Ranking ON (leaderboard on,
+  result released), 3+ ranked tests, equal averages share; PYQs never count; memoized
+  60 s per process. `isLeaderboardAttempt` is still set by `submitAttempt` but is
+  legacy: ranking does not read it.
 - **PYQ full paper** freezes the whole published paper in original order
   (question `createdAt`, then `code`). It is never sampled or shuffled.
   PYQ-only practice goes through Custom Module with Source = PYQ.
