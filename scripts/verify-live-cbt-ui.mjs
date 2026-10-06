@@ -58,6 +58,20 @@ async function startLive(page) {
   return page.url().split("/").at(-2);
 }
 const fetchStatus = (page, url) => page.evaluate(async (u) => (await fetch(u)).status, url);
+const attemptCount = () => sql(`select count(*) from "TestAttempt" where "mockTestId"='${F.l1}'`);
+
+/** Student Dashboard "Next Test" card, opened in a fresh tab of an already signed-in context. */
+async function dashboardCard(ctx, shot) {
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/student/dashboard`);
+  await page.waitForLoadState("networkidle");
+  const card = page.getByText(/Test Schedule · Next Test/i).first().locator("xpath=ancestor::*[.//a][1]");
+  const text = (await card.innerText()).replace(/\s+/g, " ");
+  const link = card.locator("a").last();
+  const out = { page, text, label: (await link.innerText()).trim(), href: await link.getAttribute("href"), overflow: await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth) };
+  if (shot) await card.screenshot({ path: `${SHOTS}/${shot}.png` });
+  return out;
+}
 
 const startAt = Date.now() + 70_000;
 const endAt = startAt + 120_000;
@@ -111,6 +125,11 @@ try {
     return r.url;
   }, F.l1);
   check("enrolled, before start: the start path refuses (no attempt can exist)", sql(`select count(*) from "TestAttempt" where "mockTestId"='${F.l1}'`) === "0", early2);
+  const before = attemptCount();
+  const up = await dashboardCard(ab, "dashboard-upcoming-enrolled");
+  check("dashboard (upcoming, enrolled): Live Test · Enrolled + View Live Test → this test", /Live Test · Enrolled/.test(up.text) && /Starts in/i.test(up.text) && up.label === "View Live Test" && up.href === `/student/test-series/${F.l1}`, up);
+  check("viewing the dashboard created no attempt", attemptCount() === before);
+  await up.page.close();
   await viewer.reload();
   check("public enrolled count now 3", (await viewer.getByTestId("enrolled-count").innerText()).startsWith("3 students"));
 
@@ -123,6 +142,19 @@ try {
   check("…not before the server start time", Date.now() >= startAt - 1500, Date.now() - startAt);
   check("window-closes countdown shown", /^\d\d:\d\d:\d\d$/.test(await viewer.getByTestId("ends-in").innerText()));
 
+  console.log("\nDashboard while LIVE");
+  const liveBefore = attemptCount();
+  const live = await dashboardCard(ab, "dashboard-live-now-desktop");
+  check("dashboard (live, enrolled): Live Now · Ends … + Enter Live Test", /Live Test · Enrolled/.test(live.text) && /Live Now · Ends/.test(live.text) && live.label === "Enter Live Test", live);
+  await live.page.getByRole("link", { name: "Enter Live Test" }).click();
+  await live.page.waitForURL(testUrl, { timeout: 30000 });
+  check("Enter Live Test opens the same Live CBT page with Start Live Test", (await live.page.getByRole("button", { name: /Start Live Test/ }).count()) === 1, live.page.url());
+  await live.page.close();
+  const liveMob = await dashboardCard(mob, "dashboard-live-now-mobile");
+  check("dashboard (live) on 360 px mobile: Live Now + Enter Live Test", /Live Now · Ends/.test(liveMob.text) && liveMob.label === "Enter Live Test" && liveMob.href === `/student/test-series/${F.l1}`, liveMob);
+  await liveMob.page.close();
+  check("viewing the live dashboard created no attempt", attemptCount() === liveBefore);
+
   console.log("\nEarly finisher (mobile) — everything held");
   await early.getByRole("button", { name: /Start Live Test/ }).waitFor({ timeout: 30000 });
   const earlyAttempt = await startLive(early);
@@ -133,6 +165,23 @@ try {
   const heldText = await early.locator("body").innerText();
   check("early result: Result Pending, no score / leaderboard", /Result Pending/i.test(heldText) && !/IST IST/.test(heldText) && (await early.getByTestId("rank-summary").count()) === 0);
   await early.screenshot({ path: `${SHOTS}/mobile-result-pending.png`, fullPage: true });
+
+  console.log("\nAdmin Live CBT Monitor while results are held");
+  const adm = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+  await adm.goto(`${BASE}/admin/login`);
+  await adm.fill("input[name=username]", F.adminUsername);
+  await adm.fill("input[name=password]", F.password);
+  await Promise.all([adm.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), adm.locator("form button[type=submit]").click()]);
+  await adm.goto(`${BASE}/admin/tests/mock/${F.l1}#live`);
+  await adm.getByTestId("open-live-monitor").click();
+  await adm.waitForURL(/\/live-monitor$/);
+  const tiles = (await adm.getByTestId("live-monitor-summary").innerText()).replace(/\s+/g, " ");
+  check("monitor: 3 enrolled, 1 started, 1 submitted by student (live)", /\b3 Enrolled/.test(tiles) && /\b1 Started/.test(tiles) && /\b1 Submitted by student/.test(tiles), tiles);
+  const heldRows = (await adm.getByTestId("live-monitor-table").innerText()).replace(/\s+/g, " ");
+  check("monitor: candidate list names all 3 enrolled students", [F.students.viewer, F.students.early, F.students.abandon].every((s) => heldRows.includes(s.email)), heldRows.slice(0, 300));
+  check("monitor: score and rank Held before the result release", /Held/.test(heldRows) && !/\d+(\.\d+)? \/ \d+ /.test(heldRows) && /Results: Held until/.test(await adm.locator("main").innerText()), heldRows.slice(0, 300));
+  check("monitor is read-only (no forms or buttons)", (await adm.locator("main form").count()) === 0 && (await adm.locator("main button").count()) === 0);
+  await adm.screenshot({ path: `${SHOTS}/admin-monitor-held.png`, fullPage: true });
   await early.goto(`${BASE}/student/attempt/${earlyAttempt}/review`);
   check("early review locked", /Answer review isn.t available yet/i.test(await early.locator("body").innerText()));
   await early.goto(`${BASE}/student/attempt/${earlyAttempt}/leaderboard`);
@@ -199,11 +248,11 @@ try {
   check("enrollment OFF mock: no LIVE CBT panel, normal start", (await viewer.getByTestId("live-cbt-panel").count()) === 0 && (await viewer.getByTestId("live-cbt-badge").count()) === 0 && (await viewer.getByRole("button", { name: /Start Test|Start/ }).count()) >= 1);
 
   console.log("\nAdmin");
-  const adm = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
-  await adm.goto(`${BASE}/admin/login`);
-  await adm.fill("input[name=username]", F.adminUsername);
-  await adm.fill("input[name=password]", F.password);
-  await Promise.all([adm.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), adm.locator("form button[type=submit]").click()]);
+  await adm.goto(`${BASE}/admin/tests/mock/${F.l1}/live-monitor`);
+  const relTiles = (await adm.getByTestId("live-monitor-summary").innerText()).replace(/\s+/g, " ");
+  const relRows = (await adm.getByTestId("live-monitor-table").innerText()).replace(/\s+/g, " ");
+  check("monitor after release: 3 completed, scores + ranks shown, nothing Held", /\b3 Completed/.test(relTiles) && !/Held/.test(relRows) && /\d+(\.\d+)? \/ \d+/.test(relRows) && /Released to students · 3 ranked/.test(await adm.locator("main").innerText()), relTiles);
+  await adm.screenshot({ path: `${SHOTS}/admin-monitor-released.png`, fullPage: true });
   await adm.goto(`${BASE}/admin/tests/mock/${F.l1}#live`);
   check("admin: Enrolled Students: 4", (await adm.getByTestId("admin-enrolled-count").innerText()).includes("4"));
   check("admin: shareable link is the student test URL", (await adm.locator("#shareUrl").inputValue()).endsWith(`/student/test-series/${F.l1}`));

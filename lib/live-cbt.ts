@@ -111,3 +111,128 @@ export async function finalizeClosedWindowAttempts(now: Date = new Date(), batch
   }
   return { candidates: candidates.length, finalized };
 }
+
+export type LiveCandidateStatus = "NOT_STARTED" | "ABSENT" | "IN_PROGRESS" | "SUBMITTED" | "AUTO_SUBMITTED" | "FINALIZED_AFTER_WINDOW";
+
+export interface LiveCandidateRow {
+  studentDbId: string;
+  name: string;
+  studentCode: string;
+  contact: string | null;
+  enrolledAt: Date | null;
+  status: LiveCandidateStatus;
+  attemptId: string | null;
+  startedAt: Date | null;
+  submittedAt: Date | null;
+  score: number | null;
+  maxScore: number | null;
+  correct: number | null;
+  incorrect: number | null;
+  unanswered: number | null;
+  rank: number | null;
+  /** Submitted attempts this student started after the window (later practice); never ranked as the live attempt. */
+  laterAttempts: number;
+}
+
+/**
+ * Admin Live CBT Monitor (read-only): every enrolled student plus anyone
+ * who attempted the test inside its window, with the live attempt's state.
+ * The live attempt = the student's earliest attempt started before the
+ * window end. How it ended is derived from stored times (no new column):
+ * submitted before its own deadline = by the student; within 10 s after =
+ * the player's time-up auto-submit; later = finalized by the window-end
+ * sweep (browser closed). Ranks come from lib/leaderboard.ts (same rules
+ * students see); the page shows scores and ranks only once the result is
+ * released (lib/mock-test-schedule.ts#isMockResultReleased).
+ */
+export async function getLiveCbtMonitor(mockTestId: string, now: Date = new Date()) {
+  const { getTestRanksForAdmin } = await import("@/lib/leaderboard");
+  const mock = await prisma.mockTest.findUniqueOrThrow({
+    where: { id: mockTestId },
+    select: { id: true, availableFrom: true, availableUntil: true, enrollmentEnabled: true, durationMinutes: true },
+  });
+  const windowEnd = mock.availableUntil;
+  const [enrollments, attempts, ranks] = await Promise.all([
+    prisma.mockTestEnrollment.findMany({ where: { mockTestId }, select: { studentId: true, enrolledAt: true } }),
+    prisma.testAttempt.findMany({
+      where: { mockTestId, sourceType: "MOCK_TEST" },
+      orderBy: { startedAt: "asc" },
+      select: {
+        id: true, studentId: true, status: true, startedAt: true, submittedAt: true, durationMinutes: true,
+        score: true, maxScore: true, correctCount: true, incorrectCount: true, unansweredCount: true,
+      },
+    }),
+    getTestRanksForAdmin({ kind: "MOCK_TEST", id: mockTestId }),
+  ]);
+
+  const liveByStudent = new Map<string, (typeof attempts)[number]>();
+  const later = new Map<string, number>();
+  for (const a of attempts) {
+    const inWindow = !windowEnd || a.startedAt < windowEnd;
+    if (inWindow && !liveByStudent.has(a.studentId)) liveByStudent.set(a.studentId, a);
+    else if (a.status === "SUBMITTED") later.set(a.studentId, (later.get(a.studentId) ?? 0) + 1);
+  }
+  const studentIds = [...new Set([...enrollments.map((e) => e.studentId), ...liveByStudent.keys()])];
+  const students = await prisma.student.findMany({
+    where: { id: { in: studentIds } },
+    select: { id: true, name: true, studentId: true, email: true, mobile: true },
+  });
+  const studentById = new Map(students.map((s) => [s.id, s]));
+  const enrolledAt = new Map(enrollments.map((e) => [e.studentId, e.enrolledAt]));
+  const windowClosed = !!windowEnd && now >= windowEnd;
+
+  const rows: LiveCandidateRow[] = studentIds.map((id) => {
+    const s = studentById.get(id);
+    const a = liveByStudent.get(id) ?? null;
+    let status: LiveCandidateStatus = windowClosed ? "ABSENT" : "NOT_STARTED";
+    if (a?.status === "IN_PROGRESS") status = "IN_PROGRESS";
+    else if (a?.status === "SUBMITTED" && a.submittedAt) {
+      const ownEnd = a.startedAt.getTime() + a.durationMinutes * 60_000;
+      const deadline = windowEnd ? Math.min(ownEnd, windowEnd.getTime()) : ownEnd;
+      const t = a.submittedAt.getTime();
+      status = t < deadline - 2_000 ? "SUBMITTED" : t <= deadline + 10_000 ? "AUTO_SUBMITTED" : "FINALIZED_AFTER_WINDOW";
+    }
+    const rank = a ? ranks.byStudent.get(id) : undefined;
+    return {
+      studentDbId: id,
+      name: s?.name ?? "Former Student",
+      studentCode: s?.studentId ?? "—",
+      contact: s?.email ?? s?.mobile ?? null,
+      enrolledAt: enrolledAt.get(id) ?? null,
+      status,
+      attemptId: a?.id ?? null,
+      startedAt: a?.startedAt ?? null,
+      submittedAt: a?.submittedAt ?? null,
+      score: a?.score ?? null,
+      maxScore: a?.maxScore ?? null,
+      correct: a?.correctCount ?? null,
+      incorrect: a?.incorrectCount ?? null,
+      unanswered: a?.unansweredCount ?? null,
+      rank: rank && rank.attemptId === a?.id ? rank.rank : null,
+      laterAttempts: later.get(id) ?? 0,
+    };
+  });
+  const order: Record<LiveCandidateStatus, number> = { IN_PROGRESS: 0, SUBMITTED: 1, AUTO_SUBMITTED: 1, FINALIZED_AFTER_WINDOW: 1, NOT_STARTED: 2, ABSENT: 2 };
+  rows.sort((x, y) => order[x.status] - order[y.status] || (x.rank ?? 1e9) - (y.rank ?? 1e9) || x.name.localeCompare(y.name));
+
+  const count = (st: LiveCandidateStatus) => rows.filter((r) => r.status === st).length;
+  const started = rows.filter((r) => r.attemptId).length;
+  return {
+    windowClosed,
+    summary: {
+      enrolled: enrollments.length,
+      started,
+      notStarted: count("NOT_STARTED"),
+      absent: count("ABSENT"),
+      inProgress: count("IN_PROGRESS"),
+      submittedByStudent: count("SUBMITTED"),
+      autoSubmitted: count("AUTO_SUBMITTED"),
+      finalizedAfterWindow: count("FINALIZED_AFTER_WINDOW"),
+      completed: count("SUBMITTED") + count("AUTO_SUBMITTED") + count("FINALIZED_AFTER_WINDOW"),
+      startedWithoutEnrollment: rows.filter((r) => r.attemptId && !r.enrolledAt).length,
+      ranked: ranks.total,
+      laterPracticeAttempts: [...later.values()].reduce((x, y) => x + y, 0),
+    },
+    rows,
+  };
+}

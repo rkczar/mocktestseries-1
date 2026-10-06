@@ -361,6 +361,15 @@ export default async function MockTestDetailPage({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
+          {mockTest.availableUntil || enrolledCount > 0 ? (
+            <Link
+              href={`/admin/tests/mock/${mockTest.id}/live-monitor`}
+              className="w-fit rounded-[var(--radius-button)] border border-[var(--color-primary)] px-3 py-1.5 text-sm font-medium text-[var(--color-primary)]"
+              data-testid="open-live-monitor"
+            >
+              Open Live CBT Monitor →
+            </Link>
+          ) : null}
           <div className="flex flex-col gap-2" data-testid="live-cbt-summary">
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">Live CBT / Fixed Window</p>
             <ul className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">

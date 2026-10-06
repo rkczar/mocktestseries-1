@@ -61,6 +61,8 @@ interface NextTestCard {
   availability: "UPCOMING" | "AVAILABLE" | "LIVE_NOW" | "CLOSED";
   availableFrom: string | null; // ISO
   availableUntil: string | null; // ISO — Fixed Window end
+  enrollmentEnabled: boolean;
+  enrolled: boolean;
 }
 
 /** Display-only countdown — startMockTestAttempt's server-side check is the real gate regardless of what this shows. */
@@ -214,6 +216,11 @@ export function ActiveExamDashboard({
             </p>
             <p className="text-sm font-medium text-[var(--color-foreground)]">{nextTest.title}</p>
             <p className="text-xs text-[var(--color-muted-foreground)]">{nextTest.examName}</p>
+            {nextTest.availableUntil ? (
+              <Badge variant="info" className="mt-1 mr-1 w-fit">
+                Live Test{nextTest.enrolled ? " · Enrolled" : ""}
+              </Badge>
+            ) : null}
             {nextTest.availability === "LIVE_NOW" ? (
               <Badge variant="warning" className="mt-1 w-fit">
                 Live Now{nextTest.availableUntil ? ` · Ends ${formatIst(new Date(nextTest.availableUntil))}` : ""}
@@ -230,8 +237,16 @@ export function ActiveExamDashboard({
             ) : null}
           </div>
           <Button asChild variant={nextTest.availability !== "UPCOMING" ? "primary" : "outline"}>
-            <Link href={nextTest.availability !== "UPCOMING" ? `/student/test-series/${nextTest.mockTestId}` : "/student/test-series"}>
-              {nextTest.availability !== "UPCOMING" ? "Start Test" : "View Full Schedule"}
+            <Link href={nextTest.availability !== "UPCOMING" || nextTest.availableUntil ? `/student/test-series/${nextTest.mockTestId}` : "/student/test-series"}>
+              {nextTest.availability === "LIVE_NOW"
+                ? nextTest.enrollmentEnabled && !nextTest.enrolled
+                  ? "Enroll / Start Live Test"
+                  : "Enter Live Test"
+                : nextTest.availability !== "UPCOMING"
+                  ? "Start Test"
+                  : nextTest.availableUntil
+                    ? "View Live Test"
+                    : "View Full Schedule"}
             </Link>
           </Button>
         </CardContent>

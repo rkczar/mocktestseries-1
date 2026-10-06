@@ -255,6 +255,18 @@ export async function getLeaderboard(
   };
 }
 
+/**
+ * Admin only (Live CBT Monitor): every ranked row of one test — the same
+ * rankedCte rules as getLeaderboard, so the admin sees exactly the ranks
+ * students see. Returns the official (ranked) attempt id per student.
+ */
+export async function getTestRanksForAdmin(test: RankingTestRef): Promise<{ total: number; byStudent: Map<string, { rank: number; attemptId: string }> }> {
+  const rows = await prisma.$queryRaw<{ studentId: string; id: string; rank: number; total: number }[]>`
+    WITH ${rankedCte(testFilter(test))}
+    SELECT "studentId", id, rank, total FROM ranked`;
+  return { total: rows[0]?.total ?? 0, byStudent: new Map(rows.map((r) => [r.studentId, { rank: r.rank, attemptId: r.id }])) };
+}
+
 /** The viewer's attempts of one test, as the pure rules need them (a handful of rows, indexed). */
 export async function getStudentRankableAttempts(test: RankingTestRef, studentId: string): Promise<RankableAttempt[]> {
   return prisma.testAttempt.findMany({

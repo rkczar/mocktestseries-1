@@ -181,6 +181,11 @@ export async function getScheduledMockTestsForStudent(studentId: string) {
     if (a.status === AttemptStatus.SUBMITTED) submittedMockTestIds.add(a.mockTestId);
   }
 
+  // Live CBT enrollments (lib/live-cbt.ts): one indexed read, used by the Dashboard's Next Test card.
+  const enrolledMockTestIds = new Set(
+    (await prisma.mockTestEnrollment.findMany({ where: { studentId }, select: { mockTestId: true } })).map((e) => e.mockTestId)
+  );
+
   const now = new Date();
   const rows = mockTests.map((mockTest) => ({
     mockTest,
@@ -188,6 +193,7 @@ export async function getScheduledMockTestsForStudent(studentId: string) {
     bestScore: bestByMockTest.get(mockTest.id) ?? null,
     latestAttempt: latestByMockTest.get(mockTest.id) ?? null,
     hasSubmittedAttempt: submittedMockTestIds.has(mockTest.id),
+    enrolled: enrolledMockTestIds.has(mockTest.id),
   }));
 
   const groupMap = new Map<string, { series: (typeof mockTests)[number]["testSeries"]; tests: typeof rows }>();
@@ -236,11 +242,14 @@ export async function getMockTestDetailForStudent(studentId: string, mockTestId:
 
 /**
  * Picks the single test to surface on the Dashboard's "Next Test" card:
- * an AVAILABLE test the student hasn't submitted yet (soonest by
- * availableFrom, nulls first since they've been open longest), else the
- * soonest UPCOMING test. Optionally scoped to one exam. Display-only — the
- * actual gate is startMockTestAttempt's server-side isMockTestAvailable
- * check, not anything derived here.
+ * a Live CBT that is LIVE NOW and not yet submitted (soonest to close), else
+ * an UPCOMING Live CBT the student is enrolled in (soonest start), else an
+ * AVAILABLE test the student hasn't submitted yet (soonest by availableFrom,
+ * nulls first since they've been open longest), else the soonest UPCOMING
+ * test. A Live CBT comes first because it only runs inside its window, while
+ * an always-open mock can be taken any time. Optionally scoped to one exam.
+ * Display-only — the actual gate is startMockTestAttempt's server-side
+ * isMockTestAvailable check, not anything derived here.
  */
 export async function getNextScheduledTestForStudent(studentId: string, examId?: string | null) {
   const { all } = await getScheduledMockTestsForStudent(studentId);
@@ -252,8 +261,18 @@ export async function getNextScheduledTestForStudent(studentId: string, examId?:
     return at - bt;
   };
 
+  const liveNow = candidates
+    .filter((row) => row.availability === "LIVE_NOW" && !row.hasSubmittedAttempt)
+    .sort((a, b) => (a.mockTest.availableUntil?.getTime() ?? 0) - (b.mockTest.availableUntil?.getTime() ?? 0));
+  if (liveNow.length > 0) return liveNow[0];
+
+  const upcomingEnrolledLive = candidates
+    .filter((row) => row.availability === "UPCOMING" && row.enrolled && row.mockTest.availableUntil !== null)
+    .sort(byAvailableFromAsc);
+  if (upcomingEnrolledLive.length > 0) return upcomingEnrolledLive[0];
+
   const available = candidates
-    .filter((row) => (row.availability === "AVAILABLE" || row.availability === "LIVE_NOW") && !row.hasSubmittedAttempt)
+    .filter((row) => row.availability === "AVAILABLE" && !row.hasSubmittedAttempt)
     .sort(byAvailableFromAsc);
   if (available.length > 0) return available[0];
 

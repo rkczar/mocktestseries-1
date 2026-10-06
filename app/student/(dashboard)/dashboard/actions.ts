@@ -44,6 +44,8 @@ export async function getActiveExamDashboardDataAction(examId: string) {
         availability: nextTestRow.availability,
         availableFrom: nextTestRow.mockTest.availableFrom ? nextTestRow.mockTest.availableFrom.toISOString() : null,
         availableUntil: nextTestRow.mockTest.availableUntil ? nextTestRow.mockTest.availableUntil.toISOString() : null,
+        enrollmentEnabled: nextTestRow.mockTest.enrollmentEnabled,
+        enrolled: nextTestRow.enrolled,
       }
     : null;
   const overallRank = toOverallRankView({ id: examId, name: rawMetrics.examName }, overall, OVERALL_MIN_RANKED_TESTS);

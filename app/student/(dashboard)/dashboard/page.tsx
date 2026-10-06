@@ -91,6 +91,8 @@ export default async function StudentDashboardPage() {
         availability: nextTest.availability,
         availableFrom: nextTest.mockTest.availableFrom ? nextTest.mockTest.availableFrom.toISOString() : null,
         availableUntil: nextTest.mockTest.availableUntil ? nextTest.mockTest.availableUntil.toISOString() : null,
+        enrollmentEnabled: nextTest.mockTest.enrollmentEnabled,
+        enrolled: nextTest.enrolled,
       }
     : null;
 
