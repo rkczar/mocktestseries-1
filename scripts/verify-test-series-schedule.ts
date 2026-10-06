@@ -51,7 +51,7 @@ import argon2 from "argon2";
 import { startMockTestAttempt, saveAnswer, submitAttempt } from "@/lib/test-attempt";
 import { getOwnedAttempt } from "@/lib/student-data";
 import { isMockTestAvailable, deriveMockTestAvailability } from "@/lib/mock-test-schedule";
-import { getMockTestLeaderboard } from "@/lib/leaderboard";
+import { getLeaderboard } from "@/lib/leaderboard";
 import { canAccessTestResource } from "@/lib/test-resources-access";
 import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions";
 import { createFixtureSubject, deleteFixtureTaxonomy } from "./fixture-taxonomy";
@@ -201,11 +201,12 @@ async function main() {
     await saveAnswer(attemptB.id, studentB.id, questions[1].id, "B", false);
     await submitAttempt(attemptB.id, studentB.id);
 
-    const leaderboard = await getMockTestLeaderboard(multiTest.id, studentA.id);
+    const leaderboard = await getLeaderboard({ kind: "MOCK_TEST", id: multiTest.id }, studentA.id);
     check("leaderboard has exactly one entry per student despite A's retake", leaderboard.totalParticipants === 2);
-    check("higher score ranks first (student B rank 1)", leaderboard.entries[0]?.studentId === studentB.id && leaderboard.entries[0]?.rank === 1);
-    check("leaderboard never exposes phone/email fields", !("phone" in leaderboard.entries[0]!) && !("email" in leaderboard.entries[0]!));
-    check("selfEntry resolves to the requesting student's own rank", leaderboard.selfEntry?.studentId === studentA.id);
+    check("higher score ranks first (student B rank 1)", leaderboard.rows[0]?.rank === 1 && leaderboard.rows[0]?.isSelf === false);
+    check("leaderboard never exposes phone/email/id fields", !("phone" in leaderboard.rows[0]!) && !("email" in leaderboard.rows[0]!) && !("studentId" in leaderboard.rows[0]!));
+    check("self resolves to the requesting student's own rank", leaderboard.self?.isSelf === true && leaderboard.self?.rank === 2);
+    check("A's ranked attempt is the FIRST submission, not the retake", leaderboard.selfOfficialAttemptId === firstMulti.id);
 
     // ---- 8: student isolation / IDOR -----------------------------------
     console.log("\n--- Student isolation ---");

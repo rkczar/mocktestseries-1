@@ -21,6 +21,8 @@ import {
 } from "@/lib/mock-test-schedule";
 import { mockSeriesPath } from "@/lib/mock-series";
 import { AccessResultForm, ScheduleForm } from "./schedule-form";
+import { RankingSettingsForm } from "@/components/admin/ranking-settings-form";
+import { getRankingConfig } from "@/lib/leaderboard";
 import { MockDetailsForm } from "../mock-details-form";
 import { MockTestStatusSelect } from "../status-select";
 import { SeriesAssignmentForm } from "./series-assignment-form";
@@ -43,6 +45,7 @@ const STEPS = [
   ["questions", "3 Questions"],
   ["schedule", "4 Schedule & Availability"],
   ["access", "5 Access & Result"],
+  ["ranking", "Ranking & Leaderboard"],
   ["publish", "6 Review & Publish"],
 ] as const;
 
@@ -86,6 +89,7 @@ export default async function MockTestDetailPage({
     },
   });
   if (!mockTest) notFound();
+  const ranking = await getRankingConfig({ kind: "MOCK_TEST", id: mockTest.id });
 
   const [bankExams, bankPapers, subjects, importRun, examSeries, coverageProducts] = await Promise.all([
     // Add From Question Bank source pickers — small reference lists only; the
@@ -137,7 +141,7 @@ export default async function MockTestDetailPage({
     },
     { ok: selected.length === publishedCount, warn: true, label: `${selected.length - publishedCount} draft question(s) hidden from students` },
     { ok: true, label: `Availability: ${AVAILABILITY_MODE_LABELS[mode]}${mockTest.availableFrom ? ` · from ${formatIst(mockTest.availableFrom)}` : ""}${mockTest.availableUntil ? ` · until ${formatIst(mockTest.availableUntil)}` : ""}` },
-    { ok: true, label: `Access: ${mockTest.accessType} · Results: ${RESULT_RELEASE_LABELS[mockTest.resultReleaseMode]}${releaseAt ? ` (${formatIst(releaseAt)})` : ""} · Leaderboard ${mockTest.leaderboardEnabled ? "on" : "off"}` },
+    { ok: true, label: `Access: ${mockTest.accessType} · Results: ${RESULT_RELEASE_LABELS[mockTest.resultReleaseMode]}${releaseAt ? ` (${formatIst(releaseAt)})` : ""} · Leaderboard ${ranking.leaderboardEnabled ? "on" : "off"}${ranking.countsTowardOverall ? " · Counts toward Overall Rank" : ""}` },
     { ok: !mockTest.testSeries || mockTest.testSeries.status === "PUBLISHED", warn: true, label: mockTest.testSeries ? `Test Series is ${mockTest.testSeries.status}` : "Standalone test" },
     { ok: !uncoveredPaid, warn: true, label: uncoveredPaid ? UNCOVERED_PAID_MOCK_WARNING : (sellingCoverageLabel(coveringPlans) ?? "Free for signed-in students") },
   ];
@@ -336,9 +340,18 @@ export default async function MockTestDetailPage({
               attemptPolicy: mockTest.attemptPolicy,
               resultReleaseMode: mockTest.resultReleaseMode,
               resultReleaseAtValue: mockTest.resultReleaseAt ? toIstDateTimeLocalValue(mockTest.resultReleaseAt) : "",
-              leaderboardEnabled: mockTest.leaderboardEnabled,
             }}
           />
+        </CardContent>
+      </Card>
+
+      <Card id="ranking" className="scroll-mt-20">
+        <CardHeader>
+          <CardTitle>Ranking &amp; Leaderboard</CardTitle>
+          <CardDescription>Per-test leaderboard and whether this test will count toward the exam&apos;s Overall Rank.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RankingSettingsForm kind="MOCK_TEST" testId={mockTest.id} values={ranking} readOnly={!canManage} />
         </CardContent>
       </Card>
 

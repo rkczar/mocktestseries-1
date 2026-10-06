@@ -66,8 +66,13 @@ Test types only supply data and configuration. There is no per-type player.
   answer key is held never get a choice, and `revealAnswer` re-checks this on
   every reveal (an admin holding the key mid-attempt stops further reveals).
   Hiding buttons is never the control.
-- **Leaderboard**: only a mock attempt taken with Standard time and answers
-  after the test can become `isLeaderboardAttempt`.
+- **Leaderboard** (Ranking Phase 1, `lib/leaderboard.ts` + `lib/leaderboard-core.ts`):
+  Mock Tests and Previous Year Papers only. Ranks are derived on read from stored
+  attempt columns (never Answer rows, never a write): each student's earliest
+  SUBMITTED attempt that is ONLINE + Standard time + answers after the test; a
+  student whose earlier attempt exposed the key (Practice Mode, a submitted
+  custom/1-min/OMR attempt) is unranked for that test. `isLeaderboardAttempt` is
+  still set by `submitAttempt` but is legacy: ranking does not read it.
 - **PYQ full paper** freezes the whole published paper in original order
   (question `createdAt`, then `code`). It is never sampled or shuffled.
   PYQ-only practice goes through Custom Module with Source = PYQ.
@@ -233,6 +238,14 @@ PKG=pilot45|scale180|stress180 SERVER_PID=<next pid> STORAGE_DIR=/tmp/media-scra
 …same env… npx tsx scripts/verify-rich-import.ts cleanup /tmp/ri.json
 # legacy parity: run from a worktree of the previous release and from HEAD, outputs must be identical
 DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/legacy-import-parity.ts /tmp/rifx > out.json
+
+# 12. ranking & leaderboard (Phase 1): order, eligibility, percentile, privacy, SQL ⇄ reference parity,
+#     10k-participant timing, read-only proof; then the browser half (result summary, board, YOU, Your Position,
+#     not-ranked states, PYQ, payload leak check, 360 px dark, admin Ranking forms)
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-leaderboard.ts
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/leaderboard-ui-fixture.ts setup > /tmp/lb.json
+BASE=http://localhost:3100 FIXTURE=/tmp/lb.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<playwright> node scripts/verify-leaderboard-ui.mjs
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/leaderboard-ui-fixture.ts cleanup
 
 # 11. advanced question types (NEET Phase 4): snapshot v3, label-set save/seq/race, all-or-nothing matrix,
 #     negative marking, practice reveal lock, exam leak gate, history after edits, OMR / AI guards, insights,

@@ -247,7 +247,7 @@ try {
     await page.getByRole("button", { name: "Submit Test" }).first().click();
     await page.getByRole("dialog").getByRole("button", { name: "Submit Test" }).click();
     await page.waitForURL(/\/result$/, { timeout: 30000 });
-    check("result page renders", !(await crashed(page)) && /Score|score|Result/.test(await page.locator("body").innerText()));
+    check("result page renders", !(await crashed(page)) && /Test submitted successfully/.test(await page.locator("body").innerText()));
     await page.goto(`${BASE}/student/attempt/${paidAttemptId}/run`);
     check("player after submit does not reopen the test", !page.url().endsWith("/run") || !(await page.locator("[data-testid=test-player]").count()), path(page.url()));
     await page.goto(`${BASE}/student/attempt/${paidAttemptId}/review`);

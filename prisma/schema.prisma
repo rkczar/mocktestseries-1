@@ -299,6 +299,7 @@ model PreviousYearPaper {
   questions      Question[]
   testAttempts   TestAttempt[]
   bulkImportRuns BulkImportRun[]
+  rankingConfig  TestRankingConfig?
 }
 
 enum TestSeriesStatus {
@@ -1158,7 +1159,9 @@ model MockTest {
   resultReleaseMode   MockResultRelease @default(IMMEDIATE)
   // Only consulted when resultReleaseMode = CUSTOM_DATE.
   resultReleaseAt     DateTime?
-  // Whether the result page shows this test's leaderboard (lib/leaderboard.ts).
+  // Legacy leaderboard switch. Since Ranking Phase 1 the authority is
+  // TestRankingConfig.leaderboardEnabled (lib/leaderboard.ts); the admin
+  // Ranking form still mirrors its value here so a rollback keeps working.
   leaderboardEnabled  Boolean          @default(true)
   // Governs whether a student may submit this test more than once. Default
   // MULTIPLE_PRACTICE matches today's actual behavior (nothing currently
@@ -1185,6 +1188,7 @@ model MockTest {
   announcements Announcement[]
   resources     TestResource[]
   bulkImportRuns BulkImportRun[]
+  rankingConfig  TestRankingConfig?
 
   products Product[]
 
@@ -1637,11 +1641,46 @@ model TestAttempt {
   @@index([grandTestId])
   @@index([liveTestId])
   @@index([mockTestId, isLeaderboardAttempt, status])
+  // Ranking (lib/leaderboard.ts): one test's attempts per student in start order.
+  @@index([mockTestId, studentId, startedAt])
+  @@index([previousYearPaperId, studentId, startedAt])
   @@index([activeDeviceId])
   // Admin → Analytics → Question Insights reads submitted attempts by
   // submission window (Today / Yesterday / 7d / 30d); without this a
   // "Today" view would scan every attempt ever taken.
   @@index([status, submittedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Ranking & Leaderboard (Phase 1)
+//
+// Per-test ranking configuration. Ranks themselves are never stored: they are
+// derived on read from immutable TestAttempt columns (lib/leaderboard.ts), so
+// no historical attempt is ever rewritten. A test with no row uses the
+// defaults (leaderboard on, not counted toward Overall Rank). Exactly one of
+// mockTestId / previousYearPaperId is set, matching `kind`, and a Previous
+// Year Paper can never count toward Overall Rank (DB CHECK constraint).
+// ---------------------------------------------------------------------------
+
+enum RankingTestKind {
+  MOCK_TEST
+  PREVIOUS_YEAR_PAPER
+}
+
+model TestRankingConfig {
+  id                  String             @id @default(cuid())
+  kind                RankingTestKind
+  mockTestId          String?            @unique
+  mockTest            MockTest?          @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
+  previousYearPaperId String?            @unique
+  previousYearPaper   PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id], onDelete: Cascade)
+  leaderboardEnabled  Boolean            @default(true)
+  // Phase 2 input only (Overall Rank = mean per-test percentile over admin-
+  // selected Mock Tests, minimum 3). Nothing reads it for students yet.
+  countsTowardOverall Boolean            @default(false)
+  updatedByAdminId    String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 }
 
 model TestAttemptQuestion {

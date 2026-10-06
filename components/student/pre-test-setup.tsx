@@ -72,7 +72,7 @@ export function PreTestSetup({
           </ul>
           <p className="text-xs text-[var(--color-muted-foreground)]">
             Your choices are locked once the test starts.
-            {kind === "MOCK_TEST" ? " Only attempts with Standard time and answers after the test count for the leaderboard." : ""}
+            {" When this test has a leaderboard, it ranks your first attempt taken with Standard time and answers after the test. Retakes, and any attempt after a practice attempt, are not ranked."}
           </p>
         </CardContent>
       </Card>

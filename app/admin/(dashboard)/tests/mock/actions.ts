@@ -236,7 +236,7 @@ export async function updateMockTestScheduleAction(mockTestId: string, _prev: Sc
   return { success: true };
 }
 
-/** Step 5: FREE/PAID access, attempt policy, result release and leaderboard. */
+/** Step 5: FREE/PAID access, attempt policy and result release. The leaderboard switch lives in ranking-actions.ts. */
 export async function updateMockTestAccessAction(mockTestId: string, _prev: ScheduleFormState, formData: FormData): Promise<ScheduleFormState> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const accessType = formData.get("accessType");
@@ -255,10 +255,9 @@ export async function updateMockTestAccessAction(mockTestId: string, _prev: Sche
   const error = validateMockSchedule({ mode, ...existing, resultReleaseMode, resultReleaseAt });
   if (error) return { error };
 
-  const leaderboardEnabled = formData.get("leaderboardEnabled") === "on";
   await prisma.mockTest.update({
     where: { id: mockTestId },
-    data: { accessType, attemptPolicy, resultReleaseMode, resultReleaseAt, leaderboardEnabled },
+    data: { accessType, attemptPolicy, resultReleaseMode, resultReleaseAt },
   });
   await prisma.auditLog.create({
     data: {
@@ -266,7 +265,7 @@ export async function updateMockTestAccessAction(mockTestId: string, _prev: Sche
       action: "MOCK_TEST_ACCESS_UPDATED",
       entityType: "MockTest",
       entityId: mockTestId,
-      metadata: { accessType, attemptPolicy, resultReleaseMode, resultReleaseAt, leaderboardEnabled },
+      metadata: { accessType, attemptPolicy, resultReleaseMode, resultReleaseAt },
     },
   });
   revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`);

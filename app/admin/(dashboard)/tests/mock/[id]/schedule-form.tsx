@@ -86,7 +86,7 @@ export function ScheduleForm({
   );
 }
 
-/** Step 5 — Access & Result: FREE/PAID, attempt policy, result release and leaderboard. */
+/** Step 5 — Access & Result: FREE/PAID, attempt policy and result release (leaderboard: Ranking card). */
 export function AccessResultForm({
   mockTestId,
   values,
@@ -99,7 +99,6 @@ export function AccessResultForm({
     attemptPolicy: "SINGLE_ATTEMPT" | "MULTIPLE_PRACTICE";
     resultReleaseMode: "IMMEDIATE" | "AFTER_WINDOW" | "CUSTOM_DATE";
     resultReleaseAtValue: string;
-    leaderboardEnabled: boolean;
   };
   isFixedWindow: boolean;
   readOnly: boolean;
@@ -145,10 +144,6 @@ export function AccessResultForm({
             <Input id="resultReleaseAt" name="resultReleaseAt" type="datetime-local" defaultValue={values.resultReleaseAtValue} required />
           </div>
         ) : null}
-        <label className="flex items-center gap-2 text-sm text-[var(--color-foreground)] sm:col-span-2">
-          <input type="checkbox" name="leaderboardEnabled" defaultChecked={values.leaderboardEnabled} />
-          Show leaderboard on the result page (first submission per student, ranked by score)
-        </label>
       </fieldset>
       <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
         <SubmitButton label="Save Access & Result" disabled={readOnly} />

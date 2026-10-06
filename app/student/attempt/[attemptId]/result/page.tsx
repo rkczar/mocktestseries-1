@@ -6,7 +6,7 @@ import { requireStudentOrLogin } from "@/lib/student-session";
 import { getOwnedAttempt } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import { prisma } from "@/lib/prisma";
-import { getMockTestLeaderboard } from "@/lib/leaderboard";
+import { getAttemptRanking } from "@/lib/leaderboard";
 import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
 import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +15,7 @@ import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button"
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
 import { StudentShell } from "@/components/student/shell";
 import { SubjectPerformance } from "./subject-performance";
-import { Leaderboard } from "./leaderboard";
+import { RankSummaryCard } from "@/components/student/leaderboard";
 import { PrintPracticeKit } from "./print-practice-kit";
 
 export const metadata = { title: "Test Result — Mock Test Series.in" };
@@ -64,24 +64,26 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
   const percentage = attempt.maxScore ? Math.max(0, Math.round(((attempt.score ?? 0) / attempt.maxScore) * 100)) : 0;
   const minutesTaken = attempt.timeTakenSeconds ? Math.round(attempt.timeTakenSeconds / 60) : 0;
 
-  // Subject-wise breakdown, Topic Insights, Leaderboard, and Print Practice
-  // Kit only make sense for full Mock Test attempts (Subject/Grand/Live/PYQ/
-  // Custom Module attempts skip this section entirely).
+  // Subject-wise breakdown, Topic Insights and Print Practice Kit only make
+  // sense for full Mock Test attempts (Subject/Grand/Live/PYQ/Custom Module
+  // attempts skip this section entirely).
   const isMockTest = attempt.testType === TestType.FULL_MOCK && attempt.mockTestId;
 
+  // Ranking (lib/leaderboard.ts): Mock Tests and Previous Year Papers only;
+  // null for every other test type. Already past the result-release gate.
+  const ranking = await getAttemptRanking(attempt, { pageSize: 3 });
+
   let performance: ReturnType<typeof buildPerformanceBreakdown> = { subjects: [], strongTopics: [], needsImprovementTopics: [] };
-  let leaderboard: Awaited<ReturnType<typeof getMockTestLeaderboard>> | null = null;
   let paperResourceId: string | null = null;
   let omrResourceId: string | null = null;
 
   if (isMockTest && attempt.mockTestId) {
     const questionIds = attempt.questions.map((q) => q.questionId);
-    const [questions, board, paperResource, omrResource] = await Promise.all([
+    const [questions, paperResource, omrResource] = await Promise.all([
       prisma.question.findMany({
         where: { id: { in: questionIds } },
         select: { id: true, subject: { select: { name: true } }, topic: { select: { name: true } } },
       }),
-      attempt.mockTest?.leaderboardEnabled === false ? Promise.resolve(null) : getMockTestLeaderboard(attempt.mockTestId, student.id),
       prisma.testResource.findFirst({
         where: { type: "PAPER_PDF", isActive: true, mockTestId: attempt.mockTestId },
         select: { id: true },
@@ -89,7 +91,6 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
       resolveOmrResource(attempt.mockTestId, attempt.examId),
     ]);
     performance = buildPerformanceBreakdown(attempt.questions, questions);
-    leaderboard = board;
     paperResourceId = paperResource?.id ?? null;
     omrResourceId = omrResource;
   }
@@ -112,6 +113,8 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
             </p>
           </CardContent>
         </Card>
+
+        {ranking ? <RankSummaryCard ranking={ranking} leaderboardHref={`/student/attempt/${attemptId}/leaderboard`} /> : null}
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatTile
@@ -143,10 +146,6 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
         ) : null}
 
         {isMockTest ? <SubjectPerformance performance={performance} /> : null}
-
-        {isMockTest && leaderboard ? (
-          <Leaderboard data={leaderboard} isLeaderboardAttempt={attempt.isLeaderboardAttempt} />
-        ) : null}
 
         {isMockTest && (paperResourceId || omrResourceId) ? (
           <PrintPracticeKit paperResourceId={paperResourceId} omrResourceId={omrResourceId} />

@@ -9,6 +9,10 @@ import { Button } from "@/components/ui/button";
 import { PaperToggle } from "../paper-toggle";
 import { QuestionBankPicker } from "./question-bank-picker";
 import { RemoveFromPaperButton } from "./remove-from-paper-button";
+import { RankingSettingsForm } from "@/components/admin/ranking-settings-form";
+import { getRankingConfig } from "@/lib/leaderboard";
+import { hasPermission } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
 
 export const metadata = { title: "Previous Year Paper — Mock Test Series.in Admin" };
 
@@ -34,6 +38,10 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
   });
 
   if (!paper) notFound();
+  const [ranking, canManageRanking] = await Promise.all([
+    getRankingConfig({ kind: "PREVIOUS_YEAR_PAPER", id: paper.id }),
+    hasPermission(PERMISSIONS.TEST_SERIES_MANAGE),
+  ]);
 
   const subjects = (await getExamTaxonomy(prisma, paper.examId)).map((s) => ({
     id: s.id,
@@ -77,6 +85,16 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
             <Info label="Status" value={paper.isActive ? "Active" : "Inactive"} />
             <Info label="Test Attempts" value={String(paper._count.testAttempts)} />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Ranking &amp; Leaderboard</CardTitle>
+          <CardDescription>This paper&apos;s own leaderboard. Independent of Overall Rank.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RankingSettingsForm kind="PREVIOUS_YEAR_PAPER" testId={paper.id} values={ranking} readOnly={!canManageRanking} />
         </CardContent>
       </Card>
 
