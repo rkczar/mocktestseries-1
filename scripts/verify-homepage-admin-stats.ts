@@ -52,6 +52,25 @@ async function main() {
     check("deleted (tombstoned) accounts are not counted; the new student is", (await stats()).registeredStudents === s0.registeredStudents);
     await prisma.student.delete({ where: { id: deleted.id } });
 
+    console.log("\n--- Questions Available (platform-wide PUBLISHED) ---");
+    const qa0 = (await stats()).questionsAvailable;
+    const [{ n: rawPublished }] = await prisma.$queryRaw<{ n: number }[]>`SELECT COUNT(DISTINCT id)::int AS n FROM "Question" WHERE status = 'PUBLISHED'`;
+    check("equals the DB's distinct PUBLISHED question total", qa0 === rawPublished, { qa0, rawPublished });
+    const inactive = await prisma.exam.create({ data: { name: `HPS Inactive ${suffix}`, code: `HPS-${suffix}`, isActive: false } });
+    const mkQ = (status: "PUBLISHED" | "DRAFT" | "ARCHIVED", i: number) =>
+      prisma.question.create({ data: { code: `HPS-${suffix}-${i}`, examId: inactive.id, subjectId: bank[0].subjectId, text: `HPS ${i}`, status } });
+    const pubQ = await mkQ("PUBLISHED", 1);
+    check("published question of an INACTIVE exam is included (+1)", (await stats()).questionsAvailable === qa0 + 1);
+    await mkQ("DRAFT", 2);
+    await mkQ("ARCHIVED", 3);
+    check("DRAFT and ARCHIVED questions are excluded (+0)", (await stats()).questionsAvailable === qa0 + 1);
+    await prisma.mockTestQuestion.create({ data: { mockTestId: mock.id, questionId: pubQ.id, order: 99 } });
+    check("a question referenced by several tests counts once", (await stats()).questionsAvailable === qa0 + 1);
+    await prisma.mockTestQuestion.deleteMany({ where: { questionId: pubQ.id } });
+    await prisma.question.delete({ where: { id: pubQ.id } });
+    check("deleted question no longer counts", (await stats()).questionsAvailable === qa0);
+    await prisma.exam.delete({ where: { id: inactive.id } });
+
     console.log("\n--- Questions Attempted / Tests Attempted (real engine) ---");
     const base = await stats();
     const a1 = await startMockTestAttempt(student.id, mock.id);

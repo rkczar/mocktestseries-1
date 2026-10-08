@@ -63,8 +63,10 @@ export async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot
     prisma.mockTest.count({ where: LIVE_MOCK_TEST_WHERE }),
     // Every successfully submitted attempt, across all test types.
     prisma.testAttempt.count({ where: { status: "SUBMITTED" } }),
-    // What a student can actually practise: published questions of exams that are live.
-    prisma.question.count({ where: { status: "PUBLISHED", exam: { isActive: true } } }),
+    // Platform-wide: every PUBLISHED question across all exams (active or not).
+    // A row per Question id, so a question used by several tests counts once;
+    // DRAFT / ARCHIVED never count, deleted questions no longer exist.
+    prisma.question.count({ where: { status: "PUBLISHED" } }),
     // Every attempt a student started (TestAttempt is created once on Start;
     // resume/refresh reuse it), whatever its outcome.
     prisma.testAttempt.count(),

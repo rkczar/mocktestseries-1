@@ -162,12 +162,12 @@ async function main() {
       (SELECT COUNT(*) FROM "TestAttempt" WHERE "status" = 'SUBMITTED') AS tests,
       (SELECT COUNT(*) FROM "TestAttempt") AS started,
       (SELECT COUNT(*) FROM "StudentActivity" WHERE activity = 'AI_EXPLANATION_VIEWED') AS "aiRaw",
-      (SELECT COUNT(*) FROM "Question" q JOIN "Exam" e ON e."id" = q."examId" WHERE q."status" = 'PUBLISHED' AND e."isActive") AS questions,
+      (SELECT COUNT(DISTINCT q."id") FROM "Question" q WHERE q."status" = 'PUBLISHED') AS questions,
       (SELECT COUNT(*) FROM "Answer" WHERE "status" IN ('ANSWERED', 'ANSWERED_AND_MARKED')) AS answered`;
   const expected = { students: Number(sql.students), tests: Number(sql.tests), started: Number(sql.started), questions: Number(sql.questions), answered: Number(sql.answered) };
   const snapshot = await computeHomepageStatistics();
   console.log(`    SQL: questions=${expected.questions} students=${expected.students} tests=${expected.tests} answered=${expected.answered}`);
-  check("Questions Available = PUBLISHED questions of active exams", () => assert.equal(snapshot.values.questionsAvailable, expected.questions));
+  check("Questions Available = distinct PUBLISHED questions platform-wide (all exams)", () => assert.equal(snapshot.values.questionsAvailable, expected.questions));
   check("Total Students = non-deleted students", () => assert.equal(snapshot.values.registeredStudents, expected.students));
   check("Tests Attempted = every started attempt", () => assert.equal(snapshot.values.testsStarted, expected.started));
   check("legacy testsCompleted = SUBMITTED attempts", () => assert.equal(snapshot.values.testsCompleted, expected.tests));

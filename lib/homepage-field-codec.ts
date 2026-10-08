@@ -82,7 +82,7 @@ export const STAT_DATA_SOURCE_LABELS: Record<StatDynamicKey, string> = {
   mockTestsPublished: "Published Mock Tests",
   previousYearPapers: "Active Previous Year Papers",
   testsCompleted: "Submitted Test Attempts (all test types)",
-  questionsAvailable: "Published Questions in Active Exams",
+  questionsAvailable: "Published Questions (all exams)",
   testsStarted: "Test Attempts Started (all test types)",
   aiExplanationUses: "Student AI Explanation Uses (successful)",
 };
