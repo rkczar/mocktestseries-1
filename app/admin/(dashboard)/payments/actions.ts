@@ -41,6 +41,7 @@ import { getRazorpayConfig, saveRazorpayConfig, testRazorpayConnection, Razorpay
 import { reconcileOrder, ensureFulfilment, expireStaleOrders } from "@/lib/payments/orders";
 import { requestRefund, RefundError } from "@/lib/payments/refunds";
 import { getLaunchReadiness } from "@/lib/payments/launch-readiness";
+import { getGroupDiscountEnabled, setGroupDiscountEnabled } from "@/lib/group-discount";
 import { LEGAL_DOCS, markLegalDocReviewed, type LegalDocKey } from "@/lib/legal-readiness";
 
 /**
@@ -150,6 +151,22 @@ export async function saveVerificationAccountsAction(_prev: FormState, fd: FormD
     await logPaymentAudit(session.user.id, "VERIFICATION_ACCOUNTS_UPDATED", "PaymentSettings", "payments.verification", { before, after: ids });
     revalidatePayments();
     return { success: ids.length ? `${ids.length} verification account(s) saved.` : "Verification accounts cleared." };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Show Group Discount Offer — display-only card on /plans-and-pricing. */
+export async function setGroupDiscountOfferAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  try {
+    const session = await manage();
+    const after = bool(fd, "enabled");
+    const before = await getGroupDiscountEnabled();
+    await setGroupDiscountEnabled(after);
+    await logPaymentAudit(session.user.id, "GROUP_DISCOUNT_OFFER_TOGGLED", "PaymentSettings", "payments.group_discount", { before, after });
+    revalidatePayments();
+    revalidatePath("/plans-and-pricing");
+    return { success: after ? "Group Discount Offer is now shown." : "Group Discount Offer is now hidden." };
   } catch (e) {
     return fail(e);
   }

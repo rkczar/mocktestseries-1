@@ -6,6 +6,7 @@ import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { PriceTag } from "@/components/public-exam/mock-series-promo";
 import { PlanComparison } from "@/components/payments/plan-comparison";
+import { GroupDiscountCard } from "@/components/payments/group-discount-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ import { mockSeriesPath } from "@/lib/mock-series";
 import { getExamPyqInsights } from "@/lib/exam-pyq-insights";
 import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
+import { getPublicGroupDiscountHref } from "@/lib/group-discount";
 import { getPlanStates, getPublicPlanCatalog, type CatalogPlan, type PlanCatalog, type PlanState } from "@/lib/plans-catalog";
 
 /**
@@ -237,7 +239,13 @@ function catalogJsonLd(catalog: PlanCatalog, pageUrl: string, siteUrl: string, s
 
 export default async function PlansAndPricingPage() {
   const now = new Date();
-  const [catalog, siteUrl, seo, session] = await Promise.all([getPublicPlanCatalog(now), getSiteUrl(), getSeoSettings(), getStudentSession()]);
+  const [catalog, siteUrl, seo, session, groupDiscountHref] = await Promise.all([
+    getPublicPlanCatalog(now),
+    getSiteUrl(),
+    getSeoSettings(),
+    getStudentSession(),
+    getPublicGroupDiscountHref(),
+  ]);
   const studentId = session?.user?.studentId ? (session.user.id ?? null) : null;
   const states = studentId && catalog.showPrices ? await getPlanStates(studentId, catalog, now) : new Map<string, PlanState>();
   const signedIn = Boolean(studentId);
@@ -325,7 +333,7 @@ export default async function PlansAndPricingPage() {
             </CardContent>
           </Card>
         ) : (
-          catalog.groups.map((g) => (
+          catalog.groups.map((g, gi) => (
             <section key={g.exam.id} aria-labelledby={`exam-${g.exam.id}`} className="mt-12">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                 <h2 id={`exam-${g.exam.id}`} className="text-2xl font-semibold text-[var(--color-foreground)]">
@@ -356,6 +364,9 @@ export default async function PlansAndPricingPage() {
                   )}
                 </div>
               ))}
+
+              {/* Group Discount Offer (Admin switch, default OFF) sits right under the first exam's plan cards. */}
+              {gi === 0 && catalog.showPrices && groupDiscountHref ? <GroupDiscountCard whatsappHref={groupDiscountHref} /> : null}
 
               {catalog.showPrices && g.comparison && g.comparison.rows.length > 0 ? (
                 <div className="mt-8">

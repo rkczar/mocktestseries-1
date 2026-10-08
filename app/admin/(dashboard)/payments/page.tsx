@@ -8,7 +8,7 @@ import { expireStaleOrders } from "@/lib/payments/orders";
 import { getPaymentsAccess, getFilterOptions } from "./_components/access";
 import { FilterBar } from "./_components/shared";
 import { OverviewPanel, OrdersPanel, TransactionsPanel, RevenuePanel } from "./_components/panels-core";
-import { ProductsPanel, CouponsPanel, SubscriptionsPanel, InvoicesPanel, RefundsPanel } from "./_components/panels-catalog";
+import { GroupDiscountPanel, ProductsPanel, CouponsPanel, SubscriptionsPanel, InvoicesPanel, RefundsPanel } from "./_components/panels-catalog";
 import { GatewayPanel, WebhooksPanel, ReconciliationPanel, AuditPanel, SettingsPanel } from "./_components/panels-ops";
 import { ReadinessPanel } from "./_components/panels-readiness";
 
@@ -65,7 +65,12 @@ export default async function PaymentsControlCenter({ searchParams }: { searchPa
       case "orders":
         return <OrdersPanel filters={filters} />;
       case "products":
-        return <ProductsPanel canManage={canManage} />;
+        return (
+          <>
+            <ProductsPanel canManage={canManage} />
+            <GroupDiscountPanel canManage={canManage} />
+          </>
+        );
       case "subscriptions":
         return <SubscriptionsPanel filters={filters} />;
       case "coupons":

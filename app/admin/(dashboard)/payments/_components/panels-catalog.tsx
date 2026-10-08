@@ -12,7 +12,42 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Empty, EnvBadge, fmtDate, StatusBadge, TableShell, Td, Th } from "./shared";
 import { ActionForm } from "./action-form";
-import { toggleCouponAction } from "../actions";
+import { Switch } from "@/components/ui/switch";
+import { getGroupDiscountEnabled } from "@/lib/group-discount";
+import { getWhatsAppSupportConfig } from "@/lib/whatsapp-support";
+import { setGroupDiscountOfferAction, toggleCouponAction } from "../actions";
+
+/** Show Group Discount Offer — a display-only card under the plan cards on /plans-and-pricing. */
+export async function GroupDiscountPanel({ canManage }: { canManage: boolean }) {
+  const [enabled, support] = await Promise.all([getGroupDiscountEnabled(), getWhatsAppSupportConfig()]);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          Group Discount Offer <Badge variant={enabled ? "success" : "neutral"}>{enabled ? "ON" : "OFF"}</Badge>
+        </CardTitle>
+        <CardDescription>
+          Shows the &ldquo;Study Together, Save More!&rdquo; card (2 students 20%, 5 students 40%, 10 students 50% off) below the plan cards on Plans &amp; Pricing.
+          Its button opens WhatsApp with the official support number. Display only — prices, coupons and checkout are unchanged; share coupon codes
+          manually.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {!support.number ? (
+          <p className="text-xs text-[var(--color-error)]">
+            No WhatsApp number is saved (Admin → Website → Footer → WhatsApp Support), so the card stays hidden even when ON.
+          </p>
+        ) : null}
+        <ActionForm action={setGroupDiscountOfferAction} submitLabel="Save" readOnly={!canManage} className="flex flex-wrap items-center gap-4">
+          <label htmlFor="gd-enabled" className="flex items-center gap-3 text-sm font-medium text-[var(--color-foreground)]">
+            <Switch id="gd-enabled" name="enabled" defaultChecked={enabled} />
+            Show Group Discount Offer
+          </label>
+        </ActionForm>
+      </CardContent>
+    </Card>
+  );
+}
 
 export async function ProductsPanel({ canManage }: { canManage: boolean }) {
   const now = new Date();
