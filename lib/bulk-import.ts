@@ -2,6 +2,7 @@ import "server-only";
 import { taxonomyNameKey } from "@/lib/exam-taxonomy";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
+import { JsonImportError, parseJsonQuestions } from "@/lib/json-import";
 import {
   QuestionDifficulty,
   QuestionStatus,
@@ -320,8 +321,10 @@ export async function parseImportFile(
       return await parseCSV(file, mode);
     } else if (filename.endsWith(".xlsx") || filename.endsWith(".xls")) {
       return await parseExcel(file, mode);
+    } else if (filename.endsWith(".json")) {
+      return parseJsonText(await file.text(), mode);
     } else {
-      errors.push("Unsupported file format. Please upload CSV, XLS, or XLSX files.");
+      errors.push("Unsupported file format. Please upload CSV, XLS, XLSX or JSON files.");
       return { rows: [], errors };
     }
   } catch (error) {
@@ -330,9 +333,20 @@ export async function parseImportFile(
   }
 }
 
+/** JSON document (lib/json-import.ts) → rows; a structurally broken file yields no rows and every problem. */
+export function parseJsonText(source: string, mode: ImportParseMode = "LEGACY"): { rows: BulkImportRow[]; errors: string[] } {
+  try {
+    return { rows: parseJsonQuestions(source, mode), errors: [] };
+  } catch (error) {
+    if (error instanceof JsonImportError) return { rows: [], errors: error.problems };
+    throw error;
+  }
+}
+
 /** Best-effort file-extension -> ImportFileFormat mapping for BulkImportRun.format. */
-export function detectImportFileFormat(filename: string): "CSV" | "XLS" | "XLSX" | "DOCX" | null {
+export function detectImportFileFormat(filename: string): "CSV" | "XLS" | "XLSX" | "JSON" | "DOCX" | null {
   const lower = filename.toLowerCase();
+  if (lower.endsWith(".json")) return "JSON";
   if (lower.endsWith(".csv")) return "CSV";
   if (lower.endsWith(".xlsx")) return "XLSX";
   if (lower.endsWith(".xls")) return "XLS";

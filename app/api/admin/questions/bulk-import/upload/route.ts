@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { parseImportFile, detectImportFileFormat, type BulkImportRow } from "@/lib/bulk-import";
+import { parseImportFile, parseJsonText, detectImportFileFormat, type BulkImportRow } from "@/lib/bulk-import";
+import { readBundleJsonManifest } from "@/lib/rich-import/bundle";
+import { JsonImportError } from "@/lib/json-import";
 import { BulkImportDuplicateStrategy, BulkImportMode, BulkImportStatus, BulkImportRowStatus, ImportBundleStatus, ImportRowSeverity } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 
@@ -40,6 +42,8 @@ export async function POST(request: NextRequest) {
     // NEET Phase 3: RICH mode is opt-in per upload; anything else is the unchanged LEGACY import.
     const importMode = formData.get("importMode") === "RICH" ? BulkImportMode.RICH : BulkImportMode.LEGACY;
     const bundleId = importMode === BulkImportMode.RICH ? (formData.get("bundleId") as string | null)?.trim() || null : null;
+    // JSON package (RICH): one ZIP holding questions.json + its images, uploaded as the image bundle.
+    const jsonPackage = importMode === BulkImportMode.RICH && formData.get("jsonPackage") === "1";
     const idempotencyKeyRaw = (formData.get("idempotencyKey") as string | null)?.trim() || null;
     const idempotencyKey = idempotencyKeyRaw && /^[A-Za-z0-9-]{16,64}$/.test(idempotencyKeyRaw) ? idempotencyKeyRaw : null;
 
@@ -52,7 +56,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (!file) {
+    if (jsonPackage && !bundleId) {
+      return NextResponse.json({ error: "Upload the JSON package ZIP first." }, { status: 400 });
+    }
+    if (!file && !jsonPackage) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
 
@@ -62,11 +69,11 @@ export async function POST(request: NextRequest) {
 
     // Validate file size (10MB max)
     const maxSize = 10 * 1024 * 1024;
-    if (file.size > maxSize) {
+    if (file && file.size > maxSize) {
       return NextResponse.json({ error: "File size exceeds 10MB limit" }, { status: 400 });
     }
 
-    const format = detectImportFileFormat(file.name);
+    const format = jsonPackage ? "JSON" : detectImportFileFormat(file!.name);
     if (format === "DOCX") {
       return NextResponse.json(
         { error: "DOCX bulk-import files are not supported yet. Please upload CSV, XLS, or XLSX." },
@@ -74,25 +81,36 @@ export async function POST(request: NextRequest) {
       );
     }
     if (!format) {
-      return NextResponse.json({ error: "Unsupported file format. Please upload CSV, XLS, or XLSX files." }, { status: 400 });
+      return NextResponse.json({ error: "Unsupported file format. Please upload CSV, XLS, XLSX or JSON files." }, { status: 400 });
     }
     if (importMode === BulkImportMode.RICH && format === "XLS") {
       return NextResponse.json({ error: "Rich imports take the canonical XLSX template (or CSV). Save the workbook as .xlsx." }, { status: 400 });
     }
 
+    let filename = file?.name ?? "";
     if (bundleId) {
-      const bundle = await prisma.importBundle.findUnique({ where: { id: bundleId }, select: { createdById: true, status: true, errorMessage: true, run: { select: { id: true } } } });
+      const bundle = await prisma.importBundle.findUnique({ where: { id: bundleId }, select: { createdById: true, status: true, errorMessage: true, filename: true, run: { select: { id: true } } } });
       if (!bundle || bundle.createdById !== session.user.id) return NextResponse.json({ error: "Image bundle not found." }, { status: 400 });
       if (bundle.run) return NextResponse.json({ error: "This image bundle is already attached to another import." }, { status: 409 });
       if (bundle.status === ImportBundleStatus.FAILED) return NextResponse.json({ error: `The image bundle was refused: ${bundle.errorMessage ?? "invalid archive"}` }, { status: 400 });
       if (bundle.status === ImportBundleStatus.UPLOADING) return NextResponse.json({ error: "The image bundle upload is not complete yet." }, { status: 409 });
+      if (jsonPackage) filename = bundle.filename;
     }
 
     // Parse the file
-    const { rows, errors: parseErrors } = await parseImportFile(file, importMode);
+    let parsed: { rows: BulkImportRow[]; errors: string[] };
+    try {
+      parsed = jsonPackage ? parseJsonText(await readBundleJsonManifest(bundleId!), "RICH") : await parseImportFile(file!, importMode);
+    } catch (e) {
+      if (!(e instanceof JsonImportError)) throw e;
+      parsed = { rows: [], errors: e.problems };
+    }
+    const { rows, errors: parseErrors } = parsed;
 
     if (rows.length === 0) {
-      return NextResponse.json({ error: "Failed to parse file", details: parseErrors }, { status: 400 });
+      // JSON problems are structural and precise ("Question 3 › correct: …") — show them, not a generic line.
+      const error = format === "JSON" && parseErrors.length ? `JSON file refused: ${parseErrors.slice(0, 8).join(" · ")}${parseErrors.length > 8 ? ` · …and ${parseErrors.length - 8} more` : ""}` : "Failed to parse file";
+      return NextResponse.json({ error, details: parseErrors }, { status: 400 });
     }
     if (importMode === BulkImportMode.RICH && rows.length > RICH_MAX_ROWS) {
       return NextResponse.json({ error: `A rich import holds at most ${RICH_MAX_ROWS} questions (this file has ${rows.length}). Split it into separate imports.` }, { status: 400 });
@@ -126,7 +144,7 @@ export async function POST(request: NextRequest) {
       const created = await tx.bulkImportRun.create({
         data: {
           adminUserId: session.user.id!,
-          filename: file.name,
+          filename,
           format,
           label,
           examId,
@@ -162,14 +180,14 @@ export async function POST(request: NextRequest) {
         action: "BULK_IMPORT_UPLOADED",
         entityType: "BulkImportRun",
         entityId: run.id,
-        metadata: { filename: file.name, totalRows: rows.length, format, label, examId, examYear, previousYearPaperId, mockTestId, importSource, duplicateStrategy, ...(importMode === BulkImportMode.RICH ? { importMode, bundleId } : {}) },
+        metadata: { filename, totalRows: rows.length, format, label, examId, examYear, previousYearPaperId, mockTestId, importSource, duplicateStrategy, ...(importMode === BulkImportMode.RICH ? { importMode, bundleId } : {}) },
       },
     });
 
     return NextResponse.json({
       success: true,
       runId: run.id,
-      filename: file.name,
+      filename,
       format,
       total: rows.length,
       parseErrors,

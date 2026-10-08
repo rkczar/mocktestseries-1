@@ -2,6 +2,8 @@ import "server-only";
 import sharp from "sharp";
 import * as XLSX from "xlsx";
 import { buildZip } from "@/lib/rich-import/zip-writer";
+import { jsonImportExampleText } from "@/lib/json-import-examples";
+import { JSON_PACKAGE_MANIFEST } from "@/lib/json-import";
 
 /**
  * The official RICH import template (NEET Phase 3): an example XLSX and a
@@ -77,6 +79,15 @@ const svg = (w: number, h: number, body: string) =>
 const label = (x: number, y: number, s: string) => `<text x="${x}" y="${y}" fill="#000" stroke="none">${s}</text>`;
 
 export async function richTemplateZip(): Promise<Buffer> {
+  return buildZip(await sampleImages());
+}
+
+/** JSON package example: questions.json (the with-images example) + the sample images. */
+export async function jsonPackageZip(): Promise<Buffer> {
+  return buildZip([{ name: JSON_PACKAGE_MANIFEST, data: Buffer.from(jsonImportExampleText("with-images")) }, ...(await sampleImages())]);
+}
+
+async function sampleImages(): Promise<{ name: string; data: Buffer }[]> {
   const png = (b: Buffer) => sharp(b).png().toBuffer();
   const circuit = (r2: string) => svg(480, 260, `<path d="M60 60 H420 V200 H60 Z"/><path d="M60 110 V150 M48 120 H72 M54 136 H66"/><rect x="150" y="48" width="80" height="24" fill="#fff"/>${label(160, 40, "R1 = 3 Ω")}<rect x="290" y="48" width="80" height="24" fill="#fff"/>${label(300, 40, `R2 = ${r2}`)}`);
   const tile = (shape: string, l: string) => svg(160, 150, `${shape}${label(8, 144, l)}`);
@@ -89,5 +100,5 @@ export async function richTemplateZip(): Promise<Buffer> {
     { name: "options/SAMPLE-005-C.png", data: await png(tile(`<path d="M80 22 L130 118 L30 118 Z"/>`, "C")) },
     { name: "options/SAMPLE-005-D.png", data: await png(tile(`<path d="M80 20 L124 45 L124 95 L80 120 L36 95 L36 45 Z"/>`, "D")) },
   ];
-  return buildZip(files);
+  return files;
 }

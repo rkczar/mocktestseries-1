@@ -1,0 +1,61 @@
+{
+  "schema": "mocktestseries.questions/v1",
+  "defaults": {
+    "contentFormat": "RICH_V1",
+    "type": "MATCH_THE_FOLLOWING",
+    "subject": "Chemistry"
+  },
+  "questions": [
+    {
+      "code": "MTF-JSON-001",
+      "question": "Match List I with List II.",
+      "matchLists": {
+        "listI": [
+          {
+            "key": "A",
+            "text": "\\ce{CH4}"
+          },
+          {
+            "key": "B",
+            "text": "\\ce{C2H4}"
+          },
+          {
+            "key": "C",
+            "text": "\\ce{C2H2}"
+          },
+          {
+            "key": "D",
+            "text": "\\ce{C6H6}"
+          }
+        ],
+        "listII": [
+          {
+            "key": "I",
+            "text": "Benzene"
+          },
+          {
+            "key": "II",
+            "text": "Methane"
+          },
+          {
+            "key": "III",
+            "text": "Ethene"
+          },
+          {
+            "key": "IV",
+            "text": "Ethyne"
+          }
+        ]
+      },
+      "options": [
+        "A-II, B-III, C-IV, D-I",
+        "A-I, B-II, C-III, D-IV",
+        "A-III, B-IV, C-I, D-II",
+        "A-IV, B-I, C-II, D-III"
+      ],
+      "correct": "A",
+      "explanation": "Methane, ethene, ethyne, benzene.",
+      "difficulty": "MEDIUM"
+    }
+  ]
+}

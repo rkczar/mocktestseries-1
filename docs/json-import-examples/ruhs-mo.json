@@ -1,0 +1,60 @@
+{
+  "schema": "mocktestseries.questions/v1",
+  "defaults": {
+    "difficulty": "MEDIUM"
+  },
+  "questions": [
+    {
+      "code": "RUHS-JSON-001",
+      "subject": "Pharmacology",
+      "question": "Drug of choice for anaphylactic shock is:",
+      "options": [
+        "Adrenaline",
+        "Atropine",
+        "Hydrocortisone",
+        "Chlorpheniramine"
+      ],
+      "correct": "A",
+      "explanation": "Intramuscular adrenaline is the first-line treatment of anaphylaxis."
+    },
+    {
+      "code": "RUHS-JSON-002",
+      "subject": "Physiology",
+      "question": "Normal adult resting heart rate (beats per minute) is:",
+      "options": {
+        "A": "40–50",
+        "B": "60–100",
+        "C": "100–120",
+        "D": "120–140"
+      },
+      "correct": "B",
+      "explanation": "A resting rate of 60–100 per minute is normal in adults.",
+      "difficulty": "EASY"
+    },
+    {
+      "code": "RUHS-JSON-003",
+      "subject": "Anatomy",
+      "question": "The largest bone of the human body is:",
+      "options": [
+        {
+          "label": "A",
+          "text": "Humerus"
+        },
+        {
+          "label": "B",
+          "text": "Tibia"
+        },
+        {
+          "label": "C",
+          "text": "Femur",
+          "correct": true
+        },
+        {
+          "label": "D",
+          "text": "Fibula"
+        }
+      ],
+      "explanation": "The femur is the longest and strongest bone."
+    }
+  ]
+}

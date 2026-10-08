@@ -13,6 +13,7 @@ import {
   buildTaxonomyLookups,
 } from "@/lib/bulk-import";
 import { bundleEntries, entryIndex, type BundleEntry } from "@/lib/rich-import/bundle";
+import { JSON_PACKAGE_MANIFEST } from "@/lib/json-import";
 import {
   allImageRefs,
   IMAGE_LIMITS,
@@ -401,7 +402,9 @@ export function richImageMatches(m: ManifestQuestion, ctx: RichContext): RichIma
 
 /** Bundle images that no row references (a WARNING at batch level; they are never processed). */
 export function unusedBundleImages(ctx: RichContext, referenced: Set<string>): string[] {
-  return (ctx.bundle?.entries ?? []).filter((e) => (e.kind === "IMAGE" || e.kind === "UNSUPPORTED") && !referenced.has(e.basename.toLowerCase())).map((e) => e.name);
+  return (ctx.bundle?.entries ?? [])
+    .filter((e) => (e.kind === "IMAGE" || e.kind === "UNSUPPORTED") && !referenced.has(e.basename.toLowerCase()) && e.basename.toLowerCase() !== JSON_PACKAGE_MANIFEST)
+    .map((e) => e.name);
 }
 
 /**

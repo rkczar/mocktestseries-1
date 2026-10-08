@@ -1,0 +1,56 @@
+{
+  "schema": "mocktestseries.questions/v1",
+  "defaults": {
+    "contentFormat": "RICH_V1",
+    "difficulty": "MEDIUM"
+  },
+  "questions": [
+    {
+      "code": "NEET-JSON-001",
+      "questionNumber": 1,
+      "subject": "PHYSICS",
+      "question": "A body starts from rest with acceleration $a$. Its speed after covering distance $s$ is:\n$$v^2 = u^2 + 2as$$",
+      "options": [
+        "$\\sqrt{2as}$",
+        "$2as$",
+        "$\\frac{1}{2}as$",
+        "$\\sqrt{as}$"
+      ],
+      "correct": "A",
+      "explanation": "With $u = 0$: $v = \\sqrt{2as}$."
+    },
+    {
+      "code": "NEET-JSON-002",
+      "questionNumber": 2,
+      "subject": "Chemistry",
+      "question": "For \\ce{N2 + 3H2 <=> 2NH3}, increasing the pressure favours the formation of:",
+      "options": [
+        "\\ce{NH3}",
+        "\\ce{N2}",
+        "\\ce{H2}",
+        "No change"
+      ],
+      "correct": "A",
+      "explanation": "The forward reaction lowers the number of gas moles (4 → 2).",
+      "difficulty": "EASY"
+    },
+    {
+      "code": "NEET-JSON-003",
+      "questionNumber": 3,
+      "subject": "Botany",
+      "question": "The energy currency of the cell is:",
+      "options": [
+        "DNA",
+        "ATP",
+        "RNA",
+        "NADP"
+      ],
+      "correct": "B",
+      "explanation": "\\ce{ATP} stores and transfers energy within cells.",
+      "review": {
+        "required": true,
+        "reason": "Answer key to be confirmed by the subject expert"
+      }
+    }
+  ]
+}

@@ -230,8 +230,9 @@ export async function readZipDirectory(filePath: string): Promise<ZipEntryInfo[]
  * inflated (maxOutputLength), and the result must match the declared size and
  * CRC-32 exactly.
  */
-export async function readZipEntry(filePath: string, entry: ZipEntryInfo): Promise<Buffer> {
-  if (entry.kind !== "IMAGE") throw new ZipSecurityError(`"${entry.name}" is not a readable image entry.`);
+export async function readZipEntry(filePath: string, entry: ZipEntryInfo, opts: { manifest?: boolean } = {}): Promise<Buffer> {
+  // `manifest`: the one questions.json of a JSON package (lib/json-import.ts) — same bounds and checks.
+  if (entry.kind !== "IMAGE" && !(opts.manifest && entry.kind === "UNSUPPORTED" && extensionOf(entry.name) === "json")) throw new ZipSecurityError(`"${entry.name}" is not a readable image entry.`);
   if (entry.uncompressedSize > ZIP_LIMITS.maxEntryBytes) throw new ZipSecurityError(`"${entry.name}" is too large.`);
   if (entry.compressedSize > ZIP_LIMITS.maxEntryBytes + 64 * 1024) throw new ZipSecurityError(`"${entry.name}" is too large.`);
   const fh = await open(filePath, "r");

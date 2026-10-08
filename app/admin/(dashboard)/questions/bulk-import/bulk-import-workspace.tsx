@@ -18,6 +18,7 @@ import {
   RichPreviewDialog,
   RichSummaryCard,
   RichUploadHelp,
+  JsonExamples,
   processRunImages,
   uploadImageBundle,
   type RichSummaryData,
@@ -358,21 +359,25 @@ export function BulkImportWorkspace({
     setError(null);
     try {
       // RICH: the image bundle goes first (chunked), so its id rides on the upload.
+      // A JSON package (.zip with questions.json + images) IS that bundle.
+      const jsonPackage = importMode === "RICH" && isZipName(file.name);
+      if (jsonPackage && bundleFile) throw new Error("A JSON package ZIP already contains its images — remove the separate image bundle.");
       let bundleId: string | null = null;
-      if (importMode === "RICH" && bundleFile) {
-        const bundle = await uploadImageBundle(bundleFile, setProgress);
+      if (importMode === "RICH" && (bundleFile || jsonPackage)) {
+        const bundle = await uploadImageBundle(jsonPackage ? file : bundleFile!, setProgress);
         if (bundle.status === "FAILED") throw new Error(`The image bundle was refused: ${bundle.errorMessage ?? "invalid archive"}`);
         bundleId = bundle.bundleId;
       }
-      setProgress(importMode === "RICH" ? "Uploading spreadsheet…" : null);
+      setProgress(importMode === "RICH" ? (jsonPackage ? "Reading questions.json…" : "Uploading question file…") : null);
       const formData = new FormData();
       if (importMode === "RICH") {
         formData.append("importMode", "RICH");
         if (bundleId) formData.append("bundleId", bundleId);
+        if (jsonPackage) formData.append("jsonPackage", "1");
       }
       // Same key on a retry = the same run (no duplicate batch from a lost response).
       formData.append("idempotencyKey", crypto.randomUUID());
-      formData.append("file", file);
+      if (!jsonPackage) formData.append("file", file);
       if (label) formData.append("label", label);
       formData.append("examId", examId);
       if (examYear) formData.append("examYear", examYear);
@@ -620,7 +625,7 @@ export function BulkImportWorkspace({
         <div>
           <h1 className="text-2xl font-bold text-[var(--color-foreground)]">Bulk Import Questions</h1>
           <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
-            Upload CSV, XLS, or XLSX files, validate and fix rows, then import.
+            Upload CSV, XLS, XLSX or JSON files, validate and fix rows, then import.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -786,7 +791,17 @@ export function BulkImportWorkspace({
               <legend className="px-1 text-xs font-medium text-[var(--color-foreground)]">Import Mode</legend>
               <div className="flex flex-wrap gap-4 text-sm">
                 <label className="flex items-center gap-2">
-                  <input type="radio" name="importMode" value="LEGACY" checked={importMode === "LEGACY"} onChange={() => setImportMode("LEGACY")} />
+                  <input
+                    type="radio"
+                    name="importMode"
+                    value="LEGACY"
+                    checked={importMode === "LEGACY"}
+                    onChange={() => {
+                      setImportMode("LEGACY");
+                      // A JSON package ZIP is Rich-only.
+                      if (file && isZipName(file.name)) setFile(null);
+                    }}
+                  />
                   Standard (text questions)
                 </label>
                 <label className="flex items-center gap-2">
@@ -796,7 +811,7 @@ export function BulkImportWorkspace({
               </div>
               {importMode === "RICH" ? (
                 <p className="text-[11px] text-[var(--color-muted-foreground)]">
-                  Upload the rich XLSX and, if questions have images, the ZIP image bundle. Rich questions are always imported as DRAFT.
+                  Upload the rich XLSX or JSON file and, if questions have images, the ZIP image bundle — or one JSON package ZIP (questions.json + images). Rich questions are always imported as DRAFT.
                 </p>
               ) : null}
             </fieldset>
@@ -811,8 +826,17 @@ export function BulkImportWorkspace({
               <span className="text-sm font-medium text-[var(--color-foreground)]">
                 {file ? file.name : "Click to upload or drag and drop"}
               </span>
-              <span className="text-xs text-[var(--color-muted-foreground)] mt-1">CSV, XLS, XLSX (Max 10MB)</span>
-              <input id="file-upload" type="file" accept=".csv,.xls,.xlsx" onChange={handleFileSelect} className="hidden" disabled={!examId} />
+              <span className="text-xs text-[var(--color-muted-foreground)] mt-1">
+                {importMode === "RICH" ? "CSV, XLSX, JSON (Max 10MB) or a JSON package .zip" : "CSV, XLS, XLSX, JSON (Max 10MB)"}
+              </span>
+              <input
+                id="file-upload"
+                type="file"
+                accept={importMode === "RICH" ? ".csv,.xls,.xlsx,.json,.zip" : ".csv,.xls,.xlsx,.json"}
+                onChange={handleFileSelect}
+                className="hidden"
+                disabled={!examId}
+              />
             </label>
 
             {importMode === "RICH" ? (
@@ -880,6 +904,7 @@ export function BulkImportWorkspace({
                 missing or you ignore it in Manage Columns, the row is still staged and imported, just saved as Draft / Review Required
                 instead of being silently Published. Exam/Exam Year default to the Exam selected above.
               </p>
+              {importMode === "LEGACY" ? <JsonExamples /> : null}
             </div>
 
             <Button onClick={handleUpload} disabled={!file || !examId || targetIncomplete || uploading || validating}>
@@ -1466,6 +1491,11 @@ function RowEditDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Rich mode: a .zip in the question-file slot is a JSON package (questions.json + images). */
+function isZipName(name: string): boolean {
+  return name.toLowerCase().endsWith(".zip");
 }
 
 function mockContextQuery(ctx: ImportContext): string {

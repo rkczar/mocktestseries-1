@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { MediaValidationError, storeScientificImage } from "@/lib/media-processing";
 import { mediaStorage } from "@/lib/media-storage";
 import { readZipDirectory, readZipEntry, ZIP_LIMITS, ZipSecurityError, type ZipEntryInfo } from "@/lib/rich-import/zip";
+import { findPackageManifest, JsonImportError } from "@/lib/json-import";
 
 /**
  * Image bundles for RICH bulk imports (NEET Phase 3).
@@ -307,6 +308,22 @@ export async function verifyEntryMedia(entry: BundleEntry): Promise<boolean> {
   if (entry.status !== "READY" || !entry.sha256 || !entry.storageKey) return false;
   const row = await prisma.mediaObject.findUnique({ where: { sha256: entry.sha256 }, select: { storageKey: true } });
   return !!row && row.storageKey === entry.storageKey && (await mediaStorage().exists(entry.storageKey));
+}
+
+/**
+ * JSON package: the `questions.json` inside an UPLOADED bundle, read from the
+ * already-vetted archive (same path, size and CRC checks as the images; at
+ * most ZIP_LIMITS.maxEntryBytes). Its images are then the bundle's images.
+ */
+export async function readBundleJsonManifest(bundleId: string): Promise<string> {
+  const entries = await readZipDirectory(archivePath(bundleId));
+  const manifest = findPackageManifest(entries.filter((e) => e.kind !== "IGNORED" && e.kind !== "DIRECTORY"));
+  try {
+    return (await readZipEntry(archivePath(bundleId), manifest, { manifest: true })).toString("utf8");
+  } catch (e) {
+    if (e instanceof ZipSecurityError) throw new JsonImportError([`${manifest.name}: ${e.message}`]);
+    throw e;
+  }
 }
 
 /** Removes a bundle's private staging files (the archive is no longer needed once its run is imported). */

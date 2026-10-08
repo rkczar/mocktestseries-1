@@ -1,0 +1,120 @@
+{
+  "schema": "mocktestseries.questions/v1",
+  "defaults": {
+    "contentFormat": "RICH_V1",
+    "subject": "PHYSICS"
+  },
+  "questions": [
+    {
+      "code": "IMG-JSON-001",
+      "question": {
+        "text": "In the circuit shown, find $R_{eq}$.",
+        "images": [
+          {
+            "file": "SAMPLE-004-Q1.png",
+            "alt": "Battery with two 3 ohm resistors in series"
+          }
+        ]
+      },
+      "options": [
+        "$6\\,\\Omega$",
+        "$3\\,\\Omega$",
+        "$2\\,\\Omega$",
+        "$9\\,\\Omega$"
+      ],
+      "correct": "A",
+      "explanation": {
+        "text": "Series: $R = R_1 + R_2$.",
+        "images": [
+          {
+            "file": "SAMPLE-004-EXP1.png",
+            "alt": "R equals R1 plus R2"
+          }
+        ]
+      },
+      "difficulty": "MEDIUM"
+    },
+    {
+      "code": "IMG-JSON-002",
+      "question": "Which figure is a triangle?",
+      "options": [
+        {
+          "label": "A",
+          "text": "",
+          "images": [
+            {
+              "file": "SAMPLE-005-A.png",
+              "alt": "A circle"
+            }
+          ]
+        },
+        {
+          "label": "B",
+          "text": "",
+          "images": [
+            {
+              "file": "SAMPLE-005-B.png",
+              "alt": "A square"
+            }
+          ]
+        },
+        {
+          "label": "C",
+          "text": "",
+          "images": [
+            {
+              "file": "SAMPLE-005-C.png",
+              "alt": "A triangle"
+            }
+          ]
+        },
+        {
+          "label": "D",
+          "text": "",
+          "images": [
+            {
+              "file": "SAMPLE-005-D.png",
+              "alt": "A hexagon"
+            }
+          ]
+        }
+      ],
+      "correct": "C",
+      "explanation": "A triangle has three sides.",
+      "difficulty": "EASY"
+    },
+    {
+      "code": "IMG-JSON-003",
+      "question": {
+        "text": "Figures 1 and 2 show the same circuit before and after a change. Which statement is true?",
+        "images": [
+          {
+            "file": "SAMPLE-004-Q1.png",
+            "alt": "Circuit before"
+          },
+          {
+            "file": "SAMPLE-006-Q2.png",
+            "alt": "Circuit after"
+          }
+        ]
+      },
+      "options": [
+        "Current increases",
+        "Current decreases",
+        "No change",
+        "Cannot say"
+      ],
+      "correct": "B",
+      "explanation": {
+        "text": "More resistance, less current.",
+        "images": [
+          {
+            "file": "SAMPLE-004-EXP1.png",
+            "decorative": true
+          }
+        ]
+      },
+      "difficulty": "HARD"
+    }
+  ]
+}

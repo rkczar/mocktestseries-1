@@ -104,6 +104,37 @@ export function RichUploadHelp() {
           <Archive className="h-3 w-3" /> Sample image bundle (ZIP)
         </a>
       </div>
+      <JsonExamples />
+    </div>
+  );
+}
+
+const JSON_EXAMPLE_LINKS = [
+  ["ruhs-mo", "RUHS MO"],
+  ["neet-ug-rich", "NEET UG rich"],
+  ["with-images", "With images"],
+  ["multiple-correct", "Multiple correct"],
+  ["match-the-following", "Match the Following"],
+] as const;
+
+/** JSON format (docs/JSON-IMPORT.md): example files for both modes; shown under the Rich and Standard help. */
+export function JsonExamples() {
+  return (
+    <div className="mt-3 text-xs text-[var(--color-muted-foreground)]" data-testid="json-examples">
+      <p>
+        <strong className="text-[var(--color-foreground)]">JSON files</strong> use the same rules in schema <code>mocktestseries.questions/v1</code>. A JSON
+        package is one .zip with <code>questions.json</code> and its images (Rich mode).
+      </p>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+        {JSON_EXAMPLE_LINKS.map(([id, name]) => (
+          <a key={id} className="inline-flex items-center gap-1 text-[var(--color-primary)] hover:underline" href={`/api/admin/questions/bulk-import/rich-template?file=json&example=${id}`}>
+            <Download className="h-3 w-3" /> {name} (.json)
+          </a>
+        ))}
+        <a className="inline-flex items-center gap-1 text-[var(--color-primary)] hover:underline" href="/api/admin/questions/bulk-import/rich-template?file=json-package">
+          <Archive className="h-3 w-3" /> JSON package (.zip)
+        </a>
+      </div>
     </div>
   );
 }

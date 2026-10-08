@@ -1,0 +1,53 @@
+{
+  "schema": "mocktestseries.questions/v1",
+  "defaults": {
+    "contentFormat": "RICH_V1",
+    "type": "MULTIPLE_CORRECT",
+    "subject": "Chemistry"
+  },
+  "questions": [
+    {
+      "code": "MSQ-JSON-001",
+      "question": "Which of the following are noble gases? (More than one option may be correct.)",
+      "options": [
+        "\\ce{He}",
+        "\\ce{Ne}",
+        "\\ce{N2}",
+        "\\ce{Ar}"
+      ],
+      "correct": [
+        "A",
+        "B",
+        "D"
+      ],
+      "explanation": "He, Ne and Ar are group 18 elements; \\ce{N2} is not.",
+      "difficulty": "EASY"
+    },
+    {
+      "code": "MSQ-JSON-002",
+      "question": "Which quantities are vectors?",
+      "options": [
+        {
+          "label": "A",
+          "text": "Velocity",
+          "correct": true
+        },
+        {
+          "label": "B",
+          "text": "Speed"
+        },
+        {
+          "label": "C",
+          "text": "Force",
+          "correct": true
+        },
+        {
+          "label": "D",
+          "text": "Work"
+        }
+      ],
+      "explanation": "Velocity and force have direction; speed and work are scalars.",
+      "difficulty": "MEDIUM"
+    }
+  ]
+}
