@@ -8,6 +8,7 @@ import {
   deriveAvailabilityMode,
   deriveMockTestAvailability,
 } from "@/lib/mock-test-schedule";
+import { DeleteTestDialog, TestDeletedNotice } from "@/components/admin/delete-test-dialog";
 
 export const COVERAGE_LABELS: Record<MockCoverageType, string> = {
   FULL_SYLLABUS: "Full Syllabus",
@@ -98,91 +99,100 @@ export function bulkImportHrefFor(row: { id: string; examId: string }) {
  */
 export function MockTestTable({ rows, showSeries = true, canManage }: { rows: MockTestTableRow[]; showSeries?: boolean; canManage: boolean }) {
   if (rows.length === 0) {
-    return <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">No mock tests yet.</p>;
+    return (
+      <>
+        <TestDeletedNotice />
+        <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">No mock tests yet.</p>
+      </>
+    );
   }
   const now = new Date();
   return (
-    <table className="w-full min-w-[980px] text-left text-sm">
-      <thead>
-        <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
-          <th className="py-2 pr-3">No.</th>
-          <th className="py-2 pr-3">Mock Test</th>
-          {showSeries ? <th className="py-2 pr-3">Test Series / Exam</th> : null}
-          <th className="py-2 pr-3">Questions</th>
-          <th className="py-2 pr-3">Schedule</th>
-          <th className="py-2 pr-3">Availability</th>
-          <th className="py-2 pr-3">Status</th>
-          <th className="py-2 pr-3">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((m) => {
-          const state = deriveMockTestAvailability(m, now);
-          const needs = m.questionCount === 0;
-          return (
-            <tr key={m.id} className="border-b border-[var(--color-border)] align-top last:border-0">
-              <td className="py-2.5 pr-3 text-[var(--color-muted-foreground)]">{m.order}</td>
-              <td className="py-2.5 pr-3">
-                <Link href={`/admin/tests/mock/${m.id}`} className="font-medium text-[var(--color-foreground)] hover:underline">
-                  {m.title}
-                </Link>
-                <span className="block text-xs text-[var(--color-muted-foreground)]">
-                  {COVERAGE_LABELS[m.coverageType]}
-                  {m.coverageText ? `: ${m.coverageText}` : ""} · {m.accessType}
-                </span>
-              </td>
-              {showSeries ? (
-                <td className="py-2.5 pr-3 text-xs text-[var(--color-muted-foreground)]">
-                  {m.seriesName ?? "Standalone"}
-                  <span className="block">{m.examName}</span>
+    <>
+      <TestDeletedNotice />
+      <table className="w-full min-w-[980px] text-left text-sm">
+        <thead>
+          <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
+            <th className="py-2 pr-3">No.</th>
+            <th className="py-2 pr-3">Mock Test</th>
+            {showSeries ? <th className="py-2 pr-3">Test Series / Exam</th> : null}
+            <th className="py-2 pr-3">Questions</th>
+            <th className="py-2 pr-3">Schedule</th>
+            <th className="py-2 pr-3">Availability</th>
+            <th className="py-2 pr-3">Status</th>
+            <th className="py-2 pr-3">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((m) => {
+            const state = deriveMockTestAvailability(m, now);
+            const needs = m.questionCount === 0;
+            return (
+              <tr key={m.id} className="border-b border-[var(--color-border)] align-top last:border-0">
+                <td className="py-2.5 pr-3 text-[var(--color-muted-foreground)]">{m.order}</td>
+                <td className="py-2.5 pr-3">
+                  <Link href={`/admin/tests/mock/${m.id}`} className="font-medium text-[var(--color-foreground)] hover:underline">
+                    {m.title}
+                  </Link>
+                  <span className="block text-xs text-[var(--color-muted-foreground)]">
+                    {COVERAGE_LABELS[m.coverageType]}
+                    {m.coverageText ? `: ${m.coverageText}` : ""} · {m.accessType}
+                  </span>
                 </td>
-              ) : null}
-              <td className="py-2.5 pr-3">
-                {needs ? (
-                  <Badge variant="warning">Needs Questions</Badge>
-                ) : (
-                  <Badge variant={m.targetQuestionCount !== null && m.questionCount !== m.targetQuestionCount ? "info" : "success"}>
-                    {m.questionCount}
-                    {m.targetQuestionCount !== null ? ` / ${m.targetQuestionCount}` : ""}
+                {showSeries ? (
+                  <td className="py-2.5 pr-3 text-xs text-[var(--color-muted-foreground)]">
+                    {m.seriesName ?? "Standalone"}
+                    <span className="block">{m.examName}</span>
+                  </td>
+                ) : null}
+                <td className="py-2.5 pr-3">
+                  {needs ? (
+                    <Badge variant="warning">Needs Questions</Badge>
+                  ) : (
+                    <Badge variant={m.targetQuestionCount !== null && m.questionCount !== m.targetQuestionCount ? "info" : "success"}>
+                      {m.questionCount}
+                      {m.targetQuestionCount !== null ? ` / ${m.targetQuestionCount}` : ""}
+                    </Badge>
+                  )}
+                </td>
+                <td className="py-2.5 pr-3 text-xs text-[var(--color-muted-foreground)]">
+                  {AVAILABILITY_MODE_LABELS[deriveAvailabilityMode(m)]}
+                  {m.availableFrom ? <span className="block">{formatIst(m.availableFrom)}</span> : null}
+                  {m.availableUntil ? <span className="block">→ {formatIst(m.availableUntil)}</span> : null}
+                </td>
+                <td className="py-2.5 pr-3">
+                  <Badge variant={state === "LIVE_NOW" ? "warning" : state === "AVAILABLE" ? "success" : state === "CLOSED" ? "neutral" : "info"}>
+                    {AVAILABILITY_LABELS[state]}
                   </Badge>
-                )}
-              </td>
-              <td className="py-2.5 pr-3 text-xs text-[var(--color-muted-foreground)]">
-                {AVAILABILITY_MODE_LABELS[deriveAvailabilityMode(m)]}
-                {m.availableFrom ? <span className="block">{formatIst(m.availableFrom)}</span> : null}
-                {m.availableUntil ? <span className="block">→ {formatIst(m.availableUntil)}</span> : null}
-              </td>
-              <td className="py-2.5 pr-3">
-                <Badge variant={state === "LIVE_NOW" ? "warning" : state === "AVAILABLE" ? "success" : state === "CLOSED" ? "neutral" : "info"}>
-                  {AVAILABILITY_LABELS[state]}
-                </Badge>
-              </td>
-              <td className="py-2.5 pr-3">
-                <Badge variant={m.status === "PUBLISHED" ? "success" : m.status === "DRAFT" ? "warning" : "neutral"}>{m.status}</Badge>
-                {m.attempts > 0 ? <span className="block text-[11px] text-[var(--color-muted-foreground)]">{m.attempts} attempts</span> : null}
-              </td>
-              <td className="py-2.5 pr-3">
-                <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                  <Link href={`/admin/tests/mock/${m.id}`} className="text-[var(--color-primary)] hover:underline">
-                    Edit
-                  </Link>
-                  <Link href={`/admin/tests/mock/${m.id}#questions`} className="text-[var(--color-primary)] hover:underline">
-                    {needs ? "Add From Question Bank" : "Manage Questions"}
-                  </Link>
-                  {canManage ? (
-                    <Link href={bulkImportHrefFor(m)} className="text-[var(--color-primary)] hover:underline">
-                      Bulk Import Questions
+                </td>
+                <td className="py-2.5 pr-3">
+                  <Badge variant={m.status === "PUBLISHED" ? "success" : m.status === "DRAFT" ? "warning" : "neutral"}>{m.status}</Badge>
+                  {m.attempts > 0 ? <span className="block text-[11px] text-[var(--color-muted-foreground)]">{m.attempts} attempts</span> : null}
+                </td>
+                <td className="py-2.5 pr-3">
+                  <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                    <Link href={`/admin/tests/mock/${m.id}`} className="text-[var(--color-primary)] hover:underline">
+                      Edit
                     </Link>
-                  ) : null}
-                  <Link href={`/admin/tests/mock/${m.id}/preview`} className="text-[var(--color-primary)] hover:underline">
-                    Preview
-                  </Link>
-                </span>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+                    <Link href={`/admin/tests/mock/${m.id}#questions`} className="text-[var(--color-primary)] hover:underline">
+                      {needs ? "Add From Question Bank" : "Manage Questions"}
+                    </Link>
+                    {canManage ? (
+                      <Link href={bulkImportHrefFor(m)} className="text-[var(--color-primary)] hover:underline">
+                        Bulk Import Questions
+                      </Link>
+                    ) : null}
+                    <Link href={`/admin/tests/mock/${m.id}/preview`} className="text-[var(--color-primary)] hover:underline">
+                      Preview
+                    </Link>
+                    {canManage ? <DeleteTestDialog kind="mock" id={m.id} title={m.title} /> : null}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
   );
 }

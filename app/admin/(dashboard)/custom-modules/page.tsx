@@ -5,11 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { CustomModuleForm } from "./custom-module-form";
 import { CustomModuleStatusSelect } from "./status-select";
+import { hasPermission } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
+import { DeleteTestDialog, TestDeletedNotice } from "@/components/admin/delete-test-dialog";
 
 export const metadata = { title: "Custom Modules — Mock Test Series.in Admin" };
 
 export default async function CustomModulesPage() {
   const exams = await withExamTaxonomy(prisma, await prisma.exam.findMany({ orderBy: { order: "asc" } }));
+  const canManage = await hasPermission(PERMISSIONS.CUSTOM_MODULES_MANAGE);
 
   const modules = await prisma.customModule.findMany({
     orderBy: { createdAt: "desc" },
@@ -45,6 +49,7 @@ export default async function CustomModulesPage() {
           <CardDescription>{modules.length} total</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
+          <TestDeletedNotice />
           {modules.length === 0 ? (
             <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">No custom modules yet.</p>
           ) : (
@@ -79,6 +84,11 @@ export default async function CustomModulesPage() {
                       <Link href={`/admin/custom-modules/${m.id}`} className="text-[var(--color-primary)] hover:underline">
                         Manage
                       </Link>
+                      {canManage && !m.isStudentOwned ? (
+                        <span className="ml-3 text-sm">
+                          <DeleteTestDialog kind="custom" id={m.id} title={m.title} />
+                        </span>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

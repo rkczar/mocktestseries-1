@@ -5,6 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { QuestionPicker } from "@/components/admin/question-picker";
 import { syncCustomModuleQuestionsAction, regenerateFromRuleAction } from "../actions";
+import { hasPermission } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
+import { DeleteTestDialog } from "@/components/admin/delete-test-dialog";
 
 export const metadata = { title: "Custom Module — Mock Test Series.in Admin" };
 
@@ -46,14 +49,20 @@ export default async function CustomModuleDetailPage({ params }: { params: Promi
   const lastAttempt = attempts[0]?.startedAt;
 
   const hasAttempts = attempts.length > 0;
+  const canDelete = !customModule.isStudentOwned && (await hasPermission(PERMISSIONS.CUSTOM_MODULES_MANAGE));
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{customModule.title}</h1>
-        <p className="text-sm text-[var(--color-muted-foreground)]">
-          {customModule.exam.name} · {customModule.selectionMode === "MANUAL" ? "Manual selection" : "Rule-based selection"}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{customModule.title}</h1>
+          <p className="text-sm text-[var(--color-muted-foreground)]">
+            {customModule.exam.name} · {customModule.selectionMode === "MANUAL" ? "Manual selection" : "Rule-based selection"}
+          </p>
+        </div>
+        {canDelete ? (
+          <DeleteTestDialog kind="custom" id={customModule.id} title={customModule.title} trigger="button" afterDeleteHref="/admin/tests?tab=custom-modules" />
+        ) : null}
       </div>
 
       <Card>

@@ -29,6 +29,7 @@ import { getSiteUrl } from "@/lib/site-url";
 import { getRankingConfig } from "@/lib/leaderboard";
 import { MockDetailsForm } from "../mock-details-form";
 import { MockTestStatusSelect } from "../status-select";
+import { DeleteTestDialog } from "@/components/admin/delete-test-dialog";
 import { SeriesAssignmentForm } from "./series-assignment-form";
 import {
   UNCOVERED_PAID_MOCK_WARNING,
@@ -188,6 +189,7 @@ export default async function MockTestDetailPage({
             {selected.length === 0 ? <Badge variant="warning">Needs Questions</Badge> : null}
             <Badge variant={mockTest.accessType === "FREE" ? "primary" : "neutral"}>{mockTest.accessType}</Badge>
             <MockTestStatusSelect mockTestId={mockTest.id} status={mockTest.status} readOnly={!canManage} />
+            {canManage ? <DeleteTestDialog kind="mock" id={mockTest.id} title={mockTest.title} trigger="button" afterDeleteHref="/admin/tests?tab=mock" /> : null}
             {publicHref ? (
               <Link href={publicHref} target="_blank" className="text-sm text-[var(--color-primary)] hover:underline">
                 View public page ↗
