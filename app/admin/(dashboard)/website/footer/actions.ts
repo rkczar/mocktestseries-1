@@ -10,6 +10,8 @@ import {
   normalizeWhatsAppNumber,
   saveWhatsAppSupportConfig,
 } from "@/lib/whatsapp-support";
+import { saveTelegramChannelConfig } from "@/lib/telegram-channel";
+import { safeTelegramUrl } from "@/lib/telegram-url";
 
 export interface WhatsAppSupportFormState {
   error?: string;
@@ -63,4 +65,39 @@ export async function saveWhatsAppSupportAction(
 
   revalidatePath("/", "layout");
   return { success: true, savedNumber: number };
+}
+
+export interface TelegramChannelFormState {
+  error?: string;
+  success?: boolean;
+  savedUrl?: string;
+}
+
+/** Telegram Channel CTA — same WEBSITE_MANAGE (MASTER_ADMIN-only) gate as WhatsApp Support. */
+export async function saveTelegramChannelAction(_prev: TelegramChannelFormState, formData: FormData): Promise<TelegramChannelFormState> {
+  const session = await requirePermission(PERMISSIONS.WEBSITE_MANAGE);
+  const showOnHomepage = formData.get("showOnHomepage") === "on";
+  const showOnDashboard = formData.get("showOnDashboard") === "on";
+  const rawUrl = String(formData.get("url") ?? "").trim();
+
+  let url = "";
+  if (rawUrl) {
+    const safe = safeTelegramUrl(rawUrl);
+    if (!safe) return { error: "Enter a Telegram link like https://t.me/yourchannel (https on t.me or telegram.me only)." };
+    url = safe;
+  }
+
+  await saveTelegramChannelConfig({ url, showOnHomepage, showOnDashboard });
+  await prisma.auditLog.create({
+    data: {
+      actorId: session.user.id,
+      action: "TELEGRAM_CHANNEL_CONFIG_SAVED",
+      entityType: "Setting",
+      entityId: "website.telegram_channel",
+      metadata: { showOnHomepage, showOnDashboard, hasUrl: url !== "" },
+    },
+  });
+
+  revalidatePath("/", "layout");
+  return { success: true, savedUrl: url };
 }

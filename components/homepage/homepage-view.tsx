@@ -1,4 +1,5 @@
 import type { ResolvedHomepage } from "@/lib/homepage-render";
+import { TelegramChannelCta } from "@/components/support/telegram-channel-cta";
 import { SiteHeader } from "./site-header";
 import { SiteFooter } from "./site-footer";
 import { AskAiDemoSection } from "./ask-ai-demo-section";
@@ -45,12 +46,15 @@ export function HomepageView({
   omrResourceId = null,
   studentSignedIn = false,
   reviewsSection = null,
+  telegramHref = null,
 }: {
   homepage: ResolvedHomepage;
   omrResourceId?: string | null;
   studentSignedIn?: boolean;
   /** Server-rendered "What Students Say" (components/homepage/reviews-section.tsx); null hides it. */
   reviewsSection?: ReactNode;
+  /** Validated Telegram channel link (Admin → Website → Footer); null hides the CTA. */
+  telegramHref?: string | null;
 }) {
   const byKey = new Map(homepage.sections.map((s) => [s.key, s]));
   const header = byKey.get("HEADER");
@@ -126,6 +130,8 @@ export function HomepageView({
           return nodes;
         })()}
       </main>
+
+      {telegramHref ? <TelegramChannelCta href={telegramHref} /> : null}
 
       {footer?.isEnabled !== false ? (
         <SiteFooter

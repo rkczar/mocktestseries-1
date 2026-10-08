@@ -739,6 +739,8 @@ function statGridColumns(count: number): string {
   if (count === 2) return "grid-cols-2 mx-auto max-w-3xl";
   if (count === 3) return "grid-cols-1 sm:grid-cols-3";
   if (count === 4) return "grid-cols-2 lg:grid-cols-4";
+  // 5 cards: one row on desktop; on phones the last card spans the full row instead of leaving a gap.
+  if (count === 5) return "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 [&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1";
   return "grid-cols-2 sm:grid-cols-3";
 }
 

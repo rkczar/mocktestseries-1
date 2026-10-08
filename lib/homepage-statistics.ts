@@ -9,6 +9,29 @@ export interface HomepageStatsSnapshot {
   computedAt: string;
 }
 
+/**
+ * Successful student-initiated AI uses (Ask AI explanation, AI explanation
+ * variants, AI question variants). Source: AI_EXPLANATION_VIEWED, which
+ * app/student/ai-actions.ts writes only after a successful result — failures,
+ * quota refusals and admin/background generation never write it — and which
+ * includes explicit cache-served requests. A repeat of the same student +
+ * question + feature within 60 s (double-click, client timeout retry) counts
+ * once. Rows written before the `feature` tag fall back to student + question.
+ */
+export const AI_USE_DEDUPE_SECONDS = 60;
+async function countStudentAiExplanationUses(): Promise<number> {
+  const rows = await prisma.$queryRaw<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM (
+      SELECT "createdAt", lag("createdAt") OVER (
+        PARTITION BY "studentId", coalesce(metadata->>'questionId', ''), coalesce(metadata->>'feature', '')
+        ORDER BY "createdAt"
+      ) AS prev
+      FROM "StudentActivity" WHERE activity = 'AI_EXPLANATION_VIEWED'
+    ) t
+    WHERE prev IS NULL OR "createdAt" - prev > make_interval(secs => ${AI_USE_DEDUPE_SECONDS})`;
+  return rows[0]?.n ?? 0;
+}
+
 /** Uncached aggregation — exported for scripts/verify-homepage-stats.ts; pages use getHomepageStatistics. */
 export async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot> {
   const [
@@ -24,6 +47,8 @@ export async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot
     mockTestsPublished,
     testsCompleted,
     questionsAvailable,
+    testsStarted,
+    aiExplanationUses,
   ] = await Promise.all([
     prisma.answer.count({ where: { status: { in: ["ANSWERED", "ANSWERED_AND_MARKED"] } } }),
     prisma.aIExplanation.count(),
@@ -40,6 +65,10 @@ export async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot
     prisma.testAttempt.count({ where: { status: "SUBMITTED" } }),
     // What a student can actually practise: published questions of exams that are live.
     prisma.question.count({ where: { status: "PUBLISHED", exam: { isActive: true } } }),
+    // Every attempt a student started (TestAttempt is created once on Start;
+    // resume/refresh reuse it), whatever its outcome.
+    prisma.testAttempt.count(),
+    countStudentAiExplanationUses(),
   ]);
 
   return {
@@ -56,6 +85,8 @@ export async function computeHomepageStatistics(): Promise<HomepageStatsSnapshot
       mockTestsPublished,
       testsCompleted,
       questionsAvailable,
+      testsStarted,
+      aiExplanationUses,
     },
     computedAt: new Date().toISOString(),
   };

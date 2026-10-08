@@ -1,10 +1,10 @@
 import { notFound } from "next/navigation";
+import { PendingSubmitButton } from "@/components/ui/pending-submit-button";
 import { HelpCircle, Clock, Share2 } from "lucide-react";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { getCustomModuleByShareToken } from "@/lib/student-data";
 import { startSharedCustomModuleAction } from "../../builder/actions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
 import { moduleDurationLabel } from "@/lib/module-duration-label";
 
@@ -48,9 +48,9 @@ export default async function SharedCustomModulePage({ params }: { params: Promi
             never shared with whoever sent you this link.
           </p>
           <form action={startSharedCustomModuleAction.bind(null, token)}>
-            <Button type="submit" size="lg" className="w-full">
+            <PendingSubmitButton size="lg" className="w-full" pendingLabel="Starting…">
               Start Module
-            </Button>
+            </PendingSubmitButton>
           </form>
         </CardContent>
       </Card>

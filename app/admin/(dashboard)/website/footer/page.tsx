@@ -9,11 +9,13 @@ import {
   getWhatsAppSupportConfig,
 } from "@/lib/whatsapp-support";
 import { WhatsAppSupportForm } from "./whatsapp-support-form";
+import { getTelegramChannelConfig } from "@/lib/telegram-channel";
+import { TelegramChannelForm } from "./telegram-channel-form";
 
 export const metadata = { title: "Footer — Mock Test Series.in Admin" };
 
 export default async function Page() {
-  const [session, config] = await Promise.all([getAdminSession(), getWhatsAppSupportConfig()]);
+  const [session, config, telegram] = await Promise.all([getAdminSession(), getWhatsAppSupportConfig(), getTelegramChannelConfig()]);
   const canManage = session?.user?.permissions?.includes(PERMISSIONS.WEBSITE_MANAGE) ?? false;
 
   return (
@@ -35,6 +37,7 @@ export default async function Page() {
             labelMax: WHATSAPP_SUPPORT_LABEL_MAX,
           }}
         />
+        <TelegramChannelForm config={telegram} canManage={canManage} />
       </div>
     </div>
   );

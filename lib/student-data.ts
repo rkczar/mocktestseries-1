@@ -979,7 +979,7 @@ export async function checkAiAccessQuota(studentId: string, questionId: string):
 }
 
 /** Logs a successful Ask AI access (cached or freshly generated) — the quota ledger checkAiAccessQuota reads, and the "views" side of Admin AI Usage's views/cache-hits/provider-calls split. */
-export async function logAiAccess(studentId: string, questionId: string, opts: { cacheHit: boolean; provider: string; model: string }) {
+export async function logAiAccess(studentId: string, questionId: string, opts: { cacheHit: boolean; provider: string; model: string; feature?: string }) {
   await logActivity(studentId, "AI_EXPLANATION_VIEWED", { questionId, ...opts });
 }
 

@@ -89,7 +89,7 @@ export async function getExplanationAction(questionId: string, reviewAttemptId?:
   try {
     const explanation = await getOrCreateExplanation(questionId);
     if (isNewGeneration) await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId });
-    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: explanation.provider, model: explanation.model });
+    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: explanation.provider, model: explanation.model, feature: "EXPLANATION" });
 
     return {
       ok: true as const,
@@ -139,7 +139,7 @@ export async function getExplanationVariantAction(questionId: string, variantId:
   try {
     const variant = await getOrCreateExplanationVariant(questionId, variantId);
     if (isNewGeneration) await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId, variantId });
-    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: variant.provider, model: variant.model });
+    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: variant.provider, model: variant.model, feature: `EXPLANATION_VARIANT:${variantId}` });
 
     return {
       ok: true as const,
@@ -198,7 +198,7 @@ export async function getQuestionVariantsAction(questionId: string, reviewAttemp
     if (result.providerCalls > 0) {
       await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId, kind: "question-variants", generated: result.generatedNow });
     }
-    await logAiAccess(student.id, questionId, { cacheHit: result.providerCalls === 0, provider: result.provider, model: result.model });
+    await logAiAccess(student.id, questionId, { cacheHit: result.providerCalls === 0, provider: result.provider, model: result.model, feature: "QUESTION_VARIANTS" });
 
     return {
       ok: true as const,

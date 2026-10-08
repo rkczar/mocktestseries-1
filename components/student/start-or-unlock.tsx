@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PendingSubmitButton } from "@/components/ui/pending-submit-button";
 import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,9 +14,9 @@ export function StartOrUnlock({ access, action, label = "Start" }: { access: Acc
   if (access.allowed) {
     return (
       <form action={action}>
-        <Button type="submit" size="sm">
+        <PendingSubmitButton size="sm" pendingLabel="Starting…">
           {label}
-        </Button>
+        </PendingSubmitButton>
       </form>
     );
   }

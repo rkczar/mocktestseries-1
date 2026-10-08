@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState, useTransition } from "react";
+import { TelegramChannelCta } from "@/components/support/telegram-channel-cta";
 import Link from "next/link";
 import {
   GraduationCap,
@@ -127,6 +128,7 @@ export function ActiveExamDashboard({
   footer = null,
   reviewCard = null,
   reviewsSection = null,
+  telegramHref = null,
 }: {
   enrolledExams: ExamOption[];
   initialActiveExamId: string | null;
@@ -152,6 +154,7 @@ export function ActiveExamDashboard({
   reviewCard?: React.ReactNode;
   /** "What Students Say" — published reviews (components/homepage/reviews-section.tsx, dashboard variant); null hides it. */
   reviewsSection?: React.ReactNode;
+  telegramHref?: string | null;
 }) {
   const [activeExamId, setActiveExamId] = useState(initialActiveExamId);
   const [metrics, setMetrics] = useState(initialMetrics);
@@ -364,6 +367,7 @@ export function ActiveExamDashboard({
     "install-app": <InstallAppCard />,
     "share-review": reviewCard,
     "student-reviews": reviewsSection,
+    "telegram-channel": telegramHref ? <TelegramChannelCta href={telegramHref} variant="card" /> : null,
   };
 
   const sectionHeading: Partial<Record<StudentDashboardGroup, { id: string; title: React.ReactNode }>> = {

@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
+import { PendingSubmitButton } from "@/components/ui/pending-submit-button";
 import { prisma } from "@/lib/prisma";
 import { QuestionStatus } from "@prisma/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { QuestionPicker } from "@/components/admin/question-picker";
 import { syncCustomModuleQuestionsAction, regenerateFromRuleAction } from "../actions";
 import { hasPermission } from "@/lib/rbac";
@@ -105,9 +105,9 @@ export default async function CustomModuleDetailPage({ params }: { params: Promi
           </div>
           {customModule.selectionMode === "RULE_BASED" ? (
             <form action={regenerateFromRuleAction.bind(null, customModule.id)}>
-              <Button type="submit" variant="outline" size="sm">
+              <PendingSubmitButton variant="outline" size="sm" pendingLabel="Regenerating…">
                 Regenerate from Rule
-              </Button>
+              </PendingSubmitButton>
             </form>
           ) : null}
         </CardHeader>

@@ -38,6 +38,8 @@ export const STUDENT_DASHBOARD_BLOCKS = [
   // Registered last so access-status stays first; `insertBefore` places it
   // directly above Access & Subscription in the default and in saved layouts.
   { id: "student-reviews", label: "What Students Say", group: "account", card: false, insertBefore: "access-status", description: "Published reviews from Admin → Reviews (compact carousel); hidden when none are published or the Reviews setting is off" },
+  // No anchor: new layouts and saved ones place it after Share your experience, near the bottom.
+  { id: "telegram-channel", label: "Telegram Channel", group: "account", card: false, description: "Join Our Telegram Channel card; link and ON/OFF in Admin → Website → Footer → Telegram Channel, hidden without a valid link" },
 ] as const satisfies readonly { id: string; label: string; group: StudentDashboardGroup; card: boolean; description: string; insertBefore?: string }[];
 
 export type StudentDashboardBlockId = (typeof STUDENT_DASHBOARD_BLOCKS)[number]["id"];

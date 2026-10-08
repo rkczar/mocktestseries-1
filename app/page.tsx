@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { getPublicTelegramChannel } from "@/lib/telegram-channel";
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings } from "@/lib/seo-settings";
 import { getPublishedHomepage, getFallbackHomepage, DEFAULT_HOMEPAGE_SEO } from "@/lib/homepage";
@@ -43,11 +44,12 @@ export default async function Home() {
   const [published, session, siteUrl] = await Promise.all([getPublishedHomepage(), getStudentSession(), getSiteUrl()]);
   const config = published ?? getFallbackHomepage();
   const studentId = session?.user?.studentId ? (session.user.id ?? null) : null;
-  const [homepage, omrSheet, reviews] = await Promise.all([
+  const [homepage, omrSheet, reviews, telegramHref] = await Promise.all([
     resolveHomepage(config, { studentId }),
     findPracticeOmrSheet(),
     // Cached, time-boxed and never throws: no reviews / an error just hides the section.
     getHomepageReviewsSafe(),
+    getPublicTelegramChannel("homepage"),
   ]);
 
   // WebSite markup names the site for Google's site-name system: the public
@@ -87,6 +89,7 @@ export default async function Home() {
         omrResourceId={omrSheet?.id ?? null}
         studentSignedIn={Boolean(studentId)}
         reviewsSection={reviews ? <ReviewsSection settings={reviews.settings} reviews={reviews.reviews} /> : null}
+        telegramHref={telegramHref}
       />
       <FloatingWhatsAppSupport surface="homepage" />
     </>

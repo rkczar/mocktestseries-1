@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PendingSubmitButton } from "@/components/ui/pending-submit-button";
 import { notFound } from "next/navigation";
 import { Clock, AlertTriangle, HelpCircle } from "lucide-react";
 import { requireStudentOrLogin } from "@/lib/student-session";
@@ -92,9 +93,9 @@ export default async function CustomModuleDetailPage({ params }: { params: Promi
         </Button>
       ) : (
         <form action={startCustomModuleFromExamAction.bind(null, m.id)}>
-          <Button type="submit" size="lg" className="w-full">
+          <PendingSubmitButton size="lg" className="w-full" pendingLabel="Starting…">
             Start Module
-          </Button>
+          </PendingSubmitButton>
         </form>
       )}
 

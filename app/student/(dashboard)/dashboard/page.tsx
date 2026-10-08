@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { getPublicTelegramChannel } from "@/lib/telegram-channel";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import {
   getDashboardMetrics,
@@ -59,7 +60,7 @@ export default async function StudentDashboardPage() {
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
   const siteUrl = await getSiteUrl();
-  const [[rawExamMetrics, subjects, nextTest, papers, overall], omrSheet, layout, accessSummaries, reviewState, publicReviews, liveCbt] = await Promise.all([
+  const [[rawExamMetrics, subjects, nextTest, papers, overall], omrSheet, layout, accessSummaries, reviewState, publicReviews, liveCbt, telegramHref] = await Promise.all([
     activeExamId
       ? Promise.all([
           getExamScopedDashboardMetrics(student.id, activeExamId),
@@ -79,6 +80,8 @@ export default async function StudentDashboardPage() {
     getDashboardReviewsSafe(),
     // Live CBT card (admin-promoted); never let it break the dashboard.
     getDashboardLiveCbtPromotion(student.id, activeExamId, siteUrl).catch(() => null),
+    // Telegram Channel card; null (hidden) on any settings problem.
+    getPublicTelegramChannel("dashboard"),
   ]);
   // Server-rendered per exam; the client picks the active exam's card, so an
   // exam switch never shows another exam's access state.
@@ -147,6 +150,7 @@ export default async function StudentDashboardPage() {
         reviewsSection={
           publicReviews ? <ReviewsSection settings={publicReviews.settings} reviews={publicReviews.reviews} variant="dashboard" /> : null
         }
+        telegramHref={telegramHref}
       />
       <FloatingWhatsAppSupport surface="dashboard" />
     </div>

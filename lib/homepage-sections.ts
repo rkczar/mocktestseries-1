@@ -41,10 +41,11 @@ export interface SectionMeta {
  * fallback and the admin editor's "Restore default cards".
  */
 export const DEFAULT_STAT_METRICS = [
-  { id: "questions-available", label: "Questions Available", icon: "bookOpen", enabled: true, mode: "LIVE", dynamicKey: "questionsAvailable", format: "EXACT", suffix: "+" },
-  { id: "students-joined", label: "Students Joined", icon: "users", enabled: true, mode: "LIVE", dynamicKey: "registeredStudents", format: "EXACT", suffix: "+" },
-  { id: "tests-attempted", label: "Tests Attempted", icon: "checkCircle", enabled: true, mode: "LIVE", dynamicKey: "testsCompleted", format: "EXACT", suffix: "+" },
+  { id: "students-joined", label: "Total Students", icon: "users", enabled: true, mode: "LIVE", dynamicKey: "registeredStudents", format: "EXACT", suffix: "+" },
+  { id: "tests-attempted", label: "Tests Attempted", icon: "checkCircle", enabled: true, mode: "LIVE", dynamicKey: "testsStarted", format: "EXACT", suffix: "+" },
   { id: "questions-attempted", label: "Questions Attempted", icon: "helpCircle", enabled: true, mode: "LIVE", dynamicKey: "questionsAnswered", format: "EXACT", suffix: "+" },
+  { id: "questions-available", label: "Questions Available", icon: "bookOpen", enabled: true, mode: "LIVE", dynamicKey: "questionsAvailable", format: "EXACT", suffix: "+" },
+  { id: "ai-explanations-used", label: "AI Explanations Used", icon: "sparkles", enabled: true, mode: "LIVE", dynamicKey: "aiExplanationUses", format: "EXACT", suffix: "+" },
 ] as const;
 
 /**

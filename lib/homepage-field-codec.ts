@@ -46,7 +46,9 @@ export type StatDynamicKey =
   | "mockTestsPublished"
   | "previousYearPapers"
   | "testsCompleted"
-  | "questionsAvailable";
+  | "questionsAvailable"
+  | "testsStarted"
+  | "aiExplanationUses";
 
 export interface StatMetric {
   id: string;
@@ -81,6 +83,8 @@ export const STAT_DATA_SOURCE_LABELS: Record<StatDynamicKey, string> = {
   previousYearPapers: "Active Previous Year Papers",
   testsCompleted: "Submitted Test Attempts (all test types)",
   questionsAvailable: "Published Questions in Active Exams",
+  testsStarted: "Test Attempts Started (all test types)",
+  aiExplanationUses: "Student AI Explanation Uses (successful)",
 };
 
 export interface UpcomingExamConfig {

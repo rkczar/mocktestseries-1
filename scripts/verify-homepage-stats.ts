@@ -7,7 +7,7 @@
  *  2. Admin input sanitization (lib/homepage-stat-sanitize.ts) — markup
  *     stripped, enums allow-listed, unsafe links dropped, lengths capped.
  *  3. Live accuracy — the statistics aggregate (lib/homepage-statistics.ts)
- *     equals independent raw-SQL counts for the 4 default cards.
+ *     equals independent raw-SQL counts for the 5 default cards.
  *  4. Resolution (resolveStatisticsCards) — LIVE vs MANUAL, show/hide,
  *     order, formatting, hide-zero, legacy card shapes, aggregates only.
  *  5. Render — the public StatisticsSection HTML (rendered in a child
@@ -123,14 +123,15 @@ async function main() {
     const many = sanitizeStatisticsContent({ metrics: Array.from({ length: 40 }, (_, i) => ({ id: `m${i}`, label: "x", enabled: true, mode: "MANUAL" })) });
     assert.equal((many.metrics as unknown[]).length, 12);
   });
-  check("defaults = exactly 4 LIVE cards", () => {
+  check("defaults = exactly 5 LIVE cards", () => {
     assert.deepEqual(
       DEFAULT_STAT_METRICS.map((m) => [m.label, m.mode, m.dynamicKey]),
       [
-        ["Questions Available", "LIVE", "questionsAvailable"],
-        ["Students Joined", "LIVE", "registeredStudents"],
-        ["Tests Attempted", "LIVE", "testsCompleted"],
+        ["Total Students", "LIVE", "registeredStudents"],
+        ["Tests Attempted", "LIVE", "testsStarted"],
         ["Questions Attempted", "LIVE", "questionsAnswered"],
+        ["Questions Available", "LIVE", "questionsAvailable"],
+        ["AI Explanations Used", "LIVE", "aiExplanationUses"],
       ]
     );
   });
@@ -155,33 +156,42 @@ async function main() {
   });
 
   console.log("3. Live accuracy (raw SQL vs app aggregate)");
-  const [sql] = await prisma.$queryRaw<{ students: bigint; tests: bigint; questions: bigint; answered: bigint }[]>`
+  const [sql] = await prisma.$queryRaw<{ students: bigint; tests: bigint; started: bigint; aiRaw: bigint; questions: bigint; answered: bigint }[]>`
     SELECT
       (SELECT COUNT(*) FROM "Student" WHERE "status" <> 'DELETED') AS students,
       (SELECT COUNT(*) FROM "TestAttempt" WHERE "status" = 'SUBMITTED') AS tests,
+      (SELECT COUNT(*) FROM "TestAttempt") AS started,
+      (SELECT COUNT(*) FROM "StudentActivity" WHERE activity = 'AI_EXPLANATION_VIEWED') AS "aiRaw",
       (SELECT COUNT(*) FROM "Question" q JOIN "Exam" e ON e."id" = q."examId" WHERE q."status" = 'PUBLISHED' AND e."isActive") AS questions,
       (SELECT COUNT(*) FROM "Answer" WHERE "status" IN ('ANSWERED', 'ANSWERED_AND_MARKED')) AS answered`;
-  const expected = { students: Number(sql.students), tests: Number(sql.tests), questions: Number(sql.questions), answered: Number(sql.answered) };
+  const expected = { students: Number(sql.students), tests: Number(sql.tests), started: Number(sql.started), questions: Number(sql.questions), answered: Number(sql.answered) };
   const snapshot = await computeHomepageStatistics();
   console.log(`    SQL: questions=${expected.questions} students=${expected.students} tests=${expected.tests} answered=${expected.answered}`);
   check("Questions Available = PUBLISHED questions of active exams", () => assert.equal(snapshot.values.questionsAvailable, expected.questions));
-  check("Students Joined = non-deleted students", () => assert.equal(snapshot.values.registeredStudents, expected.students));
-  check("Tests Attempted = SUBMITTED attempts", () => assert.equal(snapshot.values.testsCompleted, expected.tests));
+  check("Total Students = non-deleted students", () => assert.equal(snapshot.values.registeredStudents, expected.students));
+  check("Tests Attempted = every started attempt", () => assert.equal(snapshot.values.testsStarted, expected.started));
+  check("legacy testsCompleted = SUBMITTED attempts", () => assert.equal(snapshot.values.testsCompleted, expected.tests));
+  check("AI Explanations Used ≤ raw successful-use rows (deduped), > 0 when any exist", () => {
+    assert.ok(snapshot.values.aiExplanationUses <= Number(sql.aiRaw));
+    assert.ok(Number(sql.aiRaw) === 0 || snapshot.values.aiExplanationUses > 0);
+  });
   check("Questions Attempted = answered answers", () => assert.equal(snapshot.values.questionsAnswered, expected.answered));
 
   console.log("4. Resolution");
   const base = { heading: "Growing every day", hideZeroLive: true, metrics: DEFAULT_STAT_METRICS.map((m) => ({ ...m })) };
   const live = resolveStatisticsCards(base, snapshot);
   const fmt = (n: number) => `${n.toLocaleString("en-IN")}+`;
-  check("default: 4 LIVE cards, in order, with live values", () => {
+  const ai = snapshot.values.aiExplanationUses;
+  check("default: 5 LIVE cards, in order, with live values (hide-zero aware)", () => {
     assert.deepEqual(
       live.map((v) => [v.label, v.value, v.mode]),
       [
-        ["Questions Available", fmt(expected.questions), "LIVE"],
-        ["Students Joined", fmt(expected.students), "LIVE"],
-        ["Tests Attempted", fmt(expected.tests), "LIVE"],
+        ["Total Students", fmt(expected.students), "LIVE"],
+        ["Tests Attempted", fmt(expected.started), "LIVE"],
         ["Questions Attempted", fmt(expected.answered), "LIVE"],
-      ]
+        ["Questions Available", fmt(expected.questions), "LIVE"],
+        ["AI Explanations Used", fmt(ai), "LIVE"],
+      ].filter((r) => r[1] !== "0")
     );
   });
   check("only aggregates leave the resolver", () => {
@@ -197,7 +207,7 @@ async function main() {
     assert.equal(manual[1].value, "100+");
     assert.equal(manual[1].label, "Students Preparing");
     assert.equal(manual[1].numeric, undefined);
-    assert.equal(manual[0].value, fmt(expected.questions));
+    assert.equal(manual[0].value, fmt(expected.students));
   });
   check("CUSTOM never changes the real statistics", () => {
     assert.equal(snapshot.values.registeredStudents, expected.students);
@@ -218,26 +228,26 @@ async function main() {
     assert.equal(verbatim[0].numeric, undefined);
   });
   check("switching MANUAL back to LIVE restores the live value", () => {
-    const back = resolveStatisticsCards({ ...base, metrics: [{ ...base.metrics[1], mode: "LIVE", manualValue: "999" }] }, snapshot);
+    const back = resolveStatisticsCards({ ...base, metrics: [{ ...base.metrics[0], mode: "LIVE", manualValue: "999" }] }, snapshot);
     assert.equal(back[0].value, fmt(expected.students));
   });
   check("hidden card is not rendered", () => {
     const hidden = resolveStatisticsCards({ ...base, metrics: base.metrics.map((m, i) => (i === 0 ? { ...m, enabled: false } : m)) }, snapshot);
-    assert.deepEqual(hidden.map((v) => v.label), ["Students Joined", "Tests Attempted", "Questions Attempted"]);
+    assert.deepEqual(hidden.map((v) => v.label), live.slice(1).map((v) => v.label));
   });
   check("card order follows admin order", () => {
     const reordered = resolveStatisticsCards({ ...base, metrics: [base.metrics[2], base.metrics[0], base.metrics[1]] }, snapshot);
-    assert.deepEqual(reordered.map((v) => v.label), ["Tests Attempted", "Questions Available", "Students Joined"]);
+    assert.deepEqual(reordered.map((v) => v.label), ["Questions Attempted", "Total Students", "Tests Attempted"]);
   });
   check("K / K+ formats on live values", () => {
     const k = resolveStatisticsCards({ ...base, metrics: [{ ...base.metrics[0], format: "K", suffix: "" }, { ...base.metrics[0], id: "x", format: "K_PLUS", suffix: "+" }] }, snapshot);
-    assert.equal(k[0].value, formatStatNumber(expected.questions, "K"));
-    assert.equal(k[1].value, formatStatNumber(expected.questions, "K_PLUS"));
+    assert.equal(k[0].value, formatStatNumber(expected.students, "K"));
+    assert.equal(k[1].value, formatStatNumber(expected.students, "K_PLUS"));
   });
   check("hide-zero drops LIVE zero cards only", () => {
-    const zero = { ...snapshot, values: { ...snapshot.values, testsCompleted: 0 } };
+    const zero = { ...snapshot, values: { ...snapshot.values, testsStarted: 0, aiExplanationUses: 0 } };
     assert.equal(resolveStatisticsCards(base, zero).length, 3);
-    assert.equal(resolveStatisticsCards({ ...base, hideZeroLive: false }, zero).length, 4);
+    assert.equal(resolveStatisticsCards({ ...base, hideZeroLive: false }, zero).length, 5);
   });
   check("legacy 2-mode cards still resolve", () => {
     const legacy = resolveStatisticsCards({ metrics: [{ label: "Mock Tests", source: "ADMIN_CONFIGURED", manualValue: "50+" }, { label: "PYQ", source: "DYNAMIC", dynamicKey: "previousYearPapers" }] }, snapshot);
@@ -259,10 +269,10 @@ async function main() {
     })
   ) as Record<string, string>;
   check("live HTML server-renders final numbers (SEO / no-JS)", () => {
-    for (const n of [expected.students, expected.tests, expected.questions, expected.answered]) assert.ok(html.live.includes(fmt(n)), fmt(n));
-    assert.ok(html.live.includes("Students Joined") && html.live.includes("Growing every day"));
+    for (const n of [expected.students, expected.started, expected.questions, expected.answered]) assert.ok(html.live.includes(fmt(n)), fmt(n));
+    assert.ok(html.live.includes("Total Students") && html.live.includes("Growing every day"));
   });
-  check("4 cards: 2 × 2 on phones/tablets, one row on desktop", () => assert.ok(html.live.includes("grid-cols-2 lg:grid-cols-4")));
+  check("5 cards: one row on desktop", () => assert.ok(live.length !== 5 || html.live.includes("lg:grid-cols-5")));
   check("SURFACE background + subheading render", () => {
     assert.ok(html.manual.includes("bg-[var(--color-surface)]"));
     assert.ok(html.manual.includes("Sub"));

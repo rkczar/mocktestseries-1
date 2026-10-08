@@ -293,6 +293,19 @@ function MetricCard({
               ? "Custom value is kept but not shown while the card is LIVE."
               : "The homepage shows the live database value."}
         </p>
+        {metric.mode !== "LIVE" && metric.dynamicKey ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={() => requestModeChange("LIVE")}
+            data-testid={`stat-reset-live-${metric.id}`}
+          >
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+            Reset to Live ({count === null ? "—" : count.toLocaleString("en-IN")})
+          </Button>
+        ) : null}
       </div>
 
       <div className="rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2 text-center">
@@ -575,8 +588,8 @@ export function StatisticsFieldEditor({
           <DialogHeader>
             <DialogTitle>Restore default cards?</DialogTitle>
             <DialogDescription>
-              All cards are replaced with the 4 default LIVE cards: Questions Available, Students Joined, Tests Attempted
-              and Questions Attempted. Nothing is saved until you click Save Changes.
+              All cards are replaced with the 5 default LIVE cards: Total Students, Tests Attempted, Questions Attempted,
+              Questions Available and AI Explanations Used. Nothing is saved until you click Save Changes.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
