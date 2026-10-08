@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getCheckoutQuote } from "@/lib/payments/orders";
 import { productHref } from "@/lib/payments/product-links";
 import { BackButton } from "@/components/student/back-button";
+import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 import { CheckoutClient } from "./checkout-client";
 
 export const metadata = { title: "Checkout — Mock Test Series.in" };
@@ -27,7 +28,7 @@ export default async function CheckoutPage({ params }: { params: Promise<{ code:
 
   return (
     <div className="flex flex-col gap-6">
-      <BackButton href="/student/plans" />
+      <BackButton href={PLANS_AND_PRICING_PATH} />
       <CheckoutClient
         product={quote.product}
         price={{

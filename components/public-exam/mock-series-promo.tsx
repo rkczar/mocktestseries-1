@@ -3,6 +3,8 @@ import { CalendarClock, ClipboardList } from "lucide-react";
 import { formatInr } from "@/lib/payments/money";
 import { formatIst } from "@/lib/ist-time";
 import type { ExamMockSeriesSummary, SeriesOffer } from "@/lib/mock-series";
+import type { ProductPrice } from "@/lib/payments/pricing";
+import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -13,7 +15,11 @@ import { Button } from "@/components/ui/button";
  */
 export function OfferPrice({ offer, size = "md" }: { offer: SeriesOffer | null; size?: "md" | "lg" }) {
   if (!offer?.showPrice) return null;
-  const { price } = offer;
+  return <PriceTag price={offer.price} size={size} />;
+}
+
+/** Price · MRP · % OFF · sale end for one product's computed price (lib/payments/pricing.ts). */
+export function PriceTag({ price, size = "md" }: { price: ProductPrice; size?: "md" | "lg" }) {
   const discounted = price.mrpPaise > price.pricePaise;
   return (
     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -83,6 +89,11 @@ export function MockSeriesPromo({
           <Button asChild>
             <Link href={summary.href}>View Mock Test Series</Link>
           </Button>
+          {summary.offer?.showPrice ? (
+            <Link href={PLANS_AND_PRICING_PATH} className="text-sm font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
+              Compare all plans &amp; prices
+            </Link>
+          ) : null}
         </div>
       </div>
     </section>

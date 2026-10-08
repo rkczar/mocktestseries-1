@@ -22,6 +22,7 @@ import { InstallAppMenuItem } from "@/components/pwa/install-app";
 
 const NAV_ITEMS = [
   { label: "My Exams", href: "/student/exams" },
+  { label: "Plans & Pricing", href: "/plans-and-pricing" },
   { label: "Test Series", href: "/student/test-series" },
   { label: "Custom Module", href: "/student/custom-module" },
   { label: "History", href: "/student/history" },

@@ -8,6 +8,7 @@ import { displayExamName, formatExamDate } from "@/lib/exam-display";
 import { str, pairs, stepList } from "./content-helpers";
 import { getStatIcon } from "@/lib/homepage-icons";
 import { OfferPrice } from "@/components/public-exam/mock-series-promo";
+import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 import { isSafeInternalRoute } from "@/lib/safe-route";
 import { StatCountUp } from "./stat-count-up";
 
@@ -390,6 +391,11 @@ export function MockTestPromotionSection({ content, resolved }: SectionProps) {
               {compareText && offer?.compareHref ? (
                 <Link href={offer.compareHref} className="text-center text-sm font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
                   {compareText}
+                </Link>
+              ) : null}
+              {series.offer?.showPrice ? (
+                <Link href={PLANS_AND_PRICING_PATH} className="text-center text-sm font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
+                  See all plans &amp; pricing
                 </Link>
               ) : null}
             </div>

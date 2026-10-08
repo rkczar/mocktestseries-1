@@ -5,6 +5,8 @@ import { getSeoSettings } from "@/lib/seo-settings";
 import { getPageVisibilityMap } from "@/lib/page-visibility";
 import { getExamPyqInsights, pyqYearPath } from "@/lib/exam-pyq-insights";
 import { EXAM_INSIGHT_PAGES, getPyqAnalysisMeta, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
+import { getPublicPlanCatalog } from "@/lib/plans-catalog";
+import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 
 // Regenerate hourly so exams published/unpublished in Admin appear without a redeploy.
 export const revalidate = 3600;
@@ -28,6 +30,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       select: { publishedAt: true },
     });
     entries.push({ url: `${siteUrl}/`, lastModified: published?.publishedAt ?? undefined, changeFrequency: "daily", priority: 1 });
+  }
+  // Same gate as the page's robots meta: listed only while plans are on sale.
+  if ((await getPublicPlanCatalog()).planCount > 0) {
+    entries.push({ url: `${siteUrl}${PLANS_AND_PRICING_PATH}`, changeFrequency: "weekly", priority: 0.8 });
   }
   if (isVisible("contact")) entries.push({ url: `${siteUrl}/contact`, changeFrequency: "monthly", priority: 0.3 });
   if (isVisible("privacy")) entries.push({ url: `${siteUrl}/privacy`, changeFrequency: "yearly", priority: 0.2 });

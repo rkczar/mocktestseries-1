@@ -341,7 +341,9 @@ try {
     await login(page, F.students.paid.email);
     for (const p of ["/student/dashboard", "/student/exams", `/student/exams/${F.examId}`, "/student/test-series", "/student/subject-test", "/student/custom-module", "/student/history", "/student/analytics", "/student/saved", "/student/profile", "/student/plans", "/student/subscriptions", "/student/payments"]) {
       const res = await page.goto(BASE + p);
-      check(`${p} renders`, res.status() < 400 && path(page.url()).startsWith(p.split("?")[0]) && !(await crashed(page)), { status: res.status(), at: path(page.url()) });
+      // /student/plans forwards to the public Plans & Pricing page.
+      const at = p === "/student/plans" ? "/plans-and-pricing" : p.split("?")[0];
+      check(`${p} renders`, res.status() < 400 && path(page.url()).startsWith(at) && !(await crashed(page)), { status: res.status(), at: path(page.url()) });
     }
     await page.goto(`${BASE}/student/live-tests`);
     check("/student/live-tests (retired) → Test Series", path(page.url()) === "/student/test-series" && !(await crashed(page)), path(page.url()));

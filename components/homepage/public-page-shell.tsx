@@ -22,14 +22,14 @@ export async function getPublicChrome() {
   };
 }
 
-export async function PublicPageShell({ children }: { children: React.ReactNode }) {
+export async function PublicPageShell({ children, studentSignedIn = false }: { children: React.ReactNode; studentSignedIn?: boolean }) {
   const { header, footer, contactInfo } = await getPublicChrome();
   const growWithUsEnabled = (contactInfo?.content as Record<string, unknown> | undefined)?.growWithUsEnabled !== false;
 
   return (
     <div className="flex min-h-full flex-col bg-[var(--color-background)]">
       {header?.isEnabled !== false ? (
-        <SiteHeader content={(header?.content as Record<string, unknown>) ?? {}} growWithUsEnabled={growWithUsEnabled} />
+        <SiteHeader content={(header?.content as Record<string, unknown>) ?? {}} growWithUsEnabled={growWithUsEnabled} studentSignedIn={studentSignedIn} />
       ) : null}
       <main className="flex-1">{children}</main>
       {footer?.isEnabled !== false ? (

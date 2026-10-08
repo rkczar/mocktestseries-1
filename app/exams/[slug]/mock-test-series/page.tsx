@@ -22,6 +22,7 @@ import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
 import { OfferPrice, SeriesCounts } from "@/components/public-exam/mock-series-promo";
 import { PlanComparison } from "@/components/payments/plan-comparison";
+import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 import { getExamPyqInsights } from "@/lib/exam-pyq-insights";
 import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 
@@ -210,6 +211,11 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
           </div>
           <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <OfferPrice offer={offer} size="lg" />
+            {offer?.showPrice ? (
+              <Link href={PLANS_AND_PRICING_PATH} className="text-sm font-medium text-[var(--color-foreground)] underline-offset-4 hover:underline">
+                Compare all plans &amp; prices
+              </Link>
+            ) : null}
           </div>
           <div className="mt-6 flex flex-wrap items-center gap-3">
             {cta.kind === "BUY" || cta.kind === "LOGIN_TO_BUY" ? (
