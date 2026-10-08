@@ -38,7 +38,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, Flag, Infinity as InfinityIcon, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronRight, Clock, Flag, Infinity as InfinityIcon, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -46,6 +46,7 @@ import { TextSizeControl } from "@/components/theme/text-size-control";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
+import { QuestionBottomNav } from "@/components/student/question-bottom-nav";
 import { useAskAi } from "@/components/student/explanation-panel";
 import { RichText } from "@/components/content/rich-text";
 import { QuestionMedia, preloadImages } from "@/components/content/question-media";
@@ -405,6 +406,19 @@ export function TestPlayer({
     };
   }, [retryAllSaves]);
 
+  // After Previous / Next from the bottom bar, bring the new question's heading back into view — only when the
+  // student had scrolled past it (deep in a long question), so a press from the top doesn't jump.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const firstQuestionRender = useRef(true);
+  useEffect(() => {
+    if (firstQuestionRender.current) {
+      firstQuestionRender.current = false;
+      return;
+    }
+    const card = cardRef.current;
+    if (card && card.getBoundingClientRect().top < 64) card.scrollIntoView({ block: "start", behavior: "instant" });
+  }, [current]);
+
   // ---- Answer + navigation handlers (pure state, side effects after) ---------
   const setAnswer = (questionId: string, patch: Partial<Pick<QuestionState, "selected" | "marked" | "labels">>) => {
     if (submittedRef.current || (reveals[questionId] && (patch.selected !== undefined || patch.labels !== undefined))) return;
@@ -644,7 +658,7 @@ export function TestPlayer({
 
       <div className="grid flex-1 grid-cols-1 gap-4 p-4 sm:px-6 lg:grid-cols-[1fr_280px]">
         <div className="flex flex-col gap-4">
-          <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
+          <div ref={cardRef} className="scroll-mt-20 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-medium text-[var(--color-muted-foreground)]" data-testid="question-position">
                 Question {current + 1} of {questions.length}
@@ -832,40 +846,25 @@ export function TestPlayer({
             ) : null}
           </div>
 
+          {/* Previous / Save & Next (Submit Test on the last question) live in the sticky bottom bar (QuestionBottomNav) below. */}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => goTo(current - 1)} disabled={current === 0}>
-                <ChevronLeft className="h-4 w-4" aria-hidden /> Previous
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setAnswer(question.questionId, multi ? { labels: [], marked: false } : { selected: null, marked: false })}
-                disabled={!!reveal || !!checking || submitting || question.malformed}
-              >
-                Clear Response
-              </Button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                disabled={submitting || !!checkingHere}
-                onClick={() => {
-                  setAnswer(question.questionId, { marked: !state.marked });
-                  goTo(current + 1);
-                }}
-              >
-                <Flag className="h-4 w-4" aria-hidden /> Mark for Review & Next
-              </Button>
-              {isLast ? (
-                <Button onClick={() => setConfirmOpen(true)} disabled={submitting}>
-                  Submit Test
-                </Button>
-              ) : (
-                <Button onClick={() => goTo(current + 1)}>
-                  {instantMode ? "Next" : "Save & Next"} <ChevronRight className="h-4 w-4" aria-hidden />
-                </Button>
-              )}
-            </div>
+            <Button
+              variant="outline"
+              onClick={() => setAnswer(question.questionId, multi ? { labels: [], marked: false } : { selected: null, marked: false })}
+              disabled={!!reveal || !!checking || submitting || question.malformed}
+            >
+              Clear Response
+            </Button>
+            <Button
+              variant="outline"
+              disabled={submitting || !!checkingHere}
+              onClick={() => {
+                setAnswer(question.questionId, { marked: !state.marked });
+                goTo(current + 1);
+              }}
+            >
+              <Flag className="h-4 w-4" aria-hidden /> Mark for Review & Next
+            </Button>
           </div>
         </div>
 
@@ -908,6 +907,27 @@ export function TestPlayer({
           </Button>
         </aside>
       </div>
+
+      <QuestionBottomNav
+        testId="player-nav"
+        positionTestId="player-nav-position"
+        className="mx-0 px-4 sm:px-6"
+        index={current}
+        total={questions.length}
+        onPrevious={() => goTo(current - 1)}
+        previousDisabled={current === 0}
+        onNext={isLast ? () => setConfirmOpen(true) : () => goTo(current + 1)}
+        nextDisabled={isLast ? submitting : false}
+        next={
+          isLast ? (
+            "Submit Test"
+          ) : (
+            <>
+              {instantMode ? "Next" : "Save & Next"} <ChevronRight className="h-4 w-4" aria-hidden />
+            </>
+          )
+        }
+      />
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>

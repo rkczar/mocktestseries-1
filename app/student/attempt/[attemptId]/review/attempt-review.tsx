@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReportType } from "@prisma/client";
-import { CheckCircle2, ChevronLeft, ChevronRight, MinusCircle, XCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { CheckCircle2, MinusCircle, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { QuestionBottomNav } from "@/components/student/question-bottom-nav";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import { useAskAi } from "@/components/student/explanation-panel";
@@ -87,40 +87,18 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
         <ReviewQuestionCard key={q.attemptQuestionId} q={q} index={index} total={total} />
       </div>
 
-      {/* Sticky (not fixed): it keeps its own place in the flow right after the card, so it pins to the viewport bottom while the card scrolls under it, yet the last line of any explanation can always scroll clear above it, and it stops before the footer. */}
-      <nav
-        aria-label="Question navigation"
-        data-testid="review-nav"
-        className="sticky bottom-0 z-30 -mx-1 px-1 pt-1 print:static"
-        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
-      >
-        <div className="mx-auto flex w-full items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)]/85 p-2 shadow-[var(--shadow-card)] backdrop-blur supports-[backdrop-filter]:bg-[var(--color-card)]/75 sm:max-w-md">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={goPrev}
-            disabled={index === 0}
-            aria-label="Previous question"
-            className="h-11 flex-1 sm:flex-none"
-          >
-            <ChevronLeft className="h-4 w-4" aria-hidden /> Previous
-          </Button>
-          <span className="shrink-0 text-sm font-medium tabular-nums text-[var(--color-muted-foreground)]" aria-live="polite" data-testid="review-nav-position">
-            <span className="sr-only">Question </span>
-            {index + 1} / {total}
-          </span>
-          <Button
-            type="button"
-            variant="primary"
-            onClick={goNext}
-            disabled={index === total - 1}
-            aria-label="Next question"
-            className="h-11 flex-1 sm:flex-none"
-          >
-            Next <ChevronRight className="h-4 w-4" aria-hidden />
-          </Button>
-        </div>
-      </nav>
+      <QuestionBottomNav
+        testId="review-nav"
+        positionTestId="review-nav-position"
+        index={index}
+        total={total}
+        onPrevious={goPrev}
+        onNext={goNext}
+        previousDisabled={index === 0}
+        nextDisabled={index === total - 1}
+        previousAriaLabel="Previous question"
+        nextAriaLabel="Next question"
+      />
     </div>
   );
 }

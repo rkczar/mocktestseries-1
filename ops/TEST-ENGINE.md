@@ -277,6 +277,14 @@ DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scr
 STORAGE_DIR=/tmp/media-scratch REAL_MEDIA=1 …same env… npx tsx scripts/verify-question-types.ts setup > /tmp/qt.json
 BASE=<nginx origin> FIXTURE=/tmp/qt.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<playwright> node scripts/verify-question-types.mjs
 …same env… npx tsx scripts/verify-question-types.ts cleanup /tmp/qt.json
+
+# 12. sticky Previous / Next bars (components/student/question-bottom-nav.tsx): the Test Player bar
+#     (Exam + Practice, desktop / tablet / phone / landscape: pinned while scrolling, never covers options or
+#     Submit Test, first/last question, Submit Test → confirm dialog, Clear / Mark / palette) and the Review bar.
+#     Both use the ai-actions-ux fixture; the player suite never submits.
+DATABASE_URL="$SCRATCH_URL" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/ai-actions-ux-fixture.ts setup > /tmp/aiux.json
+BASE=http://localhost:3100 FIXTURE=/tmp/aiux.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<playwright> node scripts/verify-player-nav.mjs
+BASE=http://localhost:3100 FIXTURE=/tmp/aiux.json DATABASE_URL="$SCRATCH_URL" NODE_PATH=<playwright> node scripts/verify-review-nav.mjs
 ```
 
 ## Rich content and snapshot v2 (since NEET Phase 1)
