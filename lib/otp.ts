@@ -9,7 +9,7 @@ import { assertOtpSendAllowed, AuthRateLimitError, TOO_MANY_ATTEMPTS_MESSAGE } f
 
 const OTP_LENGTH = 6;
 const OTP_TTL_MS = 5 * 60 * 1000;
-const RESEND_COOLDOWN_MS = 30 * 1000;
+const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 5;
 const MAX_SENDS_PER_WINDOW = 5;
 const SEND_WINDOW_MS = 15 * 60 * 1000;

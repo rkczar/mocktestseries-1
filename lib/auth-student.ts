@@ -2,7 +2,7 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import argon2 from "argon2";
-import { OtpPurpose, StudentAuthProvider } from "@prisma/client";
+import { OtpPurpose, Prisma, StudentAuthProvider } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { studentAuthConfig } from "@/lib/auth-student.config";
 import { nextStudentId } from "@/lib/student-id";
@@ -21,13 +21,13 @@ import {
   type AdmittedSignIn,
 } from "@/lib/student-devices";
 import { queueFirstLoginEmail, queueWelcomeEmail } from "@/lib/email/events";
+import { parseIndianMobile, storedMobileVariants, INDIAN_MOBILE_ERROR } from "@/lib/indian-mobile";
+import { findStudentsByMobile } from "@/lib/mobile-verification";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
 
-function normalizeMobile(mobile: string) {
-  return mobile.trim().replace(/[^\d+]/g, "");
-}
+const ACCOUNT_EXISTS_MESSAGE = "An account with this mobile number already exists. Please sign in instead.";
 
 /** Device/session claims the jwt callback copies into the token (see lib/auth-student.config.ts). */
 function deviceClaims(admitted: AdmittedSignIn) {
@@ -89,8 +89,17 @@ export const {
         await assertStudentPasswordLoginAllowed(identifier, ipAddress);
 
         // The form is labelled "User ID or Email" — User IDs are stored upper-case (MTS-000123).
+        // A verified mobile is stored as +91XXXXXXXXXX: match the other spellings a student may type too.
+        const asMobile = parseIndianMobile(identifier);
         const student = await prisma.student.findFirst({
-          where: { OR: [{ email: identifier }, { mobile: identifier }, { studentId: identifier.toUpperCase() }] },
+          where: {
+            OR: [
+              { email: identifier },
+              { mobile: identifier },
+              ...(asMobile ? [{ mobile: { in: storedMobileVariants(asMobile) } }] : []),
+              { studentId: identifier.toUpperCase() },
+            ],
+          },
         });
 
         let success = false;
@@ -135,12 +144,17 @@ export const {
         email: { label: "Email", type: "text" },
       },
       async authorize(credentials, request) {
-        const mobile = normalizeMobile(String(credentials?.mobile ?? ""));
+        // Indian mobiles only, always handled as E.164 (the OTP was sent to that form).
+        const parsedMobile = parseIndianMobile(String(credentials?.mobile ?? ""));
         const code = String(credentials?.code ?? "");
         const mode = String(credentials?.mode ?? "login");
         const ipAddress = clientIpFromHeaders(request.headers);
-        if (!mobile || !code) return null;
-        if (!providerConfig.otpEnabled) {
+        if (!code) return null;
+        if (!parsedMobile) throw new Error(INDIAN_MOBILE_ERROR);
+        const mobile = parsedMobile.e164;
+        // The Phone OTP sign-in toggle does not apply to Create Account, which
+        // is mobile-OTP-first and governed by registerEnabled alone.
+        if (!providerConfig.otpEnabled && mode !== "register") {
           throw new Error("Mobile OTP login is currently disabled.");
         }
         if (mode === "register" && !providerConfig.registerEnabled) {
@@ -164,21 +178,33 @@ export const {
         }
 
         if (mode === "register") {
-          const existing = await prisma.student.findUnique({ where: { mobile } });
-          if (existing) {
+          // Reached only after verifyOtp() succeeded above, in this same server
+          // call: the account is created already verified, and nothing from the
+          // browser decides that. Every older spelling of the number counts as taken.
+          const existing = await findStudentsByMobile(parsedMobile);
+          if (existing.length > 0) {
             await prisma.studentLoginAttempt.create({
-              data: { identifier: mobile, ipAddress, success: false, method: attemptMethod, studentId: existing.id },
+              data: { identifier: mobile, ipAddress, success: false, method: attemptMethod, studentId: existing[0].id },
             });
-            throw new Error("An account with this mobile number already exists. Please login instead.");
+            throw new Error(ACCOUNT_EXISTS_MESSAGE);
           }
-          const name = String(credentials?.name ?? "").trim();
-          if (!name) throw new Error("Name is required.");
+          const name = String(credentials?.name ?? "").trim().replace(/\s+/g, " ");
+          if (name.length < 2 || name.length > 80) throw new Error("Enter your full name (2–80 characters).");
           const email = String(credentials?.email ?? "").trim().toLowerCase() || undefined;
 
           const studentId = await nextStudentId();
-          const student = await prisma.student.create({
-            data: { studentId, name, mobile, email, authProvider: StudentAuthProvider.OTP },
-          });
+          let student;
+          try {
+            student = await prisma.student.create({
+              data: { studentId, name, mobile, mobileVerifiedAt: new Date(), email, authProvider: StudentAuthProvider.OTP },
+            });
+          } catch (error) {
+            // Unique(mobile): a parallel sign-up with the same number won the race.
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+              throw new Error(ACCOUNT_EXISTS_MESSAGE);
+            }
+            throw error;
+          }
           await prisma.studentProfile.create({ data: { studentId: student.id } });
           await prisma.studentActivity.create({
             data: { studentId: student.id, activity: "REGISTERED", metadata: { method: "otp" } },
@@ -201,13 +227,38 @@ export const {
           };
         }
 
-        const student = await prisma.student.findUnique({ where: { mobile } });
-        if (!student || !isStudentAuthEligible(student.status)) {
+        // OTP sign-in reaches only an account that PROVED this number: one
+        // already verified, or one created by OTP sign-up (whose number was
+        // OTP-checked at creation). A number merely typed into a password or
+        // Google account is never trusted — that student signs in the usual way
+        // and verifies from there. These answers come after the OTP succeeded,
+        // so only the number's owner ever sees them.
+        const candidates = (await findStudentsByMobile(parsedMobile)).filter((s) => isStudentAuthEligible(s.status));
+        const verified = candidates.filter((s) => s.mobileVerifiedAt);
+        const match =
+          verified.length === 1
+            ? verified[0]
+            : verified.length === 0 && candidates.length === 1 && candidates[0].authProvider === StudentAuthProvider.OTP
+              ? candidates[0]
+              : null;
+        if (!match) {
           await prisma.studentLoginAttempt.create({
-            data: { identifier: mobile, ipAddress, success: false, method: attemptMethod, studentId: student?.id },
+            data: { identifier: mobile, ipAddress, success: false, method: attemptMethod, studentId: candidates[0]?.id },
           });
-          throw new Error("No account found for this mobile number.");
+          throw new Error(
+            candidates.length === 0
+              ? "No account is linked to this mobile number. Please create a new account."
+              : "This mobile number isn't verified on your account yet. Please sign in with your password or Google, then verify your number."
+          );
         }
+        if (!match.mobileVerifiedAt) {
+          // OTP sign-up account proving its number again: record it as verified (E.164).
+          await prisma.student.updateMany({
+            where: { id: match.id, mobileVerifiedAt: null },
+            data: { mobile, mobileVerifiedAt: new Date() },
+          });
+        }
+        const student = await prisma.student.findUniqueOrThrow({ where: { id: match.id } });
 
         const admitted = await admitCurrentRequestSignIn(student.id, "OTP", mobile);
 

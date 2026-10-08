@@ -19,13 +19,15 @@ export async function sendSms(mobile: string, message: string): Promise<void> {
   const provider = await getSmsProviderName();
 
   if (provider === "console") {
-    console.log(`[SMS:DEV] to ${mobile}: ${message}`);
     // In production this fallback reaches no real phone — throwing here (instead
     // of a silent "success") is what lets the OTP UI show an honest error
     // rather than telling a student a code was sent when nothing went out.
+    // It throws BEFORE logging: the message carries the OTP, which must never
+    // reach production logs.
     if (process.env.NODE_ENV === "production") {
       throw new Error("No SMS provider is configured. Set up MSG91 in Admin > Settings > Authentication.");
     }
+    console.log(`[SMS:DEV] to ${mobile}: ${message}`);
     return;
   }
 

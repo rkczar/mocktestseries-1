@@ -5,6 +5,8 @@ import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import {
+  getAuthProviderConfig,
+  getMsg91Credentials,
   saveAuthProviderConfig,
   testGoogleConnection,
   testMsg91Connection,
@@ -79,15 +81,30 @@ export async function saveLoginMethodTogglesAction(
 ): Promise<SettingsFormState> {
   const session = await requirePermission(PERMISSIONS.SETTINGS_MANAGE);
 
+  const mobileVerificationRequired = formData.get("mobileVerificationRequired") === "on";
+  const before = await getAuthProviderConfig();
+  if (mobileVerificationRequired && !before.mobileVerificationRequired) {
+    // Never switch on a requirement nobody can complete: real OTP delivery
+    // (MSG91 Auth Key + Widget ID or Flow ID) must be configured first.
+    const msg91 = await getMsg91Credentials();
+    if (!msg91.authKey || !(msg91.widgetId || msg91.flowId)) {
+      return {
+        error:
+          "Configure MSG91 (Auth Key + Widget ID or Flow ID) and confirm a real OTP arrives before requiring mobile verification.",
+      };
+    }
+  }
+
   await saveAuthProviderConfig({
     toggles: {
       passwordEnabled: formData.get("passwordEnabled") === "on",
       otpEnabled: formData.get("otpEnabled") === "on",
       registerEnabled: formData.get("registerEnabled") === "on",
+      mobileVerificationRequired,
     },
   });
 
-  await logAudit(session.user.id, "AUTH_LOGIN_METHODS_SAVED", "auth.providers");
+  await logAudit(session.user.id, "AUTH_LOGIN_METHODS_SAVED", "auth.providers", { mobileVerificationRequired });
 
   revalidateAuthSurfaces();
   return { success: true };

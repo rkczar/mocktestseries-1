@@ -15,6 +15,8 @@ import {
   registerWithPasswordAction,
   sendMobileOtpAction,
   verifyMobileOtpAction,
+  sendRegisterOtpAction,
+  verifyRegisterOtpAction,
   googleSignInAction,
   requestPasswordResetAction,
   verifyPasswordResetCodeAction,
@@ -22,8 +24,9 @@ import {
   type AuthFormState,
   type ResetFormState,
 } from "./actions";
+import { INDIAN_MOBILE_ERROR, INDIAN_MOBILE_PATTERN, formatIndianMobile } from "@/lib/indian-mobile";
 
-function SubmitButton({
+export function SubmitButton({
   children,
   pendingLabel,
   style,
@@ -41,7 +44,7 @@ function SubmitButton({
   );
 }
 
-function ErrorBanner({ message }: { message?: string }) {
+export function ErrorBanner({ message }: { message?: string }) {
   if (!message) return null;
   return (
     <p
@@ -172,7 +175,7 @@ function PasswordRegisterForm({ callbackUrl, buttonStyle }: { callbackUrl: strin
 }
 
 const OTP_LENGTH = 6;
-const RESEND_COOLDOWN_SECONDS = 30;
+const RESEND_COOLDOWN_SECONDS = 60;
 
 /**
  * Six single-digit boxes backing one hidden `code` field, so the server
@@ -180,13 +183,27 @@ const RESEND_COOLDOWN_SECONDS = 30;
  * Auto-advances on entry, moves back on backspace/left-arrow, and fills all
  * boxes from a single pasted code.
  */
-function OtpBoxInput({ autoSubmit }: { autoSubmit: () => void }) {
+export function OtpBoxInput({ autoSubmit }: { autoSubmit: () => void }) {
   const [digits, setDigits] = useState<string[]>(() => Array(OTP_LENGTH).fill(""));
   const boxRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
     boxRefs.current[0]?.focus();
   }, []);
+
+  /** Fills the boxes from `index` with a multi-digit string (paste, or an OS one-time-code autofill). */
+  function fillFrom(index: number, value: string) {
+    const next = [...digits];
+    value
+      .slice(0, OTP_LENGTH - index)
+      .split("")
+      .forEach((ch, k) => {
+        next[index + k] = ch;
+      });
+    setDigits(next);
+    boxRefs.current[Math.min(index + value.length, OTP_LENGTH - 1)]?.focus();
+    if (next.every((d) => d.length === 1)) setTimeout(autoSubmit, 0);
+  }
 
   function setDigit(index: number, value: string) {
     // Side effect kept out of the state updater: updaters may run twice
@@ -215,10 +232,16 @@ function OtpBoxInput({ autoSubmit }: { autoSubmit: () => void }) {
             type="text"
             inputMode="numeric"
             autoComplete={i === 0 ? "one-time-code" : "off"}
-            maxLength={1}
             value={digit}
             onChange={(e) => {
-              const val = e.target.value.replace(/\D/g, "").slice(-1);
+              const typed = e.target.value.replace(/\D/g, "");
+              // iOS/Android SMS autofill inserts the whole code into one box
+              // (two characters is just a new digit typed over an old one).
+              if (typed.length > 2) {
+                fillFrom(i, typed.slice(0, OTP_LENGTH));
+                return;
+              }
+              const val = typed.slice(-1);
               setDigit(i, val);
               if (val && i < OTP_LENGTH - 1) boxRefs.current[i + 1]?.focus();
             }}
@@ -254,7 +277,7 @@ function OtpBoxInput({ autoSubmit }: { autoSubmit: () => void }) {
   );
 }
 
-function ResendCountdown({ onResend }: { onResend: () => void }) {
+export function ResendCountdown({ onResend }: { onResend: () => void }) {
   const [secondsLeft, setSecondsLeft] = useState(RESEND_COOLDOWN_SECONDS);
 
   useEffect(() => {
@@ -281,22 +304,84 @@ function ResendCountdown({ onResend }: { onResend: () => void }) {
   );
 }
 
+/**
+ * The fixed 🇮🇳 +91 prefix and a 10-digit national number. Only Indian mobile
+ * numbers are accepted; the server re-validates (lib/indian-mobile.ts).
+ */
+export function IndianMobileInput({
+  id,
+  defaultValue,
+  autoFocus,
+}: {
+  id: string;
+  defaultValue?: string;
+  autoFocus?: boolean;
+}) {
+  const [value, setValue] = useState(defaultValue ?? "");
+  const invalid = value.length === 10 && !INDIAN_MOBILE_PATTERN.test(value);
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor={id}>Mobile Number</Label>
+      <div className="flex h-11 items-stretch overflow-hidden rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--color-primary)]">
+        <span
+          className="flex select-none items-center gap-1.5 border-r border-[var(--color-border)] px-3 text-sm font-medium text-[var(--color-foreground)]"
+          aria-label="Country code India plus 91"
+        >
+          <span aria-hidden>🇮🇳</span> +91
+        </span>
+        <input
+          id={id}
+          name="mobile"
+          type="tel"
+          inputMode="numeric"
+          autoComplete="tel-national"
+          required
+          autoFocus={autoFocus}
+          maxLength={10}
+          pattern="[6-9][0-9]{9}"
+          placeholder="Mobile Number"
+          value={value}
+          onChange={(e) => {
+            // Accept a pasted "+91 98765 43210" / "098…" by keeping the last 10 digits.
+            const digits = e.target.value.replace(/\D/g, "");
+            setValue(digits.length > 10 ? digits.slice(-10) : digits);
+          }}
+          aria-invalid={invalid || undefined}
+          className="min-w-0 flex-1 bg-transparent px-3 text-base tracking-wide text-[var(--color-foreground)] outline-none placeholder:text-[var(--color-muted-foreground)]"
+        />
+      </div>
+      {invalid ? <p className="text-xs text-[var(--color-error)]">{INDIAN_MOBILE_ERROR}</p> : null}
+    </div>
+  );
+}
+
+function DevCodeNotice({ code }: { code?: string }) {
+  if (!code) return null;
+  return (
+    <p className="rounded-[var(--radius-button)] border border-dashed border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-muted-foreground)]">
+      Dev mode — no SMS provider configured. Your code is <span className="font-mono font-semibold">{code}</span>.
+    </p>
+  );
+}
+
+/** Phone OTP sign-in for an existing account. New accounts use Create Account. */
 function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
   const [sendState, sendAction] = useActionState<AuthFormState, FormData>(sendMobileOtpAction, {});
-  const [verifyState, verifyAction] = useActionState<AuthFormState, FormData>(verifyMobileOtpAction, {});
+  const [verifyState, verifyAction, verifying] = useActionState<AuthFormState, FormData>(verifyMobileOtpAction, {});
   const [resendState, resendAction] = useActionState<AuthFormState, FormData>(sendMobileOtpAction, {});
   const verifyFormRef = useRef<HTMLFormElement>(null);
   const resendFormRef = useRef<HTMLFormElement>(null);
+  const verifyingRef = useRef(false);
+  useEffect(() => {
+    verifyingRef.current = verifying;
+  }, [verifying]);
 
   const active = resendState.sent ? resendState : sendState;
 
   if (!active.sent) {
     return (
       <form action={sendAction} className="flex flex-col gap-4" noValidate>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="otp-mobile">Mobile Number</Label>
-          <Input id="otp-mobile" name="mobile" type="tel" autoComplete="tel" required placeholder="+91XXXXXXXXXX" />
-        </div>
+        <IndianMobileInput id="otp-mobile" />
         <ErrorBanner message={sendState.error} />
         <SubmitButton pendingLabel="Sending code…" style={buttonStyle}>
           Send OTP
@@ -306,49 +391,135 @@ function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; butt
   }
 
   return (
-    <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
-      <input type="hidden" name="callbackUrl" value={callbackUrl} />
-      <input type="hidden" name="mobile" value={active.mobile} />
-      <input type="hidden" name="existing" value={String(active.existing)} />
-
-      <p className="text-sm text-[var(--color-muted-foreground)]">
-        {active.existing ? "Welcome back — " : "New number — let's set up your account. "}
-        We sent a verification code to <span className="font-medium text-[var(--color-foreground)]">{active.mobile}</span>.
-      </p>
-      {active.devCode ? (
-        <p className="rounded-[var(--radius-button)] border border-dashed border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-muted-foreground)]">
-          Dev mode — no SMS provider configured. Your code is <span className="font-mono font-semibold">{active.devCode}</span>.
+    <>
+      <form ref={resendFormRef} action={resendAction} className="hidden">
+        <input type="hidden" name="mobile" value={active.mobile} />
+      </form>
+      <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
+        <input type="hidden" name="callbackUrl" value={callbackUrl} />
+        <input type="hidden" name="mobile" value={active.mobile} />
+        <p className="text-sm text-[var(--color-muted-foreground)]">
+          If this number is registered, you&apos;ll receive a 6-digit code at{" "}
+          <span className="font-medium text-[var(--color-foreground)]">{formatIndianMobile(active.mobile)}</span>.
         </p>
-      ) : null}
-
-      {!active.existing ? (
-        <>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="otp-name">Full Name</Label>
-            <Input id="otp-name" name="name" type="text" autoComplete="name" required />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="otp-email">Email (optional)</Label>
-            <Input id="otp-email" name="email" type="email" autoComplete="email" />
-          </div>
-        </>
-      ) : null}
-
-      <OtpBoxInput autoSubmit={() => verifyFormRef.current?.requestSubmit()} />
-
-      <ErrorBanner message={verifyState.error} />
-
-      <div className="flex items-center justify-between">
-        <form ref={resendFormRef} action={resendAction}>
-          <input type="hidden" name="mobile" value={active.mobile} />
-        </form>
+        <DevCodeNotice code={active.devCode} />
+        <OtpBoxInput autoSubmit={() => !verifyingRef.current && verifyFormRef.current?.requestSubmit()} />
+        <ErrorBanner message={verifyState.error ?? resendState.error} />
         <ResendCountdown onResend={() => resendFormRef.current?.requestSubmit()} />
-      </div>
+        <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
+          Verify &amp; Sign In
+        </SubmitButton>
+      </form>
+    </>
+  );
+}
 
-      <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
-        Verify &amp; Sign In
-      </SubmitButton>
-    </form>
+/**
+ * Create Account (mobile-first, used while "Require mobile verification" is
+ * ON): Full Name + 🇮🇳 +91 mobile → "Verify Your Mobile Number" → the account
+ * is created by the server only after the OTP is verified, then signed in.
+ */
+function RegisterMobileForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
+  // "Change" remounts the steps (fresh action states) with the typed values kept.
+  const [restart, setRestart] = useState<{ key: number; name?: string; mobile?: string }>({ key: 0 });
+  return (
+    <RegisterMobileSteps
+      key={restart.key}
+      callbackUrl={callbackUrl}
+      buttonStyle={buttonStyle}
+      initialName={restart.name}
+      initialMobile={restart.mobile}
+      onChangeNumber={(name, mobile) => setRestart((r) => ({ key: r.key + 1, name, mobile }))}
+    />
+  );
+}
+
+function RegisterMobileSteps({
+  callbackUrl,
+  buttonStyle,
+  initialName,
+  initialMobile,
+  onChangeNumber,
+}: {
+  callbackUrl: string;
+  buttonStyle?: CSSProperties;
+  initialName?: string;
+  initialMobile?: string;
+  onChangeNumber: (name?: string, mobile?: string) => void;
+}) {
+  const [sendState, sendAction] = useActionState<AuthFormState, FormData>(sendRegisterOtpAction, {});
+  const [verifyState, verifyAction, verifying] = useActionState<AuthFormState, FormData>(verifyRegisterOtpAction, {});
+  const [resendState, resendAction] = useActionState<AuthFormState, FormData>(sendRegisterOtpAction, {});
+  // Controlled, so a refused send (React resets uncontrolled fields after a form action) keeps what was typed.
+  const [name, setName] = useState(initialName ?? "");
+  const verifyFormRef = useRef<HTMLFormElement>(null);
+  const resendFormRef = useRef<HTMLFormElement>(null);
+  const verifyingRef = useRef(false);
+  useEffect(() => {
+    verifyingRef.current = verifying;
+  }, [verifying]);
+
+  const active = resendState.sent ? resendState : sendState;
+
+  if (!active.sent) {
+    return (
+      <form action={sendAction} className="flex flex-col gap-4" noValidate>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="reg-name">Full Name</Label>
+          <Input
+            id="reg-name"
+            name="name"
+            type="text"
+            autoComplete="name"
+            required
+            minLength={2}
+            maxLength={80}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <IndianMobileInput id="reg-mobile" defaultValue={initialMobile} />
+        <ErrorBanner message={sendState.error} />
+        <SubmitButton pendingLabel="Sending OTP…" style={buttonStyle}>
+          Send OTP
+        </SubmitButton>
+      </form>
+    );
+  }
+
+  return (
+    <>
+      <form ref={resendFormRef} action={resendAction} className="hidden">
+        <input type="hidden" name="name" value={active.name} />
+        <input type="hidden" name="mobile" value={active.mobile} />
+      </form>
+      <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
+        <input type="hidden" name="callbackUrl" value={callbackUrl} />
+        <input type="hidden" name="name" value={active.name} />
+        <input type="hidden" name="mobile" value={active.mobile} />
+        <div className="flex flex-col gap-1">
+          <p className="text-base font-semibold text-[var(--color-foreground)]">Verify Your Mobile Number</p>
+          <p className="text-sm text-[var(--color-muted-foreground)]">
+            Enter the 6-digit code sent to{" "}
+            <span className="font-medium text-[var(--color-foreground)]">{formatIndianMobile(active.mobile)}</span>.{" "}
+            <button
+              type="button"
+              onClick={() => onChangeNumber(active.name, active.mobile?.slice(-10))}
+              className="text-indigo-400 hover:underline"
+            >
+              Change
+            </button>
+          </p>
+        </div>
+        <DevCodeNotice code={active.devCode} />
+        <OtpBoxInput autoSubmit={() => !verifyingRef.current && verifyFormRef.current?.requestSubmit()} />
+        <ErrorBanner message={verifyState.error ?? resendState.error} />
+        <ResendCountdown onResend={() => resendFormRef.current?.requestSubmit()} />
+        <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
+          Verify &amp; Create Account
+        </SubmitButton>
+      </form>
+    </>
   );
 }
 
@@ -572,7 +743,11 @@ export function LoginScreen({
         ) : mode === "register" ? (
           <div className="flex flex-col gap-4">
             <p className="text-sm font-medium text-white">Create Account</p>
-            <PasswordRegisterForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} />
+            {providerConfig.mobileVerificationRequired ? (
+              <RegisterMobileForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} />
+            ) : (
+              <PasswordRegisterForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} />
+            )}
             {showGoogle ? (
               <>
                 <Divider />

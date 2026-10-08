@@ -519,6 +519,7 @@ enum OtpPurpose {
   LOGIN
   REGISTER
   RESET_PASSWORD
+  VERIFY_MOBILE
 }
 
 enum DeletionRequestStatus {
@@ -541,6 +542,12 @@ model Student {
   name         String
   email        String?             @unique
   mobile       String?             @unique
+  // Set only when the student proved ownership of `mobile` with an OTP
+  // (lib/mobile-verification.ts); `mobile` is then stored in E.164
+  // (+919876543210). NULL = unverified — a stored number alone is never
+  // treated as verified. Enforced by requireStudent() when Admin turns on
+  // "Require mobile verification" (lib/auth-provider-config.ts toggles).
+  mobileVerifiedAt DateTime?
   passwordHash String?
   authProvider StudentAuthProvider
   status       StudentStatus       @default(ACTIVE)

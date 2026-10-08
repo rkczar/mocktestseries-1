@@ -20,6 +20,7 @@ import {
   PasswordResetError,
 } from "@/lib/password-reset";
 import { queueWelcomeEmail } from "@/lib/email/events";
+import { parseIndianMobile, INDIAN_MOBILE_ERROR } from "@/lib/indian-mobile";
 
 export interface AuthFormState {
   error?: string;
@@ -27,6 +28,7 @@ export interface AuthFormState {
   sent?: boolean;
   existing?: boolean;
   mobile?: string;
+  name?: string;
   devCode?: string;
 }
 
@@ -85,6 +87,12 @@ export async function registerWithPasswordAction(
   // The Admin API Manager toggles hide the form; enforce them here too.
   const providerConfig = await getAuthProviderConfig();
   if (!providerConfig.registerEnabled) return { error: "New account creation is currently disabled." };
+  // Mandatory mobile verification: the only way to create an account is the
+  // mobile-first OTP sign-up (sendRegisterOtpAction → verifyRegisterOtpAction).
+  // Refused here too, so a direct POST to this action cannot bypass it.
+  if (providerConfig.mobileVerificationRequired) {
+    return { error: "Please create your account with your mobile number and OTP verification." };
+  }
   if (!providerConfig.passwordEnabled) return { error: "Password login is currently disabled." };
   // Platform Controls → New Registrations (also Lockdown / Maintenance / Login paused).
   const platform = await getPlatformControls();
@@ -123,29 +131,26 @@ export async function registerWithPasswordAction(
   }
 }
 
-function normalizeMobile(mobile: string) {
-  return mobile.trim().replace(/[^\d+]/g, "");
-}
-
+/**
+ * Phone OTP sign-in, step 1. The answer is the same whether or not the number
+ * has an account (no enumeration before the OTP); the sign-in provider tells
+ * the number's owner after the code is verified. New accounts are created only
+ * through Create Account (sendRegisterOtpAction).
+ */
 export async function sendMobileOtpAction(
   _prevState: AuthFormState,
   formData: FormData
 ): Promise<AuthFormState> {
-  const mobile = normalizeMobile(String(formData.get("mobile") ?? ""));
-  if (!/^\+?[0-9]{7,15}$/.test(mobile)) return { error: "Enter a valid mobile number." };
-
-  const existingStudent = await prisma.student.findUnique({ where: { mobile } });
-  const purpose = existingStudent ? "LOGIN" : "REGISTER";
+  const mobile = parseIndianMobile(String(formData.get("mobile") ?? ""));
+  if (!mobile) return { error: INDIAN_MOBILE_ERROR };
 
   // Platform Controls: don't send (or pay for) an OTP that could only be refused at verify time.
   const platform = await getPlatformControls();
-  const effective = effectivePlatformControls(platform);
-  if (existingStudent && !effective.loginOpen) return { error: pausedMessage(platform, "login") };
-  if (!existingStudent && !effective.registrationsOpen) return { error: pausedMessage(platform, "registrations") };
+  if (!effectivePlatformControls(platform).loginOpen) return { error: pausedMessage(platform, "login") };
 
   try {
-    const { devCode } = await requestOtp(mobile, purpose, await clientIp());
-    return { sent: true, existing: Boolean(existingStudent), mobile, devCode };
+    const { devCode } = await requestOtp(mobile.e164, "LOGIN", await clientIp());
+    return { sent: true, existing: true, mobile: mobile.e164, devCode };
   } catch (error) {
     if (error instanceof OtpError) return { error: error.message };
     throw error;
@@ -156,25 +161,74 @@ export async function verifyMobileOtpAction(
   _prevState: AuthFormState,
   formData: FormData
 ): Promise<AuthFormState> {
-  const mobile = normalizeMobile(String(formData.get("mobile") ?? ""));
+  const mobile = parseIndianMobile(String(formData.get("mobile") ?? ""));
   const code = String(formData.get("code") ?? "").trim();
-  const existing = formData.get("existing") === "true";
-  const name = String(formData.get("name") ?? "").trim();
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const callbackUrl = safeCallback(String(formData.get("callbackUrl") ?? ""));
 
-  if (!mobile || !code) return { error: "Enter the verification code." };
-  if (!existing && !name) return { error: "Full name is required to create your account." };
+  if (!mobile) return { error: INDIAN_MOBILE_ERROR };
+  if (!code) return { error: "Enter the verification code." };
 
   try {
-    await studentSignIn("otp", {
-      mobile,
-      code,
-      mode: existing ? "login" : "register",
-      name,
-      email,
-      redirectTo: callbackUrl,
-    });
+    await studentSignIn("otp", { mobile: mobile.e164, code, mode: "login", redirectTo: callbackUrl });
+    return {};
+  } catch (error) {
+    return { error: unwrapAuthError(error, "Verification failed. Please try again.") };
+  }
+}
+
+function parseFullName(raw: FormDataEntryValue | null): string | null {
+  const name = String(raw ?? "").trim().replace(/\s+/g, " ");
+  return name.length >= 2 && name.length <= 80 ? name : null;
+}
+
+/**
+ * Create Account (mobile-first), step 1: Full Name + +91 mobile → OTP.
+ * Same answer whether or not the number already has an account; that is
+ * only revealed after the OTP proves ownership (lib/auth-student.ts).
+ */
+export async function sendRegisterOtpAction(
+  _prevState: AuthFormState,
+  formData: FormData
+): Promise<AuthFormState> {
+  const providerConfig = await getAuthProviderConfig();
+  if (!providerConfig.registerEnabled) return { error: "New account creation is currently disabled." };
+  const platform = await getPlatformControls();
+  if (!effectivePlatformControls(platform).registrationsOpen) return { error: pausedMessage(platform, "registrations") };
+
+  const name = parseFullName(formData.get("name"));
+  if (!name) return { error: "Enter your full name (2–80 characters)." };
+  const mobile = parseIndianMobile(String(formData.get("mobile") ?? ""));
+  if (!mobile) return { error: INDIAN_MOBILE_ERROR };
+
+  try {
+    const { devCode } = await requestOtp(mobile.e164, "REGISTER", await clientIp());
+    return { sent: true, mobile: mobile.e164, name, devCode };
+  } catch (error) {
+    if (error instanceof OtpError) return { error: error.message };
+    throw error;
+  }
+}
+
+/**
+ * Create Account, step 2. The OTP is verified and the account created in ONE
+ * server-side call (the "otp" provider, register mode), which then signs the
+ * student in — there is no verified-flag or token for the browser to replay.
+ */
+export async function verifyRegisterOtpAction(
+  _prevState: AuthFormState,
+  formData: FormData
+): Promise<AuthFormState> {
+  const name = parseFullName(formData.get("name"));
+  const mobile = parseIndianMobile(String(formData.get("mobile") ?? ""));
+  const code = String(formData.get("code") ?? "").trim();
+  const callbackUrl = safeCallback(String(formData.get("callbackUrl") ?? ""));
+
+  if (!name) return { error: "Enter your full name (2–80 characters)." };
+  if (!mobile) return { error: INDIAN_MOBILE_ERROR };
+  if (!/^[0-9]{6}$/.test(code)) return { error: "Enter the 6-digit verification code." };
+
+  try {
+    await studentSignIn("otp", { mobile: mobile.e164, code, mode: "register", name, redirectTo: callbackUrl });
     return {};
   } catch (error) {
     return { error: unwrapAuthError(error, "Verification failed. Please try again.") };

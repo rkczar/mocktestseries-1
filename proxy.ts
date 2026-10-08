@@ -5,6 +5,9 @@ import { DEVICE_COOKIE_NAME, deviceCookieOptions, mintDeviceCookieValue, verifyD
 import { getPlatformControls, DEFAULT_MAINTENANCE_MESSAGE, DEFAULT_MAINTENANCE_TITLE, type MaintenanceState } from "@/lib/platform-controls";
 import { checkStudentToken } from "@/lib/student-devices";
 import { STUDENT_PATH_HEADER } from "@/lib/student-path";
+import { isMobileVerificationRequired, isStudentMobileVerified } from "@/lib/mobile-verification";
+
+const VERIFY_MOBILE_PATH = "/student/verify-mobile";
 
 const STUDENT_SESSION_COOKIE = "student-session-token";
 
@@ -35,6 +38,18 @@ async function studentTokenAlive(token: Record<string, unknown>, route: string):
     // A database hiccup must not log everyone out; the page re-checks anyway.
     console.error("[auth] proxy session check failed", { code: (error as { code?: string })?.code ?? "UNKNOWN" });
     return true;
+  }
+}
+
+async function mobileVerificationPending(studentDbId: unknown): Promise<boolean> {
+  if (typeof studentDbId !== "string") return false;
+  try {
+    return (await isMobileVerificationRequired()) && !(await isStudentMobileVerified(studentDbId));
+  } catch (error) {
+    // Fail open HERE only: requireStudent() still refuses every protected
+    // page, action and API call for an unverified student.
+    console.error("[auth] proxy mobile-verification check failed", { code: (error as { code?: string })?.code ?? "UNKNOWN" });
+    return false;
   }
 }
 
@@ -192,6 +207,15 @@ export default async function proxy(request: NextRequest) {
         if (token) response.cookies.set(STUDENT_SESSION_COOKIE, "", { path: "/", maxAge: 0 });
         return response;
       });
+    }
+    // Mandatory mobile verification (Admin switch): a page load by a student
+    // without a verified mobile goes to the one-time verification page, with
+    // its destination kept. requireStudent() enforces the same rule for every
+    // Server Action and API call; this is the early, friendly redirect.
+    if (isPageLoad && pathname !== VERIFY_MOBILE_PATH && (await mobileVerificationPending(token.studentDbId))) {
+      const verifyUrl = new URL(VERIFY_MOBILE_PATH, request.nextUrl.origin);
+      verifyUrl.searchParams.set("callbackUrl", destination);
+      return withDeviceCookie(request, () => NextResponse.redirect(verifyUrl));
     }
     return withDeviceCookie(request, (init) => NextResponse.next(init), { [STUDENT_PATH_HEADER]: destination });
   }

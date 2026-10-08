@@ -47,7 +47,7 @@ export class AuthRateLimitError extends Error {
 const since = (windowMs: number) => new Date(Date.now() - windowMs);
 const knownIp = (ip: string) => Boolean(ip) && ip !== UNKNOWN_IP;
 
-export const OTP_VERIFY_METHODS = ["PHONE_OTP", "CREATE_ACCOUNT", "PASSWORD_RESET_VERIFY"];
+export const OTP_VERIFY_METHODS = ["PHONE_OTP", "CREATE_ACCOUNT", "PASSWORD_RESET_VERIFY", "MOBILE_VERIFY"];
 
 /** Student password login: per-IP and per-identifier failure caps. */
 export async function assertStudentPasswordLoginAllowed(identifier: string, ip: string): Promise<void> {

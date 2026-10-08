@@ -57,6 +57,13 @@ export interface AuthProviderPublicConfig {
   passwordEnabled: boolean;
   otpEnabled: boolean;
   registerEnabled: boolean;
+  /**
+   * Mandatory mobile OTP verification (default OFF). When ON: Create Account
+   * is mobile-first (name + +91 mobile + OTP), the password sign-up action is
+   * refused, and requireStudent() sends every student without a verified
+   * mobile to /student/verify-mobile (lib/mobile-verification.ts).
+   */
+  mobileVerificationRequired: boolean;
 }
 
 interface StoredGoogle {
@@ -80,7 +87,7 @@ interface StoredMsg91 {
 interface StoredProviders {
   google?: StoredGoogle;
   msg91?: StoredMsg91;
-  toggles?: { passwordEnabled?: boolean; otpEnabled?: boolean; registerEnabled?: boolean };
+  toggles?: { passwordEnabled?: boolean; otpEnabled?: boolean; registerEnabled?: boolean; mobileVerificationRequired?: boolean };
 }
 
 let cache: { fetchedAt: number; value: AuthProviderPublicConfig } | null = null;
@@ -152,6 +159,7 @@ function toPublic(raw: StoredProviders): AuthProviderPublicConfig {
     passwordEnabled: raw.toggles?.passwordEnabled ?? true,
     otpEnabled: raw.toggles?.otpEnabled ?? true,
     registerEnabled: raw.toggles?.registerEnabled ?? true,
+    mobileVerificationRequired: raw.toggles?.mobileVerificationRequired ?? false,
   };
 }
 
@@ -207,7 +215,7 @@ export interface ProviderConfigUpdate {
     flowId?: string;
     widgetId?: string;
   };
-  toggles?: { passwordEnabled?: boolean; otpEnabled?: boolean; registerEnabled?: boolean };
+  toggles?: { passwordEnabled?: boolean; otpEnabled?: boolean; registerEnabled?: boolean; mobileVerificationRequired?: boolean };
 }
 
 /**
@@ -249,6 +257,8 @@ export async function saveAuthProviderConfig(update: ProviderConfigUpdate): Prom
       passwordEnabled: update.toggles.passwordEnabled ?? raw.toggles?.passwordEnabled ?? true,
       otpEnabled: update.toggles.otpEnabled ?? raw.toggles?.otpEnabled ?? true,
       registerEnabled: update.toggles.registerEnabled ?? raw.toggles?.registerEnabled ?? true,
+      mobileVerificationRequired:
+        update.toggles.mobileVerificationRequired ?? raw.toggles?.mobileVerificationRequired ?? false,
     };
   }
 

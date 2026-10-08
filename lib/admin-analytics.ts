@@ -1,5 +1,5 @@
 import "server-only";
-import { AttemptStatus } from "@prisma/client";
+import { AttemptStatus, StudentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { toIstDateString } from "@/lib/ist-time";
 
@@ -156,10 +156,23 @@ export async function getPlatformAnalytics() {
 
   const funnel = distinctCounts[0];
 
+  // Mobile OTP verification (lib/mobile-verification.ts). Deleted accounts are
+  // left out; only a recorded OTP verification counts as verified.
+  const [verificationAccounts, mobileVerified] = await Promise.all([
+    prisma.student.count({ where: { status: { not: StudentStatus.DELETED } } }),
+    prisma.student.count({ where: { status: { not: StudentStatus.DELETED }, mobileVerifiedAt: { not: null } } }),
+  ]);
+
   const reportCountByStatus = Object.fromEntries(reportedQuestionCounts.map((r) => [r.status, r._count._all]));
   const reportsTotal = reportedQuestionCounts.reduce((sum, r) => sum + r._count._all, 0);
 
   return {
+    mobileVerification: {
+      accounts: verificationAccounts,
+      verified: mobileVerified,
+      unverified: verificationAccounts - mobileVerified,
+      completionRate: verificationAccounts > 0 ? (mobileVerified / verificationAccounts) * 100 : null,
+    },
     totalStudents,
     activeStudents7d,
     newStudents30d,

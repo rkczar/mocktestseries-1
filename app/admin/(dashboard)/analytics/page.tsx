@@ -148,6 +148,16 @@ export default async function AnalyticsPage() {
         <StatCard label="Saved Questions" value={a.savedQuestionsCount} />
       </div>
 
+      <div className="flex flex-col gap-2">
+        <h2 className="text-sm font-semibold text-[var(--color-foreground)]">Mobile Verification</h2>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <StatCard label="Total Student Accounts" value={a.mobileVerification.accounts} />
+          <StatCard label="Mobile Verified Students" value={a.mobileVerification.verified} />
+          <StatCard label="Mobile Unverified Students" value={a.mobileVerification.unverified} />
+          <StatCard label="Verification Completion Rate" value={formatPercent(a.mobileVerification.completionRate)} />
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <DailyTrend title="New Signups" description="Last 14 days, by registration date (IST)" series={a.signupsByDay} />
         <DailyTrend title="Test Attempts" description="Last 14 days, submitted attempts by submission date (IST)" series={a.attemptsByDay} />

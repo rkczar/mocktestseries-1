@@ -240,9 +240,18 @@ export function LoginMethodsCard({ config }: { config: AuthProviderPublicConfig 
             { name: "passwordEnabled", label: "User ID / Email + Password", defaultChecked: config.passwordEnabled },
             { name: "otpEnabled", label: "Mobile OTP", defaultChecked: config.otpEnabled },
             { name: "registerEnabled", label: "Create Account (new users)", defaultChecked: config.registerEnabled },
+            {
+              name: "mobileVerificationRequired",
+              label: "Require mobile OTP verification (all students)",
+              hint: "New accounts sign up with Name + +91 mobile + OTP. Existing and Google students must verify their mobile once before using tests, results or their dashboard. Turn on only after a real OTP has been received.",
+              defaultChecked: config.mobileVerificationRequired,
+            },
           ].map((row) => (
-            <div key={row.name} className="flex items-center justify-between rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-2.5">
-              <p className="text-sm font-medium text-[var(--color-foreground)]">{row.label}</p>
+            <div key={row.name} className="flex items-center justify-between gap-3 rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-2.5">
+              <div>
+                <p className="text-sm font-medium text-[var(--color-foreground)]">{row.label}</p>
+                {"hint" in row ? <p className="mt-0.5 text-xs text-[var(--color-muted-foreground)]">{row.hint}</p> : null}
+              </div>
               <Switch name={row.name} defaultChecked={row.defaultChecked} />
             </div>
           ))}

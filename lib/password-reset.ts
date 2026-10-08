@@ -9,6 +9,7 @@ import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { assertOtpVerifyAllowed, AuthRateLimitError } from "@/lib/auth-rate-limit";
 import { logoutAllStudentSessions } from "@/lib/student-devices";
 import { queueForgotPasswordEmail, queuePasswordChangedEmail } from "@/lib/email/events";
+import { parseIndianMobile, storedMobileVariants } from "@/lib/indian-mobile";
 
 /**
  * Student Forgot Password — the one reset path, built on the existing phone
@@ -48,9 +49,12 @@ function hashToken(token: string) {
 async function findStudentByIdentifier(rawIdentifier: string) {
   const identifier = rawIdentifier.trim();
   if (!identifier) return null;
-  const or: { email?: string; mobile?: string; studentId?: string }[] = [{ email: identifier.toLowerCase() }];
+  const or: { email?: string; mobile?: string | { in: string[] }; studentId?: string }[] = [{ email: identifier.toLowerCase() }];
   const mobile = normalizeMobile(identifier);
   if (/^\+?[0-9]{7,15}$/.test(mobile)) or.push({ mobile });
+  // Verified numbers are stored as +91XXXXXXXXXX; match what the student typed in any spelling.
+  const indian = parseIndianMobile(identifier);
+  if (indian) or.push({ mobile: { in: storedMobileVariants(indian) } });
   or.push({ studentId: identifier.toUpperCase() });
   const student = await prisma.student.findFirst({
     where: { OR: or },
