@@ -13,6 +13,13 @@
  *
  *   BASE=http://localhost:3111 FIXTURE=/tmp/lcb.json DATABASE_URL=<scratch> SHOTS=<dir> \
  *     NODE_PATH=<dir containing playwright> node scripts/verify-live-cbt-ui.mjs
+ *
+ * MOBILE OTP mode (switch ON): also pass MSG91_MOCK_FILE=<file> — the same file
+ * the server's scripts/msg91-widget-mock.mjs writes (see verify-mobile-otp.mjs
+ * for the server invocation; no real SMS is sent) — and turn the switch on with
+ * `scripts/mobile-otp-fixture.ts flag on`. Then the viewer is an existing
+ * UNVERIFIED student who must verify inside the share-link flow, early/abandon
+ * are already verified, and the late joiner registers mobile-first (Name + +91 + OTP).
  */
 import { readFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -33,6 +40,27 @@ function check(label, ok, detail) {
 const DB = process.env.DATABASE_URL.replace(/\?schema=public$/, "");
 const sql = (q) => execFileSync("psql", [DB, "-Atc", q], { encoding: "utf8" }).trim();
 const testUrl = `${BASE}/student/test-series/${F.l1}`;
+
+const MOCK_FILE = process.env.MSG91_MOCK_FILE;
+const OTP_MODE = Boolean(MOCK_FILE);
+const LATE_DIGITS = "9000007999";
+const lateWhere = OTP_MODE ? `s.mobile='+91${LATE_DIGITS}'` : `s.email='${F.lateEmail}'`;
+const mockLatest = (digits) => {
+  try {
+    return JSON.parse(readFileSync(MOCK_FILE, "utf8")).latest[`91${digits}`];
+  } catch {
+    return undefined;
+  }
+};
+/** The code the MSG91 mock "delivered" to +91<digits> after request `afterReqId`. */
+async function otpFor(digits, afterReqId) {
+  for (let i = 0; i < 60; i++) {
+    const latest = mockLatest(digits);
+    if (latest && latest.reqId !== afterReqId) return latest.code;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error(`no OTP delivered to ${digits}`);
+}
 
 async function login(page, email, { viaShareLink = false } = {}) {
   if (!viaShareLink) await page.goto(`${BASE}/login`);
@@ -58,6 +86,7 @@ async function startLive(page) {
   return page.url().split("/").at(-2);
 }
 const fetchStatus = (page, url) => page.evaluate(async (u) => (await fetch(u)).status, url);
+const attemptCountFor = (studentId) => sql(`select count(*) from "TestAttempt" where "mockTestId"='${F.l1}' and "studentId"='${studentId}'`);
 const attemptCount = () => sql(`select count(*) from "TestAttempt" where "mockTestId"='${F.l1}'`);
 
 /** Student Dashboard "Next Test" card, opened in a fresh tab of an already signed-in context. */
@@ -73,8 +102,13 @@ async function dashboardCard(ctx, shot) {
   return out;
 }
 
-const startAt = Date.now() + 70_000;
-const endAt = startAt + 120_000;
+if (OTP_MODE) {
+  // viewer = existing UNVERIFIED password student; early/abandon = already verified.
+  sql(`update "Student" set "mobileVerifiedAt" = null where id = '${F.students.viewer.id}'`);
+  sql(`update "Student" set "mobileVerifiedAt" = now() where id in ('${F.students.early.id}','${F.students.abandon.id}')`);
+}
+const startAt = Date.now() + (OTP_MODE ? 90_000 : 70_000);
+const endAt = startAt + (OTP_MODE ? 150_000 : 120_000);
 sql(`update "MockTest" set "availableFrom" = to_timestamp(${startAt / 1000}), "availableUntil" = to_timestamp(${endAt / 1000}) where id = '${F.l1}'`);
 console.log(`window: ${new Date(startAt).toISOString()} → ${new Date(endAt).toISOString()}`);
 
@@ -91,6 +125,27 @@ try {
   await viewer.goto(testUrl);
   check("signed-out share link → /login with callbackUrl to the same test", viewer.url().includes("/login") && decodeURIComponent(viewer.url()).includes(`/student/test-series/${F.l1}`), viewer.url());
   await login(viewer, F.students.viewer.email, { viaShareLink: true });
+  if (OTP_MODE) {
+    console.log("\nExisting UNVERIFIED student (switch ON) → one-time verification → same test");
+    await viewer.waitForURL((u) => u.pathname === "/student/verify-mobile", { timeout: 15000 }).catch(() => {});
+    const verifyUrl = new URL(viewer.url());
+    check("password login of an unverified student → /student/verify-mobile", verifyUrl.pathname === "/student/verify-mobile", viewer.url());
+    check("…with the Live CBT test kept as callbackUrl", verifyUrl.searchParams.get("callbackUrl") === `/student/test-series/${F.l1}`, viewer.url());
+    check("'One-Time Mobile Verification Required' shown", (await viewer.getByText("One-Time Mobile Verification Required").count()) >= 1);
+    const blocked = await viewer.evaluate(async (u) => (await fetch(u, { redirect: "follow" })).url, `/student/test-series/${F.l1}`);
+    check("unverified: test page redirects back to verification (no direct-URL bypass)", blocked.includes("/student/verify-mobile"), blocked);
+    const blockedStart = await viewer.evaluate(async (u) => (await fetch(u, { redirect: "follow" })).url, `/student/attempt/resume?mockTest=${F.l1}`);
+    check("unverified: start path refused, no attempt, no enrollment", blockedStart.includes("/student/verify-mobile") && attemptCountFor(F.students.viewer.id) === "0" && sql(`select count(*) from "MockTestEnrollment" where "studentId"='${F.students.viewer.id}'`) === "0", blockedStart);
+    const viewerDigits = sql(`select right(mobile, 10) from "Student" where id='${F.students.viewer.id}'`);
+    const prev = mockLatest(viewerDigits)?.reqId;
+    await viewer.fill("#verify-mobile", viewerDigits);
+    await viewer.getByRole("button", { name: "Send Verification OTP" }).click();
+    const code = await otpFor(viewerDigits, prev);
+    await viewer.locator("#otp-box-0").fill(code);
+    await viewer.waitForURL(testUrl, { timeout: 30000 }).catch(() => {});
+    const row = sql(`select id||','||mobile||','||("mobileVerifiedAt" is not null)||','||(select count(*) from "Student" where email='${F.students.viewer.email}') from "Student" where id='${F.students.viewer.id}'`);
+    check("verified: same account (id unchanged, no duplicate), E.164 number, mobileVerifiedAt set", row === `${F.students.viewer.id},+91${viewerDigits},true,1`, row);
+  }
   check("after login the student is back on the SAME test page", viewer.url() === testUrl, viewer.url());
 
   console.log("\nBefore start");
@@ -111,6 +166,7 @@ try {
   await viewer.screenshot({ path: `${SHOTS}/desktop-enrolled-countdown.png`, fullPage: true });
 
   await login(early, F.students.early.email);
+  if (OTP_MODE) check("already-verified student signs in normally (no verification step)", !early.url().includes("/verify-mobile"), early.url());
   await early.goto(testUrl);
   await early.getByTestId("enroll-button").click();
   await early.getByTestId("enrolled-badge").waitFor({ timeout: 15000 });
@@ -199,18 +255,32 @@ try {
   const late = await lateCtx.newPage();
   await late.goto(testUrl);
   await late.getByText(/Create Account/).first().click().catch(() => {});
-  if (!(await late.locator("#reg-password").count())) await late.goto(`${BASE}/login?tab=register&callbackUrl=${encodeURIComponent(`/student/test-series/${F.l1}`)}`);
-  await late.fill("#name", "Late Comer");
-  await late.fill("#email", F.lateEmail);
-  await late.fill("#mobile", "+919000007999");
-  await late.fill("#reg-password", F.password);
-  await late.fill("#confirmPassword", F.password);
-  await late.locator("input[name=acceptTerms]").check();
-  await late.getByRole("button", { name: /Create Account/ }).last().click();
+  const regField = OTP_MODE ? "#reg-name" : "#reg-password";
+  if (!(await late.locator(regField).count())) await late.goto(`${BASE}/login?tab=register&callbackUrl=${encodeURIComponent(`/student/test-series/${F.l1}`)}`);
+  if (OTP_MODE) {
+    check("switch ON: Create Account is mobile-first (no password field)", (await late.locator("input[type=password]").count()) === 0 && (await late.locator("#reg-mobile").count()) === 1);
+    await late.fill("#reg-name", "Late Comer");
+    await late.fill("#reg-mobile", LATE_DIGITS);
+    const prev = mockLatest(LATE_DIGITS)?.reqId;
+    await late.getByRole("button", { name: "Send OTP" }).click();
+    await late.getByText("Verify Your Mobile Number").waitFor({ timeout: 15000 });
+    check("no account exists before the OTP is verified", sql(`select count(*) from "Student" s where ${lateWhere}`) === "0");
+    const code = await otpFor(LATE_DIGITS, prev);
+    await late.locator("#otp-box-0").fill(code);
+  } else {
+    await late.fill("#name", "Late Comer");
+    await late.fill("#email", F.lateEmail);
+    await late.fill("#mobile", "+919000007999");
+    await late.fill("#reg-password", F.password);
+    await late.fill("#confirmPassword", F.password);
+    await late.locator("input[name=acceptTerms]").check();
+    await late.getByRole("button", { name: /Create Account/ }).last().click();
+  }
   await late.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 30000 });
   check("register via the share link → back on the SAME test", late.url() === testUrl, late.url());
+  if (OTP_MODE) check("late joiner created verified (E.164, mobileVerifiedAt set)", sql(`select count(*) from "Student" s where ${lateWhere} and "mobileVerifiedAt" is not null`) === "1");
   const res = await late.goto(`${BASE}/student/attempt/resume?mockTest=${F.l1}`);
-  check("unenrolled direct start during the window → explained refusal, no attempt", /enroll/i.test(await late.locator("body").innerText()) && sql(`select count(*) from "TestAttempt" a join "Student" s on s.id=a."studentId" where s.email='${F.lateEmail}'`) === "0", res?.url());
+  check("unenrolled direct start during the window → explained refusal, no attempt", /enroll/i.test(await late.locator("body").innerText()) && sql(`select count(*) from "TestAttempt" a join "Student" s on s.id=a."studentId" where ${lateWhere}`) === "0", res?.url());
   await late.goto(testUrl);
   await late.getByTestId("enroll-button").click();
   await late.getByRole("button", { name: /Start Live Test/ }).waitFor({ timeout: 15000 });

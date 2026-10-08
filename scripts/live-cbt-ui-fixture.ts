@@ -24,6 +24,8 @@ const ADMIN = "qa-lcb-admin";
 const TAG = "QALCB";
 const EMAILS = { viewer: "qa-lcb-viewer@example.test", early: "qa-lcb-early@example.test", abandon: "qa-lcb-abandon@example.test" };
 const LATE_EMAIL = "qa-lcb-late@example.test";
+/** The late joiner's number; with mobile verification ON it signs up by OTP and has no email. */
+const LATE_MOBILE = "+919000007999";
 
 if (/\/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run against what looks like the production database.");
@@ -42,7 +44,7 @@ async function cleanup() {
     await prisma.testResource.deleteMany({ where: { createdByAdminId: admin.id } });
     await prisma.adminUser.delete({ where: { id: admin.id } });
   }
-  const students = await prisma.student.findMany({ where: { OR: [{ email: { in: [...Object.values(EMAILS), LATE_EMAIL] } }, { studentId: { startsWith: `${TAG}-` } }] }, select: { id: true } });
+  const students = await prisma.student.findMany({ where: { OR: [{ email: { in: [...Object.values(EMAILS), LATE_EMAIL] } }, { mobile: LATE_MOBILE }, { studentId: { startsWith: `${TAG}-` } }] }, select: { id: true } });
   const ids = students.map((s) => s.id);
   await prisma.testAttempt.deleteMany({ where: { studentId: { in: ids } } });
   for (const model of ["studentLoginAttempt", "studentActivity", "studentSession", "deviceSecurityEvent", "studentDevice", "studentExamEnrollment", "studentProfile"] as const) {
