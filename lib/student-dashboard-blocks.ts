@@ -11,9 +11,12 @@
  * `card` blocks share one grid, so any admin order still reads cleanly.
  */
 
-export type StudentDashboardGroup = "overview" | "practice" | "pyq" | "recent" | "account";
+export type StudentDashboardGroup = "live" | "overview" | "practice" | "pyq" | "recent" | "account";
 
 export const STUDENT_DASHBOARD_BLOCKS = [
+  // First in the registry with no anchor, so it lands at the very top of the
+  // default layout and of every saved layout that doesn't have it yet.
+  { id: "live-cbt-promotion", label: "Live CBT", group: "live", card: false, description: "The most relevant admin-promoted Live CBT (upcoming / live / submitted): countdown, Enroll / Enter Live Test, Share. Hidden when no Live CBT is promoted" },
   { id: "access-status", label: "Access & Subscription", group: "account", card: false, description: "Free / Complete Access / Expired state per exam: upgrade offer, Free vs Complete comparison, or active plan with expiry" },
   { id: "performance-summary", label: "Performance Summary", group: "overview", card: false, description: "MCQs today, questions attempted, tests completed, streak, average score" },
   { id: "overall-rank", label: "Overall Rank", group: "overview", card: false, description: "Active exam's Overall Rank (average percentile over admin-selected Mock Tests, 3+ ranked tests); opens Ranking & Progress. Hidden until a Mock Test counts toward Overall Ranking" },
@@ -55,7 +58,7 @@ export function studentDashboardBlockAnchor(id: StudentDashboardBlockId): Studen
   return block.insertBefore ?? null;
 }
 
-/** Default: (What Students Say) → Access & Subscription → Overview → Practice & Tests → Previous Year Papers → Recent Activity → account. */
+/** Default: Live CBT → (What Students Say) → Access & Subscription → Overview → Practice & Tests → Previous Year Papers → Recent Activity → account. */
 export const DEFAULT_STUDENT_DASHBOARD_LAYOUT: StudentDashboardLayout = (() => {
   const layout: StudentDashboardLayout = STUDENT_DASHBOARD_BLOCKS.filter((b) => !("insertBefore" in b)).map((b) => ({ id: b.id, visible: true }));
   for (const b of STUDENT_DASHBOARD_BLOCKS) {

@@ -44,3 +44,75 @@ export function formatCountdown(msLeft: number): string {
   const hms = [h, m, s].map((v) => String(v).padStart(2, "0")).join(":");
   return d > 0 ? `${d}d ${hms}` : hms;
 }
+
+// ---------------------------------------------------------------------------
+// Live CBT promotion + sharing (Student Dashboard card, Share buttons and the
+// public invitation page /live-cbt/[id]). Display text only — the invitation
+// never grants anything: login, enrollment, payment, the window and result
+// release are all still enforced by the normal server gates.
+// ---------------------------------------------------------------------------
+
+/** Public invitation page (works signed out). */
+export function liveCbtInvitePath(mockTestId: string): string {
+  return `/live-cbt/${encodeURIComponent(mockTestId)}`;
+}
+
+/** Where a signed-out visitor goes: login/register, then back to the test's enrollment page. */
+export function liveCbtLoginHref(mockTestId: string): string {
+  return `/login?callbackUrl=${encodeURIComponent(`/student/test-series/${encodeURIComponent(mockTestId)}`)}`;
+}
+
+const IST_DATE = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+const IST_TIME = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true });
+
+/** "Thu, 08 Oct 2026" in IST (built from parts: en-IN puts a comma before the year). */
+export function formatIstDay(date: Date): string {
+  const part = Object.fromEntries(IST_DATE.formatToParts(date).map((p) => [p.type, p.value]));
+  return `${part.weekday}, ${part.day} ${part.month} ${part.year}`;
+}
+
+/** "10:00 am" in IST (no suffix). */
+export function formatIstClock(date: Date): string {
+  return IST_TIME.format(date);
+}
+
+/** "10:00 am – 12:00 pm IST" (or "10:00 am IST" without an end). */
+export function formatIstWindow(start: Date, end: Date | null): string {
+  return end ? `${formatIstClock(start)} – ${formatIstClock(end)} IST` : `${formatIstClock(start)} IST`;
+}
+
+/**
+ * The share text. Only the admin-configured test details and the public
+ * invitation URL — never a student, attempt, answer or result.
+ */
+export function buildLiveCbtShareMessage(t: { examName: string; title: string; startsAt: Date; endsAt: Date | null; url: string }): string {
+  return [
+    `🩺 ${t.examName} — LIVE CBT`,
+    "",
+    `Test: ${t.title}`,
+    `Date: ${formatIstDay(t.startsAt)}`,
+    `Time: ${formatIstWindow(t.startsAt, t.endsAt)}`,
+    "",
+    "Experience a real-time computer-based mock test.",
+    "Enroll now and compete with other aspirants.",
+    "",
+    t.url,
+    "",
+    "MockTestSeries.in",
+  ].join("\n");
+}
+
+/** WhatsApp: the whole message (it already ends with the URL), encoded once. */
+export function whatsappShareHref(message: string): string {
+  return `https://wa.me/?text=${encodeURIComponent(message)}`;
+}
+
+/** Telegram puts `url` first, so the text is the message without its URL line. */
+export function telegramShareHref(url: string, message: string): string {
+  const text = message
+    .split("\n")
+    .filter((line) => line !== url)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+  return `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`;
+}

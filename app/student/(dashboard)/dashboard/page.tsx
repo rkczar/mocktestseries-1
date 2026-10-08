@@ -26,6 +26,8 @@ import { getStudentReviewState } from "@/lib/student-review";
 import { StudentReviewCard } from "./review-card";
 import { getDashboardReviewsSafe } from "@/lib/reviews";
 import { ReviewsSection } from "@/components/homepage/reviews-section";
+import { getDashboardLiveCbtPromotion } from "@/lib/live-cbt";
+import { getSiteUrl } from "@/lib/site-url";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
@@ -56,7 +58,8 @@ export default async function StudentDashboardPage() {
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const [[rawExamMetrics, subjects, nextTest, papers, overall], omrSheet, layout, accessSummaries, reviewState, publicReviews] = await Promise.all([
+  const siteUrl = await getSiteUrl();
+  const [[rawExamMetrics, subjects, nextTest, papers, overall], omrSheet, layout, accessSummaries, reviewState, publicReviews, liveCbt] = await Promise.all([
     activeExamId
       ? Promise.all([
           getExamScopedDashboardMetrics(student.id, activeExamId),
@@ -74,6 +77,8 @@ export default async function StudentDashboardPage() {
     getStudentReviewState(student.id).catch(() => null),
     // Same cached query as the homepage section; never throws, null hides the block.
     getDashboardReviewsSafe(),
+    // Live CBT card (admin-promoted); never let it break the dashboard.
+    getDashboardLiveCbtPromotion(student.id, activeExamId, siteUrl).catch(() => null),
   ]);
   // Server-rendered per exam; the client picks the active exam's card, so an
   // exam switch never shows another exam's access state.
@@ -119,6 +124,8 @@ export default async function StudentDashboardPage() {
         initialSubjects={subjects}
         studyStreak={globalMetrics.studyStreak}
         nextTest={nextTestCard}
+        liveCbt={liveCbt}
+        serverNow={Date.now()}
         omrResourceId={omrSheet?.id ?? null}
         initialPapers={papers}
         layout={layout}

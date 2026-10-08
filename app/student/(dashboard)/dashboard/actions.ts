@@ -13,6 +13,8 @@ import { InsufficientQuestionsError, NoQuestionsAvailableError } from "@/lib/que
 import { getOverallStanding, OVERALL_MIN_RANKED_TESTS } from "@/lib/leaderboard";
 import { toDashboardMetricsView, toOverallRankView } from "./metrics-view";
 import { getDashboardPaperViews } from "./pyq-view";
+import { getDashboardLiveCbtPromotion } from "@/lib/live-cbt";
+import { getSiteUrl } from "@/lib/site-url";
 
 export interface TestOnTheGoFormState {
   error?: string;
@@ -29,12 +31,13 @@ export async function getActiveExamDashboardDataAction(examId: string) {
   const enrolled = await isStudentEnrolledInExam(student.id, examId);
   if (!enrolled) throw new Error("You are not enrolled in this exam.");
 
-  const [rawMetrics, subjects, nextTestRow, papers, overall] = await Promise.all([
+  const [rawMetrics, subjects, nextTestRow, papers, overall, liveCbt] = await Promise.all([
     getExamScopedDashboardMetrics(student.id, examId),
     getExamSubjectsOverview(examId),
     getNextScheduledTestForStudent(student.id, examId),
     getDashboardPaperViews(student.id, examId),
     getOverallStanding(examId, student.id),
+    getSiteUrl().then((siteUrl) => getDashboardLiveCbtPromotion(student.id, examId, siteUrl)).catch(() => null),
   ]);
   const nextTest = nextTestRow
     ? {
@@ -49,7 +52,7 @@ export async function getActiveExamDashboardDataAction(examId: string) {
       }
     : null;
   const overallRank = toOverallRankView({ id: examId, name: rawMetrics.examName }, overall, OVERALL_MIN_RANKED_TESTS);
-  return { metrics: { ...toDashboardMetricsView(rawMetrics), overallRank }, subjects, nextTest, papers };
+  return { metrics: { ...toDashboardMetricsView(rawMetrics), overallRank }, subjects, nextTest, papers, liveCbt, serverNow: Date.now() };
 }
 
 function str(formData: FormData, key: string): string {

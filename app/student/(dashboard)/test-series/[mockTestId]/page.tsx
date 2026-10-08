@@ -4,7 +4,9 @@ import { AlertTriangle, CalendarClock, Clock, ListChecks, Lock } from "lucide-re
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { getMockTestDetailForStudent } from "@/lib/student-data";
 import { AVAILABILITY_LABELS, isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
-import { countMockTestEnrollments, isEnrolledInMockTest } from "@/lib/live-cbt";
+import { countMockTestEnrollments, getLiveCbtShare, isEnrolledInMockTest } from "@/lib/live-cbt";
+import { LiveCbtShareButton } from "@/components/student/live-cbt-share-button";
+import { getSiteUrl } from "@/lib/site-url";
 import { effectiveEnrollmentCloseAt } from "@/lib/live-cbt-core";
 import { LiveCbtPanel } from "./live-cbt-panel";
 import { serverNow } from "@/lib/attempt-timing";
@@ -97,6 +99,8 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
     : null;
   const releaseInstant = mockResultReleaseInstant(mockTest);
   const enrollCloseAt = effectiveEnrollmentCloseAt(mockTest);
+  // Share (admin "Allow Live CBT Sharing"): before or after enrolling, never once the window closed.
+  const share = mockTest.allowSharing ? await getLiveCbtShare(mockTest.id, await getSiteUrl()) : null;
 
   let action: React.ReactNode;
   if (inProgressAttempt && access.allowed) {
@@ -334,6 +338,8 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
       )}
 
       {action}
+
+      {share ? <LiveCbtShareButton url={share.url} message={share.message} title={mockTest.title} /> : null}
 
       {latestSubmittedAttempt ? (
         <div className="flex flex-wrap justify-center gap-2">

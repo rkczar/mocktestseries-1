@@ -179,10 +179,10 @@ async function main() {
   check("MASTER_ADMIN has TEST_SERIES_MANAGE", DEFAULT_ROLE_PERMISSIONS[RoleName.MASTER_ADMIN].includes(PERMISSIONS.TEST_SERIES_MANAGE));
 
   console.log("\nG. Dashboard block");
-  check("access-status registered first", STUDENT_DASHBOARD_BLOCKS[0].id === "access-status");
+  check("access-status registered first (after the Live CBT card)", STUDENT_DASHBOARD_BLOCKS[0].id === "live-cbt-promotion" && STUDENT_DASHBOARD_BLOCKS[1].id === "access-status");
   const legacy = normalizeStudentDashboardLayout([{ id: "performance-summary", visible: true }, { id: "subscription-status", visible: false }]);
   // Only the anchored "student-reviews" block (registry insertBefore: access-status) may precede it.
-  check("Saved layouts gain access-status at the top, visible", legacy[0].id === "student-reviews" && legacy[1].id === "access-status" && legacy[1].visible);
+  check("Saved layouts gain access-status at the top, visible", legacy[0].id === "live-cbt-promotion" && legacy[1].id === "student-reviews" && legacy[2].id === "access-status" && legacy[2].visible);
 
   await prisma.$disconnect();
   console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);

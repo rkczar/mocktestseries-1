@@ -116,12 +116,12 @@ async function unitChecks() {
   const prodSaved = PRODUCTION_SAVED_LAYOUT.map((id) => ({ id, visible: true }));
   const prod = normalizeStudentDashboardLayout(prodSaved).map((b) => b.id);
   check("dashboard: reviews block directly above access-status in the saved production layout", prod[prod.indexOf("access-status") - 1] === "student-reviews", prod);
-  check("dashboard: every other block keeps its saved order", JSON.stringify(prod.filter((id) => id !== "student-reviews" && id !== "share-review")) === JSON.stringify(prodSaved.map((b) => b.id)), prod);
+  check("dashboard: every other block keeps its saved order", JSON.stringify(prod.filter((id) => id !== "student-reviews" && id !== "share-review" && id !== "live-cbt-promotion")) === JSON.stringify(prodSaved.map((b) => b.id)), prod);
   const moved = normalizeStudentDashboardLayout([{ id: "access-status", visible: true }, { id: "weak-topics", visible: true }]).map((b) => b.id);
-  check("dashboard: follows access-status wherever the admin put it", moved[0] === "student-reviews" && moved[1] === "access-status", moved);
+  check("dashboard: follows access-status wherever the admin put it", moved[1] === "student-reviews" && moved[2] === "access-status", moved);
   const def = DEFAULT_STUDENT_DASHBOARD_LAYOUT.map((b) => b.id);
   check("dashboard: default layout also places it directly above access-status", def[def.indexOf("access-status") - 1] === "student-reviews" && def.length === STUDENT_DASHBOARD_BLOCKS.length);
-  check("dashboard: access-status stays first in the registry", STUDENT_DASHBOARD_BLOCKS[0].id === "access-status");
+  check("dashboard: access-status stays first in the registry (after the Live CBT card)", STUDENT_DASHBOARD_BLOCKS[0].id === "live-cbt-promotion" && STUDENT_DASHBOARD_BLOCKS[1].id === "access-status");
   const hidden = normalizeStudentDashboardLayout([...prodSaved, { id: "student-reviews", visible: false }]);
   check("dashboard: an admin-hidden reviews block stays hidden", hidden.find((b) => b.id === "student-reviews")?.visible === false);
   check("settings: null -> defaults", JSON.stringify(normalizeReviewsSectionSettings(null)) === JSON.stringify(DEFAULT_REVIEWS_SECTION_SETTINGS));

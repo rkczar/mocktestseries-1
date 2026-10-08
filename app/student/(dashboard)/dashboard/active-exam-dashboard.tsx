@@ -38,6 +38,8 @@ import {
 } from "@/lib/student-dashboard-blocks";
 import { omrDownloadHref } from "@/components/omr/omr-practice-card";
 import { InstallAppCard } from "@/components/pwa/install-app";
+import type { LiveCbtPromotionView } from "@/lib/live-cbt";
+import { LiveCbtPromotionCard } from "./live-cbt-promotion";
 
 // Practice & Tests — every test/practice entry point, one card per action.
 // Mock Tests covers the schedule too (it lives on the Test Series page).
@@ -115,6 +117,8 @@ export function ActiveExamDashboard({
   initialSubjects,
   studyStreak,
   nextTest: initialNextTest,
+  liveCbt: initialLiveCbt = null,
+  serverNow: initialServerNow,
   omrResourceId = null,
   initialPapers,
   layout,
@@ -130,6 +134,10 @@ export function ActiveExamDashboard({
   initialSubjects: SubjectOverview[];
   studyStreak: number;
   nextTest: NextTestCard | null;
+  /** Admin-promoted Live CBT card (lib/live-cbt.ts#getDashboardLiveCbtPromotion); null hides the block. */
+  liveCbt?: LiveCbtPromotionView | null;
+  /** Server clock (ms) at render — the Live CBT countdown corrects the client clock by it. */
+  serverNow: number;
   omrResourceId?: string | null;
   initialPapers: DashboardPaperView[];
   /** Admin-managed block order/visibility (lib/student-dashboard-layout.ts). */
@@ -150,6 +158,7 @@ export function ActiveExamDashboard({
   const [subjects, setSubjects] = useState(initialSubjects);
   const [nextTest, setNextTest] = useState(initialNextTest);
   const [papers, setPapers] = useState(initialPapers);
+  const [liveCbt, setLiveCbt] = useState({ promo: initialLiveCbt, serverNow: initialServerNow });
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -167,6 +176,7 @@ export function ActiveExamDashboard({
         setSubjects(data.subjects);
         setNextTest(data.nextTest);
         setPapers(data.papers);
+        setLiveCbt({ promo: data.liveCbt, serverNow: data.serverNow });
       } catch (error) {
         setSwitchError(error instanceof Error ? error.message : "Could not switch exams.");
       }
@@ -177,6 +187,7 @@ export function ActiveExamDashboard({
 
   // Every registered block (lib/student-dashboard-blocks.ts). null = nothing
   // to show for this student right now; the block is then skipped cleanly.
+  const promoShown = liveCbt.promo !== null && layout.some((b) => b.id === "live-cbt-promotion" && b.visible);
   const blocks: Record<StudentDashboardBlockId, React.ReactNode> = {
     "access-status": activeExamId ? (accessPanels[activeExamId] ?? null) : null,
     "performance-summary": (
@@ -206,7 +217,11 @@ export function ActiveExamDashboard({
         />
       </div>
     ),
-    "test-schedule": nextTest ? (
+    "live-cbt-promotion": liveCbt.promo ? (
+      <LiveCbtPromotionCard key={liveCbt.promo.mockTestId} promo={liveCbt.promo} serverNow={liveCbt.serverNow} />
+    ) : null,
+    // The Live CBT card already shows this test: never show it twice.
+    "test-schedule": nextTest && !(promoShown && liveCbt.promo?.mockTestId === nextTest.mockTestId) ? (
       <Card>
         <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-5">
           <div>

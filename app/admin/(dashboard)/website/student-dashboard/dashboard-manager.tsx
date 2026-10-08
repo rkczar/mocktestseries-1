@@ -20,7 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { studentDashboardBlock, type StudentDashboardLayout } from "@/lib/student-dashboard-blocks";
 import { restoreDefaultStudentDashboardLayoutAction, saveStudentDashboardLayoutAction } from "./actions";
 
-const GROUP_LABEL = { overview: "Overview", practice: "Practice & Tests", pyq: "Previous Year Papers", recent: "Recent Activity", account: "Account" } as const;
+const GROUP_LABEL = { live: "Live CBT", overview: "Overview", practice: "Practice & Tests", pyq: "Previous Year Papers", recent: "Recent Activity", account: "Account" } as const;
 
 /**
  * Student Dashboard Manager — show/hide and reorder the registered dashboard

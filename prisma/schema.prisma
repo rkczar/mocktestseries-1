@@ -1187,6 +1187,14 @@ model MockTest {
   enrollmentClosesAt  DateTime?
   // Show "X students enrolled" on the student page (counts only, no names).
   showEnrolledCount   Boolean          @default(false)
+  // Live CBT promotion (lib/live-cbt.ts). Both OFF by default, so no
+  // existing test changes. Promote = the Student Dashboard's Live CBT card;
+  // Sharing = Share buttons + the public invitation page /live-cbt/[id].
+  // Both apply only to a published Fixed Window test. promoText: optional
+  // short line shown on the card / invitation page.
+  promoteOnDashboard  Boolean          @default(false)
+  allowSharing        Boolean          @default(false)
+  promoText           String?
   // Reused as "Test Number" — the test's display/sort position within its
   // Test Series (already existed for general ordering; no new field needed).
   order               Int              @default(0)

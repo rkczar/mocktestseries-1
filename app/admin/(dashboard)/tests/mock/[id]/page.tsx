@@ -24,6 +24,7 @@ import { AccessResultForm, ScheduleForm } from "./schedule-form";
 import { RankingSettingsForm } from "@/components/admin/ranking-settings-form";
 import { EnrollmentForm } from "./enrollment-form";
 import { countMockTestEnrollments } from "@/lib/live-cbt";
+import { liveCbtInvitePath } from "@/lib/live-cbt-core";
 import { getSiteUrl } from "@/lib/site-url";
 import { getRankingConfig } from "@/lib/leaderboard";
 import { MockDetailsForm } from "../mock-details-form";
@@ -387,10 +388,18 @@ export default async function MockTestDetailPage({
               </li>
             </ul>
             {mode !== "FIXED_WINDOW" ? (
-              <p className="text-xs text-[var(--color-muted-foreground)]">
-                Not a Live CBT yet: choose <a href="#schedule" className="text-[var(--color-primary)] hover:underline">Fixed Window in Step 4</a>. Saving it
-                sets Single Attempt and &quot;After test window closes&quot; automatically.
-              </p>
+              <>
+                <p className="text-xs text-[var(--color-muted-foreground)]">
+                  Not a Live CBT yet: choose <a href="#schedule" className="text-[var(--color-primary)] hover:underline">Fixed Window in Step 4</a>. Saving it
+                  sets Single Attempt and &quot;After test window closes&quot; automatically.
+                </p>
+                {mockTest.enrollmentEnabled ? (
+                  <p className="flex items-start gap-1.5 text-xs text-[var(--color-warning)]" data-testid="enrollment-without-window">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /> Enrollment is ON but this test has no Fixed Window: students see a
+                    Live CBT with no end time, and it is not promoted on the dashboard or shareable. Choose Fixed Window in Step 4, or turn Enrollment off.
+                  </p>
+                ) : null}
+              </>
             ) : (
               <>
                 {mockTest.resultReleaseMode === "IMMEDIATE" ? (
@@ -412,13 +421,21 @@ export default async function MockTestDetailPage({
             <EnrollmentForm
               mockTestId={mockTest.id}
               enrolledCount={enrolledCount}
-              shareUrl={`${siteUrl}/student/test-series/${mockTest.id}`}
+              shareUrl={
+                mockTest.allowSharing && mode === "FIXED_WINDOW" && mockTest.status === "PUBLISHED"
+                  ? `${siteUrl}${liveCbtInvitePath(mockTest.id)}`
+                  : `${siteUrl}/student/test-series/${mockTest.id}`
+              }
+              promotable={mode === "FIXED_WINDOW" && mockTest.status === "PUBLISHED"}
               readOnly={!canManage}
               values={{
                 enrollmentEnabled: mockTest.enrollmentEnabled,
                 showEnrolledCount: mockTest.showEnrolledCount,
                 opensAtValue: mockTest.enrollmentOpensAt ? toIstDateTimeLocalValue(mockTest.enrollmentOpensAt) : "",
                 closesAtValue: mockTest.enrollmentClosesAt ? toIstDateTimeLocalValue(mockTest.enrollmentClosesAt) : "",
+                promoteOnDashboard: mockTest.promoteOnDashboard,
+                allowSharing: mockTest.allowSharing,
+                promoText: mockTest.promoText ?? "",
               }}
             />
           </div>

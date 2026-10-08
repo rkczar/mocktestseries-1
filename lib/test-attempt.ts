@@ -143,14 +143,19 @@ export function isFormalSource(sourceType: AttemptSourceType): boolean {
  * Fixed Window). A scheduled/competitive mock (window, AFTER_WINDOW or
  * CUSTOM_DATE release) keeps the formal EXAM + admin timing, because a
  * per-question reveal there would leak a held answer key. Grand/Live never.
+ *
+ * A Live CBT (enrollment ON) is never configurable, whatever its schedule:
+ * its page has no Pre-Test Setup, so a "configurable" Live CBT sent Start
+ * back to the same page forever (7 Oct 2026 incident: enrollment ON +
+ * Scheduled Release + Immediate result — Start did nothing).
  */
 export function studentConfigAllowed(
   sourceType: AttemptSourceType,
-  mockTest?: { resultReleaseMode: string; availableUntil: Date | null } | null
+  mockTest?: { resultReleaseMode: string; availableUntil: Date | null; enrollmentEnabled?: boolean } | null
 ): boolean {
   if (sourceType === AttemptSourceType.PREVIOUS_YEAR_PAPER) return true;
   if (sourceType === AttemptSourceType.MOCK_TEST) {
-    return !!mockTest && mockTest.resultReleaseMode === "IMMEDIATE" && mockTest.availableUntil === null;
+    return !!mockTest && !mockTest.enrollmentEnabled && mockTest.resultReleaseMode === "IMMEDIATE" && mockTest.availableUntil === null;
   }
   return false;
 }
@@ -1004,7 +1009,7 @@ async function instantRevealPermitted(attempt: { id: string; sourceType: Attempt
   if (attempt.sourceType !== AttemptSourceType.MOCK_TEST) return true;
   const row = await prisma.testAttempt.findUnique({
     where: { id: attempt.id },
-    select: { mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true } } },
+    select: { mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true, enrollmentEnabled: true } } },
   });
   return !!row?.mockTest && studentConfigAllowed(AttemptSourceType.MOCK_TEST, row.mockTest) && isMockResultReleased(row.mockTest);
 }

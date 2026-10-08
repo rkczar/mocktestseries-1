@@ -3,8 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { assertExamLive } from "@/lib/exam-live";
 import { getContentAccess } from "@/lib/payments/access";
-import { LIVE_MOCK_TEST_WHERE, deriveMockTestAvailability } from "@/lib/mock-test-schedule";
-import { enrollmentWindowState } from "@/lib/live-cbt-core";
+import { LIVE_MOCK_TEST_WHERE, deriveMockTestAvailability, isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
+import { buildLiveCbtShareMessage, effectiveEnrollmentCloseAt, enrollmentWindowState, liveCbtInvitePath } from "@/lib/live-cbt-core";
 import { finalizeIfExpired } from "@/lib/test-attempt";
 
 /**
@@ -235,4 +235,191 @@ export async function getLiveCbtMonitor(mockTestId: string, now: Date = new Date
     },
     rows,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Promotion + sharing (admin: promoteOnDashboard / allowSharing / promoText).
+// Only a PUBLISHED, Fixed Window mock of an active exam is ever promoted or
+// shareable — an unpublished/cancelled test, or one with no window, never is.
+// ---------------------------------------------------------------------------
+
+const PROMOTABLE_WHERE = {
+  ...LIVE_MOCK_TEST_WHERE,
+  exam: { isActive: true },
+  availableFrom: { not: null },
+  availableUntil: { not: null },
+} satisfies Prisma.MockTestWhereInput;
+
+const LIVE_CBT_CARD_SELECT = {
+  id: true,
+  title: true,
+  promoText: true,
+  examId: true,
+  testSeriesId: true,
+  accessType: true,
+  durationMinutes: true,
+  availableFrom: true,
+  availableUntil: true,
+  resultReleaseMode: true,
+  resultReleaseAt: true,
+  enrollmentEnabled: true,
+  enrollmentOpensAt: true,
+  enrollmentClosesAt: true,
+  allowSharing: true,
+  exam: { select: { name: true } },
+  _count: { select: { questions: { where: { question: { status: "PUBLISHED" } } } } },
+} satisfies Prisma.MockTestSelect;
+
+type LiveCbtCardRow = Prisma.MockTestGetPayload<{ select: typeof LIVE_CBT_CARD_SELECT }>;
+
+/** Share URL + message for a test whose sharing is ON (else null). */
+function shareFor(m: LiveCbtCardRow, siteUrl: string) {
+  if (!m.allowSharing || !m.availableFrom) return null;
+  const url = `${siteUrl}${liveCbtInvitePath(m.id)}`;
+  return { url, message: buildLiveCbtShareMessage({ examName: m.exam.name, title: m.title, startsAt: m.availableFrom, endsAt: m.availableUntil, url }) };
+}
+
+/** Public invitation page data (/live-cbt/[id]): null unless published, windowed and sharing ON. No student data. */
+export async function getLiveCbtInvitation(mockTestId: string, siteUrl: string, now: Date = new Date()) {
+  const m = await prisma.mockTest.findFirst({ where: { id: mockTestId, ...PROMOTABLE_WHERE, allowSharing: true }, select: LIVE_CBT_CARD_SELECT });
+  if (!m || !m.availableFrom || !m.availableUntil) return null;
+  return {
+    mockTestId: m.id,
+    title: m.title,
+    examName: m.exam.name,
+    promoText: m.promoText,
+    startsAt: m.availableFrom,
+    endsAt: m.availableUntil,
+    durationMinutes: m.durationMinutes,
+    questionCount: m._count.questions,
+    paid: m.accessType === "PAID",
+    phase: deriveMockTestAvailability(m, now),
+    enrollmentEnabled: m.enrollmentEnabled,
+    enrollmentState: enrollmentWindowState(m, now),
+    share: shareFor(m, siteUrl)!,
+  };
+}
+
+export type LiveCbtCardState = "UPCOMING" | "LIVE" | "COMPLETED";
+
+/** Serializable Student Dashboard Live CBT card (ISO times). */
+export interface LiveCbtPromotionView {
+  mockTestId: string;
+  title: string;
+  examName: string;
+  promoText: string | null;
+  state: LiveCbtCardState;
+  startsAt: string;
+  endsAt: string;
+  durationMinutes: number;
+  questionCount: number;
+  enrollmentEnabled: boolean;
+  enrolled: boolean;
+  enrollmentOpensAt: string | null;
+  enrollmentClosesAt: string | null;
+  /** Student may take this test (FREE, or unlocked). Locked → the card links to the test page's purchase options. */
+  accessAllowed: boolean;
+  inProgressAttemptId: string | null;
+  submittedAttemptId: string | null;
+  resultReleased: boolean;
+  resultReleaseAt: string | null;
+  share: { url: string; message: string } | null;
+  /** How many promoted Live CBTs are relevant right now (the card shows the most relevant one). */
+  promotedCount: number;
+}
+
+/**
+ * The Student Dashboard's Live CBT card: the most relevant promoted Live CBT
+ * for this student (active exam when given). LIVE first (closing soonest),
+ * then UPCOMING (starting soonest), then COMPLETED — the latter only for a
+ * test this student submitted, within 7 days of its window end. A closed
+ * test the student never attempted is not promoted. null = no card.
+ */
+export async function getDashboardLiveCbtPromotion(
+  studentId: string,
+  examId: string | null,
+  siteUrl: string,
+  now: Date = new Date()
+): Promise<LiveCbtPromotionView | null> {
+  const rows = await prisma.mockTest.findMany({
+    where: {
+      ...PROMOTABLE_WHERE,
+      promoteOnDashboard: true,
+      ...(examId ? { examId } : {}),
+      availableUntil: { gt: new Date(now.getTime() - 7 * 86_400_000) },
+    },
+    select: LIVE_CBT_CARD_SELECT,
+    take: 50,
+  });
+  if (rows.length === 0) return null;
+
+  const ids = rows.map((m) => m.id);
+  const [enrollments, attempts] = await Promise.all([
+    prisma.mockTestEnrollment.findMany({ where: { studentId, mockTestId: { in: ids } }, select: { mockTestId: true } }),
+    prisma.testAttempt.findMany({
+      where: { studentId, mockTestId: { in: ids }, sourceType: "MOCK_TEST", status: { in: ["IN_PROGRESS", "SUBMITTED"] } },
+      orderBy: { startedAt: "desc" },
+      select: { id: true, mockTestId: true, status: true },
+    }),
+  ]);
+  const enrolled = new Set(enrollments.map((e) => e.mockTestId));
+  const inProgress = new Map<string, string>();
+  const submitted = new Map<string, string>();
+  for (const a of attempts) {
+    if (!a.mockTestId) continue;
+    const into = a.status === "IN_PROGRESS" ? inProgress : submitted;
+    if (!into.has(a.mockTestId)) into.set(a.mockTestId, a.id);
+  }
+
+  const ranked = rows
+    .map((m) => {
+      const phase = deriveMockTestAvailability(m, now);
+      const state: LiveCbtCardState | null = submitted.has(m.id) && !inProgress.has(m.id)
+        ? "COMPLETED"
+        : phase === "UPCOMING" ? "UPCOMING" : phase === "LIVE_NOW" ? "LIVE" : null;
+      return { m, state };
+    })
+    .filter((r): r is { m: LiveCbtCardRow; state: LiveCbtCardState } => r.state !== null);
+  if (ranked.length === 0) return null;
+  const order: Record<LiveCbtCardState, number> = { LIVE: 0, UPCOMING: 1, COMPLETED: 2 };
+  ranked.sort((a, b) => {
+    if (order[a.state] !== order[b.state]) return order[a.state] - order[b.state];
+    if (a.state === "LIVE") return a.m.availableUntil!.getTime() - b.m.availableUntil!.getTime();
+    if (a.state === "UPCOMING") return a.m.availableFrom!.getTime() - b.m.availableFrom!.getTime();
+    return b.m.availableUntil!.getTime() - a.m.availableUntil!.getTime();
+  });
+
+  const { m, state } = ranked[0];
+  const access = await getContentAccess(studentId, { kind: "MOCK_TEST", id: m.id, examId: m.examId, testSeriesId: m.testSeriesId, accessType: m.accessType });
+  const releaseAt = mockResultReleaseInstant(m);
+  const closeAt = effectiveEnrollmentCloseAt(m);
+  return {
+    mockTestId: m.id,
+    title: m.title,
+    examName: m.exam.name,
+    promoText: m.promoText,
+    state,
+    startsAt: m.availableFrom!.toISOString(),
+    endsAt: m.availableUntil!.toISOString(),
+    durationMinutes: m.durationMinutes,
+    questionCount: m._count.questions,
+    enrollmentEnabled: m.enrollmentEnabled,
+    enrolled: enrolled.has(m.id),
+    enrollmentOpensAt: m.enrollmentOpensAt?.toISOString() ?? null,
+    enrollmentClosesAt: closeAt?.toISOString() ?? null,
+    accessAllowed: access.allowed,
+    inProgressAttemptId: inProgress.get(m.id) ?? null,
+    submittedAttemptId: submitted.get(m.id) ?? null,
+    resultReleased: isMockResultReleased(m, now),
+    resultReleaseAt: releaseAt?.toISOString() ?? null,
+    share: state === "COMPLETED" ? null : shareFor(m, siteUrl),
+    promotedCount: ranked.filter((r) => r.state !== "COMPLETED").length,
+  };
+}
+
+/** Share data for the student test page (null unless sharing is ON and the test is promotable and not over). */
+export async function getLiveCbtShare(mockTestId: string, siteUrl: string, now: Date = new Date()) {
+  const m = await prisma.mockTest.findFirst({ where: { id: mockTestId, ...PROMOTABLE_WHERE, allowSharing: true }, select: LIVE_CBT_CARD_SELECT });
+  if (!m || deriveMockTestAvailability(m, now) === "CLOSED") return null;
+  return shareFor(m, siteUrl);
 }

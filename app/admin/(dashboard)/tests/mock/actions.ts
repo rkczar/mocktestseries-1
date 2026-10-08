@@ -186,6 +186,7 @@ export interface ScheduleFormState {
 
 const AVAILABILITY_MODES: MockAvailabilityMode[] = ["AVAILABLE_NOW", "SCHEDULED_RELEASE", "FIXED_WINDOW"];
 const RESULT_MODES: MockResultRelease[] = ["IMMEDIATE", "AFTER_WINDOW", "CUSTOM_DATE"];
+const PROMO_TEXT_MAX = 160;
 
 function readIst(formData: FormData, key: string): { value: Date | null; invalid: boolean } {
   const raw = ((formData.get(key) as string | null) ?? "").trim();
@@ -262,6 +263,11 @@ export async function updateMockTestEnrollmentAction(mockTestId: string, _prev: 
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   const enrollmentEnabled = formData.get("enrollmentEnabled") === "on";
   const showEnrolledCount = formData.get("showEnrolledCount") === "on";
+  // Live CBT promotion (lib/live-cbt.ts): only ever applied to a published Fixed Window test.
+  const promoteOnDashboard = formData.get("promoteOnDashboard") === "on";
+  const allowSharing = formData.get("allowSharing") === "on";
+  const promoText = String(formData.get("promoText") ?? "").replace(/\s+/g, " ").trim() || null;
+  if (promoText && promoText.length > PROMO_TEXT_MAX) return { error: `Promotional description must be ${PROMO_TEXT_MAX} characters or fewer.` };
   const opens = readIst(formData, "enrollmentOpensAt");
   const closes = readIst(formData, "enrollmentClosesAt");
   if (opens.invalid || closes.invalid) return { error: "Invalid enrollment date/time." };
@@ -272,12 +278,12 @@ export async function updateMockTestEnrollmentAction(mockTestId: string, _prev: 
     return { error: "Enrollment can't close after the test window ends." };
   }
 
-  const data = { enrollmentEnabled, showEnrolledCount, enrollmentOpensAt: opens.value, enrollmentClosesAt: closes.value };
+  const data = { enrollmentEnabled, showEnrolledCount, enrollmentOpensAt: opens.value, enrollmentClosesAt: closes.value, promoteOnDashboard, allowSharing, promoText };
   await prisma.mockTest.update({ where: { id: mockTestId }, data });
   await prisma.auditLog.create({
     data: { actorId: session.user.id, action: "MOCK_TEST_ENROLLMENT_UPDATED", entityType: "MockTest", entityId: mockTestId, metadata: data },
   });
-  revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`, `/student/test-series/${mockTestId}`);
+  revalidateMockSeriesSurfaces(`/admin/tests/mock/${mockTestId}`, `/student/test-series/${mockTestId}`, `/live-cbt/${mockTestId}`);
   return { success: true };
 }
 
