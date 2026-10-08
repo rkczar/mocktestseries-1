@@ -71,6 +71,8 @@ check("groups by exam (both active exams, inactive exam hidden)", examHeadings.l
 check("category headings", ["Test Series Packages", "Previous Year Paper Packages", "Single Mock Tests", "Complete Access Plans"].every((h) => g.html.includes(h)));
 const series = planHtml(g.html, P.series.code) ?? "";
 check("series: sale price ₹899.10, MRP ₹2,000, 55% OFF, validity", series.includes("₹899.10") && series.includes("₹2,000") && /55(<!-- -->)?% OFF/.test(series) && series.includes("100 days"), series.slice(0, 400));
+const saleEnd = (series.replace(/<!-- -->/g, "").match(/Offer ends [^<]*/) ?? [""])[0];
+check("sale end shows a single IST suffix", /IST$/.test(saleEnd) && !/IST\s*IST/.test(g.html.replace(/<!-- -->/g, "")), saleEnd);
 check("series: admin benefits listed", (series.match(/<li/g) ?? []).length >= 1);
 check("PYQ: ₹499, lifetime", (planHtml(g.html, P.pyq.code) ?? "").includes("₹499") && /lifetime/i.test(planHtml(g.html, P.pyq.code) ?? ""));
 check("guest Buy Now → /login?callbackUrl=checkout", series.includes(`href="/login?callbackUrl=${encodeURIComponent(`/student/checkout/${P.series.code}`)}"`));

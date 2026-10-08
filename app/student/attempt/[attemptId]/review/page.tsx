@@ -45,7 +45,7 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
               <p className="text-sm font-medium text-[var(--color-foreground)]">Answer review isn&apos;t available yet</p>
               <p className="text-sm text-[var(--color-muted-foreground)]">
                 {releaseAt
-                  ? `The answer key is released on ${formatIst(releaseAt)} IST.`
+                  ? `The answer key is released on ${formatIst(releaseAt)}.`
                   : "The answer key is released once results are published for everyone."}
               </p>
             </CardContent>

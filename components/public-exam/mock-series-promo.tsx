@@ -33,7 +33,7 @@ export function PriceTag({ price, size = "md" }: { price: ProductPrice; size?: "
         </>
       ) : null}
       {price.saleEndsAt ? (
-        <span className="w-full text-xs text-[var(--color-muted-foreground)]">Offer ends {formatIst(price.saleEndsAt)} IST</span>
+        <span className="w-full text-xs text-[var(--color-muted-foreground)]">Offer ends {formatIst(price.saleEndsAt)}</span>
       ) : null}
     </div>
   );
