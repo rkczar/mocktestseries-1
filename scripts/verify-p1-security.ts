@@ -190,16 +190,36 @@ async function main() {
   ]);
   // POST handlers that write nothing (file generation only) — any admin may use them.
   const READ_ONLY_POST = new Set(["app/api/admin/questions/templates/generate/route.ts#POST"]);
+  // Guard helpers in the same file: `async function guard() { …requirePermission(PERMISSIONS.X)… }`
+  // (fixed key) or `async function requireX(permission) { …requirePermission(permission)… }`
+  // (key passed at the call site as requireX(PERMISSIONS.Y)).
+  const guardHelpers = (src: string) => {
+    const fixed: (readonly [string, string])[] = [];
+    const param: string[] = [];
+    for (const chunk of src.split(/(?=^(?:export )?async function )/m)) {
+      const m = /^async function (\w+)\(([^)]*)\)/.exec(chunk);
+      if (!m) continue;
+      for (const k of chunk.matchAll(/requirePermission\(PERMISSIONS\.(\w+)\)/g)) fixed.push([m[1], k[1]] as const);
+      if (/requirePermission\((?!PERMISSIONS\.)\w+\)/.test(chunk)) param.push(m[1]);
+    }
+    return { fixed, param };
+  };
+  const helperKeysFor = (part: string, helpers: ReturnType<typeof guardHelpers>) => {
+    const keys: string[] = [];
+    for (const [helper, key] of helpers.fixed) if (new RegExp(`\\b${helper}\\(\\)`).test(part)) keys.push(key);
+    for (const helper of helpers.param) for (const k of part.matchAll(new RegExp(`\\b${helper}\\(PERMISSIONS\\.(\\w+)\\)`, "g"))) keys.push(k[1]);
+    return keys;
+  };
   const allowedForFull: string[] = [];
   let checked = 0;
   for (const f of actionFiles) {
     const src = readFileSync(f, "utf8");
-    const helperKeys = [...src.matchAll(/async function (\w+)\(\)[^{]*\{\s*return requirePermission\(PERMISSIONS\.(\w+)\)/g)].map((m) => [m[1], m[2]] as const);
+    const helpers = guardHelpers(src);
     for (const part of src.split(/(?=export async function )/).slice(1)) {
       const name = /export async function (\w+)/.exec(part)![1];
       if (PUBLIC_OK.has(name) || READ_ONLY_ACTIONS.has(`${f}#${name}`)) continue;
       const keys = [...part.matchAll(/requirePermission\(PERMISSIONS\.(\w+)\)/g)].map((m) => m[1]);
-      for (const [helper, key] of helperKeys) if (new RegExp(`\\b${helper}\\(\\)`).test(part)) keys.push(key);
+      keys.push(...helperKeysFor(part, helpers));
       if (/reviewDeletion\(/.test(part)) keys.push("STUDENT_DELETION_MANAGE");
       checked++;
       if (keys.length === 0 || keys.every((k) => full.has(keyByConst.get(k) as PermissionKey))) allowedForFull.push(`${f}#${name}`);
@@ -207,9 +227,11 @@ async function main() {
   }
   for (const f of routeFiles) {
     const src = readFileSync(f, "utf8");
+    const helpers = guardHelpers(src);
     for (const part of src.split(/(?=export async function (?:POST|PUT|PATCH|DELETE))/).slice(1)) {
       const name = /export async function (\w+)/.exec(part)![1];
       const keys = [...part.matchAll(/requirePermission\(PERMISSIONS\.(\w+)\)/g)].map((m) => m[1]);
+      keys.push(...helperKeysFor(part, helpers));
       if (READ_ONLY_POST.has(`${f}#${name}`)) continue;
       checked++;
       if (keys.length === 0 || keys.every((k) => full.has(keyByConst.get(k) as PermissionKey))) allowedForFull.push(`${f}#${name}`);

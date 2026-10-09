@@ -70,23 +70,9 @@ const RANK: Record<EmailStatus, number> = {
   CANCELLED: -1,
 };
 
-export async function handleResendEvent(rawBody: string): Promise<{ handled: boolean; reason?: string }> {
-  let event: ResendEvent;
-  try {
-    event = JSON.parse(rawBody) as ResendEvent;
-  } catch {
-    return { handled: false, reason: "invalid json" };
-  }
-  const messageId = event.data?.email_id;
-  const type = (event.type ?? "").slice(0, 60);
-  if (!messageId || !type) return { handled: false, reason: "no email id" };
-
-  const log = await prisma.emailDeliveryLog.findUnique({ where: { providerMessageId: messageId }, select: { id: true, status: true, studentId: true } });
-  if (!log) return { handled: false, reason: "unknown email" };
-
+function statusFromEvent(type: string, event: ResendEvent): { next: EmailStatus | null; failureReason?: string } {
   let next: EmailStatus | null = null;
   let failureReason: string | undefined;
-  const now = new Date();
   switch (type) {
     case "email.delivered":
       next = "DELIVERED";
@@ -107,6 +93,25 @@ export async function handleResendEvent(rawBody: string): Promise<{ handled: boo
       // email.sent / delivery_delayed / opened / clicked …: recorded, status unchanged.
       break;
   }
+  return { next, failureReason };
+}
+
+export async function handleResendEvent(rawBody: string): Promise<{ handled: boolean; reason?: string }> {
+  let event: ResendEvent;
+  try {
+    event = JSON.parse(rawBody) as ResendEvent;
+  } catch {
+    return { handled: false, reason: "invalid json" };
+  }
+  const messageId = event.data?.email_id;
+  const type = (event.type ?? "").slice(0, 60);
+  if (!messageId || !type) return { handled: false, reason: "no email id" };
+
+  const log = await prisma.emailDeliveryLog.findUnique({ where: { providerMessageId: messageId }, select: { id: true, status: true, studentId: true } });
+  if (!log) return handleSecurityCodeEvent(messageId, type, event);
+
+  const { next, failureReason } = statusFromEvent(type, event);
+  const now = new Date();
 
   if (next && RANK[next] > RANK[log.status]) {
     await prisma.emailDeliveryLog.updateMany({
@@ -134,6 +139,32 @@ export async function handleResendEvent(rawBody: string): Promise<{ handled: boo
         ...(type === "email.complained" ? { promotionalOptOut: true, optedOutAt: now } : {}),
       },
     });
+  }
+  return { handled: true };
+}
+
+/**
+ * Security-code (Email OTP) emails are sent straight to Resend, so they have
+ * no EmailDeliveryLog row: their status lives on EmailOtpRequest. Same
+ * monotonic rule. Never touches the student's email preferences, and the
+ * code/hash is neither read nor logged here.
+ */
+async function handleSecurityCodeEvent(messageId: string, type: string, event: ResendEvent): Promise<{ handled: boolean; reason?: string }> {
+  const row = await prisma.emailOtpRequest.findFirst({ where: { providerMessageId: messageId }, select: { id: true, deliveryStatus: true } });
+  if (!row) return { handled: false, reason: "unknown email" };
+  const { next, failureReason } = statusFromEvent(type, event);
+  if (next && RANK[next] > RANK[row.deliveryStatus ?? "SENT"]) {
+    await prisma.emailOtpRequest.updateMany({
+      where: { id: row.id, deliveryStatus: row.deliveryStatus },
+      data: {
+        deliveryStatus: next,
+        lastEventType: type,
+        ...(next === "DELIVERED" ? { deliveredAt: new Date() } : {}),
+        ...(failureReason ? { deliveryFailure: failureReason } : {}),
+      },
+    });
+  } else {
+    await prisma.emailOtpRequest.update({ where: { id: row.id }, data: { lastEventType: type } });
   }
   return { handled: true };
 }

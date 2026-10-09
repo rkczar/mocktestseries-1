@@ -15,7 +15,7 @@ import { ComposeForm, type ComposeDraft } from "./compose-form";
 import { TemplatesPanel } from "./templates-panel";
 import { SettingsPanel } from "./settings-panel";
 import { SecurityCodesCard } from "./security-codes-card";
-import { getEmailOtpSettings } from "@/lib/email-otp";
+import { getEmailOtpSettings, getSecurityCodeDeliverySummary } from "@/lib/email-otp";
 import { CampaignRowActions, RetryEmailButton } from "./campaign-actions";
 
 /**
@@ -352,12 +352,12 @@ async function LogsTab({ params, canManage }: { params: EmailTabParams; canManag
 
 async function SettingsTab({ canManage, overview }: { canManage: boolean; overview: Awaited<ReturnType<typeof getEmailOverview>> }) {
   const siteUrl = await getSiteUrl();
-  const otp = await getEmailOtpSettings();
+  const [otp, delivery] = await Promise.all([getEmailOtpSettings(), getSecurityCodeDeliverySummary()]);
   return (
     <div className="flex flex-col gap-6">
       <SecurityCodesCard
         canManage={canManage}
-        view={{ enabled: otp.enabled, providerConfigured: overview.env.providerConfigured, lastTest: otp.lastTest, updatedAt: otp.updatedAt, updatedBy: otp.updatedBy }}
+        view={{ enabled: otp.enabled, providerConfigured: overview.env.providerConfigured, lastTest: otp.lastTest, updatedAt: otp.updatedAt, updatedBy: otp.updatedBy, delivery }}
       />
       <SettingsPanel
         canManage={canManage}
