@@ -3176,3 +3176,90 @@ model AccountRecoveryRequest {
   @@index([requesterId])
   @@index([holderId])
 }
+
+// ---------------------------------------------------------------------------
+// Instagram Content Studio (Admin → Instagram). Self-contained and additive:
+// no relation fields on Question / AdminUser, so no existing model, FK or
+// delete behavior changes. `questionId` is a plain indexed reference and
+// `sourceSnapshot` freezes the question exactly as it was when the draft was
+// created (stem, options, correct answer, exam/paper attribution);
+// `sourceHash` detects a later Question Bank edit so a stale post can never be
+// approved. Nothing here ever writes to Question, QuestionOption or
+// PreviousYearPaper. See lib/instagram/.
+//
+// Two partial unique indexes live in the migration SQL (Prisma cannot model
+// them): one CURRENT (supersededAt IS NULL) post per question, and at most
+// one PUBLISHING post per question.
+// ---------------------------------------------------------------------------
+
+enum InstagramPostStatus {
+  DRAFT
+  READY
+  PUBLISHING
+  PUBLISHED
+  FAILED
+}
+
+enum InstagramPostSeries {
+  PYQ
+  MOST_MISSED
+}
+
+model InstagramPost {
+  id                     String              @id @default(cuid())
+  questionId             String
+  questionCode           String
+  series                 InstagramPostSeries
+  /// 1 for the first post of a question; "Create New Version" adds version+1 and supersedes the old row.
+  version                Int                 @default(1)
+  status                 InstagramPostStatus @default(DRAFT)
+  /// Current InstagramPostRevision.revision — bumps on every content/design change (optimistic concurrency).
+  revision               Int                 @default(1)
+  content                Json
+  design                 Json
+  sourceSnapshot         Json
+  sourceHash             String
+  /// MOST_MISSED only: the Question Insights numbers captured when the draft was created.
+  seriesStats            Json?
+  /// Printed question number — entered and verified by an admin, never derived from import order.
+  questionNumber         Int?
+  questionNumberVerified Boolean             @default(false)
+  /// Review checklist + acknowledged quality warnings captured on Mark Ready.
+  review                 Json?
+  reviewedById           String?
+  reviewedAt             DateTime?
+  createdById            String
+  updatedById            String?
+  // Reserved for the (not yet approved) publishing phase.
+  igMediaId              String?
+  igPermalink            String?
+  publishedAt            DateTime?
+  publishError           String?
+  supersededAt           DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  revisions InstagramPostRevision[]
+
+  @@unique([questionId, version])
+  @@index([status])
+  @@index([series, status])
+  @@index([updatedAt])
+}
+
+/// Append-only history of every content/design state of a post (undo / restore).
+model InstagramPostRevision {
+  id           String        @id @default(cuid())
+  postId       String
+  post         InstagramPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  revision     Int
+  /// The revision this state was derived from; Undo walks back along this chain.
+  baseRevision Int?
+  content      Json
+  design       Json
+  note         String
+  createdById  String
+  createdAt    DateTime      @default(now())
+
+  @@unique([postId, revision])
+}

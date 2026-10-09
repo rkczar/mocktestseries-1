@@ -98,6 +98,12 @@ export const PERMISSIONS = {
   // MASTER_ADMIN-only, enforced server-side.
   ACCOUNT_RECOVERY_VIEW: "account-recovery:view",
   ACCOUNT_RECOVERY_MANAGE: "account-recovery:manage",
+  // Instagram Content Studio (Admin -> Instagram): browse PYQ / Most Missed
+  // questions, create and edit carousel drafts, run AI generation, approve
+  // (Mark Ready) and edit studio settings. MASTER_ADMIN-only, enforced
+  // server-side on every page, action and the slide-image route. Publishing
+  // itself is not built yet (lib/instagram/types.ts INSTAGRAM_PUBLISHING_AVAILABLE).
+  INSTAGRAM_MANAGE: "instagram:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

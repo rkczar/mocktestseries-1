@@ -17,6 +17,7 @@ import {
   Archive,
   HardDrive,
   Settings,
+  GalleryHorizontal,
 } from "lucide-react";
 
 export interface AdminNavItem {
@@ -37,6 +38,7 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { label: "Users & Access", href: "/admin/users", icon: ShieldCheck },
   { label: "Analytics", href: "/admin/analytics", icon: BarChart3 },
   { label: "Communications", href: "/admin/communications", icon: MessageSquare },
+  { label: "Instagram", href: "/admin/instagram", icon: GalleryHorizontal },
   { label: "Reviews", href: "/admin/reviews", icon: MessageSquareQuote },
   { label: "SEO", href: "/admin/seo", icon: Search },
   { label: "Security", href: "/admin/security", icon: Lock },
