@@ -1,6 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
-import type { EmailOtpPurpose } from "@prisma/client";
+import type { EmailOtpPurpose, EmailStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEmailProvider } from "@/lib/email/provider";
 import { getEmailEnvConfig } from "@/lib/email/config";
@@ -78,6 +78,28 @@ export async function setEmailOtpEnabled(enabled: boolean, adminName: string) {
 export async function recordEmailOtpTest(result: { ok: boolean; message: string }) {
   const current = await getEmailOtpSettings();
   await writeEmailOtpSettings({ ...current, lastTest: { at: new Date().toISOString(), ...result } });
+}
+
+export interface SecurityCodeDeliverySummary {
+  /** Delivery status of the most recent admin test code (null = never sent / not accepted). */
+  lastTestStatus: EmailStatus | null;
+  /** Security codes accepted by Resend in the last 24 h, by current delivery status. */
+  last24h: Partial<Record<EmailStatus, number>>;
+}
+
+/** Delivery overview for the admin card — statuses only, never codes or hashes. */
+export async function getSecurityCodeDeliverySummary(): Promise<SecurityCodeDeliverySummary> {
+  const [lastTest, groups] = await Promise.all([
+    prisma.emailOtpRequest.findFirst({ where: { purpose: "ADMIN_TEST" }, orderBy: { createdAt: "desc" }, select: { deliveryStatus: true } }),
+    prisma.emailOtpRequest.groupBy({
+      by: ["deliveryStatus"],
+      where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, deliveryStatus: { not: null } },
+      _count: { _all: true },
+    }),
+  ]);
+  const last24h: Partial<Record<EmailStatus, number>> = {};
+  for (const g of groups) if (g.deliveryStatus) last24h[g.deliveryStatus] = g._count._all;
+  return { lastTestStatus: lastTest?.deliveryStatus ?? null, last24h };
 }
 
 /** Email OTP works only with the switch ON and a configured provider. */
@@ -246,7 +268,7 @@ export async function sendEmailOtp(input: SendEmailOtpInput): Promise<{ id: stri
     console.error("[email-otp] provider send failed", { purpose: input.purpose, reason: result.reason });
     throw new EmailOtpError(SEND_FAILED);
   }
-  await prisma.emailOtpRequest.update({ where: { id }, data: { providerMessageId: result.providerMessageId } });
+  await prisma.emailOtpRequest.update({ where: { id }, data: { providerMessageId: result.providerMessageId, deliveryStatus: "SENT" } });
   return { id };
 }
 

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import type { SecurityCodeDeliverySummary } from "@/lib/email-otp";
 import { sendTestSecurityCodeAction, setSecurityCodeEmailsAction } from "./actions";
 
 export interface SecurityCodesView {
@@ -16,7 +17,16 @@ export interface SecurityCodesView {
   lastTest: { at: string; ok: boolean; message: string } | null;
   updatedAt: string | null;
   updatedBy: string | null;
+  delivery: SecurityCodeDeliverySummary;
 }
+
+const STATUS_LABEL: Record<string, string> = {
+  SENT: "accepted by Resend, awaiting delivery report",
+  DELIVERED: "delivered",
+  BOUNCED: "bounced",
+  COMPLAINED: "marked as spam",
+  FAILED: "failed",
+};
 
 function at(iso: string | null): string {
   if (!iso) return "never";
@@ -69,6 +79,16 @@ export function SecurityCodesCard({ view, canManage }: { view: SecurityCodesView
         </label>
         <p className="text-xs text-[var(--color-muted-foreground)]">
           Last test: {view.lastTest ? `${at(view.lastTest.at)} (${view.lastTest.ok ? "sent" : `failed: ${view.lastTest.message}`})` : "never"}
+          {view.lastTest?.ok && view.delivery.lastTestStatus ? ` · ${STATUS_LABEL[view.delivery.lastTestStatus] ?? view.delivery.lastTestStatus}` : null}
+        </p>
+        <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="security-codes-delivery">
+          Last 24 h:{" "}
+          {Object.keys(view.delivery.last24h).length === 0
+            ? "no codes sent"
+            : (["DELIVERED", "SENT", "BOUNCED", "FAILED", "COMPLAINED"] as const)
+                .filter((s) => view.delivery.last24h[s])
+                .map((s) => `${view.delivery.last24h[s]} ${s === "SENT" ? "awaiting report" : STATUS_LABEL[s]}`)
+                .join(" · ")}
         </p>
         {canManage ? (
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">

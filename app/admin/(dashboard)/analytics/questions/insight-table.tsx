@@ -287,7 +287,8 @@ export function InsightTable({
             </Button>
           </div>
 
-          {/* Copy actions — the primary workflow */}
+          {/* Copy actions — the primary workflow (QUESTIONS_MANAGE, enforced server-side too) */}
+          {canManage && (
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="cta" disabled={total === 0} onClick={() => openPreview({ top: 10 })}>
               <ClipboardCopy className="h-3.5 w-3.5" aria-hidden />
@@ -302,12 +303,13 @@ export function InsightTable({
               Copy Selected ({selected.length})
             </Button>
           </div>
+          )}
 
           {/* Selection controls */}
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm">
             <span className="font-medium text-[var(--color-foreground)]">{selected.length} selected</span>
             <span className="text-[var(--color-muted-foreground)]">·</span>
-            {[10, 20, 50].map((n) => (
+            {canManage && [10, 20, 50].map((n) => (
               <Button key={n} size="compact" variant="secondary" disabled={busy || total === 0} onClick={() => selectTop(n)}>
                 Top {n}
               </Button>

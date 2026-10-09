@@ -360,6 +360,32 @@ async function main() {
   check("complaint → COMPLAINED + opted out of promotional", compPref.promotionalOptOut && (await prisma.emailDeliveryLog.findUniqueOrThrow({ where: { id: campRows[1].id } })).status === "COMPLAINED");
   check("unknown email id ignored safely", (await handleResendEvent(JSON.stringify({ type: "email.delivered", data: { email_id: "nope" } }))).handled === false);
 
+  // Security-code (Email OTP) emails have no EmailDeliveryLog row: the webhook tracks them on EmailOtpRequest.
+  const otpRow = (purpose: "ADMIN_TEST" | "VERIFY_EMAIL", studentId: string | null, providerMessageId: string | null) =>
+    prisma.emailOtpRequest.create({
+      data: { email: "otp-hook@example.test", purpose, studentId, otpHash: "x".repeat(64), expiresAt: new Date(Date.now() + 300_000), providerMessageId, deliveryStatus: providerMessageId ? "SENT" : null },
+    });
+  const otpA = await otpRow("ADMIN_TEST", null, "otp_msg_a");
+  const otpB = await otpRow("VERIFY_EMAIL", p3.id, "otp_msg_b");
+  const prefBefore = await prisma.emailPreference.findUnique({ where: { studentId: p3.id } });
+  check("security-code delivered event handled", (await handleResendEvent(JSON.stringify({ type: "email.delivered", data: { email_id: "otp_msg_a" } }))).handled === true);
+  const otpAfter = await prisma.emailOtpRequest.findUniqueOrThrow({ where: { id: otpA.id } });
+  check("security code → DELIVERED with deliveredAt", otpAfter.deliveryStatus === "DELIVERED" && otpAfter.deliveredAt !== null && otpAfter.lastEventType === "email.delivered", otpAfter.deliveryStatus);
+  await handleResendEvent(JSON.stringify({ type: "email.sent", data: { email_id: "otp_msg_a" } }));
+  check("late email.sent never downgrades a delivered security code", (await prisma.emailOtpRequest.findUniqueOrThrow({ where: { id: otpA.id } })).deliveryStatus === "DELIVERED");
+  await handleResendEvent(JSON.stringify({ type: "email.bounced", data: { email_id: "otp_msg_b", bounce: { type: "Permanent", subType: "General", message: "mailbox does not exist" } } }));
+  await handleResendEvent(JSON.stringify({ type: "email.delivered", data: { email_id: "otp_msg_b" } }));
+  const otpBAfter = await prisma.emailOtpRequest.findUniqueOrThrow({ where: { id: otpB.id } });
+  check("security-code bounce wins over a replayed delivered", otpBAfter.deliveryStatus === "BOUNCED" && /Permanent/.test(otpBAfter.deliveryFailure ?? ""), otpBAfter.deliveryStatus);
+  const prefAfter = await prisma.emailPreference.findUnique({ where: { studentId: p3.id } });
+  check("security-code bounce leaves the student's email preferences untouched", JSON.stringify(prefBefore) === JSON.stringify(prefAfter));
+  const { getSecurityCodeDeliverySummary } = await import("../lib/email-otp");
+  const summary = await getSecurityCodeDeliverySummary();
+  check("admin summary: last test DELIVERED, 24 h counts by status", summary.lastTestStatus === "DELIVERED" && summary.last24h.DELIVERED === 1 && summary.last24h.BOUNCED === 1, summary);
+  const otpC = await otpRow("ADMIN_TEST", null, null);
+  check("never-accepted code has no delivery status", (await prisma.emailOtpRequest.findUniqueOrThrow({ where: { id: otpC.id } })).deliveryStatus === null);
+  await prisma.emailOtpRequest.deleteMany({ where: { id: { in: [otpA.id, otpB.id, otpC.id] } } });
+
   // ---- 9. Preferences token --------------------------------------------------
   const tok = preferencesToken(p3.id);
   check("preferences token round-trips", verifyPreferencesToken(tok) === p3.id);

@@ -3113,12 +3113,18 @@ model EmailOtpRequest {
   lastSentAt        DateTime        @default(now())
   ipAddress         String?
   providerMessageId String?
+  /// Resend delivery status: SENT once accepted, then webhook events (monotonic, like EmailDeliveryLog).
+  deliveryStatus    EmailStatus?
+  lastEventType     String?
+  deliveredAt       DateTime?
+  deliveryFailure   String?
   createdAt         DateTime        @default(now())
 
   @@index([email, purpose, createdAt])
   @@index([studentId, purpose, createdAt])
   @@index([ipAddress, createdAt])
   @@index([createdAt])
+  @@index([providerMessageId])
 }
 
 // ---------------------------------------------------------------------------
