@@ -10,6 +10,8 @@ import { BackButton } from "@/components/student/back-button";
 import { EditProfileDialog, ChangePasswordDialog, DeleteAccountDialog } from "./profile-dialogs";
 import { getStudentDeviceOverview } from "@/lib/student-devices";
 import { DevicesCard, type StudentDeviceView } from "./devices-card";
+import { EmailVerifyCard } from "./email-verify-card";
+import { isEmailOtpAvailable } from "@/lib/email-otp";
 
 /** Revoked devices shown to the student (history beyond this stays admin-only). */
 const REVOKED_SHOWN = 5;
@@ -24,10 +26,11 @@ const PROVIDER_LABEL: Record<string, string> = {
 
 export default async function StudentProfilePage() {
   const student = await requireStudentOrLogin();
-  const [profile, latestDeletion, deviceOverview] = await Promise.all([
+  const [profile, latestDeletion, deviceOverview, emailOtpAvailable] = await Promise.all([
     getStudentProfile(student.id),
     getLatestDeletionRequest(student.id),
     getStudentDeviceOverview(student.id),
+    isEmailOtpAvailable(),
   ]);
   const pendingDeletion = latestDeletion?.status === "PENDING" ? latestDeletion : null;
   const rejectedDeletion = latestDeletion?.status === "REJECTED" ? latestDeletion : null;
@@ -82,6 +85,11 @@ export default async function StudentProfilePage() {
           <div className="flex items-center gap-3 text-sm">
             <Mail className="h-4 w-4 text-[var(--color-muted-foreground)]" aria-hidden />
             <span className="text-[var(--color-foreground)]">{profile.email ?? "—"}</span>
+            {profile.email && profile.emailVerifiedAt ? (
+              <span className="text-xs font-medium text-[var(--color-success)]" data-testid="email-verified-badge">
+                Verified
+              </span>
+            ) : null}
           </div>
           <div className="flex items-center gap-3 text-sm">
             <Phone className="h-4 w-4 text-[var(--color-muted-foreground)]" aria-hidden />
@@ -99,6 +107,8 @@ export default async function StudentProfilePage() {
           </div>
         </CardContent>
       </Card>
+
+      {profile.email && !profile.emailVerifiedAt && emailOtpAvailable ? <EmailVerifyCard email={profile.email} /> : null}
 
       {pendingDeletion ? (
         <Card className="border-[var(--color-warning)]/40">

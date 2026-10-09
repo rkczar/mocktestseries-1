@@ -7,6 +7,8 @@ import { prisma } from "@/lib/prisma";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { updateStudentProfile, requestAccountDeletion } from "@/lib/student-data";
 import { DeletionLifecycleError } from "@/lib/student-lifecycle";
+import { getClientIp } from "@/lib/client-ip";
+import { sendOwnEmailVerification, confirmOwnEmailVerification, EmailOtpError } from "@/lib/email-otp";
 import {
   DeviceActionError,
   logoutAllStudentSessions,
@@ -132,4 +134,40 @@ export async function removeOwnDeviceAction(deviceId: string): Promise<DeviceAct
   }
   revalidatePath("/student/profile");
   return { success: "Device removed." };
+}
+
+// ------------------------------------------------------- Email verification
+// Codes go to the address already on the account; the student can't choose
+// another one here (lib/email-otp.ts).
+
+export interface EmailVerifyState {
+  error?: string;
+  sent?: boolean;
+  maskedEmail?: string | null;
+  verified?: boolean;
+}
+
+export async function sendEmailVerificationAction(): Promise<EmailVerifyState> {
+  const student = await requireStudentOrLogin();
+  try {
+    const { maskedEmail } = await sendOwnEmailVerification(student.id, await getClientIp());
+    return { sent: true, maskedEmail };
+  } catch (error) {
+    if (error instanceof EmailOtpError) return { error: error.message };
+    throw error;
+  }
+}
+
+export async function confirmEmailVerificationAction(prev: EmailVerifyState, formData: FormData): Promise<EmailVerifyState> {
+  if (prev.verified) return prev;
+  const student = await requireStudentOrLogin();
+  try {
+    await confirmOwnEmailVerification(student.id, String(formData.get("code") ?? ""));
+  } catch (error) {
+    if (error instanceof EmailOtpError) return { ...prev, error: error.message };
+    throw error;
+  }
+  // No revalidate here: the card stays to show the success message; the
+  // "Verified" badge appears on the next load of the profile.
+  return { sent: true, verified: true };
 }

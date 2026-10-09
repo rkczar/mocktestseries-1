@@ -548,6 +548,10 @@ model Student {
   // treated as verified. Enforced by requireStudent() when Admin turns on
   // "Require mobile verification" (lib/auth-provider-config.ts toggles).
   mobileVerifiedAt DateTime?
+  // Set only when the student entered a code sent to `email`
+  // (lib/email-otp.ts, purpose VERIFY_EMAIL). NULL = not proven; Google sign-in
+  // alone does not set it.
+  emailVerifiedAt DateTime?
   passwordHash String?
   authProvider StudentAuthProvider
   status       StudentStatus       @default(ACTIVE)
@@ -588,6 +592,8 @@ model Student {
   emailDeliveries         EmailDeliveryLog[]
   review                  Review?
   mockTestEnrollments     MockTestEnrollment[]
+  recoveryRequestsMade    AccountRecoveryRequest[]   @relation("RecoveryRequester")
+  recoveryRequestsHeld    AccountRecoveryRequest[]   @relation("RecoveryHolder")
 
   entitlements      StudentEntitlement[]
   couponRedemptions CouponRedemption[]
@@ -3078,4 +3084,82 @@ model Review {
   @@index([status, isPublished, isFeatured, displayOrder])
   @@index([source, status])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Email OTP (lib/email-otp.ts). Codes are sent directly through the email
+// provider (never the campaign queue) and only while Admin -> Communications
+// -> Email -> "Security code emails" is ON. Only an HMAC-SHA256 of the code
+// (keyed with AUTH_SECRET) is stored; the code itself is never stored or logged.
+enum EmailOtpPurpose {
+  VERIFY_EMAIL // a student proving their own account email
+  RECOVERY_PROOF // a requester proving the email of the account that holds their number
+  ADMIN_TEST // Admin "Send test security code"
+}
+
+model EmailOtpRequest {
+  id                String          @id @default(cuid())
+  /// Lower-cased address the code was sent to.
+  email             String
+  purpose           EmailOtpPurpose
+  /// The signed-in student who asked for the code (null for ADMIN_TEST).
+  studentId         String?
+  recoveryRequestId String?
+  otpHash           String
+  expiresAt         DateTime
+  attempts          Int             @default(0)
+  maxAttempts       Int             @default(5)
+  consumedAt        DateTime?
+  lastSentAt        DateTime        @default(now())
+  ipAddress         String?
+  providerMessageId String?
+  createdAt         DateTime        @default(now())
+
+  @@index([email, purpose, createdAt])
+  @@index([studentId, purpose, createdAt])
+  @@index([ipAddress, createdAt])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate-number recovery (lib/account-recovery.ts). Opened when a student
+// proves a mobile number by OTP that another account already holds. Nothing
+// moves until an Admin approves; approval moves ONLY the mobile number (the
+// holder keeps every attempt, payment and entitlement). One open (DRAFT or
+// PENDING) request per requester — partial unique index in the migration.
+enum AccountRecoveryStatus {
+  DRAFT // conflict recorded after the SMS OTP; the student has not submitted yet
+  PENDING // submitted, waiting for Admin review
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model AccountRecoveryRequest {
+  id                  String                @id @default(cuid())
+  requesterId         String?
+  requester           Student?              @relation("RecoveryRequester", fields: [requesterId], references: [id], onDelete: SetNull)
+  holderId            String?
+  holder              Student?              @relation("RecoveryHolder", fields: [holderId], references: [id], onDelete: SetNull)
+  /// E.164 number the requester proved by SMS OTP.
+  mobile              String
+  mobileProvedAt      DateTime
+  /// Set when the requester also entered a code sent to the HOLDER account's email.
+  holderEmailProvedAt DateTime?
+  studentNote         String?
+  status              AccountRecoveryStatus @default(DRAFT)
+  /// Accounts holding a spelling of the number when the conflict was recorded.
+  conflictingAccounts Int                   @default(1)
+  createdAt           DateTime              @default(now())
+  submittedAt         DateTime?
+  reviewedAt          DateTime?
+  reviewedByAdminId   String?
+  reviewedByName      String?
+  adminNotes          String?
+  /// Holder's stored number before approval, kept for support/audit.
+  holderPreviousMobile String?
+
+  @@index([status, createdAt])
+  @@index([requesterId])
+  @@index([holderId])
 }

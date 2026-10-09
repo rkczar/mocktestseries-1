@@ -186,19 +186,33 @@ try {
     check("invalid mobile rejected server-side", /valid 10-digit Indian mobile/.test(await errorText(page)));
 
     // Another account's VERIFIED number: sent like any number, refused only after the OTP.
+    // The refusal opens the recovery panel (request flow: scripts/verify-account-recovery.mjs).
+    const recoveryPanel = async () => {
+      const panel = page.getByTestId("recovery-draft");
+      await panel.waitFor({ timeout: 20000 }).catch(() => {});
+      return panel.innerText({ timeout: 1000 }).catch(() => "");
+    };
     await page.goto(`${BASE}/student/verify-mobile`);
     let prev = await sendVerify(page, "9000000002");
     let sent = await codeFor("9000000002", prev);
     await enterCode(page, sent.code);
-    check("number verified on another account → safe in-use error", /already linked to another MockTestSeries account/.test(await errorText(page)), await errorText(page));
+    let panelText = await recoveryPanel();
+    check("number verified on another account → refused, recovery panel offered", /linked to another account/.test(panelText), panelText);
+    check("…never merged automatically", /never move or merge accounts automatically/.test(panelText));
+    check("…still unverified", studentRow("A").mobileVerifiedAt === null);
+    await page.getByRole("button", { name: "Use a different number instead" }).click();
+    check("'Use a different number instead' returns to the number step", await page.locator("#verify-mobile").isVisible({ timeout: 10000 }).catch(() => false));
+    fixture("reset-recovery");
     // A legacy-format number on another account (919000000005)
     await page.goto(`${BASE}/student/verify-mobile`);
     prev = await sendVerify(page, "9000000005");
     sent = await codeFor("9000000005", prev);
     await enterCode(page, sent.code);
-    check("legacy-format duplicate (91…) also refused, no merge", /already linked/.test(await errorText(page)), await errorText(page));
+    panelText = await recoveryPanel();
+    check("legacy-format duplicate (91…) also refused, no merge", /linked to another account/.test(panelText), panelText);
     const eRow = studentRow("E");
     check("other account untouched", eRow.mobile === "919000000005" && eRow.mobileVerifiedAt === null, eRow);
+    fixture("reset-recovery");
 
     // Wrong code / expired / attempt cap / resend cooldown on the student's own number
     fixture("reset-otp");

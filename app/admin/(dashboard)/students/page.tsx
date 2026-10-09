@@ -3,6 +3,7 @@ import { AllStudentsPanel } from "./all-students-panel";
 import AttemptedQuestionsPage from "./attempted/page";
 import StudentsHistoryPage from "./history/page";
 import DeletionRequestsPage from "./deletion-requests/page";
+import AccountRecoveryPage from "./account-recovery/page";
 import DeletedStudentsPage from "./deleted/page";
 import EnrollmentPage from "./enrollment/page";
 
@@ -36,6 +37,7 @@ export default async function StudentsControlCenter({
             content: <StudentsHistoryPage searchParams={Promise.resolve({ examId })} />,
           },
           { value: "enrollment", label: "Enrollment", content: <EnrollmentPage /> },
+          { value: "account-recovery", label: "Account Recovery", content: <AccountRecoveryPage /> },
           { value: "deletion-requests", label: "Deletion Requests", content: <DeletionRequestsPage /> },
           { value: "deleted", label: "Deleted Students", content: <DeletedStudentsPage /> },
         ]}

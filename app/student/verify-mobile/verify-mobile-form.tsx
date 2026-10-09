@@ -5,11 +5,22 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { IndianMobileInput, OtpBoxInput, ResendCountdown, ErrorBanner, SubmitButton } from "@/app/login/login-screen";
 import { formatIndianMobile } from "@/lib/indian-mobile";
+import type { StudentRecoveryView } from "@/lib/account-recovery";
 import { sendVerifyMobileOtpAction, confirmVerifyMobileOtpAction, type VerifyMobileState } from "./actions";
+import { RecoveryPanel } from "./recovery-panel";
 
 const VERIFY_MOBILE_PATH = "/student/verify-mobile";
 
-export function VerifyMobileForm({ suggestedDigits, destination }: { suggestedDigits: string; destination: string }) {
+export function VerifyMobileForm({
+  suggestedDigits,
+  destination,
+  recovery,
+}: {
+  suggestedDigits: string;
+  destination: string;
+  /** The student's open (or recently reviewed) duplicate-number request, shown first. */
+  recovery: StudentRecoveryView | null;
+}) {
   const router = useRouter();
   // A sign-in Server Action renders its redirect target inside the action
   // response, so when that target's guard redirects here the browser can still
@@ -23,6 +34,18 @@ export function VerifyMobileForm({ suggestedDigits, destination }: { suggestedDi
 
   // "Change number" remounts the steps with fresh action states.
   const [restart, setRestart] = useState<{ key: number; digits: string }>({ key: 0, digits: suggestedDigits });
+  const [showRecovery, setShowRecovery] = useState(Boolean(recovery));
+  if (showRecovery && recovery) {
+    return (
+      <RecoveryPanel
+        initial={recovery}
+        onUseDifferentNumber={() => {
+          setShowRecovery(false);
+          setRestart((r) => ({ key: r.key + 1, digits: "" }));
+        }}
+      />
+    );
+  }
   return (
     <VerifyMobileSteps
       key={restart.key}
@@ -72,6 +95,10 @@ function VerifyMobileSteps({
         </p>
       </div>
     );
+  }
+
+  if (verifyState.recovery) {
+    return <RecoveryPanel initial={verifyState.recovery} onUseDifferentNumber={() => onChangeNumber("")} />;
   }
 
   const active = resendState.sent ? resendState : sendState;

@@ -4,6 +4,7 @@
  *   setup            students A–G (see STUDENTS) + snapshot of A; prints JSON
  *   reset-otp        clears OtpRequest + failed OTP attempts (keeps cooldowns from blocking the next step)
  *   reset-devices    removes the fixture students' devices (device limit; ends their sessions)
+ *   reset-recovery   removes duplicate-number recovery requests involving the fixture students
  *   expire <e164>    expires the pending OTP rows for that number
  *   state            prints the fixture students' current rows + related-row counts as JSON
  *   flag on|off      sets the "Require mobile verification" toggle directly
@@ -47,6 +48,7 @@ async function fixtureStudents() {
 
 async function cleanup() {
   const ids = (await fixtureStudents()).map((s) => s.id);
+  await resetRecovery();
   await prisma.studentLoginAttempt.deleteMany({ where: { OR: [{ studentId: { in: ids } }, { identifier: { contains: "90000000" } }, { identifier: { endsWith: DOMAIN } }] } });
   await prisma.otpRequest.deleteMany({ where: { mobile: { contains: "90000000" } } });
   await prisma.studentOAuthAccount.deleteMany({ where: { studentId: { in: ids } } });
@@ -56,6 +58,12 @@ async function cleanup() {
 async function resetOtp() {
   await prisma.otpRequest.deleteMany({});
   await prisma.studentLoginAttempt.deleteMany({ where: { success: false } });
+}
+
+/** A duplicate number opens a recovery request, which the verify page then shows first. */
+async function resetRecovery() {
+  const ids = (await fixtureStudents()).map((s) => s.id);
+  await prisma.accountRecoveryRequest.deleteMany({ where: { OR: [{ requesterId: { in: ids } }, { holderId: { in: ids } }] } });
 }
 
 /** Between browser contexts only: each new context is a new device (device limit). Kills open sessions. */
@@ -76,13 +84,14 @@ async function main() {
   if (mode === "cleanup") return cleanup();
   if (mode === "reset-otp") return resetOtp();
   if (mode === "reset-devices") return resetDevices();
+  if (mode === "reset-recovery") return resetRecovery();
   if (mode === "state") return console.log(JSON.stringify(await state()));
   if (mode === "expire") {
     const r = await prisma.otpRequest.updateMany({ where: { mobile: arg, consumedAt: null }, data: { expiresAt: new Date(Date.now() - 1000) } });
     return console.log(JSON.stringify({ expired: r.count }));
   }
   if (mode === "flag") return saveAuthProviderConfig({ toggles: { mobileVerificationRequired: arg === "on" } });
-  if (mode !== "setup") throw new Error("usage: mobile-otp-fixture.ts setup|reset-otp|expire <e164>|state|flag on|off|cleanup");
+  if (mode !== "setup") throw new Error("usage: mobile-otp-fixture.ts setup|reset-otp|reset-recovery|expire <e164>|state|flag on|off|cleanup");
 
   await cleanup();
   await resetOtp();

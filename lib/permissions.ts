@@ -92,6 +92,12 @@ export const PERMISSIONS = {
   // MASTER_ADMIN-only, enforced server-side on every action. Reading the
   // Email tabs (logs, campaigns, settings status) uses COMMUNICATIONS_VIEW.
   EMAIL_MANAGE: "email:manage",
+  // Duplicate-number recovery requests (Admin -> Students -> Account
+  // Recovery). VIEW shows both accounts' real contact details (MASTER_ADMIN +
+  // FULL_ADMIN). MANAGE — approve (moves the mobile number) / reject — is
+  // MASTER_ADMIN-only, enforced server-side.
+  ACCOUNT_RECOVERY_VIEW: "account-recovery:view",
+  ACCOUNT_RECOVERY_MANAGE: "account-recovery:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -110,6 +116,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.STUDENT_DELETION_VIEW,
     PERMISSIONS.COMMUNICATIONS_VIEW,
     PERMISSIONS.PLATFORM_CONTROLS_VIEW,
+    PERMISSIONS.ACCOUNT_RECOVERY_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };

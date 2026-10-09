@@ -14,6 +14,8 @@ import { getEmailOverview, listCampaigns, listEmailLogs } from "@/lib/email/admi
 import { ComposeForm, type ComposeDraft } from "./compose-form";
 import { TemplatesPanel } from "./templates-panel";
 import { SettingsPanel } from "./settings-panel";
+import { SecurityCodesCard } from "./security-codes-card";
+import { getEmailOtpSettings } from "@/lib/email-otp";
 import { CampaignRowActions, RetryEmailButton } from "./campaign-actions";
 
 /**
@@ -350,32 +352,39 @@ async function LogsTab({ params, canManage }: { params: EmailTabParams; canManag
 
 async function SettingsTab({ canManage, overview }: { canManage: boolean; overview: Awaited<ReturnType<typeof getEmailOverview>> }) {
   const siteUrl = await getSiteUrl();
+  const otp = await getEmailOtpSettings();
   return (
-    <SettingsPanel
-      canManage={canManage}
-      templates={TEMPLATE_KEYS.map((k) => ({ key: k, label: TEMPLATE_DEFAULTS[k].label }))}
-      view={{
-        provider: overview.env.provider,
-        from: overview.env.from,
-        replyTo: overview.env.replyTo,
-        senderAddress: senderAddress(overview.env.from),
-        providerConfigured: overview.env.providerConfigured,
-        providerProblem: overview.env.providerProblem,
-        webhookConfigured: overview.env.webhookConfigured,
-        webhookUrl: `${siteUrl}/api/webhooks/resend`,
-        sendingEnabled: overview.settings.sendingEnabled,
-        ratePerSecond: overview.settings.ratePerSecond,
-        testEmailSucceeded: overview.testEmailSucceeded,
-        settingsUpdatedAt: overview.settings.updatedAt,
-        settingsUpdatedBy: overview.settings.updatedBy,
-        workerLastRunAt: overview.workerLastRunAt?.toISOString() ?? null,
-        workerAlive: overview.workerAlive,
-        queued: overview.queued,
-        sending: overview.sending,
-        sent24: overview.sent24,
-        failed24: overview.failed24,
-        skipped24: overview.skipped24,
-      }}
-    />
+    <div className="flex flex-col gap-6">
+      <SecurityCodesCard
+        canManage={canManage}
+        view={{ enabled: otp.enabled, providerConfigured: overview.env.providerConfigured, lastTest: otp.lastTest, updatedAt: otp.updatedAt, updatedBy: otp.updatedBy }}
+      />
+      <SettingsPanel
+        canManage={canManage}
+        templates={TEMPLATE_KEYS.map((k) => ({ key: k, label: TEMPLATE_DEFAULTS[k].label }))}
+        view={{
+          provider: overview.env.provider,
+          from: overview.env.from,
+          replyTo: overview.env.replyTo,
+          senderAddress: senderAddress(overview.env.from),
+          providerConfigured: overview.env.providerConfigured,
+          providerProblem: overview.env.providerProblem,
+          webhookConfigured: overview.env.webhookConfigured,
+          webhookUrl: `${siteUrl}/api/webhooks/resend`,
+          sendingEnabled: overview.settings.sendingEnabled,
+          ratePerSecond: overview.settings.ratePerSecond,
+          testEmailSucceeded: overview.testEmailSucceeded,
+          settingsUpdatedAt: overview.settings.updatedAt,
+          settingsUpdatedBy: overview.settings.updatedBy,
+          workerLastRunAt: overview.workerLastRunAt?.toISOString() ?? null,
+          workerAlive: overview.workerAlive,
+          queued: overview.queued,
+          sending: overview.sending,
+          sent24: overview.sent24,
+          failed24: overview.failed24,
+          skipped24: overview.skipped24,
+        }}
+      />
+    </div>
   );
 }

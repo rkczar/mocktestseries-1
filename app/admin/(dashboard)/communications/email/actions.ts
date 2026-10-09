@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import type { EmailAudience, EmailTemplateKey } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
+import { getClientIp } from "@/lib/client-ip";
+import { sendEmailOtp, recordEmailOtpTest, getEmailOtpSettings, setEmailOtpEnabled, EmailOtpError } from "@/lib/email-otp";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getEmailEnvConfig } from "@/lib/email/config";
 import { getEmailProvider } from "@/lib/email/provider";
@@ -203,6 +205,49 @@ export async function retryFailedEmailAction(logId: string) {
   return guard(async () => {
     const { adminId } = adminOf(await requireEmailManager());
     await retryFailedEmail(String(logId), adminId);
+    revalidate();
+    return {};
+  });
+}
+
+// ------------------------------------------------------ Security code emails
+// Email OTP (lib/email-otp.ts) has its own switch, independent of production
+// sending: codes go straight to the provider, never through the queue.
+
+export async function sendTestSecurityCodeAction(to: string) {
+  return guard(async () => {
+    const { adminId } = adminOf(await requireEmailManager());
+    let ok = true;
+    let message = "Test code sent. Check the inbox.";
+    try {
+      await sendEmailOtp({ email: String(to ?? ""), purpose: "ADMIN_TEST", studentId: null, ipAddress: await getClientIp(), ignoreSwitch: true });
+    } catch (error) {
+      if (!(error instanceof EmailOtpError)) throw error;
+      ok = false;
+      message = error.message;
+    }
+    await recordEmailOtpTest({ ok, message });
+    await prisma.auditLog.create({
+      data: { actorId: adminId, action: "EMAIL_OTP_TEST_SENT", entityType: "Setting", entityId: "email.otp", metadata: { ok } },
+    });
+    revalidate();
+    if (!ok) throw new EmailAdminError(message);
+    return { message };
+  });
+}
+
+export async function setSecurityCodeEmailsAction(enabled: boolean) {
+  return guard(async () => {
+    const { adminId, adminName } = adminOf(await requireEmailManager());
+    const next = Boolean(enabled);
+    if (next) {
+      if (!getEmailEnvConfig().providerConfigured) throw new EmailAdminError("Email provider not configured.");
+      if (!(await getEmailOtpSettings()).lastTest?.ok) throw new EmailAdminError("Send a test security code and confirm it arrives first.");
+    }
+    await setEmailOtpEnabled(next, adminName);
+    await prisma.auditLog.create({
+      data: { actorId: adminId, action: "EMAIL_OTP_SETTINGS_UPDATED", entityType: "Setting", entityId: "email.otp", metadata: { enabled: next } },
+    });
     revalidate();
     return {};
   });

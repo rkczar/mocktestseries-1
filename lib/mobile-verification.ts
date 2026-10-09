@@ -5,6 +5,7 @@ import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { requestOtp, verifyOtp, OtpError } from "@/lib/otp";
 import { assertOtpVerifyAllowed, AuthRateLimitError, TOO_MANY_ATTEMPTS_MESSAGE } from "@/lib/auth-rate-limit";
 import { parseIndianMobile, storedMobileVariants, INDIAN_MOBILE_ERROR, type IndianMobile } from "@/lib/indian-mobile";
+import { recordMobileConflict } from "@/lib/account-recovery";
 
 /**
  * Mandatory mobile OTP verification for students.
@@ -16,8 +17,9 @@ import { parseIndianMobile, storedMobileVariants, INDIAN_MOBILE_ERROR, type Indi
  * - A verified number is always stored as E.164. Student.mobile is @unique, so
  *   two accounts can never hold the same verified number; older spellings of
  *   the same number (9876543210, 919876543210, …) are checked explicitly.
- * - A number already on another account is never moved or merged: the student
- *   gets MOBILE_IN_USE_MESSAGE (support path) instead. That answer is only
+ * - A number already on another account is never moved or merged here: the
+ *   student gets MOBILE_IN_USE_MESSAGE plus a recovery request (DRAFT, see
+ *   lib/account-recovery.ts) that an Admin must approve. That answer is only
  *   given AFTER the OTP proved the student owns the number, so it cannot be
  *   used to probe which numbers have accounts.
  * - Enforcement (requireStudent → /student/verify-mobile) follows the Admin
@@ -25,9 +27,24 @@ import { parseIndianMobile, storedMobileVariants, INDIAN_MOBILE_ERROR, type Indi
  */
 
 export const MOBILE_IN_USE_MESSAGE =
-  "This mobile number is already linked to another MockTestSeries account. For your security it can't be moved automatically. Please use a different number, or contact support from the Contact page.";
+  "This mobile number is already linked to another MockTestSeries account. For your security it can't be moved automatically. You can ask our team to review a transfer below, or use a different number.";
 
 export class MobileVerificationError extends Error {}
+
+/** The proven number is held by another account; a recovery request was recorded server-side. */
+export class MobileInUseError extends MobileVerificationError {
+  constructor(readonly recoveryRequestId: string) {
+    super(MOBILE_IN_USE_MESSAGE);
+  }
+}
+
+async function conflict(studentDbId: string, mobile: IndianMobile, others: { id: string; status: string }[]): Promise<never> {
+  await prisma.studentActivity.create({
+    data: { studentId: studentDbId, activity: "MOBILE_VERIFY_CONFLICT", metadata: { conflictingAccounts: others.length } },
+  });
+  const request = await recordMobileConflict(studentDbId, mobile.e164, others);
+  throw new MobileInUseError(request.id);
+}
 
 const OTP_CODE_PATTERN = /^[0-9]{6}$/;
 
@@ -122,12 +139,7 @@ export async function confirmMobileVerificationOtp(studentDbId: string, rawMobil
   if (current.mobileVerifiedAt) return; // a duplicate submit already finished
 
   const others = await findStudentsByMobile(mobile, studentDbId);
-  if (others.length > 0) {
-    await prisma.studentActivity.create({
-      data: { studentId: studentDbId, activity: "MOBILE_VERIFY_CONFLICT", metadata: { conflictingAccounts: others.length } },
-    });
-    throw new MobileVerificationError(MOBILE_IN_USE_MESSAGE);
-  }
+  if (others.length > 0) await conflict(studentDbId, mobile, others);
 
   const now = new Date();
   try {
@@ -141,7 +153,7 @@ export async function confirmMobileVerificationOtp(studentDbId: string, rawMobil
   } catch (error) {
     // Unique(mobile): another account claimed this exact number in parallel.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      throw new MobileVerificationError(MOBILE_IN_USE_MESSAGE);
+      await conflict(studentDbId, mobile, await findStudentsByMobile(mobile, studentDbId));
     }
     throw error;
   }
