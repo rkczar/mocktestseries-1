@@ -31,14 +31,16 @@ import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
 import { CONTENT_FIELDS, SLIDE_COUNTS, SLIDE_MODULES, TEMPLATE_KEYS, normalizeHashtags, type ContentField, type SlideModule } from "@/lib/instagram/types";
 import { safeTelegramUrl } from "@/lib/telegram-url";
 import { AiNotConfiguredError } from "@/lib/ai-provider";
+import { CONNECTION_SETTING_KEY, getConnectionConfigView, getLastConnectionResult, runConnectionTest, saveConnectionResult, type ConnectionConfigView, type ConnectionTestResult } from "@/lib/instagram/meta";
 
 /**
  * Admin → Instagram Server Actions. Every action re-checks INSTAGRAM_MANAGE
  * (MASTER_ADMIN only) — a Server Action is callable on its own, so the
  * page-level check is never relied on. Writes go only to InstagramPost /
  * InstagramPostRevision / the `instagram.studio` Setting / AuditLog
- * (lib/instagram/posts.ts). Nothing here publishes: publishing is not built
- * in this phase.
+ * (lib/instagram/posts.ts), plus the `instagram.connection` Setting for the
+ * read-only Meta connection test. Nothing here publishes: publishing is not
+ * built in this phase.
  */
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string; kind?: StudioError["kind"] };
@@ -351,5 +353,22 @@ export async function saveStudioSettingsAction(input: Record<string, unknown>): 
     await prisma.auditLog.create({ data: { actorId, action: "INSTAGRAM_SETTINGS_UPDATED", entityType: "Setting", entityId: "instagram.studio", metadata: { keys: Object.keys(next).filter((k) => next[k as keyof StoredStudioSettings] !== undefined) } } });
     touch();
     return null;
+  });
+}
+
+// ---- Meta connection (read-only) -----------------------------------------------------------
+
+/** Read-only Instagram API test (GET /me + publishing-limit read). Returns no token — only identity and permission status. */
+export async function testInstagramConnectionAction(): Promise<Result<{ result: ConnectionTestResult; config: ConnectionConfigView }>> {
+  return run(await requireStudio(), async (actorId) => {
+    const last = await getLastConnectionResult();
+    if (last && Date.now() - Date.parse(last.testedAt) < 5_000) throw new StudioError("A test just ran — wait a few seconds and try again.");
+    const result = await runConnectionTest();
+    await saveConnectionResult(result, actorId);
+    await prisma.auditLog.create({
+      data: { actorId, action: "INSTAGRAM_CONNECTION_TESTED", entityType: "Setting", entityId: CONNECTION_SETTING_KEY, metadata: { status: result.status, publishPermission: result.publishPermission, tokenFingerprint: result.tokenFingerprint } },
+    });
+    touch();
+    return { result, config: getConnectionConfigView() };
   });
 }

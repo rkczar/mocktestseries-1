@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 /**
  * Admin → Instagram (Content Studio). MASTER_ADMIN only — every action and
  * image route re-checks INSTAGRAM_MANAGE server-side as well. Publishing to
- * Instagram is not part of this phase: nothing here talks to Meta.
+ * Instagram is not part of this phase: the only Meta call is the read-only
+ * connection test (lib/instagram/meta.ts).
  */
 export default async function InstagramStudioLayout({ children }: { children: React.ReactNode }) {
   if (!(await hasPermission(PERMISSIONS.INSTAGRAM_MANAGE))) return <RestrictedCard title="Instagram" />;
@@ -26,8 +27,8 @@ export default async function InstagramStudioLayout({ children }: { children: Re
         data-testid="publishing-disabled"
         className="rounded-[var(--radius-card)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-4 py-2.5 text-sm text-[var(--color-foreground)]"
       >
-        <span className="font-semibold">Publishing is turned off.</span> Instagram is not connected. You can create, edit, review and download carousels; nothing is
-        posted.
+        <span className="font-semibold">Publishing is turned off.</span> Nothing is posted to Instagram. You can create, edit, review and download
+        carousels.
       </div>
       {children}
     </div>
