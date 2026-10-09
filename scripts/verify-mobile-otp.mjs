@@ -165,6 +165,7 @@ try {
     const u = new URL(page.url());
     check("password login → /student/verify-mobile", u.pathname === "/student/verify-mobile", page.url());
     check("intended destination kept in callbackUrl", u.searchParams.get("callbackUrl") === "/student/test-series", page.url());
+    await page.getByText("One-Time Mobile Verification Required").waitFor({ timeout: 15000 }).catch(() => {});
     check("page title", (await page.getByText("One-Time Mobile Verification Required").count()) === 1);
     check(
       "explanation copy",
