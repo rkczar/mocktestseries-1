@@ -7,6 +7,7 @@ import { safeStudentCallback, DEFAULT_STUDENT_DESTINATION } from "@/lib/student-
 import { requireStudentAllowUnverified, StudentUnauthorizedError, VERIFY_MOBILE_PATH } from "@/lib/student-session";
 import { getMobileVerificationState } from "@/lib/mobile-verification";
 import { getStudentRecoveryState } from "@/lib/account-recovery";
+import { isWhatsAppOtpAvailable } from "@/lib/auth-provider-config";
 import { studentLogoutAction } from "../(dashboard)/actions";
 import { VerifyMobileForm } from "./verify-mobile-form";
 
@@ -35,7 +36,7 @@ export default async function VerifyMobilePage({ searchParams }: { searchParams:
 
   const state = await getMobileVerificationState(student.id);
   if (state.verified) redirect(destination);
-  const recovery = await getStudentRecoveryState(student.id);
+  const [recovery, whatsapp] = await Promise.all([getStudentRecoveryState(student.id), isWhatsAppOtpAvailable()]);
 
   return (
     <main className="flex min-h-screen items-start justify-center bg-[var(--color-background)] px-4 py-10 sm:items-center">
@@ -54,7 +55,7 @@ export default async function VerifyMobilePage({ searchParams }: { searchParams:
               only once.
             </p>
           </div>
-          <VerifyMobileForm suggestedDigits={state.suggestedDigits} destination={destination} recovery={recovery} />
+          <VerifyMobileForm suggestedDigits={state.suggestedDigits} destination={destination} recovery={recovery} whatsapp={whatsapp} />
         </Card>
         <div className="mt-5 flex flex-col items-center gap-2 text-sm text-[var(--color-muted-foreground)]">
           <p>

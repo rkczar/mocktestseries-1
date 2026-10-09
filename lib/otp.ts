@@ -4,7 +4,7 @@ import argon2 from "argon2";
 import type { OtpPurpose } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendSms } from "@/lib/sms";
-import { getSmsProviderName, getMsg91Credentials } from "@/lib/auth-provider-config";
+import { getSmsProviderName, getMsg91Credentials, isWhatsAppOtpAvailable } from "@/lib/auth-provider-config";
 import { assertOtpSendAllowed, AuthRateLimitError, TOO_MANY_ATTEMPTS_MESSAGE } from "@/lib/auth-rate-limit";
 
 const OTP_LENGTH = 6;
@@ -15,6 +15,16 @@ const MAX_SENDS_PER_WINDOW = 5;
 const SEND_WINDOW_MS = 15 * 60 * 1000;
 
 const MSG91_WIDGET_BASE = "https://api.msg91.com/api/v5/widget";
+/**
+ * MSG91 Widget retry channel code for WhatsApp (MSG91's own SDKs: SMS 11,
+ * VOICE 4, EMAIL 3, WHATSAPP 12 — sent as a number).
+ */
+const MSG91_RETRY_CHANNEL_WHATSAPP = 12;
+const SEND_FAILED = "We couldn't send a verification code right now. Please try Password login instead, or contact support.";
+export const WHATSAPP_UNAVAILABLE = "WhatsApp codes are not available right now. Please use the SMS code.";
+export const WHATSAPP_FAILED = "We couldn't send the code on WhatsApp. Please use the SMS code or try again later.";
+/** No pending SMS code to re-deliver (never sent, used, or expired). */
+export const WHATSAPP_NO_PENDING = "Request a new code first, then you can get it on WhatsApp.";
 
 export class OtpError extends Error {}
 
@@ -34,12 +44,12 @@ interface Msg91WidgetResponse {
 }
 
 /**
- * Calls one of MSG91's OTP Widget REST endpoints (sendOtp / verifyOtp /
- * verifyAccessToken) — server-to-server, authenticated with the account auth
+ * Calls one of MSG91's OTP Widget REST endpoints (sendOtp / retryOtp /
+ * verifyOtp / verifyAccessToken) — server-to-server, authenticated with the account auth
  * key. Unlike the client-side widget script, this never touches the browser.
  */
 async function msg91WidgetRequest(
-  path: "sendOtp" | "verifyOtp" | "verifyAccessToken",
+  path: "sendOtp" | "retryOtp" | "verifyOtp" | "verifyAccessToken",
   authKey: string,
   body: Record<string, unknown>
 ): Promise<Msg91WidgetResponse> {
@@ -61,7 +71,11 @@ async function msg91WidgetRequest(
  * plus this purpose's resend cooldown and 15-minute per-mobile cap.
  * `ipAddress` must come from lib/client-ip.ts.
  */
-export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress: string) {
+/**
+ * Every send — SMS or WhatsApp — passes the same caps (each one is an
+ * OtpRequest row, so they all count toward each other).
+ */
+async function assertSendLimits(mobile: string, purpose: OtpPurpose, ipAddress: string) {
   try {
     await assertOtpSendAllowed(mobile, ipAddress);
   } catch (error) {
@@ -89,6 +103,10 @@ export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress:
       throw new OtpError(`Please wait ${Math.ceil((RESEND_COOLDOWN_MS - elapsed) / 1000)}s before requesting another code.`);
     }
   }
+}
+
+export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress: string) {
+  await assertSendLimits(mobile, purpose, ipAddress);
 
   const { authKey, widgetId } = await getMsg91Credentials();
 
@@ -103,7 +121,7 @@ export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress:
       reqId = result.message;
     } catch (error) {
       console.error("[otp] MSG91 widget sendOtp failed:", error);
-      throw new OtpError("We couldn't send a verification code right now. Please try Password login instead, or contact support.");
+      throw new OtpError(SEND_FAILED);
     }
 
     // otpHash is unused when MSG91 holds the code (see the OtpRequest doc comment
@@ -139,11 +157,70 @@ export async function requestOtp(mobile: string, purpose: OtpPurpose, ipAddress:
     // student it must not be reported as a pending code — surface a clear,
     // honest failure instead of a false "check your phone" state.
     console.error(`[otp] sendSms failed via ${providerName}:`, error);
-    throw new OtpError("We couldn't send a verification code right now. Please try Password login instead, or contact support.");
+    throw new OtpError(SEND_FAILED);
   }
 
   const isDevProvider = providerName === "console";
   return { devCode: process.env.NODE_ENV !== "production" && isDevProvider ? code : undefined };
+}
+
+/**
+ * "Get OTP on WhatsApp": re-delivers the student's pending Widget code via
+ * MSG91 retryOtp (WhatsApp channel), using the original reqId. Same caps as an
+ * SMS send. The pending row is superseded by a new row carrying the reqId
+ * MSG91 returns, so verifyOtp() below — the one verification path — keeps
+ * working unchanged. Throws OtpError (WHATSAPP_NO_PENDING when there is no
+ * open code to re-deliver).
+ */
+export async function requestOtpOnWhatsApp(mobile: string, purpose: OtpPurpose, ipAddress: string): Promise<void> {
+  if (!(await isWhatsAppOtpAvailable())) throw new OtpError(WHATSAPP_UNAVAILABLE);
+  const { authKey, widgetId } = await getMsg91Credentials();
+  if (!authKey || !widgetId) throw new OtpError(WHATSAPP_UNAVAILABLE);
+
+  const pending = await prisma.otpRequest.findFirst({
+    where: { mobile, purpose, consumedAt: null, providerRef: { not: null } },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!pending || pending.expiresAt < new Date()) throw new OtpError(WHATSAPP_NO_PENDING);
+
+  await assertSendLimits(mobile, purpose, ipAddress);
+
+  let reqId = pending.providerRef!;
+  try {
+    const result = await msg91WidgetRequest("retryOtp", authKey, {
+      widgetId,
+      reqId,
+      retryChannel: MSG91_RETRY_CHANNEL_WHATSAPP,
+    });
+    if (result.type !== "success") throw new Error(result.message);
+    // retryOtp answers with the (possibly new) reqId; keep the old one if it
+    // answered with a sentence instead.
+    if (/^[A-Za-z0-9_-]{8,100}$/.test(result.message)) reqId = result.message;
+  } catch (error) {
+    console.error("[otp] MSG91 widget retryOtp (whatsapp) failed:", error);
+    throw new OtpError(WHATSAPP_FAILED);
+  }
+
+  const placeholderHash = await argon2.hash(crypto.randomUUID());
+  const superseded = await prisma.$transaction(async (tx) => {
+    const closed = await tx.otpRequest.updateMany({ where: { id: pending.id, consumedAt: null }, data: { consumedAt: new Date() } });
+    if (closed.count !== 1) return false;
+    await tx.otpRequest.create({
+      data: {
+        mobile,
+        purpose,
+        otpHash: placeholderHash,
+        providerRef: reqId,
+        expiresAt: new Date(Date.now() + OTP_TTL_MS),
+        ipAddress,
+        maxAttempts: MAX_VERIFY_ATTEMPTS,
+        channel: "WHATSAPP",
+      },
+    });
+    return true;
+  });
+  // Verified (or superseded) while MSG91 was answering.
+  if (!superseded) throw new OtpError("This code has already been used. Please request a new one.");
 }
 
 /** Single use: only one concurrent verification can consume a code. */

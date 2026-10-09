@@ -2,7 +2,7 @@
  * TEST-ONLY MSG91 stand-in for scripts/verify-mobile-otp.mjs. Preloaded into a
  * LOCAL `next start` (NODE_OPTIONS="--import ./scripts/msg91-widget-mock.mjs")
  * so the production OTP code path (lib/otp.ts → MSG91 Widget sendOtp /
- * verifyOtp / verifyAccessToken) runs end-to-end WITHOUT sending a real SMS:
+ * retryOtp / verifyOtp / verifyAccessToken) runs end-to-end WITHOUT sending a real SMS:
  * every request to api.msg91.com / control.msg91.com is answered here and
  * never leaves the machine. Issued codes go to MSG91_MOCK_FILE (the "phone"),
  * which the suite reads and later scans the server log for.
@@ -39,6 +39,20 @@ globalThis.fetch = async function mockedFetch(input, init) {
     const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, "0");
     db.requests[reqId] = { identifier: body.identifier, code };
     db.latest[body.identifier] = { reqId, code };
+    save(db);
+    return json({ type: "success", message: reqId });
+  }
+  if (url.endsWith("/widget/retryOtp")) {
+    // Re-delivers the SAME code under a NEW reqId (MSG91 answers with the reqId to verify against).
+    // WhatsApp (retryChannel 12) deliveries are recorded in `whatsapp`; db.failRetry simulates a provider refusal.
+    const r = db.requests[body.reqId];
+    if (db.failRetry) return json({ type: "error", message: String(db.failRetry) });
+    if (!r) return json({ type: "error", message: "Invalid reqId" });
+    if (body.retryChannel !== 12) return json({ type: "error", message: `unsupported retryChannel ${JSON.stringify(body.retryChannel)}` });
+    const reqId = crypto.randomUUID();
+    db.requests[reqId] = { identifier: r.identifier, code: r.code, channel: "whatsapp", retryOf: body.reqId };
+    db.latest[r.identifier] = { reqId, code: r.code, channel: "whatsapp" };
+    db.whatsapp = [...(db.whatsapp ?? []), { identifier: r.identifier, reqId, retryOf: body.reqId, widgetId: body.widgetId }];
     save(db);
     return json({ type: "success", message: reqId });
   }

@@ -7,7 +7,7 @@ import { StudentAuthProvider } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { studentSignIn } from "@/lib/auth-student";
 import { nextStudentId } from "@/lib/student-id";
-import { requestOtp, OtpError } from "@/lib/otp";
+import { requestOtp, requestOtpOnWhatsApp, OtpError } from "@/lib/otp";
 import { safeStudentCallback } from "@/lib/student-callback";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
 import { getClientIp } from "@/lib/client-ip";
@@ -15,6 +15,7 @@ import { ensureDefaultExamEnrollmentSafely } from "@/lib/default-enrollment";
 import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 import {
   requestPasswordReset,
+  requestPasswordResetOnWhatsApp,
   verifyPasswordResetCode,
   resetPasswordWithToken,
   PasswordResetError,
@@ -157,6 +158,30 @@ export async function sendMobileOtpAction(
   }
 }
 
+const WHATSAPP_SENT = "Code sent on WhatsApp. Enter the same 6-digit code here.";
+
+/**
+ * Phone OTP sign-in, "Get OTP on WhatsApp": re-delivers the pending code via
+ * MSG91 retryOtp. Same answer shape as sendMobileOtpAction (a code was sent
+ * for any number, so nothing is revealed here either).
+ */
+export async function sendMobileOtpWhatsAppAction(
+  _prevState: AuthFormState,
+  formData: FormData
+): Promise<AuthFormState> {
+  const mobile = parseIndianMobile(String(formData.get("mobile") ?? ""));
+  if (!mobile) return { error: INDIAN_MOBILE_ERROR };
+  const platform = await getPlatformControls();
+  if (!effectivePlatformControls(platform).loginOpen) return { error: pausedMessage(platform, "login") };
+  try {
+    await requestOtpOnWhatsApp(mobile.e164, "LOGIN", await clientIp());
+    return { sent: true, existing: true, mobile: mobile.e164, info: WHATSAPP_SENT };
+  } catch (error) {
+    if (error instanceof OtpError) return { error: error.message };
+    throw error;
+  }
+}
+
 export async function verifyMobileOtpAction(
   _prevState: AuthFormState,
   formData: FormData
@@ -209,6 +234,30 @@ export async function sendRegisterOtpAction(
   }
 }
 
+/** Create Account, "Get OTP on WhatsApp" for the pending REGISTER code. */
+export async function sendRegisterOtpWhatsAppAction(
+  _prevState: AuthFormState,
+  formData: FormData
+): Promise<AuthFormState> {
+  const providerConfig = await getAuthProviderConfig();
+  if (!providerConfig.registerEnabled) return { error: "New account creation is currently disabled." };
+  const platform = await getPlatformControls();
+  if (!effectivePlatformControls(platform).registrationsOpen) return { error: pausedMessage(platform, "registrations") };
+
+  const name = parseFullName(formData.get("name"));
+  if (!name) return { error: "Enter your full name (2–80 characters)." };
+  const mobile = parseIndianMobile(String(formData.get("mobile") ?? ""));
+  if (!mobile) return { error: INDIAN_MOBILE_ERROR };
+
+  try {
+    await requestOtpOnWhatsApp(mobile.e164, "REGISTER", await clientIp());
+    return { sent: true, mobile: mobile.e164, name, info: WHATSAPP_SENT };
+  } catch (error) {
+    if (error instanceof OtpError) return { error: error.message };
+    throw error;
+  }
+}
+
 /**
  * Create Account, step 2. The OTP is verified and the account created in ONE
  * server-side call (the "otp" provider, register mode), which then signs the
@@ -244,6 +293,7 @@ export async function googleSignInAction(formData: FormData) {
 
 export interface ResetFormState {
   error?: string;
+  info?: string;
   step?: "code" | "password" | "done";
   identifier?: string;
   token?: string;
@@ -261,6 +311,22 @@ export async function requestPasswordResetAction(
     return { step: "code", identifier, devCode };
   } catch (error) {
     if (error instanceof PasswordResetError || error instanceof OtpError) return { error: error.message };
+    throw error;
+  }
+}
+
+/** Forgot Password, "Get OTP on WhatsApp" — same answer whether or not an account matched. */
+export async function requestPasswordResetWhatsAppAction(
+  _prevState: ResetFormState,
+  formData: FormData
+): Promise<ResetFormState> {
+  const identifier = String(formData.get("identifier") ?? "").trim();
+  if (!identifier) return { error: "Enter your email, mobile number or User ID." };
+  try {
+    await requestPasswordResetOnWhatsApp(identifier, await clientIp());
+    return { step: "code", identifier, info: "If this account exists, the code was sent on WhatsApp to its registered mobile." };
+  } catch (error) {
+    if (error instanceof PasswordResetError || error instanceof OtpError) return { step: "code", identifier, error: error.message };
     throw error;
   }
 }

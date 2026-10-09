@@ -45,6 +45,33 @@ sent to verification on their next save. Flip it outside Live CBT windows.
 
 To turn it off, flip the same switch. Verified data stays, and nothing else changes.
 
+## WhatsApp OTP fallback (Admin switch, default OFF)
+
+After the 60 s SMS resend wait, Sign-in OTP, Create Account, Forgot Password and
+`/student/verify-mobile` can offer **Get OTP on WhatsApp** next to **Resend code**.
+
+- **How:** `lib/otp.ts` `requestOtpOnWhatsApp()` calls MSG91
+  `POST https://api.msg91.com/api/v5/widget/retryOtp` (header `authkey`), with the body
+  `{ "widgetId", "reqId": <the pending SMS reqId>, "retryChannel": 12 }`. Channel 12 is WhatsApp
+  (MSG91's SDKs use SMS 11, VOICE 4, EMAIL 3, WHATSAPP 12, sent as a number).
+- **Rows:** MSG91 answers with the reqId to verify against. The pending row is closed and a new
+  `OtpRequest` row (`channel = WHATSAPP`) carries that reqId.
+- **Verification:** unchanged. It goes through `verifyOtp` → `verifyAccessToken`.
+- **Limits:** the same as SMS, because every WhatsApp send is an `OtpRequest` row. That covers the
+  60 s wait (shared by both channels), 5 per number+purpose per 15 min, and the per-IP, daily and
+  global caps. Forgot Password also counts it toward the per-IP reset cap.
+- **Enumeration:** Forgot Password answers the same whether or not an account matched.
+- **Refusals:** if MSG91 refuses (e.g. WhatsApp not set up on the Widget), the student sees an
+  honest error. The SMS code stays valid.
+- **The switch:** Admin → Settings → Authentication → MSG91 → **WhatsApp OTP fallback**. It needs
+  the Widget ID, and the button only appears while it is ON. Before turning it on:
+  1. In the MSG91 Dashboard, subscribe to WhatsApp and connect an approved WhatsApp Business number
+     with an OTP (authentication) template.
+  2. Add **WhatsApp as a retry channel** on this OTP Widget.
+  3. Test with one real number (owner-approved), then turn the switch on.
+- **Tests:** `scripts/verify-whatsapp-otp.ts` (library, stubbed MSG91) and
+  `scripts/verify-whatsapp-otp-ui.mjs` (browser, all four flows; the mock answers `retryOtp`).
+
 ## Production audit (count-only, run by the owner)
 
 ```bash

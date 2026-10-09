@@ -14,11 +14,14 @@ import {
   loginWithPasswordAction,
   registerWithPasswordAction,
   sendMobileOtpAction,
+  sendMobileOtpWhatsAppAction,
   verifyMobileOtpAction,
   sendRegisterOtpAction,
+  sendRegisterOtpWhatsAppAction,
   verifyRegisterOtpAction,
   googleSignInAction,
   requestPasswordResetAction,
+  requestPasswordResetWhatsAppAction,
   verifyPasswordResetCodeAction,
   resetPasswordAction,
   type AuthFormState,
@@ -277,7 +280,7 @@ export function OtpBoxInput({ autoSubmit }: { autoSubmit: () => void }) {
   );
 }
 
-export function ResendCountdown({ onResend }: { onResend: () => void }) {
+export function ResendCountdown({ onResend, onWhatsApp }: { onResend: () => void; onWhatsApp?: () => void }) {
   const [secondsLeft, setSecondsLeft] = useState(RESEND_COOLDOWN_SECONDS);
 
   useEffect(() => {
@@ -290,7 +293,7 @@ export function ResendCountdown({ onResend }: { onResend: () => void }) {
     return <span className="text-sm text-[var(--color-muted-foreground)]">Resend code in {secondsLeft}s</span>;
   }
 
-  return (
+  const resend = (
     <button
       type="button"
       onClick={() => {
@@ -301,6 +304,34 @@ export function ResendCountdown({ onResend }: { onResend: () => void }) {
     >
       Resend code
     </button>
+  );
+  if (!onWhatsApp) return resend;
+
+  // Same 60 s server-side cooldown for both channels, so either restarts the countdown.
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+      {resend}
+      <button
+        type="button"
+        onClick={() => {
+          setSecondsLeft(RESEND_COOLDOWN_SECONDS);
+          onWhatsApp();
+        }}
+        className="text-sm text-[var(--color-primary)] hover:underline"
+      >
+        Get OTP on WhatsApp
+      </button>
+    </div>
+  );
+}
+
+/** Confirmation after "Get OTP on WhatsApp" (the code itself is never shown). */
+export function WhatsAppSentNotice({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <p role="status" className="text-sm text-[var(--color-success)]">
+      {message}
+    </p>
   );
 }
 
@@ -365,12 +396,14 @@ function DevCodeNotice({ code }: { code?: string }) {
 }
 
 /** Phone OTP sign-in for an existing account. New accounts use Create Account. */
-function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
+function MobileOtpForm({ callbackUrl, buttonStyle, whatsapp }: { callbackUrl: string; buttonStyle?: CSSProperties; whatsapp?: boolean }) {
   const [sendState, sendAction] = useActionState<AuthFormState, FormData>(sendMobileOtpAction, {});
   const [verifyState, verifyAction, verifying] = useActionState<AuthFormState, FormData>(verifyMobileOtpAction, {});
   const [resendState, resendAction] = useActionState<AuthFormState, FormData>(sendMobileOtpAction, {});
+  const [whatsappState, whatsappAction] = useActionState<AuthFormState, FormData>(sendMobileOtpWhatsAppAction, {});
   const verifyFormRef = useRef<HTMLFormElement>(null);
   const resendFormRef = useRef<HTMLFormElement>(null);
+  const whatsappFormRef = useRef<HTMLFormElement>(null);
   const verifyingRef = useRef(false);
   useEffect(() => {
     verifyingRef.current = verifying;
@@ -395,6 +428,9 @@ function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; butt
       <form ref={resendFormRef} action={resendAction} className="hidden">
         <input type="hidden" name="mobile" value={active.mobile} />
       </form>
+      <form ref={whatsappFormRef} action={whatsappAction} className="hidden">
+        <input type="hidden" name="mobile" value={active.mobile} />
+      </form>
       <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
         <input type="hidden" name="callbackUrl" value={callbackUrl} />
         <input type="hidden" name="mobile" value={active.mobile} />
@@ -404,8 +440,12 @@ function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; butt
         </p>
         <DevCodeNotice code={active.devCode} />
         <OtpBoxInput autoSubmit={() => !verifyingRef.current && verifyFormRef.current?.requestSubmit()} />
-        <ErrorBanner message={verifyState.error ?? resendState.error} />
-        <ResendCountdown onResend={() => resendFormRef.current?.requestSubmit()} />
+        <WhatsAppSentNotice message={whatsappState.info} />
+        <ErrorBanner message={verifyState.error ?? whatsappState.error ?? resendState.error} />
+        <ResendCountdown
+          onResend={() => resendFormRef.current?.requestSubmit()}
+          onWhatsApp={whatsapp ? () => whatsappFormRef.current?.requestSubmit() : undefined}
+        />
         <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
           Verify &amp; Sign In
         </SubmitButton>
@@ -419,7 +459,7 @@ function MobileOtpForm({ callbackUrl, buttonStyle }: { callbackUrl: string; butt
  * ON): Full Name + 🇮🇳 +91 mobile → "Verify Your Mobile Number" → the account
  * is created by the server only after the OTP is verified, then signed in.
  */
-function RegisterMobileForm({ callbackUrl, buttonStyle }: { callbackUrl: string; buttonStyle?: CSSProperties }) {
+function RegisterMobileForm({ callbackUrl, buttonStyle, whatsapp }: { callbackUrl: string; buttonStyle?: CSSProperties; whatsapp?: boolean }) {
   // "Change" remounts the steps (fresh action states) with the typed values kept.
   const [restart, setRestart] = useState<{ key: number; name?: string; mobile?: string }>({ key: 0 });
   return (
@@ -427,6 +467,7 @@ function RegisterMobileForm({ callbackUrl, buttonStyle }: { callbackUrl: string;
       key={restart.key}
       callbackUrl={callbackUrl}
       buttonStyle={buttonStyle}
+      whatsapp={whatsapp}
       initialName={restart.name}
       initialMobile={restart.mobile}
       onChangeNumber={(name, mobile) => setRestart((r) => ({ key: r.key + 1, name, mobile }))}
@@ -437,12 +478,14 @@ function RegisterMobileForm({ callbackUrl, buttonStyle }: { callbackUrl: string;
 function RegisterMobileSteps({
   callbackUrl,
   buttonStyle,
+  whatsapp,
   initialName,
   initialMobile,
   onChangeNumber,
 }: {
   callbackUrl: string;
   buttonStyle?: CSSProperties;
+  whatsapp?: boolean;
   initialName?: string;
   initialMobile?: string;
   onChangeNumber: (name?: string, mobile?: string) => void;
@@ -450,6 +493,8 @@ function RegisterMobileSteps({
   const [sendState, sendAction] = useActionState<AuthFormState, FormData>(sendRegisterOtpAction, {});
   const [verifyState, verifyAction, verifying] = useActionState<AuthFormState, FormData>(verifyRegisterOtpAction, {});
   const [resendState, resendAction] = useActionState<AuthFormState, FormData>(sendRegisterOtpAction, {});
+  const [whatsappState, whatsappAction] = useActionState<AuthFormState, FormData>(sendRegisterOtpWhatsAppAction, {});
+  const whatsappFormRef = useRef<HTMLFormElement>(null);
   // Controlled, so a refused send (React resets uncontrolled fields after a form action) keeps what was typed.
   const [name, setName] = useState(initialName ?? "");
   const verifyFormRef = useRef<HTMLFormElement>(null);
@@ -493,6 +538,10 @@ function RegisterMobileSteps({
         <input type="hidden" name="name" value={active.name} />
         <input type="hidden" name="mobile" value={active.mobile} />
       </form>
+      <form ref={whatsappFormRef} action={whatsappAction} className="hidden">
+        <input type="hidden" name="name" value={active.name} />
+        <input type="hidden" name="mobile" value={active.mobile} />
+      </form>
       <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
         <input type="hidden" name="callbackUrl" value={callbackUrl} />
         <input type="hidden" name="name" value={active.name} />
@@ -513,8 +562,12 @@ function RegisterMobileSteps({
         </div>
         <DevCodeNotice code={active.devCode} />
         <OtpBoxInput autoSubmit={() => !verifyingRef.current && verifyFormRef.current?.requestSubmit()} />
-        <ErrorBanner message={verifyState.error ?? resendState.error} />
-        <ResendCountdown onResend={() => resendFormRef.current?.requestSubmit()} />
+        <WhatsAppSentNotice message={whatsappState.info} />
+        <ErrorBanner message={verifyState.error ?? whatsappState.error ?? resendState.error} />
+        <ResendCountdown
+          onResend={() => resendFormRef.current?.requestSubmit()}
+          onWhatsApp={whatsapp ? () => whatsappFormRef.current?.requestSubmit() : undefined}
+        />
         <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
           Verify &amp; Create Account
         </SubmitButton>
@@ -530,15 +583,19 @@ function RegisterMobileSteps({
  */
 function ForgotPasswordFlow({
   buttonStyle,
+  whatsapp,
   onBack,
   onRestart,
 }: {
   buttonStyle?: CSSProperties;
+  whatsapp?: boolean;
   onBack: () => void;
   onRestart: () => void;
 }) {
   const [requestState, requestAction] = useActionState<ResetFormState, FormData>(requestPasswordResetAction, {});
   const [resendState, resendAction] = useActionState<ResetFormState, FormData>(requestPasswordResetAction, {});
+  const [whatsappState, whatsappAction] = useActionState<ResetFormState, FormData>(requestPasswordResetWhatsAppAction, {});
+  const whatsappFormRef = useRef<HTMLFormElement>(null);
   const [verifyState, verifyAction] = useActionState<ResetFormState, FormData>(verifyPasswordResetCodeAction, {});
   const [resetState, resetAction] = useActionState<ResetFormState, FormData>(resetPasswordAction, {});
   const [show, setShow] = useState(false);
@@ -629,6 +686,9 @@ function ForgotPasswordFlow({
         <form ref={resendFormRef} action={resendAction} className="hidden">
           <input type="hidden" name="identifier" value={sent.identifier} />
         </form>
+        <form ref={whatsappFormRef} action={whatsappAction} className="hidden">
+          <input type="hidden" name="identifier" value={sent.identifier} />
+        </form>
         <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
           <p className="text-sm font-medium text-white">Verify it&apos;s you</p>
           <input type="hidden" name="identifier" value={sent.identifier} />
@@ -642,8 +702,12 @@ function ForgotPasswordFlow({
             </p>
           ) : null}
           <OtpBoxInput autoSubmit={() => verifyFormRef.current?.requestSubmit()} />
-          <ErrorBanner message={verifyState.error ?? resendState.error} />
-          <ResendCountdown onResend={() => resendFormRef.current?.requestSubmit()} />
+          <WhatsAppSentNotice message={whatsappState.info} />
+          <ErrorBanner message={verifyState.error ?? whatsappState.error ?? resendState.error} />
+          <ResendCountdown
+            onResend={() => resendFormRef.current?.requestSubmit()}
+            onWhatsApp={whatsapp ? () => whatsappFormRef.current?.requestSubmit() : undefined}
+          />
           <SubmitButton pendingLabel="Verifying…" style={buttonStyle}>
             Verify Code
           </SubmitButton>
@@ -693,6 +757,9 @@ export function LoginScreen({
   const showPassword = providerConfig.passwordEnabled;
   const showOtp = providerConfig.otpEnabled;
   const showRegister = providerConfig.registerEnabled;
+  // Same rule as lib/auth-provider-config.ts isWhatsAppOtpAvailable() (enforced again server-side).
+  const whatsappOtp =
+    providerConfig.msg91.enabled && providerConfig.msg91.configured && providerConfig.msg91.whatsappRetryEnabled && Boolean(providerConfig.msg91.widgetId);
 
   const [mode, setMode] = useState<"signin" | "register" | "forgot">(defaultMode);
   const [forgotKey, setForgotKey] = useState(0);
@@ -737,6 +804,7 @@ export function LoginScreen({
           <ForgotPasswordFlow
             key={forgotKey}
             buttonStyle={buttonStyle}
+            whatsapp={whatsappOtp}
             onBack={() => setMode("signin")}
             onRestart={() => setForgotKey((k) => k + 1)}
           />
@@ -744,7 +812,7 @@ export function LoginScreen({
           <div className="flex flex-col gap-4">
             <p className="text-sm font-medium text-white">Create Account</p>
             {providerConfig.mobileVerificationRequired ? (
-              <RegisterMobileForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} />
+              <RegisterMobileForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} whatsapp={whatsappOtp} />
             ) : (
               <PasswordRegisterForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} />
             )}
@@ -791,7 +859,7 @@ export function LoginScreen({
             ) : null}
 
             {showPassword && method === "password" ? <PasswordLoginForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} onForgot={() => setMode("forgot")} /> : null}
-            {showOtp && method === "otp" ? <MobileOtpForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} /> : null}
+            {showOtp && method === "otp" ? <MobileOtpForm callbackUrl={callbackUrl} buttonStyle={buttonStyle} whatsapp={whatsappOtp} /> : null}
             {!showPassword && !showOtp && !showGoogle ? (
               <p className="text-center text-sm text-white/50">
                 Sign-in is temporarily unavailable. Please contact support.

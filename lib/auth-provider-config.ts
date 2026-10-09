@@ -47,6 +47,12 @@ export interface Msg91PublicConfig {
   flowId: string;
   /** MSG91 Widget ID (OTP Widget product). When set, OTP delivery/verification goes through the Widget REST API instead of the Flow API + our own code generation. */
   widgetId: string;
+  /**
+   * "Get OTP on WhatsApp" (default OFF): re-delivers a pending Widget OTP via
+   * MSG91 retryOtp on the WhatsApp channel. Needs WhatsApp set up as a retry
+   * channel on this Widget in the MSG91 Dashboard (ops/MOBILE-VERIFICATION.md).
+   */
+  whatsappRetryEnabled: boolean;
   lastTest: ProviderLastTest | null;
   updatedAt: string | null;
 }
@@ -80,6 +86,7 @@ interface StoredMsg91 {
   senderId?: string;
   flowId?: string;
   widgetId?: string;
+  whatsappRetryEnabled?: boolean;
   lastTest?: ProviderLastTest | null;
   updatedAt?: string;
 }
@@ -149,6 +156,7 @@ function toPublic(raw: StoredProviders): AuthProviderPublicConfig {
     senderId: msg.senderId ?? process.env.MSG91_SENDER_ID ?? "",
     flowId: msg.flowId ?? process.env.MSG91_FLOW_ID ?? "",
     widgetId: msg.widgetId ?? process.env.MSG91_WIDGET_ID ?? "",
+    whatsappRetryEnabled: msg.whatsappRetryEnabled ?? false,
     lastTest: msg.lastTest ?? null,
     updatedAt: msg.updatedAt ?? null,
   };
@@ -201,6 +209,17 @@ export async function getMsg91Credentials(): Promise<{
   };
 }
 
+/**
+ * WhatsApp OTP is offered only when the Admin switch is ON, MSG91 is enabled
+ * and the Widget path is active (retryOtp needs the Widget's reqId).
+ */
+export async function isWhatsAppOtpAvailable(): Promise<boolean> {
+  const config = await getAuthProviderConfig();
+  if (!config.msg91.enabled || !config.msg91.whatsappRetryEnabled) return false;
+  const { authKey, widgetId } = await getMsg91Credentials();
+  return Boolean(authKey && widgetId);
+}
+
 export interface ProviderConfigUpdate {
   google?: {
     enabled?: boolean;
@@ -214,6 +233,7 @@ export interface ProviderConfigUpdate {
     senderId?: string;
     flowId?: string;
     widgetId?: string;
+    whatsappRetryEnabled?: boolean;
   };
   toggles?: { passwordEnabled?: boolean; otpEnabled?: boolean; registerEnabled?: boolean; mobileVerificationRequired?: boolean };
 }
@@ -247,6 +267,7 @@ export async function saveAuthProviderConfig(update: ProviderConfigUpdate): Prom
     if (update.msg91.senderId !== undefined) next.senderId = update.msg91.senderId.trim() || undefined;
     if (update.msg91.flowId !== undefined) next.flowId = update.msg91.flowId.trim() || undefined;
     if (update.msg91.widgetId !== undefined) next.widgetId = update.msg91.widgetId.trim() || undefined;
+    if (update.msg91.whatsappRetryEnabled !== undefined) next.whatsappRetryEnabled = update.msg91.whatsappRetryEnabled;
     next.lastTest = null;
     next.updatedAt = new Date().toISOString();
     raw.msg91 = next;

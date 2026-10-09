@@ -4,6 +4,7 @@ import { getClientIp } from "@/lib/client-ip";
 import { requireStudentAllowUnverified, StudentUnauthorizedError } from "@/lib/student-session";
 import {
   sendMobileVerificationOtp,
+  sendMobileVerificationOtpOnWhatsApp,
   confirmMobileVerificationOtp,
   MobileVerificationError,
   MobileInUseError,
@@ -25,6 +26,7 @@ export interface VerifyMobileState {
   mobile?: string;
   verified?: boolean;
   devCode?: string;
+  info?: string;
   /** Set when the proven number belongs to another account (recovery request recorded server-side). */
   recovery?: StudentRecoveryView;
 }
@@ -41,6 +43,18 @@ export async function sendVerifyMobileOtpAction(_prev: VerifyMobileState, formDa
     const student = await requireStudentAllowUnverified();
     const { mobile, devCode } = await sendMobileVerificationOtp(student.id, String(formData.get("mobile") ?? ""), await getClientIp());
     return { sent: true, mobile: mobile.e164, devCode };
+  } catch (error) {
+    if (error instanceof StudentUnauthorizedError) return { error: SIGNED_OUT };
+    if (error instanceof MobileVerificationError) return { error: error.message };
+    throw error;
+  }
+}
+
+export async function sendVerifyMobileOtpWhatsAppAction(_prev: VerifyMobileState, formData: FormData): Promise<VerifyMobileState> {
+  try {
+    const student = await requireStudentAllowUnverified();
+    const { mobile } = await sendMobileVerificationOtpOnWhatsApp(student.id, String(formData.get("mobile") ?? ""), await getClientIp());
+    return { sent: true, mobile: mobile.e164, info: "Code sent on WhatsApp. Enter the same 6-digit code here." };
   } catch (error) {
     if (error instanceof StudentUnauthorizedError) return { error: SIGNED_OUT };
     if (error instanceof MobileVerificationError) return { error: error.message };

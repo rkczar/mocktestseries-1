@@ -3,10 +3,10 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Loader2 } from "lucide-react";
-import { IndianMobileInput, OtpBoxInput, ResendCountdown, ErrorBanner, SubmitButton } from "@/app/login/login-screen";
+import { IndianMobileInput, OtpBoxInput, ResendCountdown, ErrorBanner, SubmitButton, WhatsAppSentNotice } from "@/app/login/login-screen";
 import { formatIndianMobile } from "@/lib/indian-mobile";
 import type { StudentRecoveryView } from "@/lib/account-recovery";
-import { sendVerifyMobileOtpAction, confirmVerifyMobileOtpAction, type VerifyMobileState } from "./actions";
+import { sendVerifyMobileOtpAction, sendVerifyMobileOtpWhatsAppAction, confirmVerifyMobileOtpAction, type VerifyMobileState } from "./actions";
 import { RecoveryPanel } from "./recovery-panel";
 
 const VERIFY_MOBILE_PATH = "/student/verify-mobile";
@@ -15,11 +15,14 @@ export function VerifyMobileForm({
   suggestedDigits,
   destination,
   recovery,
+  whatsapp = false,
 }: {
   suggestedDigits: string;
   destination: string;
   /** The student's open (or recently reviewed) duplicate-number request, shown first. */
   recovery: StudentRecoveryView | null;
+  /** "Get OTP on WhatsApp" after the resend cooldown (lib/auth-provider-config.ts isWhatsAppOtpAvailable). */
+  whatsapp?: boolean;
 }) {
   const router = useRouter();
   // A sign-in Server Action renders its redirect target inside the action
@@ -51,6 +54,7 @@ export function VerifyMobileForm({
       key={restart.key}
       initialDigits={restart.digits}
       destination={destination}
+      whatsapp={whatsapp}
       onChangeNumber={(digits) => setRestart((r) => ({ key: r.key + 1, digits }))}
     />
   );
@@ -59,15 +63,19 @@ export function VerifyMobileForm({
 function VerifyMobileSteps({
   initialDigits,
   destination,
+  whatsapp,
   onChangeNumber,
 }: {
   initialDigits: string;
   destination: string;
+  whatsapp: boolean;
   onChangeNumber: (digits: string) => void;
 }) {
   const router = useRouter();
   const [sendState, sendAction] = useActionState<VerifyMobileState, FormData>(sendVerifyMobileOtpAction, {});
   const [resendState, resendAction] = useActionState<VerifyMobileState, FormData>(sendVerifyMobileOtpAction, {});
+  const [whatsappState, whatsappAction] = useActionState<VerifyMobileState, FormData>(sendVerifyMobileOtpWhatsAppAction, {});
+  const whatsappFormRef = useRef<HTMLFormElement>(null);
   const [verifyState, verifyAction, verifying] = useActionState<VerifyMobileState, FormData>(confirmVerifyMobileOtpAction, {});
   const verifyFormRef = useRef<HTMLFormElement>(null);
   const resendFormRef = useRef<HTMLFormElement>(null);
@@ -118,6 +126,9 @@ function VerifyMobileSteps({
       <form ref={resendFormRef} action={resendAction} className="hidden">
         <input type="hidden" name="mobile" value={active.mobile} />
       </form>
+      <form ref={whatsappFormRef} action={whatsappAction} className="hidden">
+        <input type="hidden" name="mobile" value={active.mobile} />
+      </form>
       <form ref={verifyFormRef} action={verifyAction} className="flex flex-col gap-4" noValidate>
         <input type="hidden" name="mobile" value={active.mobile} />
         <p className="text-sm text-[var(--color-muted-foreground)]">
@@ -137,8 +148,12 @@ function VerifyMobileSteps({
           </p>
         ) : null}
         <OtpBoxInput autoSubmit={() => !verifyingRef.current && verifyFormRef.current?.requestSubmit()} />
-        <ErrorBanner message={verifyState.error ?? resendState.error} />
-        <ResendCountdown onResend={() => resendFormRef.current?.requestSubmit()} />
+        <WhatsAppSentNotice message={whatsappState.info} />
+        <ErrorBanner message={verifyState.error ?? whatsappState.error ?? resendState.error} />
+        <ResendCountdown
+          onResend={() => resendFormRef.current?.requestSubmit()}
+          onWhatsApp={whatsapp ? () => whatsappFormRef.current?.requestSubmit() : undefined}
+        />
         <SubmitButton pendingLabel="Verifying…">Verify Mobile Number</SubmitButton>
       </form>
     </>

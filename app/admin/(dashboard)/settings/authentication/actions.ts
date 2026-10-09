@@ -65,11 +65,15 @@ export async function saveMsg91ConfigAction(
   const senderId = String(formData.get("senderId") ?? "").trim();
   const flowId = String(formData.get("flowId") ?? "").trim();
   const widgetId = String(formData.get("widgetId") ?? "").trim();
+  const whatsappRetryEnabled = formData.get("whatsappRetryEnabled") === "on";
+  if (whatsappRetryEnabled && !widgetId) {
+    return { error: "WhatsApp OTP fallback needs the MSG91 Widget ID (it re-delivers a Widget OTP)." };
+  }
 
   await saveAuthProviderConfig({
-    msg91: { enabled, authKey: authKey || undefined, senderId, flowId, widgetId },
+    msg91: { enabled, authKey: authKey || undefined, senderId, flowId, widgetId, whatsappRetryEnabled },
   });
-  await logAudit(session.user.id, "AUTH_PROVIDER_MSG91_SAVED", "auth.providers", { enabled });
+  await logAudit(session.user.id, "AUTH_PROVIDER_MSG91_SAVED", "auth.providers", { enabled, whatsappRetryEnabled });
 
   revalidateAuthSurfaces();
   return { success: true };

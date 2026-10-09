@@ -3,9 +3,9 @@ import crypto from "node:crypto";
 import argon2 from "argon2";
 import { OtpPurpose } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requestOtp, verifyOtp, OtpError } from "@/lib/otp";
+import { requestOtp, requestOtpOnWhatsApp, verifyOtp, OtpError, WHATSAPP_NO_PENDING, WHATSAPP_UNAVAILABLE } from "@/lib/otp";
 import { isStudentAuthEligible } from "@/lib/student-lifecycle";
-import { getAuthProviderConfig } from "@/lib/auth-provider-config";
+import { getAuthProviderConfig, isWhatsAppOtpAvailable } from "@/lib/auth-provider-config";
 import { assertOtpVerifyAllowed, AuthRateLimitError } from "@/lib/auth-rate-limit";
 import { logoutAllStudentSessions } from "@/lib/student-devices";
 import { queueForgotPasswordEmail, queuePasswordChangedEmail } from "@/lib/email/events";
@@ -103,6 +103,47 @@ export async function requestPasswordReset(identifier: string, ipAddress: string
     // Cooldown / send-cap only happen for a real account — answering them
     // differently would reveal the account exists, so they read as "sent".
     if (error instanceof OtpError && /wait|too many/i.test(error.message)) return {};
+    throw error;
+  }
+}
+
+/**
+ * Step 1b, "Get OTP on WhatsApp": re-delivers the pending RESET_PASSWORD code
+ * (lib/otp.ts requestOtpOnWhatsApp). Counts toward the same per-IP request
+ * cap, and answers identically whether or not an account matched: only
+ * account-independent failures (cap, WhatsApp unavailable, delivery error for
+ * a real account — the same as the SMS path) are thrown.
+ */
+export async function requestPasswordResetOnWhatsApp(identifier: string, ipAddress: string): Promise<void> {
+  const config = await getAuthProviderConfig();
+  if (!config.passwordEnabled) throw new PasswordResetError("Password login is currently disabled.");
+  if (!(await isWhatsAppOtpAvailable())) throw new OtpError(WHATSAPP_UNAVAILABLE);
+
+  const windowStart = new Date(Date.now() - REQUEST_WINDOW_MS);
+  const recent = await prisma.studentLoginAttempt.count({
+    where: { ipAddress, method: "PASSWORD_RESET_REQUEST", createdAt: { gte: windowStart } },
+  });
+  if (recent >= MAX_REQUESTS_PER_IP) {
+    throw new PasswordResetError("Too many reset requests. Please try again later.");
+  }
+
+  const student = await findStudentByIdentifier(identifier);
+  await prisma.studentLoginAttempt.create({
+    data: {
+      identifier: identifier.trim().toLowerCase().slice(0, 200),
+      ipAddress,
+      success: false,
+      method: "PASSWORD_RESET_REQUEST",
+      studentId: student?.id,
+    },
+  });
+  if (!student) return;
+
+  try {
+    await requestOtpOnWhatsApp(student.mobile, OtpPurpose.RESET_PASSWORD, ipAddress);
+  } catch (error) {
+    // Cooldown / caps / no pending code exist only for a real account — they read as "sent".
+    if (error instanceof OtpError && (/wait|too many/i.test(error.message) || error.message === WHATSAPP_NO_PENDING)) return;
     throw error;
   }
 }

@@ -197,6 +197,17 @@ export function Msg91Card({ msg91 }: { msg91: AuthProviderPublicConfig["msg91"] 
             <Input id="msg91-widget-id" name="widgetId" defaultValue={msg91.widgetId} placeholder="36xxxxxxxxxxxxxxxxxxxxxx" />
           </div>
 
+          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-[var(--color-foreground)]">WhatsApp OTP fallback</p>
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                Shows &ldquo;Get OTP on WhatsApp&rdquo; after the 60 s SMS resend wait (Widget ID required). Turn on only after
+                WhatsApp is added as a retry channel on this Widget in the MSG91 Dashboard and a real test code arrived.
+              </p>
+            </div>
+            <Switch name="whatsappRetryEnabled" aria-label="WhatsApp OTP fallback" defaultChecked={msg91.whatsappRetryEnabled} />
+          </div>
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="msg91-sender-id">Sender ID (Flow API only)</Label>

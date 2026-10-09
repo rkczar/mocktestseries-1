@@ -2,7 +2,7 @@ import "server-only";
 import { OtpPurpose, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAuthProviderConfig } from "@/lib/auth-provider-config";
-import { requestOtp, verifyOtp, OtpError } from "@/lib/otp";
+import { requestOtp, requestOtpOnWhatsApp, verifyOtp, OtpError } from "@/lib/otp";
 import { assertOtpVerifyAllowed, AuthRateLimitError, TOO_MANY_ATTEMPTS_MESSAGE } from "@/lib/auth-rate-limit";
 import { parseIndianMobile, storedMobileVariants, INDIAN_MOBILE_ERROR, type IndianMobile } from "@/lib/indian-mobile";
 import { recordMobileConflict } from "@/lib/account-recovery";
@@ -97,6 +97,21 @@ export async function sendMobileVerificationOtp(studentDbId: string, rawMobile: 
   try {
     const { devCode } = await requestOtp(mobile.e164, OtpPurpose.VERIFY_MOBILE, ipAddress);
     return { mobile, devCode };
+  } catch (error) {
+    if (error instanceof OtpError) throw new MobileVerificationError(error.message);
+    throw error;
+  }
+}
+
+/** Step 1b: "Get OTP on WhatsApp" for the pending VERIFY_MOBILE code (same caps as SMS). */
+export async function sendMobileVerificationOtpOnWhatsApp(studentDbId: string, rawMobile: string, ipAddress: string) {
+  const mobile = parseOrThrow(rawMobile);
+  if (await isStudentMobileVerified(studentDbId)) {
+    throw new MobileVerificationError("Your mobile number is already verified.");
+  }
+  try {
+    await requestOtpOnWhatsApp(mobile.e164, OtpPurpose.VERIFY_MOBILE, ipAddress);
+    return { mobile };
   } catch (error) {
     if (error instanceof OtpError) throw new MobileVerificationError(error.message);
     throw error;

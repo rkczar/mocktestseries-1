@@ -522,6 +522,12 @@ enum OtpPurpose {
   VERIFY_MOBILE
 }
 
+/// How an OTP reached the phone. WHATSAPP = an MSG91 Widget retryOtp of a pending SMS code (lib/otp.ts).
+enum OtpChannel {
+  SMS
+  WHATSAPP
+}
+
 enum DeletionRequestStatus {
   PENDING
   APPROVED
@@ -645,6 +651,7 @@ model OtpRequest {
   consumedAt  DateTime?
   lastSentAt  DateTime   @default(now())
   ipAddress   String?
+  channel     OtpChannel @default(SMS)
   createdAt   DateTime   @default(now())
 
   @@index([mobile, purpose, createdAt])
