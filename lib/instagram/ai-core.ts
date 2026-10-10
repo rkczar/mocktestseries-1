@@ -1,5 +1,6 @@
 import { checkText, type SafetyContext } from "@/lib/instagram/content-safety";
 import { plainText } from "@/lib/instagram/layout";
+import { examProfile, stripExcluded } from "@/lib/instagram/exam-scope";
 import {
   HOOK_STYLES,
   LIMITS,
@@ -20,7 +21,7 @@ import {
  * and the response must echo the stored answer label or it is discarded.
  */
 
-export const IG_PROMPT_VERSION = "ig-studio-v1";
+export const IG_PROMPT_VERSION = "ig-studio-v2";
 
 export interface PromptInput {
   snapshot: SourceSnapshot;
@@ -40,6 +41,8 @@ const FIELD_SPEC: Record<ContentField, string> = {
   memoryTrick: `"memoryTrick": one short mnemonic or memory aid for this exact fact, at most ${LIMITS.memoryTrick} characters`,
   clinicalPearl: `"clinicalPearl": one high-yield, textbook-standard clinical/exam pearl directly related to this question, at most ${LIMITS.clinicalPearl} characters`,
   quickRevision: `"quickRevision": 2 to ${LIMITS.quickRevisionItems} one-line revision points, each at most ${LIMITS.quickRevisionItem} characters`,
+  pearls: `"pearls": 3 to ${LIMITS.pearls} high-yield medical pearls about this concept (clinical facts, key associations, memory aids), each at most ${LIMITS.pearl} characters`,
+  mistakes: `"mistakes": 2 to ${LIMITS.mistakes} common mistakes students make on this concept — the confusing options, misconceptions and the differentiating feature — each at most ${LIMITS.mistake} characters`,
   finalTrick: `"finalTrick": one closing quick-revision line for the last slide, at most ${LIMITS.finalTrick} characters`,
   caption: `"caption": the Instagram caption, 3 to 6 short lines, at most ${LIMITS.caption} characters, no hashtags inside it; end by inviting people to comment their answer and save the post`,
   hashtags: `"hashtags": 8 to ${LIMITS.hashtags} relevant hashtags (strings starting with #), no spaces inside a tag`,
@@ -65,6 +68,8 @@ export function buildPrompt(input: PromptInput): string {
     "",
     `Attribution (use exactly as given, never add another exam, year or source): ${attribution}`,
     `Subject: ${s.subjectName}${s.topicName ? ` / ${s.topicName}` : ""}`,
+    `Exam style (${examProfile(s.examName, s.examCode).label}): ${examProfile(s.examName, s.examCode).style}`,
+    "Audience: MBBS graduates preparing for this exam. Never mention NEET UG, school or board exams.",
     "",
     `Question: ${plainText(s.text)}`,
     optionLines(s),
@@ -178,20 +183,22 @@ export function parseAiResponse(text: string, snapshot: SourceSnapshot, targets:
       if (reasons.length) out.rejected.push({ field, reason: reasons.join("; ") });
       continue;
     }
-    if (field === "quickRevision") {
-      const items = (Array.isArray(raw) ? raw : []).map(str).filter(Boolean);
+    if (field === "quickRevision" || field === "pearls" || field === "mistakes") {
+      const [maxItems, maxLen] =
+        field === "quickRevision" ? [LIMITS.quickRevisionItems, LIMITS.quickRevisionItem] : field === "pearls" ? [LIMITS.pearls, LIMITS.pearl] : [LIMITS.mistakes, LIMITS.mistake];
+      const items = (Array.isArray(raw) ? raw : []).map(str).map((i) => i.replace(/\s+/g, " ")).filter(Boolean);
       const bad =
         items.length === 0
           ? "empty"
-          : items.length > LIMITS.quickRevisionItems
-            ? `too many points (${items.length}/${LIMITS.quickRevisionItems})`
-            : items.map((i) => capCheck(i, LIMITS.quickRevisionItem) ?? safety(field, i)).find(Boolean) ?? null;
+          : items.length > maxItems
+            ? `too many points (${items.length}/${maxItems})`
+            : items.map((i) => capCheck(i, maxLen) ?? safety(field, i)).find(Boolean) ?? null;
       if (bad) out.rejected.push({ field, reason: bad });
-      else out.patch.quickRevision = items;
+      else out.patch[field] = items;
       continue;
     }
     if (field === "hashtags") {
-      const tags = normalizeHashtags((Array.isArray(raw) ? raw : []).map(str));
+      const tags = stripExcluded(normalizeHashtags((Array.isArray(raw) ? raw : []).map(str)));
       const bad = tags.length === 0 ? "empty" : safety(field, tags.join(" "));
       if (bad) out.rejected.push({ field, reason: bad });
       else out.patch.hashtags = tags;

@@ -3265,3 +3265,151 @@ model InstagramPostRevision {
 
   @@unique([postId, revision])
 }
+
+/// One provider call made through the AI Gateway (lib/ai-gateway.ts): which
+/// feature asked, which provider/model answered, tokens and an estimated cost.
+/// Never stores prompts, responses or credentials — only a sanitized error summary.
+model AiGatewayCall {
+  id           String   @id @default(cuid())
+  feature      String
+  provider     String
+  model        String
+  ok           Boolean
+  errorCategory String?
+  errorSummary String?
+  latencyMs    Int
+  inputTokens  Int?
+  outputTokens Int?
+  /// Estimated USD cost from the admin-visible price table; null when the price is unknown.
+  estCostUsd   Float?
+  attempt      Int      @default(1)
+  actorId      String?
+  createdAt    DateTime @default(now())
+
+  @@index([feature, createdAt])
+  @@index([provider, createdAt])
+  @@index([createdAt])
+}
+
+enum InstagramBatchStatus {
+  DRAFTING
+  QUEUE_RUNNING
+  QUEUE_PAUSED
+  QUEUE_STOPPED
+  COMPLETE
+}
+
+enum InstagramQueueState {
+  NONE
+  QUEUED
+  PUBLISHING
+  DONE
+  FAILED
+  UNCERTAIN
+  SKIPPED
+}
+
+/// Bulk Studio batch: one separate post per selected question. Publishing from
+/// a batch is an attended queue — it advances only while a Master Admin has the
+/// queue open and running, one confirmed post at a time.
+model InstagramBatch {
+  id          String               @id @default(cuid())
+  name        String
+  examId      String?
+  status      InstagramBatchStatus @default(DRAFTING)
+  createdById String
+  /// Who confirmed the publishing queue and when (explicit Master Admin confirmation).
+  queueConfirmedById String?
+  queueConfirmedAt   DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  items InstagramBatchItem[]
+
+  @@index([createdAt])
+}
+
+model InstagramBatchItem {
+  id         String              @id @default(cuid())
+  batchId    String
+  batch      InstagramBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  postId     String
+  questionId String
+  position   Int
+  queueState InstagramQueueState @default(NONE)
+  /// Idempotency key used for this item's publish request (reused on resume; never a second post).
+  requestKey String?
+  lastError  String?
+  updatedAt  DateTime            @updatedAt
+
+  @@unique([batchId, postId])
+  @@index([postId])
+}
+
+/// A snapshot of an Instagram post's metrics, read from the Instagram API.
+/// A metric the API did not return stays null (never guessed).
+model InstagramPostMetric {
+  id          String   @id @default(cuid())
+  postId      String
+  igMediaId   String
+  views       Int?
+  reach       Int?
+  likes       Int?
+  comments    Int?
+  saves       Int?
+  shares      Int?
+  /// Metric names the API refused or did not return, with the reason.
+  unavailable Json?
+  fetchedAt   DateTime @default(now())
+
+  @@index([postId, fetchedAt])
+}
+
+enum InstagramReferenceKind {
+  HANDLE
+  POST
+}
+
+/// Trends & Competitors: competitor/reference handles and manually provided
+/// reference posts (topic, format, caption style, observed engagement). Every
+/// row records who entered it, the source and when it was observed.
+model InstagramReference {
+  id             String                 @id @default(cuid())
+  kind           InstagramReferenceKind
+  handle         String
+  examTags       String[]
+  url            String?
+  topic          String?
+  subject        String?
+  format         String?
+  captionStyle   String?
+  keywords       String[]
+  likes          Int?
+  comments       Int?
+  views          Int?
+  observedAt     DateTime?
+  notes          String?
+  /// MANUAL (admin-entered) or API (official API read).
+  source         String                 @default("MANUAL")
+  active         Boolean                @default(true)
+  createdById    String
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@index([kind, active])
+  @@index([handle])
+}
+
+/// Saved AI trend / competitor analyses with the evidence they were given.
+model InstagramInsightReport {
+  id          String   @id @default(cuid())
+  kind        String
+  provider    String?
+  model       String?
+  evidence    Json
+  result      Json
+  createdById String
+  createdAt   DateTime @default(now())
+
+  @@index([kind, createdAt])
+}

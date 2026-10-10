@@ -8,9 +8,12 @@ import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
 import { saveStudioSettingsAction } from "@/app/admin/(dashboard)/instagram/actions";
 import type { StudioSettings } from "@/lib/instagram/config";
-import { SLIDE_COUNTS, TEMPLATE_KEYS } from "@/lib/instagram/types";
+import { SLIDE_COUNTS, TEMPLATE_KEYS, DESIGN_MODE_LABELS, modeOfTemplate } from "@/lib/instagram/types";
+import { TEMPLATES } from "@/lib/instagram/templates";
 
-const TEMPLATE_NAMES: Record<string, string> = { midnight: "Midnight Medical (website)", academic: "Clean Academic", clinical: "Clinical Green", premium: "Premium Dark" };
+const TEMPLATE_NAMES: Record<string, string> = Object.fromEntries(
+  TEMPLATE_KEYS.map((k) => [k, `${k === "midnight" ? "Midnight Medical (website)" : TEMPLATES[k].name} · ${DESIGN_MODE_LABELS[modeOfTemplate(k)]}`])
+);
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (

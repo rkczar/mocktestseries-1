@@ -30,31 +30,30 @@ import {
   type Result,
 } from "@/app/admin/(dashboard)/instagram/actions";
 import type { PostDto, QuestionPostState } from "@/lib/instagram/posts";
-import { REVIEW_CHECKLIST } from "@/lib/instagram/quality";
+import { checklistFor } from "@/lib/instagram/quality";
+
+import { smartModules } from "@/lib/instagram/smart-layout";
+import { AiStudioPanel, ProviderPicker, type ProviderChoice } from "@/components/admin/instagram/ai-studio-panel";
+import { CaptionVersions } from "@/components/admin/instagram/caption-versions";
+import { DesignModePicker } from "@/components/admin/instagram/design-mode-picker";
 import {
   CONTENT_FIELD_LABELS,
   DEFAULT_LAYOUTS,
   HOOK_STYLE_LABELS,
   LIMITS,
+  MAX_SLIDES,
+  MIN_SLIDES,
   MODULE_LABELS,
   SLIDE_COUNTS,
   SLIDE_MODULES,
-  TEMPLATE_KEYS,
   composeCaption,
   validateModules,
   type PostContent,
   type PostDesign,
   type SlideCount,
   type SlideModule,
-  type TemplateKey,
 } from "@/lib/instagram/types";
 
-const TEMPLATE_NAMES: Record<TemplateKey, string> = {
-  midnight: "Midnight Medical (website)",
-  academic: "Clean Academic",
-  clinical: "Clinical Green",
-  premium: "Premium Dark",
-};
 
 export interface EditorTarget {
   questionId: string;
@@ -66,25 +65,41 @@ export interface EditorTarget {
   filterQuery?: string;
 }
 
-type Tab = "content" | "design" | "ai" | "review" | "history";
+type Tab = "content" | "design" | "ai" | "studio" | "review" | "history";
 
 interface Draft {
   content: PostContent;
   design: PostDesign;
   hashtagsText: string;
   revisionText: string;
+  pearlsText: string;
+  mistakesText: string;
+  keywordsText: string;
 }
 
 function toDraft(p: PostDto): Draft {
-  return { content: p.content, design: p.design, hashtagsText: p.content.hashtags.join(" "), revisionText: p.content.quickRevision.join("\n") };
+  return {
+    content: p.content,
+    design: p.design,
+    hashtagsText: p.content.hashtags.join(" "),
+    revisionText: p.content.quickRevision.join("\n"),
+    pearlsText: p.content.pearls.join("\n"),
+    mistakesText: p.content.mistakes.join("\n"),
+    keywordsText: p.content.keywords.join(", "),
+  };
 }
+
+const lines = (t: string) => t.split("\n").map((x) => x.trim()).filter(Boolean);
 
 function draftPayload(d: Draft): { content: PostContent; design: PostDesign } {
   return {
     content: {
       ...d.content,
       hashtags: d.hashtagsText.split(/[\s,]+/).filter(Boolean),
-      quickRevision: d.revisionText.split("\n").map((x) => x.trim()).filter(Boolean),
+      quickRevision: lines(d.revisionText),
+      pearls: lines(d.pearlsText),
+      mistakes: lines(d.mistakesText),
+      keywords: d.keywordsText.split(",").map((x) => x.trim()).filter(Boolean),
     },
     design: d.design,
   };
@@ -146,6 +161,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmNewVersion, setConfirmNewVersion] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [provider, setProvider] = useState<ProviderChoice>("default");
   const changed = useRef(false);
 
   const adopt = useCallback((p: PostDto) => {
@@ -275,6 +291,31 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
     patchDesign({ slideCount: n, modules: [...DEFAULT_LAYOUTS[n]] });
     setSlide((s) => Math.min(s, n - 1));
   }
+  function setModules(modules: SlideModule[]) {
+    patchDesign({ slideCount: modules.length, modules });
+    setSlide((s) => Math.min(s, modules.length - 1));
+  }
+  function addSlide() {
+    if (!draft || draft.design.modules.length >= MAX_SLIDES) return;
+    const used = new Set(draft.design.modules);
+    const next = (["DIAGRAM", "PEARLS", "MISTAKES", "TRAP", "EXPLANATION", "MEMORY_TRICK", "PEARL_REVISION", "HOOK"] as SlideModule[]).find((m) => !used.has(m));
+    if (!next) return;
+    const m = [...draft.design.modules];
+    m.splice(m.length - 1, 0, next);
+    setModules(m);
+  }
+  function removeSlide(i: number) {
+    if (!draft || draft.design.modules.length <= MIN_SLIDES) return;
+    setModules(draft.design.modules.filter((_, k) => k !== i));
+  }
+  function moveSlide(i: number, dir: -1 | 1) {
+    if (!draft) return;
+    const m = [...draft.design.modules];
+    const j = i + dir;
+    if (j < 0 || j >= m.length - 1 || i >= m.length - 1) return;
+    [m[i], m[j]] = [m[j], m[i]];
+    setModules(m);
+  }
   function setModuleAt(i: number, m: SlideModule) {
     if (!draft) return;
     const modules = [...draft.design.modules];
@@ -306,6 +347,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
           fields: opts.fields,
           selectedModule: opts.selected ? draft.design.modules[slide] : null,
           confirmReplaceApproved: confirm,
+          provider: provider === "default" ? null : provider,
         }),
       (r) => {
         adopt(r.post);
@@ -317,7 +359,8 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const issues = post?.issues ?? [];
   const errors = issues.filter((i) => i.severity === "error");
   const warnings = issues.filter((i) => i.severity === "warning");
-  const checklistDone = REVIEW_CHECKLIST.every((c) => checklist[c.key]);
+  const reviewChecklist = post ? checklistFor(post.design) : [];
+  const checklistDone = reviewChecklist.every((c) => checklist[c.key]);
   const acksDone = warnings.every((w) => acks.includes(w.code));
   const canMarkReady = Boolean(post && editable && post.status !== "READY" && !dirty && errors.length === 0 && checklistDone && acksDone);
 
@@ -332,6 +375,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
         { key: "content", label: "Edit Text" },
         { key: "design", label: "Design" },
         { key: "ai", label: "AI Assistant" },
+        { key: "studio", label: "Diagram & Trap" },
         { key: "review", label: `Review${errors.length ? ` (${errors.length})` : ""}` },
         { key: "history", label: "History" },
       ] as { key: Tab; label: string }[],
@@ -582,6 +626,17 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                       <Field label={`Quick Revision (one point per line, max ${LIMITS.quickRevisionItems})`}>
                         <Textarea rows={3} value={draft.revisionText} onChange={(e) => setDraft({ ...draft, revisionText: e.target.value })} />
                       </Field>
+                      <Field label={`High-Yield Medical Pearls (one per line, max ${LIMITS.pearls}, ${LIMITS.pearl} characters each)`} count={<Counter value={lines(draft.pearlsText).length} max={LIMITS.pearls} />}>
+                        <Textarea rows={4} value={draft.pearlsText} onChange={(e) => setDraft({ ...draft, pearlsText: e.target.value })} data-testid="field-pearls" />
+                      </Field>
+                      <Field label={`Common Mistakes (one per line, max ${LIMITS.mistakes}, ${LIMITS.mistake} characters each)`} count={<Counter value={lines(draft.mistakesText).length} max={LIMITS.mistakes} />}>
+                        <Textarea rows={3} value={draft.mistakesText} onChange={(e) => setDraft({ ...draft, mistakesText: e.target.value })} data-testid="field-mistakes" />
+                      </Field>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" size="sm" variant="outline" onClick={() => runAi({ fields: ["pearls", "mistakes"] })} data-testid="ai-pearls-mistakes">
+                          <Sparkles className="h-4 w-4" aria-hidden /> Generate pearls &amp; common mistakes
+                        </Button>
+                      </div>
                       <div className="flex flex-col gap-1.5">
                         <label className="flex items-center gap-2 text-sm">
                           <input type="checkbox" checked={draft.content.showFinalTrick} onChange={(e) => patchContent({ showFinalTrick: e.target.checked })} />
@@ -597,11 +652,25 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                           <Sparkles className="h-4 w-4" aria-hidden /> Generate with AI
                         </Button>
                       </div>
+                      <CaptionVersions
+                        post={post}
+                        variants={post.content.captionVariants}
+                        currentStyle={draft.content.captionStyle}
+                        disabled={!editable || pending}
+                        provider={provider}
+                        draftPayload={() => draftPayload(draft)}
+                        act={act}
+                        onPost={(p, summary) => (adopt(p), setMessage({ tone: "ok", text: summary }))}
+                        onUse={(v) => setDraft({ ...draft, content: { ...draft.content, caption: v.caption, captionStyle: v.style }, hashtagsText: v.hashtags.join(" ") })}
+                      />
                       <Field label="Instagram caption" count={<Counter value={draft.content.caption.length} max={LIMITS.caption} />}>
                         <Textarea rows={5} value={draft.content.caption} onChange={(e) => patchContent({ caption: e.target.value })} data-testid="field-caption" />
                       </Field>
                       <Field label={`Hashtags (max ${LIMITS.hashtags})`}>
                         <Input value={draft.hashtagsText} onChange={(e) => setDraft({ ...draft, hashtagsText: e.target.value })} />
+                      </Field>
+                      <Field label={`Keywords (comma separated, max ${LIMITS.keywords}) — for your SEO notes; not posted`}>
+                        <Input value={draft.keywordsText} onChange={(e) => setDraft({ ...draft, keywordsText: e.target.value })} data-testid="field-keywords" />
                       </Field>
                       <details className="text-sm">
                         <summary className="cursor-pointer text-xs text-[var(--color-muted-foreground)]">Caption as it would be posted</summary>
@@ -612,39 +681,59 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
 
                   {tab === "design" ? (
                     <fieldset disabled={!editable || pending} className="flex flex-col gap-4">
-                      <Field label="Template">
-                        <SelectNative value={draft.design.template} onChange={(e) => patchDesign({ template: e.target.value as TemplateKey })} data-testid="design-template">
-                          {TEMPLATE_KEYS.map((k) => (
-                            <option key={k} value={k}>
-                              {TEMPLATE_NAMES[k]}
-                            </option>
-                          ))}
-                        </SelectNative>
-                      </Field>
+                      <DesignModePicker design={draft.design} onChange={patchDesign} disabled={!editable || pending} />
                       <div className="flex flex-col gap-1.5">
                         <span className="text-xs font-medium text-[var(--color-muted-foreground)]">Slides</span>
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           {SLIDE_COUNTS.map((n) => (
                             <Button key={n} type="button" size="sm" variant={draft.design.modules.length === n ? "primary" : "outline"} onClick={() => setSlideCount(n)} data-testid={`slides-${n}`}>
                               {n}
                             </Button>
                           ))}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            data-testid="smart-layout"
+                            title="Build the slide list from the content this post has (Question, Answer, Diagram, Pearls, Mistakes, Trap, Follow)"
+                            onClick={() => setModules(smartModules(draftPayload(draft).content, { includeHook: draft.design.modules.includes("HOOK") }))}
+                          >
+                            <Sparkles className="h-4 w-4" aria-hidden /> Smart layout
+                          </Button>
                         </div>
+                        <p className="text-[11px] text-[var(--color-muted-foreground)]">{`${MIN_SLIDES}–${MAX_SLIDES} slides. 7 = Question → Answer → Diagram → Pearls → Mistakes → Examiner Trap → Follow. Smart layout uses only the sections this post has.`}</p>
                       </div>
                       <div className="flex flex-col gap-2">
                         <span className="text-xs font-medium text-[var(--color-muted-foreground)]">Slide order</span>
-                        {draft.design.modules.map((m, i) => (
-                          <div key={i} className="flex items-center gap-2">
-                            <span className="w-6 text-sm tabular-nums">{i + 1}.</span>
-                            <SelectNative value={m} onChange={(e) => setModuleAt(i, e.target.value as SlideModule)} disabled={i === draft.design.modules.length - 1}>
-                              {SLIDE_MODULES.map((x) => (
-                                <option key={x} value={x}>
-                                  {MODULE_LABELS[x]}
-                                </option>
-                              ))}
-                            </SelectNative>
-                          </div>
-                        ))}
+                        {draft.design.modules.map((m, i) => {
+                          const last = i === draft.design.modules.length - 1;
+                          return (
+                            <div key={i} className="flex items-center gap-1.5" data-testid={`module-row-${i}`}>
+                              <span className="w-6 text-sm tabular-nums">{i + 1}.</span>
+                              <SelectNative value={m} onChange={(e) => setModuleAt(i, e.target.value as SlideModule)} disabled={last}>
+                                {SLIDE_MODULES.map((x) => (
+                                  <option key={x} value={x}>
+                                    {MODULE_LABELS[x]}
+                                  </option>
+                                ))}
+                              </SelectNative>
+                              <Button type="button" size="compact" variant="ghost" aria-label={`Move slide ${i + 1} up`} disabled={last || i === 0} onClick={() => moveSlide(i, -1)}>
+                                ↑
+                              </Button>
+                              <Button type="button" size="compact" variant="ghost" aria-label={`Move slide ${i + 1} down`} disabled={last || i >= draft.design.modules.length - 2} onClick={() => moveSlide(i, 1)}>
+                                ↓
+                              </Button>
+                              <Button type="button" size="compact" variant="ghost" aria-label={`Remove slide ${i + 1}`} disabled={last || draft.design.modules.length <= MIN_SLIDES} onClick={() => removeSlide(i)}>
+                                <X className="h-3.5 w-3.5" aria-hidden />
+                              </Button>
+                            </div>
+                          );
+                        })}
+                        <div>
+                          <Button type="button" size="sm" variant="outline" disabled={draft.design.modules.length >= MAX_SLIDES} onClick={addSlide} data-testid="add-slide">
+                            Add slide
+                          </Button>
+                        </div>
                         {moduleError ? <p className="text-xs text-[var(--color-error)]">{moduleError}</p> : null}
                       </div>
                       <Field label={`Question text size ×${draft.design.questionScale.toFixed(2)}`}>
@@ -659,6 +748,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
 
                   {tab === "ai" ? (
                     <fieldset disabled={!editable || pending} className="flex flex-col gap-4" data-testid="ai-panel">
+                      <ProviderPicker value={provider} onChange={setProvider} />
                       <p className="text-sm text-[var(--color-muted-foreground)]">
                         The AI only writes hooks, explanation, trick, pearl, revision points, caption and hashtags. The question, options and correct answer are fixed; any output that contradicts the answer key,
                         claims a question is &quot;repeated&quot;, or invents statistics is rejected. Every result needs your review.
@@ -710,6 +800,27 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                         <p className="text-xs text-[var(--color-muted-foreground)]">{`Last AI generation: ${post.content.origin.provider ?? ""} ${post.content.origin.model ?? ""} · ${post.content.origin.generatedAt ? fmt(post.content.origin.generatedAt) : ""}`}</p>
                       ) : null}
                     </fieldset>
+                  ) : null}
+
+                  {tab === "studio" ? (
+                    <AiStudioPanel
+                      post={post}
+                      draft={draftPayload(draft)}
+                      editable={editable}
+                      dirty={dirty}
+                      pending={pending}
+                      provider={provider}
+                      setProvider={setProvider}
+                      act={act}
+                      onPost={(p, summary) => (adopt(p), setMessage({ tone: "ok", text: summary }))}
+                      onEditContent={(c) => patchContent(c)}
+                      onAddModule={(m) => {
+                        if (draft.design.modules.includes(m) || draft.design.modules.length >= MAX_SLIDES) return;
+                        const mods = [...draft.design.modules];
+                        mods.splice(mods.length - 1, 0, m);
+                        setModules(mods);
+                      }}
+                    />
                   ) : null}
 
                   {tab === "review" ? (
@@ -780,7 +891,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                         {post.status === "READY" ? (
                           <p className="text-sm text-[var(--color-success)]" data-testid="ready-note">{`Approved (Ready) by ${post.reviewedBy ?? "Admin"} on ${post.reviewedAt ? fmt(post.reviewedAt) : ""}.`}</p>
                         ) : (
-                          REVIEW_CHECKLIST.map((c) => (
+                          reviewChecklist.map((c) => (
                             <label key={c.key} className="flex items-start gap-2 text-sm">
                               <input type="checkbox" className="mt-1" disabled={!editable} checked={Boolean(checklist[c.key])} onChange={(e) => setChecklist((s) => ({ ...s, [c.key]: e.target.checked }))} data-testid={`check-${c.key}`} />
                               {c.label}

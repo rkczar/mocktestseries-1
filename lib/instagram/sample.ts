@@ -72,6 +72,48 @@ export const SAMPLE_INPUT: RenderInput = {
     finalTrick: "Absence = Ethosuximide; mixed generalized = Valproate.",
     showFinalTrick: true,
     caption: "Can you solve this RUHS MO PYQ?",
+    pearls: [
+      "Absence seizures: brief staring spells, no post-ictal confusion",
+      "EEG hallmark: generalized 3 Hz spike-and-wave discharges",
+      "Hyperventilation can provoke an absence seizure in clinic",
+      "Valproate covers absence plus generalized tonic-clonic seizures",
+    ],
+    mistakes: [
+      "Choosing carbamazepine or phenytoin — both can aggravate absence seizures",
+      "Confusing absence with focal impaired-awareness seizures, which have an aura and post-ictal phase",
+    ],
+    diagram: {
+      kind: "mechanism",
+      title: "How ethosuximide stops absence seizures",
+      nodes: [
+        { id: "n1", label: "Thalamic relay neurons", note: "T-type calcium channels" },
+        { id: "n2", label: "Rhythmic burst firing" },
+        { id: "n3", label: "3 Hz spike-and-wave on EEG" },
+        { id: "n4", label: "Ethosuximide blocks T-type channels", note: "bursts and seizures stop" },
+      ],
+      edges: [],
+      columns: [],
+      rows: [],
+      sets: [],
+      overlap: [],
+      footnote: "Sample diagram",
+      reviewed: true,
+    },
+    trap: {
+      question: "A 7-year-old has absence seizures and also generalized tonic-clonic seizures. Best single drug?",
+      options: [
+        { label: "A", text: "Ethosuximide" },
+        { label: "B", text: "Sodium valproate" },
+        { label: "C", text: "Carbamazepine" },
+        { label: "D", text: "Phenytoin" },
+      ],
+      correct: "B",
+      tempting: "A",
+      trapExplanation: "Ethosuximide is the classic answer for absence, but it does not control tonic-clonic seizures.",
+      avoidTip: "Read every seizure type in the stem: mixed generalized epilepsy needs a broad-spectrum drug.",
+      status: "approved",
+      checks: [],
+    },
   },
   design: defaultDesign(),
   series: "PYQ",
@@ -82,6 +124,6 @@ export const SAMPLE_INPUT: RenderInput = {
 };
 
 /** The sample with the studio's real configured settings (handle, Telegram, CTA texts). */
-export function sampleWith(settings: StudioSettings, design = defaultDesign()): RenderInput {
+export function sampleWith(settings: StudioSettings, design: RenderInput["design"] = defaultDesign()): RenderInput {
   return { ...SAMPLE_INPUT, settings, design };
 }

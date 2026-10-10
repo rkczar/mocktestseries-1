@@ -1,14 +1,16 @@
 import "server-only";
-import { generateWithAi, type AiGenerationResult } from "@/lib/ai-provider";
+import type { AiGenerationResult } from "@/lib/ai-provider";
+import { generateForFeature } from "@/lib/ai-gateway";
+import type { GatewayProvider } from "@/lib/ai-gateway-config";
 import { checkText } from "@/lib/instagram/content-safety";
 import { IG_PROMPT_VERSION, buildPrompt, correctLabels, parseAiResponse } from "@/lib/instagram/ai-core";
 import type { AiReference } from "@/lib/instagram/snapshot";
 import { CONTENT_FIELD_LABELS, LIMITS, type ContentField, type PostContent, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
 
 /**
- * Instagram content generation through the platform's single AI entry point
- * (lib/ai-provider.ts — honours Platform Controls' AI pause and the admin's
- * provider settings). The provider call is injectable so tests never need a
+ * Instagram content generation through the AI Gateway (lib/ai-gateway.ts,
+ * feature "ig_carousel" — honours Platform Controls' AI pause, the admin's
+ * per-feature routing and an optional per-request provider choice). The provider call is injectable so tests never need a
  * key. Output is validated (lib/instagram/ai-core.ts) and only ever merged
  * into the post's own content — never into the Question Bank or the student
  * AI explanation cache.
@@ -34,6 +36,8 @@ export async function generateContent(params: {
   reference: AiReference | null;
   allowedDomains: string[];
   generator?: Generator;
+  actorId?: string | null;
+  provider?: GatewayProvider | null;
 }): Promise<GenerationOutcome> {
   const prompt = buildPrompt({
     snapshot: params.snapshot,
@@ -44,8 +48,8 @@ export async function generateContent(params: {
     instruction: params.instruction,
     reference: params.reference,
   });
-  const gen = params.generator ?? generateWithAi;
-  const result = await gen(prompt, { temperature: params.instruction ? 0.6 : 0.5, maxOutputTokens: 2048 });
+  const gen: Generator = params.generator ?? ((prompt, opts) => generateForFeature("ig_carousel", prompt, opts, { actorId: params.actorId, providerOverride: params.provider ?? null }));
+  const result = await gen(prompt, { temperature: params.instruction ? 0.6 : 0.5, maxOutputTokens: 3000 });
   const parsed = parseAiResponse(result.text, params.snapshot, params.targets, params.allowedDomains);
   if (parsed.fatal) throw new Error(parsed.fatal);
 

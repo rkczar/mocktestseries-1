@@ -5,6 +5,7 @@ import { EditorHost, OpenInEditor } from "@/components/admin/instagram/editor-ho
 import { InstagramStatusBadge } from "@/components/admin/instagram/status-badge";
 import { getPaperDetail, listPapersByYear, listPyqExams, type ContentReview } from "@/lib/instagram/queries";
 import { cn } from "@/lib/utils";
+import { eligibleExamIds } from "@/lib/instagram/scope";
 
 export const metadata = { title: "PYQ Series — Instagram — Mock Test Series.in Admin" };
 
@@ -38,7 +39,9 @@ function one(v: string | string[] | undefined): string | undefined {
  */
 export default async function PyqSeriesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
-  const exams = await listPyqExams();
+  // Instagram Studio scope: MBBS-level / post-MBBS exams only (NEET UG excluded; Settings → Exam scope).
+  const scope = await eligibleExamIds();
+  const exams = (await listPyqExams()).filter((e) => scope.has(e.id));
   const examId = ID.test(one(sp.examId) ?? "") ? one(sp.examId)! : exams[0]?.id;
   const paperId = ID.test(one(sp.paperId) ?? "") ? one(sp.paperId)! : undefined;
   const yearParam = Number(one(sp.year));

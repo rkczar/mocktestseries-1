@@ -15,6 +15,10 @@ export const SLIDE_MODULES = [
   "MEMORY_TRICK",
   "EXPLANATION_TRICK",
   "PEARL_REVISION",
+  "PEARLS",
+  "MISTAKES",
+  "DIAGRAM",
+  "TRAP",
   "FOLLOW",
 ] as const;
 export type SlideModule = (typeof SLIDE_MODULES)[number];
@@ -27,12 +31,20 @@ export const MODULE_LABELS: Record<SlideModule, string> = {
   MEMORY_TRICK: "Memory Trick + Pearl",
   EXPLANATION_TRICK: "Explanation + Memory Trick",
   PEARL_REVISION: "Clinical Pearl + Quick Revision",
+  PEARLS: "High-Yield Medical Pearls",
+  MISTAKES: "Common Mistakes",
+  DIAGRAM: "Medical Concept Diagram",
+  TRAP: "How the Examiner Traps You",
   FOLLOW: "Follow / Join",
 };
 
-export const SLIDE_COUNTS = [3, 4, 5, 6] as const;
+/** Preset slide counts (each has a recommended layout). Custom layouts may use any count from MIN_SLIDES to MAX_SLIDES. */
+export const SLIDE_COUNTS = [3, 4, 5, 6, 7] as const;
 export type SlideCount = (typeof SLIDE_COUNTS)[number];
 export const DEFAULT_SLIDE_COUNT: SlideCount = 5;
+export const MIN_SLIDES = 3;
+/** Instagram's carousel limit used by the publisher (lib/instagram/publish.ts CAROUSEL_MAX). */
+export const MAX_SLIDES = 10;
 
 /** Recommended order per slide count. The Follow slide is always last. */
 export const DEFAULT_LAYOUTS: Record<SlideCount, SlideModule[]> = {
@@ -40,11 +52,52 @@ export const DEFAULT_LAYOUTS: Record<SlideCount, SlideModule[]> = {
   4: ["QUESTION", "ANSWER", "EXPLANATION_TRICK", "FOLLOW"],
   5: ["HOOK", "QUESTION", "ANSWER", "EXPLANATION_TRICK", "FOLLOW"],
   6: ["HOOK", "QUESTION", "ANSWER", "EXPLANATION_TRICK", "PEARL_REVISION", "FOLLOW"],
+  7: ["QUESTION", "ANSWER", "DIAGRAM", "PEARLS", "MISTAKES", "TRAP", "FOLLOW"],
 };
 
-export const TEMPLATE_KEYS = ["midnight", "academic", "clinical", "premium"] as const;
+/**
+ * Templates. The first four are the original brand templates (kept as they
+ * were). Professional presets and Handwritten presets were added with the
+ * AI Studio; a template's mode is fixed (lib/instagram/templates.ts).
+ */
+export const TEMPLATE_KEYS = [
+  "midnight",
+  "academic",
+  "clinical",
+  "premium",
+  "clean-clinical",
+  "navy-premium",
+  "minimal-infographic",
+  "modern-revision",
+  "hw-doctor",
+  "hw-colorful",
+  "hw-diagrams",
+] as const;
 export type TemplateKey = (typeof TEMPLATE_KEYS)[number];
 export const DEFAULT_TEMPLATE: TemplateKey = "midnight";
+
+export const DESIGN_MODES = ["professional", "handwritten"] as const;
+export type DesignMode = (typeof DESIGN_MODES)[number];
+export const DESIGN_MODE_LABELS: Record<DesignMode, string> = { professional: "Normal Professional", handwritten: "Human Handwritten" };
+export const HANDWRITTEN_TEMPLATES: TemplateKey[] = ["hw-doctor", "hw-colorful", "hw-diagrams"];
+export function modeOfTemplate(t: TemplateKey): DesignMode {
+  return HANDWRITTEN_TEMPLATES.includes(t) ? "handwritten" : "professional";
+}
+
+export const FONT_CHOICES = ["default", "geist", "kalam"] as const;
+export type FontChoice = (typeof FONT_CHOICES)[number];
+export const FONT_LABELS: Record<FontChoice, string> = { default: "Template default", geist: "Geist (clean sans)", kalam: "Kalam (handwriting)" };
+
+/** Optional per-post colour/font overrides on top of the template. Colours are #rrggbb. */
+export interface DesignOverrides {
+  background?: string;
+  card?: string;
+  foreground?: string;
+  accent?: string;
+  highlight?: string;
+  font?: FontChoice;
+}
+export const OVERRIDE_COLOR_KEYS = ["background", "card", "foreground", "accent", "highlight"] as const;
 
 export const HOOK_STYLES = ["curiosity", "challenge", "memory"] as const;
 export type HookStyle = (typeof HOOK_STYLES)[number];
@@ -70,9 +123,15 @@ export const LIMITS = {
   finalTrick: 120,
   caption: 2000,
   hashtags: 15,
+  pearl: 110,
+  pearls: 5,
+  mistake: 140,
+  mistakes: 4,
+  keyword: 40,
+  keywords: 12,
 } as const;
 
-export const CONTENT_FIELDS = ["hooks", "explanation", "memoryTrick", "clinicalPearl", "quickRevision", "finalTrick", "caption", "hashtags"] as const;
+export const CONTENT_FIELDS = ["hooks", "explanation", "memoryTrick", "clinicalPearl", "quickRevision", "pearls", "mistakes", "finalTrick", "caption", "hashtags"] as const;
 export type ContentField = (typeof CONTENT_FIELDS)[number];
 export const CONTENT_FIELD_LABELS: Record<ContentField, string> = {
   hooks: "Hooks",
@@ -80,6 +139,8 @@ export const CONTENT_FIELD_LABELS: Record<ContentField, string> = {
   memoryTrick: "Memory Trick",
   clinicalPearl: "Clinical Pearl",
   quickRevision: "Quick Revision",
+  pearls: "High-Yield Pearls",
+  mistakes: "Common Mistakes",
   finalTrick: "Final-slide trick",
   caption: "Caption",
   hashtags: "Hashtags",
@@ -93,6 +154,80 @@ export interface ContentOrigin {
   generatedAt?: string;
 }
 
+// ---- Medical diagram (structured spec, drawn by the renderer — never an AI image) -----
+
+export const DIAGRAM_KINDS = ["flowchart", "mechanism", "comparison", "ddx", "venn", "hub"] as const;
+export type DiagramKind = (typeof DIAGRAM_KINDS)[number];
+export const DIAGRAM_KIND_LABELS: Record<DiagramKind, string> = {
+  flowchart: "Clinical flowchart",
+  mechanism: "Mechanism / pathway (steps)",
+  comparison: "Comparison table",
+  ddx: "Differential diagnosis chart",
+  venn: "Venn diagram",
+  hub: "Concept map / labelled schematic",
+};
+
+export interface DiagramNode {
+  id: string;
+  label: string;
+  note?: string;
+}
+
+export interface DiagramSpec {
+  kind: DiagramKind;
+  title: string;
+  /** flowchart / mechanism / hub (first node = centre). */
+  nodes: DiagramNode[];
+  /** flowchart only: arrows; empty = nodes in order. */
+  edges: { from: string; to: string; label?: string }[];
+  /** comparison / ddx: column headers (first = row label column). */
+  columns: string[];
+  rows: { label: string; cells: string[] }[];
+  /** venn: 2 or 3 sets; `overlap` = items shared by all sets. */
+  sets: { label: string; items: string[] }[];
+  overlap: string[];
+  footnote: string;
+  /** Admin attestation that a medical reviewer checked every label. Reset by any AI regeneration. */
+  reviewed: boolean;
+  origin?: ContentOrigin;
+}
+
+export const DIAGRAM_LIMITS = { title: 60, label: 42, note: 60, nodes: 7, edges: 10, columns: 3, cell: 60, rows: 6, setItems: 4, item: 32, footnote: 110 } as const;
+
+// ---- Examiner trap (AI variant shown on the TRAP slide; stored on the post only) ------
+
+export const TRAP_LABELS = ["A", "B", "C", "D"] as const;
+export interface TrapVariant {
+  question: string;
+  options: { label: string; text: string }[];
+  correct: string;
+  /** The most tempting wrong option. */
+  tempting: string;
+  trapExplanation: string;
+  avoidTip: string;
+  status: "draft" | "approved" | "rejected";
+  /** Validation notes (independent re-solve, originality, relevance). */
+  checks: { code: string; ok: boolean; message: string }[];
+  origin?: ContentOrigin;
+  reviewedAt?: string;
+}
+export const TRAP_LIMITS = { question: 300, option: 110, trapExplanation: 300, avoidTip: 200 } as const;
+
+// ---- Caption versions -------------------------------------------------------------------
+
+export const CAPTION_STYLES = ["professional", "hook", "search"] as const;
+export type CaptionStyle = (typeof CAPTION_STYLES)[number];
+export const CAPTION_STYLE_LABELS: Record<CaptionStyle, string> = {
+  professional: "Professional Medical Education",
+  hook: "High-Engagement Clinical Hook",
+  search: "Instagram Search-Optimized",
+};
+export interface CaptionVariant {
+  style: CaptionStyle;
+  caption: string;
+  hashtags: string[];
+}
+
 export interface PostContent {
   hooks: HookOption[];
   /** The hook actually shown (one of `hooks`, possibly edited). */
@@ -101,6 +236,14 @@ export interface PostContent {
   memoryTrick: string;
   clinicalPearl: string;
   quickRevision: string[];
+  pearls: string[];
+  mistakes: string[];
+  diagram: DiagramSpec | null;
+  trap: TrapVariant | null;
+  captionVariants: CaptionVariant[];
+  /** Which caption version is in use (null = written/edited directly). */
+  captionStyle: CaptionStyle | null;
+  keywords: string[];
   finalTrick: string;
   showFinalTrick: boolean;
   caption: string;
@@ -112,12 +255,14 @@ export interface PostContent {
 
 export interface PostDesign {
   template: TemplateKey;
-  slideCount: SlideCount;
+  /** = modules.length (3 – 10). */
+  slideCount: number;
   modules: SlideModule[];
   /** 0.85 – 1.25 multiplier on the question/option text size. */
   questionScale: number;
   /** 0.85 – 1.25 multiplier on the other slides' body text. */
   bodyScale: number;
+  overrides?: DesignOverrides;
 }
 
 export interface SnapshotOption {
@@ -187,7 +332,7 @@ const clampNum = (n: unknown, min: number, max: number, fallback: number) => {
 
 /** Returns an error message, or null when the module order is valid. */
 export function validateModules(modules: readonly string[]): string | null {
-  if (!(SLIDE_COUNTS as readonly number[]).includes(modules.length)) return "A carousel has 3 to 6 slides.";
+  if (modules.length < MIN_SLIDES || modules.length > MAX_SLIDES) return `A carousel has ${MIN_SLIDES} to ${MAX_SLIDES} slides.`;
   if (modules.some((m) => !(SLIDE_MODULES as readonly string[]).includes(m))) return "Unknown slide type.";
   if (new Set(modules).size !== modules.length) return "Each slide type can be used once.";
   if (modules[modules.length - 1] !== "FOLLOW") return "The Follow / Join slide must be the last slide.";
@@ -210,14 +355,29 @@ export function normalizeDesign(raw: unknown): PostDesign {
   const template = (TEMPLATE_KEYS as readonly string[]).includes(r.template as string) ? (r.template as TemplateKey) : DEFAULT_TEMPLATE;
   const modules = Array.isArray(r.modules) ? (r.modules.filter((m) => typeof m === "string") as SlideModule[]) : [];
   const validModules = validateModules(modules) === null ? modules : null;
-  const slideCount = (validModules?.length ?? ((SLIDE_COUNTS as readonly number[]).includes(r.slideCount as number) ? r.slideCount : DEFAULT_SLIDE_COUNT)) as SlideCount;
+  const presetCount = ((SLIDE_COUNTS as readonly number[]).includes(r.slideCount as number) ? r.slideCount : DEFAULT_SLIDE_COUNT) as SlideCount;
+  const finalModules = validModules ?? [...DEFAULT_LAYOUTS[presetCount]];
+  const overrides = normalizeOverrides(r.overrides);
   return {
     template,
-    slideCount,
-    modules: validModules ?? [...DEFAULT_LAYOUTS[slideCount]],
+    slideCount: finalModules.length,
+    modules: finalModules,
     questionScale: clampNum(r.questionScale, 0.85, 1.25, 1),
     bodyScale: clampNum(r.bodyScale, 0.85, 1.25, 1),
+    ...(overrides ? { overrides } : {}),
   };
+}
+
+const HEX = /^#[0-9a-f]{6}$/i;
+
+/** Keeps only valid #rrggbb colours and a known font; undefined when nothing is overridden. */
+export function normalizeOverrides(raw: unknown): DesignOverrides | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: DesignOverrides = {};
+  for (const k of OVERRIDE_COLOR_KEYS) if (typeof r[k] === "string" && HEX.test(r[k] as string)) out[k] = (r[k] as string).toLowerCase();
+  if ((FONT_CHOICES as readonly string[]).includes(r.font as string) && r.font !== "default") out.font = r.font as FontChoice;
+  return Object.keys(out).length ? out : undefined;
 }
 
 export function emptyContent(): PostContent {
@@ -228,6 +388,13 @@ export function emptyContent(): PostContent {
     memoryTrick: "",
     clinicalPearl: "",
     quickRevision: [],
+    pearls: [],
+    mistakes: [],
+    diagram: null,
+    trap: null,
+    captionVariants: [],
+    captionStyle: null,
+    keywords: [],
     finalTrick: "",
     showFinalTrick: false,
     caption: "",
@@ -256,6 +423,13 @@ export function normalizeContent(raw: unknown): PostContent {
     memoryTrick: str(r.memoryTrick),
     clinicalPearl: str(r.clinicalPearl),
     quickRevision: strList(r.quickRevision),
+    pearls: strList(r.pearls),
+    mistakes: strList(r.mistakes),
+    diagram: normalizeDiagram(r.diagram),
+    trap: normalizeTrap(r.trap),
+    captionVariants: normalizeCaptionVariants(r.captionVariants),
+    captionStyle: (CAPTION_STYLES as readonly string[]).includes(r.captionStyle as string) ? (r.captionStyle as CaptionStyle) : null,
+    keywords: strList(r.keywords),
     finalTrick: str(r.finalTrick),
     showFinalTrick: r.showFinalTrick === true,
     caption: str(r.caption),
@@ -263,6 +437,106 @@ export function normalizeContent(raw: unknown): PostContent {
     origin: { ...origin, kind: (["empty", "ai", "existing-explanation", "manual"] as const).includes(origin.kind) ? origin.kind : "empty" },
     aiFlags: strList(r.aiFlags),
   };
+}
+
+function originOf(v: unknown): ContentOrigin | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as ContentOrigin;
+  return (["empty", "ai", "existing-explanation", "manual"] as const).includes(o.kind) ? { ...o } : undefined;
+}
+
+/** Shape-normalizes a stored/submitted diagram (no length checks — lib/instagram/diagram.ts validates). */
+export function normalizeDiagram(raw: unknown): DiagramSpec | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (!(DIAGRAM_KINDS as readonly string[]).includes(r.kind as string)) return null;
+  const nodes = Array.isArray(r.nodes)
+    ? (r.nodes as unknown[]).flatMap((n, i) => {
+        const x = (n ?? {}) as Record<string, unknown>;
+        const label = str(x.label).trim();
+        if (!label) return [];
+        const note = str(x.note).trim();
+        return [{ id: str(x.id).trim() || `n${i + 1}`, label, ...(note ? { note } : {}) }];
+      })
+    : [];
+  const edges = Array.isArray(r.edges)
+    ? (r.edges as unknown[]).flatMap((e) => {
+        const x = (e ?? {}) as Record<string, unknown>;
+        const from = str(x.from).trim();
+        const to = str(x.to).trim();
+        if (!from || !to) return [];
+        const label = str(x.label).trim();
+        return [{ from, to, ...(label ? { label } : {}) }];
+      })
+    : [];
+  const rows = Array.isArray(r.rows)
+    ? (r.rows as unknown[]).flatMap((row) => {
+        const x = (row ?? {}) as Record<string, unknown>;
+        const label = str(x.label).trim();
+        return label ? [{ label, cells: strList(x.cells).map((c) => c.trim()) }] : [];
+      })
+    : [];
+  const sets = Array.isArray(r.sets)
+    ? (r.sets as unknown[]).flatMap((set) => {
+        const x = (set ?? {}) as Record<string, unknown>;
+        const label = str(x.label).trim();
+        return label ? [{ label, items: strList(x.items).map((c) => c.trim()).filter(Boolean) }] : [];
+      })
+    : [];
+  return {
+    kind: r.kind as DiagramKind,
+    title: str(r.title).trim(),
+    nodes,
+    edges,
+    columns: strList(r.columns).map((c) => c.trim()),
+    rows,
+    sets,
+    overlap: strList(r.overlap).map((c) => c.trim()).filter(Boolean),
+    footnote: str(r.footnote).trim(),
+    reviewed: r.reviewed === true,
+    origin: originOf(r.origin),
+  };
+}
+
+export function normalizeTrap(raw: unknown): TrapVariant | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const options = Array.isArray(r.options)
+    ? (r.options as unknown[]).map((o) => {
+        const x = (o ?? {}) as Record<string, unknown>;
+        return { label: str(x.label).trim().toUpperCase(), text: str(x.text).trim() };
+      })
+    : [];
+  const checks = Array.isArray(r.checks)
+    ? (r.checks as unknown[]).flatMap((c) => {
+        const x = (c ?? {}) as Record<string, unknown>;
+        return typeof x.code === "string" ? [{ code: x.code, ok: x.ok === true, message: str(x.message) }] : [];
+      })
+    : [];
+  return {
+    question: str(r.question).trim(),
+    options,
+    correct: str(r.correct).trim().toUpperCase(),
+    tempting: str(r.tempting).trim().toUpperCase(),
+    trapExplanation: str(r.trapExplanation).trim(),
+    avoidTip: str(r.avoidTip).trim(),
+    status: r.status === "approved" || r.status === "rejected" ? r.status : "draft",
+    checks,
+    origin: originOf(r.origin),
+    ...(typeof r.reviewedAt === "string" ? { reviewedAt: r.reviewedAt } : {}),
+  };
+}
+
+export function normalizeCaptionVariants(raw: unknown): CaptionVariant[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CaptionVariant[] = [];
+  for (const v of raw) {
+    const x = (v ?? {}) as Record<string, unknown>;
+    if (!(CAPTION_STYLES as readonly string[]).includes(x.style as string) || typeof x.caption !== "string") continue;
+    if (out.some((o) => o.style === x.style)) continue;
+    out.push({ style: x.style as CaptionStyle, caption: x.caption, hashtags: normalizeHashtags(strList(x.hashtags)) });
+  }
+  return out;
 }
 
 /** Normalizes a hashtag list: '#' prefix, letters/digits/underscore only, de-duplicated (case-insensitive), capped. */
@@ -291,6 +565,10 @@ export const MODULE_FIELDS: Record<SlideModule, ContentField[]> = {
   MEMORY_TRICK: ["memoryTrick", "clinicalPearl"],
   EXPLANATION_TRICK: ["explanation", "memoryTrick"],
   PEARL_REVISION: ["clinicalPearl", "quickRevision"],
+  PEARLS: ["pearls"],
+  MISTAKES: ["mistakes"],
+  DIAGRAM: [],
+  TRAP: [],
   FOLLOW: ["finalTrick"],
 };
 

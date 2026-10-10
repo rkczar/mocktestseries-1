@@ -3,7 +3,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { getStudioSettings } from "@/lib/instagram/config";
 import { TEMPLATES } from "@/lib/instagram/templates";
-import { MODULE_LABELS, DEFAULT_LAYOUTS, TEMPLATE_KEYS } from "@/lib/instagram/types";
+import { MODULE_LABELS, DEFAULT_LAYOUTS, type TemplateKey } from "@/lib/instagram/types";
+
+const ORIGINAL_TEMPLATES: TemplateKey[] = ["midnight", "academic", "clinical", "premium"];
 
 export const metadata = { title: "Templates & Branding — Instagram — Mock Test Series.in Admin" };
 
@@ -44,7 +46,14 @@ export default async function InstagramTemplatesPage() {
           </div>
         </CardContent>
       </Card>
-      {TEMPLATE_KEYS.map((key) => {
+      <p className="text-sm text-[var(--color-muted-foreground)]" data-testid="design-mode-link">
+        The original brand templates are shown below. All Professional and Handwritten presets, the default design and saved presets are in{" "}
+        <Link href="/admin/instagram/design" className="underline">
+          Design Mode
+        </Link>
+        .
+      </p>
+      {ORIGINAL_TEMPLATES.map((key) => {
         const t = TEMPLATES[key];
         return (
           <Card key={key} data-testid={`template-${key}`}>

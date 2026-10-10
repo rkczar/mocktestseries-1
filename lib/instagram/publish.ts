@@ -290,6 +290,11 @@ async function assertPublishable(post: InstagramPost, expectedRevision: number, 
   return { caption, slideCount, username: EXPECTED_INSTAGRAM_USERNAME };
 }
 
+/** True when a token + pinned account are installed (no network call). */
+export function isPublishingConfigured(): boolean {
+  return publishingApi() !== null;
+}
+
 /** Read-only check shown in the confirmation dialog. */
 export async function publishPreflight(postId: string, expectedRevision: number, format: PublishFormat): Promise<PublishPreflight & { enabled: boolean; configured: boolean }> {
   const post = await prisma.instagramPost.findUnique({ where: { id: postId } });

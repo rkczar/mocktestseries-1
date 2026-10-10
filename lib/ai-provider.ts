@@ -34,9 +34,14 @@ export async function assertAiGenerationOpen(): Promise<void> {
 
 export interface AiGenerationResult {
   text: string;
-  provider: AiProviderName;
+  /** "anthropic" only when the AI Gateway routed the call to Claude (lib/ai-gateway.ts). */
+  provider: AiProviderName | "anthropic";
   model: string;
+  /** Token usage when the provider reported it (used for the AI Gateway usage/cost log). */
+  usage?: { inputTokens: number | null; outputTokens: number | null };
 }
+
+type Usage = NonNullable<AiGenerationResult["usage"]>;
 
 export interface AiGenerationOptions {
   temperature: number;
@@ -118,9 +123,9 @@ function looksTruncatedOrMalformed(text: string): boolean {
   }
 }
 
-async function callGeminiModel(prompt: string, apiKey: string, model: string, opts: AiGenerationOptions): Promise<string> {
+async function callGeminiModel(prompt: string, apiKey: string, model: string, opts: AiGenerationOptions, timeoutMs = REQUEST_TIMEOUT_MS): Promise<{ text: string; usage: Usage }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
     res = await fetch(
@@ -148,7 +153,7 @@ async function callGeminiModel(prompt: string, apiKey: string, model: string, op
     );
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new GeminiModelError("timeout", `Gemini model "${model}" timed out after ${REQUEST_TIMEOUT_MS}ms.`);
+      throw new GeminiModelError("timeout", `Gemini model "${model}" timed out after ${timeoutMs}ms.`);
     }
     throw new GeminiModelError("provider_error", `Could not reach Gemini for model "${model}".`);
   } finally {
@@ -161,14 +166,17 @@ async function callGeminiModel(prompt: string, apiKey: string, model: string, op
     throw new GeminiModelError(categorizeGeminiHttpError(res.status, message), message);
   }
 
-  const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[] };
+  const data = (await res.json()) as {
+    candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
+    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  };
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
 
   if (!text.trim()) throw new GeminiModelError("empty_response", `Gemini model "${model}" returned an empty response.`);
   if (looksTruncatedOrMalformed(text)) {
     throw new GeminiModelError("malformed_response", `Gemini model "${model}" returned truncated or malformed output.`);
   }
-  return text;
+  return { text, usage: { inputTokens: data.usageMetadata?.promptTokenCount ?? null, outputTokens: data.usageMetadata?.candidatesTokenCount ?? null } };
 }
 
 /**
@@ -183,15 +191,16 @@ async function callGeminiWithModelFallback(
   prompt: string,
   apiKey: string,
   models: string[],
-  opts: AiGenerationOptions
-): Promise<{ text: string; model: string }> {
+  opts: AiGenerationOptions,
+  timeoutMs?: number
+): Promise<{ text: string; model: string; usage?: Usage }> {
   let lastError: Error | null = null;
   for (const model of models) {
     const startedAt = Date.now();
     try {
-      const text = await callGeminiModel(prompt, apiKey, model, opts);
+      const { text, usage } = await callGeminiModel(prompt, apiKey, model, opts, timeoutMs);
       await recordGeminiModelResult(model, { ok: true, latencyMs: Date.now() - startedAt });
-      return { text, model };
+      return { text, model, usage };
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       if (error instanceof GeminiModelError) {
@@ -210,31 +219,68 @@ async function callGeminiWithModelFallback(
   throw lastError ?? new Error("Gemini request failed.");
 }
 
-async function callOpenAi(prompt: string, apiKey: string, model: string, opts: AiGenerationOptions): Promise<string> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      temperature: opts.temperature,
-      max_tokens: opts.maxOutputTokens,
-    }),
-  });
+/** `timeoutMs` is only set by AI Gateway routes; the default (legacy) path keeps its previous no-timeout behaviour. */
+async function callOpenAi(prompt: string, apiKey: string, model: string, opts: AiGenerationOptions, timeoutMs?: number): Promise<{ text: string; usage: Usage }> {
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
+      signal: controller?.signal,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: opts.temperature,
+        max_tokens: opts.maxOutputTokens,
+      }),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error(`OpenAI timed out after ${timeoutMs}ms.`);
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
     throw new Error(body.error?.message ? `OpenAI rejected the request: ${body.error.message}` : `OpenAI request failed (${res.status}).`);
   }
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  return data.choices?.[0]?.message?.content ?? "";
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+  return { text: data.choices?.[0]?.message?.content ?? "", usage: { inputTokens: data.usage?.prompt_tokens ?? null, outputTokens: data.usage?.completion_tokens ?? null } };
 }
 
-async function callProvider(resolved: ResolvedProvider, prompt: string, opts: AiGenerationOptions): Promise<{ text: string; model: string }> {
+async function callProvider(resolved: ResolvedProvider, prompt: string, opts: AiGenerationOptions, timeoutMs?: number): Promise<{ text: string; model: string; usage?: Usage }> {
   if (resolved.name === "gemini") {
-    return callGeminiWithModelFallback(prompt, resolved.apiKey, resolved.models, opts);
+    return callGeminiWithModelFallback(prompt, resolved.apiKey, resolved.models, opts, timeoutMs);
   }
-  const text = await callOpenAi(prompt, resolved.apiKey, resolved.models[0], opts);
-  return { text, model: resolved.models[0] };
+  const { text, usage } = await callOpenAi(prompt, resolved.apiKey, resolved.models[0], opts, timeoutMs);
+  return { text, model: resolved.models[0], usage };
+}
+
+/** True when this one provider (Gemini or OpenAI) has a key and is enabled. Used by the AI Gateway. */
+export async function isProviderUsable(name: AiProviderName): Promise<boolean> {
+  return (await resolveProvider(name)) !== null;
+}
+
+/**
+ * One provider only (no provider-level fallback) — the AI Gateway's building
+ * block for admin-configured per-feature routes. `model` overrides the
+ * provider's configured model (Gemini: replaces the model pool for this call).
+ * Platform Controls' AI pause still applies.
+ */
+export async function generateWithSingleProvider(
+  name: AiProviderName,
+  prompt: string,
+  opts: AiGenerationOptions,
+  o: { model?: string; timeoutMs?: number } = {}
+): Promise<AiGenerationResult> {
+  await assertAiGenerationOpen();
+  const resolved = await resolveProvider(name);
+  if (!resolved) throw new AiNotConfiguredError(`${name === "gemini" ? "Gemini" : "OpenAI"} is not configured or is disabled.`);
+  const target = o.model ? { ...resolved, models: [o.model] } : resolved;
+  const { text, model, usage } = await callProvider(target, prompt, opts, o.timeoutMs);
+  return { text, provider: name, model, usage };
 }
 
 /** True if at least one provider (active or fallback) is configured and enabled — used to gate before attempting generation. */
@@ -282,8 +328,8 @@ export async function generateWithAi(prompt: string, opts: AiGenerationOptions):
   let lastError: Error | null = null;
   for (const resolved of resolvedCandidates) {
     try {
-      const { text, model } = await callProvider(resolved, prompt, opts);
-      return { text, provider: resolved.name, model };
+      const { text, model, usage } = await callProvider(resolved, prompt, opts);
+      return { text, provider: resolved.name, model, usage };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error("AI request failed.");
     }

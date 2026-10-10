@@ -1,8 +1,9 @@
 import "server-only";
 import { Prisma, type InstagramPost, type InstagramPostSeries } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { isExamInScope } from "@/lib/instagram/scope";
 import { allowedCaptionDomains, getStudioSettings, type StudioSettings } from "@/lib/instagram/config";
-import { blockingIssues, runQualityGate, warningCodes, REVIEW_CHECKLIST, type QualityIssue } from "@/lib/instagram/quality";
+import { blockingIssues, runQualityGate, warningCodes, checklistFor, type QualityIssue } from "@/lib/instagram/quality";
 import { unsupportedChars } from "@/lib/instagram/glyphs";
 import { buildSnapshot, currentSourceHash } from "@/lib/instagram/snapshot";
 import { publishView, type PublishView } from "@/lib/instagram/publish-view";
@@ -235,7 +236,14 @@ function isUniqueViolation(e: unknown): boolean {
   return e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
 }
 
-export async function createDraft(params: { questionId: string; series: InstagramPostSeries; stats: SeriesStats | null; actorId: string }): Promise<{ post: PostDto; existed: boolean }> {
+export async function createDraft(params: {
+  questionId: string;
+  series: InstagramPostSeries;
+  stats: SeriesStats | null;
+  actorId: string;
+  /** Bulk Studio: start this draft with a chosen design instead of the Settings default. */
+  design?: PostDesign;
+}): Promise<{ post: PostDto; existed: boolean }> {
   const existing = await prisma.instagramPost.findFirst({ where: { questionId: params.questionId, supersededAt: null } });
   if (existing) return { post: await toDto(existing), existed: true };
 
@@ -243,9 +251,12 @@ export async function createDraft(params: { questionId: string; series: Instagra
   if (!built) throw new StudioError("This question no longer exists.", "not-found");
   if (params.series === "PYQ" && !built.snapshot.paperId) throw new StudioError("This question is not linked to a previous year paper.");
   if (params.series === "MOST_MISSED" && !params.stats) throw new StudioError("Most Missed numbers are required.");
+  if (!(await isExamInScope(built.snapshot.examId))) {
+    throw new StudioError(`${built.snapshot.examName} is not in Instagram Studio's exam scope (MBBS-level and post-MBBS exams only; NEET UG is excluded). A Master Admin can change the scope in Instagram → Settings.`);
+  }
 
   const settings = await getStudioSettings();
-  const design = defaultDesign(settings.defaultTemplate, settings.defaultSlideCount);
+  const design = params.design ?? defaultDesign(settings.defaultTemplate, settings.defaultSlideCount);
   const content: PostContent = { ...emptyContent(), hashtags: settings.defaultHashtags };
   try {
     const result = await prisma.$transaction(async (tx) => {
@@ -476,7 +487,7 @@ export async function markReady(input: MarkReadyInput): Promise<{ post: PostDto;
   const issues = issuesFor(post, await currentSourceHash(post.questionId), settings);
   const blocked = blockingIssues(issues);
   const missingAcks = warningCodes(issues).filter((c) => !input.acknowledged.includes(c));
-  const missingChecklist = REVIEW_CHECKLIST.filter((c) => input.checklist[c.key] !== true).map((c) => c.key);
+  const missingChecklist = checklistFor(normalizeDesign(post.design)).filter((c) => input.checklist[c.key] !== true).map((c) => c.key);
   if (blocked.length || missingAcks.length || missingChecklist.length) {
     return { post: await toDto(post, settings), blocked, missingAcks, missingChecklist };
   }

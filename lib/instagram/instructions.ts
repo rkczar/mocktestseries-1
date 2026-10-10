@@ -1,4 +1,4 @@
-import { CONTENT_FIELDS, MODULE_FIELDS, TEMPLATE_KEYS, type ContentField, type PostDesign, type SlideModule, type TemplateKey } from "@/lib/instagram/types";
+import { CONTENT_FIELDS, MODULE_FIELDS, TEMPLATE_KEYS, modeOfTemplate, type ContentField, type PostDesign, type SlideModule, type TemplateKey } from "@/lib/instagram/types";
 
 /**
  * Routes an admin's free-text edit instruction (Hindi or English, Roman or
@@ -48,10 +48,10 @@ export function parseLayoutInstruction(instruction: string, design: PostDesign):
         return { patch: { template: key }, summary: `Template changed to ${key}. Brand header and footer are unchanged.` };
       }
     }
-    // Backgrounds are limited to the four brand templates, so pick the next one.
-    const order = TEMPLATE_KEYS as readonly TemplateKey[];
+    // Pick the next template of the same design mode (handwritten stays handwritten).
+    const order = (TEMPLATE_KEYS as readonly TemplateKey[]).filter((k) => modeOfTemplate(k) === modeOfTemplate(design.template));
     const next = order[(order.indexOf(design.template) + 1) % order.length];
-    return { patch: { template: next }, summary: `Background changed to the ${next} template (backgrounds are limited to the brand templates).` };
+    return { patch: { template: next }, summary: `Background changed to the ${next} template (same design mode).` };
   }
   return null;
 }

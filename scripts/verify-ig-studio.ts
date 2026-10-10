@@ -21,7 +21,7 @@ import { buildPrompt, parseAiResponse } from "@/lib/instagram/ai-core";
 import { generateContent, prefillFromReference } from "@/lib/instagram/ai";
 import { parseLayoutInstruction, targetFields } from "@/lib/instagram/instructions";
 import { estimateLines, planSlides } from "@/lib/instagram/layout";
-import { runQualityGate, stemLooksTruncated, REVIEW_CHECKLIST, type QualityInput } from "@/lib/instagram/quality";
+import { runQualityGate, stemLooksTruncated, REVIEW_CHECKLIST, checklistFor, type QualityInput } from "@/lib/instagram/quality";
 import { renderable, unsupportedChars } from "@/lib/instagram/glyphs";
 import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
 import { renderSlideJpeg } from "@/lib/instagram/render";
@@ -197,7 +197,7 @@ async function partA() {
     assert.deepEqual(targetFields("Explanation ko aur simple banao", null), ["explanation"]);
     assert.deepEqual(targetFields("याद रखने की ट्रिक दो", null), ["memoryTrick"]);
     assert.deepEqual(targetFields("better", "PEARL_REVISION"), ["clinicalPearl", "quickRevision"]);
-    assert.equal(targetFields("improve", null).length, 8);
+    assert.equal(targetFields("improve", null).length, 10); // + High-Yield Pearls, Common Mistakes (AI Studio)
   });
 
   await check("editor input: caps enforced (rejected, not cut); provenance is server-owned", () => {
@@ -470,7 +470,8 @@ async function partB() {
     assert.ok(warn.includes("AI_CONTENT"));
     const refused = await posts.markReady({ postId, expectedRevision: rev, checklist: {}, acknowledged: [], actorId });
     assert.equal(refused.post.status, "DRAFT");
-    assert.equal(refused.missingChecklist.length, REVIEW_CHECKLIST.length);
+    // The extras item applies only to carousels with Diagram / Trap / Pearls / Mistakes slides (AI Studio).
+    assert.equal(refused.missingChecklist.length, checklistFor(dto.design).length);
     assert.deepEqual(refused.missingAcks.sort(), [...warn].sort());
     const all = Object.fromEntries(REVIEW_CHECKLIST.map((c) => [c.key, true]));
     const ok = await posts.markReady({ postId, expectedRevision: rev, checklist: all, acknowledged: warn, actorId });

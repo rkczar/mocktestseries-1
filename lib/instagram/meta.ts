@@ -41,7 +41,7 @@ const WRITE_TIMEOUT_MS = 45_000;
 const MAX_BODY = 64 * 1024;
 const PROFESSIONAL_TYPES = new Set(["BUSINESS", "MEDIA_CREATOR", "CREATOR"]);
 /** The only requests this module can make. */
-const ALLOWED_GET = /^\/v\d{1,3}\.\d\/(me|\d{5,25}\/content_publishing_limit|\d{5,25}\/media|\d{5,30})$/;
+const ALLOWED_GET = /^\/v\d{1,3}\.\d\/(me|\d{5,25}\/content_publishing_limit|\d{5,25}\/media|\d{5,30}|\d{5,30}\/insights)$/;
 const ALLOWED_POST = /^\/v\d{1,3}\.\d\/\d{5,25}\/(media|media_publish)$/;
 
 // ---- Config --------------------------------------------------------------------------------
@@ -428,5 +428,32 @@ export function publishingApi(): PublishingApi | null {
     publishContainer: (userId, creationId) => graphRequest(cfg, "POST", `/${v}/${own(userId)}/media_publish`, { creation_id: id(creationId) }),
     mediaInfo: (mediaId) => graphGet(cfg, `/${v}/${id(mediaId)}`, "id,permalink,timestamp,media_type"),
     recentMedia: (userId) => graphGet(cfg, `/${v}/${own(userId)}/media`, "id,caption,permalink,timestamp,media_type", { limit: "25" }),
+  };
+}
+
+// ---- Read-only post metrics (used only by lib/instagram/metrics.ts) ---------------------------
+
+export interface InsightsApi {
+  /** like_count / comments_count from the media object. */
+  mediaCounts(mediaId: string): Promise<GraphOk | GraphFail>;
+  /** GET /<media-id>/insights?metric=a,b,c — needs instagram_business_manage_insights. */
+  mediaInsights(mediaId: string, metrics: string[]): Promise<GraphOk | GraphFail>;
+}
+
+/** Read-only metrics API bound to the server's token, or null when no token is installed. */
+export function insightsApi(): InsightsApi | null {
+  const cfg = readConfig();
+  if (!cfg.token) return null;
+  const v = cfg.version;
+  const id = (x: string) => {
+    if (!ID_RE.test(x)) throw new Error("Invalid Instagram object id.");
+    return x;
+  };
+  return {
+    mediaCounts: (mediaId) => graphGet(cfg, `/${v}/${id(mediaId)}`, "id,like_count,comments_count,timestamp"),
+    mediaInsights: (mediaId, metrics) => {
+      const list = metrics.filter((m) => /^[a-z_]{3,40}$/.test(m)).join(",");
+      return graphRequest(cfg, "GET", `/${v}/${id(mediaId)}/insights`, { metric: list });
+    },
   };
 }

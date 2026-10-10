@@ -2,7 +2,8 @@ import "server-only";
 import { AiGenerationStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
-import { assertAiGenerationOpen, generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
+import { assertAiGenerationOpen, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
+import { generateForFeature, isFeatureConfigured } from "@/lib/ai-gateway";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 
 /**
@@ -167,7 +168,7 @@ export function validateExplanationContent(text: string): ExplanationContent {
 
 async function runAndPersist(questionId: string, question: QuestionForExplanation, settings: AiSettings) {
   try {
-    const result: AiGenerationResult = await generateWithAi(buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 1400 });
+    const result: AiGenerationResult = await generateForFeature("explanation", buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 1400 });
     if (isTruncatedOrMalformedJson(result.text)) {
       throw new Error("AI returned truncated or malformed JSON (likely hit the output token limit) — please retry.");
     }
@@ -217,7 +218,7 @@ export async function getOrCreateExplanation(questionId: string) {
   // Checked BEFORE claiming: an unconfigured provider must refuse with no
   // DB write at all (no network call attempted, no dangling GENERATING row).
   await assertAiGenerationOpen();
-  if (!(await isAiGenerationConfigured())) {
+  if (!(await isFeatureConfigured("explanation"))) {
     throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }
 
@@ -286,7 +287,7 @@ export async function regenerateExplanation(questionId: string) {
   if (!existing) throw new ExplanationNotReadyError("No explanation exists yet for this question — use Generate instead.");
 
   await assertAiGenerationOpen();
-  if (!(await isAiGenerationConfigured())) {
+  if (!(await isFeatureConfigured("explanation"))) {
     throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }
   if (existing.status === AiGenerationStatus.GENERATING) {

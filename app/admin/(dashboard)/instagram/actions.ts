@@ -33,6 +33,8 @@ import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
 import { CONTENT_FIELDS, SLIDE_COUNTS, SLIDE_MODULES, TEMPLATE_KEYS, normalizeHashtags, type ContentField, type SlideModule } from "@/lib/instagram/types";
 import { safeTelegramUrl } from "@/lib/telegram-url";
 import { AiNotConfiguredError } from "@/lib/ai-provider";
+import { GATEWAY_PROVIDERS, type GatewayProvider } from "@/lib/ai-gateway-config";
+import { AiProviderFailure } from "@/lib/ai-gateway";
 import {
   getPublishStatus,
   getPublishingSwitch,
@@ -82,6 +84,7 @@ async function run<T>(actorId: string | null, fn: (actorId: string) => Promise<T
   } catch (error) {
     if (error instanceof StudioError) return { ok: false, error: error.message, kind: error.kind };
     if (error instanceof AiNotConfiguredError) return { ok: false, error: error.message || "AI generation is not configured or is paused (Platform Controls)." };
+    if (error instanceof AiProviderFailure) return { ok: false, error: `${error.message} Nothing was changed.` };
     console.error("[instagram-studio]", error);
     return { ok: false, error: "Something went wrong. Nothing was changed — try again." };
   }
@@ -101,6 +104,12 @@ async function requirePublisher(): Promise<string | null> {
 function checkFormat(f: unknown): PublishFormat {
   if (f !== "CAROUSEL" && f !== "IMAGE") throw new StudioError("Invalid format.");
   return f;
+}
+
+function parseProvider(p: unknown): GatewayProvider | null {
+  if (p === null || p === undefined || p === "" || p === "default") return null;
+  if ((GATEWAY_PROVIDERS as readonly string[]).includes(p as string)) return p as GatewayProvider;
+  throw new StudioError("Unknown AI provider.");
 }
 
 function checkId(id: unknown): string {
@@ -206,6 +215,8 @@ export async function aiEditAction(input: {
   selectedModule?: string | null;
   fields?: string[];
   confirmReplaceApproved?: boolean;
+  /** Optional per-request AI provider ("anthropic" | "gemini" | "openai"); default = the feature's routing. */
+  provider?: string | null;
 }): Promise<Result<AiEditResult>> {
   return run(await requireStudio(), async (actorId) => {
     const postId = checkId(input.postId);
@@ -238,6 +249,8 @@ export async function aiEditAction(input: {
       instruction: instruction || undefined,
       reference: await getAiReference(current.questionId),
       allowedDomains: allowedCaptionDomains(settings),
+      actorId,
+      provider: parseProvider(input.provider),
     });
     if (!outcome.changed.length) {
       return { post: current, summary: outcome.summary + (outcome.rejected.length ? ` (${outcome.rejected.map((r) => `${r.field}: ${r.reason}`).join("; ")})` : ""), kind: "content" as const, rejected: outcome.rejected };

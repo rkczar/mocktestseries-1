@@ -4,6 +4,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { getStudioSettings } from "@/lib/instagram/config";
 import { StudioError, getPostDto } from "@/lib/instagram/posts";
 import { renderSlideJpeg } from "@/lib/instagram/render";
+import { MAX_SLIDES } from "@/lib/instagram/types";
 import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
 
 /**
@@ -23,14 +24,14 @@ export async function POST(request: NextRequest) {
   let body: { postId?: unknown; index?: unknown; content?: unknown; design?: unknown };
   try {
     const text = await request.text();
-    if (text.length > 64_000) return NextResponse.json({ error: "Too large." }, { status: 413 });
+    if (text.length > 96_000) return NextResponse.json({ error: "Too large." }, { status: 413 });
     body = JSON.parse(text);
   } catch {
     return NextResponse.json({ error: "Invalid JSON." }, { status: 400 });
   }
   if (typeof body.postId !== "string" || !ID.test(body.postId)) return NextResponse.json({ error: "Invalid post." }, { status: 400 });
   const index = Number(body.index);
-  if (!Number.isInteger(index) || index < 0 || index > 5) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
+  if (!Number.isInteger(index) || index < 0 || index >= MAX_SLIDES) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
   try {
     const [post, settings] = await Promise.all([getPostDto(body.postId), getStudioSettings()]);
     const content = checkContentInput(body.content ?? post.content, post.content);

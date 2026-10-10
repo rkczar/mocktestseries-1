@@ -1,6 +1,9 @@
 import { answerKeyIssue } from "@/lib/question-insights-format";
 import { checkText, type SafetyContext } from "@/lib/instagram/content-safety";
 import { planSlides, plainText } from "@/lib/instagram/layout";
+import { checkDiagram, diagramLayout, diagramTexts, diagramTitleOverflows } from "@/lib/instagram/diagram";
+import { checkTrap, trapTexts } from "@/lib/instagram/trap";
+import { EXCLUDED_TERMS, isExcludedExam } from "@/lib/instagram/exam-scope";
 import { MODULE_LABELS, type PostContent, type PostDesign, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
 
 /**
@@ -48,8 +51,17 @@ export const REVIEW_CHECKLIST = [
   { key: "answerVerified", label: "The correct answer is verified against the official answer key" },
   { key: "attributionVerified", label: "Exam name, year and paper shown on the slides are correct" },
   { key: "medicalReviewed", label: "Explanation, memory trick, pearl and revision points are medically accurate" },
+  { key: "extrasReviewed", label: "Diagram, Examiner Trap, pearls and common mistakes (where included) were checked by a medical reviewer" },
 ] as const;
 export type ChecklistKey = (typeof REVIEW_CHECKLIST)[number]["key"];
+
+const EXTRA_MODULES = ["DIAGRAM", "TRAP", "PEARLS", "MISTAKES"];
+
+/** The checklist for one post: the extras item applies only when the carousel has a Diagram / Trap / Pearls / Mistakes slide. */
+export function checklistFor(design: Pick<PostDesign, "modules">) {
+  const extras = design.modules.some((m) => EXTRA_MODULES.includes(m));
+  return REVIEW_CHECKLIST.filter((c) => c.key !== "extrasReviewed" || extras);
+}
 
 /** Common correct-lowercase stem openings (units, gene/drug names) that are not OCR damage. */
 const LOWERCASE_OK = /^(pH|pO2|pCO2|mRNA|tRNA|rRNA|miRNA|dNTP|cAMP|cGMP|iNOS|eNOS|mTOR|p53|e\.g\.|i\.e\.|vs\.?)\b/;
@@ -102,6 +114,10 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     err("EQUATIONS_UNSUPPORTED", "This question uses equations/chemistry markup, which the slide renderer can't draw yet.");
   }
 
+  if (isExcludedExam(s.examName, s.examCode)) {
+    err("EXAM_OUT_OF_SCOPE", "NEET UG / school-level questions are excluded from Instagram Studio (MBBS-level and post-MBBS exams only).");
+  }
+
   // --- Attribution --------------------------------------------------------------
   if (input.series === "PYQ") {
     if (!s.paperId || !s.paperYear) err("NOT_PYQ", "This question is not linked to a previous year paper.");
@@ -122,6 +138,20 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     if (p.missing.length) err(`SLIDE_MISSING:${i}`, `Slide ${i + 1} (${MODULE_LABELS[p.module]}) is missing: ${p.missing.join(", ")}.`, i);
     if (p.overflow) err(`SLIDE_OVERFLOW:${i}`, `Slide ${i + 1} (${MODULE_LABELS[p.module]}) has too much text to stay readable. Shorten it or reduce the font scale.`, i);
   });
+  const diagramIdx = d.modules.indexOf("DIAGRAM");
+  if (diagramIdx >= 0 && c.diagram) {
+    for (const m of checkDiagram(c.diagram)) err(`DIAGRAM_INVALID:${m.slice(0, 40)}`, `Slide ${diagramIdx + 1} (diagram): ${m}`, diagramIdx);
+    if (diagramLayout(c.diagram).overflow || diagramTitleOverflows(c.diagram.title)) {
+      err("DIAGRAM_OVERFLOW", `Slide ${diagramIdx + 1} (diagram) has too much text for its boxes. Shorten the labels or use fewer boxes.`, diagramIdx);
+    }
+    if (!c.diagram.reviewed) err("DIAGRAM_UNREVIEWED", `Slide ${diagramIdx + 1}: the diagram needs medical review — check every label, then tick "Diagram reviewed".`, diagramIdx);
+  }
+  const trapIdx = d.modules.indexOf("TRAP");
+  if (trapIdx >= 0 && c.trap) {
+    for (const m of checkTrap(c.trap)) err(`TRAP_INVALID:${m.slice(0, 40)}`, `Slide ${trapIdx + 1} (examiner trap): ${m}`, trapIdx);
+    if (c.trap.status !== "approved") err("TRAP_UNAPPROVED", `Slide ${trapIdx + 1}: the Examiner Trap question must be approved by a reviewer before this post can be Ready.`, trapIdx);
+    for (const ch of c.trap.checks) if (!ch.ok) warn(`TRAP_CHECK:${ch.code}`, `Examiner trap: ${ch.message}`, trapIdx);
+  }
   if (input.follow.showInstagram && !input.follow.instagramHandle) err("FOLLOW_NO_INSTAGRAM", "No Instagram handle is configured (Instagram → Settings).");
   if (input.follow.showTelegram && !input.follow.telegramUrl) err("FOLLOW_NO_TELEGRAM", "Telegram is shown on the Follow slide but no Telegram URL is configured.");
 
@@ -137,6 +167,9 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     { name: "Memory Trick", text: c.memoryTrick, strict: false },
     { name: "Clinical Pearl", text: c.clinicalPearl, strict: false },
     { name: "Quick Revision", text: c.quickRevision.join("\n"), strict: false },
+    { name: "High-Yield Pearls", text: d.modules.includes("PEARLS") ? c.pearls.join("\n") : "", strict: false },
+    { name: "Common Mistakes", text: d.modules.includes("MISTAKES") ? c.mistakes.join("\n") : "", strict: false },
+    { name: "Diagram", text: diagramIdx >= 0 && c.diagram ? diagramTexts(c.diagram).join("\n") : "", strict: false },
     { name: "Final trick", text: c.showFinalTrick ? c.finalTrick : "", strict: false },
     { name: "Caption", text: c.caption, strict: true },
   ];
@@ -145,12 +178,20 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
       err(`SAFETY:${f.name}:${p.rule}`, `${f.name}: ${p.message}`);
     }
   }
+  // The trap is a NEW question with its own key, so the source answer key is not compared.
+  if (trapIdx >= 0 && c.trap) {
+    for (const p of checkText(trapTexts(c.trap).join("\n"), { paperYear: s.paperYear, correctLabels: [], optionLabels: [] })) err(`SAFETY:Examiner Trap:${p.rule}`, `Examiner Trap: ${p.message}`, trapIdx);
+  }
+  const captionAll = `${c.caption}\n${c.hashtags.join(" ")}`;
+  if (EXCLUDED_TERMS.test(captionAll)) err("CAPTION_OUT_OF_SCOPE", "Caption or hashtags mention NEET UG / school-level terms — Instagram Studio posts target MBBS-level and post-MBBS exams only.");
+  if (/\btrending\b|\bviral\b/i.test(captionAll)) warn("CAPTION_TREND_CLAIM", 'The caption says something is "trending" or "viral" — keep it only if Trends & Competitors evidence supports it.');
   if (input.unsupportedChars) {
     // The caption is not drawn on a slide (Instagram shows emoji there natively), so it is not checked.
     const drawn: { name: string; text: string }[] = [
       { name: "Question", text: s.text },
       ...s.options.map((o) => ({ name: `Option ${o.label}`, text: o.text })),
       ...fields.filter((f) => f.name !== "Caption"),
+      ...(trapIdx >= 0 && c.trap ? [{ name: "Examiner Trap", text: trapTexts(c.trap).join(" ") }] : []),
       { name: "Follow slide settings", text: (input.settingsTexts ?? []).join(" ") },
     ];
     for (const f of drawn) {

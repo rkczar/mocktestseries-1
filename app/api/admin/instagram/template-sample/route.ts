@@ -17,7 +17,9 @@ export async function GET(request: NextRequest) {
   const p = request.nextUrl.searchParams;
   const t = TEMPLATE_KEYS.find((k) => k === p.get("t")) as TemplateKey | undefined;
   const i = Number(p.get("i") ?? "0");
-  if (!t || !Number.isInteger(i) || i < 0 || i > 4) return NextResponse.json({ error: "Invalid request." }, { status: 400 });
-  const jpeg = await renderSlideJpeg(sampleWith(await getStudioSettings(), defaultDesign(t, 5)), i, 80);
+  // n=7 shows the universal medical carousel (Question … Diagram, Pearls, Mistakes, Trap, Follow); default is the 5-slide layout.
+  const n = p.get("n") === "7" ? 7 : 5;
+  if (!t || !Number.isInteger(i) || i < 0 || i >= n) return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  const jpeg = await renderSlideJpeg(sampleWith(await getStudioSettings(), defaultDesign(t, n)), i, 80);
   return new NextResponse(new Uint8Array(jpeg), { headers: { "Content-Type": "image/jpeg", "Cache-Control": "private, no-store" } });
 }

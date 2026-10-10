@@ -1,4 +1,4 @@
-import { SLIDE_HEIGHT, SLIDE_WIDTH, type PostContent, type PostDesign, type SlideModule, type SourceSnapshot } from "@/lib/instagram/types";
+import { SLIDE_HEIGHT, SLIDE_WIDTH, type PostContent, type PostDesign, type SlideModule, type SourceSnapshot, type TrapVariant } from "@/lib/instagram/types";
 
 /**
  * Deterministic text fitting for the 1080 × 1350 slides. Satori wraps text but
@@ -171,6 +171,35 @@ export function hookLayout(hook: string, extraLines: number, scale: number): Hoo
   return fit(Math.round(84 * scale), 48, GEOMETRY.bodyHeight - reserved, (s) => textHeight(hook || " ", s, W, "bold"));
 }
 
+// ---- Examiner trap slide ----------------------------------------------------------
+
+export const TRAP_HEAD = { titleSize: 46, subtitleSize: 24, height: 132 };
+
+export interface TrapLayout {
+  stemSize: number;
+  optionSize: number;
+  noteSize: number;
+  overflow: boolean;
+}
+
+export function trapLayout(trap: TrapVariant, scale: number): TrapLayout {
+  const W = GEOMETRY.contentWidth;
+  const optW = W - 2 * 22 - 48 - 18 - 150;
+  const noteW = W - 2 * 30;
+  const heightAt = (s: number) => {
+    const o = Math.max(22, Math.round(s * 0.82));
+    const n = Math.max(22, Math.round(s * 0.74));
+    const stem = textHeight(trap.question, s, W, "bold");
+    const opts = trap.options.reduce((h, opt) => h + Math.max(48, textHeight(opt.text || " ", o, optW)) + 2 * 12 + 10, 0);
+    const notes = [trap.trapExplanation, trap.avoidTip].reduce((h, t) => h + 2 * 22 + 26 + 10 + textHeight(t || " ", n, noteW) + 16, 0);
+    return TRAP_HEAD.height + stem + 20 + opts + 10 + notes;
+  };
+  for (let s = Math.round(36 * scale); s >= 24; s -= 2) {
+    if (heightAt(s) <= GEOMETRY.bodyHeight) return { stemSize: s, optionSize: Math.max(22, Math.round(s * 0.82)), noteSize: Math.max(22, Math.round(s * 0.74)), overflow: false };
+  }
+  return { stemSize: 24, optionSize: 22, noteSize: 22, overflow: true };
+}
+
 // ---- Per-slide plan (shared by renderer + quality gate) ---------------------
 
 export interface SlidePlan {
@@ -200,6 +229,10 @@ export function textBlocksFor(module: SlideModule, c: PostContent): TextBlock[] 
         { label: "CLINICAL PEARL", text: c.clinicalPearl, tone: "accent" },
         { label: "QUICK REVISION", text: "", bullets: c.quickRevision.filter(Boolean), tone: "plain" },
       ];
+    case "PEARLS":
+      return [{ label: "HIGH-YIELD PEARLS", text: "", bullets: c.pearls.filter(Boolean), tone: "accent" }];
+    case "MISTAKES":
+      return [{ label: "COMMON MISTAKES", text: "", bullets: c.mistakes.filter(Boolean), tone: "highlight" }];
     default:
       return [];
   }
@@ -234,6 +267,13 @@ export function planSlides(snapshot: SourceSnapshot, content: PostContent, desig
         break;
       }
       case "FOLLOW":
+        break;
+      case "DIAGRAM":
+        if (!content.diagram) missing.push("Diagram");
+        break;
+      case "TRAP":
+        if (!content.trap) missing.push("Examiner trap question");
+        else overflow = trapLayout(content.trap, design.bodyScale).overflow;
         break;
       default: {
         const blocks = textBlocksFor(module, content);

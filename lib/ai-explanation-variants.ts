@@ -2,7 +2,8 @@ import "server-only";
 import { AiGenerationStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
-import { assertAiGenerationOpen, generateWithAi, isAiGenerationConfigured, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
+import { assertAiGenerationOpen, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
+import { generateForFeature, isFeatureConfigured } from "@/lib/ai-gateway";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, validateExplanationContent, isTruncatedOrMalformedJson, type ExplanationContent, type QuestionForExplanation } from "@/lib/ai-explanation";
 import { EXPLANATION_VARIANTS, getVariantDef, type ExplanationVariantDef } from "@/lib/ai-explanation-variants-catalog";
@@ -76,7 +77,7 @@ async function loadCanonicalQuestion(questionId: string): Promise<QuestionForExp
 async function runAndPersist(questionId: string, variant: ExplanationVariantDef, question: QuestionForExplanation, settings: AiSettings) {
   const key = { questionId_variantId: { questionId, variantId: variant.id } };
   try {
-    const result: AiGenerationResult = await generateWithAi(buildVariantPrompt(question, settings, variant), { temperature: 0.4, maxOutputTokens: 1400 });
+    const result: AiGenerationResult = await generateForFeature("explanation", buildVariantPrompt(question, settings, variant), { temperature: 0.4, maxOutputTokens: 1400 });
     if (isTruncatedOrMalformedJson(result.text)) {
       throw new Error("AI returned truncated or malformed JSON (likely hit the output token limit) — please retry.");
     }
@@ -153,7 +154,7 @@ export async function getOrCreateExplanationVariant(questionId: string, variantI
   if (existing?.status === AiGenerationStatus.COMPLETED) return existing;
 
   await assertAiGenerationOpen();
-  if (!(await isAiGenerationConfigured())) {
+  if (!(await isFeatureConfigured("explanation"))) {
     throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }
 
