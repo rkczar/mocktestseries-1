@@ -181,10 +181,12 @@ export interface PostListRow {
   reviewedAt: string | null;
   publishedAt: string | null;
   igPermalink: string | null;
+  igMediaId: string | null;
+  publishError: string | null;
   isCurrent: boolean;
 }
 
-function toListRow(p: { id: string; questionId: string; questionCode: string; series: "PYQ" | "MOST_MISSED"; version: number; status: InstagramPostStatus; sourceSnapshot: unknown; updatedAt: Date; reviewedAt: Date | null; publishedAt: Date | null; igPermalink: string | null; supersededAt: Date | null }): PostListRow {
+function toListRow(p: { id: string; questionId: string; questionCode: string; series: "PYQ" | "MOST_MISSED"; version: number; status: InstagramPostStatus; sourceSnapshot: unknown; updatedAt: Date; reviewedAt: Date | null; publishedAt: Date | null; igPermalink: string | null; igMediaId: string | null; publishError: string | null; supersededAt: Date | null }): PostListRow {
   const s = p.sourceSnapshot as SourceSnapshot;
   return {
     id: p.id,
@@ -200,6 +202,8 @@ function toListRow(p: { id: string; questionId: string; questionCode: string; se
     reviewedAt: p.reviewedAt?.toISOString() ?? null,
     publishedAt: p.publishedAt?.toISOString() ?? null,
     igPermalink: p.igPermalink,
+    igMediaId: p.igMediaId,
+    publishError: p.publishError,
     isCurrent: p.supersededAt === null,
   };
 }
@@ -216,6 +220,8 @@ const listSelect = {
   reviewedAt: true,
   publishedAt: true,
   igPermalink: true,
+  igMediaId: true,
+  publishError: true,
   supersededAt: true,
 } as const;
 
@@ -232,6 +238,15 @@ export async function listDrafts(): Promise<PostListRow[]> {
 export async function listHistory(): Promise<PostListRow[]> {
   const rows = await prisma.instagramPost.findMany({ orderBy: { updatedAt: "desc" }, take: 300, select: listSelect });
   return rows.map(toListRow);
+}
+
+/** Published History: everything that is on Instagram (newest first), plus posts being published or failed. */
+export async function listPublishActivity(): Promise<{ published: PostListRow[]; active: PostListRow[] }> {
+  const [published, active] = await Promise.all([
+    prisma.instagramPost.findMany({ where: { status: "PUBLISHED" }, orderBy: [{ publishedAt: "desc" }, { updatedAt: "desc" }], take: 300, select: listSelect }),
+    prisma.instagramPost.findMany({ where: { status: { in: ["PUBLISHING", "FAILED"] } }, orderBy: { updatedAt: "desc" }, take: 100, select: listSelect }),
+  ]);
+  return { published: published.map(toListRow), active: active.map(toListRow) };
 }
 
 export async function studioCounts(): Promise<Record<"DRAFT" | "READY" | "PUBLISHED" | "FAILED", number>> {

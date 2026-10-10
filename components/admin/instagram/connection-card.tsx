@@ -87,8 +87,8 @@ export function ConnectionCard({ config: initialConfig, last: initialLast }: { c
       <CardHeader className="pb-2">
         <CardTitle>Instagram connection</CardTitle>
         <CardDescription>
-          Read-only check of the Instagram API token installed on the server. It reads the account identity and publishing permission only — it never posts,
-          schedules or deletes anything. Publishing stays turned off.
+          Read-only check of the Instagram API token installed on the server. It reads the account identity and publishing permission only — the test never posts,
+          schedules or deletes anything.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4 px-5 pb-5">
@@ -120,7 +120,7 @@ export function ConnectionCard({ config: initialConfig, last: initialLast }: { c
             testId="ig-conn-publish"
             value={
               perm === "GRANTED" ? (
-                <Badge variant="success">Granted (publishing still OFF in the app)</Badge>
+                <Badge variant="success">Granted</Badge>
               ) : perm === "MISSING" ? (
                 <Badge variant="warning">Missing — instagram_business_content_publish</Badge>
               ) : (

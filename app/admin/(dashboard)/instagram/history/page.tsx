@@ -1,27 +1,40 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EditorHost } from "@/components/admin/instagram/editor-host";
 import { PostTable } from "@/components/admin/instagram/post-table";
-import { listHistory } from "@/lib/instagram/queries";
+import { PublishedTable } from "@/components/admin/instagram/published-table";
+import { listHistory, listPublishActivity } from "@/lib/instagram/queries";
 
 export const metadata = { title: "Published History — Instagram — Mock Test Series.in Admin" };
 
-/** Admin → Instagram → Published History: posted carousels, then every post version ever created. */
+/** Admin → Instagram → Published History: posted carousels, posts being published / failed, then every post version ever created. */
 export default async function InstagramHistoryPage() {
-  const rows = await listHistory();
-  const published = rows.filter((r) => r.status === "PUBLISHED");
+  const [rows, activity] = await Promise.all([listHistory(), listPublishActivity()]);
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle>Published</CardTitle>
-          <CardDescription>Questions already posted show “Instagram ✓ Posted” everywhere in the studio, so they are not posted twice by accident.</CardDescription>
+          <CardTitle>Published on Instagram</CardTitle>
+          <CardDescription>Questions already posted show “Instagram ✓ Posted” everywhere in the studio, so they are not posted twice by accident. Published posts are never deleted from Instagram by the studio.</CardDescription>
         </CardHeader>
         <CardContent className="px-5 pb-5">
           <EditorHost>
-            <PostTable rows={published} empty="Nothing has been published — publishing is not enabled yet." testId="published-table" showPublished />
+            <PublishedTable rows={activity.published} empty="Nothing has been published yet." testId="published-table" />
           </EditorHost>
         </CardContent>
       </Card>
+      {activity.active.length ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle>Publishing now / failed</CardTitle>
+            <CardDescription>Open a post to see its progress, check its status with Instagram, or retry a failed publish.</CardDescription>
+          </CardHeader>
+          <CardContent className="px-5 pb-5">
+            <EditorHost>
+              <PublishedTable rows={activity.active} empty="" testId="publish-activity-table" />
+            </EditorHost>
+          </CardContent>
+        </Card>
+      ) : null}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle>All posts and versions</CardTitle>

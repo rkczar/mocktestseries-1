@@ -12,9 +12,12 @@ import type { Prisma } from "@prisma/client";
  *   browser, never in source.
  * - It is sent in the Authorization header only (never in a URL), and every
  *   error text that leaves this module goes through `redact()`.
- * - Only GET requests to an allow-list of read endpoints are possible here.
- *   Nothing in this module can publish, schedule or delete; publishing stays
- *   off in code (INSTAGRAM_PUBLISHING_AVAILABLE in lib/instagram/types.ts).
+ * - Requests are limited to an allow-list: the read endpoints of the
+ *   connection test, plus the content-publishing endpoints (create container,
+ *   container status, media_publish, media read) used ONLY by
+ *   lib/instagram/publish.ts after an admin's explicit confirmation. Publish
+ *   calls only ever target the pinned INSTAGRAM_USER_ID. Nothing here can
+ *   schedule or delete.
  *
  * Environment:
  *   INSTAGRAM_ACCESS_TOKEN   secret — Instagram User access token (long-lived, ~60 days)
@@ -33,10 +36,13 @@ export const CONNECTION_SETTING_KEY = "instagram.connection";
 const GRAPH_BASE = "https://graph.instagram.com";
 const DEFAULT_VERSION = "v25.0";
 const TIMEOUT_MS = 10_000;
+/** media_publish / container creation can be slower than reads. */
+const WRITE_TIMEOUT_MS = 45_000;
 const MAX_BODY = 64 * 1024;
 const PROFESSIONAL_TYPES = new Set(["BUSINESS", "MEDIA_CREATOR", "CREATOR"]);
-/** The only requests this module can make (all GET). */
-const ALLOWED_PATH = /^\/v\d{1,3}\.\d\/(me|\d{5,25}\/content_publishing_limit)$/;
+/** The only requests this module can make. */
+const ALLOWED_GET = /^\/v\d{1,3}\.\d\/(me|\d{5,25}\/content_publishing_limit|\d{5,25}\/media|\d{5,30})$/;
+const ALLOWED_POST = /^\/v\d{1,3}\.\d\/\d{5,25}\/(media|media_publish)$/;
 
 // ---- Config --------------------------------------------------------------------------------
 
@@ -176,27 +182,35 @@ export interface ConnectionTestResult {
   error: { code: number | null; subcode: number | null; message: string } | null;
 }
 
-type GraphOk = { ok: true; body: Record<string, unknown> };
-type GraphFail = { ok: false; kind: "timeout" | "network" | "http"; httpStatus: number | null; code: number | null; subcode: number | null; message: string };
+export type GraphOk = { ok: true; body: Record<string, unknown> };
+export type GraphFail = { ok: false; kind: "timeout" | "network" | "http"; httpStatus: number | null; code: number | null; subcode: number | null; message: string };
 
-async function graphGet(cfg: MetaConfig, path: string, fields: string): Promise<GraphOk | GraphFail> {
-  if (!ALLOWED_PATH.test(path)) throw new Error("Instagram request not allowed.");
+async function graphGet(cfg: MetaConfig, path: string, fields: string, extra: Record<string, string> = {}): Promise<GraphOk | GraphFail> {
+  return graphRequest(cfg, "GET", path, { fields, ...extra });
+}
+
+async function graphRequest(cfg: MetaConfig, method: "GET" | "POST", path: string, params: Record<string, string>): Promise<GraphOk | GraphFail> {
+  if (!(method === "GET" ? ALLOWED_GET : ALLOWED_POST).test(path)) throw new Error("Instagram request not allowed.");
   const url = new URL(cfg.base + path);
-  url.searchParams.set("fields", fields);
-  if (cfg.appSecret && cfg.token) url.searchParams.set("appsecret_proof", crypto.createHmac("sha256", cfg.appSecret).update(cfg.token).digest("hex"));
+  const form = new URLSearchParams();
+  const target = method === "GET" ? url.searchParams : form;
+  for (const [k, v] of Object.entries(params)) target.set(k, v);
+  if (cfg.appSecret && cfg.token) target.set("appsecret_proof", crypto.createHmac("sha256", cfg.appSecret).update(cfg.token).digest("hex"));
+  const timeoutMs = method === "GET" ? TIMEOUT_MS : cfg.base !== GRAPH_BASE && Number(process.env.INSTAGRAM_WRITE_TIMEOUT_MS) >= 500 ? Number(process.env.INSTAGRAM_WRITE_TIMEOUT_MS) : WRITE_TIMEOUT_MS;
   let res: Response;
   try {
     res = await fetch(url, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${cfg.token}`, Accept: "application/json" },
+      method,
+      headers: { Authorization: `Bearer ${cfg.token}`, Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/x-www-form-urlencoded" } : {}) },
+      body: method === "POST" ? form.toString() : undefined,
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     const name = (error as { name?: string })?.name;
     const timeout = name === "TimeoutError" || name === "AbortError";
-    return { ok: false, kind: timeout ? "timeout" : "network", httpStatus: null, code: null, subcode: null, message: timeout ? `No answer from Instagram within ${TIMEOUT_MS / 1000} s.` : "Could not reach Instagram (network error)." };
+    return { ok: false, kind: timeout ? "timeout" : "network", httpStatus: null, code: null, subcode: null, message: timeout ? `No answer from Instagram within ${timeoutMs / 1000} s.` : "Could not reach Instagram (network error)." };
   }
   let text = "";
   try {
@@ -209,24 +223,25 @@ async function graphGet(cfg: MetaConfig, path: string, fields: string): Promise<
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) body = parsed as Record<string, unknown>;
   } catch {}
-  const err = body?.error as { code?: unknown; error_subcode?: unknown; message?: unknown } | undefined;
+  const err = body?.error as { code?: unknown; error_subcode?: unknown; message?: unknown; error_user_msg?: unknown } | undefined;
   if (!res.ok || err || !body) {
+    const msg = typeof err?.error_user_msg === "string" && err.error_user_msg ? err.error_user_msg : typeof err?.message === "string" ? err.message : `Unexpected answer from Instagram (HTTP ${res.status}).`;
     return {
       ok: false,
       kind: "http",
       httpStatus: res.status,
       code: typeof err?.code === "number" ? err.code : null,
       subcode: typeof err?.error_subcode === "number" ? err.error_subcode : null,
-      message: redact(typeof err?.message === "string" ? err.message : `Unexpected answer from Instagram (HTTP ${res.status}).`, cfg),
+      message: redact(msg, cfg),
     };
   }
   return { ok: true, body };
 }
 
-const isPermissionError = (f: GraphFail) => f.code === 10 || (f.code !== null && f.code >= 200 && f.code <= 299);
-const isRateLimit = (f: GraphFail) => f.code === 4 || f.code === 17 || f.code === 32 || f.code === 613;
-const isTokenError = (f: GraphFail) => f.code === 190 || f.code === 102;
-const isExpired = (f: GraphFail) => isTokenError(f) && (f.subcode === 463 || /expired/i.test(f.message));
+export const isPermissionError = (f: GraphFail) => f.code === 10 || (f.code !== null && f.code >= 200 && f.code <= 299);
+export const isRateLimit = (f: GraphFail) => f.code === 4 || f.code === 17 || f.code === 32 || f.code === 613;
+export const isTokenError = (f: GraphFail) => f.code === 190 || f.code === 102;
+export const isExpired = (f: GraphFail) => isTokenError(f) && (f.subcode === 463 || /expired/i.test(f.message));
 
 function classifyFailure(f: GraphFail): { status: ConnectionStatus; summary: string } {
   if (f.kind === "timeout") return { status: "TIMEOUT", summary: "Instagram did not answer in time. Try again in a minute." };
@@ -325,8 +340,8 @@ export async function runConnectionTest(): Promise<ConnectionTestResult> {
   if (limit.ok) {
     const row = (Array.isArray(limit.body.data) ? limit.body.data[0] : null) as { quota_usage?: unknown; config?: { quota_total?: unknown; quota_duration?: unknown } } | null;
     const quota = { usage: num(row?.quota_usage) ?? 0, total: num(row?.config?.quota_total), durationSeconds: num(row?.config?.quota_duration) };
-    checks.push({ key: "publishPermission", label: "Publishing permission", state: "pass", detail: `instagram_business_content_publish granted (quota ${quota.usage}/${quota.total ?? "?"} per 24 h). Publishing stays OFF in the app.` });
-    return result({ status: "CONNECTED", summary: "Connected to @" + username + ". Publishing permission is granted; publishing stays turned off in the app.", account, publishPermission: "GRANTED", publishingQuota: quota });
+    checks.push({ key: "publishPermission", label: "Publishing permission", state: "pass", detail: `instagram_business_content_publish granted (quota ${quota.usage}/${quota.total ?? "?"} per 24 h).` });
+    return result({ status: "CONNECTED", summary: "Connected to @" + username + ". Publishing permission is granted.", account, publishPermission: "GRANTED", publishingQuota: quota });
   }
   if (limit.kind === "http" && isPermissionError(limit)) {
     checks.push({ key: "publishPermission", label: "Publishing permission", state: "warn", detail: `Missing: instagram_business_content_publish is not granted to this token. (${limit.message})` });
@@ -348,4 +363,70 @@ export async function getLastConnectionResult(): Promise<ConnectionTestResult | 
 export async function saveConnectionResult(last: ConnectionTestResult, testedById: string): Promise<void> {
   const value = { last: { ...last, testedById } } as unknown as Prisma.InputJsonValue;
   await prisma.setting.upsert({ where: { key: CONNECTION_SETTING_KEY }, update: { value }, create: { key: CONNECTION_SETTING_KEY, value } });
+}
+
+// ---- Content publishing (used only by lib/instagram/publish.ts) ---------------------------
+
+export interface PublishTarget {
+  userId: string;
+  username: string;
+}
+
+export interface PublishingApi {
+  /** Confirms the token belongs to the pinned account (GET /me). */
+  verifyAccount(): Promise<{ ok: true; target: PublishTarget } | { ok: false; fail: GraphFail | null; message: string }>;
+  quota(userId: string): Promise<GraphOk | GraphFail>;
+  createImageContainer(userId: string, imageUrl: string, opts: { caption?: string; carouselItem?: boolean }): Promise<GraphOk | GraphFail>;
+  createCarouselContainer(userId: string, children: string[], caption: string): Promise<GraphOk | GraphFail>;
+  containerStatus(containerId: string): Promise<GraphOk | GraphFail>;
+  publishContainer(userId: string, creationId: string): Promise<GraphOk | GraphFail>;
+  mediaInfo(mediaId: string): Promise<GraphOk | GraphFail>;
+  recentMedia(userId: string): Promise<GraphOk | GraphFail>;
+  apiVersion: string;
+}
+
+const ID_RE = /^\d{5,30}$/;
+
+/** Publishing API bound to the server's token. Returns null when no token / no pinned user ID is installed. */
+export function publishingApi(): PublishingApi | null {
+  const cfg = readConfig();
+  if (!cfg.token || !cfg.userId) return null;
+  const pinned = cfg.userId;
+  const v = cfg.version;
+  const own = (userId: string) => {
+    if (userId !== pinned) throw new Error("Publishing is only allowed to the pinned Instagram account.");
+    return userId;
+  };
+  const id = (x: string) => {
+    if (!ID_RE.test(x)) throw new Error("Invalid Instagram object id.");
+    return x;
+  };
+  return {
+    apiVersion: v,
+    async verifyAccount() {
+      const me = await graphGet(cfg, `/${v}/me`, "user_id,username,account_type");
+      if (!me.ok) return { ok: false, fail: me, message: me.message };
+      const userId = str(me.body.user_id) ?? "";
+      const username = str(me.body.username)?.toLowerCase() ?? "";
+      if (userId !== pinned || username !== EXPECTED_INSTAGRAM_USERNAME) {
+        return { ok: false, fail: null, message: `The installed token belongs to @${username || "?"} (${userId || "?"}), not @${EXPECTED_INSTAGRAM_USERNAME} (${pinned}). Nothing was published.` };
+      }
+      const type = str(me.body.account_type)?.toUpperCase() ?? "";
+      if (!PROFESSIONAL_TYPES.has(type)) return { ok: false, fail: null, message: "The Instagram account is not a Business/Creator account." };
+      return { ok: true, target: { userId, username } };
+    },
+    quota: (userId) => graphGet(cfg, `/${v}/${own(userId)}/content_publishing_limit`, "quota_usage,config"),
+    createImageContainer: (userId, imageUrl, opts) =>
+      graphRequest(cfg, "POST", `/${v}/${own(userId)}/media`, {
+        image_url: imageUrl,
+        ...(opts.carouselItem ? { is_carousel_item: "true" } : {}),
+        ...(opts.caption ? { caption: opts.caption } : {}),
+      }),
+    createCarouselContainer: (userId, children, caption) =>
+      graphRequest(cfg, "POST", `/${v}/${own(userId)}/media`, { media_type: "CAROUSEL", children: children.map(id).join(","), caption }),
+    containerStatus: (containerId) => graphGet(cfg, `/${v}/${id(containerId)}`, "status_code,status"),
+    publishContainer: (userId, creationId) => graphRequest(cfg, "POST", `/${v}/${own(userId)}/media_publish`, { creation_id: id(creationId) }),
+    mediaInfo: (mediaId) => graphGet(cfg, `/${v}/${id(mediaId)}`, "id,permalink,timestamp,media_type"),
+    recentMedia: (userId) => graphGet(cfg, `/${v}/${own(userId)}/media`, "id,caption,permalink,timestamp,media_type", { limit: "25" }),
+  };
 }

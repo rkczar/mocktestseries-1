@@ -177,9 +177,6 @@ export const POST_STATUS_LABELS: Record<PostStatusLabel, string> = {
   FAILED: "Failed",
 };
 
-/** Publishing is not part of this phase. Flip only with owner approval (and the Meta connection built). */
-export const INSTAGRAM_PUBLISHING_AVAILABLE = false;
-
 export const SLIDE_WIDTH = 1080;
 export const SLIDE_HEIGHT = 1350;
 

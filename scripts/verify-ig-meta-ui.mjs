@@ -189,7 +189,7 @@ try {
         check("username @mocktestseries.in", (await text(page, "ig-conn-username")) === "@mocktestseries.in");
         check(`Instagram User ID ${MOCK_USER_ID} (retrieved via API)`, (await text(page, "ig-conn-userid")) === MOCK_USER_ID);
         check("account type BUSINESS", (await text(page, "ig-conn-type")) === "BUSINESS");
-        check("publishing permission: Granted (publishing still OFF)", /Granted \(publishing still OFF/.test(publish), publish);
+        check("publishing permission: Granted", /Granted/.test(publish), publish);
         check("all 6 checks pass", (await page.locator('[data-testid="ig-conn-checks"] li[data-state="pass"]').count()) === 6);
         // Throttle + persistence + audit.
         await page.getByTestId("ig-conn-test").click();

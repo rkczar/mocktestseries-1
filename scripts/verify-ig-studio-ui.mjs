@@ -246,7 +246,7 @@ try {
   check("question number saved", /Question number saved/.test(await editorMessage(page)));
   for (const cb of await page.locator('[data-testid="issue-list"] input[type=checkbox]').all()) await cb.check();
   for (const key of ["textMatchesPaper", "answerVerified", "attributionVerified", "medicalReviewed"]) await page.getByTestId(`check-${key}`).check();
-  check("Publish button is disabled", await page.getByTestId("publish-disabled").isDisabled());
+  check("no Publish button before approval", (await page.getByTestId("publish-open").count()) === 0 && (await page.getByTestId("publish-from-review").count()) === 0);
   await page.getByTestId("mark-ready").click();
   check("Marked Ready", /Marked Ready/.test(await editorMessage(page)));
   check("status READY in DB", sql(`SELECT status FROM "InstagramPost" WHERE "questionCode" = 'IGFIX-RUHS21-W01'`) === "READY");

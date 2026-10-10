@@ -1,6 +1,8 @@
 "use server";
 
+import crypto from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -31,6 +33,19 @@ import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
 import { CONTENT_FIELDS, SLIDE_COUNTS, SLIDE_MODULES, TEMPLATE_KEYS, normalizeHashtags, type ContentField, type SlideModule } from "@/lib/instagram/types";
 import { safeTelegramUrl } from "@/lib/telegram-url";
 import { AiNotConfiguredError } from "@/lib/ai-provider";
+import {
+  getPublishStatus,
+  getPublishingSwitch,
+  publishPreflight,
+  reconcilePublish,
+  runPublishJob,
+  setPublishingSwitch,
+  startPublish,
+  type PublishFormat,
+  type PublishPreflight,
+  type PublishView,
+  type PublishingSwitch,
+} from "@/lib/instagram/publish";
 import { CONNECTION_SETTING_KEY, getConnectionConfigView, getLastConnectionResult, runConnectionTest, saveConnectionResult, type ConnectionConfigView, type ConnectionTestResult } from "@/lib/instagram/meta";
 
 /**
@@ -39,8 +54,9 @@ import { CONNECTION_SETTING_KEY, getConnectionConfigView, getLastConnectionResul
  * page-level check is never relied on. Writes go only to InstagramPost /
  * InstagramPostRevision / the `instagram.studio` Setting / AuditLog
  * (lib/instagram/posts.ts), plus the `instagram.connection` Setting for the
- * read-only Meta connection test. Nothing here publishes: publishing is not
- * built in this phase.
+ * read-only Meta connection test, and `instagram.publishing` (the publishing
+ * switch). Publishing (lib/instagram/publish.ts) starts ONLY from
+ * publishPostAction, which a Master Admin triggers with "Confirm & Publish".
  */
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string; kind?: StudioError["kind"] };
@@ -69,6 +85,22 @@ async function run<T>(actorId: string | null, fn: (actorId: string) => Promise<T
     console.error("[instagram-studio]", error);
     return { ok: false, error: "Something went wrong. Nothing was changed — try again." };
   }
+}
+
+/** Publishing additionally requires the MASTER_ADMIN role itself (not just the permission). */
+async function requirePublisher(): Promise<string | null> {
+  try {
+    const session = await requirePermission(PERMISSIONS.INSTAGRAM_MANAGE);
+    return session.user.role === "MASTER_ADMIN" ? (session.user.id ?? null) : null;
+  } catch (error) {
+    if (error instanceof UnauthorizedError) return null;
+    throw error;
+  }
+}
+
+function checkFormat(f: unknown): PublishFormat {
+  if (f !== "CAROUSEL" && f !== "IMAGE") throw new StudioError("Invalid format.");
+  return f;
 }
 
 function checkId(id: unknown): string {
@@ -371,4 +403,70 @@ export async function testInstagramConnectionAction(): Promise<Result<{ result: 
     touch();
     return { result, config: getConnectionConfigView() };
   });
+}
+
+// ---- Direct publishing (Master Admin, explicit confirmation only) ---------------------------
+
+/** What the confirmation dialog shows. Read-only; also re-checks every publish condition. */
+export async function publishPreflightAction(postId: string, expectedRevision: number, format: string): Promise<Result<PublishPreflight & { enabled: boolean; configured: boolean }>> {
+  return run(await requirePublisher(), async () => publishPreflight(checkId(postId), checkRevision(expectedRevision), checkFormat(format)));
+}
+
+/**
+ * "Confirm & Publish". Claims the post atomically (a repeated request with the
+ * same requestKey returns the running job instead of starting another), then
+ * runs the job after the response so a closed tab or dropped connection
+ * can't interrupt it. The editor polls publishStatusAction.
+ */
+export async function publishPostAction(input: { postId: string; expectedRevision: number; requestKey: string; format: string; confirmed: boolean }): Promise<Result<{ view: PublishView; existing: boolean }>> {
+  return run(await requirePublisher(), async (actorId) => {
+    if (input.confirmed !== true) throw new StudioError("Publishing needs an explicit confirmation.");
+    const requestKey = typeof input.requestKey === "string" && /^[A-Za-z0-9-]{16,64}$/.test(input.requestKey) ? input.requestKey : null;
+    if (!requestKey) throw new StudioError("Invalid request.");
+    const postId = checkId(input.postId);
+    const { job, existing } = await startPublish({ postId, expectedRevision: checkRevision(input.expectedRevision), requestKey, format: checkFormat(input.format), actorId });
+    if (!existing) {
+      after(async () => {
+        await runPublishJob(postId, job.leaseId);
+        revalidatePath("/admin/instagram", "layout");
+      });
+    }
+    touch();
+    return { view: await getPublishStatus(postId, actorId), existing };
+  });
+}
+
+export async function publishStatusAction(postId: string): Promise<Result<{ view: PublishView; post: PostDto }>> {
+  return run(await requireStudio(), async (actorId) => {
+    const id = checkId(postId);
+    const view = await getPublishStatus(id, actorId);
+    return { view, post: await getPostDto(id) };
+  });
+}
+
+/** "Check status": asks Instagram what happened to an interrupted/unclear publish. Never publishes. */
+export async function reconcilePublishAction(postId: string): Promise<Result<{ view: PublishView; post: PostDto }>> {
+  return run(await requirePublisher(), async (actorId) => {
+    const id = checkId(postId);
+    const view = await reconcilePublish(id, actorId);
+    touch();
+    return { view, post: await getPostDto(id) };
+  });
+}
+
+export async function getPublishingSwitchAction(): Promise<Result<PublishingSwitch>> {
+  return run(await requireStudio(), async () => getPublishingSwitch());
+}
+
+export async function setPublishingSwitchAction(enabled: boolean): Promise<Result<PublishingSwitch>> {
+  return run(await requirePublisher(), async (actorId) => {
+    const r = await setPublishingSwitch(enabled === true, actorId);
+    touch();
+    return r;
+  });
+}
+
+/** Single-use idempotency key for one confirmation dialog. */
+export async function newPublishRequestKeyAction(): Promise<Result<string>> {
+  return run(await requirePublisher(), async () => crypto.randomUUID());
 }

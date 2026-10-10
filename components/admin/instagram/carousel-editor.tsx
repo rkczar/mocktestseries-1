@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
 import { cn } from "@/lib/utils";
 import { InstagramStatusBadge } from "@/components/admin/instagram/status-badge";
+import { PublishPanel } from "@/components/admin/instagram/publish-panel";
 import {
   aiEditAction,
   backToDraftAction,
@@ -34,7 +35,6 @@ import {
   CONTENT_FIELD_LABELS,
   DEFAULT_LAYOUTS,
   HOOK_STYLE_LABELS,
-  INSTAGRAM_PUBLISHING_AVAILABLE,
   LIMITS,
   MODULE_LABELS,
   SLIDE_COUNTS,
@@ -145,6 +145,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const [qVerified, setQVerified] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmNewVersion, setConfirmNewVersion] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
   const changed = useRef(false);
 
   const adopt = useCallback((p: PostDto) => {
@@ -154,6 +155,25 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
     setQVerified(p.questionNumberVerified);
     setSlide((s) => Math.min(s, p.design.modules.length - 1));
   }, []);
+
+  /** A post update coming from the publishing flow (also refreshes this question's version list). */
+  const adoptPublished = useCallback(
+    (p: PostDto) => {
+      adopt(p);
+      changed.current = true;
+      setState((s) =>
+        s
+          ? {
+              ...s,
+              current: p,
+              posted: s.posted || p.status === "PUBLISHED",
+              history: s.history.map((h) => (h.id === p.id ? { ...h, status: p.status, publishedAt: p.publishedAt, igPermalink: p.igPermalink } : h)),
+            }
+          : s
+      );
+    },
+    [adopt]
+  );
 
   // Load when opened. The host remounts this component per question (key), so state starts fresh.
   useEffect(() => {
@@ -519,9 +539,15 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                     ))}
                   </div>
 
+                  {post.isCurrent && post.status !== "DRAFT" ? <PublishPanel post={post} dirty={dirty} onPost={adoptPublished} open={publishOpen} setOpen={setPublishOpen} /> : null}
+
                   {!editable ? (
                     <p className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm" data-testid="readonly-note">
-                      {publishedCurrent ? "This post is published and can't be edited. Use Create New Version (History tab) for a new post of this question." : "This version is read-only."}
+                      {publishedCurrent
+                        ? "This post is published and can't be edited. Use Create New Version (History tab) for a new post of this question."
+                        : post.status === "PUBLISHING"
+                          ? "Publishing is in progress — editing is locked until Instagram confirms the result."
+                          : "This version is read-only."}
                     </p>
                   ) : null}
 
@@ -564,6 +590,12 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                         {draft.content.showFinalTrick ? (
                           <Input value={draft.content.finalTrick} onChange={(e) => patchContent({ finalTrick: e.target.value })} placeholder="e.g. Absence = Ethosuximide" />
                         ) : null}
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-[var(--color-muted-foreground)]">Caption and hashtags are posted exactly as written below.</span>
+                        <Button type="button" size="sm" variant="outline" onClick={() => runAi({ fields: ["caption", "hashtags"] })} data-testid="ai-caption">
+                          <Sparkles className="h-4 w-4" aria-hidden /> Generate with AI
+                        </Button>
                       </div>
                       <Field label="Instagram caption" count={<Counter value={draft.content.caption.length} max={LIMITS.caption} />}>
                         <Textarea rows={5} value={draft.content.caption} onChange={(e) => patchContent({ caption: e.target.value })} data-testid="field-caption" />
@@ -780,9 +812,11 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                               Mark Ready
                             </Button>
                           )}
-                          <Button variant="outline" disabled title="Publishing is not enabled in this phase" data-testid="publish-disabled">
-                            {INSTAGRAM_PUBLISHING_AVAILABLE ? "Publish" : "Publish to Instagram (disabled)"}
-                          </Button>
+                          {post.status === "READY" || post.status === "FAILED" ? (
+                            <Button variant="success" disabled={pending || dirty} onClick={() => setPublishOpen(true)} data-testid="publish-from-review">
+                              <Send className="h-4 w-4" aria-hidden /> Publish to Instagram
+                            </Button>
+                          ) : null}
                         </div>
                       </section>
                     </div>

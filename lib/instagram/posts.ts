@@ -5,6 +5,7 @@ import { allowedCaptionDomains, getStudioSettings, type StudioSettings } from "@
 import { blockingIssues, runQualityGate, warningCodes, REVIEW_CHECKLIST, type QualityIssue } from "@/lib/instagram/quality";
 import { unsupportedChars } from "@/lib/instagram/glyphs";
 import { buildSnapshot, currentSourceHash } from "@/lib/instagram/snapshot";
+import { publishView, type PublishView } from "@/lib/instagram/publish-view";
 import {
   defaultDesign,
   emptyContent,
@@ -64,6 +65,8 @@ export interface PostDto {
   updatedAt: string;
   publishedAt: string | null;
   igPermalink: string | null;
+  igMediaId: string | null;
+  publish: PublishView;
   isCurrent: boolean;
   sourceChanged: boolean;
   sourceDeleted: boolean;
@@ -149,6 +152,8 @@ export async function toDto(post: InstagramPost, settings?: StudioSettings): Pro
     updatedAt: post.updatedAt.toISOString(),
     publishedAt: post.publishedAt?.toISOString() ?? null,
     igPermalink: post.igPermalink,
+    igMediaId: post.igMediaId,
+    publish: publishView(post),
     isCurrent: post.supersededAt === null,
     sourceChanged: currentHash !== null && currentHash !== post.sourceHash,
     sourceDeleted: currentHash === null,
@@ -332,6 +337,9 @@ async function loadEditable(postId: string, expectedRevision: number, confirmRep
   if (post.status === "READY" && !confirmReplaceApproved) {
     throw new StudioError("This post is approved (Ready). Changing it sends it back to Draft and needs a new review.", "needs-confirm");
   }
+  if (post.status === "FAILED" && !confirmReplaceApproved) {
+    throw new StudioError("This post is approved but its publish failed. Changing it sends it back to Draft and needs a new review.", "needs-confirm");
+  }
   return post;
 }
 
@@ -345,7 +353,8 @@ async function writeRevision(
   extra: Prisma.InstagramPostUpdateManyMutationInput = {}
 ): Promise<InstagramPost> {
   const revision = post.revision + 1;
-  const backToDraft = post.status === "READY";
+  // An approval covers one exact revision; a failed publish keeps its approval only until the post is edited.
+  const backToDraft = post.status === "READY" || post.status === "FAILED";
   await prisma.$transaction(async (tx) => {
     const res = await tx.instagramPost.updateMany({
       where: { id: post.id, revision: post.revision, supersededAt: null, status: { in: ["DRAFT", "READY", "FAILED"] } },

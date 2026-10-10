@@ -12,7 +12,6 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { prisma } from "@/lib/prisma";
 import { CONNECTION_SETTING_KEY, getConnectionConfigView, getLastConnectionResult, runConnectionTest, saveConnectionResult, tokenExpiry, type ConnectionTestResult } from "@/lib/instagram/meta";
-import { INSTAGRAM_PUBLISHING_AVAILABLE } from "@/lib/instagram/types";
 import { MOCK_USER_ID, mockToken, startMockGraph } from "./mock-meta-graph.mjs";
 
 const PORT = Number(process.env.MOCK_GRAPH_PORT ?? 3198);
@@ -88,7 +87,7 @@ async function main() {
       check("Valid token → CONNECTED + ok", r.status === "CONNECTED" && r.ok, r);
       check("Valid → username mocktestseries.in, numeric user ID retrieved", r.account?.username === "mocktestseries.in" && r.account?.userId === MOCK_USER_ID, r.account);
       check("Valid → account type BUSINESS, media count read", r.account?.accountType === "BUSINESS" && r.account?.mediaCount === 12, r.account);
-      check("Valid → publishing permission GRANTED (verified by a read), quota 0/50", r.publishPermission === "GRANTED" && r.publishingQuota?.usage === 0 && r.publishingQuota?.total === 50, r);
+      check("Valid → publishing permission GRANTED (verified by a read), quota 0/100", r.publishPermission === "GRANTED" && r.publishingQuota?.usage === 0 && r.publishingQuota?.total === 100, r);
       check("Valid → all checks pass", r.checks.every((c) => c.state === "pass") && r.checks.length === 6, r.checks);
       check("Valid → exactly 2 requests: GET /me then GET /<id>/content_publishing_limit", requests.length === 2 && requests.every((q: { method: string }) => q.method === "GET") && /\/me$/.test(requests[0].path) && requests[1].path.endsWith(`/${MOCK_USER_ID}/content_publishing_limit`), requests);
       check("Valid → token sent in Authorization header, never in a URL", requests.every((q: { hasAuth: boolean }) => q.hasAuth) && stats.tokenInUrl === 0);
@@ -189,9 +188,10 @@ async function main() {
     {
       const src = readFileSync("lib/instagram/meta.ts", "utf8");
       const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-      check("Publishing still disabled in code (INSTAGRAM_PUBLISHING_AVAILABLE === false)", INSTAGRAM_PUBLISHING_AVAILABLE === false);
-      check("meta.ts only issues GET (no POST/DELETE/media_publish/media containers)", /method: "GET"/.test(code) && !/"(POST|DELETE|PUT|PATCH)"/.test(code) && !/media_publish|\/media\b|scheduled/i.test(code));
-      check("meta.ts is server-only and allow-lists its two read endpoints", src.startsWith('import "server-only";') && src.includes("ALLOWED_PATH"));
+      const testFn = code.slice(code.indexOf("export async function runConnectionTest"), code.indexOf("export async function getLastConnectionResult"));
+      check("connection test only reads (no POST / publish calls in runConnectionTest)", testFn.length > 100 && !/graphRequest\(|POST|media_publish|createImageContainer/.test(testFn));
+      check("meta.ts: POST only to /<id>/media and /<id>/media_publish; no DELETE/PUT/PATCH", /ALLOWED_POST = \/\^.*\(media\|media_publish\)\$\//.test(code) && !/"(DELETE|PUT|PATCH)"/.test(code) && !/scheduled_publish_time/i.test(code));
+      check("meta.ts is server-only and allow-lists its endpoints", src.startsWith('import "server-only";') && src.includes("ALLOWED_GET") && src.includes("ALLOWED_POST"));
       check("meta.ts never logs", !/console\./.test(code));
 
       // Only meta.ts may read the token; client components may import types only.
