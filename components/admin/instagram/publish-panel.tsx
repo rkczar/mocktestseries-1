@@ -14,6 +14,7 @@ import {
 } from "@/app/admin/(dashboard)/instagram/actions";
 import type { PostDto } from "@/lib/instagram/posts";
 import type { PublishFormat, PublishStage, PublishView } from "@/lib/instagram/publish-view";
+import type { PublishPreflight } from "@/lib/instagram/publish";
 
 const fmt = (iso: string) => new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) + " IST";
 
@@ -33,25 +34,13 @@ function newKey(): string {
 }
 
 /**
- * Publish to Instagram — status + the "Publish to Instagram" button and its
- * confirmation dialog. The server re-checks everything (role, approval,
- * quality gate, switch, duplicates); this component only drives the flow.
+ * Publish to Instagram — the publishing status of a post (in progress,
+ * published, failed). The button and the single final confirmation are in
+ * PublishButton. The server re-checks everything (role, quality gate, switch,
+ * duplicates); these components only drive the flow.
  */
-export function PublishPanel({
-  post,
-  dirty,
-  onPost,
-  open,
-  setOpen,
-}: {
-  post: PostDto;
-  dirty: boolean;
-  onPost: (p: PostDto) => void;
-  open: boolean;
-  setOpen: (o: boolean) => void;
-}) {
+export function PublishPanel({ post, onPost }: { post: PostDto; onPost: (p: PostDto) => void }) {
   const [view, setView] = useState<PublishView>(post.publish);
-  const [enabled, setEnabled] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const polling = useRef(false);
@@ -62,9 +51,6 @@ export function PublishPanel({
     setSeen(post.publish);
     setView(post.publish);
   }
-  useEffect(() => {
-    getPublishingSwitchAction().then((r) => setEnabled(r.ok ? r.data.enabled : false));
-  }, []);
 
   // Poll while a job runs (also after reopening the editor or a page reload).
   useEffect(() => {
@@ -102,17 +88,7 @@ export function PublishPanel({
     onPost(r.data.post);
   }
 
-  const approved = post.status === "READY" || post.status === "FAILED";
-  const canPublish = post.isCurrent && approved && !dirty && enabled === true;
-  const reason = !post.isCurrent
-    ? "Older version."
-    : !approved
-      ? "Mark the post Ready (Review tab) first."
-      : dirty
-        ? "Save your changes first."
-        : enabled === false
-          ? "Direct publishing is turned off in Admin → Instagram → Settings."
-          : null;
+  if (view.status === "DRAFT" && !error) return null;
 
   return (
     <section className="flex flex-col gap-2" data-testid="publish-panel" data-publish-status={view.status} data-publish-stage={view.stage ?? ""}>
@@ -173,7 +149,7 @@ export function PublishPanel({
             <TriangleAlert className="h-4 w-4" aria-hidden /> Publishing failed — nothing was posted
           </p>
           <p data-testid="publish-error">{view.publishError ?? "Unknown error."}</p>
-          <p className="text-xs text-[var(--color-muted-foreground)]">The draft is unchanged. Fix the cause, then retry — a retry is safe because Instagram confirmed nothing went live.</p>
+          <p className="text-xs text-[var(--color-muted-foreground)]">The draft is unchanged. Fix the cause, then publish again — it is safe because Instagram confirmed nothing went live.</p>
         </div>
       ) : null}
 
@@ -183,28 +159,78 @@ export function PublishPanel({
         </p>
       ) : null}
 
-      {view.status === "READY" || view.status === "FAILED" ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="success" disabled={!canPublish} onClick={() => setOpen(true)} data-testid="publish-open" className="font-semibold">
-            <Send className="h-4 w-4" aria-hidden /> {view.status === "FAILED" ? "Retry: Publish to Instagram" : "Publish to Instagram"}
-          </Button>
-          {reason ? <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="publish-blocked-reason">{reason}</span> : null}
-        </div>
-      ) : null}
-
-      {open && canPublish ? <ConfirmPublishDialog post={post} onClose={() => setOpen(false)} onStarted={(v) => {
-            setView(v);
-            setOpen(false);
-            // Lock the editor at once (the post is PUBLISHING now).
-            publishStatusAction(post.id).then((r) => r.ok && onPost(r.data.post));
-          }} /> : null}
     </section>
   );
 }
 
+/**
+ * The one "Publish to Instagram" button (Draft or Failed posts) and its single
+ * final confirmation. There is no separate approval: the dialog shows what
+ * will be posted plus any warnings, and "Confirm & Publish" starts it.
+ */
+export function PublishButton({
+  post,
+  dirty,
+  onPost,
+  open,
+  setOpen,
+  size,
+}: {
+  post: PostDto;
+  dirty: boolean;
+  onPost: (p: PostDto) => void;
+  open: boolean;
+  setOpen: (o: boolean) => void;
+  size?: "sm";
+}) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    getPublishingSwitchAction().then((r) => setEnabled(r.ok ? r.data.enabled : false));
+  }, []);
+  const publishable = post.isCurrent && (post.status === "DRAFT" || post.status === "FAILED");
+  const blocking = post.issues.filter((i) => i.severity === "error").length;
+  const canPublish = publishable && !dirty && blocking === 0 && enabled === true;
+  // A request to open (e.g. "Publish to Instagram" on a Drafts row) for a post that can't be published
+  // is dropped, so the dialog never pops up later on its own; the reason stays visible next to the button.
+  useEffect(() => {
+    if (open && enabled !== null && !canPublish) setOpen(false);
+  }, [open, enabled, canPublish, setOpen]);
+  if (!publishable) return null;
+
+  const reason = dirty
+    ? "Save your changes first."
+    : blocking
+      ? `Fix ${blocking} blocking issue(s) first (Checks tab).`
+      : enabled === false
+        ? "Direct publishing is turned off in Admin → Instagram → Settings."
+        : null;
+
+  return (
+    <>
+      <span className="flex flex-wrap items-center gap-2">
+        {reason ? <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="publish-blocked-reason">{reason}</span> : null}
+        <Button variant="success" size={size} disabled={!canPublish} onClick={() => setOpen(true)} data-testid="publish-open" className="font-semibold">
+          <Send className="h-4 w-4" aria-hidden /> {post.status === "FAILED" ? "Retry: Publish to Instagram" : "Publish to Instagram"}
+        </Button>
+      </span>
+      {open && canPublish ? (
+        <ConfirmPublishDialog
+          post={post}
+          onClose={() => setOpen(false)}
+          onStarted={() => {
+            setOpen(false);
+            // Lock the editor at once (the post is PUBLISHING now); the status panel then polls.
+            publishStatusAction(post.id).then((r) => r.ok && onPost(r.data.post));
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onClose: () => void; onStarted: (v: PublishView) => void }) {
-  const [format, setFormat] = useState<PublishFormat>("CAROUSEL");
-  type Pre = { caption: string; slideCount: number; username: string; enabled: boolean; configured: boolean };
+  const [format, setFormat] = useState<PublishFormat>(post.design.modules.length >= 2 ? "CAROUSEL" : "IMAGE");
+  type Pre = PublishPreflight & { enabled: boolean; configured: boolean };
   const [checked, setChecked] = useState<{ format: PublishFormat; pre: Pre | null; error: string | null } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const pre = checked?.format === format ? checked.pre : null;
@@ -230,7 +256,9 @@ function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onC
     sent.current = true;
     setBusy(true);
     setSendError(null);
-    const r = await publishPostAction({ postId: post.id, expectedRevision: post.revision, requestKey: key.current, format, confirmed: true }).catch(() => null);
+    // The warnings this dialog showed are what the confirmation acknowledges (the server re-checks them).
+    const acknowledged = pre ? pre.warnings.map((w) => w.code) : [];
+    const r = await publishPostAction({ postId: post.id, expectedRevision: post.revision, requestKey: key.current, format, confirmed: true, acknowledged }).catch(() => null);
     if (!r) {
       // Network trouble: the same key is safe to send again; the server returns the running job if it got the first one.
       sent.current = false;
@@ -260,7 +288,7 @@ function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onC
           onInteractOutside={(e) => e.preventDefault()}
         >
           <div className="flex items-start justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
-            <DialogPrimitive.Title className="text-base font-semibold">Publish this carousel to @{pre?.username ?? "mocktestseries.in"}?</DialogPrimitive.Title>
+            <DialogPrimitive.Title className="text-base font-semibold">Publish to Instagram?</DialogPrimitive.Title>
             <button type="button" onClick={onClose} disabled={busy} aria-label="Close" className="p-1 text-[var(--color-muted-foreground)]">
               <X className="h-5 w-5" aria-hidden />
             </button>
@@ -269,6 +297,8 @@ function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onC
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
               <dt className="text-[var(--color-muted-foreground)]">Instagram account</dt>
               <dd className="font-semibold" data-testid="confirm-username">@{pre?.username ?? "…"}</dd>
+              <dt className="text-[var(--color-muted-foreground)]">Destination</dt>
+              <dd data-testid="confirm-destination">{`Instagram feed — public ${format === "IMAGE" ? "single-image post" : "carousel post"}, live immediately`}</dd>
               <dt className="text-[var(--color-muted-foreground)]">Question</dt>
               <dd className="font-mono text-xs">{`${post.questionCode} · v${post.version} · revision ${post.revision}`}</dd>
               <dt className="text-[var(--color-muted-foreground)]">Number of slides</dt>
@@ -287,7 +317,7 @@ function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onC
             <div className="mt-3 flex gap-2 overflow-x-auto pb-2" data-testid="confirm-preview">
               {Array.from({ length: slides }, (_, i) => (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img key={`${format}-${i}`} src={`/api/admin/instagram/slide?postId=${post.id}&i=${i}&r=${post.revision}`} alt={`Slide ${i + 1}`} className="h-44 w-auto shrink-0 rounded border border-[var(--color-border)]" loading="lazy" />
+                <img key={`${format}-${i}`} src={`/api/admin/instagram/slide?postId=${post.id}&i=${i}&r=${post.revision}`} alt={`Slide ${i + 1}`} className="aspect-[4/5] h-44 w-auto shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] object-cover" loading="lazy" />
               ))}
             </div>
             <h3 className="mt-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">Caption</h3>
@@ -295,6 +325,29 @@ function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onC
             <h3 className="mt-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">Hashtags</h3>
             <p className="mt-1 text-xs" data-testid="confirm-hashtags">{post.content.hashtags.join(" ") || "(none)"}</p>
             {pre ? <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">{`Caption with hashtags: ${pre.caption.length} / 2200 characters.`}</p> : null}
+            {pre && pre.warnings.length ? (
+              <section className="mt-3 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 p-3" data-testid="confirm-warnings">
+                <h3 className="text-xs font-semibold uppercase tracking-wide">{`Check before publishing (${pre.warnings.length})`}</h3>
+                <ul className="mt-1 list-disc pl-5 text-xs">
+                  {pre.warnings.map((w) => (
+                    <li key={w.code} data-code={w.code}>
+                      {w.message}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+            {pre ? (
+              <section className="mt-3 text-xs" data-testid="confirm-covers">
+                <p className="font-semibold">By confirming, you confirm that:</p>
+                <ul className="mt-1 list-disc pl-5 text-[var(--color-muted-foreground)]">
+                  {pre.checklist.map((c) => (
+                    <li key={c.key}>{c.label}</li>
+                  ))}
+                  {pre.warnings.length ? <li>You checked every warning listed above.</li> : null}
+                </ul>
+              </section>
+            ) : null}
             {pre && !pre.enabled ? <p className="mt-3 text-sm text-[var(--color-error)]">Direct publishing is turned off in Settings.</p> : null}
             {pre && !pre.configured ? <p className="mt-3 text-sm text-[var(--color-error)]">No Instagram token is installed on the server.</p> : null}
             {error ? (

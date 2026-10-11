@@ -12,7 +12,7 @@ export default async function InstagramCreatePostPage() {
   const [counts, drafts] = await Promise.all([studioCounts(), listDrafts()]);
   const stats = [
     { label: "Drafts", value: counts.DRAFT },
-    { label: "Ready", value: counts.READY },
+    { label: "Publishing", value: counts.PUBLISHING },
     { label: "Posted", value: counts.PUBLISHED },
     { label: "Failed", value: counts.FAILED },
   ];
@@ -58,7 +58,7 @@ export default async function InstagramCreatePostPage() {
         </CardHeader>
         <CardContent className="px-5 pb-5">
           <EditorHost>
-            <PostTable rows={drafts.slice(0, 8)} empty="No drafts yet. Start from PYQ Series or Most Missed MCQ." testId="recent-drafts" />
+            <PostTable rows={drafts.slice(0, 8)} empty="No drafts yet. Start from PYQ Series or Most Missed MCQ." testId="recent-drafts" showPublish />
           </EditorHost>
         </CardContent>
       </Card>

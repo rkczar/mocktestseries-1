@@ -34,7 +34,7 @@ export function PublishingSwitchCard({ initial, tokenConfigured }: { initial: Pu
           </Badge>
         </CardTitle>
         <CardDescription>
-          When ON, a Master Admin can publish an approved (Ready) post straight to Instagram from the editor, after confirming it. Nothing is ever published automatically or on a schedule. Turn it OFF to stop all publishing at once.
+          When ON, a Master Admin can publish a draft straight to Instagram after one final confirmation. Nothing is ever published automatically or on a schedule. Turn it OFF to stop all publishing at once.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 px-5 pb-5">

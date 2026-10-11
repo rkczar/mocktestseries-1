@@ -5,7 +5,7 @@ import { answerKeyIssue } from "@/lib/question-insights-format";
 import { plainText } from "@/lib/instagram/layout";
 import { statusesFor, type QuestionStatusInfo } from "@/lib/instagram/posts";
 import { stemLooksTruncated } from "@/lib/instagram/quality";
-import type { SourceSnapshot } from "@/lib/instagram/types";
+import { studioStatus, type SourceSnapshot, type StudioPostStatus } from "@/lib/instagram/types";
 
 /** Read-only list queries for Admin → Instagram. No writes anywhere in this file. */
 
@@ -173,7 +173,8 @@ export interface PostListRow {
   questionCode: string;
   series: "PYQ" | "MOST_MISSED";
   version: number;
-  status: InstagramPostStatus;
+  /** Legacy READY rows are listed as DRAFT. */
+  status: StudioPostStatus;
   preview: string;
   examName: string;
   paperLabel: string | null;
@@ -194,7 +195,7 @@ function toListRow(p: { id: string; questionId: string; questionCode: string; se
     questionCode: p.questionCode,
     series: p.series,
     version: p.version,
-    status: p.status,
+    status: studioStatus(p.status),
     preview: preview(s.text ?? ""),
     examName: s.examName,
     paperLabel: s.paperYear ? `${s.paperYear}${s.paperSharesYear && s.paperTitle ? ` · ${s.paperTitle}` : ""}` : null,
@@ -249,9 +250,10 @@ export async function listPublishActivity(): Promise<{ published: PostListRow[];
   return { published: published.map(toListRow), active: active.map(toListRow) };
 }
 
-export async function studioCounts(): Promise<Record<"DRAFT" | "READY" | "PUBLISHED" | "FAILED", number>> {
+export async function studioCounts(): Promise<Record<"DRAFT" | "PUBLISHING" | "PUBLISHED" | "FAILED", number>> {
   const rows = await prisma.instagramPost.groupBy({ by: ["status"], where: { supersededAt: null }, _count: true });
   const published = await prisma.instagramPost.count({ where: { status: "PUBLISHED" } });
   const get = (s: InstagramPostStatus) => rows.find((r) => r.status === s)?._count ?? 0;
-  return { DRAFT: get("DRAFT"), READY: get("READY"), PUBLISHED: published, FAILED: get("FAILED") };
+  // Legacy READY rows count as drafts.
+  return { DRAFT: get("DRAFT") + get("READY"), PUBLISHING: get("PUBLISHING"), PUBLISHED: published, FAILED: get("FAILED") };
 }

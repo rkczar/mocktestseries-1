@@ -14,7 +14,8 @@ const STATUS_LABEL: Record<string, string> = { DRAFTING: "Drafting", QUEUE_RUNNI
  * Admin → Instagram → Bulk Studio: Select exam → smart question selection
  * (transparent Content Opportunity Score) → choose 5, 10 or a custom number →
  * one separate draft per question, each with its own design → generate,
- * review, approve → attended publishing queue.
+ * preview / edit → select completed drafts → one "Confirm & Publish Selected"
+ * → attended publishing queue.
  */
 export default async function BulkStudioPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;

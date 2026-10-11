@@ -311,16 +311,25 @@ export interface SeriesStats {
   capturedAt: string;
 }
 
-export const POST_STATUSES = ["NOT_CREATED", "DRAFT", "READY", "PUBLISHING", "PUBLISHED", "FAILED"] as const;
+export const POST_STATUSES = ["NOT_CREATED", "DRAFT", "PUBLISHING", "PUBLISHED", "FAILED"] as const;
 export type PostStatusLabel = (typeof POST_STATUSES)[number];
 export const POST_STATUS_LABELS: Record<PostStatusLabel, string> = {
   NOT_CREATED: "Not Created",
   DRAFT: "Draft",
-  READY: "Ready",
   PUBLISHING: "Publishing",
   PUBLISHED: "Instagram ✓ Posted",
   FAILED: "Failed",
 };
+
+/**
+ * The status the Studio shows and works with. The legacy READY value ("Mark
+ * Ready" approval, removed) is kept in the database enum for old rows and is
+ * treated exactly like DRAFT: publishing needs only the final confirmation.
+ */
+export type StudioPostStatus = "DRAFT" | "PUBLISHING" | "PUBLISHED" | "FAILED";
+export function studioStatus(s: "DRAFT" | "READY" | "PUBLISHING" | "PUBLISHED" | "FAILED"): StudioPostStatus {
+  return s === "READY" ? "DRAFT" : s;
+}
 
 export const SLIDE_WIDTH = 1080;
 export const SLIDE_HEIGHT = 1350;

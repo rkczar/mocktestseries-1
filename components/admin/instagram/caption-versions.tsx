@@ -45,7 +45,7 @@ export function CaptionVersions({
           data-testid="ai-captions"
           onClick={() =>
             act(
-              (confirm) => aiCaptionsAction({ postId: post.id, expectedRevision: post.revision, ...draftPayload(), confirmReplaceApproved: confirm, provider: provider === "default" ? null : provider, instruction }),
+              () => aiCaptionsAction({ postId: post.id, expectedRevision: post.revision, ...draftPayload(), provider: provider === "default" ? null : provider, instruction }),
               (r) => onPost(r.post, r.summary)
             )
           }

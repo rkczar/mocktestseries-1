@@ -13,13 +13,11 @@ import { parseMostMissedFilters, statsForQuestion } from "@/lib/instagram/most-m
 import {
   StudioError,
   applyChange,
-  backToDraft,
   createDraft,
   createNewVersion,
   deleteDraft,
   getPostDto,
   getQuestionPostState,
-  markReady,
   refreshSnapshot,
   restoreRevision,
   setQuestionNumber,
@@ -27,7 +25,6 @@ import {
   type PostDto,
   type QuestionPostState,
 } from "@/lib/instagram/posts";
-import type { QualityIssue } from "@/lib/instagram/quality";
 import { getAiReference } from "@/lib/instagram/snapshot";
 import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
 import { CONTENT_FIELDS, SLIDE_COUNTS, SLIDE_MODULES, TEMPLATE_KEYS, normalizeHashtags, type ContentField, type SlideModule } from "@/lib/instagram/types";
@@ -58,7 +55,8 @@ import { CONNECTION_SETTING_KEY, getConnectionConfigView, getLastConnectionResul
  * (lib/instagram/posts.ts), plus the `instagram.connection` Setting for the
  * read-only Meta connection test, and `instagram.publishing` (the publishing
  * switch). Publishing (lib/instagram/publish.ts) starts ONLY from
- * publishPostAction, which a Master Admin triggers with "Confirm & Publish".
+ * publishPostAction, which a Master Admin triggers with "Confirm & Publish" —
+ * the single manual approval (there is no separate Mark Ready step).
  */
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string; kind?: StudioError["kind"] };
@@ -99,6 +97,11 @@ async function requirePublisher(): Promise<string | null> {
     if (error instanceof UnauthorizedError) return null;
     throw error;
   }
+}
+
+/** Warning codes the confirmation dialog showed (acknowledged by Confirm & Publish). */
+function checkCodes(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length <= 120).slice(0, 60) : [];
 }
 
 function checkFormat(f: unknown): PublishFormat {
@@ -169,7 +172,7 @@ export async function createNewVersionAction(postId: string): Promise<Result<Pos
 
 // ---- Edit -------------------------------------------------------------------------
 
-export async function saveDraftAction(input: { postId: string; expectedRevision: number; content: unknown; design: unknown; confirmReplaceApproved?: boolean }): Promise<Result<PostDto>> {
+export async function saveDraftAction(input: { postId: string; expectedRevision: number; content: unknown; design: unknown }): Promise<Result<PostDto>> {
   return run(await requireStudio(), async (actorId) => {
     const postId = checkId(input.postId);
     const current = await getPostDto(postId);
@@ -184,7 +187,6 @@ export async function saveDraftAction(input: { postId: string; expectedRevision:
       design: design.value,
       note: "Edited and saved",
       actorId,
-      confirmReplaceApproved: input.confirmReplaceApproved === true,
     });
     touch();
     return r;
@@ -214,7 +216,6 @@ export async function aiEditAction(input: {
   instruction?: string;
   selectedModule?: string | null;
   fields?: string[];
-  confirmReplaceApproved?: boolean;
   /** Optional per-request AI provider ("anthropic" | "gemini" | "openai"); default = the feature's routing. */
   provider?: string | null;
 }): Promise<Result<AiEditResult>> {
@@ -228,11 +229,10 @@ export async function aiEditAction(input: {
     const instruction = typeof input.instruction === "string" ? input.instruction.trim().slice(0, 500) : "";
     const selected = (SLIDE_MODULES as readonly string[]).includes(input.selectedModule ?? "") ? (input.selectedModule as SlideModule) : null;
     const expectedRevision = checkRevision(input.expectedRevision);
-    const confirm = input.confirmReplaceApproved === true;
 
     const layout = instruction ? parseLayoutInstruction(instruction, design.value) : null;
     if (layout) {
-      const post = await applyChange({ postId, expectedRevision, content: content.value, design: { ...design.value, ...layout.patch }, note: `Layout: ${layout.summary}`, actorId, confirmReplaceApproved: confirm });
+      const post = await applyChange({ postId, expectedRevision, content: content.value, design: { ...design.value, ...layout.patch }, note: `Layout: ${layout.summary}`, actorId });
       touch();
       return { post, summary: layout.summary, kind: "layout" as const, rejected: [] };
     }
@@ -256,14 +256,14 @@ export async function aiEditAction(input: {
       return { post: current, summary: outcome.summary + (outcome.rejected.length ? ` (${outcome.rejected.map((r) => `${r.field}: ${r.reason}`).join("; ")})` : ""), kind: "content" as const, rejected: outcome.rejected };
     }
     const note = `AI: ${instruction ? `"${instruction.slice(0, 80)}" → ` : ""}${outcome.changed.join(", ")}`;
-    const post = await applyChange({ postId, expectedRevision, content: outcome.content, design: design.value, note, actorId, confirmReplaceApproved: confirm });
+    const post = await applyChange({ postId, expectedRevision, content: outcome.content, design: design.value, note, actorId });
     touch();
     return { post, summary: outcome.summary, kind: "content" as const, rejected: outcome.rejected };
   });
 }
 
 /** Fill explanation / trick / revision from the question's existing student AI explanation (no new AI call). */
-export async function prefillFromExplanationAction(input: { postId: string; expectedRevision: number; content: unknown; design: unknown; confirmReplaceApproved?: boolean }): Promise<Result<{ post: PostDto; summary: string }>> {
+export async function prefillFromExplanationAction(input: { postId: string; expectedRevision: number; content: unknown; design: unknown }): Promise<Result<{ post: PostDto; summary: string }>> {
   return run(await requireStudio(), async (actorId) => {
     const postId = checkId(input.postId);
     const current = await getPostDto(postId);
@@ -282,32 +282,31 @@ export async function prefillFromExplanationAction(input: { postId: string; expe
       design: design.value,
       note: `Copied from AI explanation: ${filled.used.join(", ")}`,
       actorId,
-      confirmReplaceApproved: input.confirmReplaceApproved === true,
     });
     touch();
     return { post, summary: `Copied ${filled.used.join(", ")}${filled.skipped.length ? `; skipped ${filled.skipped.join(", ")}` : ""}.` };
   });
 }
 
-export async function undoAction(postId: string, expectedRevision: number, confirmReplaceApproved = false): Promise<Result<PostDto>> {
+export async function undoAction(postId: string, expectedRevision: number): Promise<Result<PostDto>> {
   return run(await requireStudio(), async (actorId) => {
-    const r = await undoLast(checkId(postId), checkRevision(expectedRevision), actorId, confirmReplaceApproved === true);
+    const r = await undoLast(checkId(postId), checkRevision(expectedRevision), actorId);
     touch();
     return r;
   });
 }
 
-export async function restoreRevisionAction(postId: string, expectedRevision: number, targetRevision: number, confirmReplaceApproved = false): Promise<Result<PostDto>> {
+export async function restoreRevisionAction(postId: string, expectedRevision: number, targetRevision: number): Promise<Result<PostDto>> {
   return run(await requireStudio(), async (actorId) => {
-    const r = await restoreRevision(checkId(postId), checkRevision(expectedRevision), checkRevision(targetRevision), actorId, confirmReplaceApproved === true);
+    const r = await restoreRevision(checkId(postId), checkRevision(expectedRevision), checkRevision(targetRevision), actorId);
     touch();
     return r;
   });
 }
 
-export async function setQuestionNumberAction(postId: string, expectedRevision: number, questionNumber: number | null, verified: boolean, confirmReplaceApproved = false): Promise<Result<PostDto>> {
+export async function setQuestionNumberAction(postId: string, expectedRevision: number, questionNumber: number | null, verified: boolean): Promise<Result<PostDto>> {
   return run(await requireStudio(), async (actorId) => {
-    const r = await setQuestionNumber(checkId(postId), checkRevision(expectedRevision), questionNumber, verified === true, actorId, confirmReplaceApproved === true);
+    const r = await setQuestionNumber(checkId(postId), checkRevision(expectedRevision), questionNumber, verified === true, actorId);
     touch();
     return r;
   });
@@ -316,28 +315,6 @@ export async function setQuestionNumberAction(postId: string, expectedRevision: 
 export async function refreshSnapshotAction(postId: string, expectedRevision: number): Promise<Result<PostDto>> {
   return run(await requireStudio(), async (actorId) => {
     const r = await refreshSnapshot(checkId(postId), checkRevision(expectedRevision), actorId);
-    touch();
-    return r;
-  });
-}
-
-// ---- Review -------------------------------------------------------------------------
-
-export async function markReadyAction(input: { postId: string; expectedRevision: number; checklist: Record<string, boolean>; acknowledged: string[] }): Promise<
-  Result<{ post: PostDto; blocked: QualityIssue[]; missingAcks: string[]; missingChecklist: string[] }>
-> {
-  return run(await requireStudio(), async (actorId) => {
-    const checklist = Object.fromEntries(Object.entries(input.checklist ?? {}).filter(([k, v]) => typeof k === "string" && typeof v === "boolean").slice(0, 20));
-    const acknowledged = Array.isArray(input.acknowledged) ? input.acknowledged.filter((x): x is string => typeof x === "string").slice(0, 50) : [];
-    const r = await markReady({ postId: checkId(input.postId), expectedRevision: checkRevision(input.expectedRevision), checklist, acknowledged, actorId });
-    touch();
-    return r;
-  });
-}
-
-export async function backToDraftAction(postId: string): Promise<Result<PostDto>> {
-  return run(await requireStudio(), async (actorId) => {
-    const r = await backToDraft(checkId(postId), actorId);
     touch();
     return r;
   });
@@ -431,13 +408,14 @@ export async function publishPreflightAction(postId: string, expectedRevision: n
  * runs the job after the response so a closed tab or dropped connection
  * can't interrupt it. The editor polls publishStatusAction.
  */
-export async function publishPostAction(input: { postId: string; expectedRevision: number; requestKey: string; format: string; confirmed: boolean }): Promise<Result<{ view: PublishView; existing: boolean }>> {
+export async function publishPostAction(input: { postId: string; expectedRevision: number; requestKey: string; format: string; confirmed: boolean; acknowledged: string[] }): Promise<Result<{ view: PublishView; existing: boolean }>> {
   return run(await requirePublisher(), async (actorId) => {
     if (input.confirmed !== true) throw new StudioError("Publishing needs an explicit confirmation.");
     const requestKey = typeof input.requestKey === "string" && /^[A-Za-z0-9-]{16,64}$/.test(input.requestKey) ? input.requestKey : null;
     if (!requestKey) throw new StudioError("Invalid request.");
     const postId = checkId(input.postId);
-    const { job, existing } = await startPublish({ postId, expectedRevision: checkRevision(input.expectedRevision), requestKey, format: checkFormat(input.format), actorId });
+    const acknowledged = checkCodes(input.acknowledged);
+    const { job, existing } = await startPublish({ postId, expectedRevision: checkRevision(input.expectedRevision), requestKey, format: checkFormat(input.format), actorId, confirmation: { via: "single", acknowledged } });
     if (!existing) {
       after(async () => {
         await runPublishJob(postId, job.leaseId);

@@ -7,12 +7,13 @@ import { EXCLUDED_TERMS, isExcludedExam } from "@/lib/instagram/exam-scope";
 import { MODULE_LABELS, type PostContent, type PostDesign, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
 
 /**
- * The Ready gate. Pure: the server re-runs it inside markReady (never trusts
- * the client's view) and the modal shows the same list live.
+ * The publish gate. Pure: the server re-runs it when publishing starts (never
+ * trusts the client's view) and the editor / confirmation show the same list.
  *
- *  - error   → blocks Ready. Fix the post, or fix the question in the
+ *  - error   → blocks publishing. Fix the post, or fix the question in the
  *              Question Bank and refresh the snapshot.
- *  - warning → the admin must tick "I checked this" for each one.
+ *  - warning → listed in the final "Publish to Instagram?" confirmation;
+ *              Confirm & Publish acknowledges them for that exact revision.
  *
  * Nothing here corrects text: a damaged PYQ stem is reported, never repaired.
  */
@@ -144,12 +145,13 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     if (diagramLayout(c.diagram).overflow || diagramTitleOverflows(c.diagram.title)) {
       err("DIAGRAM_OVERFLOW", `Slide ${diagramIdx + 1} (diagram) has too much text for its boxes. Shorten the labels or use fewer boxes.`, diagramIdx);
     }
-    if (!c.diagram.reviewed) err("DIAGRAM_UNREVIEWED", `Slide ${diagramIdx + 1}: the diagram needs medical review — check every label, then tick "Diagram reviewed".`, diagramIdx);
+    if (!c.diagram.reviewed) warn("DIAGRAM_UNREVIEWED", `Slide ${diagramIdx + 1}: check every label of the diagram for medical accuracy.`, diagramIdx);
   }
   const trapIdx = d.modules.indexOf("TRAP");
   if (trapIdx >= 0 && c.trap) {
     for (const m of checkTrap(c.trap)) err(`TRAP_INVALID:${m.slice(0, 40)}`, `Slide ${trapIdx + 1} (examiner trap): ${m}`, trapIdx);
-    if (c.trap.status !== "approved") err("TRAP_UNAPPROVED", `Slide ${trapIdx + 1}: the Examiner Trap question must be approved by a reviewer before this post can be Ready.`, trapIdx);
+    if (c.trap.status === "rejected") err("TRAP_REJECTED", `Slide ${trapIdx + 1}: this Examiner Trap question was rejected. Regenerate it or remove the trap slide.`, trapIdx);
+    else if (c.trap.status !== "approved") warn("TRAP_UNAPPROVED", `Slide ${trapIdx + 1}: the Examiner Trap is a new question — check its stem, options and answer.`, trapIdx);
     for (const ch of c.trap.checks) if (!ch.ok) warn(`TRAP_CHECK:${ch.code}`, `Examiner trap: ${ch.message}`, trapIdx);
   }
   if (input.follow.showInstagram && !input.follow.instagramHandle) err("FOLLOW_NO_INSTAGRAM", "No Instagram handle is configured (Instagram → Settings).");

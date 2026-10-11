@@ -4,16 +4,32 @@ import type { InstagramBatch, InstagramBatchItem, InstagramQueueState } from "@p
 import { prisma } from "@/lib/prisma";
 import { getStudioSettings } from "@/lib/instagram/config";
 import { StudioError, applyChange, createDraft, getPostDto, type PostDto } from "@/lib/instagram/posts";
-import { getPublishStatus, getPublishingSwitch, isPublishingConfigured, reconcilePublish, startPublish, type PublishJob } from "@/lib/instagram/publish";
+import { Prisma } from "@prisma/client";
+import {
+  assertAcknowledged,
+  checkPublishable,
+  getPublishStatus,
+  getPublishingSwitch,
+  isPublishingConfigured,
+  readConfirmation,
+  reconcilePublish,
+  startPublish,
+  type ConfirmationRecord,
+  type PublishJob,
+  type PublishPreflight,
+} from "@/lib/instagram/publish";
 import { defaultDesign, modeOfTemplate, TEMPLATE_KEYS, type TemplateKey } from "@/lib/instagram/types";
 
 /**
  * Bulk Studio: one separate post per selected question, each with its own
- * design, diagram, trap, caption, review and approval (they are ordinary
- * InstagramPosts — the same editor, quality gate and publisher).
+ * design, diagram, trap and caption (they are ordinary InstagramPosts — the
+ * same editor, quality gate and publisher).
  *
  * Publishing queue (persistent, attended):
- *  - A Master Admin explicitly confirms the exact list of READY posts.
+ *  - A Master Admin selects completed drafts, reviews them together on one
+ *    final screen and clicks "Confirm & Publish Selected" once. That single
+ *    confirmation is recorded on each selected post for its exact revision and
+ *    authorizes only those posts; editing a post afterwards clears it.
  *  - The queue advances one post at a time ONLY while that admin keeps the
  *    queue page open and the queue is RUNNING (the page calls advanceQueue);
  *    closing the page pauses it in effect. There is no background scheduler
@@ -112,10 +128,11 @@ export async function getBatchView(batchId: string): Promise<BatchView> {
 
 /**
  * "Apply Handwritten / Professional / Default to All" (or to the given posts).
- * Only the design changes; content is untouched. Approved (Ready) posts are
- * skipped unless `includeReady` — changing them sends them back to Draft.
+ * Only the design changes; content is untouched. Posts waiting in (or going
+ * through) the publishing queue are skipped — a change would void their
+ * confirmation.
  */
-export async function applyDesignToBatch(params: { batchId: string; target: "handwritten" | "professional" | "default" | TemplateKey; postIds?: string[]; includeReady: boolean; actorId: string }) {
+export async function applyDesignToBatch(params: { batchId: string; target: "handwritten" | "professional" | "default" | TemplateKey; postIds?: string[]; actorId: string }) {
   const view = await getBatchView(params.batchId);
   const settings = await getStudioSettings();
   const pick = (current: TemplateKey): TemplateKey => {
@@ -131,17 +148,17 @@ export async function applyDesignToBatch(params: { batchId: string; target: "han
     if (params.postIds && !params.postIds.includes(it.postId)) continue;
     const p = it.post;
     if (!p || !p.isCurrent) continue;
-    if (!["DRAFT", "READY", "FAILED"].includes(p.status)) {
+    if (p.status !== "DRAFT" && p.status !== "FAILED") {
       skipped.push(`${p.questionCode}: ${p.status.toLowerCase()}`);
       continue;
     }
-    if (p.status !== "DRAFT" && !params.includeReady) {
-      skipped.push(`${p.questionCode}: approved — not changed`);
+    if (it.queueState === "QUEUED" || it.queueState === "PUBLISHING" || it.queueState === "UNCERTAIN") {
+      skipped.push(`${p.questionCode}: in the publishing queue`);
       continue;
     }
     const template = pick(p.design.template);
     if (template === p.design.template) continue;
-    await applyChange({ postId: p.id, expectedRevision: p.revision, design: { ...p.design, template }, note: `Bulk Studio: design → ${template}`, actorId: params.actorId, confirmReplaceApproved: params.includeReady });
+    await applyChange({ postId: p.id, expectedRevision: p.revision, design: { ...p.design, template }, note: `Bulk Studio: design → ${template}`, actorId: params.actorId });
     changed++;
   }
   return { changed, skipped };
@@ -153,22 +170,88 @@ async function setItem(id: string, data: Partial<Pick<InstagramBatchItem, "queue
   await prisma.instagramBatchItem.update({ where: { id }, data });
 }
 
-/** Explicit Master Admin confirmation of the exact posts to publish, in order. */
-export async function confirmQueue(params: { batchId: string; postIds: string[]; actorId: string }) {
+export interface BulkPreflightItem {
+  postId: string;
+  questionCode: string;
+  revision: number;
+  pre: PublishPreflight | null;
+  error: string | null;
+}
+
+/** Read-only: what the final review screen shows for each selected post (re-checks every publish condition). */
+export async function bulkPreflight(params: { batchId: string; postIds: string[] }): Promise<BulkPreflightItem[]> {
+  const view = await getBatchView(params.batchId);
+  const chosen = view.items.filter((it) => params.postIds.includes(it.postId));
+  const out: BulkPreflightItem[] = [];
+  for (const it of chosen) {
+    const row = await prisma.instagramPost.findUnique({ where: { id: it.postId } });
+    if (!row) {
+      out.push({ postId: it.postId, questionCode: it.post?.questionCode ?? it.postId, revision: 0, pre: null, error: "The post no longer exists." });
+      continue;
+    }
+    try {
+      out.push({ postId: row.id, questionCode: row.questionCode, revision: row.revision, pre: await checkPublishable(row, row.revision, "CAROUSEL"), error: null });
+    } catch (e) {
+      out.push({ postId: row.id, questionCode: row.questionCode, revision: row.revision, pre: null, error: e instanceof StudioError ? e.message : "Can't be published." });
+    }
+  }
+  return out;
+}
+
+/**
+ * "Confirm & Publish Selected": the single Master Admin confirmation for the
+ * exact posts (and revisions) shown on the final review screen. Every post is
+ * re-checked; if any can't be published, nothing is queued. The confirmation
+ * is stored on each post (review / reviewedAt / reviewedById) for its exact
+ * revision, and the queue then publishes them one at a time.
+ */
+export async function confirmQueue(params: { batchId: string; items: { postId: string; revision: number; acknowledged: string[] }[]; actorId: string }) {
   const sw = await getPublishingSwitch();
   if (!sw.enabled) throw new StudioError("Direct publishing is turned off (Instagram → Settings). Nothing was queued.", "blocked");
   if (!isPublishingConfigured()) throw new StudioError("Instagram is not connected on the server. Nothing was queued.", "blocked");
   const view = await getBatchView(params.batchId);
-  if (view.batch.status === "QUEUE_RUNNING") throw new StudioError("The queue is already running.");
-  const chosen = view.items.filter((it) => params.postIds.includes(it.postId));
-  if (!chosen.length) throw new StudioError("Choose at least one approved post.");
-  const notReady = chosen.filter((it) => it.post?.status !== "READY");
-  if (notReady.length) throw new StudioError(`Only approved (Ready) posts can be queued: ${notReady.map((i) => i.post?.questionCode ?? i.postId).join(", ")}.`);
+  if (view.batch.status === "QUEUE_RUNNING" || view.batch.status === "QUEUE_PAUSED") throw new StudioError("The queue is already active. Stop it before confirming new posts.");
+  const wanted = new Map(params.items.map((i) => [i.postId, i]));
+  const chosen = view.items.filter((it) => wanted.has(it.postId));
+  if (!chosen.length) throw new StudioError("Select at least one completed draft.");
+  if (chosen.length !== wanted.size) throw new StudioError("Some selected posts are not in this batch. Reload the page.");
+
+  const records: { itemId: string; postId: string; revision: number; record: ConfirmationRecord }[] = [];
+  const problems: string[] = [];
+  for (const it of chosen) {
+    const sel = wanted.get(it.postId)!;
+    const row = await prisma.instagramPost.findUnique({ where: { id: it.postId } });
+    if (!row) {
+      problems.push(`${it.post?.questionCode ?? it.postId}: the post no longer exists`);
+      continue;
+    }
+    try {
+      const pre = await checkPublishable(row, sel.revision, "CAROUSEL");
+      assertAcknowledged(pre, sel.acknowledged);
+      records.push({
+        itemId: it.id,
+        postId: row.id,
+        revision: row.revision,
+        record: { revision: row.revision, acknowledged: pre.warnings.map((w) => w.code), checklist: pre.checklist.map((c) => c.key), via: "bulk", batchId: params.batchId, at: new Date().toISOString() },
+      });
+    } catch (e) {
+      problems.push(`${row.questionCode}: ${e instanceof StudioError ? e.message : "can't be published"}`);
+    }
+  }
+  if (problems.length) throw new StudioError(`Nothing was queued. ${problems.join(" · ")}`, "blocked");
+
   await prisma.$transaction(async (tx) => {
-    for (const it of chosen) await tx.instagramBatchItem.update({ where: { id: it.id }, data: { queueState: "QUEUED", lastError: null, requestKey: null } });
+    for (const r of records) {
+      const res = await tx.instagramPost.updateMany({
+        where: { id: r.postId, revision: r.revision, status: { in: ["DRAFT", "READY", "FAILED"] }, supersededAt: null, igMediaId: null },
+        data: { reviewedAt: new Date(), reviewedById: params.actorId, review: r.record as unknown as Prisma.InputJsonValue },
+      });
+      if (res.count !== 1) throw new StudioError("A selected post changed while confirming. Nothing was queued — review again.", "conflict");
+      await tx.instagramBatchItem.update({ where: { id: r.itemId }, data: { queueState: "QUEUED", lastError: null, requestKey: null } });
+    }
     await tx.instagramBatch.update({ where: { id: params.batchId }, data: { status: "QUEUE_RUNNING", queueConfirmedById: params.actorId, queueConfirmedAt: new Date() } });
   });
-  await audit(params.actorId, "INSTAGRAM_QUEUE_CONFIRMED", params.batchId, { posts: chosen.map((c) => c.postId) });
+  await audit(params.actorId, "INSTAGRAM_QUEUE_CONFIRMED", params.batchId, { posts: records.map((r) => ({ postId: r.postId, revision: r.revision, acknowledged: r.record.acknowledged })) });
   return getBatchView(params.batchId);
 }
 
@@ -244,7 +327,7 @@ export async function advanceQueue(params: { batchId: string; actorId: string })
     return { view: await getBatchView(b.id), started: null };
   }
   try {
-    const { job, existing } = await startPublish({ postId: next.postId, expectedRevision: post.revision, requestKey, format: "CAROUSEL", actorId: params.actorId });
+    const { job, existing } = await startPublish({ postId: next.postId, expectedRevision: post.revision, requestKey, format: "CAROUSEL", actorId: params.actorId, confirmation: { via: "bulk", batchId: b.id } });
     await setItem(next.id, { queueState: "PUBLISHING", lastError: null });
     return { view: await getBatchView(b.id), started: existing ? null : { postId: next.postId, job } };
   } catch (e) {
@@ -260,8 +343,12 @@ export async function retryItem(params: { batchId: string; itemId: string; actor
   const it = await prisma.instagramBatchItem.findFirst({ where: { id: params.itemId, batchId: params.batchId } });
   if (!it) throw new StudioError("Item not found.");
   if (it.queueState !== "FAILED") throw new StudioError("Only a failed item can be retried.");
-  const post = await prisma.instagramPost.findUnique({ where: { id: it.postId }, select: { status: true } });
-  if (post?.status !== "READY" && post?.status !== "FAILED") throw new StudioError("The post must be approved (Ready) or confirmed-failed to retry.");
+  const post = await prisma.instagramPost.findUnique({ where: { id: it.postId }, select: { status: true, revision: true, reviewedAt: true, review: true } });
+  if (!post || !["DRAFT", "READY", "FAILED"].includes(post.status)) throw new StudioError("Only an unpublished post (nothing went live) can be retried.");
+  const onFile = readConfirmation(post.review);
+  if (!post.reviewedAt || onFile?.via !== "bulk" || onFile.batchId !== params.batchId || onFile.revision !== post.revision) {
+    throw new StudioError("This post changed after it was confirmed. Select it again and use Confirm & Publish Selected.");
+  }
   await setItem(it.id, { queueState: "QUEUED", lastError: null, requestKey: null });
   await audit(params.actorId, "INSTAGRAM_QUEUE_RETRY", params.batchId, { postId: it.postId });
   return getBatchView(params.batchId);

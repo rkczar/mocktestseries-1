@@ -235,21 +235,17 @@ try {
   await page.getByRole("button", { name: "Use existing AI explanation" }).click();
   check("prefill from existing AI explanation", /Copied/.test(await editorMessage(page)));
 
-  // Review: question number, checklist, warnings → Ready
-  await page.getByTestId("tab-review").click();
+  // Checks: question number + warnings; no approval step anywhere
+  await page.getByTestId("tab-checks").click();
   const issueText = await page.getByTestId("issue-list").innerText();
-  check("review lists the missing printed question number + AI content warning", /No printed question number/.test(issueText) && /written by AI/.test(issueText), issueText);
-  check("Mark Ready disabled before review", await page.getByTestId("mark-ready").isDisabled());
+  check("checks list the missing printed question number + AI content warning", /No printed question number/.test(issueText) && /written by AI/.test(issueText), issueText);
+  check("no Mark Ready / approval controls", (await page.getByTestId("mark-ready").count()) === 0 && (await page.locator('[data-testid="issue-list"] input[type=checkbox]').count()) === 0 && (await page.locator('[data-testid^="check-"]').count()) === 0);
   await page.getByTestId("q-number").fill("12");
   await page.getByTestId("q-verified").check();
   await page.getByTestId("q-save").click();
   check("question number saved", /Question number saved/.test(await editorMessage(page)));
-  for (const cb of await page.locator('[data-testid="issue-list"] input[type=checkbox]').all()) await cb.check();
-  for (const key of ["textMatchesPaper", "answerVerified", "attributionVerified", "medicalReviewed"]) await page.getByTestId(`check-${key}`).check();
-  check("no Publish button before approval", (await page.getByTestId("publish-open").count()) === 0 && (await page.getByTestId("publish-from-review").count()) === 0);
-  await page.getByTestId("mark-ready").click();
-  check("Marked Ready", /Marked Ready/.test(await editorMessage(page)));
-  check("status READY in DB", sql(`SELECT status FROM "InstagramPost" WHERE "questionCode" = 'IGFIX-RUHS21-W01'`) === "READY");
+  check("Publish to Instagram button shown on the Draft (disabled only because publishing is OFF)", (await page.getByTestId("publish-open").count()) === 1 && /turned off/.test(await page.getByTestId("publish-blocked-reason").innerText()));
+  check("status stays DRAFT in DB", sql(`SELECT status FROM "InstagramPost" WHERE "questionCode" = 'IGFIX-RUHS21-W01'`) === "DRAFT");
   await page.screenshot({ path: `${SHOTS}/08-editor-ready.png` });
 
   // Final JPEG download of the saved post
@@ -262,15 +258,12 @@ try {
   }, [BASE, postId]);
   check("download: JPEG attachment 1080 × 1350", dl[0] === 200 && dl[1] === "image/jpeg" && /attachment/.test(dl[2]) && dl[3] === 1080 && dl[4] === 1350, dl);
 
-  // Editing a Ready post asks first and sends it back to Draft
+  // Editing saves straight away (no "send back to Draft" confirmation any more)
   await page.getByTestId("tab-content").click();
   await page.getByTestId("field-trick").fill("ETHO = Empty THOughts.");
   await page.getByTestId("save-draft").click();
-  await page.getByTestId("confirm-back-to-draft").waitFor();
-  check("editing a Ready post asks for confirmation", sql(`SELECT status FROM "InstagramPost" WHERE "questionCode" = 'IGFIX-RUHS21-W01'`) === "READY");
-  await page.getByTestId("confirm-back-to-draft").click();
   await editor(page).getByText("Saved (revision").waitFor();
-  check("confirmed edit → back to Draft", sql(`SELECT status FROM "InstagramPost" WHERE "questionCode" = 'IGFIX-RUHS21-W01'`) === "DRAFT");
+  check("edit saved without any extra confirmation; still Draft", (await page.getByTestId("confirm-back-to-draft").count()) === 0 && sql(`SELECT status FROM "InstagramPost" WHERE "questionCode" = 'IGFIX-RUHS21-W01'`) === "DRAFT");
   await page.getByTestId("tab-history").click();
   const revs = await page.getByTestId("revision-list").innerText();
   check("history lists every revision with notes", /Draft created/.test(revs) && /Layout:/.test(revs) && /Question number set to 12/.test(revs), revs.slice(0, 300));
@@ -304,9 +297,9 @@ try {
   await openQuestion(page, "IGFIX-RUHS21-W07");
   await page.getByTestId("create-draft").click();
   await waitPreview(page, "1 / 5");
-  await page.getByTestId("tab-review").click();
+  await page.getByTestId("tab-checks").click();
   const gate = await page.getByTestId("issue-list").innerText();
-  check("undrawable '⁺' blocks Ready and says to fix it in the Question Bank", /can't draw/.test(gate) && /Question Bank/.test(gate), gate);
+  check("undrawable '⁺' blocks publishing and says to fix it in the Question Bank", /can't draw/.test(gate) && /Question Bank/.test(gate), gate);
   await page.getByRole("tab", { name: /2\. Question/ }).click();
   await waitPreview(page, "2 / 5");
   await page.screenshot({ path: `${SHOTS}/11-gate-glyph.png` });
@@ -314,7 +307,7 @@ try {
   await openQuestion(page, "IGFIX-RUHS21-W02");
   await page.getByTestId("create-draft").click();
   await waitPreview(page, "1 / 5");
-  await page.getByTestId("tab-review").click();
+  await page.getByTestId("tab-checks").click();
   check("truncated PYQ stem reported (never auto-corrected)", /may be cut off/.test(await page.getByTestId("issue-list").innerText()));
   check("snapshot keeps the original damaged text", /ll are types of RCT except/.test(await page.getByTestId("snapshot").innerText()));
   await page.screenshot({ path: `${SHOTS}/12-gate-truncated.png` });
@@ -395,7 +388,7 @@ try {
   check("no request ever reached Meta/Instagram", !external.some((u) => /facebook|instagram|fbcdn/.test(u)));
   check("Question Bank, options, answers, papers and AI explanations unchanged", fingerprint() === before);
   const writes = sql(`SELECT string_agg(DISTINCT action, ',' ORDER BY action) FROM "AuditLog" WHERE action LIKE 'INSTAGRAM_%'`);
-  check("audit log records studio actions", /INSTAGRAM_DRAFT_CREATED/.test(writes) && /INSTAGRAM_MARKED_READY/.test(writes) && /INSTAGRAM_SETTINGS_UPDATED/.test(writes), writes);
+  check("audit log records studio actions", /INSTAGRAM_DRAFT_CREATED/.test(writes) && /INSTAGRAM_SETTINGS_UPDATED/.test(writes) && !/INSTAGRAM_MARKED_READY/.test(writes), writes);
 } finally {
   await browser.close();
 }

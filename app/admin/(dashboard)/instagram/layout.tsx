@@ -30,7 +30,7 @@ export default async function InstagramStudioLayout({ children }: { children: Re
           data-testid="publishing-enabled"
           className="rounded-[var(--radius-card)] border border-[var(--color-success)]/40 bg-[var(--color-success)]/10 px-4 py-2.5 text-sm text-[var(--color-foreground)]"
         >
-          <span className="font-semibold">Direct publishing is ON.</span> An approved (Ready) post goes to Instagram only when a Master Admin clicks “Confirm &amp; Publish”. Nothing is
+          <span className="font-semibold">Direct publishing is ON.</span> A post goes to Instagram only when a Master Admin clicks “Confirm &amp; Publish” in the final confirmation. Nothing is
           published automatically.
         </div>
       ) : (

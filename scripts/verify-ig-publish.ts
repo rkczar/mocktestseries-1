@@ -16,7 +16,6 @@ import path from "node:path";
 import { prisma } from "@/lib/prisma";
 import * as posts from "@/lib/instagram/posts";
 import { saveStudioSettings } from "@/lib/instagram/config";
-import { REVIEW_CHECKLIST } from "@/lib/instagram/quality";
 import { publishingApi } from "@/lib/instagram/meta";
 import {
   classifyPublishFailure,
@@ -122,8 +121,8 @@ async function main() {
   await prisma.instagramPost.deleteMany({ where: { questionId: { in: qIds } } });
   let nth = 0;
 
-  /** A fresh, approved (READY) post on a fixture question. */
-  async function readyPost(code = CODES[nth++ % CODES.length]) {
+  /** A fresh, publishable DRAFT on a fixture question (no Mark Ready / approval step exists any more). */
+  async function draftPost(code = CODES[nth++ % CODES.length]) {
     const qid = (await q(code)).id;
     await prisma.instagramPost.deleteMany({ where: { questionId: qid } });
     const { post } = await posts.createDraft({ questionId: qid, series: "PYQ", stats: null, actorId });
@@ -142,15 +141,18 @@ async function main() {
     const dto = await posts.getPostDto(saved.id);
     const errors = dto.issues.filter((i) => i.severity === "error");
     assert.equal(errors.length, 0, `fixture post has blocking issues: ${JSON.stringify(errors)}`);
-    const warn = dto.issues.filter((i) => i.severity === "warning").map((i) => i.code);
-    const all = Object.fromEntries(REVIEW_CHECKLIST.map((c) => [c.key, true]));
-    const r = await posts.markReady({ postId: dto.id, expectedRevision: dto.revision, checklist: all, acknowledged: warn, actorId });
-    assert.equal(r.post.status, "READY");
-    return r.post;
+    assert.equal(dto.status, "DRAFT");
+    return dto;
   }
   const key = () => crypto.randomUUID();
+  /** Warning codes the confirmation dialog would show for the post right now. */
+  const shownWarnings = async (postId: string) => (await posts.getPostDto(postId)).issues.filter((i) => i.severity === "warning").map((i) => i.code);
+  /** startPublish with the single "Confirm & Publish" (acknowledging the warnings the dialog shows). */
+  async function sp(input: Omit<Parameters<typeof startPublish>[0], "confirmation">) {
+    return startPublish({ ...input, confirmation: { via: "single", acknowledged: await shownWarnings(input.postId) } });
+  }
   async function publish(post: { id: string; revision: number }, format: PublishFormat = "CAROUSEL") {
-    const { job } = await startPublish({ postId: post.id, expectedRevision: post.revision, requestKey: key(), format, actorId });
+    const { job } = await sp({ postId: post.id, expectedRevision: post.revision, requestKey: key(), format, actorId });
     return runPublishJob(post.id, job.leaseId);
   }
   const resetMock = () => realFetch(`${base}/__mock/reset`).then((r) => r.json());
@@ -164,39 +166,57 @@ async function main() {
 
     await check("switch OFF by default → publishing refused", async () => {
       assert.equal((await getPublishingSwitch()).enabled, false);
-      const p = await readyPost();
-      await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /turned off/);
-      assert.equal((await row(p.id)).status, "READY");
+      const p = await draftPost();
+      await assert.rejects(sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /turned off/);
+      assert.equal((await row(p.id)).status, "DRAFT");
     });
     await setPublishingSwitch(true, actorId);
 
     await check("no token installed → refused before any claim", async () => {
-      const p = await readyPost();
+      const p = await draftPost();
       delete process.env.INSTAGRAM_ACCESS_TOKEN;
-      await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /No Instagram access token/);
+      await assert.rejects(sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /No Instagram access token/);
       installToken("valid");
-      assert.equal((await row(p.id)).status, "READY");
+      assert.equal((await row(p.id)).status, "DRAFT");
     });
 
-    await check("a DRAFT (not approved) post can't be published", async () => {
-      const p = await readyPost();
-      const d = await posts.backToDraft(p.id, actorId);
-      await assert.rejects(startPublish({ postId: d.id, expectedRevision: d.revision, requestKey: key(), format: "CAROUSEL", actorId }), /approved \(Ready\)/);
+    await check("single confirmation: a confirmation that misses a current warning is refused, nothing claimed", async () => {
+      const p = await draftPost();
+      const warns = await shownWarnings(p.id);
+      assert.ok(warns.length > 0, "fixture should have at least one warning");
+      await assert.rejects(
+        startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId, confirmation: { via: "single", acknowledged: warns.slice(1) } }),
+        /New review warnings appeared/
+      );
+      const r = await row(p.id);
+      assert.equal(r.status, "DRAFT");
+      assert.equal(r.publishJob, null);
     });
 
-    await check("approval bypass: status forced to READY in the DB without a review → refused", async () => {
-      const p = await readyPost();
-      await prisma.instagramPost.update({ where: { id: p.id }, data: { reviewedAt: null, reviewedById: null, review: undefined } });
-      await prisma.$executeRaw`UPDATE "InstagramPost" SET "review" = NULL WHERE id = ${p.id}`;
-      await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /not been approved/);
-      // Approval for another revision doesn't count either.
-      await prisma.$executeRaw`UPDATE "InstagramPost" SET "review" = '{"revision": 1}'::jsonb, "reviewedAt" = now(), "reviewedById" = ${actorId} WHERE id = ${p.id}`;
-      await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /not been approved/);
+    await check("bulk authorization can't be forged: no / other-batch / older-revision confirmation → refused", async () => {
+      const p = await draftPost();
+      const bulk = (batchId: string) => startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId, confirmation: { via: "bulk", batchId } });
+      await assert.rejects(bulk("batch-a"), /never confirmed|changed after it was confirmed/);
+      const rec = (batchId: string, revision: number) => ({ revision, acknowledged: [], checklist: [], via: "bulk", batchId, at: new Date().toISOString() });
+      await prisma.instagramPost.update({ where: { id: p.id }, data: { reviewedAt: new Date(), reviewedById: actorId, review: rec("batch-b", p.revision) } });
+      await assert.rejects(bulk("batch-a"), /changed after it was confirmed|never confirmed/);
+      await prisma.instagramPost.update({ where: { id: p.id }, data: { review: rec("batch-a", p.revision - 1) } });
+      await assert.rejects(bulk("batch-a"), /changed after it was confirmed|never confirmed/);
+      assert.equal((await row(p.id)).status, "DRAFT");
+    });
+
+    await check("legacy READY row (old Mark Ready) publishes with the single confirmation like a Draft", async () => {
+      await resetMock();
+      const p = await draftPost();
+      await prisma.instagramPost.update({ where: { id: p.id }, data: { status: "READY" } });
+      assert.equal((await posts.getPostDto(p.id)).status, "DRAFT", "shown as Draft");
+      const v = await publish(p);
+      assert.equal(v.status, "PUBLISHED", JSON.stringify(v));
     });
 
     await check("stale tab: wrong expectedRevision → conflict; preflight reports caption, slides, account", async () => {
-      const p = await readyPost();
-      await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision - 1, requestKey: key(), format: "CAROUSEL", actorId }), /changed in another window/);
+      const p = await draftPost();
+      await assert.rejects(sp({ postId: p.id, expectedRevision: p.revision - 1, requestKey: key(), format: "CAROUSEL", actorId }), /changed in another window/);
       const pre = await publishPreflight(p.id, p.revision, "CAROUSEL");
       assert.equal(pre.username, "mocktestseries.in");
       assert.equal(pre.slideCount, p.design.modules.length);
@@ -206,12 +226,12 @@ async function main() {
       assert.equal((await publishPreflight(p.id, p.revision, "IMAGE")).slideCount, 1);
     });
 
-    await check("Question Bank edited after approval → publishing blocked (source changed)", async () => {
-      const p = await readyPost();
+    await check("Question Bank edited after the draft was made → publishing blocked (source changed)", async () => {
+      const p = await draftPost();
       const before = await prisma.question.findUniqueOrThrow({ where: { id: p.questionId }, select: { text: true } });
       await prisma.question.update({ where: { id: p.questionId }, data: { text: before.text + " (edited)" } });
       try {
-        await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /Publishing blocked/);
+        await assert.rejects(sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /Publishing blocked/);
       } finally {
         await prisma.question.update({ where: { id: p.questionId }, data: { text: before.text } });
       }
@@ -227,8 +247,8 @@ async function main() {
     console.log("\n--- B. Carousel + single image publishing (mock Meta downloads every slide) ---");
     await resetMock();
     let carouselPostId = "";
-    await check("carousel: READY → PUBLISHED with media ID, permalink, time; Meta fetched every slide as JPEG", async () => {
-      const p = await readyPost();
+    await check("carousel: DRAFT → PUBLISHED with media ID, permalink, time; Meta fetched every slide as JPEG", async () => {
+      const p = await draftPost();
       carouselPostId = p.id;
       const v = await publish(p);
       assert.equal(v.status, "PUBLISHED", JSON.stringify(v));
@@ -247,7 +267,15 @@ async function main() {
       assert.ok(stats.imageFetches.every((f: { ok: boolean; bytes: number; url: string }) => f.ok && f.bytes > 10_000 && /\/api\/instagram-media\/[a-f0-9]{48}\/slide-\d\.jpg$/.test(f.url)));
       assert.equal(stats.publishCalls, 1);
       const audits = await prisma.auditLog.findMany({ where: { entityId: p.id, action: { startsWith: "INSTAGRAM_PUBLISH" } } });
-      assert.ok(audits.some((a) => a.action === "INSTAGRAM_PUBLISH_STARTED"));
+      const started = audits.find((a) => a.action === "INSTAGRAM_PUBLISH_STARTED");
+      assert.ok(started);
+      assert.equal((started!.metadata as { confirmedVia?: string }).confirmedVia, "single");
+      // The single confirmation is stored with the claim: who, when, which revision, which warnings.
+      const rv = r.review as { via?: string; revision?: number; acknowledged?: string[] };
+      assert.equal(rv.via, "single");
+      assert.equal(rv.revision, p.revision);
+      assert.deepEqual(rv.acknowledged, (started!.metadata as { acknowledged?: string[] }).acknowledged);
+      assert.equal(r.reviewedById, actorId);
       assert.ok((await prisma.auditLog.count({ where: { entityId: p.id, action: "INSTAGRAM_PUBLISHED" } })) === 1);
     });
 
@@ -259,13 +287,13 @@ async function main() {
       assert.equal(p.publish.status, "PUBLISHED");
       assert.equal(p.igMediaId, (await row(carouselPostId)).igMediaId);
       await assert.rejects(posts.applyChange({ postId: p.id, expectedRevision: p.revision, note: "x", actorId }), /published post can't be edited/);
-      await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /already published/);
+      await assert.rejects(sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /already published/);
       assert.equal(stats.publishCalls, 1);
     });
 
     await check("single image: one container with the caption, not a carousel item; published as IMAGE", async () => {
       await resetMock();
-      const p = await readyPost();
+      const p = await draftPost();
       const v = await publish(p, "IMAGE");
       assert.equal(v.status, "PUBLISHED");
       const st = await mockState();
@@ -280,7 +308,7 @@ async function main() {
     await check("slow processing (IN_PROGRESS) is waited out, then published once", async () => {
       await resetMock();
       installToken("slow");
-      const p = await readyPost();
+      const p = await draftPost();
       const v = await publish(p);
       assert.equal(v.status, "PUBLISHED", JSON.stringify(v));
       assert.equal(stats.publishCalls, 1);
@@ -290,14 +318,14 @@ async function main() {
     console.log("\n--- C. Duplicate protection ---");
     await check("double click / several tabs: 6 concurrent claims → exactly one job", async () => {
       await resetMock();
-      const p = await readyPost();
-      const results = await Promise.allSettled(Array.from({ length: 6 }, () => startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId })));
+      const p = await draftPost();
+      const results = await Promise.allSettled(Array.from({ length: 6 }, () => sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId })));
       const ok = results.filter((r) => r.status === "fulfilled");
       assert.equal(ok.length, 1, JSON.stringify(results.map((r) => r.status)));
       assert.ok(results.filter((r) => r.status === "rejected").every((r) => /already being published|changed in the meantime/.test(String((r as PromiseRejectedResult).reason))));
       const job = (ok[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof startPublish>>>).value.job;
       // Same confirmation re-sent (network retry) → the same job, no second claim.
-      const again = await startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: job.requestKey, format: "CAROUSEL", actorId });
+      const again = await sp({ postId: p.id, expectedRevision: p.revision, requestKey: job.requestKey, format: "CAROUSEL", actorId });
       assert.equal(again.existing, true);
       assert.equal(again.job.jobId, job.jobId);
       // Two workers for one job: only the lease owner runs; a duplicate worker with a wrong lease does nothing.
@@ -309,15 +337,15 @@ async function main() {
     });
 
     await check("one question: a second version can't publish while another is PUBLISHING (partial unique index)", async () => {
-      const p = await readyPost(CODES[1]);
+      const p = await draftPost(CODES[1]);
       await prisma.instagramPost.update({ where: { id: p.id }, data: { status: "PUBLISHING" } });
-      // Second, older row of the same question pretending to be READY.
+      // Second, older row of the same question (legacy READY status).
       const clone = await prisma.instagramPost.findUniqueOrThrow({ where: { id: p.id } });
       await prisma.instagramPost.update({ where: { id: p.id }, data: { supersededAt: new Date() } });
       const other = await prisma.instagramPost.create({
-        data: { questionId: clone.questionId, questionCode: clone.questionCode, series: clone.series, version: clone.version + 1, status: "READY", revision: clone.revision, content: clone.content as object, design: clone.design as object, sourceSnapshot: clone.sourceSnapshot as object, sourceHash: clone.sourceHash, review: clone.review as object, reviewedAt: new Date(), reviewedById: actorId, createdById: actorId },
+        data: { questionId: clone.questionId, questionCode: clone.questionCode, series: clone.series, version: clone.version + 1, status: "READY", revision: clone.revision, content: clone.content as object, design: clone.design as object, sourceSnapshot: clone.sourceSnapshot as object, sourceHash: clone.sourceHash, createdById: actorId },
       });
-      await assert.rejects(startPublish({ postId: other.id, expectedRevision: other.revision, requestKey: key(), format: "CAROUSEL", actorId }), /being published right now/);
+      await assert.rejects(sp({ postId: other.id, expectedRevision: other.revision, requestKey: key(), format: "CAROUSEL", actorId }), /being published right now/);
       await prisma.instagramPost.deleteMany({ where: { questionId: clone.questionId } });
     });
 
@@ -336,7 +364,7 @@ async function main() {
       await check(`${scenario} → FAILED (${category}), nothing published, content unchanged`, async () => {
         await resetMock();
         const token = installToken(scenario);
-        const p = await readyPost();
+        const p = await draftPost();
         const v = await publish(p);
         assert.equal(v.status, "FAILED", JSON.stringify(v));
         assert.equal(v.errorCategory, category);
@@ -354,7 +382,7 @@ async function main() {
     await check("retry after a failure (token renewed) → published exactly once", async () => {
       await resetMock();
       installToken("expired");
-      const p = await readyPost();
+      const p = await draftPost();
       assert.equal((await publish(p)).status, "FAILED");
       installToken("valid");
       const v = await publish(await posts.getPostDto(p.id));
@@ -363,16 +391,16 @@ async function main() {
       assert.equal((await mockState()).media.length, 1);
     });
 
-    await check("editing a FAILED post needs confirmation and sends it back to Draft (re-approval needed)", async () => {
+    await check("editing a FAILED post sends it back to Draft without any re-approval; it publishes with one confirmation", async () => {
       installToken("badimage");
-      const p = await readyPost();
+      const p = await draftPost();
       assert.equal((await publish(p)).status, "FAILED");
       installToken("valid");
       const f = await posts.getPostDto(p.id);
-      await assert.rejects(posts.applyChange({ postId: f.id, expectedRevision: f.revision, note: "x", actorId }), (e: Error & { kind?: string }) => e.kind === "needs-confirm");
-      const d = await posts.applyChange({ postId: f.id, expectedRevision: f.revision, content: { ...f.content, memoryTrick: "Changed" }, note: "edit after failure", actorId, confirmReplaceApproved: true });
+      const d = await posts.applyChange({ postId: f.id, expectedRevision: f.revision, content: { ...f.content, memoryTrick: "Changed" }, note: "edit after failure", actorId });
       assert.equal(d.status, "DRAFT");
-      await assert.rejects(startPublish({ postId: d.id, expectedRevision: d.revision, requestKey: key(), format: "CAROUSEL", actorId }), /approved \(Ready\)/);
+      assert.equal((await row(d.id)).review, null, "old confirmation cleared by the edit");
+      assert.equal((await publish(d)).status, "PUBLISHED");
     });
 
     console.log("\n--- E. Lost responses, timeouts, restarts: reconcile, never re-publish blindly ---");
@@ -380,7 +408,7 @@ async function main() {
       await check(`${scenario}: Meta published but the answer was lost → recorded as PUBLISHED (found via container status), one post`, async () => {
         await resetMock();
         installToken(scenario);
-        const p = await readyPost();
+        const p = await draftPost();
         const v = await publish(p);
         assert.equal(v.status, "PUBLISHED", JSON.stringify(v));
         const st = await mockState();
@@ -394,7 +422,7 @@ async function main() {
     await check("media_publish failed (5xx) without publishing → FAILED; retry reuses the SAME container, one post", async () => {
       await resetMock();
       installToken("pubfailonce");
-      const p = await readyPost();
+      const p = await draftPost();
       const v = await publish(p);
       assert.equal(v.status, "FAILED", JSON.stringify(v));
       assert.match(v.publishError ?? "", /Nothing was published/);
@@ -413,12 +441,12 @@ async function main() {
     await check("Meta unreachable after media_publish → stays PUBLISHING (UNKNOWN, locked); no retry possible; reconcile resolves it", async () => {
       await resetMock();
       installToken("blackout");
-      const p = await readyPost();
+      const p = await draftPost();
       const v = await publish(p);
       assert.equal(v.status, "PUBLISHING", JSON.stringify(v));
       assert.equal(v.stage, "UNKNOWN");
       assert.equal(v.needsReconcile, true);
-      await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /already being published/);
+      await assert.rejects(sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /already being published/);
       await assert.rejects(posts.applyChange({ postId: p.id, expectedRevision: p.revision, note: "x", actorId }), /can't be edited/);
       const still = await reconcilePublish(p.id, actorId);
       assert.equal(still.status, "PUBLISHING");
@@ -434,8 +462,8 @@ async function main() {
 
     await check("server restart before media_publish (stale worker) → auto-reconciled to FAILED/INTERRUPTED; retry publishes once", async () => {
       await resetMock();
-      const p = await readyPost();
-      const { job } = await startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId });
+      const p = await draftPost();
+      const { job } = await sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId });
       // The worker "died" right after creating containers.
       const dead = { ...job, stage: "CONTAINERS", heartbeatAt: new Date(Date.now() - 10 * 60_000).toISOString() };
       await prisma.$executeRaw`UPDATE "InstagramPost" SET "publishJob" = ${JSON.stringify(dead)}::jsonb WHERE id = ${p.id}`;
@@ -454,14 +482,14 @@ async function main() {
 
     await check("server restart right after Meta published (worker died before saving) → status check records it, no second post", async () => {
       await resetMock();
-      const p = await readyPost();
-      const { job } = await startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId });
+      const p = await draftPost();
+      const { job } = await sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId });
       const real = publishingApi()!;
       const crashing = { ...real, publishContainer: async (u: string, c: string) => (await real.publishContainer(u, c), Promise.reject(new Error("process killed"))) };
       const v = await runPublishJob(p.id, job.leaseId, crashing);
       assert.equal(v.status, "PUBLISHING");
       assert.equal(v.stage, "UNKNOWN");
-      await assert.rejects(startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /already being published/);
+      await assert.rejects(sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /already being published/);
       const done = await getPublishStatus(p.id, actorId).then((x) => (x.needsReconcile ? reconcilePublish(p.id, actorId) : x));
       assert.equal(done.status, "PUBLISHED", JSON.stringify(done));
       const st = await mockState();
@@ -471,8 +499,8 @@ async function main() {
     });
 
     await check("a live job is never taken over by a status check", async () => {
-      const p = await readyPost();
-      const { job } = await startPublish({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId });
+      const p = await draftPost();
+      const { job } = await sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId });
       const v = await reconcilePublish(p.id, actorId);
       assert.equal(v.status, "PUBLISHING");
       assert.equal(((await row(p.id)).publishJob as { leaseId: string }).leaseId, job.leaseId);

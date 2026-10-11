@@ -14,7 +14,7 @@ const IG_FILTERS = [
   { key: "", label: "All" },
   { key: "NOT_CREATED", label: "Not created" },
   { key: "DRAFT", label: "Draft" },
-  { key: "READY", label: "Ready" },
+  { key: "FAILED", label: "Failed" },
   { key: "PUBLISHED", label: "Posted" },
 ] as const;
 

@@ -11,16 +11,14 @@ import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
 import { cn } from "@/lib/utils";
 import { InstagramStatusBadge } from "@/components/admin/instagram/status-badge";
-import { PublishPanel } from "@/components/admin/instagram/publish-panel";
+import { PublishButton, PublishPanel } from "@/components/admin/instagram/publish-panel";
 import {
   aiEditAction,
-  backToDraftAction,
   createMostMissedDraftAction,
   createNewVersionAction,
   createPyqDraftAction,
   deleteDraftAction,
   loadQuestionPostAction,
-  markReadyAction,
   prefillFromExplanationAction,
   refreshSnapshotAction,
   restoreRevisionAction,
@@ -30,7 +28,6 @@ import {
   type Result,
 } from "@/app/admin/(dashboard)/instagram/actions";
 import type { PostDto, QuestionPostState } from "@/lib/instagram/posts";
-import { checklistFor } from "@/lib/instagram/quality";
 
 import { smartModules } from "@/lib/instagram/smart-layout";
 import { AiStudioPanel, ProviderPicker, type ProviderChoice } from "@/components/admin/instagram/ai-studio-panel";
@@ -63,9 +60,11 @@ export interface EditorTarget {
   series: "PYQ" | "MOST_MISSED";
   /** Most Missed: the list's query string — the server recomputes the numbers from it. */
   filterQuery?: string;
+  /** Open straight into the "Publish to Instagram?" confirmation (Drafts / Bulk Studio "Publish" buttons). */
+  publish?: boolean;
 }
 
-type Tab = "content" | "design" | "ai" | "studio" | "review" | "history";
+type Tab = "content" | "design" | "ai" | "studio" | "checks" | "history";
 
 interface Draft {
   content: PostContent;
@@ -144,7 +143,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const [slide, setSlide] = useState(0);
   const [tab, setTab] = useState<Tab>("content");
   const [message, setMessage] = useState<{ tone: "ok" | "error" | "info"; text: string } | null>(null);
-  const [needsConfirm, setNeedsConfirm] = useState<null | ((confirm: boolean) => void)>(null);
   const [pending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -154,13 +152,11 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [instruction, setInstruction] = useState("");
-  const [checklist, setChecklist] = useState<Record<string, boolean>>({});
-  const [acks, setAcks] = useState<string[]>([]);
   const [qNumber, setQNumber] = useState("");
   const [qVerified, setQVerified] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmNewVersion, setConfirmNewVersion] = useState(false);
-  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(Boolean(target?.publish));
   const [provider, setProvider] = useState<ProviderChoice>("default");
   const changed = useRef(false);
 
@@ -208,7 +204,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   }, [target, adopt]);
 
   const dirty = Boolean(post && draft && !sameDraft(draft, post));
-  const editable = Boolean(post && post.isCurrent && (post.status === "DRAFT" || post.status === "READY" || post.status === "FAILED"));
+  const editable = Boolean(post && post.isCurrent && (post.status === "DRAFT" || post.status === "FAILED"));
   const moduleError = draft ? validateModules(draft.design.modules) : null;
 
   // Server-rendered preview of the current slide (debounced).
@@ -259,20 +255,12 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
     onClose();
   }
 
-  /** Runs a post-changing action; on a Ready post asks before sending it back to Draft. */
-  function act<T>(call: (confirm: boolean) => Promise<Result<T>>, onOk: (data: T) => void, confirm = false) {
+  /** Runs a post-changing action and reports its result in the message bar. */
+  function act<T>(call: () => Promise<Result<T>>, onOk: (data: T) => void) {
     setMessage(null);
     startTransition(async () => {
-      const r = await call(confirm);
+      const r = await call();
       if (!r.ok) {
-        if (r.kind === "needs-confirm") {
-          setNeedsConfirm(() => (c: boolean) => {
-            setNeedsConfirm(null);
-            if (c) act(call, onOk, true);
-          });
-          setMessage({ tone: "info", text: r.error });
-          return;
-        }
         setMessage({ tone: "error", text: r.error });
         return;
       }
@@ -327,7 +315,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
     post &&
     draft &&
     act(
-      (confirm) => saveDraftAction({ postId: post.id, expectedRevision: post.revision, ...draftPayload(draft), confirmReplaceApproved: confirm }),
+      () => saveDraftAction({ postId: post.id, expectedRevision: post.revision, ...draftPayload(draft) }),
       (p) => {
         adopt(p);
         setMessage({ tone: "ok", text: `Saved (revision ${p.revision}).` });
@@ -338,7 +326,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
     post &&
     draft &&
     act(
-      (confirm) =>
+      () =>
         aiEditAction({
           postId: post.id,
           expectedRevision: post.revision,
@@ -346,7 +334,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
           instruction: opts.instruction,
           fields: opts.fields,
           selectedModule: opts.selected ? draft.design.modules[slide] : null,
-          confirmReplaceApproved: confirm,
           provider: provider === "default" ? null : provider,
         }),
       (r) => {
@@ -359,10 +346,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const issues = post?.issues ?? [];
   const errors = issues.filter((i) => i.severity === "error");
   const warnings = issues.filter((i) => i.severity === "warning");
-  const reviewChecklist = post ? checklistFor(post.design) : [];
-  const checklistDone = reviewChecklist.every((c) => checklist[c.key]);
-  const acksDone = warnings.every((w) => acks.includes(w.code));
-  const canMarkReady = Boolean(post && editable && post.status !== "READY" && !dirty && errors.length === 0 && checklistDone && acksDone);
 
   const modules = draft?.design.modules ?? [];
   const snapshot = post?.snapshot;
@@ -376,7 +359,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
         { key: "design", label: "Design" },
         { key: "ai", label: "AI Assistant" },
         { key: "studio", label: "Diagram & Trap" },
-        { key: "review", label: `Review${errors.length ? ` (${errors.length})` : ""}` },
+        { key: "checks", label: `Checks${errors.length ? ` (${errors.length})` : ""}` },
         { key: "history", label: "History" },
       ] as { key: Tab; label: string }[],
     [errors.length]
@@ -427,16 +410,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
               )}
             >
               <span className="flex-1">{message.text}</span>
-              {needsConfirm ? (
-                <span className="flex gap-2">
-                  <Button size="sm" variant="primary" onClick={() => needsConfirm(true)} data-testid="confirm-back-to-draft">
-                    Continue — send back to Draft
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => needsConfirm(false)}>
-                    Cancel
-                  </Button>
-                </span>
-              ) : null}
             </div>
           ) : null}
 
@@ -555,7 +528,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                         <div className="rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 p-2 text-xs">
                           The question changed in the Question Bank after this snapshot.{" "}
                           {editable ? (
-                            <button type="button" className="underline" onClick={() => act(() => refreshSnapshotAction(post.id, post.revision), (p) => (adopt(p), setMessage({ tone: "ok", text: "Snapshot refreshed. Review again before marking Ready." })))}>
+                            <button type="button" className="underline" onClick={() => act(() => refreshSnapshotAction(post.id, post.revision), (p) => (adopt(p), setMessage({ tone: "ok", text: "Snapshot refreshed from the Question Bank. Check the slides again before publishing." })))}>
                               Refresh snapshot
                             </button>
                           ) : null}
@@ -583,7 +556,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                     ))}
                   </div>
 
-                  {post.isCurrent && post.status !== "DRAFT" ? <PublishPanel post={post} dirty={dirty} onPost={adoptPublished} open={publishOpen} setOpen={setPublishOpen} /> : null}
+                  {post.isCurrent ? <PublishPanel post={post} onPost={adoptPublished} /> : null}
 
                   {!editable ? (
                     <p className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm" data-testid="readonly-note">
@@ -768,7 +741,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                           variant="outline"
                           onClick={() =>
                             act(
-                              (confirm) => prefillFromExplanationAction({ postId: post.id, expectedRevision: post.revision, ...draftPayload(draft), confirmReplaceApproved: confirm }),
+                              () => prefillFromExplanationAction({ postId: post.id, expectedRevision: post.revision, ...draftPayload(draft) }),
                               (r) => (adopt(r.post), setMessage({ tone: "ok", text: r.summary }))
                             )
                           }
@@ -807,7 +780,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                       post={post}
                       draft={draftPayload(draft)}
                       editable={editable}
-                      dirty={dirty}
                       pending={pending}
                       provider={provider}
                       setProvider={setProvider}
@@ -823,11 +795,11 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                     />
                   ) : null}
 
-                  {tab === "review" ? (
+                  {tab === "checks" ? (
                     <div className="flex flex-col gap-4" data-testid="review-panel">
                       {dirty ? <p className="rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 p-2 text-sm">Save your changes first — the checks below are for the saved version.</p> : null}
                       <section className="flex flex-col gap-2">
-                        <h3 className="text-sm font-semibold">{`Quality checks — ${errors.length} blocking, ${warnings.length} to confirm`}</h3>
+                        <h3 className="text-sm font-semibold">{`Quality checks — ${errors.length} blocking, ${warnings.length} to check`}</h3>
                         {issues.length === 0 ? <p className="text-sm text-[var(--color-success)]">No problems found.</p> : null}
                         <ul className="flex flex-col gap-1.5" data-testid="issue-list">
                           {errors.map((i) => (
@@ -838,22 +810,14 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                           ))}
                           {warnings.map((i) => (
                             <li key={i.code} data-code={i.code} className="rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 p-2 text-sm">
-                              <label className="flex items-start gap-2">
-                                <input
-                                  type="checkbox"
-                                  className="mt-1"
-                                  disabled={!editable || post.status === "READY"}
-                                  checked={acks.includes(i.code) || (post.status === "READY" && post.acknowledged.includes(i.code))}
-                                  onChange={(e) => setAcks((a) => (e.target.checked ? [...a, i.code] : a.filter((x) => x !== i.code)))}
-                                />
-                                <span>
-                                  <span className="font-semibold">I checked this · </span>
-                                  {i.message}
-                                </span>
-                              </label>
+                              <span className="font-semibold">Check · </span>
+                              {i.message}
                             </li>
                           ))}
                         </ul>
+                        <p className="text-xs text-[var(--color-muted-foreground)]">
+                          Blocking issues must be fixed before publishing. Warnings are shown again in the final &quot;Publish to Instagram?&quot; confirmation — there is no separate approval step.
+                        </p>
                       </section>
 
                       {post.series === "PYQ" ? (
@@ -875,7 +839,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                               data-testid="q-save"
                               onClick={() =>
                                 act(
-                                  (confirm) => setQuestionNumberAction(post.id, post.revision, qNumber ? Number(qNumber) : null, qVerified, confirm),
+                                  () => setQuestionNumberAction(post.id, post.revision, qNumber ? Number(qNumber) : null, qVerified),
                                   (p) => (adopt(p), setMessage({ tone: "ok", text: "Question number saved." }))
                                 )
                               }
@@ -886,50 +850,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                         </section>
                       ) : null}
 
-                      <section className="flex flex-col gap-2">
-                        <h3 className="text-sm font-semibold">Admin review</h3>
-                        {post.status === "READY" ? (
-                          <p className="text-sm text-[var(--color-success)]" data-testid="ready-note">{`Approved (Ready) by ${post.reviewedBy ?? "Admin"} on ${post.reviewedAt ? fmt(post.reviewedAt) : ""}.`}</p>
-                        ) : (
-                          reviewChecklist.map((c) => (
-                            <label key={c.key} className="flex items-start gap-2 text-sm">
-                              <input type="checkbox" className="mt-1" disabled={!editable} checked={Boolean(checklist[c.key])} onChange={(e) => setChecklist((s) => ({ ...s, [c.key]: e.target.checked }))} data-testid={`check-${c.key}`} />
-                              {c.label}
-                            </label>
-                          ))
-                        )}
-                        <div className="flex flex-wrap gap-2">
-                          {post.status === "READY" ? (
-                            <Button variant="outline" disabled={pending} onClick={() => act(() => backToDraftAction(post.id), (p) => (adopt(p), setMessage({ tone: "info", text: "Back to Draft." })))} data-testid="back-to-draft">
-                              Back to Draft
-                            </Button>
-                          ) : (
-                            <Button
-                              variant="success"
-                              disabled={!canMarkReady || pending}
-                              data-testid="mark-ready"
-                              onClick={() =>
-                                act(
-                                  () => markReadyAction({ postId: post.id, expectedRevision: post.revision, checklist, acknowledged: acks }),
-                                  (r) => {
-                                    adopt(r.post);
-                                    if (r.blocked.length || r.missingAcks.length || r.missingChecklist.length) {
-                                      setMessage({ tone: "error", text: `Not marked Ready: ${r.blocked.length} blocking issue(s), ${r.missingAcks.length} warning(s) and ${r.missingChecklist.length} checklist item(s) open.` });
-                                    } else setMessage({ tone: "ok", text: "Marked Ready. Any later edit sends it back to Draft." });
-                                  }
-                                )
-                              }
-                            >
-                              Mark Ready
-                            </Button>
-                          )}
-                          {post.status === "READY" || post.status === "FAILED" ? (
-                            <Button variant="success" disabled={pending || dirty} onClick={() => setPublishOpen(true)} data-testid="publish-from-review">
-                              <Send className="h-4 w-4" aria-hidden /> Publish to Instagram
-                            </Button>
-                          ) : null}
-                        </div>
-                      </section>
                     </div>
                   ) : null}
 
@@ -982,7 +902,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                               <span className="flex-1">{r.note}</span>
                               <span className="text-xs text-[var(--color-muted-foreground)]">{`${r.createdBy} · ${fmt(r.createdAt)}`}</span>
                               {editable && r.revision !== post.revision ? (
-                                <Button size="compact" variant="ghost" disabled={pending || dirty} onClick={() => act((confirm) => restoreRevisionAction(post.id, post.revision, r.revision, confirm), (p) => (adopt(p), setMessage({ tone: "ok", text: `Restored revision ${r.revision}.` })))}>
+                                <Button size="compact" variant="ghost" disabled={pending || dirty} onClick={() => act(() => restoreRevisionAction(post.id, post.revision, r.revision), (p) => (adopt(p), setMessage({ tone: "ok", text: `Restored revision ${r.revision}.` })))}>
                                   Restore
                                 </Button>
                               ) : null}
@@ -1011,7 +931,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                     setMessage({ tone: "info", text: "Unsaved changes discarded." });
                     return;
                   }
-                  act((confirm) => undoAction(post.id, post.revision, confirm), (p) => (adopt(p), setMessage({ tone: "ok", text: `Undone — back to the previous saved state (revision ${p.revision}).` })));
+                  act(() => undoAction(post.id, post.revision), (p) => (adopt(p), setMessage({ tone: "ok", text: `Undone — back to the previous saved state (revision ${p.revision}).` })));
                 }}
               >
                 <Undo2 className="h-4 w-4" aria-hidden /> {dirty ? "Discard changes" : "Undo"}
@@ -1029,7 +949,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                     <Download className="h-4 w-4" aria-hidden /> Download slide {slide + 1} (JPEG)
                   </a>
                 ) : null}
-                {editable && (post.status === "DRAFT" || post.status === "READY") ? (
+                {editable && post.status === "DRAFT" ? (
                   confirmDelete ? (
                     <span className="flex items-center gap-2 text-xs">
                       Delete this draft?
@@ -1061,6 +981,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                     </Button>
                   )
                 ) : null}
+                <PublishButton post={post} dirty={dirty} onPost={adoptPublished} open={publishOpen} setOpen={setPublishOpen} size="sm" />
               </div>
             </div>
           ) : null}

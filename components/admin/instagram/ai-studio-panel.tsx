@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, AlertTriangle, Sparkles, XCircle } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,11 +11,11 @@ import { checkDiagram } from "@/lib/instagram/diagram";
 import { checkTrap } from "@/lib/instagram/trap";
 import { DIAGRAM_KINDS, DIAGRAM_KIND_LABELS, TRAP_LIMITS, normalizeDiagram, type DiagramSpec, type PostContent, type PostDesign, type SlideModule, type TrapVariant } from "@/lib/instagram/types";
 import type { PostDto } from "@/lib/instagram/posts";
-import { aiDiagramAction, aiTrapAction, setDiagramReviewedAction, setTrapStatusAction } from "@/app/admin/(dashboard)/instagram/studio-actions";
+import { aiDiagramAction, aiTrapAction } from "@/app/admin/(dashboard)/instagram/studio-actions";
 
 export type ProviderChoice = "default" | "anthropic" | "gemini" | "openai";
 type R<T> = { ok: true; data: T } | { ok: false; error: string; kind?: "conflict" | "needs-confirm" | "invalid" | "not-found" | "blocked" };
-export type ActFn = <T>(call: (confirm: boolean) => Promise<R<T>>, onOk: (d: T) => void) => void;
+export type ActFn = <T>(call: () => Promise<R<T>>, onOk: (d: T) => void) => void;
 
 /** Per-request AI provider choice (the server checks it is configured and enabled). */
 export function ProviderPicker({ value, onChange }: { value: ProviderChoice; onChange: (v: ProviderChoice) => void }) {
@@ -60,14 +60,14 @@ function DiagramSummary({ d }: { d: DiagramSpec }) {
 
 /**
  * Editor tab "Diagram & Trap": AI medical diagram (structured spec, drawn by
- * the app) and the Examiner Trap variant. Both need explicit reviewer
- * approval before the post can be marked Ready.
+ * the app) and the Examiner Trap variant. There is no separate approval step:
+ * both are listed as "check before publishing" warnings in the single final
+ * "Publish to Instagram?" confirmation.
  */
 export function AiStudioPanel({
   post,
   draft,
   editable,
-  dirty,
   pending,
   provider,
   setProvider,
@@ -79,7 +79,6 @@ export function AiStudioPanel({
   post: PostDto;
   draft: { content: PostContent; design: PostDesign };
   editable: boolean;
-  dirty: boolean;
   pending: boolean;
   provider: ProviderChoice;
   setProvider: (p: ProviderChoice) => void;
@@ -94,7 +93,7 @@ export function AiStudioPanel({
   const [jsonText, setJsonText] = useState<string | null>(null);
   const [jsonError, setJsonError] = useState<string | null>(null);
   const c = draft.content;
-  const base = (confirm: boolean) => ({ postId: post.id, expectedRevision: post.revision, content: draft.content, design: draft.design, confirmReplaceApproved: confirm, provider: provider === "default" ? null : provider });
+  const base = () => ({ postId: post.id, expectedRevision: post.revision, content: draft.content, design: draft.design, provider: provider === "default" ? null : provider });
   const diagram = c.diagram;
   const trap = c.trap;
   const savedTrap = post.content.trap;
@@ -112,8 +111,8 @@ export function AiStudioPanel({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">Medical Concept Diagram</h3>
           {diagram ? (
-            <span className={cn("text-xs font-medium", diagram.reviewed ? "text-[var(--color-success)]" : "text-[var(--color-warning)]")} data-testid="diagram-status">
-              {diagram.reviewed ? "Medically reviewed" : "Needs medical review"}
+            <span className="text-xs font-medium text-[var(--color-warning)]" data-testid="diagram-status">
+              Check every label before publishing
             </span>
           ) : null}
         </div>
@@ -133,7 +132,7 @@ export function AiStudioPanel({
           <Button
             type="button"
             data-testid="ai-diagram"
-            onClick={() => act((confirm) => aiDiagramAction({ ...base(confirm), kind, instruction: diagramInstr }), (r) => (onPost(r.post, r.summary), setJsonText(null)))}
+            onClick={() => act(() => aiDiagramAction({ ...base(), kind, instruction: diagramInstr }), (r) => (onPost(r.post, r.summary), setJsonText(null)))}
           >
             <Sparkles className="h-4 w-4" aria-hidden /> {diagram ? "Regenerate diagram" : "Generate diagram"}
           </Button>
@@ -176,26 +175,10 @@ export function AiStudioPanel({
                   Add the diagram slide
                 </Button>
               ) : null}
-              <Button
-                type="button"
-                size="sm"
-                variant={diagram.reviewed ? "outline" : "success"}
-                disabled={dirty || !post.content.diagram}
-                title={dirty ? "Save the draft first" : undefined}
-                data-testid="diagram-reviewed"
-                onClick={() =>
-                  act((confirm) => setDiagramReviewedAction({ postId: post.id, expectedRevision: post.revision, reviewed: !post.content.diagram?.reviewed, confirmReplaceApproved: confirm }), (p) =>
-                    onPost(p, p.content.diagram?.reviewed ? "Diagram marked as medically reviewed." : "Diagram review removed.")
-                  )
-                }
-              >
-                {post.content.diagram?.reviewed ? "Remove review mark" : "I checked every label — mark diagram reviewed"}
-              </Button>
               <Button type="button" size="sm" variant="ghost" onClick={() => onEditContent({ diagram: null })}>
                 Remove diagram
               </Button>
             </div>
-            {dirty ? <p className="text-[11px] text-[var(--color-muted-foreground)]">Save the draft before marking the diagram reviewed — the review covers the saved version.</p> : null}
           </>
         ) : null}
       </section>
@@ -208,9 +191,9 @@ export function AiStudioPanel({
             <span
               data-testid="trap-status"
               data-status={savedTrap?.status ?? "draft"}
-              className={cn("text-xs font-medium", savedTrap?.status === "approved" ? "text-[var(--color-success)]" : savedTrap?.status === "rejected" ? "text-[var(--color-error)]" : "text-[var(--color-warning)]")}
+              className={cn("text-xs font-medium", savedTrap?.status === "rejected" ? "text-[var(--color-error)]" : "text-[var(--color-warning)]")}
             >
-              {savedTrap?.status === "approved" ? "Approved" : savedTrap?.status === "rejected" ? "Rejected" : "Awaiting review"}
+              {savedTrap?.status === "rejected" ? "Rejected — regenerate or remove" : "Check before publishing"}
             </span>
           ) : null}
         </div>
@@ -219,7 +202,7 @@ export function AiStudioPanel({
           original answer key are never changed. An independent blind re-solve checks the answer.
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" data-testid="ai-trap" onClick={() => act((confirm) => aiTrapAction({ ...base(confirm), instruction: trapInstr }), (r) => onPost(r.post, r.summary))}>
+          <Button type="button" data-testid="ai-trap" onClick={() => act(() => aiTrapAction({ ...base(), instruction: trapInstr }), (r) => onPost(r.post, r.summary))}>
             <Sparkles className="h-4 w-4" aria-hidden /> {trap ? "Regenerate trap question" : "Generate Examiner Trap"}
           </Button>
           {trap && !draft.design.modules.includes("TRAP") ? (
@@ -280,32 +263,10 @@ export function AiStudioPanel({
             ) : null}
             {savedTrap?.checks.length ? <CheckList checks={savedTrap.checks} /> : null}
             <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="success"
-                disabled={dirty || !savedTrap || savedTrap.status === "approved" || trapProblems.length > 0}
-                data-testid="trap-approve"
-                title={dirty ? "Save the draft first" : undefined}
-                onClick={() => act((confirm) => setTrapStatusAction({ postId: post.id, expectedRevision: post.revision, status: "approved", confirmReplaceApproved: confirm }), (p) => onPost(p, "Examiner trap approved."))}
-              >
-                <CheckCircle2 className="h-4 w-4" aria-hidden /> Approve trap
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={dirty || !savedTrap || savedTrap.status === "rejected"}
-                data-testid="trap-reject"
-                onClick={() => act((confirm) => setTrapStatusAction({ postId: post.id, expectedRevision: post.revision, status: "rejected", confirmReplaceApproved: confirm }), (p) => onPost(p, "Examiner trap rejected — it won't be used; remove its slide or regenerate."))}
-              >
-                <XCircle className="h-4 w-4" aria-hidden /> Reject
-              </Button>
               <Button type="button" size="sm" variant="ghost" onClick={() => onEditContent({ trap: null })}>
                 Remove trap
               </Button>
             </div>
-            {dirty ? <p className="text-[11px] text-[var(--color-muted-foreground)]">Save the draft before approving — the approval covers the saved text. Editing an approved trap sends it back for review.</p> : null}
           </div>
         ) : null}
       </section>

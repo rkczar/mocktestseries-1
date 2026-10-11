@@ -17,7 +17,7 @@ import { refreshPostMetrics } from "@/lib/instagram/metrics";
 import { deletePreset, savePreset, type DesignPreset } from "@/lib/instagram/presets";
 import { saveScope } from "@/lib/instagram/scope";
 import { selectCandidates, type Candidate } from "@/lib/instagram/selection";
-import { advanceQueue, applyDesignToBatch, checkItemStatus, confirmQueue, createBatch, getBatchView, retryItem, setQueueStatus, type BatchView } from "@/lib/instagram/batch";
+import { advanceQueue, applyDesignToBatch, bulkPreflight, checkItemStatus, confirmQueue, createBatch, getBatchView, retryItem, setQueueStatus, type BatchView, type BulkPreflightItem } from "@/lib/instagram/batch";
 import { runPublishJob } from "@/lib/instagram/publish";
 import { DIAGRAM_KINDS, TEMPLATE_KEYS, type DiagramKind, type PostContent, type PostDesign, type TemplateKey } from "@/lib/instagram/types";
 import { EXCLUDED_TERMS } from "@/lib/instagram/exam-scope";
@@ -93,7 +93,6 @@ interface EditorInput {
   expectedRevision: number;
   content: unknown;
   design: unknown;
-  confirmReplaceApproved?: boolean;
   provider?: string | null;
   instruction?: string;
 }
@@ -106,11 +105,11 @@ async function editorBase(input: EditorInput) {
   if (!content.ok) throw new StudioError(content.error);
   const design = checkDesignInput(input.design);
   if (!design.ok) throw new StudioError(design.error);
-  return { postId, current, content: content.value, design: design.value, expectedRevision: checkRevision(input.expectedRevision), confirm: input.confirmReplaceApproved === true };
+  return { postId, current, content: content.value, design: design.value, expectedRevision: checkRevision(input.expectedRevision) };
 }
 
 async function save(base: Awaited<ReturnType<typeof editorBase>>, content: PostContent, design: PostDesign, note: string, actorId: string): Promise<PostDto> {
-  const post = await applyChange({ postId: base.postId, expectedRevision: base.expectedRevision, content, design, note, actorId, confirmReplaceApproved: base.confirm });
+  const post = await applyChange({ postId: base.postId, expectedRevision: base.expectedRevision, content, design, note, actorId });
   touch();
   return post;
 }
@@ -150,38 +149,6 @@ export async function aiCaptionsAction(input: EditorInput): Promise<Result<{ pos
       gen: gatewayGenerator({ actorId, provider: parseProvider(input.provider) }),
     });
     return { post: await save(base, r.content, base.design, "AI: three caption versions + keywords", actorId), summary: r.summary };
-  });
-}
-
-/** Reviewer decision on the trap question. Approval covers the exact saved text. */
-export async function setTrapStatusAction(input: { postId: string; expectedRevision: number; status: "approved" | "rejected" | "draft"; confirmReplaceApproved?: boolean }): Promise<Result<PostDto>> {
-  return run(await requireStudio(), async (actorId) => {
-    const post = await getPostDto(checkId(input.postId));
-    if (!post.content.trap) throw new StudioError("There is no trap question to review.");
-    if (!["approved", "rejected", "draft"].includes(input.status)) throw new StudioError("Invalid status.");
-    if (input.status === "approved") {
-      const { checkTrap } = await import("@/lib/instagram/trap");
-      const problems = checkTrap(post.content.trap);
-      if (problems.length) throw new StudioError(`Fix the trap question first: ${problems[0]}`);
-    }
-    const content = { ...post.content, trap: { ...post.content.trap, status: input.status, reviewedAt: new Date().toISOString() } };
-    const r = await applyChange({ postId: post.id, expectedRevision: checkRevision(input.expectedRevision), content, note: `Examiner trap ${input.status}`, actorId, confirmReplaceApproved: input.confirmReplaceApproved === true });
-    await prisma.auditLog.create({ data: { actorId, action: `INSTAGRAM_TRAP_${input.status.toUpperCase()}`, entityType: "InstagramPost", entityId: post.id, metadata: { revision: r.revision } } });
-    touch();
-    return r;
-  });
-}
-
-/** Medical review attestation for the diagram (reset automatically by any later change to it). */
-export async function setDiagramReviewedAction(input: { postId: string; expectedRevision: number; reviewed: boolean; confirmReplaceApproved?: boolean }): Promise<Result<PostDto>> {
-  return run(await requireStudio(), async (actorId) => {
-    const post = await getPostDto(checkId(input.postId));
-    if (!post.content.diagram) throw new StudioError("There is no diagram to review.");
-    const content = { ...post.content, diagram: { ...post.content.diagram, reviewed: input.reviewed === true } };
-    const r = await applyChange({ postId: post.id, expectedRevision: checkRevision(input.expectedRevision), content, note: input.reviewed ? "Diagram marked medically reviewed" : "Diagram review removed", actorId, confirmReplaceApproved: input.confirmReplaceApproved === true });
-    await prisma.auditLog.create({ data: { actorId, action: input.reviewed ? "INSTAGRAM_DIAGRAM_REVIEWED" : "INSTAGRAM_DIAGRAM_UNREVIEWED", entityType: "InstagramPost", entityId: post.id, metadata: { revision: r.revision } } });
-    touch();
-    return r;
   });
 }
 
@@ -270,22 +237,38 @@ export async function loadBatchAction(batchId: string): Promise<Result<BatchView
   return run(await requireStudio(), async () => getBatchView(checkId(batchId)));
 }
 
-export async function applyDesignToBatchAction(input: { batchId: string; target: string; postIds?: string[]; includeReady?: boolean }): Promise<Result<{ changed: number; skipped: string[]; view: BatchView }>> {
+export async function applyDesignToBatchAction(input: { batchId: string; target: string; postIds?: string[] }): Promise<Result<{ changed: number; skipped: string[]; view: BatchView }>> {
   return run(await requireStudio(), async (actorId) => {
     const target = ["handwritten", "professional", "default"].includes(input.target) ? (input.target as "handwritten" | "professional" | "default") : TEMPLATE_KEYS.find((t) => t === input.target);
     if (!target) throw new StudioError("Unknown design.");
     const postIds = Array.isArray(input.postIds) ? input.postIds.filter((x) => typeof x === "string" && ID.test(x)) : undefined;
-    const r = await applyDesignToBatch({ batchId: checkId(input.batchId), target, postIds, includeReady: input.includeReady === true, actorId });
+    const r = await applyDesignToBatch({ batchId: checkId(input.batchId), target, postIds, actorId });
     touch();
     return { ...r, view: await getBatchView(input.batchId) };
   });
 }
 
-export async function confirmQueueAction(input: { batchId: string; postIds: string[]; confirmed: boolean; typed: string }): Promise<Result<BatchView>> {
+/** Final review screen of Bulk Studio: re-checks each selected post (read-only). */
+export async function bulkPreflightAction(input: { batchId: string; postIds: string[] }): Promise<Result<BulkPreflightItem[]>> {
+  return run(await requirePublisher(), async () => {
+    const postIds = (Array.isArray(input.postIds) ? input.postIds : []).filter((x) => typeof x === "string" && ID.test(x)).slice(0, 50);
+    return bulkPreflight({ batchId: checkId(input.batchId), postIds });
+  });
+}
+
+/** "Confirm & Publish Selected" — one confirmation for exactly the posts/revisions on the review screen. */
+export async function confirmQueueAction(input: { batchId: string; items: { postId: string; revision: number; acknowledged: string[] }[]; confirmed: boolean }): Promise<Result<BatchView>> {
   return run(await requirePublisher(), async (actorId) => {
-    if (input.confirmed !== true || String(input.typed ?? "").trim().toUpperCase() !== "PUBLISH") throw new StudioError('Publishing a queue needs explicit confirmation (type PUBLISH).');
-    const postIds = (Array.isArray(input.postIds) ? input.postIds : []).filter((x) => typeof x === "string" && ID.test(x));
-    const v = await confirmQueue({ batchId: checkId(input.batchId), postIds, actorId });
+    if (input.confirmed !== true) throw new StudioError("Publishing needs an explicit confirmation.");
+    const items = (Array.isArray(input.items) ? input.items : [])
+      .filter((i) => i && typeof i.postId === "string" && ID.test(i.postId))
+      .slice(0, 50)
+      .map((i) => ({
+        postId: i.postId,
+        revision: checkRevision(i.revision),
+        acknowledged: Array.isArray(i.acknowledged) ? i.acknowledged.filter((x): x is string => typeof x === "string" && x.length <= 120).slice(0, 60) : [],
+      }));
+    const v = await confirmQueue({ batchId: checkId(input.batchId), items, actorId });
     touch();
     return v;
   });

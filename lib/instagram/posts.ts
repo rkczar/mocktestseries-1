@@ -3,7 +3,7 @@ import { Prisma, type InstagramPost, type InstagramPostSeries } from "@prisma/cl
 import { prisma } from "@/lib/prisma";
 import { isExamInScope } from "@/lib/instagram/scope";
 import { allowedCaptionDomains, getStudioSettings, type StudioSettings } from "@/lib/instagram/config";
-import { blockingIssues, runQualityGate, warningCodes, checklistFor, type QualityIssue } from "@/lib/instagram/quality";
+import { runQualityGate, type QualityIssue } from "@/lib/instagram/quality";
 import { unsupportedChars } from "@/lib/instagram/glyphs";
 import { buildSnapshot, currentSourceHash } from "@/lib/instagram/snapshot";
 import { publishView, type PublishView } from "@/lib/instagram/publish-view";
@@ -12,15 +12,17 @@ import {
   emptyContent,
   normalizeContent,
   normalizeDesign,
+  studioStatus,
   type PostContent,
   type PostDesign,
   type PostStatusLabel,
   type SeriesStats,
   type SourceSnapshot,
+  type StudioPostStatus,
 } from "@/lib/instagram/types";
 
 /**
- * Instagram post lifecycle (drafts, revisions, review). Every write goes to
+ * Instagram post lifecycle (drafts, revisions). Every write goes to
  * InstagramPost / InstagramPostRevision / AuditLog only — never to the
  * Question Bank. Concurrency: each change names the revision it was based on
  * and is applied with a conditional update, so two tabs or two admins can
@@ -51,7 +53,8 @@ export interface PostDto {
   questionCode: string;
   series: InstagramPostSeries;
   version: number;
-  status: InstagramPost["status"];
+  /** Legacy READY rows are reported as DRAFT (see studioStatus). */
+  status: StudioPostStatus;
   revision: number;
   content: PostContent;
   design: PostDesign;
@@ -79,7 +82,7 @@ export interface PostDto {
 export interface HistoryEntry {
   id: string;
   version: number;
-  status: InstagramPost["status"];
+  status: StudioPostStatus;
   series: InstagramPostSeries;
   createdAt: string;
   publishedAt: string | null;
@@ -138,7 +141,7 @@ export async function toDto(post: InstagramPost, settings?: StudioSettings): Pro
     questionCode: post.questionCode,
     series: post.series,
     version: post.version,
-    status: post.status,
+    status: studioStatus(post.status),
     revision: post.revision,
     content: normalizeContent(post.content),
     design: normalizeDesign(post.design),
@@ -179,7 +182,7 @@ export async function getQuestionPostState(questionId: string): Promise<Question
     history: posts.map((p) => ({
       id: p.id,
       version: p.version,
-      status: p.status,
+      status: studioStatus(p.status),
       series: p.series,
       createdAt: p.createdAt.toISOString(),
       publishedAt: p.publishedAt?.toISOString() ?? null,
@@ -219,7 +222,7 @@ export async function statusesFor(questionIds: string[]): Promise<Map<string, Qu
       if (!cur.publishedAt || (p.publishedAt && p.publishedAt.toISOString() > cur.publishedAt)) cur.publishedAt = p.publishedAt?.toISOString() ?? null;
     }
     if (p.supersededAt === null) {
-      cur.status = p.status;
+      cur.status = studioStatus(p.status);
       cur.postId = p.id;
     }
   }
@@ -339,22 +342,21 @@ export async function createNewVersion(postId: string, actorId: string): Promise
   }
 }
 
-async function loadEditable(postId: string, expectedRevision: number, confirmReplaceApproved: boolean) {
+async function loadEditable(postId: string, expectedRevision: number) {
   const post = await prisma.instagramPost.findUnique({ where: { id: postId } });
   if (!post) throw new StudioError("This post no longer exists.", "not-found");
   if (post.supersededAt) throw new StudioError("This is an older version and can't be edited.");
   if (post.status === "PUBLISHED" || post.status === "PUBLISHING") throw new StudioError("A published post can't be edited. Use Create New Version.");
   if (post.revision !== expectedRevision) throw new StudioError("This draft was changed in another window. Reload it to see the latest version.", "conflict");
-  if (post.status === "READY" && !confirmReplaceApproved) {
-    throw new StudioError("This post is approved (Ready). Changing it sends it back to Draft and needs a new review.", "needs-confirm");
-  }
-  if (post.status === "FAILED" && !confirmReplaceApproved) {
-    throw new StudioError("This post is approved but its publish failed. Changing it sends it back to Draft and needs a new review.", "needs-confirm");
-  }
   return post;
 }
 
-/** Writes a new revision (content and/or design) on top of `expectedRevision`. A Ready post goes back to Draft. */
+/**
+ * Writes a new revision (content and/or design) on top of `expectedRevision`.
+ * A failed (or legacy Ready) post becomes a Draft again, and any publish
+ * confirmation on record (e.g. a confirmed Bulk Studio queue item) is cleared:
+ * a confirmation covers one exact revision only.
+ */
 async function writeRevision(
   post: InstagramPost,
   next: { content: PostContent; design: PostDesign },
@@ -364,8 +366,7 @@ async function writeRevision(
   extra: Prisma.InstagramPostUpdateManyMutationInput = {}
 ): Promise<InstagramPost> {
   const revision = post.revision + 1;
-  // An approval covers one exact revision; a failed publish keeps its approval only until the post is edited.
-  const backToDraft = post.status === "READY" || post.status === "FAILED";
+  const hadConfirmation = post.reviewedAt !== null;
   await prisma.$transaction(async (tx) => {
     const res = await tx.instagramPost.updateMany({
       where: { id: post.id, revision: post.revision, supersededAt: null, status: { in: ["DRAFT", "READY", "FAILED"] } },
@@ -374,7 +375,10 @@ async function writeRevision(
         design: json(next.design),
         revision,
         updatedById: actorId,
-        ...(backToDraft ? { status: "DRAFT", reviewedAt: null, reviewedById: null, review: Prisma.DbNull } : {}),
+        status: "DRAFT",
+        reviewedAt: null,
+        reviewedById: null,
+        review: Prisma.DbNull,
         ...extra,
       },
     });
@@ -383,7 +387,7 @@ async function writeRevision(
       data: { postId: post.id, revision, baseRevision, content: json(next.content), design: json(next.design), note, createdById: actorId },
     });
   });
-  if (backToDraft) await audit(actorId, "INSTAGRAM_READY_REVOKED", post.id, { reason: note });
+  if (hadConfirmation) await audit(actorId, "INSTAGRAM_CONFIRMATION_CLEARED", post.id, { reason: note, revision: post.revision });
   return (await prisma.instagramPost.findUnique({ where: { id: post.id } }))!;
 }
 
@@ -394,9 +398,8 @@ export async function applyChange(params: {
   design?: PostDesign;
   note: string;
   actorId: string;
-  confirmReplaceApproved?: boolean;
 }): Promise<PostDto> {
-  const post = await loadEditable(params.postId, params.expectedRevision, params.confirmReplaceApproved ?? false);
+  const post = await loadEditable(params.postId, params.expectedRevision);
   const next = {
     content: params.content ?? normalizeContent(post.content),
     design: params.design ?? normalizeDesign(post.design),
@@ -405,8 +408,8 @@ export async function applyChange(params: {
   return toDto(updated);
 }
 
-export async function undoLast(postId: string, expectedRevision: number, actorId: string, confirmReplaceApproved = false): Promise<PostDto> {
-  const post = await loadEditable(postId, expectedRevision, confirmReplaceApproved);
+export async function undoLast(postId: string, expectedRevision: number, actorId: string): Promise<PostDto> {
+  const post = await loadEditable(postId, expectedRevision);
   const head = await prisma.instagramPostRevision.findUnique({ where: { postId_revision: { postId, revision: post.revision } } });
   if (head?.baseRevision == null) throw new StudioError("Nothing to undo.");
   const target = await prisma.instagramPostRevision.findUnique({ where: { postId_revision: { postId, revision: head.baseRevision } } });
@@ -421,8 +424,8 @@ export async function undoLast(postId: string, expectedRevision: number, actorId
   return toDto(updated);
 }
 
-export async function restoreRevision(postId: string, expectedRevision: number, targetRevision: number, actorId: string, confirmReplaceApproved = false): Promise<PostDto> {
-  const post = await loadEditable(postId, expectedRevision, confirmReplaceApproved);
+export async function restoreRevision(postId: string, expectedRevision: number, targetRevision: number, actorId: string): Promise<PostDto> {
+  const post = await loadEditable(postId, expectedRevision);
   const target = await prisma.instagramPostRevision.findUnique({ where: { postId_revision: { postId, revision: targetRevision } } });
   if (!target) throw new StudioError("That revision doesn't exist.");
   const updated = await writeRevision(
@@ -436,11 +439,11 @@ export async function restoreRevision(postId: string, expectedRevision: number, 
 }
 
 /** Printed question number (admin-entered). Bumps the revision so slide previews refresh. */
-export async function setQuestionNumber(postId: string, expectedRevision: number, questionNumber: number | null, verified: boolean, actorId: string, confirmReplaceApproved = false): Promise<PostDto> {
+export async function setQuestionNumber(postId: string, expectedRevision: number, questionNumber: number | null, verified: boolean, actorId: string): Promise<PostDto> {
   if (questionNumber !== null && (!Number.isInteger(questionNumber) || questionNumber < 1 || questionNumber > 500)) {
     throw new StudioError("Question number must be a whole number between 1 and 500.");
   }
-  const post = await loadEditable(postId, expectedRevision, confirmReplaceApproved);
+  const post = await loadEditable(postId, expectedRevision);
   const updated = await writeRevision(
     post,
     { content: normalizeContent(post.content), design: normalizeDesign(post.design) },
@@ -453,7 +456,7 @@ export async function setQuestionNumber(postId: string, expectedRevision: number
 }
 
 export async function refreshSnapshot(postId: string, expectedRevision: number, actorId: string): Promise<PostDto> {
-  const post = await loadEditable(postId, expectedRevision, true);
+  const post = await loadEditable(postId, expectedRevision);
   const built = await buildSnapshot(post.questionId);
   if (!built) throw new StudioError("This question no longer exists in the Question Bank.", "not-found");
   const updated = await writeRevision(
@@ -462,65 +465,17 @@ export async function refreshSnapshot(postId: string, expectedRevision: number, 
     "Question snapshot refreshed from the Question Bank",
     actorId,
     post.revision,
-    { sourceSnapshot: json(built.snapshot), sourceHash: built.hash, questionCode: built.snapshot.code, status: "DRAFT", reviewedAt: null, reviewedById: null, review: Prisma.DbNull }
+    { sourceSnapshot: json(built.snapshot), sourceHash: built.hash, questionCode: built.snapshot.code }
   );
   await audit(actorId, "INSTAGRAM_SNAPSHOT_REFRESHED", post.id, { questionId: post.questionId });
   return toDto(updated);
-}
-
-export interface MarkReadyInput {
-  postId: string;
-  expectedRevision: number;
-  checklist: Record<string, boolean>;
-  acknowledged: string[];
-  actorId: string;
-}
-
-export async function markReady(input: MarkReadyInput): Promise<{ post: PostDto; blocked: QualityIssue[]; missingAcks: string[]; missingChecklist: string[] }> {
-  const post = await prisma.instagramPost.findUnique({ where: { id: input.postId } });
-  if (!post) throw new StudioError("This post no longer exists.", "not-found");
-  if (post.supersededAt) throw new StudioError("This is an older version.");
-  if (post.status !== "DRAFT" && post.status !== "FAILED") throw new StudioError(post.status === "READY" ? "Already Ready." : "This post can't be approved in its current state.");
-  if (post.revision !== input.expectedRevision) throw new StudioError("This draft was changed in another window. Reload it first.", "conflict");
-
-  const settings = await getStudioSettings();
-  const issues = issuesFor(post, await currentSourceHash(post.questionId), settings);
-  const blocked = blockingIssues(issues);
-  const missingAcks = warningCodes(issues).filter((c) => !input.acknowledged.includes(c));
-  const missingChecklist = checklistFor(normalizeDesign(post.design)).filter((c) => input.checklist[c.key] !== true).map((c) => c.key);
-  if (blocked.length || missingAcks.length || missingChecklist.length) {
-    return { post: await toDto(post, settings), blocked, missingAcks, missingChecklist };
-  }
-  const res = await prisma.instagramPost.updateMany({
-    where: { id: post.id, revision: post.revision, status: post.status, supersededAt: null },
-    data: {
-      status: "READY",
-      reviewedAt: new Date(),
-      reviewedById: input.actorId,
-      review: json({ checklist: input.checklist, acknowledged: warningCodes(issues), revision: post.revision, at: new Date().toISOString() }),
-      updatedById: input.actorId,
-    },
-  });
-  if (res.count !== 1) throw new StudioError("This draft was changed in another window. Reload it first.", "conflict");
-  await audit(input.actorId, "INSTAGRAM_MARKED_READY", post.id, { revision: post.revision, acknowledged: warningCodes(issues) });
-  return { post: await getPostDto(post.id), blocked: [], missingAcks: [], missingChecklist: [] };
-}
-
-export async function backToDraft(postId: string, actorId: string): Promise<PostDto> {
-  const res = await prisma.instagramPost.updateMany({
-    where: { id: postId, status: "READY", supersededAt: null },
-    data: { status: "DRAFT", reviewedAt: null, reviewedById: null, review: Prisma.DbNull, updatedById: actorId },
-  });
-  if (res.count !== 1) throw new StudioError("Only a Ready post can go back to Draft.");
-  await audit(actorId, "INSTAGRAM_READY_REVOKED", postId, { reason: "Back to Draft" });
-  return getPostDto(postId);
 }
 
 /** Deletes an unpublished current draft. If it was a new version, the previous published version becomes current again. */
 export async function deleteDraft(postId: string, actorId: string): Promise<void> {
   const post = await prisma.instagramPost.findUnique({ where: { id: postId } });
   if (!post) return;
-  if (post.status !== "DRAFT" && post.status !== "READY") throw new StudioError("Only Draft or Ready posts can be deleted.");
+  if (post.status !== "DRAFT" && post.status !== "READY") throw new StudioError("Only Draft posts can be deleted.");
   if (post.supersededAt) throw new StudioError("Older versions are kept as history.");
   await prisma.$transaction(async (tx) => {
     await tx.instagramPost.delete({ where: { id: post.id } });

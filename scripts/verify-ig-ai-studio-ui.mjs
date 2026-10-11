@@ -140,10 +140,10 @@ try {
   await page.getByTestId("tab-studio").click();
   await page.getByTestId("ai-diagram").click();
   await editorMessage(page, /Diagram generated/);
-  check("diagram generated, needs medical review", /Needs medical review/.test(await page.getByTestId("diagram-status").innerText()));
+  check("diagram generated, flagged to check before publishing", /Check every label before publishing/.test(await page.getByTestId("diagram-status").innerText()));
   await page.getByTestId("ai-trap").click();
   await editorMessage(page, /Trap question generated/);
-  check("trap generated: awaiting review, checks listed", (await page.getByTestId("trap-status").getAttribute("data-status")) === "draft" && (await page.getByTestId("trap-checks").locator("li").count()) >= 3);
+  check("trap generated: check-before-publishing note, checks listed", (await page.getByTestId("trap-status").getAttribute("data-status")) === "draft" && (await page.getByTestId("trap-checks").locator("li").count()) >= 3);
   await page.getByTestId("tab-design").click();
   await page.getByTestId("smart-layout").click();
   const rows = await page.locator('[data-testid^="module-row-"] select').evaluateAll((els) => els.map((e) => e.value));
@@ -151,11 +151,7 @@ try {
   await page.getByTestId("save-draft").click();
   await editorMessage(page, /Saved/);
   await page.getByTestId("tab-studio").click();
-  await page.getByTestId("trap-approve").click();
-  await editorMessage(page, /trap approved/);
-  await page.getByTestId("diagram-reviewed").click();
-  await editorMessage(page, /medically reviewed/);
-  check("trap approved + diagram reviewed", (await page.getByTestId("trap-status").getAttribute("data-status")) === "approved");
+  check("no separate trap / diagram approval buttons", (await page.getByTestId("trap-approve").count()) === 0 && (await page.getByTestId("trap-reject").count()) === 0 && (await page.getByTestId("diagram-reviewed").count()) === 0);
   await page.getByTestId("tab-content").click();
   await page.getByTestId("ai-captions").click();
   await editorMessage(page, /caption version/);
@@ -171,9 +167,9 @@ try {
   }
   check("all 8 slides preview", true);
   await page.screenshot({ path: `${SHOTS}/02-editor-trap.png` });
-  await page.getByTestId("tab-review").click();
-  const blocking = await page.locator('[data-testid="issue-list"] [data-code]').evaluateAll((els) => els.map((e) => e.getAttribute("data-code")));
-  check("no diagram/trap blockers left", !blocking.some((c) => /DIAGRAM_UNREVIEWED|TRAP_UNAPPROVED/.test(c)), blocking);
+  await page.getByTestId("tab-checks").click();
+  const listed = await page.locator('[data-testid="issue-list"] [data-code]').evaluateAll((els) => els.map((e) => [e.getAttribute("data-code"), /Blocking/.test(e.textContent ?? "")]));
+  check("diagram/trap are listed as checks, never as blockers", listed.some(([c]) => c === "DIAGRAM_UNREVIEWED") && !listed.some(([c, blocking]) => /DIAGRAM_UNREVIEWED|TRAP_UNAPPROVED/.test(c) && blocking), listed);
   const genCalls = Number(sql(`SELECT count(*) FROM "AiGatewayCall" WHERE provider='anthropic' AND ok`));
   check("every generation went through the gateway to Claude (logged)", genCalls >= 5, genCalls);
   await editor(page).getByRole("button", { name: "Close" }).first().click();

@@ -4,7 +4,6 @@ import { POST_STATUS_LABELS, type PostStatusLabel } from "@/lib/instagram/types"
 const VARIANT: Record<PostStatusLabel, "neutral" | "primary" | "success" | "error" | "warning" | "info"> = {
   NOT_CREATED: "neutral",
   DRAFT: "info",
-  READY: "primary",
   PUBLISHING: "warning",
   PUBLISHED: "success",
   FAILED: "error",

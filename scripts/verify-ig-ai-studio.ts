@@ -272,9 +272,14 @@ async function main() {
       allowedDomains: ["mocktestseries.in"],
     };
     const content = { ...SAMPLE_INPUT.content, caption: "Comment your answer.", diagram: { ...SAMPLE_INPUT.content.diagram!, reviewed: false }, trap: { ...SAMPLE_INPUT.content.trap!, status: "draft" as const } };
-    const codes = runQualityGate({ ...base, content }).filter((i) => i.severity === "error").map((i) => i.code);
-    assert.ok(codes.includes("DIAGRAM_UNREVIEWED"));
-    assert.ok(codes.includes("TRAP_UNAPPROVED"));
+    // No separate approval: an unreviewed diagram / unapproved trap is a warning shown in the final confirmation, not a blocker.
+    const gate = runQualityGate({ ...base, content });
+    assert.ok(gate.some((i) => i.code === "DIAGRAM_UNREVIEWED" && i.severity === "warning"));
+    assert.ok(gate.some((i) => i.code === "TRAP_UNAPPROVED" && i.severity === "warning"));
+    assert.deepEqual(gate.filter((i) => i.severity === "error").map((i) => i.code), []);
+    // A trap a reviewer rejected (legacy data) still blocks.
+    const rejected = runQualityGate({ ...base, content: { ...content, trap: { ...content.trap, status: "rejected" as const } } });
+    assert.ok(rejected.some((i) => i.code === "TRAP_REJECTED" && i.severity === "error"));
     const ok = runQualityGate({ ...base, content: { ...content, diagram: { ...content.diagram, reviewed: true }, trap: { ...content.trap, status: "approved" as const } } }).filter((i) => i.severity === "error");
     assert.deepEqual(ok.map((i) => i.code), []);
     const ug = runQualityGate({ ...base, snapshot: { ...snap, examName: "Neet UG", examCode: "NEETUG" }, content: { ...content, caption: "Great for #NEETUG" } }).map((i) => i.code);
@@ -286,7 +291,7 @@ async function main() {
   // ---- DB / gateway / queue ------------------------------------------------------------
   const { server: anth } = await startMockAnthropic(A_PORT);
   const { server: graph, base: graphBase } = await startMockGraph(G_PORT);
-  const { readPublishMedia, setPublishingSwitch, runPublishJob } = await import("@/lib/instagram/publish");
+  const { readPublishMedia, setPublishingSwitch, runPublishJob, publishPreflight } = await import("@/lib/instagram/publish");
   const media = http.createServer(async (req, res) => {
     const m = /^\/api\/instagram-media\/([^/]+)\/([^/]+)$/.exec(req.url ?? "");
     const buf = m ? await readPublishMedia(m[1], m[2]) : null;
@@ -329,7 +334,6 @@ async function main() {
   const metrics = await import("@/lib/instagram/metrics");
   const scopeDb = await import("@/lib/instagram/scope");
   const presets = await import("@/lib/instagram/presets");
-  const { REVIEW_CHECKLIST } = await import("@/lib/instagram/quality");
   const { saveAiSettings } = await import("@/lib/ai-settings");
 
   const admin = await prisma.adminUser.findUniqueOrThrow({ where: { username: "igmaster" } });
@@ -436,26 +440,23 @@ async function main() {
     assert.equal(r.content.captionStyle, "professional");
     await posts.applyChange({ postId, expectedRevision: p.revision, content: r.content, note: "captions", actorId });
   });
-  await check("Ready flow: blocked until trap approved + diagram reviewed; then READY", async () => {
+  await check("publish gate: AI diagram + trap need no approval step — listed as warnings in the single confirmation", async () => {
     let p = await posts.getPostDto(postId);
-    const all = Object.fromEntries(REVIEW_CHECKLIST.map((c) => [c.key, true]));
-    let r = await posts.markReady({ postId, expectedRevision: p.revision, checklist: all, acknowledged: p.issues.filter((i) => i.severity === "warning").map((i) => i.code), actorId });
-    assert.ok(r.blocked.some((b) => b.code === "TRAP_UNAPPROVED"));
-    assert.ok(r.blocked.some((b) => b.code === "DIAGRAM_UNREVIEWED"));
-    p = await posts.getPostDto(postId);
-    const content = { ...p.content, trap: { ...p.content.trap!, status: "approved" as const }, diagram: { ...p.content.diagram!, reviewed: true } };
-    p = await posts.applyChange({ postId, expectedRevision: p.revision, content, note: "approve", actorId });
     p = await posts.setQuestionNumber(postId, p.revision, 1, true, actorId);
+    assert.equal(p.status, "DRAFT");
     const errs = p.issues.filter((i) => i.severity === "error");
     assert.deepEqual(errs.map((e) => e.code), []);
-    r = await posts.markReady({ postId, expectedRevision: p.revision, checklist: all, acknowledged: p.issues.filter((i) => i.severity === "warning").map((i) => i.code), actorId });
-    assert.equal(r.post.status, "READY", JSON.stringify(r.blocked));
+    const warns = p.issues.filter((i) => i.severity === "warning").map((i) => i.code);
+    assert.ok(warns.includes("TRAP_UNAPPROVED") && warns.includes("DIAGRAM_UNREVIEWED"), JSON.stringify(warns));
+    const pre = await publishPreflight(postId, p.revision, "CAROUSEL");
+    assert.deepEqual(pre.warnings.map((w) => w.code).sort(), [...warns].sort());
+    assert.ok(pre.checklist.some((c) => c.key === "extrasReviewed"), "the confirmation covers diagram/trap review");
   });
   await check("switching design (handwritten ↔ professional) never changes the medical content", async () => {
     const p = await posts.getPostDto(postId);
-    const r = await posts.applyChange({ postId, expectedRevision: p.revision, design: { ...p.design, template: "navy-premium" }, note: "design", actorId, confirmReplaceApproved: true });
+    const r = await posts.applyChange({ postId, expectedRevision: p.revision, design: { ...p.design, template: "navy-premium" }, note: "design", actorId });
     assert.deepEqual(r.content, p.content);
-    assert.equal(r.status, "DRAFT", "a Ready post that changes goes back to Draft");
+    assert.equal(r.status, "DRAFT");
   });
 
   console.log("\n--- F. Bulk Studio + attended queue (Meta mock) ---");
@@ -484,40 +485,50 @@ async function main() {
     const e = await thrown(() => batch.createBatch({ name: "x", examId: null, questionIds: Array.from({ length: 21 }, (_, i) => `q${i}xxxxxxxxxxx`), template: "default", actorId }));
     assert.ok(e instanceof posts.StudioError);
   });
-  await check("Apply Handwritten / Professional / Default to All (Ready posts skipped unless asked)", async () => {
-    let r = await batch.applyDesignToBatch({ batchId, target: "handwritten", includeReady: false, actorId });
+  await check("Apply Handwritten / Professional / Default to All", async () => {
+    let r = await batch.applyDesignToBatch({ batchId, target: "handwritten", actorId });
     let v = await batch.getBatchView(batchId);
     assert.ok(v.items.filter((i) => i.post?.status === "DRAFT").every((i) => T.modeOfTemplate(i.post!.design.template) === "handwritten"));
-    r = await batch.applyDesignToBatch({ batchId, target: "professional", includeReady: false, actorId });
+    r = await batch.applyDesignToBatch({ batchId, target: "professional", actorId });
     v = await batch.getBatchView(batchId);
     assert.ok(v.items.filter((i) => i.post?.status === "DRAFT").every((i) => T.modeOfTemplate(i.post!.design.template) === "professional"));
     assert.ok(r.changed >= 4);
-    await batch.applyDesignToBatch({ batchId, target: "hw-diagrams", postIds: [v.items[2].postId], includeReady: false, actorId });
+    await batch.applyDesignToBatch({ batchId, target: "hw-diagrams", postIds: [v.items[2].postId], actorId });
     v = await batch.getBatchView(batchId);
     assert.equal(v.items[2].post?.design.template, "hw-diagrams", "individual override");
   });
-  /** Makes every batch post Ready with simple manual content (no diagram/trap slide). */
-  async function readyAll() {
+  /** Completes every batch draft with simple manual content (no diagram/trap slide) — no approval step. */
+  async function completeAll() {
     const v = await batch.getBatchView(batchId);
-    const all = Object.fromEntries(REVIEW_CHECKLIST.map((c) => [c.key, true]));
     for (const it of v.items) {
       let p = it.post!;
       if (p.status !== "DRAFT") continue;
       const content = { ...p.content, hookText: "Can You Solve This PYQ?", explanation: "Short fixture explanation.", memoryTrick: "Trick.", caption: `Fixture ${p.questionCode} ${crypto.randomUUID().slice(0, 6)}\nComment your answer.`, hashtags: ["#MOExam"], origin: { kind: "manual" as const }, aiFlags: [] };
       p = await posts.applyChange({ postId: p.id, expectedRevision: p.revision, content, design: T.defaultDesign(p.design.template, 4), note: "fixture", actorId });
       p = await posts.setQuestionNumber(p.id, p.revision, 1, true, actorId);
-      const r = await posts.markReady({ postId: p.id, expectedRevision: p.revision, checklist: all, acknowledged: p.issues.filter((i) => i.severity === "warning").map((i) => i.code), actorId });
-      assert.equal(r.post.status, "READY", `${p.questionCode}: ${JSON.stringify(r.blocked.map((b) => b.code))}`);
+      assert.deepEqual(p.issues.filter((i) => i.severity === "error").map((i) => i.code), [], p.questionCode);
     }
   }
-  await check("queue: refused while publishing switch is OFF; Draft posts can't be queued", async () => {
+  /** What the final review screen sends: each post's revision + the warnings it showed. */
+  async function selection(postIds: string[]) {
+    const pre = await batch.bulkPreflight({ batchId, postIds });
+    return pre.map((i) => ({ postId: i.postId, revision: i.revision, acknowledged: i.pre?.warnings.map((w) => w.code) ?? [] }));
+  }
+  await check("queue: refused while publishing switch is OFF; a selection with an unpublishable post queues nothing", async () => {
     await setPublishingSwitch(false, actorId);
     const v = await batch.getBatchView(batchId);
-    const e = await thrown(() => batch.confirmQueue({ batchId, postIds: v.items.map((i) => i.postId), actorId }));
+    const ids = v.items.map((i) => i.postId);
+    const sel1 = await selection(ids);
+    const e = await thrown(() => batch.confirmQueue({ batchId, items: sel1, actorId }));
     assert.ok(e instanceof posts.StudioError && /turned off/.test(e.message));
     await setPublishingSwitch(true, actorId);
-    const e2 = await thrown(() => batch.confirmQueue({ batchId, postIds: v.items.map((i) => i.postId), actorId }));
-    assert.ok(e2 instanceof posts.StudioError && /Ready/.test(e2.message));
+    // Fresh drafts still have blocking issues (empty explanation etc.): all or nothing.
+    const sel2 = await selection(ids);
+    const e2 = await thrown(() => batch.confirmQueue({ batchId, items: sel2, actorId }));
+    assert.ok(e2 instanceof posts.StudioError && /Nothing was queued/.test(e2.message), String(e2));
+    const after = await batch.getBatchView(batchId);
+    assert.ok(after.items.every((i) => i.queueState === "NONE"));
+    assert.equal(after.batch.status, "DRAFTING");
   });
   async function drive(maxSteps = 60) {
     for (let i = 0; i < maxSteps; i++) {
@@ -529,11 +540,23 @@ async function main() {
     return batch.getBatchView(batchId);
   }
   await check("confirmed queue publishes each post exactly once, spaced, then COMPLETE", async () => {
-    await readyAll();
+    await completeAll();
     const v = await batch.getBatchView(batchId);
     const pick = v.items.slice(0, 3).map((i) => i.postId);
-    const c = await batch.confirmQueue({ batchId, postIds: pick, actorId });
+    // A selection whose shown warnings don't match the current ones is refused (nothing queued).
+    const stale = (await selection(pick)).map((i) => ({ ...i, acknowledged: [] }));
+    if ((await selection(pick)).some((i) => i.acknowledged.length)) {
+      const e = await thrown(() => batch.confirmQueue({ batchId, items: stale, actorId }));
+      assert.ok(e instanceof posts.StudioError && /Nothing was queued/.test(e.message));
+    }
+    const c = await batch.confirmQueue({ batchId, items: await selection(pick), actorId });
     assert.equal(c.batch.status, "QUEUE_RUNNING");
+    // The one confirmation is recorded on each selected post for its exact revision.
+    for (const id of pick) {
+      const row = await prisma.instagramPost.findUniqueOrThrow({ where: { id } });
+      const rv = row.review as { via?: string; batchId?: string; revision?: number };
+      assert.deepEqual([rv.via, rv.batchId, rv.revision, row.reviewedById], ["bulk", batchId, row.revision, actorId]);
+    }
     const end = await drive();
     assert.equal(end.batch.status, "COMPLETE");
     const done = end.items.filter((i) => i.queueState === "DONE");
@@ -551,9 +574,9 @@ async function main() {
   await check("a failure pauses the queue; FAILED = nothing published; Safe Retry; Stop Pending skips the rest", async () => {
     process.env.INSTAGRAM_ACCESS_TOKEN = mockToken("procerror");
     const v = await batch.getBatchView(batchId);
-    const rest = v.items.filter((i) => i.post?.status === "READY").map((i) => i.postId);
+    const rest = v.items.filter((i) => i.post?.status === "DRAFT").map((i) => i.postId);
     assert.equal(rest.length, 2);
-    await batch.confirmQueue({ batchId, postIds: rest, actorId });
+    await batch.confirmQueue({ batchId, items: await selection(rest), actorId });
     const end = await drive();
     assert.equal(end.batch.status, "QUEUE_PAUSED");
     const failed = end.items.find((i) => i.queueState === "FAILED");
@@ -568,7 +591,7 @@ async function main() {
   });
   await check("pause / resume; resume refused while an item is UNCERTAIN; Check Instagram status resolves it", async () => {
     const v = await batch.getBatchView(batchId);
-    const item = v.items.find((i) => i.post?.status === "READY" || i.post?.status === "FAILED")!;
+    const item = v.items.find((i) => i.post?.status === "DRAFT" || i.post?.status === "FAILED")!;
     await prisma.instagramBatchItem.update({ where: { id: item.id }, data: { queueState: "UNCERTAIN" } });
     await prisma.instagramBatch.update({ where: { id: batchId }, data: { status: "QUEUE_PAUSED" } });
     const e = await thrown(() => batch.setQueueStatus({ batchId, action: "resume", actorId }));
@@ -580,6 +603,28 @@ async function main() {
     assert.equal(resumed.batch.status, "QUEUE_RUNNING");
     const paused = await batch.setQueueStatus({ batchId, action: "pause", actorId });
     assert.equal(paused.batch.status, "QUEUE_PAUSED");
+  });
+
+  await check("confirmation covers one revision only: a post edited after Confirm & Publish Selected is not published", async () => {
+    await batch.setQueueStatus({ batchId, action: "stop", actorId });
+    const v = await batch.getBatchView(batchId);
+    const it = v.items.find((i) => i.post && (i.post.status === "DRAFT" || i.post.status === "FAILED"))!;
+    await prisma.instagramBatchItem.update({ where: { id: it.id }, data: { queueState: "NONE" } });
+    const before = ((await realFetch(`${graphBase}/__mock/state`).then((r) => r.json())) as { media: unknown[] }).media.length;
+    await batch.confirmQueue({ batchId, items: await selection([it.postId]), actorId });
+    const p = await posts.getPostDto(it.postId);
+    const edited = await posts.applyChange({ postId: p.id, expectedRevision: p.revision, content: { ...p.content, memoryTrick: "Changed after confirming." }, note: "edit after confirm", actorId });
+    assert.equal(edited.reviewedAt, null, "edit clears the confirmation");
+    const end = await drive();
+    const item = end.items.find((i) => i.id === it.id)!;
+    assert.equal(item.queueState, "FAILED");
+    assert.match(item.lastError ?? "", /changed after it was confirmed/);
+    const after = ((await realFetch(`${graphBase}/__mock/state`).then((r) => r.json())) as { media: unknown[] }).media.length;
+    assert.equal(after, before, "nothing published");
+    const e = await thrown(() => batch.retryItem({ batchId, itemId: it.id, actorId }));
+    assert.ok(e instanceof posts.StudioError && /changed after it was confirmed/.test(e.message), "retry needs a new confirmation");
+    assert.ok((await prisma.auditLog.count({ where: { entityId: it.postId, action: "INSTAGRAM_CONFIRMATION_CLEARED" } })) >= 1);
+    await batch.setQueueStatus({ batchId, action: "stop", actorId });
   });
 
   console.log("\n--- G. Metrics + analytics ---");

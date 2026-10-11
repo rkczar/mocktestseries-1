@@ -463,30 +463,23 @@ async function partB() {
     await assert.rejects(posts.setQuestionNumber(postId, rev, 0, true, actorId), /between 1 and 500/);
   });
 
-  await check("Mark Ready: refused without checklist + acknowledgements; approved with them; edit then needs confirmation and reverts to Draft", async () => {
+  await check("no approval step: edits never ask for confirmation; the review statements are what the final confirmation covers", async () => {
     const dto = await posts.getPostDto(postId);
+    assert.equal(dto.status, "DRAFT");
     assert.equal(dto.issues.filter((i) => i.severity === "error").length, 0, JSON.stringify(dto.issues));
     const warn = dto.issues.filter((i) => i.severity === "warning").map((i) => i.code);
     assert.ok(warn.includes("AI_CONTENT"));
-    const refused = await posts.markReady({ postId, expectedRevision: rev, checklist: {}, acknowledged: [], actorId });
-    assert.equal(refused.post.status, "DRAFT");
+    assert.equal("markReady" in posts, false, "Mark Ready is gone");
+    assert.equal("backToDraft" in posts, false, "Back to Draft is gone");
     // The extras item applies only to carousels with Diagram / Trap / Pearls / Mistakes slides (AI Studio).
-    assert.equal(refused.missingChecklist.length, checklistFor(dto.design).length);
-    assert.deepEqual(refused.missingAcks.sort(), [...warn].sort());
-    const all = Object.fromEntries(REVIEW_CHECKLIST.map((c) => [c.key, true]));
-    const ok = await posts.markReady({ postId, expectedRevision: rev, checklist: all, acknowledged: warn, actorId });
-    assert.equal(ok.post.status, "READY");
-    assert.equal(ok.post.reviewedBy, "IG Master");
-    await assert.rejects(posts.applyChange({ postId, expectedRevision: rev, note: "edit", actorId }), (e: Error & { kind?: string }) => e.kind === "needs-confirm");
-    const reverted = await posts.applyChange({ postId, expectedRevision: rev, content: { ...ok.post.content, clinicalPearl: "Edited pearl." }, note: "edit after approval", actorId, confirmReplaceApproved: true });
-    assert.equal(reverted.status, "DRAFT");
-    assert.equal(reverted.reviewedAt, null);
-    rev = reverted.revision;
-    const again = await posts.markReady({ postId, expectedRevision: rev, checklist: all, acknowledged: warn, actorId });
-    assert.equal(again.post.status, "READY");
+    assert.ok(checklistFor(dto.design).length >= REVIEW_CHECKLIST.length - 1);
+    const edited = await posts.applyChange({ postId, expectedRevision: rev, content: { ...dto.content, clinicalPearl: "Edited pearl." }, note: "edit", actorId });
+    assert.equal(edited.status, "DRAFT");
+    assert.equal(edited.reviewedAt, null);
+    rev = edited.revision;
   });
 
-  await check("source change in the Question Bank blocks approval until the snapshot is refreshed (fixture row, restored after)", async () => {
+  await check("source change in the Question Bank blocks publishing until the snapshot is refreshed (fixture row, restored after)", async () => {
     const original = good.text;
     await prisma.question.update({ where: { id: good.id }, data: { text: original + " (edited)" } });
     try {
@@ -567,7 +560,7 @@ async function partB() {
     await posts.deleteDraft(v2.id, actorId);
     const st3 = (await posts.statusesFor([good.id])).get(good.id)!;
     assert.deepEqual([st3.status, st3.postId], ["PUBLISHED", postId]);
-    await assert.rejects(posts.deleteDraft(postId, actorId), /Only Draft or Ready/);
+    await assert.rejects(posts.deleteDraft(postId, actorId), /Only Draft posts can be deleted/);
   });
 
   await check("audit trail written for every studio change", async () => {

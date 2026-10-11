@@ -1,4 +1,5 @@
 import type { InstagramPost } from "@prisma/client";
+import { studioStatus, type StudioPostStatus } from "@/lib/instagram/types";
 
 /**
  * Publish job state shapes + the status view shown in the editor (no I/O).
@@ -48,7 +49,7 @@ export interface PublishJob {
 }
 
 export interface PublishView {
-  status: InstagramPost["status"];
+  status: StudioPostStatus;
   stage: PublishStage | null;
   format: PublishFormat | null;
   slideCount: number | null;
@@ -81,7 +82,7 @@ export function publishView(post: Pick<InstagramPost, "status" | "publishJob" | 
   const job = readJob(post.publishJob);
   const stale = post.status === "PUBLISHING" && isStale(job);
   return {
-    status: post.status,
+    status: studioStatus(post.status),
     stage: job?.stage ?? null,
     format: job?.format ?? null,
     slideCount: job?.slideCount ?? null,

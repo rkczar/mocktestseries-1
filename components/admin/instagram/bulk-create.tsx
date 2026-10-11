@@ -177,7 +177,7 @@ export function BulkCreate({ options }: { options: Options }) {
                             <span className="font-medium">{`${p.label}: ${p.points}/${p.max}`}</span> <span className="text-[var(--color-muted-foreground)]">{p.why}</span>
                           </li>
                         ))}
-                        {c.blockers.length ? <li className="text-[var(--color-warning)]">−30 for blockers (the post can&apos;t be approved until they are fixed)</li> : null}
+                        {c.blockers.length ? <li className="text-[var(--color-warning)]">−30 for blockers (the post can&apos;t be published until they are fixed)</li> : null}
                       </ul>
                     ) : null}
                   </div>

@@ -6,13 +6,12 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Loader2, Pause, Play, RefreshCw, Send, Sparkles, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
 import { cn } from "@/lib/utils";
 import { TEMPLATES } from "@/lib/instagram/templates";
 import { smartModules } from "@/lib/instagram/smart-layout";
 import { DESIGN_MODE_LABELS, TEMPLATE_KEYS, modeOfTemplate } from "@/lib/instagram/types";
-import type { BatchItemView, BatchView } from "@/lib/instagram/batch";
+import type { BatchItemView, BatchView, BulkPreflightItem } from "@/lib/instagram/batch";
 import type { PostDto } from "@/lib/instagram/posts";
 import { InstagramStatusBadge } from "@/components/admin/instagram/status-badge";
 import { OpenInEditor } from "@/components/admin/instagram/editor-host";
@@ -24,6 +23,7 @@ import {
   aiDiagramAction,
   aiTrapAction,
   applyDesignToBatchAction,
+  bulkPreflightAction,
   checkQueueItemAction,
   confirmQueueAction,
   loadBatchAction,
@@ -54,10 +54,19 @@ function itemSummary(p: PostDto | null) {
   };
 }
 
+/** A draft that can go into the publishing queue: current, unpublished, no blocking issue, not already queued. */
+function isCompleted(it: BatchItemView): boolean {
+  const p = it.post;
+  return Boolean(
+    p && p.isCurrent && (p.status === "DRAFT" || p.status === "FAILED") && !p.issues.some((i) => i.severity === "error") && !["QUEUED", "PUBLISHING", "UNCERTAIN", "DONE"].includes(it.queueState)
+  );
+}
+
 /**
- * One Bulk Studio batch: per-post design / generation / review status, bulk
- * design switches, sequential AI generation, and the attended publishing
- * queue (advances only while this page is open and the queue is running).
+ * One Bulk Studio batch: per-post design / generation status, bulk design
+ * switches, sequential AI generation, and publishing: select completed drafts,
+ * review them on one final screen, "Confirm & Publish Selected" once, then the
+ * attended queue publishes them (advances only while this page is open).
  */
 export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spacingSeconds }: { initial: BatchView; publishingEnabled: boolean; connected: boolean; isMaster: boolean; spacingSeconds: number }) {
   const router = useRouter();
@@ -67,10 +76,8 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
   const [provider, setProvider] = useState<ProviderChoice>("default");
   const [steps, setSteps] = useState<Record<Step, boolean>>({ content: true, diagram: true, trap: true, captions: true, layout: true });
   const [progress, setProgress] = useState<string | null>(null);
-  const [includeReady, setIncludeReady] = useState(false);
   const [queuePick, setQueuePick] = useState<string[]>([]);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [typed, setTyped] = useState("");
   const running = useRef(false);
 
   // A server refresh (e.g. after the editor closes) brings a new `initial`: adopt it.
@@ -156,14 +163,14 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
       }
       running.current = false;
       setProgress(null);
-      setMsg(errors.length ? { tone: "error", text: `Finished with ${errors.length} problem(s): ${errors.join(" · ")}` } : { tone: "ok", text: "Generation finished. Review every post, approve diagrams and traps, then Mark Ready." });
+      setMsg(errors.length ? { tone: "error", text: `Finished with ${errors.length} problem(s): ${errors.join(" · ")}` } : { tone: "ok", text: "Generation finished. Preview each post; when they look right, select them and publish with one final confirmation." });
       router.refresh();
     });
   };
 
   const applyDesign = (target: string, postIds?: string[]) =>
     start(async () => {
-      const r = await applyDesignToBatchAction({ batchId: view.batch.id, target, postIds, includeReady });
+      const r = await applyDesignToBatchAction({ batchId: view.batch.id, target, postIds });
       if (!r.ok) return setMsg({ tone: "error", text: r.error });
       setView(r.data.view);
       setMsg({ tone: "ok", text: `Design changed on ${r.data.changed} post(s).${r.data.skipped.length ? ` Skipped: ${r.data.skipped.join(", ")}` : ""}` });
@@ -176,7 +183,11 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
       setView(r.data);
     });
 
-  const ready = view.items.filter((i) => i.post?.status === "READY");
+  const completed = view.items.filter(isCompleted);
+  const openReview = (postIds: string[]) => {
+    setQueuePick(postIds);
+    setConfirmOpen(true);
+  };
   const queueActive = view.batch.status === "QUEUE_RUNNING" || view.batch.status === "QUEUE_PAUSED";
   const counts = view.items.reduce((m, i) => ((m[i.post?.status ?? "?"] = (m[i.post?.status ?? "?"] ?? 0) + 1), m), {} as Record<string, number>);
 
@@ -186,7 +197,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
         <h2 className="text-lg font-semibold">{view.batch.name}</h2>
         <Badge variant="neutral">{`${view.items.length} separate posts`}</Badge>
         {Object.entries(counts).map(([k, v]) => (
-          <Badge key={k} variant={k === "READY" ? "success" : k === "PUBLISHED" ? "primary" : "neutral"}>{`${v} ${k.toLowerCase()}`}</Badge>
+          <Badge key={k} variant={k === "PUBLISHED" ? "success" : k === "FAILED" ? "error" : "neutral"}>{`${v} ${k.toLowerCase()}`}</Badge>
         ))}
       </div>
 
@@ -209,9 +220,6 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
           <Button size="sm" variant="outline" disabled={pending} onClick={() => applyDesign("default")} data-testid="apply-default">
             Apply Default to All
           </Button>
-          <label className="flex items-center gap-1.5 text-xs">
-            <input type="checkbox" checked={includeReady} onChange={(e) => setIncludeReady(e.target.checked)} /> also change approved posts (they go back to Draft)
-          </label>
         </div>
         <p className="text-[11px] text-[var(--color-muted-foreground)]">Only the design changes — never the medical content. Individual overrides are in each row below.</p>
       </section>
@@ -233,7 +241,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
           </Button>
           {progress ? <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="generate-progress">{progress}</span> : null}
         </div>
-        <p className="text-[11px] text-[var(--color-muted-foreground)]">Posts are generated one after another; each step is saved as a revision you can undo. Every result still needs your review and approval.</p>
+        <p className="text-[11px] text-[var(--color-muted-foreground)]">Posts are generated one after another; each step is saved as a revision you can undo. Nothing is published until you confirm it on the final review screen.</p>
       </section>
 
       {/* Items */}
@@ -267,7 +275,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
                     <SelectNative
                       className="h-8 w-44 text-xs"
                       value={p.design.template}
-                      disabled={pending || !["DRAFT", "READY", "FAILED"].includes(p.status)}
+                      disabled={pending || !["DRAFT", "FAILED"].includes(p.status)}
                       onChange={(e) => applyDesign(e.target.value, [p.id])}
                       aria-label={`Design for ${p.questionCode}`}
                     >
@@ -280,7 +288,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
                   ) : null}
                   {p ? (
                     <OpenInEditor target={{ questionId: p.questionId, code: p.questionCode, preview: p.snapshot.text.replace(/<[^>]+>/g, " ").slice(0, 160), series: p.series }} className="inline-flex h-8 items-center rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 text-xs" testId="open-editor">
-                      Preview · Edit · Review
+                      Preview · Edit
                     </OpenInEditor>
                   ) : null}
                   {p && editable(p) ? (
@@ -298,10 +306,15 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
                       <RefreshCw className="h-4 w-4" aria-hidden /> Check Instagram status
                     </Button>
                   ) : null}
-                  {isMaster && !queueActive && p?.status === "READY" ? (
-                    <label className="flex items-center gap-1 text-xs">
-                      <input type="checkbox" checked={queuePick.includes(p.id)} onChange={(e) => setQueuePick((x) => (e.target.checked ? [...x, p.id] : x.filter((y) => y !== p.id)))} aria-label={`Queue ${p.questionCode}`} /> queue
-                    </label>
+                  {isMaster && !queueActive && p && isCompleted(it) ? (
+                    <>
+                      <label className="flex items-center gap-1 text-xs">
+                        <input type="checkbox" checked={queuePick.includes(p.id)} onChange={(e) => setQueuePick((x) => (e.target.checked ? [...x, p.id] : x.filter((y) => y !== p.id)))} aria-label={`Select ${p.questionCode}`} data-testid="select-item" /> select
+                      </label>
+                      <Button size="sm" variant="success" disabled={pending || !publishingEnabled || !connected} onClick={() => openReview([p.id])} data-testid="item-publish">
+                        <Send className="h-4 w-4" aria-hidden /> Publish to Instagram
+                      </Button>
+                    </>
                   ) : null}
                 </div>
               </div>
@@ -320,7 +333,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
           </p>
         ) : null}
         <p className="text-[11px] text-[var(--color-muted-foreground)]">
-          {`The queue publishes approved posts one at a time, at least ${spacingSeconds} s apart, only while this page stays open — nothing is published unattended. Any failure pauses the queue. A post with an unclear result is never retried; use "Check Instagram status".`}
+          {`Select completed drafts (no blocking issues), review them together, and confirm once. They are then published one at a time, at least ${spacingSeconds} s apart, only while this page stays open — nothing is published unattended. Editing a post after confirming removes it from the confirmation. Any failure pauses the queue; a post with an unclear result is never retried — use "Check Instagram status".`}
         </p>
         {queueActive ? (
           <div className="flex flex-wrap items-center gap-2">
@@ -341,56 +354,160 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
           </div>
         ) : isMaster ? (
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" disabled={!ready.length} onClick={() => setQueuePick(ready.map((i) => i.postId))}>
-              Select all approved ({ready.length})
+            <Button size="sm" variant="outline" disabled={!completed.length} onClick={() => setQueuePick(completed.map((i) => i.postId))} data-testid="select-all-completed">
+              Select all completed drafts ({completed.length})
             </Button>
-            <Button size="sm" variant="success" disabled={!queuePick.length || !publishingEnabled || !connected} onClick={() => (setTyped(""), setConfirmOpen(true))} data-testid="queue-open-confirm">
-              <Send className="h-4 w-4" aria-hidden /> Publish {queuePick.length} selected…
+            <Button size="sm" variant="success" disabled={!queuePick.length || !publishingEnabled || !connected} onClick={() => openReview(queuePick)} data-testid="queue-open-confirm">
+              <Send className="h-4 w-4" aria-hidden /> {`Publish ${queuePick.length} selected to Instagram`}
             </Button>
           </div>
         ) : null}
       </section>
 
-      <DialogPrimitive.Root open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60" />
-          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5" data-testid="queue-confirm" aria-describedby={undefined}>
+      {confirmOpen ? (
+        <BulkConfirmDialog
+          batchId={view.batch.id}
+          postIds={queuePick}
+          onClose={() => setConfirmOpen(false)}
+          onConfirmed={(v) => {
+            setView(v);
+            setConfirmOpen(false);
+            setQueuePick([]);
+            setMsg({ tone: "info", text: "Confirmed. Publishing has started — keep this page open until the queue finishes." });
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+
+/**
+ * The single final review for Bulk Studio: every selected post with its
+ * slides, slide count, caption and warnings, then ONE "Confirm & Publish
+ * Selected" that authorizes exactly these posts (at these revisions).
+ */
+function BulkConfirmDialog({ batchId, postIds, onClose, onConfirmed }: { batchId: string; postIds: string[]; onClose: () => void; onConfirmed: (v: BatchView) => void }) {
+  const [items, setItems] = useState<BulkPreflightItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const sent = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    bulkPreflightAction({ batchId, postIds }).then((r) => {
+      if (cancelled) return;
+      if (r.ok) setItems(r.data);
+      else setError(r.error);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [batchId, postIds]);
+
+  const problems = (items ?? []).filter((i) => i.error);
+  const ready = Boolean(items && items.length && !problems.length);
+  const username = items?.find((i) => i.pre)?.pre?.username ?? "mocktestseries.in";
+  const totalWarnings = (items ?? []).reduce((n, i) => n + (i.pre?.warnings.length ?? 0), 0);
+
+  async function confirm() {
+    if (!items || sent.current) return;
+    sent.current = true;
+    setBusy(true);
+    setError(null);
+    const r = await confirmQueueAction({
+      batchId,
+      confirmed: true,
+      items: items.map((i) => ({ postId: i.postId, revision: i.revision, acknowledged: i.pre?.warnings.map((w) => w.code) ?? [] })),
+    }).catch(() => null);
+    setBusy(false);
+    if (!r || !r.ok) {
+      // Nothing was queued (the server confirms all or nothing); confirming again is safe.
+      sent.current = false;
+      return setError(r ? r.error : "No answer from the server. Check your connection and try again — nothing was queued twice.");
+    }
+    onConfirmed(r.data);
+  }
+
+  return (
+    <DialogPrimitive.Root open onOpenChange={(o) => (!o && !busy ? onClose() : undefined)}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70" />
+        <DialogPrimitive.Content
+          className="fixed inset-x-2 top-4 bottom-4 z-50 mx-auto flex max-w-3xl flex-col overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] sm:inset-x-4"
+          data-testid="queue-confirm"
+          aria-describedby={undefined}
+          onInteractOutside={(e) => e.preventDefault()}
+        >
+          <div className="border-b border-[var(--color-border)] px-4 py-3">
             <DialogPrimitive.Title className="text-base font-semibold">Publish to Instagram?</DialogPrimitive.Title>
-            <p className="mt-2 text-sm">{`${queuePick.length} approved post(s) will be published to the live @mocktestseries.in account, one at a time, while this page stays open:`}</p>
-            <ol className="mt-2 max-h-48 list-decimal overflow-y-auto pl-5 text-sm">
-              {view.items.filter((i) => queuePick.includes(i.postId)).map((i) => (
-                <li key={i.id}>{`${i.post?.questionCode} · ${i.post?.design.modules.length} slides`}</li>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-sm">
+              <dt className="text-[var(--color-muted-foreground)]">Instagram account</dt>
+              <dd className="font-semibold" data-testid="queue-username">{`@${username}`}</dd>
+              <dt className="text-[var(--color-muted-foreground)]">Destination</dt>
+              <dd>Instagram feed — public carousel posts, one at a time while this page stays open</dd>
+              <dt className="text-[var(--color-muted-foreground)]">Posts</dt>
+              <dd data-testid="queue-count">{postIds.length}</dd>
+            </dl>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {!items && !error ? (
+              <p className="flex items-center gap-2 text-sm text-[var(--color-muted-foreground)]">
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Checking every selected post…
+              </p>
+            ) : null}
+            <ol className="flex flex-col gap-3" data-testid="queue-review-list">
+              {(items ?? []).map((it, n) => (
+                <li key={it.postId} className={cn("rounded-md border p-3", it.error ? "border-[var(--color-error)]/50" : "border-[var(--color-border)]")} data-review-item={it.questionCode}>
+                  <p className="text-sm font-semibold">{`${n + 1}. ${it.questionCode}${it.pre ? ` · ${it.pre.slideCount} slides` : ""}`}</p>
+                  {it.error ? (
+                    <p className="mt-1 text-sm text-[var(--color-error)]" role="alert">
+                      {it.error}
+                    </p>
+                  ) : null}
+                  {it.pre ? (
+                    <>
+                      <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
+                        {Array.from({ length: it.pre.slideCount }, (_, i) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img key={i} src={`/api/admin/instagram/slide?postId=${it.postId}&i=${i}&r=${it.revision}`} alt={`Slide ${i + 1}`} loading="lazy" className="aspect-[4/5] h-28 w-auto shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] object-cover" />
+                        ))}
+                      </div>
+                      <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap rounded bg-[var(--color-surface)] p-2 text-xs" data-testid="queue-caption">{it.pre.caption}</pre>
+                      {it.pre.warnings.length ? (
+                        <ul className="mt-2 list-disc pl-5 text-xs text-[var(--color-warning)]" data-testid="queue-warnings">
+                          {it.pre.warnings.map((w) => (
+                            <li key={w.code}>{w.message}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </>
+                  ) : null}
+                </li>
               ))}
             </ol>
-            <label className="mt-3 flex flex-col gap-1 text-xs">
-              Type PUBLISH to confirm
-              <Input value={typed} onChange={(e) => setTyped(e.target.value)} data-testid="queue-typed" autoComplete="off" />
-            </label>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setConfirmOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="success"
-                disabled={pending || typed.trim().toUpperCase() !== "PUBLISH"}
-                data-testid="queue-confirm-button"
-                onClick={() =>
-                  start(async () => {
-                    const r = await confirmQueueAction({ batchId: view.batch.id, postIds: queuePick, confirmed: true, typed });
-                    if (!r.ok) return setMsg({ tone: "error", text: r.error });
-                    setView(r.data);
-                    setConfirmOpen(false);
-                    setQueuePick([]);
-                    setMsg({ tone: "info", text: "Queue confirmed and running. Keep this page open." });
-                  })
-                }
-              >
-                Confirm &amp; start queue
-              </Button>
-            </div>
-          </DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>
-    </div>
+            {problems.length ? <p className="mt-3 text-sm text-[var(--color-error)]">{`${problems.length} post(s) can't be published. Cancel, fix or deselect them, and try again.`}</p> : null}
+            {ready ? (
+              <p className="mt-3 text-xs text-[var(--color-muted-foreground)]">
+                {`By confirming, you confirm that the question text, answer, attribution and all medical content of these ${items!.length} post(s) were checked${totalWarnings ? ", including every warning listed above" : ""}. This one confirmation covers only the posts listed here; editing one afterwards removes it from the confirmation.`}
+              </p>
+            ) : null}
+            {error ? (
+              <p className="mt-3 rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 p-2 text-sm" role="alert" data-testid="queue-confirm-error">
+                {error}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
+            <Button variant="outline" onClick={onClose} disabled={busy} data-testid="queue-cancel">
+              Cancel
+            </Button>
+            <Button variant="success" disabled={!ready || busy} onClick={confirm} data-testid="queue-confirm-button" className="font-semibold">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />} Confirm &amp; Publish Selected
+            </Button>
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }

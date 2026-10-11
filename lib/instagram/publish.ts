@@ -7,7 +7,7 @@ import { Prisma, type InstagramPost } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { storageRootDir } from "@/lib/question-images";
 import { WEBSITE_URL_DEFAULT, getStudioSettings } from "@/lib/instagram/config";
-import { blockingIssues, warningCodes } from "@/lib/instagram/quality";
+import { blockingIssues, checklistFor, type QualityIssue } from "@/lib/instagram/quality";
 import { StudioError, issuesFor } from "@/lib/instagram/posts";
 import { currentSourceHash } from "@/lib/instagram/snapshot";
 import { renderSlideJpeg } from "@/lib/instagram/render";
@@ -18,8 +18,9 @@ import { SLIDE_HEIGHT, SLIDE_WIDTH, composeCaption, normalizeContent, normalizeD
 /**
  * Direct publishing to Instagram (Instagram API with Instagram Login).
  *
- * Flow (only after a Master Admin's explicit "Confirm & Publish"):
- *   claim (READY/FAILED → PUBLISHING, atomic) → verify the token's account →
+ * Flow (only after a Master Admin's explicit "Confirm & Publish" — the one and
+ * only manual approval; there is no separate Mark Ready / approve step):
+ *   claim (DRAFT/FAILED → PUBLISHING, atomic) → verify the token's account →
  *   quota → render immutable JPEG snapshots to a random, expiring public URL →
  *   item containers → carousel container → wait FINISHED → media_publish →
  *   permalink → PUBLISHED.
@@ -244,18 +245,48 @@ async function markUnknown(postId: string, job: PublishJob, message: string): Pr
 
 // ---- Start (claim) ---------------------------------------------------------------------------
 
+/**
+ * What authorizes a publish. There is exactly one manual approval:
+ *  - single: the Master Admin's "Confirm & Publish" in THIS request, naming the
+ *    warning codes the confirmation dialog showed them;
+ *  - bulk:   a "Confirm & Publish Selected" on record for this exact revision
+ *    (written by confirmQueue in lib/instagram/batch.ts; any edit clears it).
+ */
+export type PublishConfirmation = { via: "single"; acknowledged: string[] } | { via: "bulk"; batchId: string };
+
+/** Stored in InstagramPost.review (+ reviewedAt / reviewedById) when a publish is confirmed. */
+export interface ConfirmationRecord {
+  revision: number;
+  acknowledged: string[];
+  /** Review statements shown in the dialog that the confirmation covered. */
+  checklist: string[];
+  via: "single" | "bulk";
+  batchId?: string;
+  at: string;
+}
+
+export function readConfirmation(v: unknown): ConfirmationRecord | null {
+  const r = v as Partial<ConfirmationRecord> | null;
+  return r && typeof r.revision === "number" && (r.via === "single" || r.via === "bulk") ? (r as ConfirmationRecord) : null;
+}
+
 export interface StartPublishInput {
   postId: string;
   expectedRevision: number;
   requestKey: string;
   format: PublishFormat;
   actorId: string;
+  confirmation: PublishConfirmation;
 }
 
 export interface PublishPreflight {
   caption: string;
   slideCount: number;
   username: string;
+  /** Warnings the final confirmation shows; confirming acknowledges them for this revision. */
+  warnings: QualityIssue[];
+  /** Review statements the confirmation covers (shown in the dialog). */
+  checklist: { key: string; label: string }[];
 }
 
 function captionChecks(caption: string) {
@@ -264,30 +295,35 @@ function captionChecks(caption: string) {
   if (tags.length > HASHTAGS_MAX) throw new StudioError(`Instagram allows at most ${HASHTAGS_MAX} hashtags.`);
 }
 
-/** Every server-side condition for publishing. Throws StudioError with the reason. */
-async function assertPublishable(post: InstagramPost, expectedRevision: number, format: PublishFormat): Promise<PublishPreflight> {
+/**
+ * Every server-side condition for publishing except the confirmation itself.
+ * Throws StudioError with the reason. Draft, legacy Ready and Failed (nothing
+ * was published) posts can be published; no approval state is required.
+ */
+export async function checkPublishable(post: InstagramPost, expectedRevision: number, format: PublishFormat): Promise<PublishPreflight> {
   if (post.supersededAt) throw new StudioError("This is an older version and can't be published.");
   if (post.igMediaId || post.status === "PUBLISHED") throw new StudioError("This post is already published on Instagram.", "conflict");
   if (post.status === "PUBLISHING") throw new StudioError("This post is already being published.", "conflict");
-  if (post.status !== "READY" && post.status !== "FAILED") throw new StudioError("Only an approved (Ready) post can be published. Review it and Mark Ready first.", "blocked");
+  if (post.status !== "DRAFT" && post.status !== "READY" && post.status !== "FAILED") throw new StudioError("This post can't be published in its current state.", "blocked");
   if (post.revision !== expectedRevision) throw new StudioError("This post was changed in another window. Reload it first.", "conflict");
-  const review = (post.review ?? {}) as { revision?: number; acknowledged?: string[] };
-  if (!post.reviewedAt || !post.reviewedById || review.revision !== post.revision) {
-    throw new StudioError("This exact version has not been approved. Review it and Mark Ready first.", "blocked");
-  }
   const settings = await getStudioSettings();
   const issues = issuesFor(post, await currentSourceHash(post.questionId), settings);
   const blocked = blockingIssues(issues);
   if (blocked.length) throw new StudioError(`Publishing blocked: ${blocked[0].message}`, "blocked");
-  const unacked = warningCodes(issues).filter((c) => !(review.acknowledged ?? []).includes(c));
-  if (unacked.length) throw new StudioError("New review warnings appeared since approval. Send it back to Draft and review again.", "blocked");
 
   const design = normalizeDesign(post.design);
   const slideCount = format === "IMAGE" ? 1 : design.modules.length;
   if (format === "CAROUSEL" && (slideCount < CAROUSEL_MIN || slideCount > CAROUSEL_MAX)) throw new StudioError(`A carousel needs ${CAROUSEL_MIN}–${CAROUSEL_MAX} slides.`);
   const caption = composeCaption(normalizeContent(post.content));
   captionChecks(caption);
-  return { caption, slideCount, username: EXPECTED_INSTAGRAM_USERNAME };
+  const checklist = checklistFor(design).map((c) => ({ key: c.key, label: c.label }));
+  return { caption, slideCount, username: EXPECTED_INSTAGRAM_USERNAME, warnings: issues.filter((i) => i.severity === "warning"), checklist };
+}
+
+/** Throws unless every current warning was shown in (and so acknowledged by) the confirmation. */
+export function assertAcknowledged(pre: PublishPreflight, acknowledged: string[]) {
+  const missed = pre.warnings.filter((w) => !acknowledged.includes(w.code));
+  if (missed.length) throw new StudioError(`New review warnings appeared after the confirmation was opened (${missed.map((w) => w.message).join(" · ").slice(0, 300)}). Review them and confirm again.`, "blocked");
 }
 
 /** True when a token + pinned account are installed (no network call). */
@@ -299,7 +335,7 @@ export function isPublishingConfigured(): boolean {
 export async function publishPreflight(postId: string, expectedRevision: number, format: PublishFormat): Promise<PublishPreflight & { enabled: boolean; configured: boolean }> {
   const post = await prisma.instagramPost.findUnique({ where: { id: postId } });
   if (!post) throw new StudioError("This post no longer exists.", "not-found");
-  const pre = await assertPublishable(post, expectedRevision, format);
+  const pre = await checkPublishable(post, expectedRevision, format);
   const [sw] = await Promise.all([getPublishingSwitch()]);
   return { ...pre, enabled: sw.enabled, configured: publishingApi() !== null };
 }
@@ -318,7 +354,18 @@ export async function startPublish(input: StartPublishInput): Promise<{ job: Pub
   if (!post) throw new StudioError("This post no longer exists.", "not-found");
   const prev = readJob(post.publishJob);
   if (post.status === "PUBLISHING" && prev?.requestKey === input.requestKey) return { job: prev, existing: true };
-  const pre = await assertPublishable(post, input.expectedRevision, input.format);
+  const pre = await checkPublishable(post, input.expectedRevision, input.format);
+  let record: ConfirmationRecord | null = null;
+  if (input.confirmation.via === "single") {
+    assertAcknowledged(pre, input.confirmation.acknowledged);
+    record = { revision: post.revision, acknowledged: pre.warnings.map((w) => w.code), checklist: pre.checklist.map((c) => c.key), via: "single", at: nowIso() };
+  } else {
+    const onFile = readConfirmation(post.review);
+    if (!post.reviewedAt || !onFile || onFile.via !== "bulk" || onFile.batchId !== input.confirmation.batchId || onFile.revision !== post.revision) {
+      throw new StudioError("This post changed after it was confirmed for publishing (or was never confirmed). Select it again and confirm.", "blocked");
+    }
+    assertAcknowledged(pre, onFile.acknowledged);
+  }
 
   // A FAILED job whose carousel container is still usable is published with that SAME container (it can only become one post).
   const reuse = post.status === "FAILED" && prev && prev.containerId && prev.revision === post.revision && prev.format === input.format && prev.caption === pre.caption && Date.now() - Date.parse(prev.startedAt) < 20 * 3_600_000;
@@ -346,7 +393,14 @@ export async function startPublish(input: StartPublishInput): Promise<{ job: Pub
   try {
     const res = await prisma.instagramPost.updateMany({
       where: { id: post.id, status: post.status, revision: post.revision, igMediaId: null, supersededAt: null },
-      data: { status: "PUBLISHING", publishError: null, publishJob: json(job), updatedById: input.actorId },
+      data: {
+        status: "PUBLISHING",
+        publishError: null,
+        publishJob: json(job),
+        updatedById: input.actorId,
+        // The single confirmation is recorded with the claim (who, when, which revision, which warnings).
+        ...(record ? { reviewedAt: new Date(), reviewedById: input.actorId, review: json(record) } : {}),
+      },
     });
     if (res.count !== 1) {
       const now = await prisma.instagramPost.findUnique({ where: { id: post.id } });
@@ -358,7 +412,16 @@ export async function startPublish(input: StartPublishInput): Promise<{ job: Pub
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") throw new StudioError("Another version of this question is being published right now.", "conflict");
     throw e;
   }
-  await audit(input.actorId, "INSTAGRAM_PUBLISH_STARTED", post.id, { jobId: job.jobId, format: job.format, slides: job.slideCount, revision: job.revision, reuseContainer: !!reuse });
+  await audit(input.actorId, "INSTAGRAM_PUBLISH_STARTED", post.id, {
+    jobId: job.jobId,
+    format: job.format,
+    slides: job.slideCount,
+    revision: job.revision,
+    reuseContainer: !!reuse,
+    confirmedVia: input.confirmation.via,
+    ...(input.confirmation.via === "bulk" ? { batchId: input.confirmation.batchId } : {}),
+    acknowledged: pre.warnings.map((w) => w.code),
+  });
   return { job, existing: false };
 }
 
