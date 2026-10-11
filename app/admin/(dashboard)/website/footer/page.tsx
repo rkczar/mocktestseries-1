@@ -11,12 +11,31 @@ import {
 import { WhatsAppSupportForm } from "./whatsapp-support-form";
 import { getTelegramChannelConfig } from "@/lib/telegram-channel";
 import { TelegramChannelForm } from "./telegram-channel-form";
+import {
+  formatIstDate,
+  getDeployedAt,
+  getLastUpdatedConfig,
+  getLatestPublicContentChange,
+  istToday,
+  latestInstant,
+} from "@/lib/site-last-updated";
+import { LastUpdatedForm } from "./last-updated-form";
 
 export const metadata = { title: "Footer — Mock Test Series.in Admin" };
 
 export default async function Page() {
-  const [session, config, telegram] = await Promise.all([getAdminSession(), getWhatsAppSupportConfig(), getTelegramChannelConfig()]);
+  const [session, config, telegram, lastUpdated, contentChangedAt] = await Promise.all([
+    getAdminSession(),
+    getWhatsAppSupportConfig(),
+    getTelegramChannelConfig(),
+    getLastUpdatedConfig(),
+    getLatestPublicContentChange(),
+  ]);
   const canManage = session?.user?.permissions?.includes(PERMISSIONS.WEBSITE_MANAGE) ?? false;
+  const deployedAt = getDeployedAt();
+  const automaticInstant = latestInstant(deployedAt, contentChangedAt);
+  const istDateTime = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }) + " IST" : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -38,6 +57,16 @@ export default async function Page() {
           }}
         />
         <TelegramChannelForm config={telegram} canManage={canManage} />
+        <LastUpdatedForm
+          config={lastUpdated}
+          canManage={canManage}
+          maxDate={istToday()}
+          automatic={{
+            label: automaticInstant ? formatIstDate(automaticInstant) : null,
+            deployedAt: istDateTime(deployedAt),
+            contentChangedAt: istDateTime(contentChangedAt),
+          }}
+        />
       </div>
     </div>
   );

@@ -9,10 +9,13 @@ export function SiteFooter({
   content,
   resolved,
   growWithUsEnabled = false,
+  lastUpdated = null,
 }: {
   content: Record<string, unknown>;
   resolved: ResolvedHomepage["sections"][number]["resolved"];
   growWithUsEnabled?: boolean;
+  /** Preformatted "11 October 2026" from lib/site-last-updated.ts, or null to hide the line. */
+  lastUpdated?: string | null;
 }) {
   const email = str(content, "email");
   const location = str(content, "location");
@@ -60,9 +63,14 @@ export function SiteFooter({
           {growWithUsEnabled ? <GrowWithUsButton variant="secondary" className="self-start" /> : null}
         </div>
       </div>
-      <p className="border-t border-[var(--color-border)] px-4 py-4 text-center text-xs text-[var(--color-muted-foreground)] sm:px-6">
-        {copyrightLine}
-      </p>
+      <div className="border-t border-[var(--color-border)] px-4 py-4 text-center text-xs text-[var(--color-muted-foreground)] sm:px-6">
+        <p>{copyrightLine}</p>
+        {lastUpdated ? (
+          <p className="mt-1" data-testid="footer-last-updated">
+            Last Updated: {lastUpdated}
+          </p>
+        ) : null}
+      </div>
     </footer>
   );
 }

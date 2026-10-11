@@ -2,6 +2,7 @@ import { getPublishedHomepage, getFallbackHomepage } from "@/lib/homepage";
 import { resolveHomepage } from "@/lib/homepage-render";
 import { SiteHeader } from "./site-header";
 import { SiteFooter } from "./site-footer";
+import { getFooterLastUpdated } from "@/lib/site-last-updated";
 
 /**
  * Same canonical Header/Footer used by the homepage (components/homepage/
@@ -23,7 +24,7 @@ export async function getPublicChrome() {
 }
 
 export async function PublicPageShell({ children, studentSignedIn = false }: { children: React.ReactNode; studentSignedIn?: boolean }) {
-  const { header, footer, contactInfo } = await getPublicChrome();
+  const [{ header, footer, contactInfo }, lastUpdated] = await Promise.all([getPublicChrome(), getFooterLastUpdated()]);
   const growWithUsEnabled = (contactInfo?.content as Record<string, unknown> | undefined)?.growWithUsEnabled !== false;
 
   return (
@@ -37,6 +38,7 @@ export async function PublicPageShell({ children, studentSignedIn = false }: { c
           content={(footer?.content as Record<string, unknown>) ?? {}}
           resolved={footer?.resolved ?? {}}
           growWithUsEnabled={growWithUsEnabled}
+          lastUpdated={lastUpdated}
         />
       ) : null}
     </div>

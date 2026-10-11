@@ -167,6 +167,10 @@ pm2 reload "$PM2_APP" >/dev/null || log "pm2 reload returned an error"
 # 5. Post-switch health; automatic rollback.
 if post_switch_healthy; then
   check_current_link && check_shared_clean
+  # Successful-deployment time, read by the footer "Last Updated" date
+  # (lib/site-last-updated.ts). Written only here, after health passed, so a
+  # failed or rolled-back deploy never moves the date.
+  date -u +%FT%TZ >"$R/.deployed-at" || log "could not write $R/.deployed-at (footer date falls back to content changes)"
   log "DEPLOYED $SHA (previous known-good release kept: $PREV)"
   exit 0
 fi

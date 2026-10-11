@@ -2,6 +2,7 @@ import { StudentHeader } from "@/components/student/header";
 import { SiteFooter } from "@/components/homepage/site-footer";
 import { getPublicChrome } from "@/components/homepage/public-page-shell";
 import { getVisibleAnnouncementsForStudent } from "@/lib/notifications";
+import { getFooterLastUpdated } from "@/lib/site-last-updated";
 
 /**
  * The one shared Header + Footer shell for "normal" student pages (Section
@@ -20,9 +21,10 @@ export async function StudentShell({
   student: { id: string; name: string | null; studentId: string };
   children: React.ReactNode;
 }) {
-  const [announcements, { footer, contactInfo }] = await Promise.all([
+  const [announcements, { footer, contactInfo }, lastUpdated] = await Promise.all([
     getVisibleAnnouncementsForStudent(student.id, { limit: 30 }),
     getPublicChrome(),
+    getFooterLastUpdated(),
   ]);
   const growWithUsEnabled = (contactInfo?.content as Record<string, unknown> | undefined)?.growWithUsEnabled !== false;
 
@@ -48,6 +50,7 @@ export async function StudentShell({
           content={(footer?.content as Record<string, unknown>) ?? {}}
           resolved={footer?.resolved ?? {}}
           growWithUsEnabled={growWithUsEnabled}
+          lastUpdated={lastUpdated}
         />
       ) : null}
     </div>

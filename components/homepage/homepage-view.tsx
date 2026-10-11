@@ -47,6 +47,7 @@ export function HomepageView({
   studentSignedIn = false,
   reviewsSection = null,
   telegramHref = null,
+  lastUpdated = null,
 }: {
   homepage: ResolvedHomepage;
   omrResourceId?: string | null;
@@ -55,6 +56,8 @@ export function HomepageView({
   reviewsSection?: ReactNode;
   /** Validated Telegram channel link (Admin → Website → Footer); null hides the CTA. */
   telegramHref?: string | null;
+  /** Footer "Last Updated" date (Admin → Website → Footer); null hides it. */
+  lastUpdated?: string | null;
 }) {
   const byKey = new Map(homepage.sections.map((s) => [s.key, s]));
   const header = byKey.get("HEADER");
@@ -138,6 +141,7 @@ export function HomepageView({
           content={(footer?.content as Record<string, unknown>) ?? {}}
           resolved={footer?.resolved ?? {}}
           growWithUsEnabled={growWithUsEnabled}
+          lastUpdated={lastUpdated}
         />
       ) : null}
     </div>

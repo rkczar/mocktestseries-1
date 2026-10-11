@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
@@ -12,6 +12,7 @@ import {
 } from "@/lib/whatsapp-support";
 import { saveTelegramChannelConfig } from "@/lib/telegram-channel";
 import { safeTelegramUrl } from "@/lib/telegram-url";
+import { SITE_LAST_UPDATED_TAG, istToday, parseManualDate, saveLastUpdatedConfig, type LastUpdatedMode } from "@/lib/site-last-updated";
 
 export interface WhatsAppSupportFormState {
   error?: string;
@@ -100,4 +101,38 @@ export async function saveTelegramChannelAction(_prev: TelegramChannelFormState,
 
   revalidatePath("/", "layout");
   return { success: true, savedUrl: url };
+}
+
+export interface LastUpdatedFormState {
+  error?: string;
+  success?: boolean;
+}
+
+/** Footer "Last Updated" line — same WEBSITE_MANAGE (MASTER_ADMIN-only) gate as the cards above. */
+export async function saveLastUpdatedAction(_prev: LastUpdatedFormState, formData: FormData): Promise<LastUpdatedFormState> {
+  const session = await requirePermission(PERMISSIONS.WEBSITE_MANAGE);
+  const show = formData.get("show") === "on";
+  const mode: LastUpdatedMode = formData.get("mode") === "MANUAL" ? "MANUAL" : "AUTOMATIC";
+  const manualDate = String(formData.get("manualDate") ?? "").trim();
+
+  if (manualDate && !parseManualDate(manualDate)) return { error: "Enter a valid date." };
+  if (manualDate && manualDate > istToday()) return { error: "The manual date can't be in the future." };
+  if (mode === "MANUAL" && !manualDate) return { error: "Pick a date for Manual mode." };
+
+  await saveLastUpdatedConfig({ show, mode, manualDate });
+  // LAST_UPDATED_SETTINGS_SAVED is deliberately not a public-content action:
+  // changing how the date is shown must not itself move the date.
+  await prisma.auditLog.create({
+    data: {
+      actorId: session.user.id,
+      action: "LAST_UPDATED_SETTINGS_SAVED",
+      entityType: "Setting",
+      entityId: "website.last_updated",
+      metadata: { show, mode, manualDate: manualDate || null },
+    },
+  });
+
+  updateTag(SITE_LAST_UPDATED_TAG);
+  revalidatePath("/", "layout");
+  return { success: true };
 }
