@@ -15,6 +15,7 @@ import {
 import type { PostDto } from "@/lib/instagram/posts";
 import type { PublishFormat, PublishStage, PublishView } from "@/lib/instagram/publish-view";
 import type { PublishPreflight } from "@/lib/instagram/publish";
+import { slideSequence } from "@/lib/instagram/layout";
 
 const fmt = (iso: string) => new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) + " IST";
 
@@ -229,7 +230,7 @@ export function PublishButton({
 }
 
 function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onClose: () => void; onStarted: (v: PublishView) => void }) {
-  const [format, setFormat] = useState<PublishFormat>(post.design.modules.length >= 2 ? "CAROUSEL" : "IMAGE");
+  const [format, setFormat] = useState<PublishFormat>(slideSequence(post.content, post.design).length >= 2 ? "CAROUSEL" : "IMAGE");
   type Pre = PublishPreflight & { enabled: boolean; configured: boolean };
   const [checked, setChecked] = useState<{ format: PublishFormat; pre: Pre | null; error: string | null } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -274,7 +275,7 @@ function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onC
     onStarted(r.data.view);
   }
 
-  const slides = format === "IMAGE" ? 1 : post.design.modules.length;
+  const slides = format === "IMAGE" ? 1 : slideSequence(post.content, post.design).length;
   const ready = pre && pre.enabled && pre.configured && !error;
 
   return (
@@ -307,7 +308,7 @@ function ConfirmPublishDialog({ post, onClose, onStarted }: { post: PostDto; onC
             <fieldset className="mt-3 flex flex-wrap gap-4" disabled={busy}>
               <label className="flex items-center gap-2">
                 <input type="radio" name="format" checked={format === "CAROUSEL"} onChange={() => setFormat("CAROUSEL")} data-testid="format-carousel" />
-                Carousel ({post.design.modules.length} slides)
+                Carousel ({slideSequence(post.content, post.design).length} slides)
               </label>
               <label className="flex items-center gap-2">
                 <input type="radio" name="format" checked={format === "IMAGE"} onChange={() => setFormat("IMAGE")} data-testid="format-image" />

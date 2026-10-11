@@ -12,6 +12,7 @@ import { checkTrap } from "@/lib/instagram/trap";
 import { DIAGRAM_KINDS, DIAGRAM_KIND_LABELS, TRAP_LIMITS, normalizeDiagram, type DiagramSpec, type PostContent, type PostDesign, type SlideModule, type TrapVariant } from "@/lib/instagram/types";
 import type { PostDto } from "@/lib/instagram/posts";
 import { aiDiagramAction, aiTrapAction } from "@/app/admin/(dashboard)/instagram/studio-actions";
+import { MedicalImagePanel } from "@/components/admin/instagram/medical-image-panel";
 
 export type ProviderChoice = "default" | "anthropic" | "gemini" | "openai";
 type R<T> = { ok: true; data: T } | { ok: false; error: string; kind?: "conflict" | "needs-confirm" | "invalid" | "not-found" | "blocked" };
@@ -75,6 +76,7 @@ export function AiStudioPanel({
   onPost,
   onEditContent,
   onAddModule,
+  onRemoveModule,
 }: {
   post: PostDto;
   draft: { content: PostContent; design: PostDesign };
@@ -86,6 +88,7 @@ export function AiStudioPanel({
   onPost: (p: PostDto, summary: string) => void;
   onEditContent: (c: Partial<PostContent>) => void;
   onAddModule: (m: SlideModule) => void;
+  onRemoveModule: (m: SlideModule) => void;
 }) {
   const [kind, setKind] = useState<string>("auto");
   const [diagramInstr, setDiagramInstr] = useState("");
@@ -215,7 +218,7 @@ export function AiStudioPanel({
         {trap ? (
           <div className="flex flex-col gap-2">
             <label className="flex flex-col gap-1 text-xs">
-              {`Question (${trap.question.length}/${TRAP_LIMITS.question})`}
+              {`Question (${trap.question.length}/${TRAP_LIMITS.question} recommended — longer text continues on the next slide)`}
               <Textarea rows={3} value={trap.question} onChange={(e) => setTrap({ question: e.target.value })} data-testid="trap-question" />
             </label>
             {trap.options.map((o, i) => (
@@ -247,11 +250,11 @@ export function AiStudioPanel({
               </label>
             </div>
             <label className="flex flex-col gap-1 text-xs">
-              {`Why it traps you (${trap.trapExplanation.length}/${TRAP_LIMITS.trapExplanation})`}
+              {`Why it traps you (${trap.trapExplanation.length}/${TRAP_LIMITS.trapExplanation} recommended)`}
               <Textarea rows={2} value={trap.trapExplanation} onChange={(e) => setTrap({ trapExplanation: e.target.value })} />
             </label>
             <label className="flex flex-col gap-1 text-xs">
-              {`How to avoid it (${trap.avoidTip.length}/${TRAP_LIMITS.avoidTip})`}
+              {`How to avoid it (${trap.avoidTip.length}/${TRAP_LIMITS.avoidTip} recommended)`}
               <Textarea rows={2} value={trap.avoidTip} onChange={(e) => setTrap({ avoidTip: e.target.value })} />
             </label>
             {trapProblems.length ? (
@@ -270,6 +273,18 @@ export function AiStudioPanel({
           </div>
         ) : null}
       </section>
+
+      <MedicalImagePanel
+        post={post}
+        draft={draft}
+        base={base}
+        act={act}
+        onPost={onPost}
+        onEditContent={onEditContent}
+        onAddModule={onAddModule}
+        onRemoveModule={onRemoveModule}
+        defaultQuery={post.snapshot.topicName ?? post.snapshot.subjectName}
+      />
     </fieldset>
   );
 }

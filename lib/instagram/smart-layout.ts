@@ -16,7 +16,9 @@ export function smartModules(c: PostContent, opts: { includeHook?: boolean } = {
   else if (c.clinicalPearl.trim() && c.quickRevision.length) m.push("PEARL_REVISION");
   if (c.mistakes.length) m.push("MISTAKES");
   if (c.trap && c.trap.status !== "rejected") m.push("TRAP");
+  // Only an image the admin already approved (Add to Carousel) — a pending preview is never added.
+  if (c.medicalImage) m.push("MEDICAL_IMAGE");
   m.push("FOLLOW");
-  // At most 8 modules exist, so this never trims today; kept as a guard for Instagram's limit.
+  // At most 9 modules exist, so this never trims today; kept as a guard for Instagram's limit.
   return m.length > MAX_SLIDES ? [...m.slice(0, MAX_SLIDES - 1), "FOLLOW"] : m;
 }

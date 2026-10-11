@@ -13,6 +13,7 @@ import { smartModules } from "@/lib/instagram/smart-layout";
 import { DESIGN_MODE_LABELS, TEMPLATE_KEYS, modeOfTemplate } from "@/lib/instagram/types";
 import type { BatchItemView, BatchView, BulkPreflightItem } from "@/lib/instagram/batch";
 import type { PostDto } from "@/lib/instagram/posts";
+import { slideSequence } from "@/lib/instagram/layout";
 import { InstagramStatusBadge } from "@/components/admin/instagram/status-badge";
 import { OpenInEditor } from "@/components/admin/instagram/editor-host";
 import { ProviderPicker, type ProviderChoice } from "@/components/admin/instagram/ai-studio-panel";
@@ -262,7 +263,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
                     <span className="font-mono">{`${it.position}. ${p?.questionCode ?? "?"}`}</span>
                     {p ? <InstagramStatusBadge status={p.status} /> : <Badge variant="error">missing</Badge>}
                     {it.queueState !== "NONE" ? <Badge variant={q.variant}>{q.label}</Badge> : null}
-                    {p ? <Badge variant="neutral">{`${DESIGN_MODE_LABELS[modeOfTemplate(p.design.template)].split(" ").pop()} · ${TEMPLATES[p.design.template].name} · ${p.design.modules.length} slides`}</Badge> : null}
+                    {p ? <Badge variant="neutral">{`${DESIGN_MODE_LABELS[modeOfTemplate(p.design.template)].split(" ").pop()} · ${TEMPLATES[p.design.template].name} · ${slideSequence(p.content, p.design).length} slides`}</Badge> : null}
                   </div>
                   {p ? <p className="mt-1 line-clamp-2 text-sm">{p.snapshot.text.replace(/<[^>]+>/g, " ")}</p> : null}
                   <p className="mt-1 text-[11px] text-[var(--color-muted-foreground)]">

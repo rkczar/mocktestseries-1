@@ -19,6 +19,8 @@ import { saveScope } from "@/lib/instagram/scope";
 import { selectCandidates, type Candidate } from "@/lib/instagram/selection";
 import { advanceQueue, applyDesignToBatch, bulkPreflight, checkItemStatus, confirmQueue, createBatch, getBatchView, retryItem, setQueueStatus, type BatchView, type BulkPreflightItem } from "@/lib/instagram/batch";
 import { runPublishJob } from "@/lib/instagram/publish";
+import { generateMedicalImage, imageGenerationStatus, importReferenceImage, searchReferenceImages } from "@/lib/instagram/medical-image";
+import type { ReferenceImageResult } from "@/lib/instagram/medical-image-core";
 import { DIAGRAM_KINDS, TEMPLATE_KEYS, type DiagramKind, type PostContent, type PostDesign, type TemplateKey } from "@/lib/instagram/types";
 import { EXCLUDED_TERMS } from "@/lib/instagram/exam-scope";
 
@@ -130,6 +132,34 @@ export async function aiTrapAction(input: EditorInput): Promise<Result<{ post: P
     const base = await editorBase(input);
     const r = await generateTrap({ snapshot: base.current.snapshot, content: base.content, instruction: instr(input.instruction) || undefined, gen: gatewayGenerator({ actorId, provider: parseProvider(input.provider) }) });
     return { post: await save(base, r.content, base.design, "AI: examiner trap question", actorId), summary: r.summary };
+  });
+}
+
+// ---- Optional Medical Image slide ---------------------------------------------------------
+// Generate / choose only store a preview candidate (a new revision, so it is cached and never
+// regenerated on load). Add to Carousel / Remove / Skip are ordinary editor edits + Save.
+
+export async function medicalImageStatusAction(): Promise<Result<{ available: boolean; model: string | null; message: string }>> {
+  return run(await requireStudio(), async () => imageGenerationStatus());
+}
+
+export async function aiMedicalImageAction(input: EditorInput): Promise<Result<{ post: PostDto; summary: string }>> {
+  return run(await requireStudio(), async (actorId) => {
+    const base = await editorBase(input);
+    const r = await generateMedicalImage({ snapshot: base.current.snapshot, content: base.content, instruction: instr(input.instruction).slice(0, 300) || undefined });
+    return { post: await save(base, { ...base.content, imageCandidate: r.image }, base.design, `AI: medical image (${r.image.source.model})`, actorId), summary: r.summary };
+  });
+}
+
+export async function referenceImageSearchAction(input: { query: string }): Promise<Result<ReferenceImageResult[]>> {
+  return run(await requireStudio(), async () => searchReferenceImages(typeof input?.query === "string" ? input.query : ""));
+}
+
+export async function referenceImageUseAction(input: EditorInput & { fileTitle: string }): Promise<Result<{ post: PostDto; summary: string }>> {
+  return run(await requireStudio(), async (actorId) => {
+    const base = await editorBase(input);
+    const r = await importReferenceImage({ snapshot: base.current.snapshot, content: base.content, fileTitle: typeof input.fileTitle === "string" ? input.fileTitle : "" });
+    return { post: await save(base, { ...base.content, imageCandidate: r.image }, base.design, "Reference image (Wikimedia Commons)", actorId), summary: r.summary };
   });
 }
 

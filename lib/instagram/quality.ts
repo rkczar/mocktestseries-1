@@ -1,10 +1,10 @@
 import { answerKeyIssue } from "@/lib/question-insights-format";
 import { checkText, type SafetyContext } from "@/lib/instagram/content-safety";
-import { planSlides, plainText } from "@/lib/instagram/layout";
+import { planSlides, plainText, slideSequence } from "@/lib/instagram/layout";
 import { checkDiagram, diagramLayout, diagramTexts, diagramTitleOverflows } from "@/lib/instagram/diagram";
-import { checkTrap, trapTexts } from "@/lib/instagram/trap";
+import { checkTrap, trapLengthNotes, trapTexts } from "@/lib/instagram/trap";
 import { EXCLUDED_TERMS, isExcludedExam } from "@/lib/instagram/exam-scope";
-import { MODULE_LABELS, type PostContent, type PostDesign, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
+import { MAX_SLIDES, MODULE_LABELS, type PostContent, type PostDesign, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
 
 /**
  * The publish gate. Pure: the server re-runs it when publishing starts (never
@@ -134,12 +134,21 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
   }
 
   // --- Slides ---------------------------------------------------------------------
+  // Slide numbers/indexes are positions in the rendered sequence (a long Examiner Trap adds continuation slides).
+  const sequence = slideSequence(c, d);
+  const at = (module: string) => sequence.findIndex((r) => r.module === module);
   const plans = planSlides(s, c, d, input.series === "MOST_MISSED" ? 2 : 1);
   plans.forEach((p, i) => {
-    if (p.missing.length) err(`SLIDE_MISSING:${i}`, `Slide ${i + 1} (${MODULE_LABELS[p.module]}) is missing: ${p.missing.join(", ")}.`, i);
-    if (p.overflow) err(`SLIDE_OVERFLOW:${i}`, `Slide ${i + 1} (${MODULE_LABELS[p.module]}) has too much text to stay readable. Shorten it or reduce the font scale.`, i);
+    const n = at(p.module);
+    if (p.missing.length) err(`SLIDE_MISSING:${i}`, `Slide ${n + 1} (${MODULE_LABELS[p.module]}) is missing: ${p.missing.join(", ")}.`, n);
+    // Text length alone never blocks the Examiner Trap: it continues on the next slide instead.
+    if (p.overflow && p.module === "TRAP") warn(`SLIDE_OVERFLOW:${i}`, `Slide ${n + 1} (${MODULE_LABELS[p.module]}) is very long — check every line is visible in the preview.`, n);
+    else if (p.overflow) err(`SLIDE_OVERFLOW:${i}`, `Slide ${n + 1} (${MODULE_LABELS[p.module]}) has too much text to stay readable. Shorten it or reduce the font scale.`, n);
   });
-  const diagramIdx = d.modules.indexOf("DIAGRAM");
+  if (sequence.length > MAX_SLIDES) {
+    err("CAROUSEL_TOO_LONG", `The Examiner Trap continues on ${sequence.length - d.modules.length} extra slide(s), making ${sequence.length} slides — Instagram allows ${MAX_SLIDES}. Remove ${sequence.length - MAX_SLIDES} other slide(s).`);
+  }
+  const diagramIdx = at("DIAGRAM");
   if (diagramIdx >= 0 && c.diagram) {
     for (const m of checkDiagram(c.diagram)) err(`DIAGRAM_INVALID:${m.slice(0, 40)}`, `Slide ${diagramIdx + 1} (diagram): ${m}`, diagramIdx);
     if (diagramLayout(c.diagram).overflow || diagramTitleOverflows(c.diagram.title)) {
@@ -147,12 +156,25 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     }
     if (!c.diagram.reviewed) warn("DIAGRAM_UNREVIEWED", `Slide ${diagramIdx + 1}: check every label of the diagram for medical accuracy.`, diagramIdx);
   }
-  const trapIdx = d.modules.indexOf("TRAP");
+  const trapIdx = at("TRAP");
   if (trapIdx >= 0 && c.trap) {
     for (const m of checkTrap(c.trap)) err(`TRAP_INVALID:${m.slice(0, 40)}`, `Slide ${trapIdx + 1} (examiner trap): ${m}`, trapIdx);
+    const parts = sequence.filter((r) => r.module === "TRAP").length;
+    if (parts > 1) warn("TRAP_CONTINUED", `Slide ${trapIdx + 1} (examiner trap) is long, so it continues automatically on ${parts > 2 ? `slides ${trapIdx + 2}–${trapIdx + parts}` : `slide ${trapIdx + 2}`}. Nothing is cut.`, trapIdx);
+    for (const m of trapLengthNotes(c.trap)) warn(`TRAP_LONG:${m.slice(0, 30)}`, `Examiner trap: ${m}`, trapIdx);
     if (c.trap.status === "rejected") err("TRAP_REJECTED", `Slide ${trapIdx + 1}: this Examiner Trap question was rejected. Regenerate it or remove the trap slide.`, trapIdx);
     else if (c.trap.status !== "approved") warn("TRAP_UNAPPROVED", `Slide ${trapIdx + 1}: the Examiner Trap is a new question — check its stem, options and answer.`, trapIdx);
     for (const ch of c.trap.checks) if (!ch.ok) warn(`TRAP_CHECK:${ch.code}`, `Examiner trap: ${ch.message}`, trapIdx);
+  }
+  const imageIdx = at("MEDICAL_IMAGE");
+  if (imageIdx >= 0 && c.medicalImage) {
+    warn(
+      "MEDICAL_IMAGE_REVIEW",
+      c.medicalImage.source.kind === "ai"
+        ? `Slide ${imageIdx + 1}: the medical image is AI-generated — check it is medically accurate and matches the title and memory tip.`
+        : `Slide ${imageIdx + 1}: reference image from Wikimedia Commons (${c.medicalImage.source.license ?? "licence unknown"}) — check it is relevant and the credit line is kept.`,
+      imageIdx
+    );
   }
   if (input.follow.showInstagram && !input.follow.instagramHandle) err("FOLLOW_NO_INSTAGRAM", "No Instagram handle is configured (Instagram → Settings).");
   if (input.follow.showTelegram && !input.follow.telegramUrl) err("FOLLOW_NO_TELEGRAM", "Telegram is shown on the Follow slide but no Telegram URL is configured.");
@@ -173,6 +195,7 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     { name: "Common Mistakes", text: d.modules.includes("MISTAKES") ? c.mistakes.join("\n") : "", strict: false },
     { name: "Diagram", text: diagramIdx >= 0 && c.diagram ? diagramTexts(c.diagram).join("\n") : "", strict: false },
     { name: "Final trick", text: c.showFinalTrick ? c.finalTrick : "", strict: false },
+    { name: "Medical image", text: imageIdx >= 0 && c.medicalImage ? `${c.medicalImage.title}\n${c.medicalImage.memoryTip}` : "", strict: false },
     { name: "Caption", text: c.caption, strict: true },
   ];
   for (const f of fields) {

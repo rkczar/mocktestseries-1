@@ -3,7 +3,7 @@ import { correctLabels } from "@/lib/instagram/ai-core";
 import { checkText } from "@/lib/instagram/content-safety";
 import type { ExamProfile } from "@/lib/instagram/exam-scope";
 import { plainText } from "@/lib/instagram/layout";
-import { TRAP_LABELS, TRAP_LIMITS, type SourceSnapshot, type TrapVariant } from "@/lib/instagram/types";
+import { TRAP_LABELS, TRAP_LIMITS, TRAP_MAX, type SourceSnapshot, type TrapVariant } from "@/lib/instagram/types";
 
 /**
  * "How the Examiner Traps You" — an AI variant question for the TRAP slide.
@@ -27,24 +27,43 @@ export function trapTexts(t: TrapVariant): string[] {
   return [t.question, ...t.options.map((o) => o.text), t.trapExplanation, t.avoidTip].filter(Boolean);
 }
 
-/** Structural problems (empty = valid). */
+/**
+ * Structural problems (empty = valid). Length is NOT a structural problem: a
+ * long trap continues on an extra slide (lib/instagram/layout.ts trapParts);
+ * see trapLengthNotes (warnings) and trapInputTooLong (save ceiling).
+ */
 export function checkTrap(t: TrapVariant): string[] {
   const errs: string[] = [];
   if (!t.question) errs.push("The trap question is empty.");
-  if (t.question.length > TRAP_LIMITS.question) errs.push(`The trap question is too long (${t.question.length}/${TRAP_LIMITS.question}).`);
   const labels = t.options.map((o) => o.label);
   if (t.options.length !== 4 || TRAP_LABELS.some((l, i) => labels[i] !== l)) errs.push("The trap needs exactly four options labelled A–D.");
   const texts = t.options.map((o) => normalizeForDuplicateCheck(o.text));
   if (texts.some((x) => !x)) errs.push("Every trap option needs text.");
   if (new Set(texts).size !== texts.length) errs.push("Two trap options have the same text.");
-  for (const o of t.options) if (o.text.length > TRAP_LIMITS.option) errs.push(`Option ${o.label} is too long (${o.text.length}/${TRAP_LIMITS.option}).`);
   if (!labels.includes(t.correct)) errs.push("The trap's correct answer must be one of A–D.");
   if (!labels.includes(t.tempting) || t.tempting === t.correct) errs.push("Name the most tempting WRONG option (different from the correct answer).");
   if (!t.trapExplanation) errs.push("Explain the trap.");
-  if (t.trapExplanation.length > TRAP_LIMITS.trapExplanation) errs.push(`The trap explanation is too long (${t.trapExplanation.length}/${TRAP_LIMITS.trapExplanation}).`);
   if (!t.avoidTip) errs.push("Add how to avoid the trap.");
-  if (t.avoidTip.length > TRAP_LIMITS.avoidTip) errs.push(`"How to avoid it" is too long (${t.avoidTip.length}/${TRAP_LIMITS.avoidTip}).`);
   return errs;
+}
+
+function lengthNotes(t: TrapVariant, max: { question: number; option: number; trapExplanation: number; avoidTip: number }): string[] {
+  const notes: string[] = [];
+  if (t.question.length > max.question) notes.push(`The trap question is long (${t.question.length}/${max.question}).`);
+  for (const o of t.options) if (o.text.length > max.option) notes.push(`Option ${o.label} is long (${o.text.length}/${max.option}).`);
+  if (t.trapExplanation.length > max.trapExplanation) notes.push(`The trap explanation is long (${t.trapExplanation.length}/${max.trapExplanation}).`);
+  if (t.avoidTip.length > max.avoidTip) notes.push(`"How to avoid it" is long (${t.avoidTip.length}/${max.avoidTip}).`);
+  return notes;
+}
+
+/** Over the recommended lengths — a warning only (the slide continues on the next one). */
+export function trapLengthNotes(t: TrapVariant): string[] {
+  return lengthNotes(t, TRAP_LIMITS);
+}
+
+/** Over the input sanity ceiling (rejected on save, like every other field cap). */
+export function trapInputTooLong(t: TrapVariant): string[] {
+  return lengthNotes(t, TRAP_MAX).map((m) => m.replace(" is long ", " is too long "));
 }
 
 export function buildTrapPrompt(params: { snapshot: SourceSnapshot; explanation: string; profile: ExamProfile; instruction?: string }): string {

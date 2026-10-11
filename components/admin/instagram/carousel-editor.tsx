@@ -30,6 +30,7 @@ import {
 import type { PostDto, QuestionPostState } from "@/lib/instagram/posts";
 
 import { smartModules } from "@/lib/instagram/smart-layout";
+import { slideSequence, type SlideRef } from "@/lib/instagram/layout";
 import { AiStudioPanel, ProviderPicker, type ProviderChoice } from "@/components/admin/instagram/ai-studio-panel";
 import { CaptionVersions } from "@/components/admin/instagram/caption-versions";
 import { DesignModePicker } from "@/components/admin/instagram/design-mode-picker";
@@ -165,7 +166,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
     setDraft(toDraft(p));
     setQNumber(p.questionNumber ? String(p.questionNumber) : "");
     setQVerified(p.questionNumberVerified);
-    setSlide((s) => Math.min(s, p.design.modules.length - 1));
+    setSlide((s) => Math.min(s, slideSequence(p.content, p.design).length - 1));
   }, []);
 
   /** A post update coming from the publishing flow (also refreshes this question's version list). */
@@ -333,7 +334,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
           ...draftPayload(draft),
           instruction: opts.instruction,
           fields: opts.fields,
-          selectedModule: opts.selected ? draft.design.modules[slide] : null,
+          selectedModule: opts.selected ? (slideSequence(draft.content, draft.design)[slide]?.module ?? null) : null,
           provider: provider === "default" ? null : provider,
         }),
       (r) => {
@@ -347,7 +348,9 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const errors = issues.filter((i) => i.severity === "error");
   const warnings = issues.filter((i) => i.severity === "warning");
 
-  const modules = draft?.design.modules ?? [];
+  // Rendered slides: design.modules, plus continuation slides when a long Examiner Trap needs them.
+  const modules = draft ? slideSequence(draft.content, draft.design) : [];
+  const slideLabel = (r: SlideRef) => `${MODULE_LABELS[r.module]}${r.parts > 1 ? ` (${r.part + 1}/${r.parts})` : ""}`;
   const snapshot = post?.snapshot;
   const showCreate = Boolean(state && !state.current);
   const publishedCurrent = post?.status === "PUBLISHED";
@@ -459,7 +462,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       {previewUrl ? <img
                           src={previewUrl}
-                          alt={previewSlide !== null && modules[previewSlide] ? `Slide ${previewSlide + 1}: ${MODULE_LABELS[modules[previewSlide]]}` : "Slide preview"}
+                          alt={previewSlide !== null && modules[previewSlide] ? `Slide ${previewSlide + 1}: ${slideLabel(modules[previewSlide])}` : "Slide preview"}
                           data-testid="slide-preview"
                           data-slide={previewSlide ?? ""}
                           className={cn("h-full w-full object-contain transition-opacity", previewSlide !== slide && "opacity-60")}
@@ -488,7 +491,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                   <div className="flex flex-wrap justify-center gap-1.5" role="tablist" aria-label="Slides">
                     {modules.map((m, i) => (
                       <button
-                        key={`${m}-${i}`}
+                        key={`${m.module}-${m.part}-${i}`}
                         type="button"
                         role="tab"
                         aria-selected={i === slide}
@@ -499,7 +502,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                           errors.some((e) => e.slide === i) && "border-[var(--color-error)] text-[var(--color-error)]"
                         )}
                       >
-                        {`${i + 1}. ${MODULE_LABELS[m]}`}
+                        {`${i + 1}. ${slideLabel(m)}`}
                       </button>
                     ))}
                   </div>
@@ -731,7 +734,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                           <Sparkles className="h-4 w-4" aria-hidden /> Generate all content
                         </Button>
                         <Button type="button" variant="outline" onClick={() => runAi({ selected: true })} data-testid="ai-regenerate-slide">
-                          <RotateCcw className="h-4 w-4" aria-hidden /> Regenerate slide {slide + 1} ({MODULE_LABELS[modules[slide]]})
+                          <RotateCcw className="h-4 w-4" aria-hidden /> Regenerate slide {slide + 1} ({modules[slide] ? slideLabel(modules[slide]) : ""})
                         </Button>
                         <Button type="button" variant="outline" onClick={() => runAi({ fields: ["hooks"] })}>
                           New hooks
@@ -791,6 +794,9 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                         const mods = [...draft.design.modules];
                         mods.splice(mods.length - 1, 0, m);
                         setModules(mods);
+                      }}
+                      onRemoveModule={(m) => {
+                        if (draft.design.modules.includes(m) && draft.design.modules.length > MIN_SLIDES) setModules(draft.design.modules.filter((x) => x !== m));
                       }}
                     />
                   ) : null}

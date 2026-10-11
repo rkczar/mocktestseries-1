@@ -14,6 +14,7 @@ import { renderSlideJpeg } from "@/lib/instagram/render";
 import { EXPECTED_INSTAGRAM_USERNAME, isExpired, isPermissionError, isRateLimit, isTokenError, publishingApi, type GraphFail, type GraphOk, type PublishingApi } from "@/lib/instagram/meta";
 import { isStale, publishView, readJob, type PublishErrorCategory, type PublishFormat, type PublishJob, type PublishView } from "@/lib/instagram/publish-view";
 import { SLIDE_HEIGHT, SLIDE_WIDTH, composeCaption, normalizeContent, normalizeDesign, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
+import { slideSequence } from "@/lib/instagram/layout";
 
 /**
  * Direct publishing to Instagram (Instagram API with Instagram Login).
@@ -312,7 +313,7 @@ export async function checkPublishable(post: InstagramPost, expectedRevision: nu
   if (blocked.length) throw new StudioError(`Publishing blocked: ${blocked[0].message}`, "blocked");
 
   const design = normalizeDesign(post.design);
-  const slideCount = format === "IMAGE" ? 1 : design.modules.length;
+  const slideCount = format === "IMAGE" ? 1 : slideSequence(normalizeContent(post.content), design).length;
   if (format === "CAROUSEL" && (slideCount < CAROUSEL_MIN || slideCount > CAROUSEL_MAX)) throw new StudioError(`A carousel needs ${CAROUSEL_MIN}–${CAROUSEL_MAX} slides.`);
   const caption = composeCaption(normalizeContent(post.content));
   captionChecks(caption);

@@ -1,8 +1,9 @@
 import { checkDiagram } from "@/lib/instagram/diagram";
-import { checkTrap } from "@/lib/instagram/trap";
+import { trapInputTooLong } from "@/lib/instagram/trap";
 import { stripExcluded } from "@/lib/instagram/exam-scope";
 import {
   LIMITS,
+  MEDICAL_IMAGE_LIMITS,
   type DiagramSpec,
   type TrapVariant,
   normalizeContent,
@@ -71,7 +72,7 @@ export function checkContentInput(raw: unknown, previous: PostContent): Checked<
   }
   // Trap: approval and automatic checks are server-owned; an edit sends it back to draft.
   if (c.trap) {
-    const sizeErrors = checkTrap(c.trap).filter((m) => /too long/.test(m));
+    const sizeErrors = trapInputTooLong(c.trap);
     if (sizeErrors.length) return { ok: false, error: `Examiner Trap: ${sizeErrors[0]}` };
     const prev = previous.trap;
     if (!prev) c.trap = { ...c.trap, status: "draft", checks: [{ code: "MANUAL", ok: false, message: "Written by hand — no automatic checks ran." }], origin: { kind: "manual" } };
@@ -82,6 +83,19 @@ export function checkContentInput(raw: unknown, previous: PostContent): Checked<
     }
   }
   c.captionVariants = previous.captionVariants;
+
+  // Medical image: the file, size and source are server-owned (set only by the generate / reference actions).
+  // The client may pick the cached candidate (Add to Carousel), drop either (Remove / Skip) and edit the title and memory tip.
+  c.imageCandidate = c.imageCandidate && previous.imageCandidate && c.imageCandidate.key === previous.imageCandidate.key ? previous.imageCandidate : null;
+  if (c.medicalImage) {
+    const known = [previous.medicalImage, previous.imageCandidate].find((m) => m && m.key === c.medicalImage!.key);
+    if (!known) return { ok: false, error: "Medical image: generate or choose the image again (unknown image)." };
+    const title = clean(c.medicalImage.title).replace(/\s+/g, " ");
+    const memoryTip = clean(c.medicalImage.memoryTip).replace(/\s+/g, " ");
+    if (title.length > MEDICAL_IMAGE_LIMITS.title) return { ok: false, error: `Medical image title is too long (${title.length}/${MEDICAL_IMAGE_LIMITS.title} characters).` };
+    if (memoryTip.length > MEDICAL_IMAGE_LIMITS.memoryTip) return { ok: false, error: `Medical image memory tip is too long (${memoryTip.length}/${MEDICAL_IMAGE_LIMITS.memoryTip} characters).` };
+    c.medicalImage = { ...known, title, memoryTip };
+  }
 
   // Provenance is server-owned: never accept it from the client.
   const textChanged = TEXT_FIELDS.some((f) => f.key !== "caption" && c[f.key] !== previous[f.key]) || c.quickRevision.join("\n") !== previous.quickRevision.join("\n");

@@ -5,6 +5,7 @@ import { getStudioSettings } from "@/lib/instagram/config";
 import { StudioError, getPostDto } from "@/lib/instagram/posts";
 import { renderSlideJpeg } from "@/lib/instagram/render";
 import { MAX_SLIDES } from "@/lib/instagram/types";
+import { slideSequence } from "@/lib/instagram/layout";
 
 /**
  * A saved post's slide as the final 1080 × 1350 JPEG (?postId=…&i=0-based,
@@ -23,10 +24,10 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const postId = params.get("postId") ?? "";
   const index = Number(params.get("i"));
-  if (!ID.test(postId) || !Number.isInteger(index) || index < 0 || index >= MAX_SLIDES) return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  if (!ID.test(postId) || !Number.isInteger(index) || index < 0 || index >= MAX_SLIDES + 3) return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   try {
     const [post, settings] = await Promise.all([getPostDto(postId), getStudioSettings()]);
-    if (index >= post.design.modules.length) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
+    if (index >= slideSequence(post.content, post.design).length) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
     const jpeg = await renderSlideJpeg(
       {
         snapshot: post.snapshot,

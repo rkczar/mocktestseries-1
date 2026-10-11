@@ -18,13 +18,17 @@ import {
   questionLayout,
   TRAP_HEAD,
   textBlocksFor,
+  textHeight,
   textSlideLayout,
-  trapLayout,
+  trapParts,
+  slideSequence,
+  type SlideRef,
   type TextBlock,
 } from "@/lib/instagram/layout";
+import { mediaStorage } from "@/lib/media-storage";
 import { DIAGRAM_AREA, diagramLayout, type Arrow, type Box } from "@/lib/instagram/diagram";
 import { resolveTheme, type SlideTheme } from "@/lib/instagram/templates";
-import { SLIDE_HEIGHT, SLIDE_WIDTH, type DiagramSpec, type PostContent, type PostDesign, type SeriesStats, type SlideModule, type SourceSnapshot, type TrapVariant } from "@/lib/instagram/types";
+import { SLIDE_HEIGHT, SLIDE_WIDTH, type DiagramSpec, type MedicalImage, type PostContent, type PostDesign, type SeriesStats, type SourceSnapshot, type TrapVariant } from "@/lib/instagram/types";
 
 /**
  * Carousel slide renderer: the same `next/og` (Satori) + Geist setup as the
@@ -111,6 +115,7 @@ export function sanitizeForRender(input: RenderInput): RenderInput {
       trap: c.trap
         ? { ...c.trap, question: r(c.trap.question), options: c.trap.options.map((o) => ({ ...o, text: r(o.text) })), trapExplanation: r(c.trap.trapExplanation), avoidTip: r(c.trap.avoidTip) }
         : null,
+      medicalImage: c.medicalImage ? { ...c.medicalImage, title: r(c.medicalImage.title), memoryTip: r(c.medicalImage.memoryTip), source: { ...c.medicalImage.source, ...(c.medicalImage.source.author ? { author: r(c.medicalImage.source.author) } : {}) } } : null,
       finalTrick: r(c.finalTrick),
     },
     seriesStats: input.seriesStats ? { ...input.seriesStats, rangeLabel: r(input.seriesStats.rangeLabel), headlineSuffix: r(input.seriesStats.headlineSuffix) } : null,
@@ -629,18 +634,22 @@ function DiagramSlide({ input, t }: { input: RenderInput; t: SlideTheme }) {
 
 // ---- Examiner trap -------------------------------------------------------------------------
 
-function TrapSlide({ input, t }: { input: RenderInput; t: SlideTheme }) {
+function TrapSlide({ input, t, part }: { input: RenderInput; t: SlideTheme; part: number }) {
   const trap = input.content.trap as TrapVariant | null;
   if (!trap) return <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center", fontSize: 32, color: t.muted }}>No examiner trap yet</div>;
-  const L = trapLayout(trap, input.design.bodyScale);
+  // A long trap continues on the next slide(s) — never cut, never blocked.
+  const parts = trapParts(trap, input.design.bodyScale);
+  const L = parts[Math.min(part, parts.length - 1)];
   const red = hw(t) ? (t.annotation ?? t.highlight) : t.highlight;
+  const subtitle = parts.length > 1 ? `AI VARIANT · EXAMINER'S TRAP · ${part + 1} OF ${parts.length}${part > 0 ? " (CONTINUED)" : ""}` : "AI VARIANT · EXAMINER'S TRAP";
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, justifyContent: "center" }}>
       <div style={{ display: "flex", flexDirection: "column", height: TRAP_HEAD.height, justifyContent: "center", gap: 6 }}>
         <div style={{ display: "flex", fontSize: TRAP_HEAD.titleSize, fontWeight: 700, color: red, lineHeight: 1.1 }}>HOW THE EXAMINER TRAPS YOU?</div>
-        <div style={{ display: "flex", fontSize: TRAP_HEAD.subtitleSize, fontWeight: 700, letterSpacing: "0.12em", color: t.muted }}>{"AI VARIANT · EXAMINER'S TRAP"}</div>
+        <div style={{ display: "flex", fontSize: TRAP_HEAD.subtitleSize, fontWeight: 700, letterSpacing: "0.12em", color: t.muted }}>{subtitle}</div>
       </div>
-      <div style={{ display: "flex", fontSize: L.stemSize, fontWeight: 700, lineHeight: 1.28, marginBottom: 20 }}>{trap.question}</div>
+      {L.show.stem ? <div style={{ display: "flex", fontSize: L.stemSize, fontWeight: 700, lineHeight: 1.28, marginBottom: 20 }}>{trap.question}</div> : null}
+      {L.show.options ? (
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {trap.options.map((o) => {
           const correct = o.label === trap.correct;
@@ -671,10 +680,11 @@ function TrapSlide({ input, t }: { input: RenderInput; t: SlideTheme }) {
           );
         })}
       </div>
+      ) : null}
       {[
-        { label: "WHY IT TRAPS YOU", text: trap.trapExplanation, color: red },
-        { label: "HOW TO AVOID IT", text: trap.avoidTip, color: t.correct },
-      ].map((b, i) => (
+        { label: "WHY IT TRAPS YOU", text: trap.trapExplanation, color: red, show: L.show.why },
+        { label: "HOW TO AVOID IT", text: trap.avoidTip, color: t.correct, show: L.show.avoid },
+      ].filter((b) => b.show).map((b, i) => (
         <div key={b.label} style={sx({ display: "flex", flexDirection: "column", marginTop: 16, padding: "22px 30px", border: `${hw(t) ? 3 : 2}px solid ${b.color}`, borderRadius: hwRadius(t), background: hw(t) ? "transparent" : t.card, transform: tilt(t, i + 3) })}>
           <Label text={b.label} color={b.color} t={t} />
           <div style={{ display: "flex", marginTop: 10, fontSize: L.noteSize, fontWeight: 500, lineHeight: 1.28 }}>{b.text}</div>
@@ -684,8 +694,67 @@ function TrapSlide({ input, t }: { input: RenderInput; t: SlideTheme }) {
   );
 }
 
-function slideBody(module: SlideModule, input: RenderInput, t: SlideTheme) {
-  switch (module) {
+// ---- Medical image (optional; added only after the admin approves the preview) -------------
+
+export const IMAGE_SLIDE = { titleSize: 40, tipSize: 30, gap: 24, attributionH: 30, tipPad: 30 } as const;
+
+function imageCredit(img: MedicalImage): string {
+  if (img.source.kind === "ai") return "AI-generated educational illustration";
+  return ["Image", img.source.author, img.source.license, "via Wikimedia Commons"].filter(Boolean).join(" · ").replace("Image · ", "Image: ");
+}
+
+/** Space left for the picture itself on the image slide. */
+function imageBox(img: MedicalImage): { w: number; h: number } {
+  const W = GEOMETRY.contentWidth;
+  const title = img.title.trim() ? textHeight(img.title, IMAGE_SLIDE.titleSize, W, "bold") + IMAGE_SLIDE.gap : 0;
+  const tip = img.memoryTip.trim() ? textHeight(img.memoryTip, IMAGE_SLIDE.tipSize, W - 2 * IMAGE_SLIDE.tipPad) + 2 * IMAGE_SLIDE.tipPad + TEXT_CARD.labelH + 10 + IMAGE_SLIDE.gap : 0;
+  return { w: W, h: Math.floor(Math.max(240, GEOMETRY.bodyHeight - title - tip - IMAGE_SLIDE.attributionH - 8)) };
+}
+
+/**
+ * Loads the stored image, fitted to the slide's picture box, as a data URL Satori can draw (PNG).
+ * Throws when the file is unreadable, so preview / export / publish fail visibly instead of
+ * posting a slide without its image.
+ */
+async function loadSlideImage(img: MedicalImage): Promise<{ src: string; w: number; h: number }> {
+  const box = imageBox(img);
+  let bytes: Buffer;
+  try {
+    bytes = await mediaStorage().read(img.key);
+  } catch {
+    throw new Error("The medical image file could not be loaded. Generate or choose the image again.");
+  }
+  const { data, info } = await sharp(bytes, { failOn: "error" }).resize({ width: box.w, height: box.h, fit: "inside" }).png().toBuffer({ resolveWithObject: true });
+  return { src: `data:image/png;base64,${data.toString("base64")}`, w: info.width, h: info.height };
+}
+
+function ImageSlide({ input, t, pic }: { input: RenderInput; t: SlideTheme; pic: { src: string; w: number; h: number } | null }) {
+  const img = input.content.medicalImage;
+  if (!img || !pic) return <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center", fontSize: 32, color: t.muted }}>No medical image yet</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: IMAGE_SLIDE.gap }}>
+      {img.title.trim() ? (
+        <div style={{ display: "flex" }}>
+          <div style={{ display: "flex", fontSize: IMAGE_SLIDE.titleSize, fontWeight: 700, lineHeight: 1.28, background: hw(t) ? t.marker : "transparent", padding: hw(t) ? "0 10px" : 0 }}>{img.title}</div>
+        </div>
+      ) : null}
+      <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center" }}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- Satori renders plain <img> */}
+        <img src={pic.src} width={pic.w} height={pic.h} alt="" style={sx({ borderRadius: hw(t) ? 6 : 18, border: hw(t) ? `3px solid ${t.border}` : undefined, transform: tilt(t, 1) })} />
+      </div>
+      {img.memoryTip.trim() ? (
+        <div style={sx({ display: "flex", flexDirection: "column", padding: IMAGE_SLIDE.tipPad, borderRadius: hwRadius(t), background: hw(t) ? "transparent" : t.highlightSoft, border: `${hw(t) ? 3 : 2}px solid ${t.highlight}` })}>
+          <Label text="MEMORY TIP" color={t.highlight} t={t} />
+          <div style={{ display: "flex", marginTop: 10, fontSize: IMAGE_SLIDE.tipSize, fontWeight: 500, lineHeight: 1.28 }}>{img.memoryTip}</div>
+        </div>
+      ) : null}
+      <div style={{ display: "flex", height: IMAGE_SLIDE.attributionH, alignItems: "flex-end", fontSize: 20, color: t.muted }}>{imageCredit(img)}</div>
+    </div>
+  );
+}
+
+function slideBody(ref: SlideRef, input: RenderInput, t: SlideTheme, pic: { src: string; w: number; h: number } | null) {
+  switch (ref.module) {
     case "HOOK":
       return <HookSlide input={input} t={t} />;
     case "QUESTION":
@@ -697,22 +766,26 @@ function slideBody(module: SlideModule, input: RenderInput, t: SlideTheme) {
     case "DIAGRAM":
       return <DiagramSlide input={input} t={t} />;
     case "TRAP":
-      return <TrapSlide input={input} t={t} />;
+      return <TrapSlide input={input} t={t} part={ref.part} />;
+    case "MEDICAL_IMAGE":
+      return <ImageSlide input={input} t={t} pic={pic} />;
     default:
-      return <TextSlide blocks={textBlocksFor(module, input.content)} input={input} t={t} />;
+      return <TextSlide blocks={textBlocksFor(ref.module, input.content)} input={input} t={t} />;
   }
 }
 
-/** Renders slide `index` (0-based) as JPEG. */
+/** Renders slide `index` (0-based, over the rendered sequence incl. trap continuations) as JPEG. */
 export async function renderSlideJpeg(raw: RenderInput, index: number, quality = 92): Promise<Buffer> {
   const input = sanitizeForRender(raw);
-  const modules = input.design.modules;
-  if (index < 0 || index >= modules.length) throw new Error("Slide index out of range.");
+  const slides = slideSequence(input.content, input.design);
+  if (index < 0 || index >= slides.length) throw new Error("Slide index out of range.");
+  const ref = slides[index];
   const t = resolveTheme(input.design);
+  const pic = ref.module === "MEDICAL_IMAGE" && input.content.medicalImage ? await loadSlideImage(input.content.medicalImage) : null;
   const image = new ImageResponse(
     (
-      <Frame input={input} t={t} index={index} total={modules.length}>
-        {slideBody(modules[index], input, t)}
+      <Frame input={input} t={t} index={index} total={slides.length}>
+        {slideBody(ref, input, t, pic)}
       </Frame>
     ),
     { width: SLIDE_WIDTH, height: SLIDE_HEIGHT, fonts: await loadFonts() }

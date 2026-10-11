@@ -19,6 +19,7 @@ export const SLIDE_MODULES = [
   "MISTAKES",
   "DIAGRAM",
   "TRAP",
+  "MEDICAL_IMAGE",
   "FOLLOW",
 ] as const;
 export type SlideModule = (typeof SLIDE_MODULES)[number];
@@ -35,6 +36,7 @@ export const MODULE_LABELS: Record<SlideModule, string> = {
   MISTAKES: "Common Mistakes",
   DIAGRAM: "Medical Concept Diagram",
   TRAP: "How the Examiner Traps You",
+  MEDICAL_IMAGE: "Medical Image",
   FOLLOW: "Follow / Join",
 };
 
@@ -211,7 +213,39 @@ export interface TrapVariant {
   origin?: ContentOrigin;
   reviewedAt?: string;
 }
+/** Recommended lengths (the AI is asked to stay within them; longer text is a warning and continues on an extra slide). */
 export const TRAP_LIMITS = { question: 300, option: 110, trapExplanation: 300, avoidTip: 200 } as const;
+/** Input sanity ceiling on save — everything up to it is laid out without cutting (lib/instagram/layout.ts trapParts). */
+export const TRAP_MAX = { question: 1000, option: 250, trapExplanation: 900, avoidTip: 600 } as const;
+
+// ---- Optional medical image slide (AI-generated or a licensed reference image) -------------
+
+export interface MedicalImageSource {
+  kind: "ai" | "reference";
+  /** "gemini" for AI images, "wikimedia" for Wikimedia Commons. */
+  provider: string;
+  model?: string;
+  promptVersion?: string;
+  /** Reference images: the file page, author and licence (shown on the slide as attribution). */
+  pageUrl?: string;
+  author?: string;
+  license?: string;
+  licenseUrl?: string;
+  createdAt: string;
+}
+
+export interface MedicalImage {
+  /** Content-addressed key in the media store (lib/media-storage.ts) — server-owned. */
+  key: string;
+  width: number;
+  height: number;
+  /** Shown above the image (editable). */
+  title: string;
+  /** Short memory tip under the image (editable). */
+  memoryTip: string;
+  source: MedicalImageSource;
+}
+export const MEDICAL_IMAGE_LIMITS = { title: 70, memoryTip: 200 } as const;
 
 // ---- Caption versions -------------------------------------------------------------------
 
@@ -240,6 +274,10 @@ export interface PostContent {
   mistakes: string[];
   diagram: DiagramSpec | null;
   trap: TrapVariant | null;
+  /** The image on the MEDICAL_IMAGE slide (added only after the admin approves a preview). */
+  medicalImage: MedicalImage | null;
+  /** The latest generated / selected image awaiting Add to Carousel or Skip (cached so a reload never regenerates). */
+  imageCandidate: MedicalImage | null;
   captionVariants: CaptionVariant[];
   /** Which caption version is in use (null = written/edited directly). */
   captionStyle: CaptionStyle | null;
@@ -401,6 +439,8 @@ export function emptyContent(): PostContent {
     mistakes: [],
     diagram: null,
     trap: null,
+    medicalImage: null,
+    imageCandidate: null,
     captionVariants: [],
     captionStyle: null,
     keywords: [],
@@ -436,6 +476,8 @@ export function normalizeContent(raw: unknown): PostContent {
     mistakes: strList(r.mistakes),
     diagram: normalizeDiagram(r.diagram),
     trap: normalizeTrap(r.trap),
+    medicalImage: normalizeMedicalImage(r.medicalImage),
+    imageCandidate: normalizeMedicalImage(r.imageCandidate),
     captionVariants: normalizeCaptionVariants(r.captionVariants),
     captionStyle: (CAPTION_STYLES as readonly string[]).includes(r.captionStyle as string) ? (r.captionStyle as CaptionStyle) : null,
     keywords: strList(r.keywords),
@@ -536,6 +578,23 @@ export function normalizeTrap(raw: unknown): TrapVariant | null {
   };
 }
 
+export function normalizeMedicalImage(raw: unknown): MedicalImage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const src = (r.source ?? {}) as Record<string, unknown>;
+  const key = str(r.key);
+  if (!key || (src.kind !== "ai" && src.kind !== "reference")) return null;
+  const opt = (k: string) => (typeof src[k] === "string" && src[k] ? { [k]: src[k] as string } : {});
+  return {
+    key,
+    width: typeof r.width === "number" ? r.width : 0,
+    height: typeof r.height === "number" ? r.height : 0,
+    title: str(r.title),
+    memoryTip: str(r.memoryTip),
+    source: { kind: src.kind, provider: str(src.provider), createdAt: str(src.createdAt), ...opt("model"), ...opt("promptVersion"), ...opt("pageUrl"), ...opt("author"), ...opt("license"), ...opt("licenseUrl") },
+  };
+}
+
 export function normalizeCaptionVariants(raw: unknown): CaptionVariant[] {
   if (!Array.isArray(raw)) return [];
   const out: CaptionVariant[] = [];
@@ -578,6 +637,7 @@ export const MODULE_FIELDS: Record<SlideModule, ContentField[]> = {
   MISTAKES: ["mistakes"],
   DIAGRAM: [],
   TRAP: [],
+  MEDICAL_IMAGE: [],
   FOLLOW: ["finalTrick"],
 };
 

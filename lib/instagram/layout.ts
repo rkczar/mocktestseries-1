@@ -183,21 +183,95 @@ export interface TrapLayout {
 }
 
 export function trapLayout(trap: TrapVariant, scale: number): TrapLayout {
+  const p = trapPartLayout(trap, TRAP_ALL, scale);
+  return { stemSize: p.stemSize, optionSize: p.optionSize, noteSize: p.noteSize, overflow: p.overflow };
+}
+
+/** What one Examiner Trap slide shows. A long trap continues on extra slides instead of being cut or blocked. */
+export interface TrapPieces {
+  stem: boolean;
+  options: boolean;
+  why: boolean;
+  avoid: boolean;
+}
+const TRAP_ALL: TrapPieces = { stem: true, options: true, why: true, avoid: true };
+
+export interface TrapPartLayout extends TrapLayout {
+  show: TrapPieces;
+}
+
+function trapPartLayout(trap: TrapVariant, show: TrapPieces, scale: number): TrapPartLayout {
   const W = GEOMETRY.contentWidth;
   const optW = W - 2 * 22 - 48 - 18 - 150;
   const noteW = W - 2 * 30;
   const heightAt = (s: number) => {
     const o = Math.max(22, Math.round(s * 0.82));
     const n = Math.max(22, Math.round(s * 0.74));
-    const stem = textHeight(trap.question, s, W, "bold");
-    const opts = trap.options.reduce((h, opt) => h + Math.max(48, textHeight(opt.text || " ", o, optW)) + 2 * 12 + 10, 0);
-    const notes = [trap.trapExplanation, trap.avoidTip].reduce((h, t) => h + 2 * 22 + 26 + 10 + textHeight(t || " ", n, noteW) + 16, 0);
-    return TRAP_HEAD.height + stem + 20 + opts + 10 + notes;
+    const stem = show.stem ? textHeight(trap.question, s, W, "bold") + 20 : 0;
+    const opts = show.options ? trap.options.reduce((h, opt) => h + Math.max(48, textHeight(opt.text || " ", o, optW)) + 2 * 12 + 10, 0) + 10 : 0;
+    const notes = [show.why ? trap.trapExplanation : null, show.avoid ? trap.avoidTip : null].reduce((h, t) => (t === null ? h : h + 2 * 22 + 26 + 10 + textHeight(t || " ", n, noteW) + 16), 0);
+    return TRAP_HEAD.height + stem + opts + notes;
   };
   for (let s = Math.round(36 * scale); s >= 24; s -= 2) {
-    if (heightAt(s) <= GEOMETRY.bodyHeight) return { stemSize: s, optionSize: Math.max(22, Math.round(s * 0.82)), noteSize: Math.max(22, Math.round(s * 0.74)), overflow: false };
+    if (heightAt(s) <= GEOMETRY.bodyHeight) return { show, stemSize: s, optionSize: Math.max(22, Math.round(s * 0.82)), noteSize: Math.max(22, Math.round(s * 0.74)), overflow: false };
   }
-  return { stemSize: 24, optionSize: 22, noteSize: 22, overflow: true };
+  return { show, stemSize: 24, optionSize: 22, noteSize: 22, overflow: true };
+}
+
+/** Ways to spread a trap over 1–4 slides, tried in order; the first where every slide fits wins. */
+const TRAP_SPLITS: TrapPieces[][] = [
+  [TRAP_ALL],
+  [
+    { stem: true, options: true, why: false, avoid: false },
+    { stem: false, options: false, why: true, avoid: true },
+  ],
+  [
+    { stem: true, options: true, why: false, avoid: false },
+    { stem: false, options: false, why: true, avoid: false },
+    { stem: false, options: false, why: false, avoid: true },
+  ],
+  [
+    { stem: true, options: false, why: false, avoid: false },
+    { stem: false, options: true, why: false, avoid: false },
+    { stem: false, options: false, why: true, avoid: false },
+    { stem: false, options: false, why: false, avoid: true },
+  ],
+];
+
+/**
+ * The Examiner Trap laid out over as many slides as it needs (usually one).
+ * Text length never blocks the trap: when it does not fit one slide, it continues
+ * on the next. `overflow` stays true only if even the 4-slide split cannot fit
+ * (impossible within TRAP_MAX) — reported as a warning, never a blocker.
+ */
+export function trapParts(trap: TrapVariant, scale: number): TrapPartLayout[] {
+  let last: TrapPartLayout[] = [];
+  for (const split of TRAP_SPLITS) {
+    last = split.map((show) => trapPartLayout(trap, show, scale));
+    if (last.every((p) => !p.overflow)) return last;
+  }
+  return last;
+}
+
+// ---- Rendered slide sequence ---------------------------------------------------------
+
+/** One rendered image. `part`/`parts` > 1 only for a module that continues on extra slides (the Examiner Trap). */
+export interface SlideRef {
+  module: SlideModule;
+  part: number;
+  parts: number;
+}
+
+/**
+ * The images a carousel actually renders/publishes, in order. Same as
+ * design.modules except a long Examiner Trap adds continuation slides right
+ * after itself. Preview, export, publish and the quality gate all use this.
+ */
+export function slideSequence(content: Pick<PostContent, "trap">, design: Pick<PostDesign, "modules" | "bodyScale">): SlideRef[] {
+  return design.modules.flatMap((module) => {
+    const parts = module === "TRAP" && content.trap ? trapParts(content.trap, design.bodyScale).length : 1;
+    return Array.from({ length: parts }, (_, part) => ({ module, part, parts }));
+  });
 }
 
 // ---- Per-slide plan (shared by renderer + quality gate) ---------------------
@@ -271,9 +345,12 @@ export function planSlides(snapshot: SourceSnapshot, content: PostContent, desig
       case "DIAGRAM":
         if (!content.diagram) missing.push("Diagram");
         break;
+      case "MEDICAL_IMAGE":
+        if (!content.medicalImage) missing.push("Medical image (generate or choose one, then Add to Carousel)");
+        break;
       case "TRAP":
         if (!content.trap) missing.push("Examiner trap question");
-        else overflow = trapLayout(content.trap, design.bodyScale).overflow;
+        else overflow = trapParts(content.trap, design.bodyScale).some((p) => p.overflow);
         break;
       default: {
         const blocks = textBlocksFor(module, content);

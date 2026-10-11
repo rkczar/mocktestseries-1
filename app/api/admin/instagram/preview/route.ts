@@ -6,6 +6,7 @@ import { StudioError, getPostDto } from "@/lib/instagram/posts";
 import { renderSlideJpeg } from "@/lib/instagram/render";
 import { MAX_SLIDES } from "@/lib/instagram/types";
 import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
+import { slideSequence } from "@/lib/instagram/layout";
 
 /**
  * Live slide preview for the editor: renders the post's frozen question
@@ -31,14 +32,14 @@ export async function POST(request: NextRequest) {
   }
   if (typeof body.postId !== "string" || !ID.test(body.postId)) return NextResponse.json({ error: "Invalid post." }, { status: 400 });
   const index = Number(body.index);
-  if (!Number.isInteger(index) || index < 0 || index >= MAX_SLIDES) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
+  if (!Number.isInteger(index) || index < 0 || index >= MAX_SLIDES + 3) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
   try {
     const [post, settings] = await Promise.all([getPostDto(body.postId), getStudioSettings()]);
     const content = checkContentInput(body.content ?? post.content, post.content);
     if (!content.ok) return NextResponse.json({ error: content.error }, { status: 422 });
     const design = checkDesignInput(body.design ?? post.design);
     if (!design.ok) return NextResponse.json({ error: design.error }, { status: 422 });
-    if (index >= design.value.modules.length) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
+    if (index >= slideSequence(content.value, design.value).length) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
     const jpeg = await renderSlideJpeg(
       {
         snapshot: post.snapshot,
