@@ -4,6 +4,10 @@ import { SiteHeader } from "./site-header";
 import { SiteFooter } from "./site-footer";
 import { AskAiDemoSection } from "./ask-ai-demo-section";
 import { OmrPracticeCard } from "@/components/omr/omr-practice-card";
+// The homepage ("/") is never an excluded route, so it uses the renderer without
+// the client scope gate — keeping the gate out of the homepage bundle.
+import { BackgroundEffectsRenderer } from "@/components/background-effects/renderer";
+import type { BackgroundEffectsConfig } from "@/lib/background-effects";
 import {
   HeroSection,
   FeaturedExamSection,
@@ -48,6 +52,7 @@ export function HomepageView({
   reviewsSection = null,
   telegramHref = null,
   lastUpdated = null,
+  backgroundEffects = null,
 }: {
   homepage: ResolvedHomepage;
   omrResourceId?: string | null;
@@ -58,6 +63,8 @@ export function HomepageView({
   telegramHref?: string | null;
   /** Footer "Last Updated" date (Admin → Website → Footer); null hides it. */
   lastUpdated?: string | null;
+  /** Background Effects to draw behind the page (Admin → Website → Appearance); null = none, page unchanged. */
+  backgroundEffects?: BackgroundEffectsConfig | null;
 }) {
   const byKey = new Map(homepage.sections.map((s) => [s.key, s]));
   const header = byKey.get("HEADER");
@@ -70,7 +77,8 @@ export function HomepageView({
   );
 
   return (
-    <div className="flex min-h-full flex-col bg-[var(--color-background)]">
+    <div className={`flex min-h-full flex-col bg-[var(--color-background)]${backgroundEffects ? " isolate" : ""}`}>
+      {backgroundEffects ? <BackgroundEffectsRenderer config={backgroundEffects} /> : null}
       {header?.isEnabled !== false ? (
         <SiteHeader
           content={(header?.content as Record<string, unknown>) ?? {}}

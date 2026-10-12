@@ -5,7 +5,7 @@ export default async function StudentDashboardLayout({ children }: { children: R
   const student = await requireStudentOrLogin();
 
   return (
-    <StudentShell student={student}>
+    <StudentShell student={student} backgroundEffects>
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">{children}</div>
     </StudentShell>
   );

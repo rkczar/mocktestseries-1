@@ -3,6 +3,8 @@ import { SiteFooter } from "@/components/homepage/site-footer";
 import { getPublicChrome } from "@/components/homepage/public-page-shell";
 import { getVisibleAnnouncementsForStudent } from "@/lib/notifications";
 import { getFooterLastUpdated } from "@/lib/site-last-updated";
+import { getBackgroundEffectsFor } from "@/lib/background-effects-settings";
+import { BackgroundEffectsLayer } from "@/components/background-effects/layer";
 
 /**
  * The one shared Header + Footer shell for "normal" student pages (Section
@@ -17,19 +19,24 @@ import { getFooterLastUpdated } from "@/lib/site-last-updated";
 export async function StudentShell({
   student,
   children,
+  backgroundEffects = false,
 }: {
   student: { id: string; name: string | null; studentId: string };
   children: React.ReactNode;
+  /** Only the Student Dashboard layout opts in; result/review/leaderboard pages never draw a background. */
+  backgroundEffects?: boolean;
 }) {
-  const [announcements, { footer, contactInfo }, lastUpdated] = await Promise.all([
+  const [announcements, { footer, contactInfo }, lastUpdated, background] = await Promise.all([
     getVisibleAnnouncementsForStudent(student.id, { limit: 30 }),
     getPublicChrome(),
     getFooterLastUpdated(),
+    backgroundEffects ? getBackgroundEffectsFor("STUDENT") : null,
   ]);
   const growWithUsEnabled = (contactInfo?.content as Record<string, unknown> | undefined)?.growWithUsEnabled !== false;
 
   return (
-    <div className="flex min-h-screen flex-col bg-[var(--color-background)]">
+    <div className={`flex min-h-screen flex-col bg-[var(--color-background)]${background ? " isolate" : ""}`}>
+      {background ? <BackgroundEffectsLayer config={background} /> : null}
       <StudentHeader
         name={student.name ?? "Student"}
         studentId={student.studentId}

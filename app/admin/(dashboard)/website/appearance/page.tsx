@@ -1,11 +1,16 @@
 import { getAppearance } from "@/lib/appearance";
+import { getAdminSession } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
+import { getBackgroundEffectsConfig } from "@/lib/background-effects-settings";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { AppearanceForm } from "./appearance-form";
+import { BackgroundEffectsForm } from "./background-effects-form";
 
 export const metadata = { title: "Appearance — Mock Test Series.in Admin" };
 
 export default async function AppearancePage() {
-  const appearance = await getAppearance();
+  const [appearance, backgroundEffects, session] = await Promise.all([getAppearance(), getBackgroundEffectsConfig(), getAdminSession()]);
+  const canManageBackground = !!session?.user?.permissions?.includes(PERMISSIONS.WEBSITE_MANAGE);
 
   return (
     <div className="flex flex-col gap-6">
@@ -25,6 +30,20 @@ export default async function AppearancePage() {
         </CardHeader>
         <CardContent>
           <AppearanceForm appearance={appearance} />
+        </CardContent>
+      </Card>
+
+      <Card id="background-effects">
+        <CardHeader>
+          <CardTitle>Background Effects</CardTitle>
+          <CardDescription>
+            {canManageBackground
+              ? "Decorative backgrounds behind the homepage, public pages or Student Dashboard. Nothing changes on the website until you save."
+              : "View only — only a Master Admin can change background effects."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <BackgroundEffectsForm initial={backgroundEffects} canManage={canManageBackground} />
         </CardContent>
       </Card>
     </div>

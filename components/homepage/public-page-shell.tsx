@@ -3,6 +3,8 @@ import { resolveHomepage } from "@/lib/homepage-render";
 import { SiteHeader } from "./site-header";
 import { SiteFooter } from "./site-footer";
 import { getFooterLastUpdated } from "@/lib/site-last-updated";
+import { getBackgroundEffectsFor } from "@/lib/background-effects-settings";
+import { BackgroundEffectsLayer } from "@/components/background-effects/layer";
 
 /**
  * Same canonical Header/Footer used by the homepage (components/homepage/
@@ -24,11 +26,16 @@ export async function getPublicChrome() {
 }
 
 export async function PublicPageShell({ children, studentSignedIn = false }: { children: React.ReactNode; studentSignedIn?: boolean }) {
-  const [{ header, footer, contactInfo }, lastUpdated] = await Promise.all([getPublicChrome(), getFooterLastUpdated()]);
+  const [{ header, footer, contactInfo }, lastUpdated, backgroundEffects] = await Promise.all([
+    getPublicChrome(),
+    getFooterLastUpdated(),
+    getBackgroundEffectsFor("PUBLIC"),
+  ]);
   const growWithUsEnabled = (contactInfo?.content as Record<string, unknown> | undefined)?.growWithUsEnabled !== false;
 
   return (
-    <div className="flex min-h-full flex-col bg-[var(--color-background)]">
+    <div className={`flex min-h-full flex-col bg-[var(--color-background)]${backgroundEffects ? " isolate" : ""}`}>
+      {backgroundEffects ? <BackgroundEffectsLayer config={backgroundEffects} /> : null}
       {header?.isEnabled !== false ? (
         <SiteHeader content={(header?.content as Record<string, unknown>) ?? {}} growWithUsEnabled={growWithUsEnabled} studentSignedIn={studentSignedIn} />
       ) : null}
