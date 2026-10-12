@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { CAPTION_STYLE_LABELS, type CaptionStyle, type CaptionVariant, type PostContent, type PostDesign } from "@/lib/instagram/types";
 import type { PostDto } from "@/lib/instagram/posts";
 import { aiCaptionsAction } from "@/app/admin/(dashboard)/instagram/studio-actions";
-import type { ActFn, ProviderChoice } from "@/components/admin/instagram/ai-studio-panel";
+import type { ActFn, AskCostFn, ProviderChoice } from "@/components/admin/instagram/ai-studio-panel";
 
 /** "Generate Trend-Informed Caption": three editable versions; choosing one copies it into the caption + hashtags. */
 export function CaptionVersions({
@@ -19,6 +19,7 @@ export function CaptionVersions({
   provider,
   draftPayload,
   act,
+  askCost,
   onPost,
   onUse,
 }: {
@@ -29,6 +30,7 @@ export function CaptionVersions({
   provider: ProviderChoice;
   draftPayload: () => { content: PostContent; design: PostDesign };
   act: ActFn;
+  askCost: AskCostFn;
   onPost: (p: PostDto, summary: string) => void;
   onUse: (v: CaptionVariant) => void;
 }) {
@@ -44,9 +46,11 @@ export function CaptionVersions({
           disabled={disabled}
           data-testid="ai-captions"
           onClick={() =>
-            act(
-              () => aiCaptionsAction({ postId: post.id, expectedRevision: post.revision, ...draftPayload(), provider: provider === "default" ? null : provider, instruction }),
-              (r) => onPost(r.post, r.summary)
+            askCost({ feature: "ig_caption", context: { postId: post.id }, legacyProvider: provider !== "default" }, (quoteId) =>
+              act(
+                () => aiCaptionsAction({ postId: post.id, expectedRevision: post.revision, ...draftPayload(), provider: provider === "default" ? null : provider, instruction, quoteId }),
+                (r) => onPost(r.post, r.summary)
+              )
             )
           }
         >

@@ -8,6 +8,8 @@ import { getGatewayConfig, usageSince } from "@/lib/ai-gateway";
 import { istStartOfDay } from "@/lib/ist-time";
 import { prisma } from "@/lib/prisma";
 import { ProvidersView, type ProviderSummary } from "@/components/admin/ai/providers-view";
+import { OpenRouterCard } from "@/components/admin/ai/openrouter-card";
+import { getEngineConfig, getOpenRouterConfig } from "@/lib/ai-engine/settings";
 
 export const metadata = { title: "AI Providers — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";
@@ -74,7 +76,14 @@ export default async function AiProvidersPage() {
     },
   ];
 
+  const [openRouter, engine] = await Promise.all([getOpenRouterConfig(), getEngineConfig()]);
   return (
+    <div className="flex flex-col gap-5">
+    <OpenRouterCard config={openRouter} privacy={engine.privacy} canManage />
+    <div>
+      <h2 className="text-sm font-semibold text-[var(--color-foreground)]">Legacy providers (kept, recoverable)</h2>
+      <p className="text-xs text-[var(--color-muted-foreground)]">Gemini, OpenAI and Claude stay configured as before. A feature uses them while it is set to “Legacy route” in AI → Features.</p>
+    </div>
     <ProvidersView
       legacy={legacy}
       claude={claude}
@@ -84,5 +93,6 @@ export default async function AiProvidersPage() {
       todayByFeature={Object.fromEntries(todayRows.map((r) => [r.feature, r._count._all]))}
       usage30={usage30}
     />
+    </div>
   );
 }

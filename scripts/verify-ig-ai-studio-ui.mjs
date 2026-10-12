@@ -36,6 +36,15 @@ const fingerprint = () =>
          UNION ALL SELECT o.id || o.text || o."isCorrect" || o.label FROM "QuestionOption" o
          UNION ALL SELECT x.id || x.content::text FROM "AIExplanation" x) t`);
 
+
+/** AI Engine: every paid admin AI action first shows the AI Cost Preview — approve it. */
+async function approveCost(page) {
+  const sel = '[data-testid="cost-preview-generate"], [data-testid="bulk-cost-generate"]';
+  await page.locator(sel).first().waitFor({ timeout: 30000 });
+  await page.waitForFunction((s) => { const b = document.querySelector(s); return b && !b.disabled; }, sel, { timeout: 30000 });
+  await page.locator(sel).first().click();
+}
+
 async function login(page, username) {
   await page.goto(`${BASE}/admin/login`);
   await page.fill("input[name=username]", username);
@@ -135,13 +144,16 @@ try {
   await page.getByTestId("tab-ai").click();
   await page.getByTestId("ai-provider").selectOption("anthropic");
   await page.getByTestId("ai-generate-all").click();
+  await approveCost(page);
   const genMsg = await editorMessage(page, /Updated|rejected/);
   check("Generate all content with Claude", /Updated/.test(genMsg), genMsg);
   await page.getByTestId("tab-studio").click();
   await page.getByTestId("ai-diagram").click();
+  await approveCost(page);
   await editorMessage(page, /Diagram generated/);
   check("diagram generated, flagged to check before publishing", /Check every label before publishing/.test(await page.getByTestId("diagram-status").innerText()));
   await page.getByTestId("ai-trap").click();
+  await approveCost(page);
   await editorMessage(page, /Trap question generated/);
   check("trap generated: check-before-publishing note, checks listed", (await page.getByTestId("trap-status").getAttribute("data-status")) === "draft" && (await page.getByTestId("trap-checks").locator("li").count()) >= 3);
   await page.getByTestId("tab-design").click();
@@ -154,6 +166,7 @@ try {
   check("no separate trap / diagram approval buttons", (await page.getByTestId("trap-approve").count()) === 0 && (await page.getByTestId("trap-reject").count()) === 0 && (await page.getByTestId("diagram-reviewed").count()) === 0);
   await page.getByTestId("tab-content").click();
   await page.getByTestId("ai-captions").click();
+  await approveCost(page);
   await editorMessage(page, /caption version/);
   check("3 caption versions shown", (await page.getByTestId("caption-versions").locator('[data-testid^="caption-"]').count()) === 3);
   await page.getByTestId("use-caption-hook").click();
@@ -191,6 +204,7 @@ try {
   await page.getByTestId("batch-message").waitFor({ timeout: 30000 });
   check("Apply Handwritten to All", /Design changed/.test(await page.getByTestId("batch-message").innerText()));
   await page.getByTestId("generate-all").click();
+  await approveCost(page);
   await page.waitForFunction(() => /Generation finished|Finished with/.test(document.querySelector('[data-testid="batch-message"]')?.textContent ?? ""), null, { timeout: 300000 });
   const bm = await page.getByTestId("batch-message").innerText();
   check("Generate for all Draft posts (content, diagram, trap, captions, smart layout)", /Generation finished/.test(bm), bm);
@@ -208,9 +222,11 @@ try {
   await page.waitForFunction(() => (document.querySelector('[data-testid="reference-list"]')?.textContent ?? "").includes("@comp.one"), null, { timeout: 15000 }).catch(() => {});
   check("reference post added", (await page.getByTestId("reference-list").innerText()).includes("@comp.one"), tm);
   await page.getByTestId("run-trends").click();
+  await approveCost(page);
   await page.getByTestId("trend-report").waitFor({ timeout: 60000 });
   check("trend report shows evidence-backed items with sources", /MockTestSeries|Manually entered|Instagram API/.test(await page.getByTestId("trend-report").innerText()));
   await page.getByTestId("run-competitors").click();
+  await approveCost(page);
   await page.getByTestId("competitor-report").waitFor({ timeout: 60000 });
   check("competitor analysis shown", true);
 

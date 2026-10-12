@@ -5,10 +5,16 @@ import VariantsPage from "./variants/page";
 import UsagePage from "./usage/page";
 import SettingsPage from "./settings/page";
 import ProvidersPage from "./providers/page";
+import { AiEngineOverview } from "@/components/admin/ai/engine-overview";
+import { hasPermission } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
 
 export const metadata = { title: "AI Solutions — Mock Test Series.in Admin" };
 
-export default function AiControlCenter() {
+export const dynamic = "force-dynamic";
+
+export default async function AiControlCenter() {
+  const canViewEngine = await hasPermission(PERMISSIONS.AI_ENGINE_VIEW);
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -17,6 +23,8 @@ export default function AiControlCenter() {
           Overview, AI providers, solutions, question variants, usage, and settings.
         </p>
       </div>
+
+      {canViewEngine ? <AiEngineOverview /> : null}
 
       <ControlCenterTabs
         defaultValue="overview"

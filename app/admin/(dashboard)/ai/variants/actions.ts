@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { ensureQuestionVariants, archiveVariant, publishVariant, MAX_VARIANTS_PER_QUESTION } from "@/lib/ai-variant";
 import { AiNotConfiguredError } from "@/lib/ai-explanation";
+import { consumeQuote } from "@/lib/ai-engine/quote";
 
 /**
  * Admin quality control for AI Question Variants. Normal variants are
@@ -23,10 +24,12 @@ function revalidate(parentQuestionId: string) {
 }
 
 /** Fills any free/failed slots up to 5 through the same validated, deduplicated path Ask AI uses. */
-export async function generateMissingVariantsAction(parentQuestionId: string, _prev: VariantActionState, _formData: FormData): Promise<VariantActionState> {
-  await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
+export async function generateMissingVariantsAction(parentQuestionId: string, _prev: VariantActionState, formData: FormData): Promise<VariantActionState> {
+  const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
   try {
-    const result = await ensureQuestionVariants(parentQuestionId, { target: MAX_VARIANTS_PER_QUESTION });
+    // Paid admin AI action: needs the one-time quote approved in the AI Cost Preview.
+    const q = await consumeQuote({ quoteId: formData.get("quoteId"), actorId: session.user.id ?? "", feature: "variant_admin", action: "variant_admin", context: { questionId: parentQuestionId } });
+    const result = await ensureQuestionVariants(parentQuestionId, { target: MAX_VARIANTS_PER_QUESTION, feature: "variant_admin", ctx: { actorId: session.user.id, quoteId: q.id, modelOverride: q.model } });
     revalidate(parentQuestionId);
     return {
       success:

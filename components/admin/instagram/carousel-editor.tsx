@@ -32,6 +32,8 @@ import type { PostDto, QuestionPostState } from "@/lib/instagram/posts";
 import { smartModules } from "@/lib/instagram/smart-layout";
 import { slideSequence, type SlideRef } from "@/lib/instagram/layout";
 import { AiStudioPanel, ProviderPicker, type ProviderChoice } from "@/components/admin/instagram/ai-studio-panel";
+import { useCostPreview } from "@/components/admin/ai/cost-preview";
+import { parseLayoutInstruction } from "@/lib/instagram/instructions";
 import { CaptionVersions } from "@/components/admin/instagram/caption-versions";
 import { DesignModePicker } from "@/components/admin/instagram/design-mode-picker";
 import {
@@ -159,6 +161,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const [confirmNewVersion, setConfirmNewVersion] = useState(false);
   const [publishOpen, setPublishOpen] = useState(Boolean(target?.publish));
   const [provider, setProvider] = useState<ProviderChoice>("default");
+  const costPreview = useCostPreview();
   const changed = useRef(false);
 
   const adopt = useCallback((p: PostDto) => {
@@ -323,12 +326,20 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
       }
     );
 
-  const runAi = (opts: { instruction?: string; fields?: string[]; selected?: boolean }) =>
+  const runAi = (opts: { instruction?: string; fields?: string[]; selected?: boolean }) => {
+    if (!post || !draft) return;
+    // A layout-only instruction (font size, theme…) changes the design without any AI call — no cost preview.
+    const layoutOnly = Boolean(opts.instruction && parseLayoutInstruction(opts.instruction, draft.design));
+    if (layoutOnly) return runAiWith(opts, undefined);
+    costPreview.ask({ feature: "ig_carousel", context: { postId: post.id }, legacyProvider: provider !== "default" }, (quoteId) => runAiWith(opts, quoteId));
+  };
+  const runAiWith = (opts: { instruction?: string; fields?: string[]; selected?: boolean }, quoteId: string | undefined) =>
     post &&
     draft &&
     act(
       () =>
         aiEditAction({
+          quoteId,
           postId: post.id,
           expectedRevision: post.revision,
           ...draftPayload(draft),
@@ -636,6 +647,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                         provider={provider}
                         draftPayload={() => draftPayload(draft)}
                         act={act}
+                        askCost={costPreview.ask}
                         onPost={(p, summary) => (adopt(p), setMessage({ tone: "ok", text: summary }))}
                         onUse={(v) => setDraft({ ...draft, content: { ...draft.content, caption: v.caption, captionStyle: v.style }, hashtagsText: v.hashtags.join(" ") })}
                       />
@@ -787,6 +799,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                       provider={provider}
                       setProvider={setProvider}
                       act={act}
+                      askCost={costPreview.ask}
                       onPost={(p, summary) => (adopt(p), setMessage({ tone: "ok", text: summary }))}
                       onEditContent={(c) => patchContent(c)}
                       onAddModule={(m) => {
@@ -993,6 +1006,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
           ) : null}
           {/* Field-level hint for screen readers about which parts the AI may change. */}
           <span className="sr-only">{`AI-editable fields: ${Object.values(CONTENT_FIELD_LABELS).join(", ")}`}</span>
+          {costPreview.dialog}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

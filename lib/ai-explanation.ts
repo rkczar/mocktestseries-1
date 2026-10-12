@@ -3,7 +3,7 @@ import { AiGenerationStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { assertAiGenerationOpen, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
-import { generateForFeature, isFeatureConfigured } from "@/lib/ai-gateway";
+import { generateForFeature, isFeatureConfigured, type GatewayContext } from "@/lib/ai-gateway";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 
 /**
@@ -166,9 +166,15 @@ export function validateExplanationContent(text: string): ExplanationContent {
   };
 }
 
-async function runAndPersist(questionId: string, question: QuestionForExplanation, settings: AiSettings) {
+/** Who asked: a student (Ask AI) or an admin (Retry / Regenerate — own feature key, cost quote). */
+export interface ExplanationCaller {
+  feature?: "explanation" | "explanation_admin";
+  ctx?: GatewayContext;
+}
+
+async function runAndPersist(questionId: string, question: QuestionForExplanation, settings: AiSettings, caller: ExplanationCaller = {}) {
   try {
-    const result: AiGenerationResult = await generateForFeature("explanation", buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 1400 });
+    const result: AiGenerationResult = await generateForFeature(caller.feature ?? "explanation", buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 1400 }, caller.ctx ?? {});
     if (isTruncatedOrMalformedJson(result.text)) {
       throw new Error("AI returned truncated or malformed JSON (likely hit the output token limit) — please retry.");
     }
@@ -208,7 +214,7 @@ async function runAndPersist(questionId: string, question: QuestionForExplanatio
  * exactly one caller ever sees `count === 1` and becomes the new owner.
  * Nobody can get stuck waiting on a dead generation forever.
  */
-export async function getOrCreateExplanation(questionId: string) {
+export async function getOrCreateExplanation(questionId: string, caller: ExplanationCaller = {}) {
   // A cached explanation must always be servable, even if the provider is
   // currently unconfigured (key rotated out, admin mid-setup) — "not
   // configured" only ever blocks a NEW generation, never a cache read.
@@ -218,7 +224,7 @@ export async function getOrCreateExplanation(questionId: string) {
   // Checked BEFORE claiming: an unconfigured provider must refuse with no
   // DB write at all (no network call attempted, no dangling GENERATING row).
   await assertAiGenerationOpen();
-  if (!(await isFeatureConfigured("explanation"))) {
+  if (!(await isFeatureConfigured(caller.feature ?? "explanation"))) {
     throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }
 
@@ -229,7 +235,7 @@ export async function getOrCreateExplanation(questionId: string) {
   }
 
   const question = await loadCanonicalQuestion(questionId);
-  return runAndPersist(questionId, question, settings);
+  return runAndPersist(questionId, question, settings, caller);
 }
 
 /**
@@ -282,12 +288,12 @@ export async function claimGeneration(
  * content is snapshotted into AIExplanationVersion first so it is never
  * silently lost, then `version` is incremented.
  */
-export async function regenerateExplanation(questionId: string) {
+export async function regenerateExplanation(questionId: string, caller: ExplanationCaller = { feature: "explanation_admin" }) {
   const existing = await prisma.aIExplanation.findUnique({ where: { questionId } });
   if (!existing) throw new ExplanationNotReadyError("No explanation exists yet for this question — use Generate instead.");
 
   await assertAiGenerationOpen();
-  if (!(await isFeatureConfigured("explanation"))) {
+  if (!(await isFeatureConfigured(caller.feature ?? "explanation"))) {
     throw new AiNotConfiguredError("AI explanations aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }
   if (existing.status === AiGenerationStatus.GENERATING) {
@@ -318,7 +324,7 @@ export async function regenerateExplanation(questionId: string) {
 
   const settings = await getAiSettings();
   const question = await loadCanonicalQuestion(questionId);
-  return runAndPersist(questionId, question, settings);
+  return runAndPersist(questionId, question, settings, caller);
 }
 
 /** Marks the current version of an explanation as admin-reviewed (spec §11/§12). */

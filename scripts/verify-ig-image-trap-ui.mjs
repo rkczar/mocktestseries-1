@@ -34,6 +34,15 @@ const fingerprint = () =>
 const mockCount = async () => Number(await (await fetch(`${MOCK}/__count`)).text());
 const postSql = (expr) => sql(`SELECT ${expr} FROM "InstagramPost" WHERE "questionCode" = '${CODE}' AND "supersededAt" IS NULL`);
 
+
+/** AI Engine: every paid admin AI action first shows the AI Cost Preview — approve it. */
+async function approveCost(page) {
+  const sel = '[data-testid="cost-preview-generate"], [data-testid="bulk-cost-generate"]';
+  await page.locator(sel).first().waitFor({ timeout: 30000 });
+  await page.waitForFunction((s) => { const b = document.querySelector(s); return b && !b.disabled; }, sel, { timeout: 30000 });
+  await page.locator(sel).first().click();
+}
+
 async function login(page, username) {
   await page.goto(`${BASE}/admin/login`);
   await page.fill("input[name=username]", username);
@@ -82,6 +91,8 @@ try {
   check("Generate Medical Image button offered", (await page.getByTestId("ai-image").innerText()).includes("Generate Medical Image"));
 
   await page.getByTestId("ai-image").click();
+
+  await approveCost(page);
   await message(page, /Medical image generated/);
   await page.getByTestId("image-candidate").waitFor();
   const candOk = await page.getByTestId("image-candidate-img").evaluate((img) => img.complete && img.naturalWidth > 0);
@@ -98,6 +109,8 @@ try {
   check("Skip saved: no candidate, no image slide", postSql(`content->'imageCandidate'`) === "null" && !postSql(`design::text`).includes("MEDICAL_IMAGE"));
 
   await page.getByTestId("ai-image").click();
+
+  await approveCost(page);
   await message(page, /Medical image generated/);
   await page.getByTestId("image-add").click();
   await waitPreview(page, "/ 6");

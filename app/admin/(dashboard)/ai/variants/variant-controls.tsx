@@ -1,10 +1,11 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useTransition } from "react";
 import { useFormStatus } from "react-dom";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { generateMissingVariantsAction, archiveVariantAction, publishVariantAction, type VariantActionState } from "./actions";
+import { useCostPreview } from "@/components/admin/ai/cost-preview";
 
 function SubmitButton({ label, pendingLabel, variant }: { label: string; pendingLabel: string; variant?: "outline" }) {
   const { pending } = useFormStatus();
@@ -27,10 +28,26 @@ function ActionResult({ state }: { state: VariantActionState }) {
 }
 
 export function GenerateMissingControl({ parentQuestionId }: { parentQuestionId: string }) {
-  const [state, formAction] = useActionState<VariantActionState, FormData>(generateMissingVariantsAction.bind(null, parentQuestionId), {});
+  const [state, formAction, pending] = useActionState<VariantActionState, FormData>(generateMissingVariantsAction.bind(null, parentQuestionId), {});
+  const [, startTransition] = useTransition();
+  const preview = useCostPreview();
+  // Paid AI call: the AI Cost Preview comes first; its one-time quote id goes with the form.
   return (
-    <form action={formAction} className="flex flex-col gap-1.5">
-      <SubmitButton label="Generate missing variants" pendingLabel="Generating…" />
+    <form
+      className="flex flex-col gap-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        preview.ask({ feature: "variant_admin", context: { questionId: parentQuestionId } }, (quoteId) => {
+          const fd = new FormData();
+          fd.set("quoteId", quoteId);
+          startTransition(() => formAction(fd));
+        });
+      }}
+    >
+      {preview.dialog}
+      <Button type="submit" size="sm" disabled={pending}>
+        {pending ? "Generating…" : "Generate missing variants"}
+      </Button>
       <ActionResult state={state} />
     </form>
   );

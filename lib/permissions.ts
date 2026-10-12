@@ -105,6 +105,13 @@ export const PERMISSIONS = {
   // role itself). MASTER_ADMIN-only, enforced server-side on every page,
   // action and the slide-image route.
   INSTAGRAM_MANAGE: "instagram:manage",
+  // AI Engine (Admin -> AI: Providers, Models, Features, Analytics, Budgets,
+  // History). VIEW = read the cost/usage pages (MASTER_ADMIN + FULL_ADMIN).
+  // MANAGE — OpenRouter key, model approval, feature routing, budgets,
+  // emergency stop, exchange rate, paid model evaluation — is MASTER_ADMIN-only,
+  // enforced server-side on every action.
+  AI_ENGINE_VIEW: "ai-engine:view",
+  AI_ENGINE_MANAGE: "ai-engine:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -124,6 +131,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.COMMUNICATIONS_VIEW,
     PERMISSIONS.PLATFORM_CONTROLS_VIEW,
     PERMISSIONS.ACCOUNT_RECOVERY_VIEW,
+    PERMISSIONS.AI_ENGINE_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };

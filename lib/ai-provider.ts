@@ -34,8 +34,8 @@ export async function assertAiGenerationOpen(): Promise<void> {
 
 export interface AiGenerationResult {
   text: string;
-  /** "anthropic" only when the AI Gateway routed the call to Claude (lib/ai-gateway.ts). */
-  provider: AiProviderName | "anthropic";
+  /** "anthropic" / "openrouter" only when the AI Gateway routed the call there (lib/ai-gateway.ts, lib/ai-engine). */
+  provider: AiProviderName | "anthropic" | "openrouter";
   model: string;
   /** Token usage when the provider reported it (used for the AI Gateway usage/cost log). */
   usage?: { inputTokens: number | null; outputTokens: number | null };

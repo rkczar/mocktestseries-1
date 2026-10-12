@@ -14,11 +14,15 @@ import {
 import { ClaudeError, TRANSIENT_CLAUDE_ERRORS, callClaude, sanitizeProviderMessage } from "@/lib/anthropic-client";
 import { recordClaudeOutcome, resolveClaude } from "@/lib/anthropic-config";
 import { istStartOfDay } from "@/lib/ist-time";
+import { getEngineConfig, resolveOpenRouterKey } from "@/lib/ai-engine/settings";
+import { ENGINE_FEATURE_MAP } from "@/lib/ai-engine/config";
+import { AiEngineFailure, generateTextViaOpenRouter } from "@/lib/ai-engine/engine";
 import {
   AI_FEATURE_KEYS,
   DEFAULT_PRICES,
   DEFAULT_ROUTE,
   FEATURE_LABELS,
+  LEGACY_ROUTE_PARENT,
   PROVIDER_LABELS,
   estimateCost,
   normalizeRoute,
@@ -66,7 +70,8 @@ export interface GatewayConfig {
 export async function getGatewayConfig(): Promise<GatewayConfig> {
   const row = await prisma.setting.findUnique({ where: { key: GATEWAY_SETTING_KEY } });
   const raw = (row?.value as StoredGateway | undefined) ?? {};
-  const routes = Object.fromEntries(AI_FEATURE_KEYS.map((f) => [f, raw.routes?.[f] ? normalizeRoute(raw.routes[f]) : { ...DEFAULT_ROUTE }])) as Record<AiFeature, FeatureRoute>;
+  const stored = (f: AiFeature) => raw.routes?.[f] ?? (LEGACY_ROUTE_PARENT[f] ? raw.routes?.[LEGACY_ROUTE_PARENT[f]!] : undefined);
+  const routes = Object.fromEntries(AI_FEATURE_KEYS.map((f) => [f, stored(f) ? normalizeRoute(stored(f)) : { ...DEFAULT_ROUTE }])) as Record<AiFeature, FeatureRoute>;
   const prices: Record<string, ModelPrice> = { ...DEFAULT_PRICES };
   for (const [model, p] of Object.entries(raw.prices ?? {})) {
     if (p && Number.isFinite(p.input) && Number.isFinite(p.output) && p.input >= 0 && p.output >= 0) prices[model] = { input: p.input, output: p.output };
@@ -99,6 +104,13 @@ export async function isGatewayProviderUsable(p: GatewayProvider): Promise<boole
 
 /** True when the feature has at least one usable provider (replaces isAiGenerationConfigured for routed features). */
 export async function isFeatureConfigured(feature: AiFeature): Promise<boolean> {
+  const engine = await getEngineConfig();
+  const fc = engine.features[feature];
+  if (!fc.enabled || engine.budgets.emergencyStop) return false;
+  if (fc.provider === "openrouter") {
+    if (isStudentFeature(feature) && !(await getAiSettings()).askAiEnabled) return false;
+    return (await resolveOpenRouterKey()) !== null;
+  }
   const { routes } = await getGatewayConfig();
   const route = routes[feature];
   if (route.mode === "inherit") return isAiGenerationConfigured();
@@ -108,7 +120,19 @@ export async function isFeatureConfigured(feature: AiFeature): Promise<boolean> 
 }
 
 function isStudentFeature(f: AiFeature) {
-  return f === "explanation" || f === "variant";
+  return f === "explanation" || f === "variant" || f === "explanation_admin" || f === "variant_admin";
+}
+
+/**
+ * AI Engine switches checked before ANY provider call (OpenRouter or legacy):
+ * the emergency stop and the per-feature on/off (Admin → AI → Budgets / Features).
+ */
+export async function assertEngineAllows(feature: AiFeature) {
+  const engine = await getEngineConfig();
+  if (engine.budgets.emergencyStop) throw new AiNotConfiguredError("AI generation is stopped by the AI emergency stop (Admin → AI → Budgets).");
+  const fc = engine.features[feature];
+  if (!fc.enabled) throw new AiNotConfiguredError(`${ENGINE_FEATURE_MAP[feature]?.label ?? FEATURE_LABELS[feature]} is turned off in AI → Features.`);
+  return fc;
 }
 
 // ---- Logging ------------------------------------------------------------------------------
@@ -144,6 +168,9 @@ async function logCall(entry: {
   attempt: number;
   actorId?: string | null;
   prices: Record<string, ModelPrice>;
+  requestId?: string;
+  quoteId?: string | null;
+  instagramPostId?: string | null;
 }) {
   try {
     await prisma.aiGatewayCall.create({
@@ -160,6 +187,13 @@ async function logCall(entry: {
         estCostUsd: entry.ok ? estimateCost(entry.prices, entry.model, entry.usage?.inputTokens ?? null, entry.usage?.outputTokens ?? null) : null,
         attempt: entry.attempt,
         actorId: entry.actorId ?? null,
+        // Legacy providers report no billed cost: only the price-table estimate above (if any).
+        kind: "text",
+        routingMode: "legacy",
+        costStatus: entry.ok ? "unknown" : null,
+        requestId: entry.requestId ?? null,
+        quoteId: entry.quoteId ?? null,
+        instagramPostId: entry.instagramPostId ?? null,
       },
     });
   } catch (error) {
@@ -182,6 +216,12 @@ export interface GatewayContext {
   actorId?: string | null;
   /** Admin's per-request "use this provider" choice (Instagram Studio). Must be configured and enabled. */
   providerOverride?: GatewayProvider | null;
+  /** One-time cost quote consumed by the admin action (AI Engine cost preview). */
+  quoteId?: string | null;
+  /** OpenRouter model the admin picked in that quote. */
+  modelOverride?: string | null;
+  /** Related Instagram post, for per-post cost tracking. */
+  instagramPostId?: string | null;
 }
 
 async function callOne(
@@ -214,6 +254,22 @@ function errorInfo(p: GatewayProvider, error: unknown): { category: string; mess
  */
 export async function generateForFeature(feature: AiFeature, prompt: string, opts: AiGenerationOptions, ctx: GatewayContext = {}): Promise<AiGenerationResult> {
   await assertAiGenerationOpen();
+  const fc = await assertEngineAllows(feature);
+  // AI Engine: OpenRouter (priced, budgeted, logged with actual cost). An explicit legacy provider choice wins.
+  if (fc.provider === "openrouter" && !ctx.providerOverride) {
+    if (isStudentFeature(feature) && !(await getAiSettings()).askAiEnabled) throw new AiNotConfiguredError("Ask AI is currently disabled by an admin.");
+    try {
+      return await generateTextViaOpenRouter(feature, prompt, opts, { actorId: ctx.actorId, quoteId: ctx.quoteId, modelOverride: ctx.modelOverride, instagramPostId: ctx.instagramPostId });
+    } catch (error) {
+      // Students never see admin wording (budgets, model approval, provider errors); the details are in AI → History.
+      if (ENGINE_FEATURE_MAP[feature]?.trigger === "student") {
+        if (error instanceof AiNotConfiguredError) throw new AiNotConfiguredError("AI explanations are temporarily unavailable. Please try again later.");
+        throw new Error("The AI service could not answer right now. Please try again in a moment.");
+      }
+      if (error instanceof AiEngineFailure) throw new AiProviderFailure(error.message);
+      throw error;
+    }
+  }
   const { routes, prices } = await getGatewayConfig();
   const route = routes[feature];
   await assertUnderDailyCap(feature, route);
@@ -223,11 +279,11 @@ export async function generateForFeature(feature: AiFeature, prompt: string, opt
     const started = Date.now();
     try {
       const r = await generateWithAi(prompt, opts);
-      await logCall({ feature, provider: r.provider, model: r.model, ok: true, latencyMs: Date.now() - started, usage: r.usage, attempt: 1, actorId: ctx.actorId, prices });
+      await logCall({ feature, provider: r.provider, model: r.model, ok: true, latencyMs: Date.now() - started, usage: r.usage, attempt: 1, actorId: ctx.actorId, prices, quoteId: ctx.quoteId, instagramPostId: ctx.instagramPostId });
       return r;
     } catch (error) {
       if (!(error instanceof AiNotConfiguredError)) {
-        await logCall({ feature, provider: "default", model: "-", ok: false, errorCategory: categorizeLegacyError(error), errorSummary: error instanceof Error ? error.message : "", latencyMs: Date.now() - started, attempt: 1, actorId: ctx.actorId, prices });
+        await logCall({ feature, provider: "default", model: "-", ok: false, errorCategory: categorizeLegacyError(error), errorSummary: error instanceof Error ? error.message : "", latencyMs: Date.now() - started, attempt: 1, actorId: ctx.actorId, prices, quoteId: ctx.quoteId, instagramPostId: ctx.instagramPostId });
         // Student features keep their existing error handling unchanged; admin features get a readable message.
         if (!isStudentFeature(feature)) throw new AiProviderFailure(`AI request failed: ${sanitizeProviderMessage(error instanceof Error ? error.message : "unknown error")}`);
       }
@@ -260,13 +316,13 @@ export async function generateForFeature(feature: AiFeature, prompt: string, opt
       const started = Date.now();
       try {
         const r = await callOne(p, route, prompt, opts);
-        await logCall({ feature, provider: p, model: r.model, ok: true, latencyMs: Date.now() - started, usage: r.usage, attempt, actorId: ctx.actorId, prices });
+        await logCall({ feature, provider: p, model: r.model, ok: true, latencyMs: Date.now() - started, usage: r.usage, attempt, actorId: ctx.actorId, prices, quoteId: ctx.quoteId, instagramPostId: ctx.instagramPostId });
         if (p === "anthropic") await recordClaudeOutcome({ ok: true });
         return r;
       } catch (error) {
         last = error;
         const info = errorInfo(p, error);
-        await logCall({ feature, provider: p, model: p === "anthropic" ? route.models.anthropic || "claude" : route.models[p] || p, ok: false, errorCategory: info.category, errorSummary: info.message, latencyMs: Date.now() - started, attempt, actorId: ctx.actorId, prices });
+        await logCall({ feature, provider: p, model: p === "anthropic" ? route.models.anthropic || "claude" : route.models[p] || p, ok: false, errorCategory: info.category, errorSummary: info.message, latencyMs: Date.now() - started, attempt, actorId: ctx.actorId, prices, quoteId: ctx.quoteId, instagramPostId: ctx.instagramPostId });
         if (p === "anthropic") await recordClaudeOutcome({ ok: false, category: info.category, message: sanitizeProviderMessage(info.message) });
         if (!info.transient) break; // move to the next provider
       }

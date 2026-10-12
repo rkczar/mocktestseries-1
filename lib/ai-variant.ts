@@ -3,7 +3,7 @@ import { AiGenerationStatus, AiSlot, AiVariantType, Prisma, QuestionStatus } fro
 import { prisma } from "@/lib/prisma";
 import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { assertAiGenerationOpen, AiNotConfiguredError, type AiGenerationResult, type AiGenerationOptions } from "@/lib/ai-provider";
-import { generateForFeature, isFeatureConfigured } from "@/lib/ai-gateway";
+import { generateForFeature, isFeatureConfigured, type GatewayContext } from "@/lib/ai-gateway";
 import { isPlatformOpen } from "@/lib/platform-controls";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, type ExplanationContent } from "@/lib/ai-explanation";
 import { getAiSettings } from "@/lib/ai-settings";
@@ -308,7 +308,7 @@ async function persistVariants(source: SourceQuestion, accepted: GeneratedVarian
  */
 export async function ensureQuestionVariants(
   sourceQuestionId: string,
-  opts: { target?: number; generate?: Generator } = {}
+  opts: { target?: number; generate?: Generator; feature?: "variant" | "variant_admin"; ctx?: GatewayContext } = {}
 ): Promise<EnsureVariantsResult> {
   const source = await loadSource(sourceQuestionId);
   const target = clampVariantTarget(opts.target ?? (await getDefaultVariantTarget()));
@@ -318,11 +318,12 @@ export async function ensureQuestionVariants(
   if (existing.length >= target) return { ...base, variants: existing };
   if ((await findWritableSlots(prisma, source.id)).length === 0) return { ...base, variants: existing };
 
-  const generate = opts.generate ?? ((prompt: string, o: AiGenerationOptions) => generateForFeature("variant", prompt, o));
+  const feature = opts.feature ?? "variant";
+  const generate = opts.generate ?? ((prompt: string, o: AiGenerationOptions) => generateForFeature(feature, prompt, o, opts.ctx ?? {}));
   // Platform Controls → AI paused: keep serving what exists; refuse only a new generation.
   if (!opts.generate && existing.length > 0 && !(await isPlatformOpen("ai"))) return { ...base, variants: existing };
   if (!opts.generate) await assertAiGenerationOpen();
-  if (!opts.generate && !(await isFeatureConfigured("variant"))) {
+  if (!opts.generate && !(await isFeatureConfigured(feature))) {
     if (existing.length > 0) return { ...base, variants: existing };
     throw new AiNotConfiguredError("AI variants aren't configured yet. An admin needs to add a provider API key under AI → Settings.");
   }

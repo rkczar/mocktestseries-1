@@ -34,6 +34,15 @@ const fingerprint = () =>
          UNION ALL SELECT x.id || x.content::text || x."updatedAt" FROM "AIExplanation" x JOIN "Question" q ON q.id = x."questionId" JOIN "Exam" e ON e.id = q."examId" WHERE e.code LIKE 'IGFIX-%'
          UNION ALL SELECT p.id || p.title || p.year FROM "PreviousYearPaper" p JOIN "Exam" e ON e.id = p."examId" WHERE e.code LIKE 'IGFIX-%') t`);
 
+
+/** AI Engine: every paid admin AI action first shows the AI Cost Preview — approve it. */
+async function approveCost(page) {
+  const sel = '[data-testid="cost-preview-generate"], [data-testid="bulk-cost-generate"]';
+  await page.locator(sel).first().waitFor({ timeout: 30000 });
+  await page.waitForFunction((s) => { const b = document.querySelector(s); return b && !b.disabled; }, sel, { timeout: 30000 });
+  await page.locator(sel).first().click();
+}
+
 async function login(page, username) {
   await page.goto(`${BASE}/admin/login`);
   await page.fill("input[name=username]", username);
@@ -227,6 +236,7 @@ try {
   check("questionScale saved as 1.1", designNow.questionScale === 1.1, designNow);
   const revBefore = sql(`SELECT revision FROM "InstagramPost" WHERE "questionCode" = 'IGFIX-RUHS21-W01'`);
   await page.getByTestId("ai-generate-all").click();
+  await approveCost(page);
   const aiMsg = await editorMessage(page);
   check("AI generation without a configured provider fails safely (nothing changed)", /not configured|paused|went wrong|AI/i.test(aiMsg) && sql(`SELECT revision FROM "InstagramPost" WHERE "questionCode" = 'IGFIX-RUHS21-W01'`) === revBefore, aiMsg);
   await page.screenshot({ path: `${SHOTS}/07-editor-ai-panel.png` });

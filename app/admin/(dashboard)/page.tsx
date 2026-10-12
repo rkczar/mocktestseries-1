@@ -8,6 +8,7 @@ import { PlatformStatusStrip } from "@/components/admin/platform-status-strip";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { getStorageSnapshot, formatBytes } from "@/lib/storage-stats";
 import { formatInr } from "@/lib/payments/money";
+import { DashboardAiCards } from "@/components/admin/ai/dashboard-ai-cards";
 
 /** Paid LIVE-environment order value since the 1st of the current IST month (TEST orders excluded). */
 async function getRevenueMtdPaise(): Promise<number> {
@@ -302,6 +303,7 @@ export default async function AdminDashboardPage() {
         <StatCard label="Draft Questions" value={draftQuestionCount} />
         <StatCard label="Tests Attempted" value={attemptCount} />
         <StatCard label="AI Explanations Generated" value={aiExplanationCount} />
+        <DashboardAiCards />
         <StatCard label="Pending Question Reports" value={pendingReportCount} />
         <StatCard label="Deletion Requests" value={pendingDeletionCount} />
         <Link href="/admin/payments?tab=revenue" className="contents">

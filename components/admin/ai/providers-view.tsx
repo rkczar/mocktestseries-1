@@ -476,7 +476,7 @@ export function ProvidersView(props: {
             </p>
           ) : null}
           <div className="grid gap-3 lg:grid-cols-2">
-            {AI_FEATURES.map((f) => (
+            {AI_FEATURES.filter((f) => f.key !== "ig_image").map((f) => (
               <RouteEditor
                 key={f.key}
                 feature={f}

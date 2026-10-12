@@ -226,7 +226,7 @@ export function parseTrendReport(text: string, evidence: TrendEvidence[]): Trend
   return { evidenceBacked: list("evidenceBacked"), emerging: list("emerging"), evergreen: list("evergreen"), examSeason: list("examSeason"), dropped, note: typeof d.note === "string" ? d.note.slice(0, 300) : "" };
 }
 
-export async function runTrendAnalysis(params: { actorId: string; examId: string | null; examName: string | null; provider?: GatewayProvider | null }) {
+export async function runTrendAnalysis(params: { actorId: string; examId: string | null; examName: string | null; provider?: GatewayProvider | null; quoteId?: string | null; modelOverride?: string | null }) {
   const evidence = await getTrendEvidence({ examId: params.examId, limit: 40 });
   if (!evidence.length) throw new StudioError("There is no evidence yet — publish posts and refresh their metrics, or add reference posts, then run the analysis.");
   const prompt = [
@@ -239,7 +239,7 @@ export async function runTrendAnalysis(params: { actorId: string; examId: string
     'Return ONLY JSON: {"evidenceBacked": [{"topic":"...","why":"...","evidence":["id"]}], "emerging": [...], "evergreen": [...], "examSeason": [...], "note": "one sentence on evidence limits"}',
     "Definitions: evidenceBacked = topics with strong current evidence; emerging = rising in recent evidence; evergreen = consistently high-yield (e.g. many stored PYQs); examSeason = tied to an upcoming exam only if the evidence says so.",
   ].join("\n");
-  const r = await generateForFeature("ig_trends", prompt, { temperature: 0.2, maxOutputTokens: 2000 }, { actorId: params.actorId, providerOverride: params.provider ?? null });
+  const r = await generateForFeature("ig_trends", prompt, { temperature: 0.2, maxOutputTokens: 2000 }, { actorId: params.actorId, providerOverride: params.provider ?? null, quoteId: params.quoteId, modelOverride: params.modelOverride });
   const parsed = parseTrendReport(r.text, evidence);
   if (!parsed) throw new StudioError("The AI response was not valid JSON. Nothing was saved.");
   return prisma.instagramInsightReport.create({
@@ -247,7 +247,7 @@ export async function runTrendAnalysis(params: { actorId: string; examId: string
   });
 }
 
-export async function runCompetitorAnalysis(params: { actorId: string; provider?: GatewayProvider | null }) {
+export async function runCompetitorAnalysis(params: { actorId: string; provider?: GatewayProvider | null; quoteId?: string | null; modelOverride?: string | null }) {
   const stats = await getCompetitorStats();
   if (stats.totalPosts === 0) throw new StudioError("Add reference posts first — the analysis only uses posts you entered.");
   const refs = await prisma.instagramReference.findMany({ where: { kind: "POST", active: true }, orderBy: { observedAt: "desc" }, take: 60 });
@@ -264,7 +264,7 @@ export async function runCompetitorAnalysis(params: { actorId: string; provider?
     "",
     'Return ONLY JSON: {"patterns": [{"observation":"...","evidence":["ref:..."]}], "contentGaps": [{"idea":"...","evidence":["ref:..."]}], "captionStyles": [{"style":"...","evidence":["ref:..."]}], "note": "limits of this evidence"}',
   ].join("\n");
-  const r = await generateForFeature("ig_competitors", prompt, { temperature: 0.2, maxOutputTokens: 2000 }, { actorId: params.actorId, providerOverride: params.provider ?? null });
+  const r = await generateForFeature("ig_competitors", prompt, { temperature: 0.2, maxOutputTokens: 2000 }, { actorId: params.actorId, providerOverride: params.provider ?? null, quoteId: params.quoteId, modelOverride: params.modelOverride });
   const d = extractJson(r.text);
   if (!d) throw new StudioError("The AI response was not valid JSON. Nothing was saved.");
   const ids = new Set(refs.map((x) => `ref:${x.id}`));

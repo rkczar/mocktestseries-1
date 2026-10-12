@@ -8,7 +8,7 @@ import { MEDICAL_IMAGE_LIMITS, type MedicalImage, type PostContent, type PostDes
 import type { PostDto } from "@/lib/instagram/posts";
 import type { ReferenceImageResult } from "@/lib/instagram/medical-image-core";
 import { aiMedicalImageAction, medicalImageStatusAction, referenceImageSearchAction, referenceImageUseAction } from "@/app/admin/(dashboard)/instagram/studio-actions";
-import type { ActFn } from "@/components/admin/instagram/ai-studio-panel";
+import type { ActFn, AskCostFn } from "@/components/admin/instagram/ai-studio-panel";
 
 /** Stored images are served by the existing public media route (content-addressed, unguessable keys). */
 const mediaSrc = (key: string) => `/media/${key}`;
@@ -29,6 +29,7 @@ export function MedicalImagePanel({
   draft,
   base,
   act,
+  askCost,
   onPost,
   onEditContent,
   onAddModule,
@@ -39,6 +40,7 @@ export function MedicalImagePanel({
   draft: { content: PostContent; design: PostDesign };
   base: () => { postId: string; expectedRevision: number; content: PostContent; design: PostDesign };
   act: ActFn;
+  askCost: AskCostFn;
   onPost: (p: PostDto, summary: string) => void;
   onEditContent: (c: Partial<PostContent>) => void;
   onAddModule: (m: SlideModule) => void;
@@ -88,7 +90,7 @@ export function MedicalImagePanel({
           type="button"
           data-testid="ai-image"
           disabled={status?.available === false}
-          onClick={() => act(() => aiMedicalImageAction({ ...base(), instruction }), (r) => onPost(r.post, r.summary))}
+          onClick={() => askCost({ feature: "ig_image", context: { postId: post.id } }, (quoteId) => act(() => aiMedicalImageAction({ ...base(), instruction, quoteId }), (r) => onPost(r.post, r.summary)))}
         >
           <Sparkles className="h-4 w-4" aria-hidden /> {cand || img ? "Regenerate" : "Generate Medical Image"}
         </Button>

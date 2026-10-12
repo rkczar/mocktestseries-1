@@ -18,8 +18,9 @@ import type { ContentOrigin, DiagramKind, PostContent, SourceSnapshot, TrapVaria
 
 export type StudioGenerator = (feature: AiFeature, prompt: string, opts: { temperature: number; maxOutputTokens: number }) => Promise<AiGenerationResult>;
 
-export function gatewayGenerator(ctx: { actorId?: string | null; provider?: GatewayProvider | null }): StudioGenerator {
-  return (feature, prompt, opts) => generateForFeature(feature, prompt, opts, { actorId: ctx.actorId, providerOverride: ctx.provider ?? null });
+export function gatewayGenerator(ctx: { actorId?: string | null; provider?: GatewayProvider | null; quoteId?: string | null; modelOverride?: string | null; instagramPostId?: string | null }): StudioGenerator {
+  return (feature, prompt, opts) =>
+    generateForFeature(feature, prompt, opts, { actorId: ctx.actorId, providerOverride: ctx.provider ?? null, quoteId: ctx.quoteId, modelOverride: ctx.modelOverride, instagramPostId: ctx.instagramPostId });
 }
 
 const origin = (r: AiGenerationResult, promptVersion: string): ContentOrigin => ({ kind: "ai", provider: r.provider, model: r.model, promptVersion, generatedAt: new Date().toISOString() });

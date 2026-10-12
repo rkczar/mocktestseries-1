@@ -23,6 +23,9 @@ import { generateMedicalImage, imageGenerationStatus, importReferenceImage, sear
 import type { ReferenceImageResult } from "@/lib/instagram/medical-image-core";
 import { DIAGRAM_KINDS, TEMPLATE_KEYS, type DiagramKind, type PostContent, type PostDesign, type TemplateKey } from "@/lib/instagram/types";
 import { EXCLUDED_TERMS } from "@/lib/instagram/exam-scope";
+import { consumeQuote } from "@/lib/ai-engine/quote";
+import { postCost } from "@/lib/ai-engine/analytics";
+import type { AiFeature } from "@/lib/ai-gateway-config";
 
 /**
  * Admin → Instagram — AI Studio Server Actions (diagram, examiner trap,
@@ -86,6 +89,15 @@ function parseProvider(p: unknown): GatewayProvider | null {
 }
 const instr = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 500) : "");
 
+/**
+ * AI Engine: every paid AI action needs the one-time cost quote the admin
+ * approved in the AI Cost Preview (consumed atomically — a repeat click is refused).
+ */
+async function engineCtx(actorId: string, quoteId: unknown, feature: AiFeature, context: Record<string, string | number | null>, instagramPostId: string | null) {
+  const q = await consumeQuote({ quoteId, actorId, feature, action: feature, context });
+  return { quoteId: q.id, modelOverride: q.model, instagramPostId };
+}
+
 function touch() {
   revalidatePath("/admin/instagram", "layout");
 }
@@ -97,6 +109,8 @@ interface EditorInput {
   design: unknown;
   provider?: string | null;
   instruction?: string;
+  /** One-time AI cost quote id (AI Cost Preview). */
+  quoteId?: string;
 }
 
 /** The editor's unsaved state becomes the base for the AI change (validated server-side, like Save). */
@@ -122,7 +136,8 @@ export async function aiDiagramAction(input: EditorInput & { kind?: string }): P
   return run(await requireStudio(), async (actorId) => {
     const base = await editorBase(input);
     const kind = (DIAGRAM_KINDS as readonly string[]).includes(input.kind ?? "") ? (input.kind as DiagramKind) : "auto";
-    const r = await generateDiagram({ snapshot: base.current.snapshot, content: base.content, kind, instruction: instr(input.instruction) || undefined, gen: gatewayGenerator({ actorId, provider: parseProvider(input.provider) }) });
+    const ectx = await engineCtx(actorId, input.quoteId, "ig_diagram", { postId: base.postId }, base.postId);
+    const r = await generateDiagram({ snapshot: base.current.snapshot, content: base.content, kind, instruction: instr(input.instruction) || undefined, gen: gatewayGenerator({ actorId, provider: parseProvider(input.provider), ...ectx }) });
     return { post: await save(base, r.content, base.design, `AI: diagram (${r.content.diagram?.kind})`, actorId), summary: r.summary };
   });
 }
@@ -130,9 +145,15 @@ export async function aiDiagramAction(input: EditorInput & { kind?: string }): P
 export async function aiTrapAction(input: EditorInput): Promise<Result<{ post: PostDto; summary: string }>> {
   return run(await requireStudio(), async (actorId) => {
     const base = await editorBase(input);
-    const r = await generateTrap({ snapshot: base.current.snapshot, content: base.content, instruction: instr(input.instruction) || undefined, gen: gatewayGenerator({ actorId, provider: parseProvider(input.provider) }) });
+    const ectx = await engineCtx(actorId, input.quoteId, "ig_trap", { postId: base.postId }, base.postId);
+    const r = await generateTrap({ snapshot: base.current.snapshot, content: base.content, instruction: instr(input.instruction) || undefined, gen: gatewayGenerator({ actorId, provider: parseProvider(input.provider), ...ectx }) });
     return { post: await save(base, r.content, base.design, "AI: examiner trap question", actorId), summary: r.summary };
   });
+}
+
+/** AI cost recorded for this post (read-only): text, image, diagram, regenerations, total. */
+export async function postAiCostAction(postId: string): Promise<Result<Awaited<ReturnType<typeof postCost>>>> {
+  return run(await requireStudio(), async () => postCost(checkId(postId)));
 }
 
 // ---- Optional Medical Image slide ---------------------------------------------------------
@@ -146,7 +167,8 @@ export async function medicalImageStatusAction(): Promise<Result<{ available: bo
 export async function aiMedicalImageAction(input: EditorInput): Promise<Result<{ post: PostDto; summary: string }>> {
   return run(await requireStudio(), async (actorId) => {
     const base = await editorBase(input);
-    const r = await generateMedicalImage({ snapshot: base.current.snapshot, content: base.content, instruction: instr(input.instruction).slice(0, 300) || undefined });
+    const ectx = await engineCtx(actorId, input.quoteId, "ig_image", { postId: base.postId }, base.postId);
+    const r = await generateMedicalImage({ snapshot: base.current.snapshot, content: base.content, instruction: instr(input.instruction).slice(0, 300) || undefined, ctx: { actorId, ...ectx } });
     return { post: await save(base, { ...base.content, imageCandidate: r.image }, base.design, `AI: medical image (${r.image.source.model})`, actorId), summary: r.summary };
   });
 }
@@ -168,6 +190,7 @@ export async function aiCaptionsAction(input: EditorInput): Promise<Result<{ pos
     const base = await editorBase(input);
     const settings = await getStudioSettings();
     const s = base.current.snapshot;
+    const ectx = await engineCtx(actorId, input.quoteId, "ig_caption", { postId: base.postId }, base.postId);
     const evidence = await getTrendEvidence({ examId: s.examId, subjectName: s.subjectName, topicName: s.topicName, limit: 12 });
     const r = await generateCaptions({
       snapshot: s,
@@ -176,7 +199,7 @@ export async function aiCaptionsAction(input: EditorInput): Promise<Result<{ pos
       allowedDomains: allowedCaptionDomains(settings),
       websiteLabel: settings.websiteLabel,
       instruction: instr(input.instruction) || undefined,
-      gen: gatewayGenerator({ actorId, provider: parseProvider(input.provider) }),
+      gen: gatewayGenerator({ actorId, provider: parseProvider(input.provider), ...ectx }),
     });
     return { post: await save(base, r.content, base.design, "AI: three caption versions + keywords", actorId), summary: r.summary };
   });
@@ -449,19 +472,21 @@ export async function deleteReferenceAction(id: string): Promise<Result<null>> {
   });
 }
 
-export async function runTrendAnalysisAction(input: { examId?: string | null; provider?: string | null }): Promise<Result<{ id: string }>> {
+export async function runTrendAnalysisAction(input: { examId?: string | null; provider?: string | null; quoteId?: string }): Promise<Result<{ id: string }>> {
   return run(await requireStudio(), async (actorId) => {
     const examId = input.examId && ID.test(input.examId) ? input.examId : null;
     const exam = examId ? await prisma.exam.findUnique({ where: { id: examId }, select: { name: true } }) : null;
-    const r = await runTrendAnalysis({ actorId, examId, examName: exam?.name ?? null, provider: parseProvider(input.provider) });
+    const ectx = await engineCtx(actorId, input.quoteId, "ig_trends", { examId }, null);
+    const r = await runTrendAnalysis({ actorId, examId, examName: exam?.name ?? null, provider: parseProvider(input.provider), quoteId: ectx.quoteId, modelOverride: ectx.modelOverride });
     touch();
     return { id: r.id };
   });
 }
 
-export async function runCompetitorAnalysisAction(input: { provider?: string | null }): Promise<Result<{ id: string }>> {
+export async function runCompetitorAnalysisAction(input: { provider?: string | null; quoteId?: string }): Promise<Result<{ id: string }>> {
   return run(await requireStudio(), async (actorId) => {
-    const r = await runCompetitorAnalysis({ actorId, provider: parseProvider(input.provider) });
+    const ectx = await engineCtx(actorId, input.quoteId, "ig_competitors", {}, null);
+    const r = await runCompetitorAnalysis({ actorId, provider: parseProvider(input.provider), quoteId: ectx.quoteId, modelOverride: ectx.modelOverride });
     touch();
     return { id: r.id };
   });

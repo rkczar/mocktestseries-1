@@ -38,6 +38,8 @@ export async function generateContent(params: {
   generator?: Generator;
   actorId?: string | null;
   provider?: GatewayProvider | null;
+  /** AI Engine: consumed cost quote + per-post cost tracking. */
+  engine?: { quoteId?: string | null; modelOverride?: string | null; instagramPostId?: string | null };
 }): Promise<GenerationOutcome> {
   const prompt = buildPrompt({
     snapshot: params.snapshot,
@@ -48,7 +50,7 @@ export async function generateContent(params: {
     instruction: params.instruction,
     reference: params.reference,
   });
-  const gen: Generator = params.generator ?? ((prompt, opts) => generateForFeature("ig_carousel", prompt, opts, { actorId: params.actorId, providerOverride: params.provider ?? null }));
+  const gen: Generator = params.generator ?? ((prompt, opts) => generateForFeature("ig_carousel", prompt, opts, { actorId: params.actorId, providerOverride: params.provider ?? null, ...params.engine }));
   const result = await gen(prompt, { temperature: params.instruction ? 0.6 : 0.5, maxOutputTokens: 3000 });
   const parsed = parseAiResponse(result.text, params.snapshot, params.targets, params.allowedDomains);
   if (parsed.fatal) throw new Error(parsed.fatal);

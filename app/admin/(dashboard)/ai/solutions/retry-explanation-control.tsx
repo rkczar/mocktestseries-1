@@ -4,23 +4,28 @@ import { useState, useTransition } from "react";
 import { RefreshCw, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { retryExplanationAction, regenerateExplanationAction, markReviewedAction } from "./actions";
+import { useCostPreview } from "@/components/admin/ai/cost-preview";
 
 export function RetryExplanationControl({ questionId }: { questionId: string }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const preview = useCostPreview();
 
   return (
     <div className="flex flex-col items-end gap-1">
+      {preview.dialog}
       <Button
         type="button"
         size="sm"
         variant="outline"
         disabled={isPending}
         onClick={() =>
-          startTransition(async () => {
-            const result = await retryExplanationAction(questionId);
-            setError(result.error ?? null);
-          })
+          preview.ask({ feature: "explanation_admin", context: { questionId } }, (quoteId) =>
+            startTransition(async () => {
+              const result = await retryExplanationAction(questionId, quoteId);
+              setError(result.error ?? null);
+            })
+          )
         }
       >
         <RefreshCw className="h-3.5 w-3.5" aria-hidden /> {isPending ? "Retrying…" : "Retry"}
@@ -34,19 +39,23 @@ export function RetryExplanationControl({ questionId }: { questionId: string }) 
 export function RegenerateExplanationControl({ questionId }: { questionId: string }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const preview = useCostPreview();
 
   return (
     <div className="flex flex-col items-end gap-1">
+      {preview.dialog}
       <Button
         type="button"
         size="sm"
         variant="outline"
         disabled={isPending}
         onClick={() =>
-          startTransition(async () => {
-            const result = await regenerateExplanationAction(questionId);
-            setError(result.error ?? null);
-          })
+          preview.ask({ feature: "explanation_admin", context: { questionId } }, (quoteId) =>
+            startTransition(async () => {
+              const result = await regenerateExplanationAction(questionId, quoteId);
+              setError(result.error ?? null);
+            })
+          )
         }
       >
         <RefreshCw className="h-3.5 w-3.5" aria-hidden /> {isPending ? "Regenerating…" : "Regenerate"}

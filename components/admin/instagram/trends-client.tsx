@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ProviderPicker, type ProviderChoice } from "@/components/admin/instagram/ai-studio-panel";
+import { useCostPreview } from "@/components/admin/ai/cost-preview";
 import { addReferenceAction, deleteReferenceAction, runCompetitorAnalysisAction, runTrendAnalysisAction, setReferenceActiveAction } from "@/app/admin/(dashboard)/instagram/studio-actions";
 
 interface Ref {
@@ -36,6 +37,7 @@ export function TrendsClient({ exams, references }: { exams: { id: string; name:
   const router = useRouter();
   const [form, setForm] = useState(EMPTY);
   const [provider, setProvider] = useState<ProviderChoice>("default");
+  const costPreview = useCostPreview();
   const [examId, setExamId] = useState("");
   const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [pending, start] = useTransition();
@@ -55,6 +57,7 @@ export function TrendsClient({ exams, references }: { exams: { id: string; name:
 
   return (
     <>
+      {costPreview.dialog}
       {msg ? (
         <p role={msg.tone === "error" ? "alert" : "status"} data-testid="trends-message" className={`rounded-md px-3 py-2 text-sm ${msg.tone === "error" ? "bg-[var(--color-error)]/10" : "bg-[var(--color-success)]/10"}`}>
           {msg.text}
@@ -77,10 +80,10 @@ export function TrendsClient({ exams, references }: { exams: { id: string; name:
                 </option>
               ))}
             </SelectNative>
-            <Button disabled={pending} data-testid="run-trends" onClick={() => go(async () => runTrendAnalysisAction({ examId: examId || null, provider: prov }), "Trend analysis saved.")}>
+            <Button disabled={pending} data-testid="run-trends" onClick={() => costPreview.ask({ feature: "ig_trends", context: { examId: examId || null }, legacyProvider: prov !== null }, (quoteId) => go(async () => runTrendAnalysisAction({ examId: examId || null, provider: prov, quoteId }), "Trend analysis saved."))}>
               {pending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Sparkles className="h-4 w-4" aria-hidden />} Analyse trends
             </Button>
-            <Button variant="outline" disabled={pending || posts.length === 0} data-testid="run-competitors" onClick={() => go(async () => runCompetitorAnalysisAction({ provider: prov }), "Competitor analysis saved.")}>
+            <Button variant="outline" disabled={pending || posts.length === 0} data-testid="run-competitors" onClick={() => costPreview.ask({ feature: "ig_competitors", context: {}, legacyProvider: prov !== null }, (quoteId) => go(async () => runCompetitorAnalysisAction({ provider: prov, quoteId }), "Competitor analysis saved."))}>
               Analyse competitor content
             </Button>
           </div>

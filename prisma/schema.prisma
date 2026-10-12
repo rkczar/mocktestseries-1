@@ -3286,9 +3286,143 @@ model AiGatewayCall {
   actorId      String?
   createdAt    DateTime @default(now())
 
+  // ---- AI Engine cost accounting (OpenRouter; all nullable — rows written before
+  // 2026-10-12 have none of these, and an unknown cost stays NULL, never 0) ----
+  /// One logical request (all attempts of one generateForFeature call share it).
+  requestId       String?
+  /// Provider generation id (OpenRouter `id`); unique so a cost is never recorded twice.
+  generationId    String?  @unique
+  /// Model the router asked for; `model` is the one that actually answered.
+  modelRequested  String?
+  /// "text" | "image".
+  kind            String?
+  routingMode     String?
+  fallbackUsed    Boolean  @default(false)
+  /// Billed in INR/USD from the provider's own usage report.
+  actualCostUsd   Float?
+  actualCostInr   Float?
+  estCostInr      Float?
+  /// USD→INR rate used for the INR figures on this row, and when that rate was published.
+  fxRate          Float?
+  fxAt            DateTime?
+  /// actual | pending (generation id known, cost not yet reported) | unknown | none (provider reported no charge).
+  costStatus      String?
+  imageCount      Int?
+  quoteId         String?
+  instagramPostId String?
+
   @@index([feature, createdAt])
   @@index([provider, createdAt])
   @@index([createdAt])
+  @@index([model, createdAt])
+  @@index([instagramPostId])
+  @@index([costStatus])
+}
+
+/// OpenRouter model catalog (Admin → AI → Models). Prices are copied from the
+/// OpenRouter Models API on every sync — never hard-coded. Approval flags are
+/// the admin's and survive re-syncs.
+model AiModel {
+  id                  String    @id
+  name                String
+  /// Author prefix of the id ("google", "anthropic", …).
+  vendor              String
+  contextLength       Int?
+  maxCompletionTokens Int?
+  inputModalities     String[]
+  outputModalities    String[]
+  supportedParameters String[]
+  /// USD per token (OpenRouter `pricing.prompt` / `completion` / `internal_reasoning`); null = not published.
+  promptPrice         Float?
+  completionPrice     Float?
+  reasoningPrice      Float?
+  /// USD per request (OpenRouter `pricing.request`).
+  requestPrice        Float?
+  /// Image models: cheapest endpoint's output-image price line {unit, costUsd}.
+  imageUnit           String?
+  imageUnitCostUsd    Float?
+  /// Admin's assumption of billable units per image, required for token-priced image models.
+  imageUnitsPerImage  Float?
+  pricingRaw          Json?
+  isImageModel        Boolean   @default(false)
+  expirationDate      String?
+  /// Usable by the router at all (admin approval).
+  approved            Boolean   @default(false)
+  /// May answer medical-explanation features.
+  medicallyApproved   Boolean   @default(false)
+  disabled            Boolean   @default(false)
+  notes               String?
+  /// Set when a sync no longer lists the model; routing then skips it.
+  missingSince        DateTime?
+  lastSyncedAt        DateTime
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([approved, isImageModel])
+}
+
+enum AiQuoteStatus {
+  OPEN
+  USED
+  EXPIRED
+  CANCELLED
+}
+
+/// One-time cost quote for an admin-triggered paid AI action. The action
+/// consumes it atomically (OPEN → USED), so a double click can never start two
+/// paid requests from one approval.
+model AiCostQuote {
+  id              String        @id @default(cuid())
+  feature         String
+  action          String
+  model           String
+  routingMode     String
+  estInputTokens  Int
+  estOutputTokens Int
+  estTextUsd      Float?
+  estImageUsd     Float?
+  maxCostUsd      Float?
+  maxCostInr      Float?
+  fxRate          Float?
+  /// Action-specific context the action must match (post id, revision, …).
+  context         Json
+  actorId         String
+  status          AiQuoteStatus @default(OPEN)
+  expiresAt       DateTime
+  usedAt          DateTime?
+  createdAt       DateTime      @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([status, expiresAt])
+}
+
+enum AiReservationStatus {
+  RESERVED
+  SETTLED
+  RELEASED
+}
+
+/// Budget reservation: the worst-case INR cost of one provider request, held
+/// (under an advisory lock) before the call and settled to the actual cost after.
+model AiBudgetReservation {
+  id         String              @id @default(cuid())
+  requestKey String              @unique
+  feature    String
+  reservedInr Float
+  /// Final INR charge; null while RESERVED. When the provider never reported a
+  /// cost, the reserved amount is kept (conservative) and costKnown is false.
+  settledInr Float?
+  costKnown  Boolean             @default(false)
+  status     AiReservationStatus @default(RESERVED)
+  /// IST calendar day / month the spend belongs to ("2026-10-12", "2026-10").
+  istDay     String
+  istMonth   String
+  createdAt  DateTime            @default(now())
+  settledAt  DateTime?
+
+  @@index([istDay, status])
+  @@index([istMonth, status])
+  @@index([status, createdAt])
 }
 
 enum InstagramBatchStatus {

@@ -1,5 +1,6 @@
 "use client";
 
+import { PostAiCost } from "@/components/admin/instagram/post-ai-cost";
 import { useState } from "react";
 import { CheckCircle2, AlertTriangle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,8 @@ import { MedicalImagePanel } from "@/components/admin/instagram/medical-image-pa
 export type ProviderChoice = "default" | "anthropic" | "gemini" | "openai";
 type R<T> = { ok: true; data: T } | { ok: false; error: string; kind?: "conflict" | "needs-confirm" | "invalid" | "not-found" | "blocked" };
 export type ActFn = <T>(call: () => Promise<R<T>>, onOk: (d: T) => void) => void;
+/** Opens the AI Cost Preview; `run` gets the approved one-time quote id (components/admin/ai/cost-preview.tsx). */
+export type AskCostFn = (req: { feature: string; context?: Record<string, string | number | null>; legacyProvider?: boolean }, run: (quoteId: string) => void) => void;
 
 /** Per-request AI provider choice (the server checks it is configured and enabled). */
 export function ProviderPicker({ value, onChange }: { value: ProviderChoice; onChange: (v: ProviderChoice) => void }) {
@@ -73,6 +76,7 @@ export function AiStudioPanel({
   provider,
   setProvider,
   act,
+  askCost,
   onPost,
   onEditContent,
   onAddModule,
@@ -85,6 +89,7 @@ export function AiStudioPanel({
   provider: ProviderChoice;
   setProvider: (p: ProviderChoice) => void;
   act: ActFn;
+  askCost: AskCostFn;
   onPost: (p: PostDto, summary: string) => void;
   onEditContent: (c: Partial<PostContent>) => void;
   onAddModule: (m: SlideModule) => void;
@@ -108,6 +113,7 @@ export function AiStudioPanel({
   return (
     <fieldset disabled={!editable || pending} className="flex flex-col gap-5" data-testid="studio-panel">
       <ProviderPicker value={provider} onChange={setProvider} />
+      <PostAiCost postId={post.id} revision={post.revision} />
 
       {/* ---- Diagram ---- */}
       <section className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="diagram-section">
@@ -135,7 +141,11 @@ export function AiStudioPanel({
           <Button
             type="button"
             data-testid="ai-diagram"
-            onClick={() => act(() => aiDiagramAction({ ...base(), kind, instruction: diagramInstr }), (r) => (onPost(r.post, r.summary), setJsonText(null)))}
+            onClick={() =>
+              askCost({ feature: "ig_diagram", context: { postId: post.id }, legacyProvider: provider !== "default" }, (quoteId) =>
+                act(() => aiDiagramAction({ ...base(), kind, instruction: diagramInstr, quoteId }), (r) => (onPost(r.post, r.summary), setJsonText(null)))
+              )
+            }
           >
             <Sparkles className="h-4 w-4" aria-hidden /> {diagram ? "Regenerate diagram" : "Generate diagram"}
           </Button>
@@ -205,7 +215,7 @@ export function AiStudioPanel({
           original answer key are never changed. An independent blind re-solve checks the answer.
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" data-testid="ai-trap" onClick={() => act(() => aiTrapAction({ ...base(), instruction: trapInstr }), (r) => onPost(r.post, r.summary))}>
+          <Button type="button" data-testid="ai-trap" onClick={() => askCost({ feature: "ig_trap", context: { postId: post.id }, legacyProvider: provider !== "default" }, (quoteId) => act(() => aiTrapAction({ ...base(), instruction: trapInstr, quoteId }), (r) => onPost(r.post, r.summary)))}>
             <Sparkles className="h-4 w-4" aria-hidden /> {trap ? "Regenerate trap question" : "Generate Examiner Trap"}
           </Button>
           {trap && !draft.design.modules.includes("TRAP") ? (
@@ -279,6 +289,7 @@ export function AiStudioPanel({
         draft={draft}
         base={base}
         act={act}
+        askCost={askCost}
         onPost={onPost}
         onEditContent={onEditContent}
         onAddModule={onAddModule}

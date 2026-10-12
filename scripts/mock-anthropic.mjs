@@ -42,7 +42,7 @@ function err(res, status, type, message) {
   json(res, status, { type: "error", error: { type, message } });
 }
 
-function answerFor(prompt, scenario) {
+export function answerFor(prompt, scenario) {
   const key = /Correct answer \(from the official key\): ([A-F, ]+)/.exec(prompt)?.[1]?.trim() ?? /Correct answer \(official key\): ([A-F, ]+)/.exec(prompt)?.[1]?.trim() ?? "B";
   if (prompt.includes("Reply with the single word OK")) return "OK";
   if (prompt.includes("Answer this medical multiple-choice question")) {

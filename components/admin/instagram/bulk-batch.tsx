@@ -1,5 +1,6 @@
 "use client";
 
+import { useBulkCostPreview } from "@/components/admin/ai/cost-preview";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
@@ -114,29 +115,31 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
   const editable = (p: PostDto | null) => Boolean(p && p.isCurrent && p.status === "DRAFT");
 
   /** Runs the chosen generation steps for one post, each saved as its own revision. */
-  async function generateFor(item: BatchItemView): Promise<string | null> {
+  async function generateFor(item: BatchItemView, quotes: Record<string, Partial<Record<string, string>>>): Promise<string | null> {
     let post = item.post;
     if (!post || !editable(post)) return `${item.post?.questionCode ?? item.postId}: skipped (only Draft posts are generated)`;
     const prov = provider === "default" ? null : provider;
     const base = () => ({ postId: post!.id, expectedRevision: post!.revision, content: post!.content, design: post!.design, provider: prov });
+    // One-time quotes from the approved bulk AI Cost Preview (one per post and step).
+    const q = quotes[post.id] ?? {};
     const order: Step[] = ["content", "diagram", "trap", "captions", "layout"];
     for (const s of order) {
       if (!steps[s]) continue;
       setProgress(`${post.questionCode}: ${STEP_LABELS[s]}…`);
       if (s === "content") {
-        const r = await aiEditAction({ ...base() });
+        const r = await aiEditAction({ ...base(), quoteId: q.ig_carousel });
         if (!r.ok) return `${post.questionCode}: ${r.error}`;
         post = r.data.post;
       } else if (s === "diagram") {
-        const r = await aiDiagramAction({ ...base(), kind: "auto" });
+        const r = await aiDiagramAction({ ...base(), kind: "auto", quoteId: q.ig_diagram });
         if (!r.ok) return `${post.questionCode}: diagram — ${r.error}`;
         post = r.data.post;
       } else if (s === "trap") {
-        const r = await aiTrapAction({ ...base() });
+        const r = await aiTrapAction({ ...base(), quoteId: q.ig_trap });
         if (!r.ok) return `${post.questionCode}: trap — ${r.error}`;
         post = r.data.post;
       } else if (s === "captions") {
-        const r = await aiCaptionsAction({ ...base() });
+        const r = await aiCaptionsAction({ ...base(), quoteId: q.ig_caption });
         if (!r.ok) return `${post.questionCode}: captions — ${r.error}`;
         post = r.data.post;
       } else {
@@ -151,14 +154,24 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
     return null;
   }
 
-  const runGenerate = (items: BatchItemView[]) => {
+  const bulkPreview = useBulkCostPreview();
+  const STEP_FEATURE: Partial<Record<Step, string>> = { content: "ig_carousel", diagram: "ig_diagram", trap: "ig_trap", captions: "ig_caption" };
+  /** Bulk AI Cost Preview first; the run starts only with its one-time quotes. */
+  const askGenerate = (items: BatchItemView[]) => {
+    const postIds = items.map((i) => i.post?.id).filter((x): x is string => Boolean(x));
+    const features = (Object.keys(STEP_FEATURE) as Step[]).filter((s) => steps[s]).map((s) => STEP_FEATURE[s]!);
+    if (!features.length) return runGenerate(items, {});
+    bulkPreview.ask({ postIds, features, legacyProvider: provider !== "default" }, (quotes) => runGenerate(items, quotes));
+  };
+
+  const runGenerate = (items: BatchItemView[], quotes: Record<string, Partial<Record<string, string>>>) => {
     if (running.current) return;
     running.current = true;
     setMsg(null);
     start(async () => {
       const errors: string[] = [];
       for (const it of items) {
-        const e = await generateFor(it);
+        const e = await generateFor(it, quotes);
         if (e) errors.push(e);
         await reload();
       }
@@ -227,6 +240,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
 
       {/* Generation */}
       <section className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="bulk-generate">
+        {bulkPreview.dialog}
         <h3 className="text-sm font-semibold">Generate with AI</h3>
         <ProviderPicker value={provider} onChange={setProvider} />
         <div className="flex flex-wrap gap-3 text-xs">
@@ -237,7 +251,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
           ))}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button disabled={pending} onClick={() => runGenerate(view.items.filter((i) => editable(i.post)))} data-testid="generate-all">
+          <Button disabled={pending} onClick={() => askGenerate(view.items.filter((i) => editable(i.post)))} data-testid="generate-all">
             {pending && progress ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Sparkles className="h-4 w-4" aria-hidden />} Generate for all Draft posts
           </Button>
           {progress ? <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="generate-progress">{progress}</span> : null}
@@ -293,7 +307,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
                     </OpenInEditor>
                   ) : null}
                   {p && editable(p) ? (
-                    <Button size="sm" variant="outline" disabled={pending} onClick={() => runGenerate([it])}>
+                    <Button size="sm" variant="outline" disabled={pending} onClick={() => askGenerate([it])}>
                       <Sparkles className="h-4 w-4" aria-hidden /> Generate
                     </Button>
                   ) : null}

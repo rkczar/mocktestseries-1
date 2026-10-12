@@ -15,6 +15,8 @@ export const PROVIDER_LABELS: Record<GatewayProvider, string> = {
 export const AI_FEATURES = [
   { key: "explanation", label: "AI Explanation", group: "Student AI" },
   { key: "variant", label: "AI Variant", group: "Student AI" },
+  { key: "explanation_admin", label: "AI Explanation (admin regenerate)", group: "Admin AI" },
+  { key: "variant_admin", label: "AI Variant (admin)", group: "Admin AI" },
   { key: "ig_carousel", label: "Instagram Carousel Content", group: "Instagram" },
   { key: "ig_trap", label: "Examiner Trap Generation", group: "Instagram" },
   { key: "ig_diagram", label: "Medical Diagram Planning", group: "Instagram" },
@@ -23,9 +25,17 @@ export const AI_FEATURES = [
   { key: "ig_keywords", label: "Keyword Research", group: "Instagram" },
   { key: "ig_trends", label: "Trend Analysis", group: "Instagram" },
   { key: "ig_competitors", label: "Competitor Content Analysis", group: "Instagram" },
+  { key: "ig_image", label: "Medical Image Generation", group: "Instagram" },
 ] as const;
 export type AiFeature = (typeof AI_FEATURES)[number]["key"];
 export const AI_FEATURE_KEYS = AI_FEATURES.map((f) => f.key) as AiFeature[];
+/** Image generation is not a text route: the legacy route for it is the Gemini image model (lib/instagram/medical-image.ts). */
+export const TEXT_FEATURE_KEYS = AI_FEATURE_KEYS.filter((f) => f !== "ig_image");
+/**
+ * Admin-triggered features fall back to the student feature's legacy route when
+ * they have no route of their own, so splitting them out changes nothing.
+ */
+export const LEGACY_ROUTE_PARENT: Partial<Record<AiFeature, AiFeature>> = { explanation_admin: "explanation", variant_admin: "variant" };
 export const FEATURE_LABELS = Object.fromEntries(AI_FEATURES.map((f) => [f.key, f.label])) as Record<AiFeature, string>;
 
 /**

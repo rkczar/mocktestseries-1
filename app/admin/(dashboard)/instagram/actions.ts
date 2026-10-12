@@ -30,6 +30,7 @@ import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
 import { CONTENT_FIELDS, SLIDE_COUNTS, SLIDE_MODULES, TEMPLATE_KEYS, normalizeHashtags, type ContentField, type SlideModule } from "@/lib/instagram/types";
 import { safeTelegramUrl } from "@/lib/telegram-url";
 import { AiNotConfiguredError } from "@/lib/ai-provider";
+import { consumeQuote } from "@/lib/ai-engine/quote";
 import { GATEWAY_PROVIDERS, type GatewayProvider } from "@/lib/ai-gateway-config";
 import { AiProviderFailure } from "@/lib/ai-gateway";
 import {
@@ -218,6 +219,8 @@ export async function aiEditAction(input: {
   fields?: string[];
   /** Optional per-request AI provider ("anthropic" | "gemini" | "openai"); default = the feature's routing. */
   provider?: string | null;
+  /** One-time AI cost quote id (AI Cost Preview); required for an AI content call, not for a layout-only instruction. */
+  quoteId?: string;
 }): Promise<Result<AiEditResult>> {
   return run(await requireStudio(), async (actorId) => {
     const postId = checkId(input.postId);
@@ -240,6 +243,7 @@ export async function aiEditAction(input: {
     const explicit = Array.isArray(input.fields) ? input.fields.filter((f): f is ContentField => (CONTENT_FIELDS as readonly string[]).includes(f)) : [];
     const targets = explicit.length ? explicit : instruction ? targetFields(instruction, selected) : selected ? targetFields("", selected) : [...CONTENT_FIELDS];
     const settings = await getStudioSettings();
+    const q = await consumeQuote({ quoteId: input.quoteId, actorId, feature: "ig_carousel", action: "ig_carousel", context: { postId } });
     const outcome = await generateContent({
       snapshot: current.snapshot,
       series: current.series,
@@ -251,6 +255,7 @@ export async function aiEditAction(input: {
       allowedDomains: allowedCaptionDomains(settings),
       actorId,
       provider: parseProvider(input.provider),
+      engine: { quoteId: q.id, modelOverride: q.model, instagramPostId: postId },
     });
     if (!outcome.changed.length) {
       return { post: current, summary: outcome.summary + (outcome.rejected.length ? ` (${outcome.rejected.map((r) => `${r.field}: ${r.reason}`).join("; ")})` : ""), kind: "content" as const, rejected: outcome.rejected };
