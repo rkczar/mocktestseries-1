@@ -53,6 +53,9 @@ export async function DashboardAiCards() {
         <CardContent>
           <p className="text-2xl font-semibold text-[var(--color-foreground)]">{formatInr(stats.today.costInr)}</p>
           <p className="mt-1 text-[11px] text-[var(--color-muted-foreground)]">{`Yesterday ${formatInr(stats.yesterday.costInr)}${change !== null ? ` · ${change >= 0 ? "+" : ""}${change}%` : ""}`}</p>
+          {stats.today.uncosted ? (
+            <p className="mt-1 text-[11px] text-[var(--color-warning)]" data-testid="dash-ai-uncosted">{`${stats.today.uncosted} request(s) today without a reported cost (legacy provider) — not included`}</p>
+          ) : null}
           <p className="mt-1 text-[11px] text-[var(--color-muted-foreground)]">
             {`Total AI Cost Till Now: ${formatInr(stats.lifetime.costInr)}`}
             {stats.costTrackingSince ? ` (since ${formatIst(stats.costTrackingSince).replace(/,.*$/, "")})` : " (cost tracking starts with the first OpenRouter request)"}
