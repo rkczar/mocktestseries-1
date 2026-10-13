@@ -6,6 +6,7 @@ import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { PriceTag } from "@/components/public-exam/mock-series-promo";
 import { PlanComparison } from "@/components/payments/plan-comparison";
+import { PremiumAccessComparison } from "@/components/payments/premium-access-comparison";
 import { GroupDiscountCard } from "@/components/payments/group-discount-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -165,6 +166,7 @@ function PlanCard({ plan, ...rest }: { plan: CatalogPlan; catalog: PlanCatalog; 
         <p className="flex items-center gap-1.5 text-sm text-[var(--color-muted-foreground)]">
           <Clock className="h-4 w-4" aria-hidden /> {plan.accessDuration}
         </p>
+        {plan.accessNote ? <p className="-mt-2 text-sm text-[var(--color-muted-foreground)]">{plan.accessNote}</p> : null}
         {plan.benefits.length > 0 ? (
           <ul className="flex flex-col gap-1.5 text-sm text-[var(--color-foreground)]">
             {plan.benefits.map((b) => (
@@ -259,6 +261,8 @@ export default async function PlansAndPricingPage() {
   const validities = [...new Set(allPlans.map((p) => p.accessDuration))];
   const has = (key: string) => catalog.groups.some((g) => g.categories.some((c) => c.key === key));
   const freeMocks = lead?.comparison?.freeMocks ?? 0;
+  // Premium Access Enforcement ON: the three-tier comparison + matching FAQs replace the Free vs Complete ones.
+  const premium = catalog.premiumAccess;
   const aiRow = lead?.comparison?.rows.find((r) => /\bAI\b/.test(r.feature) && r.paid.state !== "cross");
 
   const faqs: { q: string; a: React.ReactNode }[] = [
@@ -268,9 +272,24 @@ export default async function PlansAndPricingPage() {
         ? `Every plan shows its validity on its card. The plans on sale today come with: ${validities.join(", ")}. Access starts when your payment is confirmed.`
         : "Every plan shows its validity on its card. Access starts when your payment is confirmed.",
     },
-    ...(freeMocks > 0
-      ? [{ q: "Can I try a mock test before buying?", a: `Yes. ${freeMocks} mock ${freeMocks === 1 ? "test is" : "tests are"} free to attempt after you sign in, so you can try the test interface and explanations first.` }]
-      : []),
+    ...(premium
+      ? [
+          {
+            q: "What stays free?",
+            a: `After you sign in, these stay free forever: ${premium.free.join(", ")}.`,
+          },
+          ...(premium.trialEnabled
+            ? [
+                {
+                  q: "Is there a free trial?",
+                  a: `Yes. Every student can start a one-time ${premium.trialHours}-hour Premium Trial from the Student Dashboard. It starts only when you click "Start 2-Day Free Trial", needs no payment details, and unlocks every Premium test while it lasts. When it ends, your free tests, analytics and previous results stay available.`,
+                },
+              ]
+            : []),
+        ]
+      : freeMocks > 0
+        ? [{ q: "Can I try a mock test before buying?", a: `Yes. ${freeMocks} mock ${freeMocks === 1 ? "test is" : "tests are"} free to attempt after you sign in, so you can try the test interface and explanations first.` }]
+        : []),
     ...(has("test-series") && has("single-mocks")
       ? [{ q: "If I buy the complete test series, do I also need single mock tests?", a: "No. The complete test series unlocks every mock test in that series, so single mock tests from the same series are shown as already included and are not offered for purchase again." }]
       : []),
@@ -368,7 +387,12 @@ export default async function PlansAndPricingPage() {
               {/* Group Discount Offer (Admin switch, default OFF) sits right under the first exam's plan cards. */}
               {gi === 0 && catalog.showPrices && groupDiscountHref ? <GroupDiscountCard whatsappHref={groupDiscountHref} /> : null}
 
-              {catalog.showPrices && g.comparison && g.comparison.rows.length > 0 ? (
+              {catalog.showPrices && premium && premium.examId === g.exam.id ? (
+                <div className="mt-8">
+                  <h3 className="text-lg font-semibold text-[var(--color-foreground)]">Free Forever vs Premium Trial vs Premium</h3>
+                  <PremiumAccessComparison summary={premium} className="mt-3" />
+                </div>
+              ) : catalog.showPrices && g.comparison && g.comparison.rows.length > 0 ? (
                 <div className="mt-8">
                   <h3 className="text-lg font-semibold text-[var(--color-foreground)]">Free vs Complete Series</h3>
                   <PlanComparison rows={g.comparison.rows} className="mt-3" />

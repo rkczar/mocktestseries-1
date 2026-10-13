@@ -33,6 +33,7 @@ export const TEMPLATE_VARIABLES = [
   "invoiceUrl",
   "siteUrl",
   "supportEmail",
+  "trialEndsAt",
 ] as const;
 
 export type TemplateVariable = (typeof TEMPLATE_VARIABLES)[number];
@@ -168,6 +169,77 @@ export const TEMPLATE_DEFAULTS: Record<EmailTemplateKey, TemplateDefinition> = {
     heading: "An update from MockTestSeries",
     bodyHtml: "<p>Hi {{studentName}},</p><p>Write your announcement here.</p>",
     ctaText: "Open MockTestSeries",
+    ctaUrl: "{{dashboardUrl}}",
+  },
+  // Premium Trial reminders (lib/premium-trial.ts). Queued only for students
+  // who actually started their trial, never for paid subscribers; delivered
+  // only while production sending is ON. Promotional: honours opt-out.
+  TRIAL_STARTED: {
+    key: "TRIAL_STARTED",
+    label: "Premium Trial started",
+    description: "Sent once when a student starts their one-time Premium Trial.",
+    category: "PROMOTIONAL",
+    critical: false,
+    automatic: true,
+    subject: "Your 2-Day Premium Trial Is Active!",
+    heading: "Your 2-Day Premium Trial Is Active!",
+    bodyHtml:
+      "<p>Hi {{studentName}},</p><p>Your Premium Trial is now active. Explore Premium PYQs, Mock Tests, Subject Tests and more until <strong>{{trialEndsAt}}</strong>.</p>",
+    ctaText: "Start Practising",
+    ctaUrl: "{{dashboardUrl}}",
+  },
+  TRIAL_ENDS_24H: {
+    key: "TRIAL_ENDS_24H",
+    label: "Premium Trial ends in 24 hours",
+    description: "Sent once, 24 hours before a student's trial ends.",
+    category: "PROMOTIONAL",
+    critical: false,
+    automatic: true,
+    subject: "Your Premium Trial Ends in 24 Hours",
+    heading: "Your Premium Trial Ends in 24 Hours",
+    bodyHtml:
+      "<p>Hi {{studentName}},</p><p>Your Premium Trial ends on <strong>{{trialEndsAt}}</strong>. Upgrade to Premium to keep full access. Your free tests, analytics and previous results always stay available.</p>",
+    ctaText: "Upgrade to Premium",
+    ctaUrl: "{{dashboardUrl}}",
+  },
+  TRIAL_ENDS_6H: {
+    key: "TRIAL_ENDS_6H",
+    label: "Premium Trial ends in 6 hours",
+    description: "Sent once, 6 hours before a student's trial ends.",
+    category: "PROMOTIONAL",
+    critical: false,
+    automatic: true,
+    subject: "Your Premium Trial Ends in 6 Hours",
+    heading: "Your Premium Trial Ends in 6 Hours",
+    bodyHtml: "<p>Hi {{studentName}},</p><p>Your Premium Trial ends on <strong>{{trialEndsAt}}</strong>. Upgrade to Premium to keep full access.</p>",
+    ctaText: "Upgrade to Premium",
+    ctaUrl: "{{dashboardUrl}}",
+  },
+  TRIAL_ENDS_1H: {
+    key: "TRIAL_ENDS_1H",
+    label: "Premium Trial ends in 1 hour",
+    description: "Sent once, 1 hour before a student's trial ends.",
+    category: "PROMOTIONAL",
+    critical: false,
+    automatic: true,
+    subject: "Your Premium Trial Ends in 1 Hour",
+    heading: "Your Premium Trial Ends in 1 Hour",
+    bodyHtml: "<p>Hi {{studentName}},</p><p>Your Premium Trial ends on <strong>{{trialEndsAt}}</strong>. Upgrade now to keep full access.</p>",
+    ctaText: "Upgrade to Premium",
+    ctaUrl: "{{dashboardUrl}}",
+  },
+  TRIAL_EXPIRED: {
+    key: "TRIAL_EXPIRED",
+    label: "Premium Trial ended",
+    description: "Sent once when a student's trial has ended.",
+    category: "PROMOTIONAL",
+    critical: false,
+    automatic: true,
+    subject: "Your Premium Trial Has Ended",
+    heading: "Your Premium Trial Has Ended",
+    bodyHtml:
+      "<p>Hi {{studentName}},</p><p>Your Premium Trial Has Ended. Upgrade to Continue Accessing Premium Tests.</p><p>Your free tests, analytics and previous results are still available.</p>",
+    ctaText: "Buy Premium",
     ctaUrl: "{{dashboardUrl}}",
   },
   CUSTOM: {

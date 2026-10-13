@@ -29,11 +29,14 @@ import { getDashboardReviewsSafe } from "@/lib/reviews";
 import { ReviewsSection } from "@/components/homepage/reviews-section";
 import { getDashboardLiveCbtPromotion } from "@/lib/live-cbt";
 import { getSiteUrl } from "@/lib/site-url";
+import { TrialPopup } from "./trial-popup";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
-export default async function StudentDashboardPage() {
+export default async function StudentDashboardPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const student = await requireStudentOrLogin();
+  // Arrived from a Premium lock: show trial / upgrade options right away.
+  const premiumLocked = (await searchParams).premium === "locked";
   const cookieStore = await cookies();
   const requestedExamId = cookieStore.get(ACTIVE_EXAM_COOKIE)?.value;
 
@@ -153,6 +156,7 @@ export default async function StudentDashboardPage() {
         telegramHref={telegramHref}
       />
       <FloatingWhatsAppSupport surface="dashboard" />
+      <TrialPopup force={premiumLocked} />
     </div>
   );
 }

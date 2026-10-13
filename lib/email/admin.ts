@@ -66,6 +66,7 @@ const SAMPLE_VARS: TemplateVars = {
   orderNumber: "MTS-ORD-000045",
   invoiceNumber: "MTS/2026-27/00045",
   paymentId: "pay_SAMPLE123",
+  trialEndsAt: "15 Oct 2026, 6:30 PM IST",
 };
 
 /** Full HTML preview with sample (or a real student's) values. */

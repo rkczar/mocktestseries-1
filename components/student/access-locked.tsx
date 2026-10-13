@@ -31,6 +31,11 @@ export function AccessLocked({ access, backHref = "/student/dashboard" }: { acce
               ))}
             </div>
           ) : null}
+          {access.premium && access.status !== "EXPIRED" ? (
+            <Button asChild variant="secondary">
+              <Link href="/student/dashboard?premium=locked">Free trial &amp; Premium options</Link>
+            </Button>
+          ) : null}
           <Button asChild variant="outline">
             <Link href={backHref}>Back</Link>
           </Button>

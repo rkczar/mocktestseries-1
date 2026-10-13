@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getPaymentMode, getPaymentModeForStudent, type PaymentMode } from "@/lib/payments/settings";
 import { computeProductPrice, describeAccessDuration, type ProductPrice } from "@/lib/payments/pricing";
 import { canStudentAccessProduct, evaluateContentAccess, loadAccessContext, type AccessContext } from "@/lib/payments/access";
+import { getPremiumPolicyRuntime } from "@/lib/premium-policy";
 import { deriveMockTestAvailability, type MockTestAvailability } from "@/lib/mock-test-schedule";
 import { getAiSettings } from "@/lib/ai-settings";
 import { formatInr } from "@/lib/payments/money";
@@ -277,10 +278,14 @@ export async function getPlanComparison(
           select: { id: true, code: true, name: true, productType: true, examId: true, testSeriesId: true, mockTestId: true, grandTestId: true, liveTestId: true, accessType: true, isActive: true, isVisible: true, purchaseEnabled: true, accessDurationType: true, accessExpiresAt: true },
         })
       : base.products;
-  const ctx: AccessContext = { mode: "PAID", products, entitlements: [], now: new Date() };
+  // Premium Access Enforcement applies to this public summary too (no trial: a visitor has none).
+  const ctx: AccessContext = { mode: "PAID", products, entitlements: [], now: new Date(), policy: base.policy ?? (await getPremiumPolicyRuntime()), trial: null };
   const freeFor = (c: Parameters<typeof evaluateContentAccess>[1]) => evaluateContentAccess(ctx, c).allowed;
 
-  const pyqFree = papers.length === 0 ? true : freeFor({ kind: "PREVIOUS_YEAR_PAPER", id: papers[0].id, examId });
+  // Premium Access Enforcement: exactly the admin-selected free paper is free (if any).
+  const underPolicy = Boolean(ctx.policy?.active && ctx.policy.examId === examId);
+  const freePapers = underPolicy ? papers.filter((p) => freeFor({ kind: "PREVIOUS_YEAR_PAPER", id: p.id, examId })).length : null;
+  const pyqFree = underPolicy ? freePapers! > 0 : papers.length === 0 ? true : freeFor({ kind: "PREVIOUS_YEAR_PAPER", id: papers[0].id, examId });
   const subjectFree = freeFor({ kind: "SUBJECT_TEST", id: null, examId });
   const tests = mockSeries?.tests ?? [];
   const freeMocks = tests.filter((t) => freeFor({ kind: "MOCK_TEST", id: t.id, examId, testSeriesId: mockSeries!.series.id, accessType: t.accessType })).length;
@@ -305,8 +310,20 @@ export async function getPlanComparison(
       paid: planned > 0 ? `All ${planned} planned mocks (${tests.length} published so far)` : "All mocks in the series",
     },
     { key: "scheduled-mocks", feature: "Scheduled mock access", free: freeMocks > 0 ? "Free mocks, as they release" : "—", paid: "Every mock, as it releases" },
-    { key: "pyq-papers", feature: "Previous Year Papers", free: pyqFree ? pyqLabel : "—", paid: pyqLabel },
-    { key: "pyq-practice", feature: "PYQ practice (attempt online)", free: years > 0 && pyqFree ? yes : "—", paid: years > 0 ? yes : "—" },
+    {
+      key: "pyq-papers",
+      feature: "Previous Year Papers",
+      free: freePapers !== null ? (freePapers > 0 ? `${freePapers} free paper${freePapers === 1 ? "" : "s"}` : "—") : pyqFree ? pyqLabel : "—",
+      paid: pyqLabel,
+    },
+    {
+      key: "pyq-practice",
+      feature: "PYQ practice (attempt online)",
+      // Under Premium Access Enforcement only the selected paper is free (shown in the row above). "—" here keeps
+      // every surface that reads this row (e.g. the homepage free cards) from claiming all papers are free.
+      free: freePapers !== null ? "—" : years > 0 && pyqFree ? yes : "—",
+      paid: years > 0 ? yes : "—",
+    },
     { key: "practice-omr", feature: "Downloadable Practice OMR", free: yes, paid: yes, note: omrCount > 0 ? undefined : "OMR sheets are published by the admin" },
     { key: "ai-explanations", feature: "AI Explanations (Ask AI)", free: aiFree, paid: aiPaid },
     { key: "ai-traps", feature: "Examiner Traps & AI Trap Questions", free: `${aiFree} (shared with Ask AI)`, paid: ai.paidDailyLimit === null ? "Unlimited" : `${aiPaid} (shared with Ask AI)` },

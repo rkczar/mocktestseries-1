@@ -17,6 +17,7 @@ import { prisma } from "@/lib/prisma";
 import { getRazorpayConfig, getRazorpayCredentials } from "@/lib/razorpay-config";
 import { getPaymentModeForStudent, getPaymentPolicy } from "@/lib/payments/settings";
 import { computeProductPrice, computeAccessWindow, describeAccessDuration, type ProductPrice } from "@/lib/payments/pricing";
+import { examDayEnd, getPremiumPolicy, isTillExamProduct, parsePremiumPolicy, PREMIUM_POLICY_KEY, TILL_EXAM_LABEL, TILL_EXAM_SUPPORT_TEXT } from "@/lib/premium-policy";
 import { evaluateCoupon, lockCoupon, normalizeCouponCode, COUPON_REJECTION_MESSAGES, type CouponRejection } from "@/lib/payments/coupons";
 import { canStudentAccessProduct, type AccessResult } from "@/lib/payments/access";
 import { issueInvoiceTx } from "@/lib/payments/invoices";
@@ -174,7 +175,9 @@ export async function getCheckoutQuote(studentId: string, productCode: string, c
       code: product.code,
       name: product.name,
       description: product.description,
-      accessLabel: describeAccessDuration(product),
+      accessLabel: isTillExamProduct(await getPremiumPolicy(), product.id)
+        ? `${TILL_EXAM_LABEL} — ${TILL_EXAM_SUPPORT_TEXT}`
+        : describeAccessDuration(product),
       examName: product.exam?.name ?? null,
     },
     price,
@@ -466,6 +469,11 @@ async function grantEntitlementTx(tx: Prisma.TransactionClient, orderId: string,
     .filter((e) => e.startsAt <= now && e.expiresAt && e.expiresAt > now)
     .reduce<Date | null>((m, e) => (m && m > e.expiresAt! ? m : e.expiresAt), null);
   const window = computeAccessWindow(order.product, now, currentExpiry);
+  // "Till Exam" Premium plans (Admin → Payments → Free Access & Trial): access
+  // runs at least until the end of the configured exam day (IST). A floor
+  // only — it never shortens the product's own window.
+  const tillExam = await tillExamFloor(tx, order.product.id);
+  if (tillExam && window.expiresAt && window.expiresAt < tillExam) window.expiresAt = tillExam;
   return tx.studentEntitlement.create({
     data: {
       studentId: order.studentId,
@@ -477,6 +485,12 @@ async function grantEntitlementTx(tx: Prisma.TransactionClient, orderId: string,
       orderId,
     },
   });
+}
+
+async function tillExamFloor(tx: Prisma.TransactionClient, productId: string): Promise<Date | null> {
+  const row = await tx.setting.findUnique({ where: { key: PREMIUM_POLICY_KEY } });
+  const policy = parsePremiumPolicy(row?.value ?? null);
+  return isTillExamProduct(policy, productId) ? examDayEnd(policy.examDate) : null;
 }
 
 export type FulfilOutcome = "PAID" | "ALREADY_PAID" | "NOT_CAPTURED" | "MISMATCH";

@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus, AttemptAnswerMode, AttemptDurationMode } from "@prisma/client";
 import { requireStudentOrLogin } from "@/lib/student-session";
-import { getContentAccess, describeAttemptContent } from "@/lib/payments/access";
+import { getAttemptContentAccess } from "@/lib/payments/access";
 import { AccessLocked } from "@/components/student/access-locked";
 import { AttemptResetNotice } from "@/components/student/attempt-reset-notice";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
@@ -26,8 +26,9 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
   if (attempt.status === AttemptStatus.ABANDONED) return <AttemptResetNotice isPyq={Boolean(attempt.previousYearPaperId)} />;
 
   // Entitlement re-check on every load: no paid question payload is ever
-  // rendered for a student who doesn't currently hold access.
-  const access = await getContentAccess(student.id, describeAttemptContent(attempt));
+  // rendered for a student who doesn't currently hold access (an attempt
+  // started before a trial / enforcement cut-off may finish — grace rules).
+  const access = await getAttemptContentAccess(student.id, attempt);
   if (!access.allowed) return <AccessLocked access={access} />;
 
   // One Active Test Device: claim the attempt for this device before any

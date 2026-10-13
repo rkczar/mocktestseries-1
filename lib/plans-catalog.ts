@@ -10,6 +10,8 @@ import { RENEWAL_REMINDER_DAYS } from "@/lib/payments/student-access";
 import { isPlatformOpen } from "@/lib/platform-controls";
 import { displayExamName } from "@/lib/exam-display";
 import { getExamMockSeries, getSeriesComparison, getSeriesOffer, type SeriesComparison } from "@/lib/mock-series";
+import { getPremiumPolicy, isTillExamProduct, toPolicyRuntime, TILL_EXAM_LABEL, TILL_EXAM_SUPPORT_TEXT, type PremiumPolicy } from "@/lib/premium-policy";
+import { getFreeOfferingLabels } from "@/lib/premium-trial";
 
 /**
  * Public Plans & Pricing catalog (/plans-and-pricing). Reads the Admin →
@@ -39,6 +41,8 @@ export interface CatalogPlan {
   productType: ProductType;
   price: ProductPrice;
   accessDuration: string;
+  /** Supporting line under the validity ("Till Exam" plans), else null. */
+  accessNote: string | null;
   /** Where an owner opens it (Start Test / View Series). */
   openHref: string;
   durationMinutes: number | null;
@@ -66,12 +70,32 @@ export interface PlanCatalog {
   purchasesOpen: boolean;
   groups: CatalogExamGroup[];
   planCount: number;
+  /** Premium Access Enforcement in force: the FREE FOREVER | TRIAL | PREMIUM comparison. Null = page as before. */
+  premiumAccess: PremiumAccessSummary | null;
+}
+
+export interface PremiumAccessSummary {
+  examId: string;
+  trialEnabled: boolean;
+  trialHours: number;
+  /** Titles of the free-forever offerings + always-free features (from the DB). */
+  free: string[];
+  /** The first Premium plan on sale (price + validity shown in the PREMIUM column). */
+  premiumPlan: { title: string; price: ProductPrice; accessDuration: string } | null;
+}
+
+/** Validity label: "Till Exam" for configured Premium plans once an exam date is set, else the product's own rule. */
+function accessLabel(policy: PremiumPolicy, p: Parameters<typeof describeAccessDuration>[0] & { id: string }): { accessDuration: string; accessNote: string | null } {
+  return isTillExamProduct(policy, p.id)
+    ? { accessDuration: TILL_EXAM_LABEL, accessNote: TILL_EXAM_SUPPORT_TEXT }
+    : { accessDuration: describeAccessDuration(p), accessNote: null };
 }
 
 export async function getPublicPlanCatalog(now: Date = new Date()): Promise<PlanCatalog> {
-  const [mode, paymentsOpen, products] = await Promise.all([
+  const [mode, paymentsOpen, policy, products] = await Promise.all([
     getPaymentMode(),
     isPlatformOpen("payments"),
+    getPremiumPolicy(),
     prisma.product.findMany({
       where: { isActive: true, isVisible: true, purchaseEnabled: true, accessType: "PAID" },
       include: {
@@ -126,7 +150,7 @@ export async function getPublicPlanCatalog(now: Date = new Date()): Promise<Plan
           description: p.description,
           productType: p.productType,
           price: computeProductPrice(p, now),
-          accessDuration: describeAccessDuration(p),
+          ...accessLabel(policy, p),
           openHref: productHref(p),
           durationMinutes: p.mockTest?.durationMinutes ?? p.grandTest?.durationMinutes ?? null,
           benefits: p.productType === "TEST_SERIES" || p.productType === "EXAM_ACCESS" ? benefits : [],
@@ -142,12 +166,26 @@ export async function getPublicPlanCatalog(now: Date = new Date()): Promise<Plan
     })
   );
 
+  const runtime = mode === "FREE" ? null : toPolicyRuntime(policy);
+  let premiumAccess: PremiumAccessSummary | null = null;
+  if (runtime) {
+    const premium = listed.find((p) => runtime.premiumProductIds.has(p.id));
+    premiumAccess = {
+      examId: runtime.examId,
+      trialEnabled: policy.trialEnabled,
+      trialHours: policy.trialHours,
+      free: await getFreeOfferingLabels(policy),
+      premiumPlan: premium ? { title: premium.name, price: computeProductPrice(premium, now), accessDuration: accessLabel(policy, premium).accessDuration } : null,
+    };
+  }
+
   return {
     mode,
     showPrices: mode !== "FREE",
     purchasesOpen: mode === "PAID" && paymentsOpen,
     groups: groups.sort((a, b) => a.order - b.order).map((g) => ({ exam: g.exam, categories: g.categories, comparison: g.comparison })),
     planCount: listed.length,
+    premiumAccess,
   };
 }
 

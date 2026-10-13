@@ -11,6 +11,7 @@ import { OverviewPanel, OrdersPanel, TransactionsPanel, RevenuePanel } from "./_
 import { GroupDiscountPanel, ProductsPanel, CouponsPanel, SubscriptionsPanel, InvoicesPanel, RefundsPanel } from "./_components/panels-catalog";
 import { GatewayPanel, WebhooksPanel, ReconciliationPanel, AuditPanel, SettingsPanel } from "./_components/panels-ops";
 import { ReadinessPanel } from "./_components/panels-readiness";
+import { FreeAccessPanel } from "./_components/panel-free-access";
 
 export const metadata = { title: "Payments — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ const TABS = [
   { value: "orders", label: "Orders" },
   { value: "products", label: "Products & Pricing" },
   { value: "subscriptions", label: "Subscriptions" },
+  { value: "free-access", label: "Free Access & Trial" },
   { value: "coupons", label: "Coupons" },
   { value: "invoices", label: "Invoices" },
   { value: "refunds", label: "Refunds" },
@@ -73,6 +75,8 @@ export default async function PaymentsControlCenter({ searchParams }: { searchPa
         );
       case "subscriptions":
         return <SubscriptionsPanel filters={filters} />;
+      case "free-access":
+        return <FreeAccessPanel canManage={canManage} />;
       case "coupons":
         return <CouponsPanel canManage={canManage} />;
       case "invoices":

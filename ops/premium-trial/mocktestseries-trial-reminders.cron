@@ -1,0 +1,8 @@
+# mocktestseries Premium Trial reminders — installed as /etc/cron.d/mocktestseries-trial-reminders (source: ops/premium-trial/).
+# Every 5 minutes: queues each trial reminder (started / 24h / 6h / 1h / expired) at most once per trial
+# into the email queue. No-op while Premium Access Enforcement is OFF; emails are delivered only while
+# Communications → Email production sending is ON. flock keeps exactly one run at a time.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+*/5 * * * * root cd /var/www/mocktestseries-current && flock -n /run/mocktestseries-trial-reminders.lock env NODE_OPTIONS=--conditions=react-server /usr/bin/npx --no-install tsx scripts/trial-reminders.ts >> /var/log/mocktestseries/trial-reminders.log 2>&1

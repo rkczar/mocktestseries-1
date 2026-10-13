@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus } from "@prisma/client";
 import { requireStudentOrLogin } from "@/lib/student-session";
-import { getContentAccess, describeAttemptContent } from "@/lib/payments/access";
+import { getAttemptContentAccess } from "@/lib/payments/access";
 import { AccessLocked } from "@/components/student/access-locked";
 import { AttemptResetNotice } from "@/components/student/attempt-reset-notice";
 import { getOwnedAttempt } from "@/lib/student-data";
@@ -28,8 +28,9 @@ export default async function OmrEntryPage({ params }: { params: Promise<{ attem
   if (attempt.entryMode !== "OFFLINE_OMR_ENTRY") redirect(`/student/attempt/${attemptId}/run`);
 
   // Entitlement re-check on every load: no paid question payload is ever
-  // rendered for a student who doesn't currently hold access.
-  const access = await getContentAccess(student.id, describeAttemptContent(attempt));
+  // rendered for a student who doesn't currently hold access (an attempt
+  // started before a trial / enforcement cut-off may finish — grace rules).
+  const access = await getAttemptContentAccess(student.id, attempt);
   if (!access.allowed) return <AccessLocked access={access} />;
 
   const questions = attempt.questions.map((tq, index) => {

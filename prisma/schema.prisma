@@ -606,6 +606,8 @@ model Student {
   paymentOrders     PaymentOrder[]
   payments          Payment[]
   invoices          Invoice[]
+  premiumTrial      StudentPremiumTrial?
+  trialNotices      StudentTrialNotice[]
 
   @@index([status])
 }
@@ -2892,6 +2894,11 @@ enum EmailTemplateKey {
   TEST_ANNOUNCEMENT
   GENERAL_ANNOUNCEMENT
   CUSTOM
+  TRIAL_STARTED
+  TRIAL_ENDS_24H
+  TRIAL_ENDS_6H
+  TRIAL_ENDS_1H
+  TRIAL_EXPIRED
 }
 
 // TRANSACTIONAL (account, security, payment) ignores the promotional
@@ -3545,5 +3552,40 @@ model InstagramInsightReport {
   createdById String
   createdAt   DateTime @default(now())
 
+  @@index([kind, createdAt])
+}
+
+// One-time Premium Trial (lib/premium-trial.ts). At most one row per student,
+// ever: the unique studentId makes activation atomic and idempotent (a second
+// click, tab or device gets the same row back), and the unique verified
+// mobile stops a second trial on another account with the same number.
+// Access is derived from endsAt vs server time — nothing "expires" a row.
+model StudentPremiumTrial {
+  id        String   @id @default(cuid())
+  studentId String   @unique
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // The exam whose Premium content the trial unlocks (the policy exam at activation).
+  examId    String
+  mobile    String?  @unique
+  startedAt DateTime @default(now())
+  endsAt    DateTime
+  createdAt DateTime @default(now())
+
+  @@index([endsAt])
+}
+
+// Server-side ledger of trial popups shown and trial reminders queued. The
+// unique (student, kind, bucket) key makes "once per IST day" (bucket = IST
+// date) and "once per reminder" (bucket = trial id) race-free across tabs,
+// devices and both PM2 workers.
+model StudentTrialNotice {
+  id        String   @id @default(cuid())
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  kind      String
+  bucket    String
+  createdAt DateTime @default(now())
+
+  @@unique([studentId, kind, bucket])
   @@index([kind, createdAt])
 }

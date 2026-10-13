@@ -5,6 +5,7 @@ import { AttemptAnswerMode, AttemptDurationMode, type QuestionDifficulty, type Q
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { parseAttemptConfigForm, PRACTICE_TIME_MODES } from "@/lib/attempt-config";
 import { startOrExplain } from "@/lib/payments/paywall";
+import { accessDeniedMessage, getContentAccess } from "@/lib/payments/access";
 import { getPlatformControls, effectivePlatformControls, pausedMessage } from "@/lib/platform-controls";
 import { prisma } from "@/lib/prisma";
 import { startCustomModuleAttempt, startSharedCustomModuleAttempt } from "@/lib/test-attempt";
@@ -54,6 +55,10 @@ export async function createCustomModuleAction(
   if (!examId) return { error: "Exam is required." };
   // Checked before the module row is written: an inactive exam never gets a module.
   if (!(await isExamLive(examId))) return { error: EXAM_NOT_LIVE_MESSAGE };
+  // Premium Access Enforcement: a locked student gets the reason before any module row is written
+  // (the start gate below would refuse anyway).
+  const access = await getContentAccess(student.id, { kind: "CUSTOM_MODULE", id: null, examId, accessType: "FREE" });
+  if (!access.allowed) return { error: accessDeniedMessage(access) };
 
   // Any whole number from 1 up to the platform maximum — the real limit is
   // the eligible pool, checked against the database below.

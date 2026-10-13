@@ -27,7 +27,7 @@ import { isExpired, elapsedSecondsFor, remainingSecondsFor, type ServerTimedAtte
 import { deriveLiveTestState } from "@/lib/live-test";
 import { deriveMockTestAvailability, isMockTestAvailable, isMockResultReleased, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
-import { assertContentAccess } from "@/lib/payments/access";
+import { assertContentAccess, attemptGraceAllows, loadAccessContext, PaymentRequiredError, type ContentDescriptor } from "@/lib/payments/access";
 import { assertExamLive } from "@/lib/exam-live";
 import { TestEngineError } from "@/lib/test-engine-log";
 import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
@@ -424,6 +424,30 @@ async function findResumableAttempt(studentId: string, where: Record<string, unk
   return null;
 }
 
+/**
+ * The entitlement gate, plus Premium Access Enforcement grace: when access is
+ * now denied but the student has an IN_PROGRESS attempt for this item that
+ * was legitimately started before the cut-off (trial end / enforcement
+ * start — see attemptGraceAllows), that attempt is returned so it can be
+ * finished. Nothing new can ever be started past the gate. Returns null when
+ * access is simply allowed (the caller continues as before).
+ */
+async function assertAccessOrGraceResume(
+  studentId: string,
+  content: ContentDescriptor,
+  where: Record<string, unknown>
+): Promise<ResumableAttempt | null> {
+  try {
+    await assertContentAccess(studentId, content);
+    return null;
+  } catch (error) {
+    if (!(error instanceof PaymentRequiredError)) throw error;
+    const resumable = await findResumableAttempt(studentId, where);
+    if (resumable && attemptGraceAllows(await loadAccessContext(studentId), content, resumable)) return resumable;
+    throw error;
+  }
+}
+
 type CreateAttemptParams = Parameters<typeof createAttemptFromQuestions>[0];
 type ResumableAttempt = NonNullable<Awaited<ReturnType<typeof findResumableAttempt>>>;
 
@@ -472,7 +496,10 @@ async function planMockTestStart(studentId: string, mockTestId: string, entryMod
   // while the content was free can't be resumed once it requires payment.
   const gate = await prisma.mockTest.findUnique({ where: { id: mockTestId }, select: { examId: true, testSeriesId: true, accessType: true } });
   if (gate) await assertExamLive(gate.examId);
-  if (gate) await assertContentAccess(studentId, { kind: "MOCK_TEST", id: mockTestId, ...gate });
+  if (gate) {
+    const graceResume = await assertAccessOrGraceResume(studentId, { kind: "MOCK_TEST", id: mockTestId, ...gate }, { mockTestId });
+    if (graceResume) return { resume: graceResume };
+  }
 
   const resumable = await findResumableAttempt(studentId, { mockTestId });
   if (resumable) return { resume: resumable };
@@ -620,12 +647,12 @@ type CustomModuleWithQuestions = Awaited<
 
 async function startFromCustomModuleRow(studentId: string, customModule: CustomModuleWithQuestions) {
   await assertExamLive(customModule.examId);
-  await assertContentAccess(studentId, {
-    kind: "CUSTOM_MODULE",
-    id: customModule.id,
-    examId: customModule.examId,
-    accessType: customModule.accessType,
-  });
+  const graceResume = await assertAccessOrGraceResume(
+    studentId,
+    { kind: "CUSTOM_MODULE", id: customModule.id, examId: customModule.examId, accessType: customModule.accessType },
+    { customModuleId: customModule.id }
+  );
+  if (graceResume) return graceResume;
   const resumable = await findResumableAttempt(studentId, { customModuleId: customModule.id });
   if (resumable) return resumable;
 
@@ -764,7 +791,14 @@ export async function startLiveTestAttempt(studentId: string, liveTestId: string
 async function planPreviousYearPaperStart(studentId: string, paperId: string): Promise<StartPlan> {
   const gate = await prisma.previousYearPaper.findUnique({ where: { id: paperId }, select: { examId: true } });
   if (gate) await assertExamLive(gate.examId);
-  if (gate) await assertContentAccess(studentId, { kind: "PREVIOUS_YEAR_PAPER", id: paperId, examId: gate.examId });
+  if (gate) {
+    const graceResume = await assertAccessOrGraceResume(
+      studentId,
+      { kind: "PREVIOUS_YEAR_PAPER", id: paperId, examId: gate.examId },
+      { previousYearPaperId: paperId }
+    );
+    if (graceResume) return { resume: graceResume };
+  }
 
   const resumable = await findResumableAttempt(studentId, { previousYearPaperId: paperId });
   if (resumable) return { resume: resumable };
@@ -854,7 +888,14 @@ function subjectTestTiming(selection: SubjectTestSelection, effectiveCount: numb
  */
 export async function startSubjectTestAttempt(studentId: string, selection: SubjectTestSelection) {
   if (selection.examId) await assertExamLive(selection.examId);
-  if (selection.examId) await assertContentAccess(studentId, { kind: "SUBJECT_TEST", id: null, examId: selection.examId });
+  if (selection.examId) {
+    const graceResume = await assertAccessOrGraceResume(
+      studentId,
+      { kind: "SUBJECT_TEST", id: null, examId: selection.examId },
+      { testType: TestType.SUBJECT_TEST, subjectId: selection.subjectId }
+    );
+    if (graceResume) return graceResume;
+  }
 
   const resumable = await findResumableAttempt(studentId, { testType: TestType.SUBJECT_TEST, subjectId: selection.subjectId });
   if (resumable) return resumable;

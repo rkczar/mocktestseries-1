@@ -3,6 +3,7 @@ import { isPlatformOpen } from "@/lib/platform-controls";
 import { EntitlementStatus, type Product, type StudentEntitlement } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getPaymentModeForStudent, type PaymentMode } from "@/lib/payments/settings";
+import { getPremiumPolicyRuntime, type PremiumPolicyRuntime } from "@/lib/premium-policy";
 
 /**
  * Canonical entitlement / access engine. Payment rows are NEVER consulted
@@ -25,6 +26,11 @@ import { getPaymentModeForStudent, type PaymentMode } from "@/lib/payments/setti
  *
  * FREE mode deliberately writes no entitlements, so switching back to PAID
  * leaves only real purchases/grants in force.
+ *
+ * Premium Access Enforcement (lib/premium-policy.ts), when ON, replaces steps
+ * 2–7 for the policy exam with evaluatePremiumPolicy(): admin-selected free
+ * offerings → active Premium/covering entitlement → active one-time trial →
+ * locked. Paid entitlements are always checked before the trial.
  */
 
 export type AccessStatus = "FREE_ACCESS" | "ACTIVE_SUBSCRIPTION" | "PAYMENT_REQUIRED" | "EXPIRED" | "NOT_AVAILABLE";
@@ -64,6 +70,12 @@ export interface AccessResult {
    * Series) — nothing to buy.
    */
   coveredBy?: AccessProductRef | null;
+  /** Premium Access Enforcement decided this result (Premium content of the policy exam). */
+  premium?: boolean;
+  /** Allowed only by the student's active Premium Trial (expiresAt = trial end). */
+  viaTrial?: boolean;
+  /** Allowed only because the attempt started before a cut-off (getAttemptContentAccess grace). */
+  viaGrace?: boolean;
 }
 
 export type ProductRow = Pick<
@@ -79,6 +91,16 @@ export interface AccessContext {
   now: Date;
   /** Platform Controls → New Payments paused (display only: never changes `allowed`). */
   purchasesPaused?: boolean;
+  /** Premium Access Enforcement in force (null/absent = legacy rules only). */
+  policy?: PremiumPolicyRuntime | null;
+  /** The student's one-time Premium Trial window, if ever started (only loaded while enforcement is ON). */
+  trial?: TrialWindow | null;
+}
+
+export interface TrialWindow {
+  examId: string;
+  startedAt: Date;
+  endsAt: Date;
 }
 
 export const PRODUCT_SELECT = {
@@ -102,15 +124,19 @@ export const PRODUCT_SELECT = {
 export async function loadAccessContext(studentId: string, now: Date = new Date()): Promise<AccessContext> {
   const mode = await getPaymentModeForStudent(studentId);
   if (mode === "FREE") return { mode, products: [], entitlements: [], now };
-  const [products, entitlements, paymentsOpen] = await Promise.all([
+  const [products, entitlements, paymentsOpen, policy] = await Promise.all([
     prisma.product.findMany({ where: { isActive: true }, select: PRODUCT_SELECT }),
     prisma.studentEntitlement.findMany({
       where: { studentId, status: EntitlementStatus.ACTIVE },
       select: { productId: true, status: true, startsAt: true, expiresAt: true },
     }),
     isPlatformOpen("payments"),
+    getPremiumPolicyRuntime(),
   ]);
-  return { mode, products, entitlements, now, purchasesPaused: !paymentsOpen };
+  const trial = policy
+    ? await prisma.studentPremiumTrial.findUnique({ where: { studentId }, select: { examId: true, startedAt: true, endsAt: true } })
+    : null;
+  return { mode, products, entitlements, now, purchasesPaused: !paymentsOpen, policy, trial };
 }
 
 /** Does `product` unlock `content`? */
@@ -151,6 +177,7 @@ function ref(p: ProductRow): AccessProductRef {
 export function evaluateContentAccess(ctx: AccessContext, c: ContentDescriptor): AccessResult {
   const base = { mode: ctx.mode, products: [] as AccessProductRef[], expiresAt: null, purchasesPaused: false };
   if (ctx.mode === "FREE") return { ...base, status: "FREE_ACCESS", allowed: true };
+  if (ctx.policy?.active && c.examId === ctx.policy.examId) return evaluatePremiumPolicy(ctx, ctx.policy, c);
 
   const covering = ctx.products.filter((p) => productCovers(p, c));
   if (covering.some((p) => p.accessType === "FREE")) return { ...base, status: "FREE_ACCESS", allowed: true };
@@ -193,6 +220,109 @@ export function evaluateContentAccess(ctx: AccessContext, c: ContentDescriptor):
   return { ...base, status: "NOT_AVAILABLE", allowed: false, purchasesPaused };
 }
 
+/** Is this item one of the admin-selected free offerings? */
+export function isPolicyFreeContent(policy: PremiumPolicyRuntime, c: ContentDescriptor): boolean {
+  if (c.kind === "PREVIOUS_YEAR_PAPER") return Boolean(c.id) && c.id === policy.freePyqId;
+  if (c.kind === "MOCK_TEST") return Boolean(c.id) && policy.freeMockTestIds.has(c.id!);
+  return false;
+}
+
+export function trialIsActive(trial: TrialWindow | null | undefined, examId: string, now: Date): trial is TrialWindow {
+  return Boolean(trial) && trial!.examId === examId && trial!.startedAt <= now && trial!.endsAt > now;
+}
+
+/**
+ * Premium Access Enforcement for one item of the policy exam. Legacy FREE
+ * flags / FREE products are deliberately not consulted; PAID products keep
+ * working exactly as sold (a Premium product unlocks the whole exam, any
+ * other product still unlocks what it covers).
+ */
+function evaluatePremiumPolicy(ctx: AccessContext, policy: PremiumPolicyRuntime, c: ContentDescriptor): AccessResult {
+  const base = { mode: ctx.mode, products: [] as AccessProductRef[], expiresAt: null, purchasesPaused: false, premium: true };
+  if (isPolicyFreeContent(policy, c)) return { ...base, premium: false, status: "FREE_ACCESS", allowed: true };
+
+  const covering = ctx.products.filter(
+    (p) => p.accessType === "PAID" && ((policy.premiumProductIds.has(p.id) && p.examId === policy.examId) || productCovers(p, c))
+  );
+  const coveringIds = new Set(covering.map((p) => p.id));
+  const ents = ctx.entitlements.filter((e) => coveringIds.has(e.productId));
+  const active = ents.filter((e) => entitlementIsActive(e, ctx.now));
+  if (active.length > 0) {
+    const expiresAt = active.some((e) => e.expiresAt === null) ? null : new Date(Math.max(...active.map((e) => e.expiresAt!.getTime())));
+    const granting = new Set(active.map((e) => e.productId));
+    return { ...base, status: "ACTIVE_SUBSCRIPTION", allowed: true, expiresAt, products: covering.filter((p) => granting.has(p.id)).map(ref) };
+  }
+
+  // Premium plans first, so a single-product paywall lands on the Premium checkout.
+  const purchasable = covering
+    .filter((p) => isPurchasable(p, ctx.now))
+    .sort((a, b) => Number(policy.premiumProductIds.has(b.id)) - Number(policy.premiumProductIds.has(a.id)))
+    .map(ref);
+  if (trialIsActive(ctx.trial, policy.examId, ctx.now)) {
+    return { ...base, status: "ACTIVE_SUBSCRIPTION", allowed: true, viaTrial: true, expiresAt: ctx.trial.endsAt, products: purchasable };
+  }
+
+  const purchasesPaused = ctx.mode === "MAINTENANCE" || ctx.purchasesPaused === true;
+  const expired = ents.filter((e) => e.expiresAt !== null && e.expiresAt <= ctx.now);
+  if (expired.length > 0) {
+    return {
+      ...base,
+      status: "EXPIRED",
+      allowed: false,
+      purchasesPaused,
+      expiresAt: new Date(Math.max(...expired.map((e) => e.expiresAt!.getTime()))),
+      products: purchasable,
+    };
+  }
+  if (purchasable.length > 0) return { ...base, status: "PAYMENT_REQUIRED", allowed: false, purchasesPaused, products: purchasable };
+  return { ...base, status: "NOT_AVAILABLE", allowed: false, purchasesPaused };
+}
+
+/** Minimal attempt shape the grace rules need (TestAttempt rows satisfy it). */
+export interface GraceAttempt {
+  startedAt: Date;
+  durationMode?: string | null;
+}
+
+/**
+ * May an IN_PROGRESS attempt that the policy now denies still be finished?
+ * Only for Premium content of the policy exam, and only when the attempt was
+ * legitimately started before a cut-off:
+ *   - during the student's trial (cut-off = trial end), or
+ *   - before enforcement was switched ON, when the legacy rules allowed it
+ *     (cut-off = enforcedSince).
+ * Timed attempts then run to their own frozen time limit (the engine
+ * finalizes them on expiry); untimed (UNLIMITED) attempts get
+ * attemptGraceMinutes after the cut-off. Never starts anything new.
+ */
+export function attemptGraceAllows(ctx: AccessContext, c: ContentDescriptor, attempt: GraceAttempt): boolean {
+  const policy = ctx.policy;
+  if (!policy?.active || c.examId !== policy.examId) return false;
+  const untimed = attempt.durationMode === "UNLIMITED";
+  const graceMs = policy.attemptGraceMinutes * 60_000;
+  const within = (cutoff: Date) => attempt.startedAt < cutoff && (!untimed || ctx.now.getTime() < cutoff.getTime() + graceMs);
+  const trial = ctx.trial;
+  if (trial && trial.examId === policy.examId && attempt.startedAt >= trial.startedAt && within(trial.endsAt)) return true;
+  if (policy.enforcedSince && within(policy.enforcedSince) && evaluateContentAccess({ ...ctx, policy: null, trial: null }, c).allowed) return true;
+  return false;
+}
+
+/**
+ * Access for an EXISTING attempt (run / OMR entry pages, resume): the normal
+ * decision, plus the grace rules above. Use this — never getContentAccess —
+ * wherever an attempt's questions are served.
+ */
+export async function getAttemptContentAccess(
+  studentId: string,
+  attempt: Parameters<typeof describeAttemptContent>[0] & GraceAttempt
+): Promise<AccessResult> {
+  const ctx = await loadAccessContext(studentId);
+  const c = describeAttemptContent(attempt);
+  const access = evaluateContentAccess(ctx, c);
+  if (access.allowed || !attemptGraceAllows(ctx, c, attempt)) return access;
+  return { ...access, status: "ACTIVE_SUBSCRIPTION", allowed: true, viaGrace: true };
+}
+
 export async function getContentAccess(studentId: string, c: ContentDescriptor): Promise<AccessResult> {
   return evaluateContentAccess(await loadAccessContext(studentId), c);
 }
@@ -208,6 +338,10 @@ export class PaymentRequiredError extends Error {
 }
 
 export function accessDeniedMessage(a: AccessResult): string {
+  if (a.premium && (a.status === "PAYMENT_REQUIRED" || a.status === "NOT_AVAILABLE"))
+    return a.purchasesPaused
+      ? "This is a Premium test. Purchases are temporarily paused — please try again later."
+      : "This is a Premium test. Upgrade to Premium (or start your one-time free trial from the dashboard) to continue.";
   if (a.status === "EXPIRED") return "Your access to this test has expired. Renew to continue.";
   if (a.status === "PAYMENT_REQUIRED")
     return a.purchasesPaused
@@ -274,11 +408,15 @@ export async function canStudentAccessProduct(studentId: string, productId: stri
       ? await prisma.mockTest.findUnique({ where: { id: product.mockTestId }, select: { id: true, examId: true, testSeriesId: true, accessType: true } })
       : null;
     if (!mock) return { ...base, status: "NOT_AVAILABLE", allowed: false };
-    if (mock.accessType === "FREE") return { ...base, status: "FREE_ACCESS", allowed: true };
     const ctx = await loadAccessContext(studentId, now);
+    const content0 = { kind: "MOCK_TEST" as const, id: mock.id, examId: mock.examId, testSeriesId: mock.testSeriesId, accessType: mock.accessType };
+    // Under Premium Access Enforcement only the admin-selected free offerings are free; the legacy flag is ignored.
+    const underPolicy = Boolean(ctx.policy?.active && mock.examId === ctx.policy.examId);
+    if (underPolicy ? isPolicyFreeContent(ctx.policy!, content0) : mock.accessType === "FREE") return { ...base, status: "FREE_ACCESS", allowed: true };
+    // A trial never counts as "already covered": trial students can still buy.
     const content = evaluateContentAccess(
-      { ...ctx, products: ctx.products.filter((p) => p.id !== product.id) },
-      { kind: "MOCK_TEST", id: mock.id, examId: mock.examId, testSeriesId: mock.testSeriesId, accessType: mock.accessType }
+      { ...ctx, trial: null, products: ctx.products.filter((p) => p.id !== product.id) },
+      content0
     );
     if (content.status === "ACTIVE_SUBSCRIPTION") {
       return { ...base, status: "ACTIVE_SUBSCRIPTION", allowed: true, expiresAt: content.expiresAt, coveredBy: content.products[0] ?? null };
@@ -303,6 +441,8 @@ export async function canStudentAccessProduct(studentId: string, productId: stri
 
 /** Where to send a student who was denied: the single unlocking product's checkout, else the plans list. */
 export function paywallHref(a: AccessResult, content?: ContentDescriptor): string {
+  // Premium content: the dashboard popup shows this student's options (free trial if unused, else Buy Premium).
+  if (a.premium && (a.status === "PAYMENT_REQUIRED" || a.status === "NOT_AVAILABLE")) return "/student/dashboard?premium=locked";
   if (!a.purchasesPaused && a.products.length === 1) return `/student/checkout/${encodeURIComponent(a.products[0].code)}`;
   // Several ways to unlock one mock (e.g. this mock alone or Complete Series):
   // its details page lists every option with its current price.

@@ -97,8 +97,10 @@ async function summarise(
 
   // A PAID mock of the canonical series (or, with no series, the exam pass):
   // whatever unlocks it is what "Complete Access" means for this exam.
+  // The trial is shown by the dashboard trial popup, never as a purchase here:
+  // a trial student still sees this card's Free/Buy state.
   const access = evaluateContentAccess(
-    ctx,
+    { ...ctx, trial: null },
     mockSeries
       ? { kind: "MOCK_TEST", id: "__complete_access__", examId: exam.id, testSeriesId: mockSeries.series.id, accessType: "PAID" }
       : { kind: "SUBJECT_TEST", id: null, examId: exam.id }
