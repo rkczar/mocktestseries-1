@@ -57,6 +57,8 @@ const shot = async (page, name) => {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: false });
 };
 
+// The fixture just rewrote the policy row; let the server's 5s policy cache expire first.
+await new Promise((r) => setTimeout(r, 6000));
 const browser = await chromium.launch();
 try {
   console.log("1. Welcome popup (eligible student, trial not started)");
@@ -203,6 +205,86 @@ try {
     const r = await fetch(`${BASE}/`, { headers: { "user-agent": "Googlebot/2.1 (+http://www.google.com/bot.html)" }, redirect: "manual" });
     check("Googlebot gets the same homepage status (no cloaking)", r.status === 200);
   }
+
+  console.log("\n5b. Accurate Free/Premium on the public series page + dashboard card");
+  {
+    const page = await (await browser.newContext({ viewport: { width: 1366, height: 900 } })).newPage();
+    await page.goto(`${BASE}/exams/${F.examSlug}/mock-test-series`);
+    // ScheduleRow: badges sit in the sibling div above the <p> title.
+    const badgeFor = async (title) => (await page.locator(`p:text-is("${title}")`).first().locator("xpath=..").innerText()).replace(/\s+/g, " ");
+    const legacy = await badgeFor("PTQA Mock Test 2 (legacy free)");
+    check("Series page: legacy-FREE mock shows 'Complete Series' (not Free)", /Complete Series/.test(legacy) && !/\bFree\b/.test(legacy), legacy.slice(0, 160));
+    const free1 = await badgeFor("PTQA Mock Test 1");
+    check("Series page: selected free mock shows 'Free'", /\bFree\b/.test(free1), free1.slice(0, 160));
+    const body = await page.locator("main").innerText();
+    check("Series page: PYQ row says '1 free paper'", body.includes("1 free paper"));
+    const fctx = await studentContext(browser, "locked");
+    const fp = await fctx.newPage();
+    await fp.goto(`${BASE}/student/dashboard`);
+    const dlg = await popupState(fp);
+    if (dlg) await fp.keyboard.press("Escape");
+    const dash = await fp.locator("main").innerText();
+    check("Dashboard Upgrade card shows 'Till Exam' (exam date configured)", dash.includes("Till Exam") && !dash.includes("100 days access"), dash.slice(0, 200));
+    await fctx.close();
+  }
+
+  console.log("\n5c. Homepage visual regression vs the production code (BASELINE)");
+  if (process.env.BASELINE) {
+    const shotsOf = async (origin, w, h) => {
+      const c = await browser.newContext({ viewport: { width: w, height: h }, reducedMotion: "reduce" });
+      const pg = await c.newPage();
+      await pg.goto(`${origin}/`, { waitUntil: "networkidle" });
+      await pg.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
+      // Live platform statistics are cached per server (different start times → different counts): mask them.
+      await pg.evaluate(() => {
+        const el = document.querySelector("#statistics") ?? [...document.querySelectorAll("section")].find((x) => /Total Students/.test(x.textContent ?? ""));
+        if (el) el.style.visibility = "hidden";
+      });
+      await pg.waitForTimeout(800);
+      const buf = await pg.screenshot({ fullPage: true });
+      const struct = await pg.evaluate(() =>
+        [...document.querySelectorAll("h1,h2,h3,section,nav a,header a")]
+          .filter((e) => !(e.closest("#statistics") || /Total Students/.test(e.closest("section")?.textContent ?? "")))
+          .map((e) => (e.tagName === "SECTION" ? `SECTION#${e.id}` : `${e.tagName}:${(e.textContent || "").trim().slice(0, 40)}`))
+      );
+      await c.close();
+      return { buf, struct };
+    };
+    const pixelDiff = async (a, b) => {
+      const pg = await (await browser.newContext()).newPage();
+      return pg.evaluate(async ([a64, b64]) => {
+        const load = (src) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = src; });
+        const [ia, ib] = await Promise.all([load(a64), load(b64)]);
+        if (ia.width !== ib.width || ia.height !== ib.height) return { sizeDiff: [ia.width, ia.height, ib.width, ib.height] };
+        const cv = (i) => { const c = document.createElement("canvas"); c.width = i.width; c.height = i.height; const x = c.getContext("2d"); x.drawImage(i, 0, 0); return x.getImageData(0, 0, i.width, i.height).data; };
+        const da = cv(ia), db = cv(ib);
+        let n = 0;
+        for (let k = 0; k < da.length; k += 4) if (Math.abs(da[k] - db[k]) + Math.abs(da[k + 1] - db[k + 1]) + Math.abs(da[k + 2] - db[k + 2]) > 24) n++;
+        return { changed: n, total: da.length / 4 };
+      }, [`data:image/png;base64,${a.toString("base64")}`, `data:image/png;base64,${b.toString("base64")}`]);
+    };
+    fixture("policy", "off");
+    await new Promise((r) => setTimeout(r, 6000));
+    for (const [w, h, label] of [[1366, 900, "desktop"], [390, 844, "mobile"]]) {
+      const base = await shotsOf(process.env.BASELINE, w, h);
+      const feat = await shotsOf(BASE, w, h);
+      const d = await pixelDiff(base.buf, feat.buf);
+      if (SHOTS) { fs.writeFileSync(`${SHOTS}/07-home-${label}-baseline.png`, base.buf); fs.writeFileSync(`${SHOTS}/07-home-${label}-feature.png`, feat.buf); }
+      check(`Enforcement OFF, ${label}: homepage pixel-identical to production code`, !d.sizeDiff && d.changed === 0, d);
+      check(`Enforcement OFF, ${label}: same headings/sections/nav`, JSON.stringify(base.struct) === JSON.stringify(feat.struct));
+    }
+    fixture("policy", "on");
+    await new Promise((r) => setTimeout(r, 6000));
+    for (const [w, h, label] of [[1366, 900, "desktop"], [390, 844, "mobile"]]) {
+      const base = await shotsOf(process.env.BASELINE, w, h);
+      const feat = await shotsOf(BASE, w, h);
+      if (SHOTS) fs.writeFileSync(`${SHOTS}/07-home-${label}-feature-ON.png`, feat.buf);
+      check(`Enforcement ON, ${label}: same headings/sections/nav as production (no card or section removed)`, JSON.stringify(base.struct) === JSON.stringify(feat.struct), { base: base.struct.length, feat: feat.struct.length });
+      const d = await pixelDiff(base.buf, feat.buf);
+      check(`Enforcement ON, ${label}: page width unchanged (no horizontal growth)`, !d.sizeDiff || d.sizeDiff[0] === d.sizeDiff[2], d);
+      console.log(`  INFO  Enforcement ON, ${label}: height ${d.sizeDiff ? `${d.sizeDiff[1]} → ${d.sizeDiff[3]} px (accurate Premium rows added to existing lists)` : "unchanged"}`);
+    }
+  } else console.log("  (skipped: set BASELINE=<origin of a server running the production commit>)");
 
   console.log("\n6. Admin → Payments → Free Access & Trial");
   {

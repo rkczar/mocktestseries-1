@@ -270,6 +270,9 @@ export function TestPlayer({
           } else if (code === "EXPIRED") {
             setProblem({ kind: "expired" });
             finishRef.current("auto");
+          } else if (code === "ACCESS_REVOKED") {
+            // Access ended (no plan / trial / grace): the server re-renders this page as the lock screen.
+            router.refresh();
           } else {
             router.replace(`/student/attempt/${attemptId}/result`);
           }
@@ -489,6 +492,10 @@ export function TestPlayer({
           router.replace(`/student/attempt/${attemptId}/result`);
           return;
         }
+        if (result.code === "ACCESS_REVOKED") {
+          router.refresh();
+          return;
+        }
         setRevealError({ questionId, message: result.message });
       })
       .catch(() => setRevealError({ questionId, message: "Could not check the answer. Tap an option to try again." }))
@@ -537,6 +544,10 @@ export function TestPlayer({
         }
         if (result.code === "NOT_EDITABLE") {
           router.replace(`/student/attempt/${attemptId}/result`);
+          return;
+        }
+        if (result.code === "ACCESS_REVOKED") {
+          router.refresh();
           return;
         }
         setRevealError({ questionId, message: result.message });

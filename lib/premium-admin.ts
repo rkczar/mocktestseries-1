@@ -35,11 +35,10 @@ export async function validatePremiumPolicy(p: PremiumPolicy): Promise<void> {
   }
   const mockIds = [p.freeMockTestId, p.freeSubjectMockTestId, ...p.freeLiveCbtMockTestIds].filter((x): x is string => Boolean(x));
   if (mockIds.length) {
-    const mocks = await prisma.mockTest.findMany({ where: { id: { in: mockIds } }, select: { id: true, examId: true, enrollmentEnabled: true } });
+    // Live CBT exceptions may be any test of the exam: a past Live CBT can have its enrollment switched off.
+    const mocks = await prisma.mockTest.findMany({ where: { id: { in: mockIds } }, select: { id: true, examId: true } });
     if (mocks.length !== new Set(mockIds).size || mocks.some((m) => m.examId !== p.examId))
       throw new PolicyValidationError("Free tests must be Mock Tests of the selected exam.");
-    if (p.freeLiveCbtMockTestIds.some((id) => !mocks.find((m) => m.id === id)?.enrollmentEnabled))
-      throw new PolicyValidationError("Free Live CBT tests must be Live CBT (enrollment) tests.");
   }
 }
 

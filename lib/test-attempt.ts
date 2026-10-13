@@ -27,7 +27,7 @@ import { isExpired, elapsedSecondsFor, remainingSecondsFor, type ServerTimedAtte
 import { deriveLiveTestState } from "@/lib/live-test";
 import { deriveMockTestAvailability, isMockTestAvailable, isMockResultReleased, LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQuestionsError } from "@/lib/question-selection";
-import { assertContentAccess, attemptGraceAllows, loadAccessContext, PaymentRequiredError, type ContentDescriptor } from "@/lib/payments/access";
+import { accessDeniedMessage, assertContentAccess, attemptGraceAllows, getAttemptAnswerAccess, loadAccessContext, PaymentRequiredError, type ContentDescriptor } from "@/lib/payments/access";
 import { assertExamLive } from "@/lib/exam-live";
 import { TestEngineError } from "@/lib/test-engine-log";
 import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
@@ -944,8 +944,18 @@ const EDITABLE_ATTEMPT_SELECT = {
   durationMinutes: true,
   durationMode: true,
   answerMode: true,
-  liveTest: { select: { endAt: true } },
-  mockTest: { select: { availableUntil: true } },
+  // Content identity for the answer-access gate (getAttemptAnswerAccess).
+  testType: true,
+  examId: true,
+  mockTestId: true,
+  grandTestId: true,
+  liveTestId: true,
+  previousYearPaperId: true,
+  customModuleId: true,
+  liveTest: { select: { endAt: true, accessType: true } },
+  mockTest: { select: { availableUntil: true, testSeriesId: true, accessType: true } },
+  grandTest: { select: { accessType: true } },
+  customModule: { select: { accessType: true } },
 } as const;
 
 /**
@@ -963,6 +973,10 @@ async function loadEditableQuestion(attemptId: string, studentId: string, questi
   if (isExpired(toServerTimedAttempt(attempt))) {
     throw new TestEngineError("EXPIRED", "Time is up — this test has ended and answers can no longer be changed.");
   }
+  // Same access decision as the run page (incl. grace): no answer write or
+  // reveal for content the student may no longer use. Submit is never gated.
+  const denied = await getAttemptAnswerAccess(studentId, attempt);
+  if (denied) throw new TestEngineError("ACCESS_REVOKED", accessDeniedMessage(denied));
   const attemptQuestion = await prisma.testAttemptQuestion.findUnique({
     where: { attemptId_questionId: { attemptId, questionId } },
     select: { id: true, questionSnapshot: true, answer: { select: { selectedOptionLabel: true, selectedLabels: true, revealedAt: true, status: true } } },

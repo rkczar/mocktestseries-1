@@ -21,6 +21,8 @@ export type EngineErrorCode =
   | "NO_SELECTION"
   | "INVALID_OPTION"
   | "OTHER_DEVICE"
+  /** Access to this attempt's content ended (no plan / trial / grace) — the player reloads to the lock screen. */
+  | "ACCESS_REVOKED"
   /** A test start the student cannot make right now (not released, closed, no questions, retake blocked…). */
   | "UNAVAILABLE"
   | "INTERNAL";

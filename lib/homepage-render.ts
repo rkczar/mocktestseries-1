@@ -596,7 +596,17 @@ export function buildFreeCards(
       href: hub ? `${hub}/mock-test-series` : startHref,
     });
   }
-  if (summary.papers > 0 && isFreeValue(free.get("pyq-practice"))) {
+  // Premium Access Enforcement: same cards, same layout — the wording says exactly what is free.
+  const policy = comparison?.policyFree ?? null;
+  if (policy && summary.papers > 0 && policy.papers.length > 0) {
+    cards.push({
+      key: "pyq",
+      title: "Previous Year Papers",
+      value: `${policy.papers.length} free`,
+      detail: `${policy.papers.join(", ")} free to attempt online, with results and review. All ${summary.papers} papers with Premium.`,
+      href: hub ? `${hub}/previous-year-papers` : startHref,
+    });
+  } else if (!policy && summary.papers > 0 && isFreeValue(free.get("pyq-practice"))) {
     cards.push({
       key: "pyq",
       title: "Previous Year Papers",
@@ -605,7 +615,15 @@ export function buildFreeCards(
       href: hub ? `${hub}/previous-year-papers` : startHref,
     });
   }
-  if (summary.questions > 0 && isFreeValue(free.get("subject-practice"))) {
+  if (policy && summary.questions > 0 && policy.subjectMock) {
+    cards.push({
+      key: "subject-practice",
+      title: "Subject-wise Practice",
+      value: "1 free test",
+      detail: `${policy.subjectMock} free to attempt. Subject-wise practice from the full question bank with Premium.`,
+      href: hub ? `${hub}/question-bank` : startHref,
+    });
+  } else if (!policy && summary.questions > 0 && isFreeValue(free.get("subject-practice"))) {
     cards.push({
       key: "subject-practice",
       title: "Subject-wise Practice",

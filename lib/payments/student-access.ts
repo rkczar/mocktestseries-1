@@ -4,6 +4,7 @@ import { getRazorpayConfig } from "@/lib/razorpay-config";
 import { evaluateContentAccess, loadAccessContext, type AccessContext } from "@/lib/payments/access";
 import { getExamMockSeries, getSeriesComparison, getSeriesOffer, mockSeriesPath, type SeriesOffer } from "@/lib/mock-series";
 import { paidBenefits, type OfferDisplayConfig, type OfferDisplayRow } from "@/lib/payments/offer-display-shared";
+import { getPremiumPolicy, isTillExamProduct, TILL_EXAM_LABEL } from "@/lib/premium-policy";
 
 /**
  * Per-exam Free / Complete / Expired state for the logged-in student — the
@@ -73,7 +74,14 @@ async function summarise(
 ): Promise<ExamAccessSummary | null> {
   const mockSeries = await getExamMockSeries(exam.id, now);
   // Student-aware: must agree with ctx.mode (a verification account is PAID).
-  const offer = await getSeriesOffer(exam.id, mockSeries?.series.id ?? null, now, studentId);
+  const rawOffer = await getSeriesOffer(exam.id, mockSeries?.series.id ?? null, now, studentId);
+  // Student-side only: a "Till Exam" Premium plan shows that validity here (the
+  // shared offer — homepage included — keeps the product's own label).
+  const policy = await getPremiumPolicy();
+  const offer =
+    rawOffer && isTillExamProduct(policy, rawOffer.product.id)
+      ? { ...rawOffer, product: { ...rawOffer.product, accessDuration: TILL_EXAM_LABEL } }
+      : rawOffer;
   if (!mockSeries && !offer) return null;
   const comparison = await getSeriesComparison(exam.id, mockSeries, offer);
 

@@ -284,26 +284,33 @@ export interface GraceAttempt {
   durationMode?: string | null;
 }
 
+/** Untimed-attempt grace when no policy value applies (matches the policy default). */
+export const DEFAULT_ATTEMPT_GRACE_MINUTES = 60;
+
 /**
- * May an IN_PROGRESS attempt that the policy now denies still be finished?
- * Only for Premium content of the policy exam, and only when the attempt was
- * legitimately started before a cut-off:
- *   - during the student's trial (cut-off = trial end), or
- *   - before enforcement was switched ON, when the legacy rules allowed it
- *     (cut-off = enforcedSince).
+ * May an IN_PROGRESS attempt that is now denied still be finished? Only when
+ * it was legitimately started before a cut-off:
+ *   - during the student's trial (cut-off = trial end),
+ *   - before Premium enforcement was switched ON, when the legacy rules
+ *     allowed it (cut-off = enforcedSince), or
+ *   - while a covering paid entitlement was still valid (cut-off = its
+ *     expiry) — a plan running out mid-test never cuts the test off.
  * Timed attempts then run to their own frozen time limit (the engine
- * finalizes them on expiry); untimed (UNLIMITED) attempts get
- * attemptGraceMinutes after the cut-off. Never starts anything new.
+ * finalizes them on expiry); untimed (UNLIMITED) attempts get the grace
+ * minutes after the cut-off. Never starts anything new.
  */
-export function attemptGraceAllows(ctx: AccessContext, c: ContentDescriptor, attempt: GraceAttempt): boolean {
-  const policy = ctx.policy;
-  if (!policy?.active || c.examId !== policy.examId) return false;
+export function attemptGraceAllows(ctx: AccessContext, c: ContentDescriptor, attempt: GraceAttempt, denied?: AccessResult): boolean {
+  const policy = ctx.policy?.active && c.examId === ctx.policy.examId ? ctx.policy : null;
   const untimed = attempt.durationMode === "UNLIMITED";
-  const graceMs = policy.attemptGraceMinutes * 60_000;
+  const graceMs = (policy?.attemptGraceMinutes ?? DEFAULT_ATTEMPT_GRACE_MINUTES) * 60_000;
   const within = (cutoff: Date) => attempt.startedAt < cutoff && (!untimed || ctx.now.getTime() < cutoff.getTime() + graceMs);
-  const trial = ctx.trial;
-  if (trial && trial.examId === policy.examId && attempt.startedAt >= trial.startedAt && within(trial.endsAt)) return true;
-  if (policy.enforcedSince && within(policy.enforcedSince) && evaluateContentAccess({ ...ctx, policy: null, trial: null }, c).allowed) return true;
+  if (policy) {
+    const trial = ctx.trial;
+    if (trial && trial.examId === policy.examId && attempt.startedAt >= trial.startedAt && within(trial.endsAt)) return true;
+    if (policy.enforcedSince && within(policy.enforcedSince) && evaluateContentAccess({ ...ctx, policy: null, trial: null }, c).allowed) return true;
+  }
+  const result = denied ?? evaluateContentAccess(ctx, c);
+  if (result.status === "EXPIRED" && result.expiresAt && within(result.expiresAt)) return true;
   return false;
 }
 
@@ -319,8 +326,44 @@ export async function getAttemptContentAccess(
   const ctx = await loadAccessContext(studentId);
   const c = describeAttemptContent(attempt);
   const access = evaluateContentAccess(ctx, c);
-  if (access.allowed || !attemptGraceAllows(ctx, c, attempt)) return access;
+  if (access.allowed || !attemptGraceAllows(ctx, c, attempt, access)) return access;
   return { ...access, status: "ACTIVE_SUBSCRIPTION", allowed: true, viaGrace: true };
+}
+
+// Answer save / reveal gate. Saves are frequent (every option click), so an
+// ALLOWED decision is remembered per (attempt, student) for 30s in this
+// worker; a denial is never cached. The worst case is a save accepted up to
+// 30s after access ended — well inside the grace rules above.
+const ANSWER_ACCESS_TTL_MS = 30_000;
+const answerAccessAllowedUntil = new Map<string, number>();
+
+/**
+ * Every answer save and reveal goes through this (lib/test-attempt.ts
+ * loadEditableQuestion), so a direct Server Action call can never write or
+ * reveal answers on an attempt whose content the student may no longer use.
+ * Same decision as the run page: access, or the attempt's grace.
+ */
+export async function getAttemptAnswerAccess(
+  studentId: string,
+  attempt: Parameters<typeof describeAttemptContent>[0] & GraceAttempt & { id: string }
+): Promise<AccessResult | null> {
+  const key = `${attempt.id}:${studentId}`;
+  const now = Date.now();
+  const until = answerAccessAllowedUntil.get(key);
+  if (until && until > now) return null;
+  const access = await getAttemptContentAccess(studentId, attempt);
+  if (!access.allowed) {
+    answerAccessAllowedUntil.delete(key);
+    return access;
+  }
+  if (answerAccessAllowedUntil.size > 20_000) answerAccessAllowedUntil.clear();
+  answerAccessAllowedUntil.set(key, now + ANSWER_ACCESS_TTL_MS);
+  return null;
+}
+
+/** Test hook: forget cached answer-access decisions (scripts only). */
+export function clearAnswerAccessCache() {
+  answerAccessAllowedUntil.clear();
 }
 
 export async function getContentAccess(studentId: string, c: ContentDescriptor): Promise<AccessResult> {

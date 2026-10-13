@@ -46,7 +46,7 @@ export interface SaveQueueOptions {
 }
 
 /** OTHER_DEVICE: another device holds this student's active test (lib/attempt-device-lease.ts). */
-const FATAL_CODES = new Set(["EXPIRED", "NOT_EDITABLE", "OTHER_DEVICE"]);
+const FATAL_CODES = new Set(["EXPIRED", "NOT_EDITABLE", "OTHER_DEVICE", "ACCESS_REVOKED"]);
 /** The server rejected this value for good (locked/invalid) — retrying can't help. */
 const DROP_CODES = new Set(["LOCKED", "INVALID_OPTION", "NOT_IN_ATTEMPT", "NOT_ALLOWED", "NO_SELECTION"]);
 

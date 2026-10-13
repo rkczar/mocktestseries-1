@@ -9,7 +9,7 @@
  *   DATABASE_URL=<scratch> NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-premium-trial.ts
  */
 import "dotenv/config";
-import { AttemptDurationMode, MockTestStatus, QuestionDifficulty, QuestionStatus, StudentAuthProvider } from "@prisma/client";
+import { AttemptAnswerMode, AttemptDurationMode, MockTestStatus, QuestionDifficulty, QuestionStatus, StudentAuthProvider } from "@prisma/client";
 import { createFixtureSubject } from "./fixture-taxonomy";
 
 if (!/premium/.test(process.env.DATABASE_URL ?? "")) {
@@ -128,7 +128,9 @@ async function main() {
         mobileVerifiedAt: verified ? new Date() : null,
       },
     });
-  const [N, X, P, S, U, R, G, M] = await Promise.all(["new", "existing", "paid", "single", "unverified", "reminder", "grace", "mobile"].map((t) => mkStudent(t, t !== "unverified")));
+  const [N, X, P, S, U, R, G, M, A, L] = await Promise.all(
+    ["new", "existing", "paid", "single", "unverified", "reminder", "grace", "mobile", "api", "lapsed"].map((t) => mkStudent(t, t !== "unverified"))
+  );
   const now0 = new Date();
   await prisma.studentEntitlement.create({ data: { studentId: P.id, productId: premium.id, source: "PURCHASE", startsAt: now0, expiresAt: new Date(now0.getTime() + 100 * 24 * HOUR) } });
   await prisma.studentEntitlement.create({ data: { studentId: S.id, productId: single.id, source: "PURCHASE", startsAt: now0, expiresAt: new Date(now0.getTime() + 100 * 24 * HOUR) } });
@@ -168,8 +170,9 @@ async function main() {
   const curPolicy = await getPremiumPolicy();
   const bad = await rejects(() => validatePremiumPolicy({ ...curPolicy, freeMockTestId: otherMock.id }));
   check("Free mock from another exam rejected", bad instanceof PolicyValidationError);
-  const badLive = await rejects(() => validatePremiumPolicy({ ...curPolicy, freeLiveCbtMockTestIds: [paidMock.id] }));
-  check("Non-Live-CBT test rejected as free Live CBT", badLive instanceof PolicyValidationError);
+  const badLive = await rejects(() => validatePremiumPolicy({ ...curPolicy, freeLiveCbtMockTestIds: [otherMock.id] }));
+  check("Free Live CBT exception from another exam rejected", badLive instanceof PolicyValidationError);
+  check("A test with enrollment switched off (past Live CBT) can be a free exception", (await rejects(() => validatePremiumPolicy({ ...curPolicy, freeLiveCbtMockTestIds: [paidMock.id] }))) === null);
   check("Complete policy has no enforcement blockers", enforcementBlockers(await getPremiumPolicy()).length === 0);
   check("Missing free PYQ blocks enforcement", enforcementBlockers({ ...(await getPremiumPolicy()), freePyqId: null }).length === 1);
 
@@ -303,6 +306,85 @@ async function main() {
   });
   check("…but not one the legacy rules would also have denied", !(await access.getAttemptContentAccess(U.id, await attemptRow(paidLegacy.id))).allowed);
 
+  console.log("\n7b. Answer save / reveal (direct Server Action calls) follow the same rules");
+  const { TestEngineError } = await import("../lib/test-engine-log");
+  const firstQ = async (attemptId: string) => {
+    const q = await prisma.testAttemptQuestion.findFirstOrThrow({ where: { attemptId }, orderBy: { order: "asc" }, select: { questionId: true, questionSnapshot: true } });
+    return { id: q.questionId, label: (q.questionSnapshot as { options: { label: string }[] }).options[0].label };
+  };
+  const answerOf = async (attemptId: string, questionId: string) =>
+    prisma.answer.findFirst({ where: { attemptQuestion: { attemptId, questionId } }, select: { selectedOptionLabel: true, revealedAt: true } });
+  const engineCode = async (fn: () => Promise<unknown>) => {
+    const e = await rejects(fn);
+    return e instanceof TestEngineError ? e.code : e === null ? "OK" : String(e);
+  };
+  const save = (sid: string, attemptId: string, q: { id: string; label: string }) => engineCode(() => engine.saveAnswer(attemptId, sid, q.id, q.label, false));
+  const reveal = (sid: string, attemptId: string, q: { id: string; label: string }) => engineCode(() => engine.revealAnswer(attemptId, sid, q.id, q.label));
+  const fresh = () => access.clearAnswerAccessCache();
+
+  // A: trial → a timed Premium PYQ (exam mode) and an untimed INSTANT subject practice, both started during the trial.
+  await trialLib.startPremiumTrial(A.id);
+  const aTimed = await engine.startPreviousYearPaperAttempt(A.id, paperPaid.id);
+  const aUntimed = await engine.startSubjectTestAttempt(A.id, { examId: exam.id, subjectId: subject.id, count: 2, durationMinutes: 0, durationMode: AttemptDurationMode.UNLIMITED, answerMode: AttemptAnswerMode.INSTANT });
+  const qT = await firstQ(aTimed.id);
+  const qU = await firstQ(aUntimed.id);
+  check("During the trial: save works", (await save(A.id, aTimed.id, qT)) === "OK");
+  const shiftA = async (endedMinutesAgo: number, startedBeforeEndMinutes = 10, timedLimit = 600) => {
+    const endsAt = new Date(Date.now() - endedMinutesAgo * 60_000);
+    await prisma.studentPremiumTrial.update({ where: { studentId: A.id }, data: { startedAt: new Date(endsAt.getTime() - 48 * HOUR), endsAt } });
+    const startedAt = new Date(endsAt.getTime() - startedBeforeEndMinutes * 60_000);
+    await prisma.testAttempt.update({ where: { id: aTimed.id }, data: { startedAt, durationMinutes: timedLimit } });
+    await prisma.testAttempt.update({ where: { id: aUntimed.id }, data: { startedAt } });
+    fresh();
+  };
+  await shiftA(30);
+  check("Valid timed continuation (trial ended 30 min ago): save works", (await save(A.id, aTimed.id, qT)) === "OK");
+  check("Valid untimed continuation within 60-min grace: save works", (await save(A.id, aUntimed.id, qU)) === "OK");
+  check("…and reveal works", (await reveal(A.id, aUntimed.id, qU)) === "OK");
+  const qU2 = await prisma.testAttemptQuestion.findFirstOrThrow({ where: { attemptId: aUntimed.id, NOT: { questionId: qU.id } }, select: { questionId: true, questionSnapshot: true } });
+  const q2 = { id: qU2.questionId, label: (qU2.questionSnapshot as { options: { label: string }[] }).options[0].label };
+  await shiftA(90);
+  const before2 = await answerOf(aUntimed.id, q2.id);
+  check("Grace expired (90 min): untimed save → ACCESS_REVOKED", (await save(A.id, aUntimed.id, q2)) === "ACCESS_REVOKED");
+  check("Grace expired: reveal → ACCESS_REVOKED (no answer key leaked)", (await reveal(A.id, aUntimed.id, q2)) === "ACCESS_REVOKED");
+  const after2 = await answerOf(aUntimed.id, q2.id);
+  check("…stored answer untouched, not revealed", after2?.selectedOptionLabel === before2?.selectedOptionLabel && after2?.revealedAt === null);
+  check("Grace expired: timed attempt still inside its own limit can save", (await save(A.id, aTimed.id, qT)) === "OK");
+  // Expired trial with no valid continuation: an attempt whose start is AFTER the trial ended.
+  await prisma.testAttempt.update({ where: { id: aTimed.id }, data: { startedAt: new Date(Date.now() - 5 * 60_000) } });
+  fresh();
+  const beforeT = await answerOf(aTimed.id, qT.id);
+  check("Expired trial, attempt not started in the trial: save → ACCESS_REVOKED", (await save(A.id, aTimed.id, { id: qT.id, label: "B" })) === "ACCESS_REVOKED");
+  check("…stored answer unchanged", (await answerOf(aTimed.id, qT.id))?.selectedOptionLabel === beforeT?.selectedOptionLabel);
+  check("Submit is never blocked (result preserved)", (await engineCode(() => engine.submitAttempt(aTimed.id, A.id))) === "OK" && (await prisma.testAttempt.findUniqueOrThrow({ where: { id: aTimed.id } })).status === "SUBMITTED");
+
+  // Paid entitlement + single-test purchase.
+  const pAttempt = await engine.startPreviousYearPaperAttempt(P.id, paperPaid.id);
+  fresh();
+  check("Existing paid entitlement: save works on a Premium PYQ", (await save(P.id, pAttempt.id, await firstQ(pAttempt.id))) === "OK");
+  const sAttempt = await engine.startMockTestAttempt(S.id, soldMock.id);
+  check("Single-test purchase: save works on the bought mock", (await save(S.id, sAttempt.id, await firstQ(sAttempt.id))) === "OK");
+  // S had a trial in section 9; make sure it is over, then forge an attempt on a mock S never bought.
+  await prisma.studentPremiumTrial.updateMany({ where: { studentId: S.id }, data: { startedAt: new Date(Date.now() - 60 * HOUR), endsAt: new Date(Date.now() - 12 * HOUR) } });
+  const forged = await engine.startMockTestAttempt(P.id, paidMock.id); // created legitimately for P…
+  await prisma.testAttempt.update({ where: { id: forged.id }, data: { studentId: S.id, startedAt: new Date() } }); // …then handed to S
+  fresh();
+  const fq = await firstQ(forged.id);
+  check("Direct call: save on a Premium mock S never bought → ACCESS_REVOKED", (await save(S.id, forged.id, fq)) === "ACCESS_REVOKED");
+  check("Direct call: reveal on it → ACCESS_REVOKED", (await reveal(S.id, forged.id, fq)) === "ACCESS_REVOKED");
+  check("Direct call: another student's attempt → NOT_EDITABLE (ownership)", (await save(U.id, pAttempt.id, await firstQ(pAttempt.id))) === "NOT_EDITABLE");
+  // A paid plan that lapses mid-test never cuts the test off (timed: own limit).
+  await prisma.studentEntitlement.create({ data: { studentId: L.id, productId: premium.id, source: "PURCHASE", startsAt: new Date(Date.now() - 10 * 24 * HOUR), expiresAt: new Date(Date.now() + 60_000) } });
+  const lAttempt = await engine.startPreviousYearPaperAttempt(L.id, paperPaid.id);
+  await prisma.studentEntitlement.updateMany({ where: { studentId: L.id }, data: { expiresAt: new Date(Date.now() - 60_000) } });
+  await prisma.testAttempt.update({ where: { id: lAttempt.id }, data: { startedAt: new Date(Date.now() - 5 * 60_000), durationMinutes: 600 } });
+  fresh();
+  check("Paid plan expired mid-test: started before expiry → save still works", (await save(L.id, lAttempt.id, await firstQ(lAttempt.id))) === "OK");
+  check("…but a NEW Premium start is refused", (await rejects(() => engine.startMockTestAttempt(L.id, paidMock.id))) instanceof access.PaymentRequiredError);
+  // Pre-enforcement attempt (legacy-free mock, started before enforcedSince): continues.
+  const preQ = await prisma.testAttemptQuestion.count({ where: { attemptId: legacyAttempt.id } });
+  check("Pre-enforcement attempt keeps continuing (access allowed via grace)", (await access.getAttemptAnswerAccess(S.id, { ...(await attemptRow(legacyAttempt.id)), id: legacyAttempt.id })) === null && preQ === 0);
+
   console.log("\n8. Expired trial popups and results");
   await prisma.studentPremiumTrial.update({ where: { studentId: N.id }, data: { startedAt: new Date(Date.now() - 50 * HOUR), endsAt: new Date(Date.now() - 2 * HOUR) } });
   await prisma.studentTrialNotice.deleteMany({ where: { studentId: N.id, kind: { startsWith: "POPUP" } } });
@@ -416,11 +498,47 @@ async function main() {
   check("Conversion revenue = verified LIVE captured amount only (₹999 × paying trial students)", a.conversionRevenuePaise === 99900 * a.conversions);
   check("Failed payment adds no revenue", a.conversionRevenuePaise % 99900 === 0);
 
+  console.log("\n11b. Public surfaces say exactly what is free (homepage cards, series page, dashboard card)");
+  const ms = await import("../lib/mock-series");
+  const hp = await import("../lib/homepage-render");
+  const series0 = await ms.getExamMockSeries(exam.id);
+  const badge = (id: string) => series0?.tests.find((t) => t.id === id)?.accessType;
+  check("Series page: selected free mock shown Free", badge(freeMock.id) === "FREE");
+  check("Series page: legacy-FREE mock now shown Premium (Complete Series)", badge(legacyFreeMock.id) === "PAID");
+  check("Series page: selected Subject Mock shown Free", badge(subjectMock.id) === "FREE");
+  check("Legacy flag in the DB untouched", (await prisma.mockTest.findUniqueOrThrow({ where: { id: legacyFreeMock.id } })).accessType === "FREE");
+  const offer0 = await ms.getSeriesOffer(exam.id, series0!.series.id);
+  const cmp = await ms.getSeriesComparison(exam.id, series0, offer0);
+  const freeCell = (k: string) => cmp.derivedRows.find((r) => r.key === k)?.free;
+  check("Comparison: PYQ papers row = '1 free paper'", freeCell("pyq-papers") === "1 free paper");
+  check("Comparison: PYQ practice row = '1 selected paper'", freeCell("pyq-practice") === "1 selected paper");
+  check("Comparison: subject practice = '1 selected subject test'", freeCell("subject-practice") === "1 selected subject test");
+  check("Comparison: free mock count = selected free mocks in the series (mock + subject mock + free Live CBT)", cmp.freeMocks === 3, cmp.freeMocks);
+  const summary = { name: exam.name, hubHref: "/exams/x", examDate: null, daysLeft: null, plannedMocks: 7, publishedMocks: 7, availableMocks: 7, freeMocks: 2, freeMocksAvailable: 2, papers: 2, paperYears: 2, questions: 6, subjects: 1, links: [] };
+  const cards = hp.buildFreeCards(summary, cmp, 5);
+  const card = (k: string) => cards.find((c) => c.key === k);
+  check("Homepage: PYQ card kept, says '1 free' + the paper title + 'with Premium'", card("pyq")?.value === "1 free" && Boolean(card("pyq")?.detail.includes("PREM 2024")) && Boolean(card("pyq")?.detail.includes("All 2 papers with Premium")));
+  check("Homepage: Subject card kept, names the free Subject Mock", card("subject-practice")?.value === "1 free test" && Boolean(card("subject-practice")?.detail.includes("Physiology Subject Mock 01")));
+  check("Homepage: free mock card shows the real free count", card("free-mocks")?.value === "3");
+  check("Homepage: same card set as before (no card removed)", ["free-mocks", "pyq", "subject-practice", "analysis"].every((k) => Boolean(card(k))));
+  await setPolicy({ examDate: "2026-12-13", tillExamProductIds: [premium.id] });
+  const sa = await import("../lib/payments/student-access");
+  const [sum] = await sa.getStudentExamAccessSummaries(N.id, [{ id: exam.id, name: exam.name }]);
+  check("Dashboard Upgrade card: 'Till Exam' when exam-date validity is configured", sum?.offer?.product.accessDuration === "Till Exam");
+  check("…while the shared offer (homepage) keeps the product's own label", (await ms.getSeriesOffer(exam.id, series0!.series.id))?.product.accessDuration === "100 days access");
+  await setPolicy({ examDate: null, tillExamProductIds: [] });
+  const [sum2] = await sa.getStudentExamAccessSummaries(N.id, [{ id: exam.id, name: exam.name }]);
+  check("No exam date → dashboard keeps '100 days access'", sum2?.offer?.product.accessDuration === "100 days access");
+
   console.log("\n12. Switching OFF restores legacy rules, nothing rewritten");
   await setPolicy({ enforcementEnabled: false });
   check("OFF again: legacy-free mock open for a non-trial student", await allowed(U.id, D("MOCK_TEST", legacyFreeMock.id, legacyFreeMock)));
   check("OFF again: no popups", (await trialLib.claimTrialPopup(S.id, { force: true })) === null);
   check("Trial rows kept (history), entitlements kept", (await prisma.studentPremiumTrial.count()) === trials && (await prisma.studentEntitlement.count({ where: { studentId: P.id } })) === 1);
+  const legacySeries = await ms.getExamMockSeries(exam.id);
+  check("OFF again: series page shows the legacy flags", legacySeries?.tests.find((t) => t.id === legacyFreeMock.id)?.accessType === "FREE");
+  const legacyCmp = await ms.getSeriesComparison(exam.id, legacySeries, await ms.getSeriesOffer(exam.id, legacySeries!.series.id));
+  check("OFF again: homepage cards back to the legacy wording", legacyCmp.policyFree === null && hp.buildFreeCards(summary, legacyCmp, 5).find((c) => c.key === "pyq")?.value === "2");
 
   // ---------------- cleanup of fixture rows ----------------
   console.log(`\n${passed} passed, ${failed} failed`);

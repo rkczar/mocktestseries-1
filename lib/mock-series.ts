@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getPaymentMode, getPaymentModeForStudent, type PaymentMode } from "@/lib/payments/settings";
 import { computeProductPrice, describeAccessDuration, type ProductPrice } from "@/lib/payments/pricing";
 import { canStudentAccessProduct, evaluateContentAccess, loadAccessContext, type AccessContext } from "@/lib/payments/access";
-import { getPremiumPolicyRuntime } from "@/lib/premium-policy";
+import { getPremiumPolicy, getPremiumPolicyRuntime } from "@/lib/premium-policy";
 import { deriveMockTestAvailability, type MockTestAvailability } from "@/lib/mock-test-schedule";
 import { getAiSettings } from "@/lib/ai-settings";
 import { formatInr } from "@/lib/payments/money";
@@ -69,6 +69,11 @@ export async function getCanonicalSeriesRow(examId: string) {
 export async function getExamMockSeries(examId: string, now: Date = new Date()): Promise<ExamMockSeries | null> {
   const series = await getCanonicalSeriesRow(examId);
   if (!series) return null;
+  // Premium Access Enforcement: a test's displayed access is the policy's (only the
+  // selected free tests are Free), never the legacy per-test flag. FREE payment mode
+  // keeps the flags as before.
+  const policy = await getPremiumPolicyRuntime();
+  const policyFree = policy && policy.examId === examId && (await getPaymentMode()) !== "FREE" ? policy.freeMockTestIds : null;
 
   const mocks = await prisma.mockTest.findMany({
     where: { testSeriesId: series.id, status: "PUBLISHED" },
@@ -121,7 +126,7 @@ export async function getExamMockSeries(examId: string, now: Date = new Date()):
       availableFrom: m.availableFrom,
       availableUntil: m.availableUntil,
       availability: deriveMockTestAvailability(m, now),
-      accessType: m.accessType,
+      accessType: policyFree ? (policyFree.has(m.id) ? "FREE" : "PAID") : m.accessType,
     };
   });
 
@@ -247,7 +252,7 @@ export async function getPlanComparison(
   examId: string,
   mockSeries: ExamMockSeries | null,
   offer: SeriesOffer | null
-): Promise<{ rows: PlanRow[]; everythingFreeNow: boolean; freeMocks: number; publishedMocks: number }> {
+): Promise<{ rows: PlanRow[]; everythingFreeNow: boolean; freeMocks: number; publishedMocks: number; policyFree: PolicyFreeTitles | null }> {
   const [ai, papers, omrCount, pdfCount] = await Promise.all([
     getAiSettings(),
     prisma.previousYearPaper.findMany({ where: { examId, isActive: true }, select: { id: true, year: true } }),
@@ -284,7 +289,10 @@ export async function getPlanComparison(
 
   // Premium Access Enforcement: exactly the admin-selected free paper is free (if any).
   const underPolicy = Boolean(ctx.policy?.active && ctx.policy.examId === examId);
-  const freePapers = underPolicy ? papers.filter((p) => freeFor({ kind: "PREVIOUS_YEAR_PAPER", id: p.id, examId })).length : null;
+  const freePaperRows = underPolicy ? papers.filter((p) => freeFor({ kind: "PREVIOUS_YEAR_PAPER", id: p.id, examId })) : [];
+  const freePapers = underPolicy ? freePaperRows.length : null;
+  // Titles for accurate "free" wording (homepage cards): the free paper(s) and the fixed free Subject Mock.
+  const policyFree = underPolicy ? await getPolicyFreeTitles(freePaperRows.map((p) => p.id), examId) : null;
   const pyqFree = underPolicy ? freePapers! > 0 : papers.length === 0 ? true : freeFor({ kind: "PREVIOUS_YEAR_PAPER", id: papers[0].id, examId });
   const subjectFree = freeFor({ kind: "SUBJECT_TEST", id: null, examId });
   const tests = mockSeries?.tests ?? [];
@@ -319,9 +327,8 @@ export async function getPlanComparison(
     {
       key: "pyq-practice",
       feature: "PYQ practice (attempt online)",
-      // Under Premium Access Enforcement only the selected paper is free (shown in the row above). "—" here keeps
-      // every surface that reads this row (e.g. the homepage free cards) from claiming all papers are free.
-      free: freePapers !== null ? "—" : years > 0 && pyqFree ? yes : "—",
+      // Under Premium Access Enforcement only the selected paper is free — say exactly that.
+      free: freePapers !== null ? (freePapers > 0 ? `${freePapers} selected paper${freePapers === 1 ? "" : "s"}` : "—") : years > 0 && pyqFree ? yes : "—",
       paid: years > 0 ? yes : "—",
     },
     { key: "practice-omr", feature: "Downloadable Practice OMR", free: yes, paid: yes, note: omrCount > 0 ? undefined : "OMR sheets are published by the admin" },
@@ -331,13 +338,35 @@ export async function getPlanComparison(
     { key: "question-review", feature: "Question-by-question Review", free: yes, paid: yes },
     { key: "answer-review", feature: "Correct Answer Review", free: yes, paid: yes },
     { key: "analytics", feature: "Performance Analytics", free: yes, paid: yes },
-    { key: "subject-practice", feature: "Subject-wise practice", free: subjectFree ? yes : "—", paid: yes },
+    {
+      key: "subject-practice",
+      feature: "Subject-wise practice",
+      free: policyFree ? (policyFree.subjectMock ? "1 selected subject test" : "—") : subjectFree ? yes : "—",
+      paid: yes,
+    },
     { key: "bookmarks", feature: "Bookmarks / Saved Questions", free: yes, paid: yes },
     ...(pdfCount > 0 ? [{ key: "paper-pdfs", feature: "Mock paper / solution PDFs", free: "With the mocks you can attempt", paid: "With every mock" }] : []),
     { key: "syllabus-coverage", feature: "Syllabus coverage per mock", free: yes, paid: yes },
     { key: "mobile-practice", feature: "Mobile practice", free: yes, paid: yes },
   ];
-  return { rows, everythingFreeNow: base.mode === "FREE", freeMocks, publishedMocks: tests.length };
+  return { rows, everythingFreeNow: base.mode === "FREE", freeMocks, publishedMocks: tests.length, policyFree };
+}
+
+/** Free-forever titles under Premium Access Enforcement (from the DB; nothing invented). */
+export interface PolicyFreeTitles {
+  papers: string[];
+  subjectMock: string | null;
+}
+
+async function getPolicyFreeTitles(paperIds: string[], examId: string): Promise<PolicyFreeTitles> {
+  const policy = await getPremiumPolicy();
+  const [papers, subject] = await Promise.all([
+    paperIds.length ? prisma.previousYearPaper.findMany({ where: { id: { in: paperIds } }, select: { title: true } }) : [],
+    policy.freeSubjectMockTestId
+      ? prisma.mockTest.findFirst({ where: { id: policy.freeSubjectMockTestId, examId, status: "PUBLISHED" }, select: { title: true } })
+      : null,
+  ]);
+  return { papers: papers.map((p) => p.title.trim()), subjectMock: subject?.title.trim() ?? null };
 }
 
 export interface SeriesComparison {
@@ -348,6 +377,8 @@ export interface SeriesComparison {
   everythingFreeNow: boolean;
   freeMocks: number;
   publishedMocks: number;
+  /** Premium Access Enforcement in force for this exam: the free-forever titles. Null = legacy rules. */
+  policyFree: PolicyFreeTitles | null;
 }
 
 /**
@@ -368,6 +399,7 @@ export async function getSeriesComparison(examId: string, mockSeries: ExamMockSe
     everythingFreeNow: base.everythingFreeNow,
     freeMocks: base.freeMocks,
     publishedMocks: base.publishedMocks,
+    policyFree: base.policyFree,
   };
 }
 

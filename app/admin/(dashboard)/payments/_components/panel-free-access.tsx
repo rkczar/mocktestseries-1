@@ -61,7 +61,7 @@ export async function FreeAccessPanel({ canManage }: { canManage: boolean }) {
     prisma.exam.findMany({ where: { isActive: true }, select: { id: true, name: true }, orderBy: { order: "asc" } }),
   ]);
   const examId = policy.examId ?? (exams.length === 1 ? exams[0].id : null);
-  const [products, papers, mocks, extendPreview] = await Promise.all([
+  const [products, papers, mockRows, extendPreview] = await Promise.all([
     examId
       ? prisma.product.findMany({ where: { examId, accessType: "PAID" }, select: { id: true, code: true, name: true, isActive: true, productType: true }, orderBy: { order: "asc" } })
       : [],
@@ -69,17 +69,21 @@ export async function FreeAccessPanel({ canManage }: { canManage: boolean }) {
     examId
       ? prisma.mockTest.findMany({
           where: { examId, status: "PUBLISHED" },
-          select: { id: true, title: true, enrollmentEnabled: true, coverageType: true },
+          select: { id: true, title: true, enrollmentEnabled: true, coverageType: true, _count: { select: { questions: true } } },
           orderBy: { createdAt: "asc" },
         })
       : [],
     extendTillExamAccess(policy, { apply: false }),
   ]);
+  const mocks = mockRows.map((m) => ({ ...m, questionCount: m._count.questions }));
   const blockers = enforcementBlockers({ ...policy, examId });
   const on = policy.enforcementEnabled && isPolicyComplete(policy);
   const examEnd = examDayEnd(policy.examDate);
-  const liveCbt = mocks.filter((m) => m.enrollmentEnabled);
-  const regular = mocks.filter((m) => !m.enrollmentEnabled);
+  // Live CBT = an enrollment test, or one named "Live CBT" whose enrollment was switched off after the event.
+  const isLiveCbt = (m: (typeof mocks)[number]) => m.enrollmentEnabled || /live\s*cbt/i.test(m.title);
+  const liveCbt = mocks.filter(isLiveCbt);
+  const regular = mocks.filter((m) => !isLiveCbt(m));
+  const subjectMocks = mocks.filter((m) => m.coverageType === "SUBJECT_WISE");
 
   return (
     <div className="flex flex-col gap-4">
@@ -188,13 +192,12 @@ export async function FreeAccessPanel({ canManage }: { canManage: boolean }) {
                   ))}
                 </SelectNative>
               </Field>
-              <Field label="Free Subject Mock Test" htmlFor="fa-subject" hint="A fixed subject mock (not random subject practice).">
+              <Field label="Free Subject Mock Test" htmlFor="fa-subject" hint="A fixed subject-wise mock (not random subject practice).">
                 <SelectNative id="fa-subject" name="freeSubjectMockTestId" defaultValue={policy.freeSubjectMockTestId ?? ""}>
                   <option value="">— None —</option>
-                  {regular.map((m) => (
+                  {subjectMocks.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.title}
-                      {m.coverageType === "SUBJECT_WISE" ? " (subject-wise)" : ""}
+                      {m.title} ({m.questionCount} Qs)
                     </option>
                   ))}
                 </SelectNative>
@@ -203,7 +206,7 @@ export async function FreeAccessPanel({ canManage }: { canManage: boolean }) {
 
             {liveCbt.length ? (
               <div className="flex flex-col gap-1">
-                <Label>Free Live CBT tests (optional — every other Live CBT is Premium)</Label>
+                <Label>Free Live CBT exceptions (optional — every Live CBT is Premium unless ticked here)</Label>
                 {liveCbt.map((m) => (
                   <Check key={m.id} name="freeLiveCbtMockTestIds" value={m.id} defaultChecked={policy.freeLiveCbtMockTestIds.includes(m.id)} label={m.title} />
                 ))}
