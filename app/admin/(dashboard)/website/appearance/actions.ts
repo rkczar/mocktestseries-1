@@ -13,6 +13,7 @@ import {
   SHADOW_OPTIONS,
   isValidFontStack,
 } from "@/lib/appearance";
+import { colorsMatchPalette, getPalette } from "@/lib/appearance-palettes";
 
 const hex = z.string().regex(HEX_COLOR_RE, "Must be a hex color like #0F4C81");
 // Font stacks are free text in the form but must be a plain CSS font-family
@@ -64,20 +65,25 @@ export async function saveAppearanceAction(
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
 
+  // A premade palette is recorded only while the submitted colors are exactly that palette's.
+  const colors = {
+    primary: parsed.data.primary,
+    secondary: parsed.data.secondary,
+    accent: parsed.data.accent,
+    success: parsed.data.success,
+    error: parsed.data.error,
+    warning: parsed.data.warning,
+    info: parsed.data.info,
+  };
+  const palette = getPalette(formData.get("paletteId"));
+  const paletteId = palette && colorsMatchPalette(colors, palette) ? palette.id : null;
+
   await prisma.appearanceConfig.updateMany({ where: { isActive: true }, data: { isActive: false } });
 
   const config = await prisma.appearanceConfig.create({
     data: {
       isActive: true,
-      colors: {
-        primary: parsed.data.primary,
-        secondary: parsed.data.secondary,
-        accent: parsed.data.accent,
-        success: parsed.data.success,
-        error: parsed.data.error,
-        warning: parsed.data.warning,
-        info: parsed.data.info,
-      },
+      colors: paletteId ? { ...colors, paletteId } : colors,
       fonts: { heading: parsed.data.headingFont, body: parsed.data.bodyFont },
       buttonStyle: { radius: parsed.data.buttonRadius },
       componentStyle: { cardRadius: parsed.data.cardRadius, shadowIntensity: parsed.data.shadowIntensity },
@@ -85,7 +91,7 @@ export async function saveAppearanceAction(
   });
 
   await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "APPEARANCE_CHANGED", entityType: "AppearanceConfig", entityId: config.id },
+    data: { actorId: session.user.id, action: "APPEARANCE_CHANGED", entityType: "AppearanceConfig", entityId: config.id, metadata: { paletteId } },
   });
 
   revalidatePath("/", "layout");

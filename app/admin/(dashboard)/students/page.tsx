@@ -1,5 +1,6 @@
 import { ControlCenterTabs } from "@/components/admin/control-center-tabs";
 import { AllStudentsPanel } from "./all-students-panel";
+import { parseStudentListParams } from "@/lib/admin-students-list";
 import AttemptedQuestionsPage from "./attempted/page";
 import StudentsHistoryPage from "./history/page";
 import DeletionRequestsPage from "./deletion-requests/page";
@@ -12,9 +13,10 @@ export const metadata = { title: "Students — Mock Test Series.in Admin" };
 export default async function StudentsControlCenter({
   searchParams,
 }: {
-  searchParams: Promise<{ examId?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { examId } = await searchParams;
+  const sp = await searchParams;
+  const examId = typeof sp.examId === "string" ? sp.examId : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -29,7 +31,7 @@ export default async function StudentsControlCenter({
       <ControlCenterTabs
         defaultValue="all"
         tabs={[
-          { value: "all", label: "All Students", content: <AllStudentsPanel /> },
+          { value: "all", label: "All Students", content: <AllStudentsPanel params={parseStudentListParams(sp)} /> },
           { value: "attempted", label: "Attempted", content: <AttemptedQuestionsPage /> },
           {
             value: "history",

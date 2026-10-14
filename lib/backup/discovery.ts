@@ -160,7 +160,7 @@ export async function verifyArtifact(roots: BackupRoots, id: string, passphrase?
     const ws = path.join(roots.tmp, `job-verify${crypto.randomBytes(10).toString("hex")}`);
     await mkdir(ws, { recursive: true, mode: 0o700 });
     try {
-      report = await verifyPackage(file, { workspace: ws, passphrase, repo: roots.repo });
+      report = await verifyPackage(file, { workspace: ws, passphrase, repo: roots.repo, release: roots.currentLink });
     } finally {
       await rm(ws, { recursive: true, force: true });
     }

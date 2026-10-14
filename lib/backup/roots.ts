@@ -31,6 +31,9 @@ export interface BackupRoots {
   persistent: { key: string; label: string; dir: string }[];
   /** Git working copy used to archive the exact production source SHA. */
   repo: string;
+  /** Where the app's cron files (mocktestseries-*) and host backup scripts live (default /etc/cron.d, /usr/local/bin). */
+  cronDir?: string;
+  hostScriptsDir?: string;
 }
 
 export const PRODUCTION_ROOTS: BackupRoots = {

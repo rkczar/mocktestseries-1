@@ -220,14 +220,15 @@ async function buildPortableConfig(dir: string, roots: BackupRoots, envText: str
       2
     ) + "\n"
   );
-  const refs: [string, string][] = [
-    ["/etc/nginx/sites-available/mocktestseries.in", "nginx-mocktestseries.in.conf"],
-    ["/etc/cron.d/mocktestseries-backups", "cron-mocktestseries-backups"],
-    ["/usr/local/bin/mocktestseries-backup-db.sh", "mocktestseries-backup-db.sh"],
-    ["/usr/local/bin/mocktestseries-backup-uploads.sh", "mocktestseries-backup-uploads.sh"],
-  ];
+  const refs: [string, string][] = [["/etc/nginx/sites-available/mocktestseries.in", "nginx-mocktestseries.in.conf"]];
+  // EVERY app cron (backups, email worker, Live CBT sweep, payment
+  // reconciliation, trial reminders …) and every host backup script — not
+  // just the backup cron — so a fresh VPS gets all scheduled jobs back.
+  for (const f of (await readdir(roots.cronDir ?? "/etc/cron.d").catch(() => [] as string[])).filter((n) => /^mocktestseries-[a-z0-9-]+$/.test(n)).sort())
+    refs.push([path.join(roots.cronDir ?? "/etc/cron.d", f), `cron-${f}`]);
+  for (const f of (await readdir(roots.hostScriptsDir ?? "/usr/local/bin").catch(() => [] as string[])).filter((n) => /^mocktestseries-[a-z0-9-]+\.sh$/.test(n)).sort())
+    refs.push([path.join(roots.hostScriptsDir ?? "/usr/local/bin", f), f]);
   for (const [src, name] of refs) await copyFile(src, path.join(dir, name)).catch(() => undefined);
-  void roots;
 }
 
 async function encryptSecrets(envText: string, outFile: string, passphrase: string, gnupgHome: string) {
@@ -428,7 +429,7 @@ export function buildInventory(kind: BackupKindName): BackupManifest["inventory"
       status: kind === "FULL" ? "INCLUDED" : "EXCLUDED BY DESIGN",
       note: kind === "FULL" ? "secrets.env.gpg — encrypted, needs the Backup Recovery Passphrase" : "no secrets in this backup type",
     },
-    { item: "nginx site, PM2 process definition, backup cron scripts", status: full ? "INCLUDED" : "EXCLUDED BY DESIGN", note: full ? "portable-config/ (reference copies)" : "database-only backup" },
+    { item: "nginx site, PM2 process definition, all scheduled jobs (/etc/cron.d/mocktestseries-*) and host backup scripts", status: full ? "INCLUDED" : "EXCLUDED BY DESIGN", note: full ? "portable-config/ (reference copies)" : "database-only backup" },
     { item: "DNS records, TLS certificates (Let's Encrypt)", status: "EXTERNAL / RECONFIGURATION REQUIRED", note: "Point DNS to the new VPS, re-issue with certbot" },
     { item: "Google OAuth redirect URIs, MSG91 sender/templates & IP allowlists, AI provider key restrictions", status: "EXTERNAL / RECONFIGURATION REQUIRED", note: "Update in each provider console if domain/IP changes" },
     { item: "Razorpay webhook URL/secret and dashboard settings", status: "EXTERNAL / RECONFIGURATION REQUIRED", note: "Webhook URL must point at the restored domain" },

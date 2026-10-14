@@ -17,6 +17,7 @@ import { buildInventory, CLEAN_EXCLUDED_TABLE_DATA, groupComponentSizes, readPac
 import { BACKUP_AUDIT_ENTITY_TYPES } from "@/lib/backup/audit";
 import { getRetentionSettings, type RetentionSettings } from "@/lib/backup/settings";
 import { StudentReportControls } from "./student-report-controls";
+import { LocalBackupCheck } from "./_components/local-verify";
 import { ArtifactActions, BackupOpsProvider, BulkCleanupForm, CreateBackupCard, ReleaseDelete, RestorePanel, RetentionForm, SimpleAction, StatusBadge, UploadVerify } from "./_components/client";
 
 export const metadata = { title: "Backup & Disaster Recovery — Mock Test Series.in Admin" };
@@ -40,6 +41,34 @@ const roots = PRODUCTION_ROOTS;
 
 const fmtDate = (d: Date | null | undefined) => (d ? d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 const fmtAge = (ms: number) => (!Number.isFinite(ms) ? "never" : ms < 90_000 ? "just now" : ms < 3600_000 ? `${Math.round(ms / 60_000)} min ago` : `${Math.round(ms / 3600_000)} h ago`);
+
+/** Fresh-VPS restore outline. Every package carries the full, backup-specific README-RESTORE.md. */
+function RestoreInstructions() {
+  const steps: [string, string][] = [
+    ["Check the file", "Verify tab → “Check a downloaded backup on this device”, or on any Linux machine: tar -xf <file>.tar -C restore && cd restore && sha256sum -c checksums.sha256"],
+    ["Prepare the server", "Ubuntu 24.04, Node.js (major version in the manifest), PostgreSQL, nginx, certbot, PM2, git, gnupg"],
+    ["Database", "Create the role + database, then pg_restore --no-owner --no-privileges -d mocktestseries database.dump (do not run prisma db push)"],
+    ["Secrets (FULL)", "gpg --decrypt secrets.env.gpg > /var/www/mocktestseries-shared/.env with the Backup Recovery Passphrase; update DATABASE_URL; keep AUTH_SECRET. CLEAN backups: fill portable-config/env.template"],
+    ["Application", "Extract source.tar.gz into /var/www/mocktestseries-releases/<sha>, link .env, npm ci && npx prisma generate && npm run build, link public/storage and mocktestseries-current"],
+    ["Files", "Extract assets-shared-storage.tar.gz into /var/www/mocktestseries-shared/ and assets-uploads.tar.gz into /var/lib/mocktestseries/"],
+    ["Serve", "Start PM2 (portable-config/pm2-process.json), install the nginx site, run certbot"],
+    ["Scheduled jobs last", "After the health check, copy portable-config/cron-mocktestseries-* to /etc/cron.d/ (email, payments, Live CBT, trial reminders, backups)"],
+    ["Outside the backup", "DNS, TLS certificates, Google OAuth redirect URI, Razorpay webhook URL, MSG91 and AI-provider allowlists, firewall/SSH"],
+  ];
+  return (
+    <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="restore-instructions">
+      <p className="text-sm font-medium">Restore on a new server (disaster recovery)</p>
+      <ol className="flex list-decimal flex-col gap-1 pl-5 text-xs">
+        {steps.map(([t, d]) => (
+          <li key={t}>
+            <span className="font-medium">{t}:</span> <span className="text-[var(--color-muted-foreground)]">{d}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="text-xs text-[var(--color-muted-foreground)]">Exact commands for that backup are in README-RESTORE.md inside every package. A Database Only backup cannot rebuild the site on its own.</p>
+    </div>
+  );
+}
 
 function serializeArtifact(a: Artifact) {
   return { id: a.id, name: a.name, category: a.category, sizeBytes: a.sizeBytes, mtime: a.mtime.toISOString(), verification: a.verification, deletable: a.deletable, kind: a.kind, protectedReason: a.protectedReason };
@@ -703,14 +732,29 @@ export default async function BackupPage({ searchParams }: { searchParams: Promi
       </div>
     );
   } else if (tab === "verify") {
-    const { artifacts } = await loadCore({ verify: true });
+    const [{ artifacts }, jobs] = await Promise.all([
+      loadCore({ verify: true }),
+      prisma.backupJob.findMany({ where: { sha256: { not: null } }, orderBy: { createdAt: "desc" }, take: 200, select: { fileName: true, sha256: true, sizeBytes: true, kind: true, createdAt: true } }),
+    ]);
+    const known = jobs.map((j) => ({ fileName: j.fileName, sha256: j.sha256, sizeBytes: j.sizeBytes == null ? null : Number(j.sizeBytes), kind: j.kind, createdAt: j.createdAt.toISOString() }));
     content = (
       <div className="flex flex-col gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Verify a backup from your device</CardTitle>
+            <CardTitle>Check a downloaded backup on this device</CardTitle>
             <CardDescription>
-              Upload a Backup Center .tar (up to 20 MB through the browser). Larger packages: copy with scp into the VPS backup “incoming” folder — they appear under VPS Backups automatically. Verification never restores anything.
+              Recommended. Nothing is uploaded and there is no size limit: your browser reads the .tar, checks every component&apos;s SHA-256 against checksums.sha256 and the manifest, and compares the whole file with
+              the server&apos;s record of the backups it generated. The encrypted .env is test-decrypted only by the Restore rehearsal (VPS) or <code>gpg --decrypt secrets.env.gpg</code>.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>{canManage ? <LocalBackupCheck known={known} /> : <p className="text-sm text-[var(--color-muted-foreground)]">View only.</p>}</CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Upload a backup to the VPS for verification</CardTitle>
+            <CardDescription>
+              Upload a Backup Center .tar (up to 20 MB through the browser). Larger packages: copy with scp into the VPS backup “incoming” folder — they appear under VPS Backups automatically. An upload that arrives
+              incomplete is rejected with the byte counts instead of being reported as corrupt. Verification never restores anything.
             </CardDescription>
           </CardHeader>
           <CardContent>{canManage ? <UploadVerify /> : <p className="text-sm text-[var(--color-muted-foreground)]">View only.</p>}</CardContent>
@@ -753,7 +797,10 @@ export default async function BackupPage({ searchParams }: { searchParams: Promi
             Select → validate manifest → verify checksums/format → check schema compatibility → passphrase (Full) → rehearsal → strong confirmation → restore → post-restore checks. For a brand-new VPS, follow README-RESTORE.md inside the package.
           </CardDescription>
         </CardHeader>
-        <CardContent>{canManage ? <RestorePanel packages={packages} /> : <p className="text-sm text-[var(--color-muted-foreground)]">View only — restore is limited to Master Admin.</p>}</CardContent>
+        <CardContent className="flex flex-col gap-6">
+          {canManage ? <RestorePanel packages={packages} /> : <p className="text-sm text-[var(--color-muted-foreground)]">View only — restore is limited to Master Admin.</p>}
+          <RestoreInstructions />
+        </CardContent>
       </Card>
     );
   } else if (tab === "history") {

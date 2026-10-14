@@ -9,6 +9,7 @@ import { getDeviceMonitoringData } from "@/lib/student-devices";
 import { formatIst } from "@/lib/ist-time";
 import { maskEmail, maskPhone } from "@/lib/pii-mask";
 import { DeviceMonitoringTable, type DeviceMonitoringRow } from "./device-monitoring-table";
+import { getMultipleSessions } from "@/lib/admin-dashboard-metrics";
 
 export const metadata = { title: "Authentication Monitoring — Mock Test Series.in Admin" };
 
@@ -75,7 +76,7 @@ export default async function AuthenticationMonitoringPage() {
     return <RestrictedCard title="Authentication Monitoring" />;
   }
 
-  const { total, successful, byMethod, recent, devices } = await loadAuthMonitoringData();
+  const [{ total, successful, byMethod, recent, devices }, multi] = await Promise.all([loadAuthMonitoringData(), getMultipleSessions()]);
   const deviceRows: DeviceMonitoringRow[] = devices.rows.map((r) => ({
     ...r,
     lastLoginLabel: r.lastLoginAt ? formatIst(new Date(r.lastLoginAt)) : "Never",
@@ -197,6 +198,67 @@ export default async function AuthenticationMonitoringPage() {
               )}
             </tbody>
           </table>
+        </CardContent>
+      </Card>
+
+      <Card id="multiple-sessions" className="scroll-mt-20" data-testid="multiple-sessions">
+        <CardHeader>
+          <CardTitle>Multiple Active Sessions</CardTitle>
+          <CardDescription>
+            Students signed in on 2 or more sessions that each made an authenticated request in the last {multi.windowHours} hours (not revoked, not expired, device still registered). Login attempts are not
+            sessions, and several tabs in one browser are one session. Sign-ins from before session tracking existed have no session record and are not counted. Display only — nothing here blocks an
+            account; use the device controls above to act.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid grid-cols-3 gap-3">
+            <StatCard label="2+ sessions" value={multi.twoPlus} />
+            <StatCard label="3+ sessions" value={multi.threePlus} />
+            <StatCard label="Highest" value={multi.highest || "—"} />
+          </div>
+          {multi.rows.length === 0 ? (
+            <p className="text-sm text-[var(--color-muted-foreground)]">No student currently has more than one active session.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
+                    <th className="py-2 pr-4">Student ID</th>
+                    <th className="py-2 pr-4">Name</th>
+                    <th className="py-2 pr-4">Active sessions</th>
+                    <th className="py-2 pr-4">Last activity</th>
+                    <th className="py-2 pr-4">Sessions (device · method · signed in)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {multi.rows.map((r) => (
+                    <tr key={r.studentDbId} className="border-b border-[var(--color-border)] align-top last:border-0">
+                      <td className="py-2 pr-4 font-mono text-xs">
+                        <a href={`/admin/students/${r.studentDbId}`} className="text-[var(--color-primary)] hover:underline">
+                          {r.studentId}
+                        </a>
+                      </td>
+                      <td className="py-2 pr-4">{r.name}</td>
+                      <td className="py-2 pr-4">
+                        <Badge variant={r.activeSessions >= 3 ? "error" : "warning"}>{r.activeSessions}</Badge>
+                      </td>
+                      <td className="py-2 pr-4 text-[var(--color-muted-foreground)]">{formatIst(r.lastActivity)}</td>
+                      <td className="py-2 pr-4 text-xs text-[var(--color-muted-foreground)]">
+                        <ul className="flex flex-col gap-0.5">
+                          {r.sessions.map((s, i) => (
+                            <li key={i}>
+                              {s.device}
+                              {s.browser || s.os ? ` (${[s.browser, s.os].filter(Boolean).join(", ")})` : ""} · {methodLabel(s.method)} · signed in {formatIst(s.signedInAt)} · last seen {formatIst(s.lastSeenAt)}
+                            </li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

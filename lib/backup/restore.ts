@@ -95,7 +95,7 @@ export async function rehearseRestore(opts: { file: string; roots: BackupRoots; 
   const checks: RehearsalReport["checks"] = [];
   let created = false;
   try {
-    const verify = await verifyPackage(opts.file, { workspace: ws, passphrase: opts.passphrase, repo: opts.roots.repo });
+    const verify = await verifyPackage(opts.file, { workspace: ws, passphrase: opts.passphrase, repo: opts.roots.repo, release: opts.roots.currentLink });
     checks.push({ label: "Package verification", ok: verify.status === "VALID", detail: verify.summary });
     if (verify.status !== "VALID" || !verify.extractedDir || !verify.manifest) return { ok: false, checks, verify };
     const manifest = verify.manifest as BackupManifest;
@@ -136,7 +136,7 @@ export async function restoreProduction(opts: {
   const checks: RehearsalReport["checks"] = [];
   let safetyDump: string | null = null;
   try {
-    const verify = await verifyPackage(opts.file, { workspace: ws, passphrase: opts.passphrase, repo: opts.roots.repo });
+    const verify = await verifyPackage(opts.file, { workspace: ws, passphrase: opts.passphrase, repo: opts.roots.repo, release: opts.roots.currentLink });
     if (verify.status !== "VALID" || !verify.extractedDir || !verify.manifest) throw new RestoreRefusedError(`Package did not verify: ${verify.summary}`);
     if (!verify.compatibility?.productionRestore) throw new RestoreRefusedError(verify.compatibility?.reason ?? "Schema incompatible.");
     if (verify.manifest.secrets.included && verify.passphrase !== "CORRECT") throw new RestoreRefusedError("Enter the correct Backup Recovery Passphrase for this FULL backup.");

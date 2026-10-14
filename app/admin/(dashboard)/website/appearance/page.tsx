@@ -29,7 +29,7 @@ export default async function AppearancePage() {
           <CardDescription>Changes apply immediately, no deployment required.</CardDescription>
         </CardHeader>
         <CardContent>
-          <AppearanceForm appearance={appearance} />
+          <AppearanceForm appearance={appearance} canManage={canManageBackground} />
         </CardContent>
       </Card>
 

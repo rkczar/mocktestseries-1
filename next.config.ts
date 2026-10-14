@@ -3,6 +3,14 @@ import { LEGACY_REDIRECTS } from "./lib/legacy-redirects";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  experimental: {
+    // proxy.ts runs on every API route, and Next 16 buffers a request body
+    // only up to this size before handing it to the route — larger bodies
+    // are silently TRUNCATED (default 10 MB). That cut the 19 MB Full backup
+    // uploaded to Admin → Backup → Verify (2026-10-12) and made it look
+    // corrupt. Keep this just above nginx's client_max_body_size (20M).
+    proxyClientMaxBodySize: "21mb",
+  },
   // nginx already sets X-Content-Type-Options, X-Frame-Options and
   // Referrer-Policy (sites-available/mocktestseries.in); these are the rest.
   async headers() {

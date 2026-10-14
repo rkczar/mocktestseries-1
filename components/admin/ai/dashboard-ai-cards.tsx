@@ -1,3 +1,4 @@
+import type React from "react";
 import Link from "next/link";
 import { Bot, IndianRupee, PiggyBank } from "lucide-react";
 import { CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +30,19 @@ function Head({ title, icon: Icon }: { title: string; icon: typeof Bot }) {
  * never counted as ₹0. Shown to admins with AI Engine view access.
  */
 export async function DashboardAiCards() {
+  const cards = await dashboardAiCardNodes();
+  if (!cards) return null;
+  return (
+    <>
+      {cards.usage}
+      {cards.cost}
+      {cards.month}
+    </>
+  );
+}
+
+/** The three cards as separate nodes (the dashboard grid orders each one); null without AI Engine view access. */
+export async function dashboardAiCardNodes(): Promise<{ usage: React.ReactNode; cost: React.ReactNode; month: React.ReactNode } | null> {
   if (!(await hasPermission(PERMISSIONS.AI_ENGINE_VIEW))) return null;
   const [stats, usage, engine] = await Promise.all([dashboardAiStats(), budgetUsage(), getEngineConfig()]);
   const monthly = engine.budgets.monthlyInr;
@@ -36,8 +50,8 @@ export async function DashboardAiCards() {
   const tone = pct >= 100 ? "var(--color-error)" : pct >= engine.budgets.alertPercent ? "var(--color-warning)" : "var(--color-primary)";
   const change = stats.yesterday.costInr > 0 ? Math.round(((stats.today.costInr - stats.yesterday.costInr) / stats.yesterday.costInr) * 100) : null;
 
-  return (
-    <>
+  return {
+    usage: (
       <Link href="/admin/ai/analytics" className={cardCls} data-testid="dash-ai-usage">
         <Head title="AI Usage Today" icon={Bot} />
         <CardContent>
@@ -48,6 +62,8 @@ export async function DashboardAiCards() {
           <p className="mt-1 text-[11px] text-[var(--color-muted-foreground)]">{`Total AI Requests Till Now: ${stats.lifetime.requests.toLocaleString("en-IN")}`}</p>
         </CardContent>
       </Link>
+    ),
+    cost: (
       <Link href="/admin/ai/analytics" className={cardCls} data-testid="dash-ai-cost">
         <Head title="AI Cost Today" icon={IndianRupee} />
         <CardContent>
@@ -62,6 +78,8 @@ export async function DashboardAiCards() {
           </p>
         </CardContent>
       </Link>
+    ),
+    month: (
       <Link href="/admin/ai/budgets" className={cardCls} data-testid="dash-ai-month">
         <Head title="Monthly AI Spend" icon={PiggyBank} />
         <CardContent>
@@ -74,6 +92,6 @@ export async function DashboardAiCards() {
           <p className="mt-1 text-[11px] text-[var(--color-muted-foreground)]">{`${pct}% of Monthly Budget Used${engine.budgets.emergencyStop ? " · AI STOPPED" : ""}`}</p>
         </CardContent>
       </Link>
-    </>
-  );
+    ),
+  };
 }

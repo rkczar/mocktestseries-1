@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import "./globals.css";
 import { THEME_COOKIE, isTheme } from "@/lib/theme";
 import { TEXT_SIZE_COOKIE, isTextSize } from "@/lib/text-size";
-import { getAppearance, appearanceToCssVariables } from "@/lib/appearance";
+import { getAppearance, appearanceToCssVariables, appearanceDefaultMode } from "@/lib/appearance";
 import { premiumGlowToCss } from "@/lib/premium-glow";
 import { getPremiumGlowConfig } from "@/lib/premium-glow-settings";
 import { getSeoSettings } from "@/lib/seo-settings";
@@ -44,14 +44,15 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const cookieStore = await cookies();
-  const themeCookie = cookieStore.get(THEME_COOKIE)?.value;
-  const theme = isTheme(themeCookie) ? themeCookie : "dark";
-  const textSizeCookie = cookieStore.get(TEXT_SIZE_COOKIE)?.value;
-  const textSize = isTextSize(textSizeCookie) ? textSizeCookie : "md";
-
   // Premium Glow rides in the same <style> as Appearance: one cached read
   // per render, so glowing buttons never fetch their own settings.
   const [appearance, premiumGlow] = await Promise.all([getAppearance(), getPremiumGlowConfig()]);
+  const themeCookie = cookieStore.get(THEME_COOKIE)?.value;
+  // A visitor's own Day/Night/Eye-Saver choice always wins; until they make
+  // one, the active palette decides (Night unless a light palette is set).
+  const theme = isTheme(themeCookie) ? themeCookie : appearanceDefaultMode(appearance);
+  const textSizeCookie = cookieStore.get(TEXT_SIZE_COOKIE)?.value;
+  const textSize = isTextSize(textSizeCookie) ? textSizeCookie : "md";
   const seo = await getSeoSettings();
 
   const siteUrl = seo.canonicalBase.replace(/\/+$/, "");

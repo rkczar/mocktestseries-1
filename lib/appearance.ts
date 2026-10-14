@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { colorsMatchPalette, getPalette, luminance, type AppearancePalette, type PaletteMode } from "@/lib/appearance-palettes";
 
 export interface AppearanceColors {
   primary: string;
@@ -40,6 +41,7 @@ export const DEFAULT_APPEARANCE = {
   } satisfies AppearanceFonts,
   buttonStyle: { radius: "0.625rem" } satisfies AppearanceButtonStyle,
   componentStyle: { cardRadius: "0.75rem", shadowIntensity: "sm" } satisfies AppearanceComponentStyle,
+  paletteId: null as string | null,
 };
 
 /**
@@ -74,7 +76,7 @@ const isOneOf = <T extends string>(options: readonly T[], value: unknown): value
 
 /** Keeps each stored value only if it passes its allow-list; anything else falls back to the default. */
 function sanitizeAppearance(raw: {
-  colors?: Partial<Record<keyof AppearanceColors, unknown>>;
+  colors?: Partial<Record<keyof AppearanceColors | "paletteId", unknown>>;
   fonts?: Partial<Record<keyof AppearanceFonts, unknown>>;
   buttonStyle?: { radius?: unknown };
   componentStyle?: { cardRadius?: unknown; shadowIntensity?: unknown };
@@ -84,16 +86,20 @@ function sanitizeAppearance(raw: {
     const v = raw.colors?.[k];
     return typeof v === "string" && HEX_COLOR_RE.test(v) ? v : d.colors[k];
   };
+  const colors: AppearanceColors = {
+    primary: color("primary"),
+    secondary: color("secondary"),
+    accent: color("accent"),
+    success: color("success"),
+    error: color("error"),
+    warning: color("warning"),
+    info: color("info"),
+  };
+  // A premade palette id only counts while the colors are still exactly that palette's.
+  const palette = getPalette(raw.colors?.paletteId);
   return {
-    colors: {
-      primary: color("primary"),
-      secondary: color("secondary"),
-      accent: color("accent"),
-      success: color("success"),
-      error: color("error"),
-      warning: color("warning"),
-      info: color("info"),
-    },
+    colors,
+    paletteId: palette && colorsMatchPalette(colors, palette) ? palette.id : null,
     fonts: {
       heading: isValidFontStack(raw.fonts?.heading) ? raw.fonts.heading : d.fonts.heading,
       body: isValidFontStack(raw.fonts?.body) ? raw.fonts.body : d.fonts.body,
@@ -112,6 +118,8 @@ function sanitizeAppearance(raw: {
 
 export interface ResolvedAppearance {
   colors: AppearanceColors;
+  /** Set when the saved colors are exactly a premade palette (lib/appearance-palettes.ts). */
+  paletteId: string | null;
   fonts: AppearanceFonts;
   buttonStyle: AppearanceButtonStyle;
   componentStyle: AppearanceComponentStyle;
@@ -130,7 +138,7 @@ export async function getAppearance(): Promise<ResolvedAppearance> {
     });
     if (!config) return DEFAULT_APPEARANCE;
     return sanitizeAppearance({
-      colors: (config.colors ?? undefined) as Partial<Record<keyof AppearanceColors, unknown>> | undefined,
+      colors: (config.colors ?? undefined) as Partial<Record<keyof AppearanceColors | "paletteId", unknown>> | undefined,
       fonts: (config.fonts ?? undefined) as Partial<Record<keyof AppearanceFonts, unknown>> | undefined,
       buttonStyle: (config.buttonStyle ?? undefined) as { radius?: unknown } | undefined,
       componentStyle: (config.componentStyle ?? undefined) as { cardRadius?: unknown; shadowIntensity?: unknown } | undefined,
@@ -140,8 +148,50 @@ export async function getAppearance(): Promise<ResolvedAppearance> {
   }
 }
 
+/** The display mode a visitor gets before choosing one in the header (their cookie always wins). */
+export function appearanceDefaultMode(appearance: ResolvedAppearance): PaletteMode {
+  return getPalette(appearance.paletteId)?.defaultMode ?? "dark";
+}
+
+const FILL_TOKENS = ["primary", "secondary", "accent", "info", "warning", "success", "error"] as const;
+
+/**
+ * "text-white on a solid brand fill" (selected chips, palette cells,
+ * badges) becomes black ink when that brand color is light — e.g. a white
+ * primary. Same pattern globals.css uses for Eye-Saver. Emitted only for
+ * light colors, so the default palette produces no rules.
+ */
+function lightFillInk(scope: string, colors: AppearanceColors): string {
+  const light = FILL_TOKENS.filter((t) => luminance(colors[t]) > 0.5);
+  if (!light.length) return "";
+  return `${scope} .text-white:is(${light.map((t) => `.bg-\\[var\\(--color-${t}\\)\\]`).join(",")}){color:#000000}`;
+}
+
+function brandVars(c: AppearanceColors): string {
+  return `--color-primary:${c.primary};--color-secondary:${c.secondary};--color-accent:${c.accent};--color-success:${c.success};--color-error:${c.error};--color-warning:${c.warning};--color-info:${c.info};`;
+}
+
+/** Mode-aware rules for a monochrome palette: its own mode gets its structural values, the other mode its counterpart brand values. */
+function paletteModeCss(palette: AppearancePalette): string {
+  if (!palette.counterpart || !palette.structural) return "";
+  const own = palette.themeType;
+  const other: PaletteMode = own === "dark" ? "light" : "dark";
+  const st = palette.structural;
+  const ownColors = palette.colors;
+  return [
+    `:root[data-theme="${own}"]{--color-background:${st.background};--color-surface:${st.surface};--color-card:${st.card};--color-foreground:${st.foreground};--color-muted-foreground:${st.mutedForeground};--color-border:${st.border};}`,
+    `:root[data-theme="${other}"]{${brandVars(palette.counterpart)}}`,
+    lightFillInk(`:root[data-theme="${own}"]`, ownColors),
+    lightFillInk(`:root[data-theme="${other}"]`, palette.counterpart),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function appearanceToCssVariables(appearance: ResolvedAppearance): string {
   const { colors, fonts, buttonStyle, componentStyle } = appearance;
+  const palette = getPalette(appearance.paletteId);
+  const extra = palette?.counterpart ? paletteModeCss(palette) : lightFillInk(`:root:not([data-theme="eyesaver"])`, colors);
   return `:root{
   --color-primary:${colors.primary};
   --color-secondary:${colors.secondary};
@@ -154,5 +204,5 @@ export function appearanceToCssVariables(appearance: ResolvedAppearance): string
   --font-body:${fonts.body};
   --radius-button:${buttonStyle.radius};
   --radius-card:${componentStyle.cardRadius};
-}`;
+}${extra ? `\n${extra}` : ""}`;
 }

@@ -60,7 +60,10 @@ export async function verifyLegacySqlGz(file: string): Promise<VerifyReport> {
   };
 }
 
-export async function verifyPackage(file: string, opts: { workspace: string; passphrase?: string; repo: string }): Promise<VerifyReport & { extractedDir?: string }> {
+export async function verifyPackage(
+  file: string,
+  opts: { workspace: string; passphrase?: string; repo: string; /** The LIVE release (production symlink): its migrations define the production schema. */ release?: string }
+): Promise<VerifyReport & { extractedDir?: string }> {
   const checks: VerifyReport["checks"] = [];
   const fail = (status: VerifyStatus, summary: string): VerifyReport => ({ status, summary, checks });
 
@@ -156,7 +159,10 @@ export async function verifyPackage(file: string, opts: { workspace: string; pas
   }
 
   // Compatibility for an in-place production restore.
-  const current = await latestMigrationOnDisk(opts.repo);
+  // Compare with the schema of the release actually serving production. The
+  // git working copy (`repo`) can sit on an older branch than what is live,
+  // which made every new backup look "incompatible"; it is only a fallback.
+  const current = (opts.release ? await latestMigrationOnDisk(opts.release) : null) ?? (await latestMigrationOnDisk(opts.repo));
   const productionRestore = manifest.database.latestMigration === current;
   const compatibility = {
     productionRestore,

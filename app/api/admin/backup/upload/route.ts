@@ -46,11 +46,21 @@ export async function POST(req: Request) {
       if (received > MAX_BYTES) source.destroy(new Error("too large"));
     });
     await pipeline(source, createPrivateWriteStream(partial));
-    await rename(partial, path.join(roots.incoming, name));
   } catch {
     await rm(partial, { force: true });
     return NextResponse.json({ error: "Upload failed or exceeded 20 MB." }, { status: 400 });
   }
+  // Never verify a partial upload: a cut-off body would be reported as a
+  // "corrupt backup" when only the transfer was incomplete.
+  if (received !== len) {
+    await rm(partial, { force: true });
+    await logBackupAudit(adminId, "BACKUP_UPLOAD_INCOMPLETE", "BackupArtifact", null, { expectedBytes: len, receivedBytes: received });
+    return NextResponse.json(
+      { error: `Upload incomplete: the server received ${received.toLocaleString("en-IN")} of ${len.toLocaleString("en-IN")} bytes, so the file was not verified. Your backup file was not judged corrupt — please try again, or use "Check a downloaded file on this device".` },
+      { status: 400 }
+    );
+  }
+  await rename(partial, path.join(roots.incoming, name));
   const artifact = (await listArtifacts(roots)).find((a) => a.name === name);
   const report = artifact ? await verifyArtifact(roots, artifact.id) : null;
   await logBackupAudit(adminId, "BACKUP_UPLOADED", "BackupArtifact", artifact?.id ?? null, { name, bytes: received, status: report?.status ?? null });
