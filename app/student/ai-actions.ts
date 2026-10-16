@@ -26,6 +26,7 @@ import { formatInr } from "@/lib/payments/money";
 const LOCKED_MESSAGES: Record<Exclude<AnswerRevealStatus, "REVEALABLE">, string> = {
   IN_PROGRESS: "Ask AI is available once you've submitted this test.",
   RESULT_HELD: "Ask AI unlocks when this test's result is released.",
+  PREMIUM_LOCKED: "Ask AI for this question needs Premium access. Upgrade to Premium to continue.",
   NO_ACCESS: "Ask AI is available for questions from your submitted tests.",
 };
 

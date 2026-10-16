@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { startPaperFromExamAction } from "../exams/[examId]/actions";
 import type { DashboardPaperView } from "./pyq-view";
+import { PREMIUM_LOCKED_EVENT, PREMIUM_LOCKED_HREF } from "@/lib/plans-path";
 
 /** Beyond this many, the section links to the exam page's full list instead of growing the dashboard. */
 const MAX_PAPERS = 6;
@@ -82,7 +83,9 @@ function PaperActions({ paper: p }: { paper: DashboardPaperView }) {
         </Badge>
         {p.locked.href ? (
           <Button asChild size="sm">
-            <Link href={p.locked.href}>{p.locked.ctaLabel}</Link>
+            <Link href={p.locked.href} onClick={p.locked.href === PREMIUM_LOCKED_HREF ? openPremiumOptions : undefined}>
+              {p.locked.ctaLabel}
+            </Link>
           </Button>
         ) : (
           <Button size="sm" disabled>
@@ -125,6 +128,16 @@ function PaperActions({ paper: p }: { paper: DashboardPaperView }) {
       <StartButton label="Start" />
     </form>
   );
+}
+
+/**
+ * Unlock → trial / Premium options popup. On the dashboard itself a link to
+ * the same page wouldn't remount the popup, so it is re-opened in place.
+ */
+function openPremiumOptions(e: React.MouseEvent<HTMLAnchorElement>) {
+  if (window.location.pathname !== "/student/dashboard") return;
+  e.preventDefault();
+  window.dispatchEvent(new Event(PREMIUM_LOCKED_EVENT));
 }
 
 /** Disabled while the start request is in flight, so a double tap can't fire a second start. */

@@ -125,6 +125,7 @@ export function ActiveExamDashboard({
   layout,
   announcements = null,
   accessPanels = {},
+  upgradeBanners = {},
   footer = null,
   reviewCard = null,
   reviewsSection = null,
@@ -148,6 +149,8 @@ export function ActiveExamDashboard({
   announcements?: React.ReactNode;
   /** Server-rendered Access & Subscription card per enrolled exam id (lib/payments/student-access.ts). */
   accessPanels?: Record<string, React.ReactNode>;
+  /** Server-rendered Upgrade to Premium card per enrolled exam id (components/student/upgrade-banner.tsx); missing/null hides it. */
+  upgradeBanners?: Record<string, React.ReactNode>;
   /** Lower-priority server-rendered content (subscription status), rendered last. */
   footer?: React.ReactNode;
   /** "Share your experience" review block (review-card.tsx); null when the student isn't eligible yet. */
@@ -193,6 +196,7 @@ export function ActiveExamDashboard({
   const promoShown = liveCbt.promo !== null && layout.some((b) => b.id === "live-cbt-promotion" && b.visible);
   const blocks: Record<StudentDashboardBlockId, React.ReactNode> = {
     "access-status": activeExamId ? (accessPanels[activeExamId] ?? null) : null,
+    "premium-upgrade": activeExamId ? (upgradeBanners[activeExamId] ?? null) : null,
     "performance-summary": (
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <MetricTile icon={<CheckCircle2 className="h-5 w-5 text-[var(--color-success)]" aria-hidden />} label="MCQs Solved Today" value={metrics.mcqSolvedToday} />

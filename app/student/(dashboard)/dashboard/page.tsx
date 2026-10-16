@@ -30,6 +30,9 @@ import { ReviewsSection } from "@/components/homepage/reviews-section";
 import { getDashboardLiveCbtPromotion } from "@/lib/live-cbt";
 import { getSiteUrl } from "@/lib/site-url";
 import { TrialPopup } from "./trial-popup";
+import { shouldShowUpgradeBanner, UpgradeBanner } from "@/components/student/upgrade-banner";
+import { getTrialStatus } from "@/lib/premium-trial";
+import { getPremiumPolicy } from "@/lib/premium-policy";
 
 export const metadata = { title: "Dashboard — Mock Test Series.in" };
 
@@ -63,7 +66,7 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
   const siteUrl = await getSiteUrl();
-  const [[rawExamMetrics, subjects, nextTest, papers, overall], omrSheet, layout, accessSummaries, reviewState, publicReviews, liveCbt, telegramHref] = await Promise.all([
+  const [[rawExamMetrics, subjects, nextTest, papers, overall], omrSheet, layout, accessSummaries, reviewState, publicReviews, liveCbt, telegramHref, trialStatus, premiumPolicy] = await Promise.all([
     activeExamId
       ? Promise.all([
           getExamScopedDashboardMetrics(student.id, activeExamId),
@@ -85,10 +88,24 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
     getDashboardLiveCbtPromotion(student.id, activeExamId, siteUrl).catch(() => null),
     // Telegram Channel card; null (hidden) on any settings problem.
     getPublicTelegramChannel("dashboard"),
+    // Upgrade card copy only (trial active / ended); never let it break the dashboard.
+    getTrialStatus(student.id).catch(() => null),
+    getPremiumPolicy(),
   ]);
   // Server-rendered per exam; the client picks the active exam's card, so an
   // exam switch never shows another exam's access state.
-  const accessPanels = Object.fromEntries(accessSummaries.map((s) => [s.exam.id, <AccessPanel key={s.exam.id} summary={s} />]));
+  // The trial belongs to the Premium policy exam only.
+  const upgradeBlockVisible = layout.some((b) => b.id === "premium-upgrade" && b.visible);
+  const showsUpgrade = (s: (typeof accessSummaries)[number]) =>
+    upgradeBlockVisible && shouldShowUpgradeBanner(s, s.exam.id === premiumPolicy.examId ? trialStatus : null);
+  const accessPanels = Object.fromEntries(
+    accessSummaries.map((s) => [s.exam.id, <AccessPanel key={s.exam.id} summary={s} upsellElsewhere={showsUpgrade(s)} />])
+  );
+  const upgradeBanners = Object.fromEntries(
+    accessSummaries.flatMap((s) =>
+      showsUpgrade(s) ? [[s.exam.id, <UpgradeBanner key={s.exam.id} summary={s} trial={s.exam.id === premiumPolicy.examId ? trialStatus : null} />]] : []
+    )
+  );
   const coveredProductIds = accessSummaries.flatMap((s) => (s.state === "ACTIVE" ? (s.entitlement?.productIds ?? []) : []));
   const initialMetrics = {
     ...toDashboardMetricsView(rawExamMetrics ?? globalMetrics),
@@ -148,6 +165,7 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
           />
         }
         accessPanels={accessPanels}
+        upgradeBanners={upgradeBanners}
         footer={<SubscriptionStatusCard studentId={student.id} excludeProductIds={coveredProductIds} />}
         reviewCard={reviewState ? <StudentReviewCard state={reviewState} /> : null}
         reviewsSection={
@@ -156,7 +174,8 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
         telegramHref={telegramHref}
       />
       <FloatingWhatsAppSupport surface="dashboard" />
-      <TrialPopup force={premiumLocked} />
+      {/* Keyed: arriving at ?premium=locked from the dashboard itself must remount it, or the once-per-mount claim never runs. */}
+      <TrialPopup key={premiumLocked ? "locked" : "entry"} force={premiumLocked} />
     </div>
   );
 }

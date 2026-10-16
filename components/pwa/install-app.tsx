@@ -5,16 +5,22 @@ import { Download, Share, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { usePwa } from "@/components/pwa/pwa-provider";
+import { usePwa, type InstallPlatform } from "@/components/pwa/pwa-provider";
 
 /**
  * "Install MockTestSeries" — shown only where installing genuinely works:
- *   - Chromium (Android / desktop) after the browser fired its install
- *     event: the button opens the browser's own install dialog;
- *   - iOS/iPadOS, which has no install API: the button reveals the
- *     Share → Add to Home Screen steps instead.
- * Hidden when already running as the installed app and on every other
- * browser, so there is never a button that does nothing.
+ *   - when the browser handed us its install event (Chromium): the button
+ *     opens the browser's own install dialog;
+ *   - otherwise, on browsers that can install from their own menu (iOS/
+ *     iPadOS Share sheet, Android Chrome / Samsung Internet / Firefox,
+ *     desktop Chrome / Edge, Safari 17+ on macOS): the button reveals that
+ *     browser's manual steps. Chromium withholds its event after a dismissed
+ *     prompt or before its engagement checks pass, which used to hide the
+ *     CTA entirely.
+ * Hidden when running as the installed app, after the browser confirmed an
+ * install (appinstalled) and on browsers that can't install web apps
+ * (desktop Firefox, …), so there is never a button that does nothing. The
+ * browser dialog only ever opens from a click — never by itself.
  *
  * Surfaces: InstallAppBanner (compact, under the dashboard greeting),
  * InstallAppCard (the "install-app" dashboard block) and InstallAppMenuItem
@@ -61,28 +67,58 @@ function useDismissed() {
 
 function useInstallable() {
   const pwa = usePwa();
-  return { ...pwa, available: !pwa.standalone && (pwa.canPrompt || pwa.ios) };
+  const installedHere = pwa.standalone || pwa.installed;
+  return { ...pwa, available: !installedHere && (pwa.canPrompt || pwa.platform !== null) };
 }
 
-function IosSteps({ className }: { className?: string }) {
+const strong = (text: string) => <span className="font-medium text-[var(--color-foreground)]">{text}</span>;
+
+/** Manual install steps for browsers without a prompt we can trigger. */
+function InstallSteps({ platform, className }: { platform: InstallPlatform | null; className?: string }) {
+  const steps: React.ReactNode[] =
+    platform === "ios"
+      ? [
+          <>Tap the <Share className="inline h-3.5 w-3.5 align-[-2px]" aria-label="Share" /> Share button.</>,
+          <>Choose {strong("Add to Home Screen")}, then tap Add.</>,
+        ]
+      : platform === "samsung"
+        ? [<>Tap the {strong("☰")} menu.</>, <>Choose {strong("Add page to")} → {strong("Home screen")}.</>]
+        : platform === "android" || platform === "firefox-android"
+          ? [<>Tap the {strong("⋮")} browser menu.</>, <>Choose {strong("Install app")} or {strong("Add to Home screen")}.</>]
+          : platform === "desktop"
+            ? [
+                <>Click the {strong("Install")} icon at the right end of the address bar,</>,
+                <>or open the browser menu and choose {strong("Install MockTestSeries")} (Chrome: Cast, save and share · Edge: Apps).</>,
+              ]
+            : platform === "mac-safari"
+              ? [<>In the Safari menu bar, choose {strong("File")} → {strong("Add to Dock")}.</>]
+              : [];
+  if (steps.length === 0) return null;
   return (
-    <ol className={cn("list-decimal space-y-1 pl-5 text-sm text-[var(--color-muted-foreground)]", className)}>
-      <li>
-        Tap the <Share className="inline h-3.5 w-3.5 align-[-2px]" aria-label="Share" /> Share button.
-      </li>
-      <li>
-        Choose <span className="font-medium text-[var(--color-foreground)]">Add to Home Screen</span>, then tap Add.
-      </li>
+    <ol className={cn("list-decimal space-y-1 pl-5 text-sm text-[var(--color-muted-foreground)]", className)} data-testid="install-steps" data-platform={platform ?? ""}>
+      {steps.map((step, i) => (
+        <li key={i}>{step}</li>
+      ))}
     </ol>
+  );
+}
+
+/** Shown only after the browser itself confirmed the install (appinstalled). */
+function InstalledNote({ className }: { className?: string }) {
+  return (
+    <p role="status" className={cn("text-sm text-[var(--color-muted-foreground)]", className)} data-testid="install-done">
+      MockTestSeries is installed. Open it from your home screen or app list.
+    </p>
   );
 }
 
 /** Compact CTA under the Student Dashboard greeting. Shares the card's dismissal. */
 export function InstallAppBanner({ className }: { className?: string }) {
-  const { available, canPrompt, ios, promptInstall } = useInstallable();
+  const { available, canPrompt, platform, installedNow, promptInstall } = useInstallable();
   const dismissed = useDismissed();
   const [showSteps, setShowSteps] = useState(false);
 
+  if (installedNow && !dismissed) return <InstalledNote className={cn("px-1", className)} />;
   if (!available || dismissed) return null;
 
   return (
@@ -100,16 +136,14 @@ export function InstallAppBanner({ className }: { className?: string }) {
           <p className="text-sm font-semibold leading-tight text-[var(--color-foreground)]">Install MockTestSeries App</p>
           <p className="mt-0.5 text-xs leading-snug text-[var(--color-muted-foreground)]">Get faster access directly from your home screen.</p>
         </div>
-        {canPrompt || ios ? (
-          <Button
-            size="sm"
-            className="col-start-2 row-start-2 justify-self-start sm:col-start-3 sm:row-start-1"
-            aria-expanded={!canPrompt ? showSteps : undefined}
-            onClick={() => (canPrompt ? void promptInstall() : setShowSteps((v) => !v))}
-          >
-            Install App
-          </Button>
-        ) : null}
+        <Button
+          size="sm"
+          className="col-start-2 row-start-2 justify-self-start sm:col-start-3 sm:row-start-1"
+          aria-expanded={!canPrompt ? showSteps : undefined}
+          onClick={() => (canPrompt ? void promptInstall() : setShowSteps((v) => !v))}
+        >
+          Install App
+        </Button>
         <button
           type="button"
           onClick={dismissInstallPrompts}
@@ -119,7 +153,7 @@ export function InstallAppBanner({ className }: { className?: string }) {
         >
           <X className="h-4 w-4" aria-hidden />
         </button>
-        {ios && !canPrompt && showSteps ? <IosSteps className="col-span-2 col-start-2 sm:col-span-3" /> : null}
+        {!canPrompt && showSteps ? <InstallSteps platform={platform} className="col-span-2 col-start-2 sm:col-span-3" /> : null}
       </div>
     </div>
   );
@@ -127,10 +161,17 @@ export function InstallAppBanner({ className }: { className?: string }) {
 
 /** Student Dashboard block ("install-app"). Dismissible for 30 days. */
 export function InstallAppCard() {
-  const { available, canPrompt, ios, promptInstall } = useInstallable();
+  const { available, canPrompt, platform, installedNow, promptInstall } = useInstallable();
   const dismissed = useDismissed();
   const [showSteps, setShowSteps] = useState(false);
 
+  if (installedNow && !dismissed) {
+    return (
+      <Card className="p-4">
+        <InstalledNote />
+      </Card>
+    );
+  }
   if (!available || dismissed) return null;
 
   return (
@@ -142,7 +183,7 @@ export function InstallAppCard() {
         <div className="flex flex-col gap-1">
           <p className="text-sm font-semibold text-[var(--color-foreground)]">Install MockTestSeries</p>
           <p className="text-sm text-[var(--color-muted-foreground)]">Open your tests from your home screen or desktop, in their own app window.</p>
-          {ios && showSteps ? <IosSteps className="mt-1" /> : null}
+          {!canPrompt && showSteps ? <InstallSteps platform={platform} className="mt-1" /> : null}
         </div>
       </div>
       <div className="flex items-center gap-2 self-end sm:self-center">
@@ -150,7 +191,7 @@ export function InstallAppCard() {
           <Button size="sm" onClick={() => void promptInstall()}>
             Install
           </Button>
-        ) : ios && !showSteps ? (
+        ) : !showSteps ? (
           <Button size="sm" onClick={() => setShowSteps(true)}>
             How to install
           </Button>
@@ -165,7 +206,7 @@ export function InstallAppCard() {
 
 /** Entry in the student mobile menu — shown whenever installing is possible. */
 export function InstallAppMenuItem({ onDone }: { onDone?: () => void }) {
-  const { available, canPrompt, promptInstall } = useInstallable();
+  const { available, canPrompt, platform, promptInstall } = useInstallable();
   const [showSteps, setShowSteps] = useState(false);
   if (!available) return null;
 
@@ -184,7 +225,7 @@ export function InstallAppMenuItem({ onDone }: { onDone?: () => void }) {
       >
         <Download className="h-4 w-4" aria-hidden /> Install MockTestSeries
       </button>
-      {showSteps ? <IosSteps className="px-3 pb-2 pt-1" /> : null}
+      {showSteps ? <InstallSteps platform={platform} className="px-3 pb-2 pt-1" /> : null}
     </div>
   );
 }

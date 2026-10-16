@@ -1,7 +1,10 @@
-import { Bookmark } from "lucide-react";
+import Link from "next/link";
+import { Bookmark, Lock } from "lucide-react";
+import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { getSavedQuestions } from "@/lib/student-data";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
@@ -44,6 +47,21 @@ export default async function SavedQuestionsPage() {
                 <span className="font-mono text-xs text-[var(--color-muted-foreground)]">{q.code}</span>
               </div>
 
+              {q.lockReason === "PREMIUM_LOCKED" ? (
+                <div className="flex flex-col gap-3">
+                  <p className="flex items-start gap-2 text-sm text-[var(--color-muted-foreground)]">
+                    <Lock className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-primary)]" aria-hidden />
+                    This question is from a Premium test. Upgrade to Premium to view it with its answer and explanation.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button asChild size="sm">
+                      <Link href={PLANS_AND_PRICING_PATH}>Get Complete Access</Link>
+                    </Button>
+                    <SaveQuestionButton initialSaved onToggle={unsaveQuestionAction.bind(null, q.id)} />
+                  </div>
+                </div>
+              ) : (
+              <>
               <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">
                 <RichText text={q.text} html={q.rich?.textHtml} />
               </p>
@@ -104,6 +122,8 @@ export default async function SavedQuestionsPage() {
                       ? "Answer and explanation unlock when this test's result is released."
                       : "Answer and explanation are available for questions from your submitted tests."}
                 </p>
+              )}
+              </>
               )}
             </div>
           ))}

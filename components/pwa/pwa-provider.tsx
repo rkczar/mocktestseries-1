@@ -27,23 +27,51 @@ type BeforeInstallPromptEvent = Event & {
 declare global {
   interface Window {
     __mtsInstallEvent?: BeforeInstallPromptEvent | null;
+    /** The browser fired appinstalled during this page's lifetime. */
+    __mtsInstalledNow?: boolean;
   }
 }
 
-/** Runs in <head> before hydration: Chromium may fire beforeinstallprompt before React mounts. */
-export const PWA_INSTALL_CAPTURE_SCRIPT = `window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();window.__mtsInstallEvent=e;window.dispatchEvent(new Event("mts:installable"))});window.addEventListener("appinstalled",function(){window.__mtsInstallEvent=null});`;
+/**
+ * Where the browser has no install prompt we can trigger, which manual steps
+ * apply (components/pwa/install-app.tsx#InstallSteps). null = this browser
+ * can't install web apps at all (desktop Firefox, older Safari, …): no CTA.
+ */
+export type InstallPlatform = "ios" | "android" | "samsung" | "firefox-android" | "desktop" | "mac-safari";
+
+/**
+ * Runs in <head> before hydration: Chromium may fire beforeinstallprompt before React mounts.
+ * It also keeps INSTALLED_KEY: set when the browser reports appinstalled, cleared whenever
+ * the browser offers installation again (so an uninstalled app gets its CTA back).
+ */
+export const INSTALLED_KEY = "mts-app-installed";
+export const PWA_INSTALL_CAPTURE_SCRIPT = `window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();window.__mtsInstallEvent=e;try{localStorage.removeItem("${INSTALLED_KEY}")}catch(_){}window.dispatchEvent(new Event("mts:installable"))});window.addEventListener("appinstalled",function(){window.__mtsInstallEvent=null;window.__mtsInstalledNow=true;try{localStorage.setItem("${INSTALLED_KEY}","1")}catch(_){}});`;
 
 export type PwaState = {
   /** Running as the installed app (standalone / iOS home-screen). */
   standalone: boolean;
+  /** This browser reported the app as installed (appinstalled) and hasn't offered installing again since, or the student accepted the install prompt this visit. */
+  installed: boolean;
+  /** appinstalled fired during this visit — the only signal that confirms an install. */
+  installedNow: boolean;
   /** Chromium handed us an install prompt we can trigger from a button. */
   canPrompt: boolean;
   /** iOS/iPadOS: no install prompt API; the CTA shows Add to Home Screen steps. */
   ios: boolean;
+  /** Manual install steps for this browser when there is no prompt (null = can't install here). */
+  platform: InstallPlatform | null;
   promptInstall: () => Promise<InstallOutcome>;
 };
 
-const PwaContext = createContext<PwaState>({ standalone: false, canPrompt: false, ios: false, promptInstall: async () => "unavailable" });
+const PwaContext = createContext<PwaState>({
+  standalone: false,
+  installed: false,
+  installedNow: false,
+  canPrompt: false,
+  ios: false,
+  platform: null,
+  promptInstall: async () => "unavailable",
+});
 export const usePwa = () => useContext(PwaContext);
 
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
@@ -56,6 +84,31 @@ function isIos() {
   const ua = navigator.userAgent;
   // iPadOS 13+ reports itself as a Mac; touch support gives it away.
   return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function detectPlatform(): InstallPlatform | null {
+  const ua = navigator.userAgent;
+  if (isIos()) return "ios";
+  if (/Android/i.test(ua)) {
+    if (/SamsungBrowser\//.test(ua)) return "samsung";
+    if (/Firefox\//.test(ua)) return "firefox-android";
+    if (/Chrome\//.test(ua)) return "android";
+    return null;
+  }
+  if (/Firefox\/|OPR\//.test(ua)) return null;
+  if (/(Chrome|Chromium|Edg)\//.test(ua)) return "desktop";
+  // Safari 17+ on macOS: File → Add to Dock.
+  const safari = /Version\/(\d+)[\d.]* Safari\//.exec(ua);
+  if (safari && /Macintosh/.test(ua) && Number(safari[1]) >= 17) return "mac-safari";
+  return null;
+}
+
+function readInstalledFlag() {
+  try {
+    return window.localStorage.getItem(INSTALLED_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 /** Browser state read through useSyncExternalStore (server snapshot: nothing shown). */
@@ -83,6 +136,9 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
 
   const standalone = useSyncExternalStore(subscribeStandalone, isStandalone, serverFalse);
   const ios = useSyncExternalStore(subscribeNothing, isIos, serverFalse);
+  const platform = useSyncExternalStore(subscribeNothing, detectPlatform, serverNull);
+  const installed = useSyncExternalStore(subscribeInstallEvent, readInstalledFlag, serverFalse);
+  const installedNow = useSyncExternalStore(subscribeInstallEvent, () => window.__mtsInstalledNow === true, serverFalse);
   const offline = useSyncExternalStore(subscribeConnectivity, () => !navigator.onLine, serverFalse);
   const installEvent = useSyncExternalStore(subscribeInstallEvent, () => window.__mtsInstallEvent ?? null, serverNull);
   const [waitingWorker, setWaitingWorker] = useState<ServiceWorker | null>(null);
@@ -133,11 +189,16 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [accepted, setAccepted] = useState(false);
   const promptInstall = useCallback(async (): Promise<InstallOutcome> => {
     const event = installEvent;
     if (!event) return "unavailable";
     await event.prompt();
     const { outcome } = await event.userChoice;
+    // Accepted: the browser is installing — the CTA steps aside for this visit
+    // (success is only ever shown after appinstalled). Dismissed: the CTA stays
+    // and offers the manual steps, since Chromium may not offer the prompt again soon.
+    if (outcome === "accepted") setAccepted(true);
     // A prompt event can be used once; Chromium fires a fresh one if still installable.
     window.__mtsInstallEvent = null;
     window.dispatchEvent(new Event("mts:install-consumed"));
@@ -154,7 +215,7 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
   const showOffline = offline && !isAdmin;
 
   return (
-    <PwaContext.Provider value={{ standalone, canPrompt: !!installEvent, ios, promptInstall }}>
+    <PwaContext.Provider value={{ standalone, installed: installed || accepted, installedNow, canPrompt: !!installEvent, ios, platform, promptInstall }}>
       {children}
       {showOffline ? (
         <div role="status" className="pointer-events-none fixed inset-x-0 top-3 z-[60] flex justify-center px-4">

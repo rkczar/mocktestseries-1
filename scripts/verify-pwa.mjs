@@ -186,7 +186,12 @@ async function main() {
       if (hasPrompt) {
         check("Chromium: both install CTAs shown", (await installBanner(page).count()) === 1 && (await installCard(page).count()) === 1);
       } else {
-        check("no install event → no install CTA at all (no fake button)", (await installBanner(page).count()) === 0 && (await installCard(page).count()) === 0);
+        // Android Chrome without its install event (engagement checks, recent dismissal): the CTA
+        // offers the browser's own menu steps — never a button that pretends to install.
+        const banner = installBanner(page);
+        const shown = (await banner.count()) === 1;
+        if (shown) await banner.getByRole("button", { name: "Install App" }).click();
+        check("no install event → Install App shows this browser's manual steps (no fake prompt)", shown && (await page.locator("[data-testid=install-steps][data-platform=android]").count()) === 1);
       }
       const all = Object.values(await cachedUrls(page)).flat();
       check("student pages never cached", !all.some((p) => p.startsWith("/student") || p.startsWith("/api")), all.filter((p) => !allowedCacheEntry(p)));

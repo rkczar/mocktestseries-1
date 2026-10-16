@@ -18,16 +18,21 @@ import { RENEWAL_REMINDER_DAYS, type ExamAccessSummary } from "@/lib/payments/st
 const longDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
 const DASHBOARD_COMPARISON_ROWS = 6;
 
-export function AccessPanel({ summary, variant = "full" }: { summary: ExamAccessSummary; variant?: "full" | "compact" }) {
+/**
+ * `upsellElsewhere`: the dashboard's "Upgrade to Premium" card (block
+ * "premium-upgrade") is already showing for this exam, so this block shows
+ * status only — never a second sales pitch on the same page.
+ */
+export function AccessPanel({ summary, variant = "full", upsellElsewhere = false }: { summary: ExamAccessSummary; variant?: "full" | "compact"; upsellElsewhere?: boolean }) {
   if (variant === "compact") return <CompactAccessBanner summary={summary} />;
   switch (summary.state) {
     case "ACTIVE":
       return <ActiveCard summary={summary} />;
     case "EXPIRED":
-      return <ExpiredCard summary={summary} />;
+      return <ExpiredCard summary={summary} hideRenew={upsellElsewhere} />;
     case "FREE":
     case "UNAVAILABLE":
-      return summary.display.promoVisible ? <UpgradeCard summary={summary} /> : <FreeStatusStrip summary={summary} />;
+      return summary.display.promoVisible && !upsellElsewhere ? <UpgradeCard summary={summary} /> : <FreeStatusStrip summary={summary} />;
     case "FREE_MODE":
       return (
         <Card>
@@ -221,7 +226,7 @@ function ActiveCard({ summary }: { summary: ExamAccessSummary }) {
   );
 }
 
-function ExpiredCard({ summary }: { summary: ExamAccessSummary }) {
+function ExpiredCard({ summary, hideRenew = false }: { summary: ExamAccessSummary; hideRenew?: boolean }) {
   const ent = summary.entitlement!;
   return (
     <Card className="border-[var(--color-warning)]/45">
@@ -241,7 +246,7 @@ function ExpiredCard({ summary }: { summary: ExamAccessSummary }) {
           ) : null}
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:items-end">
-          {summary.checkoutHref ? (
+          {hideRenew ? null : summary.checkoutHref ? (
             <Button asChild>
               <Link href={summary.checkoutHref}>Renew Access</Link>
             </Button>

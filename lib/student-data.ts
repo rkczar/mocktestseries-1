@@ -20,6 +20,7 @@ import { getAiSettings } from "@/lib/ai-settings";
 import { attemptTitle } from "@/lib/attempt-title";
 import { createDeletionRequest } from "@/lib/student-lifecycle";
 import { liveMatchView, liveRichViews } from "@/lib/rich-content";
+import { evaluateAttemptReviewAccess, loadAccessContext, type AccessContext } from "@/lib/payments/access";
 import type { ExplanationView, MatchView, RichQuestionView } from "@/lib/rich-content-types";
 
 /**
@@ -605,9 +606,26 @@ export function isAttemptAnswerKeyHeld(
  *                  in a running INSTANT attempt), and in no other IN_PROGRESS or held attempt.
  *  - IN_PROGRESS — it is part of a test they are still taking.
  *  - RESULT_HELD — it is in a submitted test whose result isn't released yet.
+ *  - PREMIUM_LOCKED — it is only in attempts whose test the student can no longer
+ *                  access (e.g. a Premium paper taken during a trial that has since
+ *                  ended): an attempt record alone never unlocks its answers.
  *  - NO_ACCESS   — they never legitimately reviewed it (no submitted attempt contains it).
  */
-export type AnswerRevealStatus = "REVEALABLE" | "IN_PROGRESS" | "RESULT_HELD" | "NO_ACCESS";
+export type AnswerRevealStatus = "REVEALABLE" | "IN_PROGRESS" | "RESULT_HELD" | "PREMIUM_LOCKED" | "NO_ACCESS";
+
+/** Attempt fields the content-access engine needs (lib/payments/access.ts#describeAttemptContent). */
+const ATTEMPT_ACCESS_SELECT = {
+  sourceType: true,
+  testType: true,
+  examId: true,
+  mockTestId: true,
+  grandTestId: true,
+  liveTestId: true,
+  previousYearPaperId: true,
+  customModuleId: true,
+  grandTest: { select: { accessType: true } },
+  customModule: { select: { accessType: true } },
+} as const;
 
 /**
  * Canonical answer-reveal rule for every question-keyed surface that has no
@@ -635,15 +653,19 @@ export async function getAnswerRevealStatuses(
       answer: { select: { revealedAt: true } },
       attempt: {
         select: {
+          ...ATTEMPT_ACCESS_SELECT,
           status: true,
-          testType: true,
           answerMode: true,
-          mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true } },
-          liveTest: { select: { status: true } },
+          mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true, testSeriesId: true, accessType: true } },
+          liveTest: { select: { status: true, accessType: true } },
         },
       },
     },
   });
+  // Same decision as the Review page (getAttemptReviewAccess): one context for the whole batch.
+  let accessCtx: AccessContext | null = null;
+  const reviewAllowed = async (attempt: (typeof rows)[number]["attempt"]) =>
+    evaluateAttemptReviewAccess((accessCtx ??= await loadAccessContext(studentId, now)), attempt).allowed;
 
   // Any blocking attempt wins over a released one: a question retaken in a
   // new, still-running test must stay locked until that test is over too.
@@ -652,14 +674,16 @@ export async function getAnswerRevealStatuses(
   // committed their answer and saw the key, so that row counts as REVEALABLE
   // (revealAnswer only stamps revealedAt after its own authorization). Any
   // OTHER running or held attempt containing the question still wins.
-  const RANK: Record<AnswerRevealStatus, number> = { NO_ACCESS: 0, REVEALABLE: 1, RESULT_HELD: 2, IN_PROGRESS: 3 };
+  // PREMIUM_LOCKED ranks below REVEALABLE: the same question in another attempt
+  // the student may still review (e.g. the free paper) legitimately reveals it.
+  const RANK: Record<AnswerRevealStatus, number> = { NO_ACCESS: 0, PREMIUM_LOCKED: 1, REVEALABLE: 2, RESULT_HELD: 3, IN_PROGRESS: 4 };
   for (const row of rows) {
     const committedReveal =
       row.attempt.status === AttemptStatus.IN_PROGRESS &&
       row.attempt.answerMode === AttemptAnswerMode.INSTANT &&
       !!row.answer?.revealedAt &&
       !isAttemptAnswerKeyHeld(row.attempt, now);
-    const next: AnswerRevealStatus =
+    let next: AnswerRevealStatus =
       committedReveal
         ? "REVEALABLE"
         : row.attempt.status === AttemptStatus.IN_PROGRESS
@@ -667,6 +691,7 @@ export async function getAnswerRevealStatuses(
         : isAttemptAnswerKeyHeld(row.attempt, now)
           ? "RESULT_HELD"
           : "REVEALABLE";
+    if (next === "REVEALABLE" && !(await reviewAllowed(row.attempt))) next = "PREMIUM_LOCKED";
     if (RANK[next] > RANK[statuses.get(row.questionId) ?? "NO_ACCESS"]) statuses.set(row.questionId, next);
   }
   return statuses;
@@ -683,7 +708,8 @@ export async function getAnswerRevealStatus(studentId: string, questionId: strin
  * shows the correct answer. Ask AI opened FROM that review uses this so a
  * second, still-running attempt that happens to contain the same question
  * doesn't show "available once you've submitted this test" on a test that
- * is submitted; nothing becomes visible that the review page isn't showing.
+ * is submitted; nothing becomes visible that the review page isn't showing
+ * (including its Premium gate, getAttemptReviewAccess).
  */
 export async function isQuestionReviewableInAttempt(studentId: string, attemptId: string, questionId: string, now: Date = new Date()): Promise<boolean> {
   const row = await prisma.testAttemptQuestion.findFirst({
@@ -691,14 +717,15 @@ export async function isQuestionReviewableInAttempt(studentId: string, attemptId
     select: {
       attempt: {
         select: {
-          testType: true,
-          mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true } },
-          liveTest: { select: { status: true } },
+          ...ATTEMPT_ACCESS_SELECT,
+          mockTest: { select: { availableUntil: true, resultReleaseMode: true, resultReleaseAt: true, testSeriesId: true, accessType: true } },
+          liveTest: { select: { status: true, accessType: true } },
         },
       },
     },
   });
-  return !!row && !isAttemptAnswerKeyHeld(row.attempt, now);
+  if (!row || isAttemptAnswerKeyHeld(row.attempt, now)) return false;
+  return evaluateAttemptReviewAccess(await loadAccessContext(studentId, now), row.attempt).allowed;
 }
 
 /** Subset of `questionIds` whose answers this student may see (REVEALABLE). */
@@ -731,6 +758,11 @@ export interface SavedQuestionView {
   topicName: string | null;
   /** False while the answer key is locked (see getAnswerRevealStatuses) — options then carry no isCorrect at all. */
   answerRevealed: boolean;
+  /**
+   * PREMIUM_LOCKED: the student no longer has access to the test this was
+   * saved from — text, options and media are withheld too (empty), not just
+   * the answer key.
+   */
   lockReason: Exclude<AnswerRevealStatus, "REVEALABLE"> | null;
   options: { label: string; text: string; imageUrl: string | null; isCorrect?: boolean }[];
   /** RICH_V1 only: server-rendered text/options + question/option images. */
@@ -778,6 +810,20 @@ export async function getSavedQuestions(studentId: string): Promise<SavedQuestio
 
   return rows.map(({ question: q }) => {
     const status = statuses.get(q.id) ?? "NO_ACCESS";
+    if (status === "PREMIUM_LOCKED") {
+      return {
+        id: q.id,
+        code: q.code,
+        text: "",
+        imageUrl: null,
+        examName: q.exam.name,
+        subjectName: q.subject?.name ?? null,
+        topicName: q.topic?.name ?? null,
+        answerRevealed: false,
+        lockReason: status,
+        options: [],
+      };
+    }
     const answerRevealed = status === "REVEALABLE";
     // The explanation is answer-key data: it never leaves the server while the key is locked.
     const views = liveRichViews({ ...q, explanation: answerRevealed ? q.explanation : null });

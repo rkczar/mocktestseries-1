@@ -1,6 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus, TestType } from "@prisma/client";
-import { Clock } from "lucide-react";
+import Link from "next/link";
+import { Clock, Lock } from "lucide-react";
+import { describeAttemptContent, getAttemptReviewAccess, paywallHref } from "@/lib/payments/access";
+import { Button } from "@/components/ui/button";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { getOwnedAttempt, getSavedQuestionIdSet } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
@@ -25,6 +28,42 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
   const attempt = await getOwnedAttempt(attemptId, student.id);
   if (!attempt) notFound();
   if (attempt.status !== AttemptStatus.SUBMITTED) redirect(`/student/attempt/${attemptId}`);
+
+  // Premium gate (server-side, every load): the review needs current access to
+  // this test — the attempt record alone never unlocks it, so a Premium paper
+  // taken during a trial locks again when the trial ends. Score, result and
+  // history stay available; nothing below (answer key, explanations) is sent.
+  const reviewAccess = await getAttemptReviewAccess(student.id, attempt);
+  if (!reviewAccess.allowed) {
+    const canBuy = !reviewAccess.purchasesPaused && reviewAccess.status !== "NOT_AVAILABLE";
+    return (
+      <StudentShell student={student}>
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+          <div className="flex items-center justify-between gap-2">
+            <BackButton href={`/student/attempt/${attemptId}/result`} label="Back to Result" />
+          </div>
+          <Card data-testid="review-locked">
+            <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
+              <Lock className="h-8 w-8 text-[var(--color-primary)]" aria-hidden />
+              <p className="text-base font-semibold text-[var(--color-foreground)]">Answer review needs Premium access</p>
+              <p className="max-w-md text-sm text-[var(--color-muted-foreground)]">
+                {reviewAccess.status === "EXPIRED"
+                  ? "Your access to this test has expired. Your score and result summary are still available. Renew to review each question with its answer and explanation."
+                  : "Your score and result summary are still available. Upgrade to Premium to review each question with its answer and explanation."}
+              </p>
+              {canBuy ? (
+                <Button asChild>
+                  <Link href={paywallHref({ ...reviewAccess, trialUnused: false }, describeAttemptContent(attempt))}>Get Complete Access</Link>
+                </Button>
+              ) : (
+                <p className="text-xs text-[var(--color-muted-foreground)]">Purchases are not available right now. Please check back soon.</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </StudentShell>
+    );
+  }
 
   // Live Test: the answer key (correct option, per-option explanation) stays
   // hidden until the admin explicitly publishes results — a submission must

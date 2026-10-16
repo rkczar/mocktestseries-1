@@ -17,6 +17,7 @@ import { StudentShell } from "@/components/student/shell";
 import { SubjectPerformance } from "./subject-performance";
 import { RankSummaryCard } from "@/components/student/leaderboard";
 import { PrintPracticeKit } from "./print-practice-kit";
+import { describeAttemptContent, getAttemptReviewAccess, paywallHref } from "@/lib/payments/access";
 
 export const metadata = { title: "Test Result — Mock Test Series.in" };
 
@@ -60,6 +61,12 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
   }
 
   const reviewLocked = attempt.testType === TestType.LIVE_TEST && attempt.liveTest?.status !== "RESULT_PUBLISHED";
+  // The Review page enforces the same Premium gate itself; here it only swaps the button.
+  const reviewAccess = await getAttemptReviewAccess(student.id, attempt);
+  const reviewUnlockHref =
+    reviewAccess.allowed || reviewAccess.purchasesPaused || reviewAccess.status === "NOT_AVAILABLE"
+      ? null
+      : paywallHref({ ...reviewAccess, trialUnused: false }, describeAttemptContent(attempt));
 
   const percentage = attempt.maxScore ? Math.max(0, Math.round(((attempt.score ?? 0) / attempt.maxScore) * 100)) : 0;
   const minutesTaken = attempt.timeTakenSeconds ? Math.round(attempt.timeTakenSeconds / 60) : 0;
@@ -155,12 +162,25 @@ export default async function AttemptResultPage({ params }: { params: Promise<{ 
           <Button asChild variant="outline" className="flex-1">
             <Link href="/student/dashboard">Back to Dashboard</Link>
           </Button>
-          <Button asChild className="flex-1" disabled={reviewLocked}>
-            <Link href={`/student/attempt/${attemptId}/review`} aria-disabled={reviewLocked}>
-              Review Answers
-            </Link>
-          </Button>
+          {reviewAccess.allowed ? (
+            <Button asChild className="flex-1" disabled={reviewLocked}>
+              <Link href={`/student/attempt/${attemptId}/review`} aria-disabled={reviewLocked}>
+                Review Answers
+              </Link>
+            </Button>
+          ) : reviewUnlockHref ? (
+            <Button asChild className="flex-1">
+              <Link href={reviewUnlockHref} data-testid="review-unlock">
+                Unlock Answer Review
+              </Link>
+            </Button>
+          ) : null}
         </div>
+        {reviewAccess.allowed ? null : (
+          <p className="text-center text-xs text-[var(--color-muted-foreground)]">
+            Answer review for this test needs Premium access. Your score and result summary stay available.
+          </p>
+        )}
 
         <WhatsAppShareButton
           text={`I scored ${(attempt.score ?? 0).toFixed(2)}/${attempt.maxScore} (${percentage}%) on "${title}" — Mock Test Series.in`}

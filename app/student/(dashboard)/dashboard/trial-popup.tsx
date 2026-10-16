@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, Crown, Sparkles, X as XIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import type { TrialPopupData } from "@/lib/premium-trial";
+import { PREMIUM_LOCKED_EVENT } from "@/lib/plans-path";
 import { claimTrialPopupAction, startTrialAction } from "./trial-actions";
 
 /** "1 Day 14 Hours Remaining" / "5 Hours 12 Minutes Remaining" / "12 Minutes Remaining". */
@@ -38,19 +39,40 @@ export function TrialPopup({ force }: { force: boolean }) {
   const skew = useRef(0);
   const asked = useRef(false);
 
+  // `forced` = the student asked for their options (a Premium Unlock). The
+  // server answers with a redirect when it has no trial to offer them, so an
+  // Unlock click never does nothing.
+  const claim = useCallback(
+    (forced: boolean) => {
+      claimTrialPopupAction(forced)
+        .then((d) => {
+          if (!d) return;
+          if ("redirect" in d) {
+            router.push(d.redirect);
+            return;
+          }
+          skew.current = new Date(d.serverNow).getTime() - Date.now();
+          setNow(Date.now() + skew.current);
+          setData(d);
+          setOpen(true);
+        })
+        .catch(() => undefined);
+    },
+    [router]
+  );
+
   useEffect(() => {
     if (asked.current) return;
     asked.current = true;
-    claimTrialPopupAction(force)
-      .then((d) => {
-        if (!d) return;
-        skew.current = new Date(d.serverNow).getTime() - Date.now();
-        setNow(Date.now() + skew.current);
-        setData(d);
-        setOpen(true);
-      })
-      .catch(() => undefined);
-  }, [force]);
+    claim(force);
+  }, [force, claim]);
+
+  // An Unlock click on the dashboard itself (already at ?premium=locked or not) re-opens it.
+  useEffect(() => {
+    const onLocked = () => claim(true);
+    window.addEventListener(PREMIUM_LOCKED_EVENT, onLocked);
+    return () => window.removeEventListener(PREMIUM_LOCKED_EVENT, onLocked);
+  }, [claim]);
 
   const ticking = open && data?.endsAt && (data.state === "ACTIVE" || data.state === "ENDING");
   useEffect(() => {

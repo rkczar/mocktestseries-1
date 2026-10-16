@@ -3,6 +3,7 @@ import { Lock } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { accessDeniedMessage, type AccessResult } from "@/lib/payments/access";
+import { PREMIUM_LOCKED_HREF } from "@/lib/plans-path";
 import { accessLockLabel } from "@/lib/payments/access-labels";
 
 /**
@@ -31,9 +32,10 @@ export function AccessLocked({ access, backHref = "/student/dashboard" }: { acce
               ))}
             </div>
           ) : null}
-          {access.premium && access.status !== "EXPIRED" ? (
+          {/* Only while the one-time trial is still unused: the dashboard popup has nothing else to offer. */}
+          {access.premium && access.status !== "EXPIRED" && access.trialUnused ? (
             <Button asChild variant="secondary">
-              <Link href="/student/dashboard?premium=locked">Free trial &amp; Premium options</Link>
+              <Link href={PREMIUM_LOCKED_HREF}>Free trial &amp; Premium options</Link>
             </Button>
           ) : null}
           <Button asChild variant="outline">

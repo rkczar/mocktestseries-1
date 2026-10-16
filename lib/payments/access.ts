@@ -4,6 +4,7 @@ import { EntitlementStatus, type Product, type StudentEntitlement } from "@prism
 import { prisma } from "@/lib/prisma";
 import { getPaymentModeForStudent, type PaymentMode } from "@/lib/payments/settings";
 import { getPremiumPolicyRuntime, type PremiumPolicyRuntime } from "@/lib/premium-policy";
+import { PREMIUM_LOCKED_HREF } from "@/lib/plans-path";
 
 /**
  * Canonical entitlement / access engine. Payment rows are NEVER consulted
@@ -76,6 +77,8 @@ export interface AccessResult {
   viaTrial?: boolean;
   /** Allowed only because the attempt started before a cut-off (getAttemptContentAccess grace). */
   viaGrace?: boolean;
+  /** Premium denial for a student who has never started the one-time trial while the trial is ON (the dashboard popup can offer it). */
+  trialUnused?: boolean;
 }
 
 export type ProductRow = Pick<
@@ -263,6 +266,7 @@ function evaluatePremiumPolicy(ctx: AccessContext, policy: PremiumPolicyRuntime,
   }
 
   const purchasesPaused = ctx.mode === "MAINTENANCE" || ctx.purchasesPaused === true;
+  const trialUnused = policy.trialEnabled && !ctx.trial;
   const expired = ents.filter((e) => e.expiresAt !== null && e.expiresAt <= ctx.now);
   if (expired.length > 0) {
     return {
@@ -274,8 +278,8 @@ function evaluatePremiumPolicy(ctx: AccessContext, policy: PremiumPolicyRuntime,
       products: purchasable,
     };
   }
-  if (purchasable.length > 0) return { ...base, status: "PAYMENT_REQUIRED", allowed: false, purchasesPaused, products: purchasable };
-  return { ...base, status: "NOT_AVAILABLE", allowed: false, purchasesPaused };
+  if (purchasable.length > 0) return { ...base, status: "PAYMENT_REQUIRED", allowed: false, purchasesPaused, products: purchasable, trialUnused };
+  return { ...base, status: "NOT_AVAILABLE", allowed: false, purchasesPaused, trialUnused };
 }
 
 /** Minimal attempt shape the grace rules need (TestAttempt rows satisfy it). */
@@ -328,6 +332,24 @@ export async function getAttemptContentAccess(
   const access = evaluateContentAccess(ctx, c);
   if (access.allowed || !attemptGraceAllows(ctx, c, attempt, access)) return access;
   return { ...access, status: "ACTIVE_SUBSCRIPTION", allowed: true, viaGrace: true };
+}
+
+/**
+ * May the student see a SUBMITTED attempt's question-by-question review
+ * (answer key, explanations, Ask AI)? Exactly the content-access decision for
+ * that attempt's test right now — a paid entitlement, an active trial, or free
+ * content — and deliberately NO grace: grace only lets a running attempt
+ * finish. An attempt record alone never grants access, so a premium attempt
+ * taken during a trial locks again once the trial ends (score, result summary
+ * and history stay visible; only the review is gated). Pure, for batches.
+ */
+export function evaluateAttemptReviewAccess(ctx: AccessContext, attempt: Parameters<typeof describeAttemptContent>[0]): AccessResult {
+  return evaluateContentAccess(ctx, describeAttemptContent(attempt));
+}
+
+/** evaluateAttemptReviewAccess with a freshly loaded context — Review / Result pages. */
+export async function getAttemptReviewAccess(studentId: string, attempt: Parameters<typeof describeAttemptContent>[0]): Promise<AccessResult> {
+  return evaluateAttemptReviewAccess(await loadAccessContext(studentId), attempt);
 }
 
 // Answer save / reveal gate. Saves are frequent (every option click), so an
@@ -484,8 +506,15 @@ export async function canStudentAccessProduct(studentId: string, productId: stri
 
 /** Where to send a student who was denied: the single unlocking product's checkout, else the plans list. */
 export function paywallHref(a: AccessResult, content?: ContentDescriptor): string {
-  // Premium content: the dashboard popup shows this student's options (free trial if unused, else Buy Premium).
-  if (a.premium && (a.status === "PAYMENT_REQUIRED" || a.status === "NOT_AVAILABLE")) return "/student/dashboard?premium=locked";
+  // Premium content. Trial never used: the dashboard popup offers the free
+  // trial next to Buy Premium (it re-opens on every Unlock click, and falls
+  // back to Plans & Pricing when it has nothing to show). Otherwise straight
+  // to the Premium plan's checkout (products are sorted Premium-first;
+  // checkout shows "Continue" to an owner, so nobody re-buys), else the plans.
+  if (a.premium && (a.status === "PAYMENT_REQUIRED" || a.status === "NOT_AVAILABLE")) {
+    if (a.trialUnused) return PREMIUM_LOCKED_HREF;
+    return !a.purchasesPaused && a.products.length > 0 ? `/student/checkout/${encodeURIComponent(a.products[0].code)}` : "/student/plans?locked=1";
+  }
   if (!a.purchasesPaused && a.products.length === 1) return `/student/checkout/${encodeURIComponent(a.products[0].code)}`;
   // Several ways to unlock one mock (e.g. this mock alone or Complete Series):
   // its details page lists every option with its current price.

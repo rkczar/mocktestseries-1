@@ -40,6 +40,8 @@ export const STUDENT_DASHBOARD_BLOCKS = [
   { id: "student-reviews", label: "What Students Say", group: "account", card: false, insertBefore: "access-status", description: "Published reviews from Admin → Reviews (compact carousel); hidden when none are published or the Reviews setting is off" },
   // No anchor: new layouts and saved ones place it after Share your experience, near the bottom.
   { id: "telegram-channel", label: "Telegram Channel", group: "account", card: false, description: "Join Our Telegram Channel card; link and ON/OFF in Admin → Website → Footer → Telegram Channel, hidden without a valid link" },
+  // Anchored near the top (directly above Performance Summary) in new and saved layouts.
+  { id: "premium-upgrade", label: "Upgrade to Premium", group: "live", card: false, insertBefore: "performance-summary", description: "Compact Upgrade to Premium card with Get Complete Access (opens Plans & Pricing) for Free, trial and expired-plan students; hidden with active paid access or when no purchase can complete" },
 ] as const satisfies readonly { id: string; label: string; group: StudentDashboardGroup; card: boolean; description: string; insertBefore?: string }[];
 
 export type StudentDashboardBlockId = (typeof STUDENT_DASHBOARD_BLOCKS)[number]["id"];

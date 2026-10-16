@@ -162,7 +162,8 @@ try {
     await page.goto(`${BASE}/student/attempt/resume?paper=${F.papers.free}`);
     check("Expired trial: selected free PYQ still opens", !/premium=locked/.test(page.url()), page.url());
     await page.goto(`${BASE}/student/attempt/resume?paper=${F.papers.paid}`);
-    check("Expired trial: Premium PYQ → trial/upgrade options", /premium=locked/.test(page.url()), page.url());
+    // The trial is used up, so there is nothing but Premium to offer: straight to its checkout.
+    check("Expired trial: Premium PYQ → the Premium plan checkout", new URL(page.url()).pathname === `/student/checkout/${F.premium.code}`, page.url());
     for (const path of ["/student/history", "/student/analytics"]) {
       const r = await page.goto(`${BASE}${path}`);
       check(`Expired trial: ${path} still loads`, Boolean(r && r.status() < 400 && !/login|premium=locked/.test(page.url())), `${r?.status()} ${page.url()}`);
