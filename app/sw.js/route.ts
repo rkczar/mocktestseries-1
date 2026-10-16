@@ -34,7 +34,7 @@ import path from "node:path";
 export const dynamic = "force-dynamic";
 
 /** Bump when the precached files (offline page, icons) change without a new build. */
-const CACHE_VERSION = "1";
+const CACHE_VERSION = "2";
 
 let buildId: string | null = null;
 function getBuildId() {
