@@ -1,0 +1,8 @@
+# mocktestseries AI Question Importer worker — installed as /etc/cron.d/mocktestseries-ai-import (source: ops/ai-import/).
+# Every minute: picks up queued / interrupted import jobs (analysis, extraction, verification, import).
+# The admin actions also start the worker at once (lib/ai-import/kick.ts) under the SAME flock, so at most
+# one worker ever runs. Low CPU priority; starts nothing while a Live CBT is running. Logs ids and counts only.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * root cd /var/www/mocktestseries-current && flock -n /run/mocktestseries-ai-import.lock nice -n 10 env NODE_OPTIONS=--conditions=react-server /usr/bin/npx --no-install tsx scripts/ai-import-worker.ts >> /var/log/mocktestseries/ai-import-worker.log 2>&1

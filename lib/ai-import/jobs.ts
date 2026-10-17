@@ -126,7 +126,7 @@ export async function putChunk(input: { fileId: string; actorId: string; index: 
   if (input.bytes.length !== expected) throw new ImportJobError("Chunk size does not match the declared file size.");
   const dir = tmpDir(file.id);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  await writeFile(path.join(dir, `c${input.index}`), input.bytes, { mode: 0o600 });
+  await writeFile(path.join(/* turbopackIgnore: true */ dir, `c${input.index}`), input.bytes, { mode: 0o600 });
 }
 
 /** Assembles, validates by content and moves the file into the vault. Refusals are recorded on the file. */
@@ -137,11 +137,11 @@ export async function completeFile(input: { fileId: string; actorId: string }) {
   const chunks = Math.ceil(file.declaredBytes / CHUNK_BYTES);
   const present = new Set(await readdir(dir).catch(() => [] as string[]));
   for (let i = 0; i < chunks; i++) if (!present.has(`c${i}`)) throw new ImportJobError(`Part ${i + 1} of ${chunks} has not arrived yet.`, 409);
-  const assembled = path.join(dir, "assembled");
+  const assembled = path.join(/* turbopackIgnore: true */ dir, "assembled");
   const out = await open(assembled, "w", 0o600);
   try {
     for (let i = 0; i < chunks; i++) {
-      const fh = await open(path.join(dir, `c${i}`), "r");
+      const fh = await open(path.join(/* turbopackIgnore: true */ dir, `c${i}`), "r");
       try {
         const buf = Buffer.alloc(CHUNK_BYTES);
         const { bytesRead } = await fh.read(buf, 0, CHUNK_BYTES, 0);

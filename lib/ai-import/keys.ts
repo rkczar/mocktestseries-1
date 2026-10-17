@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { runTool } from "@/lib/ai-import/tools";
 import { readDocx } from "@/lib/ai-import/docx";
 import { vaultPath } from "@/lib/ai-import/vault";
-import { importerAiCall, parseModelJson } from "@/lib/ai-import/ai";
+import { importerAiCall, parseModelJson, ImporterAiUnavailable } from "@/lib/ai-import/ai";
 import { KEY_SYSTEM, keySchema } from "@/lib/ai-import/prompts";
 import { visionImage } from "@/lib/ai-import/figures";
 import { ensureRender, saveKeyEntries, type StepContext } from "@/lib/ai-import/process";
@@ -109,9 +109,11 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     let pairs: KeyPair[] = [];
     let method = "local";
     const full = vaultPath(file.storageKey!);
+    try {
     if (kind === "pdf") {
       const text = (await runTool("pdftotext", ["-layout", "-enc", "UTF-8", full, "-"], { timeoutMs: 120_000, maxOutput: 16 * 1024 * 1024 })).toString("utf8");
-      const pages = text.split("\f");
+      // pdftotext ends every page with a form feed: never read past the real page count.
+      const pages = text.split("\f").slice(0, Math.max(1, file.pageCount ?? 1));
       for (let p = 0; p < pages.length; p++) {
         const local = parseKeyText(pages[p]);
         if (keyLooksValid(local)) {
@@ -130,6 +132,13 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     } else if (ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
       pairs = await aiKeyPage(ctx, file, 1);
       method = "ai";
+    }
+    } catch (e) {
+      // Budget / configuration stops are the job's business; anything else fails this key file only.
+      if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) throw e;
+      await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: `The answer key could not be read: ${e instanceof Error ? e.message.slice(0, 200) : "error"}` } });
+      await logEvent(ctx.job.id, "KEY_FAILED", `${file.originalName}: the answer key could not be read`, { fileId: file.id });
+      continue;
     }
     await prisma.aiImportKeyEntry.deleteMany({ where: { keyFileId: file.id } });
     if (!pairs.length) {

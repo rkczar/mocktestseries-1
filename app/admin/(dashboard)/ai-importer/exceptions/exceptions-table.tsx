@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
 import { approveQuestionsAction, importAction, rejectQuestionsAction, reprocessQuestionsAction } from "../actions";
-import { statusVariant } from "../jobs/[jobId]/job-workspace";
+import { statusVariant } from "@/lib/ai-import/config";
 
 export interface ExceptionRow {
   id: string;

@@ -137,7 +137,9 @@ const s = process.env.AUTH_SECRET;
 if (!s) process.exit(1);
 process.stdout.write(require("crypto").createHmac("sha256", s).update("mts-server-actions-key-v1").digest("base64"));
 ') || die "could not derive the server actions key (AUTH_SECRET missing from shared .env?)"
-(cd "$R" && NEXT_SERVER_ACTIONS_ENCRYPTION_KEY="$ACTIONS_KEY" npx next build >"$LOG_DIR/deploy-build.log" 2>&1)
+# The build's TypeScript step needs ~3 GB of heap (Node's default here is 2.2 GB); 3.5 GB leaves
+# room for the two running PM2 workers on this 8 GB host.
+(cd "$R" && NEXT_SERVER_ACTIONS_ENCRYPTION_KEY="$ACTIONS_KEY" NODE_OPTIONS="--max-old-space-size=3584" npx next build >"$LOG_DIR/deploy-build.log" 2>&1)
 unset ACTIONS_KEY
 validate_candidate "$R"
 log "candidate realpath:  $(realpath -e "$R")"

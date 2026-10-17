@@ -13,12 +13,12 @@ export function kickWorker(): void {
   if (process.env.AI_IMPORT_DISABLE_KICK === "1") return;
   try {
     const cwd = process.cwd();
-    const script = path.join(cwd, "scripts", "ai-import-worker.ts");
-    const tsx = path.join(cwd, "node_modules", ".bin", "tsx");
-    if (!existsSync(script) || !existsSync(tsx) || !existsSync("/usr/bin/flock")) return;
+    const script = path.join(/* turbopackIgnore: true */ cwd, "scripts", "ai-import-worker.ts");
+    const tsx = path.join(/* turbopackIgnore: true */ cwd, "node_modules", ".bin", "tsx");
+    if (!existsSync(script) || !existsSync(tsx) || !existsSync(path.resolve(/* turbopackIgnore: true */ "/usr/bin/flock"))) return;
     const lock = process.env.AI_IMPORT_LOCK || "/run/mocktestseries-ai-import.lock";
     const logFile = process.env.AI_IMPORT_LOG || "/var/log/mocktestseries/ai-import-worker.log";
-    const out = existsSync(path.dirname(logFile)) ? openSync(logFile, "a", 0o640) : "ignore";
+    const out = existsSync(path.dirname(/* turbopackIgnore: true */ logFile)) ? openSync(path.resolve(/* turbopackIgnore: true */ logFile), "a", 0o640) : "ignore";
     const child = spawn("/usr/bin/flock", ["-n", lock, "/usr/bin/nice", "-n", "10", tsx, script], {
       cwd,
       detached: true,

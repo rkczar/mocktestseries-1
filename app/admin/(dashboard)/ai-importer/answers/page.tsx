@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ANSWER_STATUS_LABELS } from "@/lib/ai-import/config";
-import { statusVariant } from "../jobs/[jobId]/job-workspace";
+import { statusVariant } from "@/lib/ai-import/config";
 
 export const metadata = { title: "Answer Keys & Verification — AI Question Importer" };
 export const dynamic = "force-dynamic";

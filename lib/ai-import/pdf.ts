@@ -73,12 +73,12 @@ const attr = (tag: string, name: string) => Number(new RegExp(`\\b${name}="(-?[\
  * private scratch directory; it is emptied afterwards.
  */
 export async function pageLayout(file: string, page: number, work: string): Promise<PageLayout> {
-  const dir = path.join(work, `layout-${page}`);
+  const dir = path.join(/* turbopackIgnore: true */ work, `layout-${page}`);
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true, mode: 0o700 });
   try {
-    await runTool("pdftohtml", ["-xml", "-q", "-f", String(page), "-l", String(page), "-zoom", "1.5", "-fmt", "png", file, path.join(dir, "p")], { timeoutMs: 60_000, maxOutput: 1024 * 1024 });
-    const xml = await readFile(path.join(dir, "p.xml"), "utf8");
+    await runTool("pdftohtml", ["-xml", "-q", "-f", String(page), "-l", String(page), "-zoom", "1.5", "-fmt", "png", file, path.join(/* turbopackIgnore: true */ dir, "p")], { timeoutMs: 60_000, maxOutput: 1024 * 1024 });
+    const xml = await readFile(path.join(/* turbopackIgnore: true */ dir, "p.xml"), "utf8");
     const pageTag = /<page [^>]*>/.exec(xml)?.[0] ?? "";
     const width = attr(pageTag, "width");
     const height = attr(pageTag, "height");
@@ -97,7 +97,7 @@ export async function pageLayout(file: string, page: number, work: string): Prom
       if (!base || !files.has(base) || !/^p-\d+_\d+\.(png|jpg)$/.test(base)) continue;
       const box = norm(m[1]);
       if (!(box.w > 0.01 && box.h > 0.01)) continue; // hairlines, rules, invisible masks
-      images.push({ box, bytes: await readFile(path.join(dir, base)), ext: base.endsWith(".jpg") ? "jpg" : "png" });
+      images.push({ box, bytes: await readFile(path.join(/* turbopackIgnore: true */ dir, base)), ext: base.endsWith(".jpg") ? "jpg" : "png" });
     }
     return { width, height, lines, images };
   } finally {

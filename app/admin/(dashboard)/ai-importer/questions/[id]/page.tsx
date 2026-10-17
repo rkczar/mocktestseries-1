@@ -13,7 +13,7 @@ import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { effective } from "@/lib/ai-import/post";
-import { statusVariant } from "../../jobs/[jobId]/job-workspace";
+import { statusVariant } from "@/lib/ai-import/config";
 import { QuestionReview } from "./question-review";
 
 export const metadata = { title: "Review Question — AI Question Importer" };

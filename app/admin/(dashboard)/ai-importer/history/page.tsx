@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { JOB_STATUS_LABELS } from "@/lib/ai-import/config";
 import { jobSummary } from "@/lib/ai-import/summary";
-import { statusVariant } from "../jobs/[jobId]/job-workspace";
+import { statusVariant } from "@/lib/ai-import/config";
 
 export const metadata = { title: "AI Import History — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";

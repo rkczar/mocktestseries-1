@@ -192,7 +192,7 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
   AWAITING_CONFIRMATION: "Awaiting confirmation",
   QUEUED: "Queued",
   PROCESSING: "Processing",
-  NEEDS_REVIEW: "Needs review",
+  NEEDS_REVIEW: "Ready to import",
   PAUSED: "Paused",
   PAUSED_BUDGET: "Paused — budget limit",
   IMPORTING: "Importing",
@@ -261,4 +261,13 @@ export function formatBytes(n: number | bigint | null | undefined): string {
   if (v < 1024 ** 2) return `${(v / 1024).toFixed(1)} KB`;
   if (v < 1024 ** 3) return `${(v / 1024 ** 2).toFixed(1)} MB`;
   return `${(v / 1024 ** 3).toFixed(2)} GB`;
+}
+
+/** Badge colour for a job / question / answer status (shared by server and client components). */
+export function statusVariant(s: string): "success" | "warning" | "error" | "info" | "neutral" | "primary" {
+  if (s === "COMPLETED" || s === "PUBLISHED" || s === "OFFICIAL_MATCHED" || s === "READY") return "success";
+  if (s === "FAILED" || s === "CANCELLED" || s === "REJECTED" || s === "IMPORT_FAILED" || s === "KEY_MISMATCH" || s === "NOT_IMPORTABLE") return "error";
+  if (s.startsWith("PAUSED") || s === "NEEDS_CORRECTION" || s === "COMPLETED_WITH_ISSUES" || s === "UNVERIFIED" || s === "AMBIGUOUS_MAPPING" || s === "WITHDRAWN" || s === "DUPLICATE" || s === "KEY_MISSING") return "warning";
+  if (["ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"].includes(s)) return "info";
+  return "neutral";
 }

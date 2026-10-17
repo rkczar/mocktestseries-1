@@ -7,7 +7,7 @@ import { formatIst } from "@/lib/ist-time";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { JOB_STATUS_LABELS } from "@/lib/ai-import/config";
-import { statusVariant } from "./[jobId]/job-workspace";
+import { statusVariant } from "@/lib/ai-import/config";
 
 export const metadata = { title: "AI Import Jobs — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";

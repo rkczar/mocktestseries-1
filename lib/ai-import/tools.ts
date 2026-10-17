@@ -1,6 +1,7 @@
 import "server-only";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import path from "node:path";
 
 /**
  * Runs a local document tool (poppler, optional tesseract) as a bounded child
@@ -30,7 +31,7 @@ export class ToolError extends Error {
 }
 
 export function toolAvailable(tool: ToolName): boolean {
-  return existsSync(BINARIES[tool]);
+  return existsSync(path.resolve(/* turbopackIgnore: true */ BINARIES[tool]));
 }
 
 export interface RunOptions {
@@ -44,7 +45,7 @@ export interface RunOptions {
 
 export async function runTool(tool: ToolName, args: string[], opts: RunOptions = {}): Promise<Buffer> {
   const bin = BINARIES[tool];
-  if (!existsSync(bin)) throw new ToolError(`${tool} is not installed on this server.`, "missing");
+  if (!existsSync(path.resolve(/* turbopackIgnore: true */ bin))) throw new ToolError(`${tool} is not installed on this server.`, "missing");
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const maxOutput = opts.maxOutput ?? 32 * 1024 * 1024;
   const memKb = (opts.memoryMb ?? 1024) * 1024;

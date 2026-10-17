@@ -259,7 +259,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       needsVision: true,
     });
     const parsed = pageSchema.safeParse(parseModelJson(r.text));
-    if (!parsed.success) throw new Error(`The model's answer did not match the expected format (${parsed.error.issues[0]?.path.join(".") ?? "?"}).`);
+    if (!parsed.success) throw new Error(`The model's answer did not match the expected format (${parsed.error.issues[0]?.path.join(/* turbopackIgnore: true */ ".") ?? "?"}).`);
     return { out: parsed.data, model: r.model, cost: r.costInr ?? 0 };
   };
   const primary = await call([ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks], "extract");

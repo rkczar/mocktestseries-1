@@ -65,7 +65,7 @@ async function dirSize(dir: string, depth = 0): Promise<{ files: number; bytes: 
   }
   for (const e of entries) {
     if (e.isSymbolicLink()) continue;
-    const full = path.join(dir, e.name);
+    const full = path.join(/* turbopackIgnore: true */ dir, e.name);
     if (e.isDirectory()) {
       const s = await dirSize(full, depth + 1);
       files += s.files;
@@ -144,7 +144,7 @@ export async function findCandidates(now = new Date()): Promise<CleanupItem[]> {
   const bundles = await prisma.importBundle.findMany({ where: { filename: { startsWith: "ai-import-" }, createdAt: { lt: new Date(now.getTime() - day) } }, select: { id: true, filename: true, run: { select: { id: true, rows: { where: { status: "PENDING", removedFromImport: false }, select: { id: true }, take: 1 } } } } });
   for (const b of bundles) {
     if (b.run && b.run.rows.length) continue;
-    const s = await dirSize(path.join(stagingRoot(), b.id));
+    const s = await dirSize(path.join(/* turbopackIgnore: true */ stagingRoot(), b.id));
     if (s.files) items.push({ category: "STAGING_BUNDLES", key: `staging:${b.id}`, bytes: s.bytes, label: b.filename });
   }
   return items;
@@ -169,7 +169,7 @@ export async function scanStorage(): Promise<StorageReport> {
   ]);
   const staging = await prisma.importBundle.findMany({ where: { filename: { startsWith: "ai-import-" } }, select: { id: true } });
   let stagingBytes = 0;
-  for (const b of staging) stagingBytes += (await dirSize(path.join(stagingRoot(), b.id))).bytes;
+  for (const b of staging) stagingBytes += (await dirSize(path.join(/* turbopackIgnore: true */ stagingRoot(), b.id))).bytes;
   const expiredRows = fileRows.filter((f) => f.retainUntil && f.retainUntil < now);
   const last = await prisma.aiImportCleanup.findFirst({ orderBy: { createdAt: "desc" } });
   const sum = (a: VaultEntry[]) => a.reduce((x, e) => x + e.bytes, 0);
@@ -296,7 +296,7 @@ export async function autoCleanup(): Promise<void> {
 
 export async function stagingBundleExists(id: string): Promise<boolean> {
   try {
-    await stat(path.join(stagingRoot(), id));
+    await stat(path.join(/* turbopackIgnore: true */ stagingRoot(), id));
     return true;
   } catch {
     return false;

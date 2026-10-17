@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
-import { ANSWER_STATUS_LABELS, CHUNK_BYTES, JOB_STATUS_LABELS, formatBytes } from "@/lib/ai-import/config";
+import { ANSWER_STATUS_LABELS, CHUNK_BYTES, JOB_STATUS_LABELS, formatBytes, statusVariant } from "@/lib/ai-import/config";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { JobSummary } from "@/lib/ai-import/summary";
 import { JobContextFields, type ExamOption } from "../../new-import-form";
@@ -47,13 +47,6 @@ export interface JobView {
 const BUSY = ["ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"];
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `₹${v.toFixed(2)}`);
 
-export function statusVariant(s: string): "success" | "warning" | "error" | "info" | "neutral" | "primary" {
-  if (s === "COMPLETED" || s === "PUBLISHED" || s === "OFFICIAL_MATCHED" || s === "READY") return "success";
-  if (s === "FAILED" || s === "CANCELLED" || s === "REJECTED" || s === "IMPORT_FAILED" || s === "KEY_MISMATCH" || s === "NOT_IMPORTABLE") return "error";
-  if (s.startsWith("PAUSED") || s === "NEEDS_CORRECTION" || s === "COMPLETED_WITH_ISSUES" || s === "UNVERIFIED" || s === "AMBIGUOUS_MAPPING" || s === "WITHDRAWN" || s === "DUPLICATE" || s === "KEY_MISSING") return "warning";
-  if (BUSY.includes(s)) return "info";
-  return "neutral";
-}
 
 function Uploader({ jobId, files, canAddPapers }: { jobId: string; files: JobView["files"]; canAddPapers: boolean }) {
   const router = useRouter();
