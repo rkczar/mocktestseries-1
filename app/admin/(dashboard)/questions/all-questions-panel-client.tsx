@@ -34,6 +34,8 @@ interface Question {
   examYear: number | null;
   source: string;
   reviewRequired: boolean;
+  /** AI Question Importer answer provenance (null for every other question). */
+  answerVerification?: string | null;
   createdAt: string;
   exam: { id: string; name: string };
   subject: { id: string; name: string };
@@ -266,6 +268,9 @@ export function AllQuestionsPanelClient({
     if (bulkAction === "SET_REVIEW_REQUIRED" && !confirm(`Flag ${ids.length} question(s) as needing manual review?`)) {
       return;
     }
+    if (bulkAction === "CLEAR_REVIEW_REQUIRED" && !confirm(`Mark ${ids.length} question(s) as reviewed? This clears their review flag so they can be published.`)) {
+      return;
+    }
 
     setBulkBusy(true);
     setBulkMessage(null);
@@ -273,7 +278,9 @@ export function AllQuestionsPanelClient({
       const response = await fetch("/api/admin/questions/bulk-actions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: bulkAction, ids }),
+        body: JSON.stringify(
+          bulkAction === "CLEAR_REVIEW_REQUIRED" ? { action: "SET_REVIEW_REQUIRED", ids, reviewRequired: false } : { action: bulkAction, ids }
+        ),
       });
       const data = await response.json();
 
@@ -630,6 +637,7 @@ export function AllQuestionsPanelClient({
                 <option value="DRAFT">Move to Draft</option>
                 <option value="ARCHIVE">Archive</option>
                 <option value="SET_REVIEW_REQUIRED">Set Review Required</option>
+                <option value="CLEAR_REVIEW_REQUIRED">Mark Reviewed (clear flag)</option>
                 <option value="DELETE">Delete</option>
               </select>
               <Button onClick={handleBulkAction} disabled={!bulkAction || selectedIds.size === 0 || bulkBusy} size="sm">
@@ -728,6 +736,8 @@ export function AllQuestionsPanelClient({
                     </td>
                     <td className="py-2.5 pr-4">
                       {q.reviewRequired ? <Badge variant="warning">Review</Badge> : null}
+                      {q.answerVerification === "UNVERIFIED" ? <Badge variant="warning" title="Imported without an official answer key">Answer unverified</Badge> : null}
+                      {q.answerVerification === "ADMIN_CONFIRMED" ? <Badge variant="info" title="Answer chosen by an administrator during AI import">Admin answer</Badge> : null}
                     </td>
                     <td className="py-2.5 pr-4">
                       <Link

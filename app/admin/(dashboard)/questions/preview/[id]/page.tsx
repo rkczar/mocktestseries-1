@@ -32,6 +32,7 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
       text: true,
       imageUrl: true,
       status: true,
+      answerVerification: true,
       contentFormat: true,
       editorialStage: true,
       explanation: true,
@@ -60,6 +61,10 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
         <Badge variant="neutral">{q.contentFormat}</Badge>
         {q.questionType !== "SINGLE_CORRECT" ? <Badge variant="neutral">{QUESTION_TYPE_LABEL[toQuestionType(q.questionType)]}</Badge> : null}
         {q.editorialStage ? <Badge variant="neutral">{q.editorialStage}</Badge> : null}
+        {q.answerVerification === "UNVERIFIED" ? <Badge variant="warning">Answer unverified (no official key)</Badge> : null}
+        {q.answerVerification === "ADMIN_CONFIRMED" ? <Badge variant="info">Answer chosen by an administrator</Badge> : null}
+        {q.answerVerification === "OFFICIAL_KEY" ? <Badge variant="success">Official answer key</Badge> : null}
+        {q.answerVerification === "INDEPENDENTLY_VERIFIED" ? <Badge variant="success">Answer independently verified</Badge> : null}
       </div>
       <Card>
         <CardContent className="flex flex-col gap-3 pt-5" data-testid="admin-question-preview">

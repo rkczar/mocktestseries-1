@@ -10,6 +10,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { allocateQuestionCode, questionCodeScope, resolveQuestionCodeInput } from "@/lib/question-code";
 import { flagExplanationStaleIfExists } from "@/lib/ai-explanation";
 import { correctCountIssue, matchAssetKey, matchSpecIssues, parseMatchLines, QUESTION_TYPES, type MatchSpec } from "@/lib/question-types";
+import { publishRefusal } from "@/lib/question-publish-policy";
 
 const OPTION_LABELS = ["A", "B", "C", "D"] as const;
 
@@ -274,6 +275,11 @@ export async function createQuestionAction(
   if (match.error) return { error: match.error };
 
   const isReviewRequired = reviewRequired === "on";
+  // Publishing policy (lib/question-publish-policy.ts): a question flagged for
+  // review is never published — clear the flag first.
+  if (status === QuestionStatus.PUBLISHED && isReviewRequired) {
+    return { error: "A question flagged for review can't be published. Untick Review Required (after reviewing it) or save it as Draft." };
+  }
 
   await prisma.$transaction(async (tx) => {
     const { examCode, examYear: resolvedYear } = await resolveQuestionCodeInput(tx, {
@@ -368,8 +374,14 @@ export async function updateQuestionAction(
   // unchanged".
   const before = await prisma.question.findUnique({
     where: { id: questionId },
-    select: { text: true, questionType: true, options: { select: { label: true, text: true, isCorrect: true }, orderBy: { label: "asc" } } },
+    select: { text: true, questionType: true, status: true, options: { select: { label: true, text: true, isCorrect: true }, orderBy: { label: "asc" } } },
   });
+
+  // Publishing policy (lib/question-publish-policy.ts): only the transition
+  // INTO Published is gated, so editing an already-published question keeps working.
+  if (status === QuestionStatus.PUBLISHED && before?.status !== QuestionStatus.PUBLISHED && isReviewRequired) {
+    return { error: "A question flagged for review can't be published. Untick Review Required (after reviewing it) or save it as Draft." };
+  }
 
   await prisma.$transaction(async (tx) => {
     const existing = await tx.question.findUnique({
@@ -414,8 +426,12 @@ export async function updateQuestionAction(
   return { success: true };
 }
 
-export async function setQuestionStatusAction(questionId: string, status: QuestionStatus) {
+export async function setQuestionStatusAction(questionId: string, status: QuestionStatus): Promise<{ error?: string } | void> {
   const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
+  if (status === QuestionStatus.PUBLISHED) {
+    const refusal = await publishRefusal(questionId);
+    if (refusal) return { error: refusal };
+  }
   await prisma.question.update({ where: { id: questionId }, data: { status } });
   await prisma.auditLog.create({
     data: {

@@ -360,6 +360,16 @@ async function executeLeased(
       reviewReason = reviewReason ?? "Auto-saved as Draft: no valid Correct Answer was provided";
     }
 
+    // Publishing policy (lib/question-publish-policy.ts): a row flagged for
+    // review is still imported, but never straight into Published.
+    // (REPLACE onto a question that is already published keeps it published:
+    // that is not a new publication — see the REPLACE branch below.)
+    const heldBackByReview = resolved.reviewRequired && effectiveStatus === QuestionStatus.PUBLISHED;
+    if (heldBackByReview) {
+      effectiveStatus = QuestionStatus.DRAFT;
+      reviewReason = reviewReason ?? "Auto-saved as Draft: flagged for review";
+    }
+
     // RICH: import is never publish. Always DRAFT; editorial stage NEEDS_REVIEW
     // when anything needs a human look, else DRAFT — never VERIFIED.
     let rich: { m: ManifestQuestion; assets: PreparedAsset[]; stage: EditorialStage } | null = null;
@@ -412,6 +422,7 @@ async function executeLeased(
     const previousYearPaperId = rd.previousYearPaperId ?? run.previousYearPaperId ?? null;
     const source = run.previousYearPaperId && !rd.previousYearPaperId ? QuestionSource.PYQ : rd.source;
 
+    let savedStatus: QuestionStatus = effectiveStatus;
     try {
       const outcome = await prisma.$transaction(async (tx) => {
         const finishRow = async <T extends { kind: "SUCCESS" | "SKIPPED" | "REPLACED"; questionId: string; questionCode: string | null }>(result: T): Promise<T> => {
@@ -469,6 +480,11 @@ async function executeLeased(
             // question's canonical ownership (exam / PYQ paper / source /
             // year) — e.g. never unlinks a RUHS 2024 PYQ from its paper.
             const ownership = mockTarget ? {} : { examId: rd.examId, previousYearPaperId, source, examYear: rd.examYear };
+            const replacedStatus =
+              heldBackByReview && (await tx.question.findUnique({ where: { id: duplicateQuestionId }, select: { status: true } }))?.status === QuestionStatus.PUBLISHED
+                ? QuestionStatus.PUBLISHED
+                : effectiveStatus;
+            savedStatus = replacedStatus;
             const updated = await tx.question.update({
               where: { id: duplicateQuestionId },
               data: {
@@ -479,7 +495,7 @@ async function executeLeased(
                 text: questionText,
                 imageUrl: rich ? null : merged.image || null,
                 difficulty: rd.difficulty,
-                status: effectiveStatus,
+                status: replacedStatus,
                 importBatchId: runId,
                 reviewRequired: resolved.reviewRequired,
                 reviewReason,
@@ -551,7 +567,7 @@ async function executeLeased(
       if (outcome.kind === "SUCCESS") successCount++;
       else if (outcome.kind === "SKIPPED") skippedCount++;
       else if (outcome.kind === "REPLACED") replacedCount++;
-      if (effectiveStatus === QuestionStatus.DRAFT) draftCount++;
+      if (savedStatus === QuestionStatus.DRAFT) draftCount++;
       if (resolved.reviewRequired) reviewRequiredCount++;
 
     } catch (error) {

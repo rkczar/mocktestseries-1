@@ -3,6 +3,7 @@ import { QuestionStatus } from "@prisma/client";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { publishQuestions, summarizeBlocks } from "@/lib/question-publish-policy";
 
 /**
  * Bulk mutations for the All Questions table (Publish / Move to Draft /
@@ -51,9 +52,27 @@ export async function POST(request: NextRequest) {
     const uniqueIds = Array.from(new Set(ids));
     const act = action as BulkAction;
 
-    if (act === "PUBLISH" || act === "DRAFT" || act === "ARCHIVE") {
-      const status =
-        act === "PUBLISH" ? QuestionStatus.PUBLISHED : act === "DRAFT" ? QuestionStatus.DRAFT : QuestionStatus.ARCHIVED;
+    if (act === "PUBLISH") {
+      // Publishing policy (lib/question-publish-policy.ts): eligible questions
+      // are published, flagged / broken ones are skipped and reported — never
+      // published by a bulk click.
+      const result = await publishQuestions({ ids: uniqueIds, actorId: session.user.id!, source: "QUESTION_BANK_BULK" });
+      const parts = [`Published ${result.publishedCount} question(s).`];
+      if (result.alreadyPublished.length) parts.push(`${result.alreadyPublished.length} already published.`);
+      if (result.blocked.length) parts.push(`${result.blocked.length} not published (${summarizeBlocks(result.blocked)}).`);
+      return NextResponse.json({
+        success: true,
+        action: act,
+        updatedCount: result.publishedCount,
+        alreadyPublishedCount: result.alreadyPublished.length,
+        blockedCount: result.blocked.length,
+        blocked: result.blocked.slice(0, 200),
+        message: parts.join(" "),
+      });
+    }
+
+    if (act === "DRAFT" || act === "ARCHIVE") {
+      const status = act === "DRAFT" ? QuestionStatus.DRAFT : QuestionStatus.ARCHIVED;
 
       const result = await prisma.question.updateMany({ where: { id: { in: uniqueIds } }, data: { status } });
 

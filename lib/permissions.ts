@@ -112,6 +112,14 @@ export const PERMISSIONS = {
   // enforced server-side on every action.
   AI_ENGINE_VIEW: "ai-engine:view",
   AI_ENGINE_MANAGE: "ai-engine:manage",
+  // AI Question Importer (Admin -> AI Question Importer). VIEW = read jobs,
+  // costs, vault and storage reports (MASTER_ADMIN + FULL_ADMIN). USE =
+  // upload, process (paid AI within the budgets), review, import and publish
+  // (MASTER_ADMIN). MANAGE = importer settings, budgets, privacy, retention
+  // and storage cleanup (MASTER_ADMIN). Enforced server-side everywhere.
+  AI_IMPORTER_VIEW: "ai-importer:view",
+  AI_IMPORTER_USE: "ai-importer:use",
+  AI_IMPORTER_MANAGE: "ai-importer:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -132,6 +140,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.PLATFORM_CONTROLS_VIEW,
     PERMISSIONS.ACCOUNT_RECOVERY_VIEW,
     PERMISSIONS.AI_ENGINE_VIEW,
+    PERMISSIONS.AI_IMPORTER_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
 };

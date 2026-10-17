@@ -12,7 +12,13 @@ export function StatusSelect({ questionId, status }: { questionId: string; statu
     <SelectNative
       value={status}
       disabled={pending}
-      onChange={(e) => startTransition(() => setQuestionStatusAction(questionId, e.target.value as QuestionStatus))}
+      onChange={(e) => {
+        const next = e.target.value as QuestionStatus;
+        startTransition(async () => {
+          const result = await setQuestionStatusAction(questionId, next);
+          if (result?.error) alert(result.error);
+        });
+      }}
       className="h-8 w-32 text-xs"
       aria-label="Question status"
     >

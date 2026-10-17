@@ -161,11 +161,18 @@ export interface ProviderPreferences {
   require_parameters?: boolean;
 }
 
+/** One part of a multimodal user message (AI Question Importer: page images). */
+export type ChatContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
+
 export interface ChatParams {
   apiKey: string;
   /** Single model, or `models` for OpenRouter-side fallbacks (first = preferred). */
   models: string[];
   prompt: string;
+  /** Optional multimodal content; when set it is sent INSTEAD of `prompt` (text-only callers never set it). */
+  content?: ChatContentPart[];
+  /** Optional system message (the importer's fixed rules; document text never goes here). */
+  system?: string;
   maxTokens: number;
   temperature: number;
   provider: ProviderPreferences;
@@ -194,7 +201,7 @@ interface ChatResponse {
 
 export async function chatCompletion(p: ChatParams): Promise<ChatResult> {
   const body: Record<string, unknown> = {
-    messages: [{ role: "user", content: p.prompt }],
+    messages: p.content || p.system ? [...(p.system ? [{ role: "system", content: p.system }] : []), { role: "user", content: p.content ?? p.prompt }] : [{ role: "user", content: p.prompt }],
     max_tokens: p.maxTokens,
     temperature: p.temperature,
     provider: p.provider,

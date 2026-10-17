@@ -32,6 +32,12 @@ export function istDayMonth(d = new Date()): { istDay: string; istMonth: string 
 
 /** Spend that counts against budgets: settled amounts + open reservations (never RELEASED rows). */
 const SPEND = Prisma.sql`COALESCE(SUM(COALESCE("settledInr", "reservedInr")), 0)::float8`;
+/**
+ * The AI Question Importer has its OWN budget (lib/ai-import/ai.ts, features
+ * "qimport_*"): its reservations share this table but never count against the
+ * platform (student Ask AI / admin / Instagram) daily and monthly budgets.
+ */
+const PLATFORM = Prisma.sql`left("feature", 8) <> 'qimport_'`;
 
 export async function reserveBudget(input: { requestKey: string; feature: string; featureLabel: string; reservedInr: number; budgets: BudgetConfig; featureDailyInr: number | null }): Promise<void> {
   const { budgets } = input;
@@ -44,8 +50,8 @@ export async function reserveBudget(input: { requestKey: string; feature: string
       WHERE "status" = 'RESERVED' AND "createdAt" < ${new Date(Date.now() - STALE_RESERVATION_MS)}`;
     const [row] = await tx.$queryRaw<{ day: number; month: number; feature: number }[]>`
       SELECT
-        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND "status" <> 'RELEASED') AS day,
-        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istMonth" = ${istMonth} AND "status" <> 'RELEASED') AS month,
+        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND "status" <> 'RELEASED' AND ${PLATFORM}) AS day,
+        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istMonth" = ${istMonth} AND "status" <> 'RELEASED' AND ${PLATFORM}) AS month,
         (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND "feature" = ${input.feature} AND "status" <> 'RELEASED') AS feature`;
     const amt = input.reservedInr;
     if (row.day + amt > budgets.dailyInr) {
@@ -96,12 +102,12 @@ export async function budgetUsage(): Promise<BudgetUsage> {
   const [[row], features] = await Promise.all([
     prisma.$queryRaw<{ day: number; month: number; dayHeld: number; monthHeld: number }[]>`
       SELECT
-        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND "status" <> 'RELEASED') AS day,
-        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istMonth" = ${istMonth} AND "status" <> 'RELEASED') AS month,
-        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND ("status" = 'RESERVED' OR ("status" = 'SETTLED' AND NOT "costKnown"))) AS "dayHeld",
-        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istMonth" = ${istMonth} AND ("status" = 'RESERVED' OR ("status" = 'SETTLED' AND NOT "costKnown"))) AS "monthHeld"`,
+        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND "status" <> 'RELEASED' AND ${PLATFORM}) AS day,
+        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istMonth" = ${istMonth} AND "status" <> 'RELEASED' AND ${PLATFORM}) AS month,
+        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND ("status" = 'RESERVED' OR ("status" = 'SETTLED' AND NOT "costKnown")) AND ${PLATFORM}) AS "dayHeld",
+        (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istMonth" = ${istMonth} AND ("status" = 'RESERVED' OR ("status" = 'SETTLED' AND NOT "costKnown")) AND ${PLATFORM}) AS "monthHeld"`,
     prisma.$queryRaw<{ feature: string; spend: number }[]>`
-      SELECT "feature", ${SPEND} AS spend FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND "status" <> 'RELEASED' GROUP BY "feature"`,
+      SELECT "feature", ${SPEND} AS spend FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND "status" <> 'RELEASED' AND ${PLATFORM} GROUP BY "feature"`,
   ]);
   return {
     dayInr: row.day,

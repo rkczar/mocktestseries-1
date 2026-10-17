@@ -18,6 +18,7 @@ import {
   HardDrive,
   Settings,
   GalleryHorizontal,
+  ScanText,
 } from "lucide-react";
 
 export interface AdminNavItem {
@@ -31,6 +32,7 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { label: "Website", href: "/admin/website", icon: Globe },
   { label: "Exams", href: "/admin/exams", icon: GraduationCap },
   { label: "Question Bank", href: "/admin/questions", icon: HelpCircle },
+  { label: "AI Question Importer", href: "/admin/ai-importer", icon: ScanText },
   { label: "Tests", href: "/admin/tests", icon: ClipboardList },
   { label: "Students", href: "/admin/students", icon: Users },
   { label: "AI Solutions", href: "/admin/ai", icon: Sparkles },

@@ -996,6 +996,11 @@ model Question {
   // ("A-II, B-I, …") are ordinary single-correct options. See docs/NEET-QUESTION-TYPES.md.
   questionType        QuestionType       @default(SINGLE_CORRECT)
   matchSpec           Json?
+  // Where the answer key of this question came from (AI Question Importer).
+  // NULL = not recorded (every question created before the importer).
+  // OFFICIAL_KEY | INDEPENDENTLY_VERIFIED | ADMIN_CONFIRMED | UNVERIFIED — UNVERIFIED is never
+  // an official answer and stays visible in the Question Bank.
+  answerVerification  String?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -3588,4 +3593,395 @@ model StudentTrialNotice {
 
   @@unique([studentId, kind, bucket])
   @@index([kind, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// AI Question Importer (Admin → AI Question Importer). A preprocessing and
+// verification layer IN FRONT of the existing Bulk Import: source files are
+// kept in a private vault (AI_IMPORT_VAULT_DIR, never public), extracted into
+// AiImportQuestion rows, verified, and approved questions enter the Question
+// Bank only through the existing Rich JSON package pipeline
+// (lib/ai-import/adapter.ts → BulkImportRun). Ids of existing records (exam,
+// subject, admin, question, bulk import run/row) are plain strings so these
+// tables never constrain or cascade into the live question tables.
+// ---------------------------------------------------------------------------
+
+enum AiImportJobStatus {
+  DRAFT
+  ANALYZING
+  AWAITING_CONFIRMATION
+  QUEUED
+  PROCESSING
+  NEEDS_REVIEW
+  PAUSED
+  PAUSED_BUDGET
+  IMPORTING
+  COMPLETED
+  COMPLETED_WITH_ISSUES
+  FAILED
+  CANCELLED
+}
+
+enum AiImportPaperType {
+  FULL_PAPER
+  SINGLE_SUBJECT
+  MIXED
+}
+
+enum AiImportFileRole {
+  PAPER
+  ANSWER_KEY
+}
+
+enum AiImportFileStatus {
+  UPLOADING
+  UPLOADED
+  ANALYZED
+  REJECTED
+  PROCESSED
+  PURGED
+}
+
+enum AiImportPageStatus {
+  PENDING
+  DONE
+  FAILED
+  SKIPPED
+}
+
+enum AiImportQuestionStatus {
+  EXTRACTED
+  READY
+  NEEDS_CORRECTION
+  NOT_IMPORTABLE
+  DUPLICATE
+  REJECTED
+  IMPORTED
+  PUBLISHED
+  IMPORT_FAILED
+}
+
+enum AiImportAnswerStatus {
+  OFFICIAL_MATCHED
+  INDEPENDENTLY_VERIFIED
+  UNVERIFIED
+  KEY_MISSING
+  KEY_MISMATCH
+  AMBIGUOUS_MAPPING
+  WITHDRAWN
+}
+
+model AiImportJob {
+  id                  String              @id @default(cuid())
+  title               String
+  status              AiImportJobStatus   @default(DRAFT)
+  examId              String
+  paperType           AiImportPaperType   @default(FULL_PAPER)
+  subjectId           String?
+  year                Int?
+  paperCode           String?
+  previousYearPaperId String?
+  createdById         String
+  /// Job spending cap (INR) for paid AI calls; the job pauses before exceeding it.
+  budgetInr           Float
+  /// Analysis-time estimate (INR / USD) + its breakdown and the prices / FX rate it used.
+  estCostInr          Float?
+  estCostUsd          Float?
+  estimate            Json?
+  /// Recorded provider cost of this job's AI calls (INR / USD). Unknown costs are held at their worst case.
+  spentInr            Float               @default(0)
+  spentUsd            Float               @default(0)
+  /// Snapshot of the importer settings (models, privacy, policies) the job runs with.
+  config              Json?
+  analysis            Json?
+  /// Worker lease (one worker per job across processes).
+  leaseOwner          String?
+  leaseUntil          DateTime?
+  heartbeatAt         DateTime?
+  pauseReason         String?
+  errorMessage        String?
+  confirmedAt         DateTime?
+  confirmedById       String?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  cancelledAt         DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  files     AiImportFile[]
+  pages     AiImportPage[]
+  questions AiImportQuestion[]
+  figures   AiImportFigure[]
+  keys      AiImportKeyEntry[]
+  events    AiImportEvent[]
+  aiCalls   AiImportAiCall[]
+
+  @@index([status, updatedAt])
+  @@index([createdById, createdAt])
+}
+
+/// One uploaded source file in the private vault (content-addressed: identical uploads share bytes).
+model AiImportFile {
+  id            String             @id @default(cuid())
+  jobId         String
+  job           AiImportJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  role          AiImportFileRole   @default(PAPER)
+  /// ANSWER_KEY: the PAPER file this key belongs to.
+  paperFileId   String?
+  originalName  String
+  ext           String
+  mime          String?
+  declaredBytes Int
+  bytes         Int                @default(0)
+  sha256        String?
+  /// Vault key ("files/<aa>/<sha256>.<ext>"), set once the upload is complete and verified.
+  storageKey    String?
+  status        AiImportFileStatus @default(UPLOADING)
+  /// Detected facts (kind, pages, text layer, images, answer-key hints) — measured, never AI.
+  detected      Json?
+  pageCount     Int?
+  errorMessage  String?
+  uploadedById  String
+  retainUntil   DateTime?
+  purgedAt      DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  pages AiImportPage[]
+
+  @@index([jobId])
+  @@index([sha256])
+  @@index([retainUntil])
+}
+
+/// Per-page checkpoint: render, text layer, extraction result.
+model AiImportPage {
+  id          String             @id @default(cuid())
+  jobId       String
+  job         AiImportJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  fileId      String
+  file        AiImportFile       @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  pageNumber  Int
+  status      AiImportPageStatus @default(PENDING)
+  /// TEXT (digital text layer) | SCANNED (image only) | DOCUMENT (DOCX / sheet rows) | BLANK
+  kind        String?
+  textChars   Int                @default(0)
+  textLayer   String?
+  imageCount  Int                @default(0)
+  /// Vault key of the page render (PNG) used for extraction, crops and review.
+  renderKey   String?
+  renderWidth Int?
+  renderHeight Int?
+  attempts    Int                @default(0)
+  model       String?
+  /// Raw (validated) model output kept for audit and reprocessing.
+  rawOutput   Json?
+  ocrText     String?
+  errorMessage String?
+  processedAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@unique([fileId, pageNumber])
+  @@index([jobId, status])
+}
+
+model AiImportQuestion {
+  id                   String                 @id @default(cuid())
+  jobId                String
+  job                  AiImportJob            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  fileId               String
+  /// "<section>#<number>" — stable per file, used to join a question that continues on the next page.
+  sourceKey            String
+  sourceNumber         Int?
+  sourceLabel          String
+  pages                Int[]
+  orderIndex           Int
+  status               AiImportQuestionStatus @default(EXTRACTED)
+  /// Machine-readable flags (EXTRACTION_UNCERTAIN, IMAGE_MAPPING_UNCERTAIN, UNSUPPORTED_TYPE, TOPIC_UNCERTAIN, …).
+  issueCodes           String[]
+  issues               Json?
+  /// Extracted question (normalized): stem, options[], type, figures, printed answer, confidence.
+  data                 Json
+  /// Admin's corrections overlaid on `data` (never overwrites the extraction).
+  editedData           Json?
+  questionType         String
+  optionCount          Int                    @default(0)
+  contentFormat        String                 @default("PLAIN")
+  confidence           Float?
+  subjectId            String?
+  topicId              String?
+  subTopicId           String?
+  taxonomyConfidence   Float?
+  taxonomySource       String?
+  answerStatus         AiImportAnswerStatus   @default(KEY_MISSING)
+  /// Official key value exactly as printed in the key file, and its source page.
+  officialAnswerRaw    String?
+  officialAnswer       String[]
+  officialKeyPage      Int?
+  /// Answer printed inside the question paper itself (if any).
+  sourceAnswer         String[]
+  /// Independent AI opinion — never an official answer.
+  aiAnswer             String[]
+  aiAnswerModel        String?
+  aiAnswerConfidence   Float?
+  /// Labels used on import; answerConfirmedById set when an admin picked them by hand.
+  finalAnswer          String[]
+  answerConfirmedById  String?
+  duplicateOfQuestionId String?
+  duplicateKind        String?
+  duplicateScore       Float?
+  allowDuplicate       Boolean                @default(false)
+  bulkImportRunId      String?
+  bulkImportRowId      String?
+  questionId           String?
+  importedAt           DateTime?
+  publishedAt          DateTime?
+  reviewedById         String?
+  reviewedAt           DateTime?
+  rejectedReason       String?
+  costInr              Float                  @default(0)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  checks  AiImportCheck[]
+  figures AiImportFigure[]
+
+  @@unique([fileId, sourceKey])
+  @@index([jobId, status])
+  @@index([questionId])
+}
+
+/// One image ↔ question relationship. The same original bytes may serve several questions (a shared diagram).
+model AiImportFigure {
+  id             String            @id @default(cuid())
+  jobId          String
+  job            AiImportJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  fileId         String
+  pageNumber     Int
+  questionId     String?
+  question       AiImportQuestion? @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  /// STEM | OPTION | SHARED | UNASSIGNED
+  owner          String
+  optionLabel    String?
+  /// Questions sharing this figure carry the same group key.
+  sharedGroup    String?
+  /// Normalized box on the page render {x, y, w, h} in 0..1; null for DOCX / sheet images.
+  box            Json?
+  /// EMBEDDED (exact bytes from the PDF/DOCX) | CROP (cut from the page render) | PAGE (whole image file)
+  source         String
+  /// Vault key of the ORIGINAL bytes (never modified).
+  originalKey    String
+  originalSha256 String
+  originalMime   String
+  width          Int
+  height         Int
+  bytes          Int
+  /// Processed media (existing media engine) once imported.
+  mediaSha256    String?
+  description    String?
+  confidence     Float?
+  /// OK | UNCERTAIN | MISSING
+  mappingStatus  String            @default("OK")
+  confirmedById  String?
+  createdAt      DateTime          @default(now())
+
+  @@index([jobId])
+  @@index([questionId])
+  @@index([originalSha256])
+}
+
+model AiImportKeyEntry {
+  id                String      @id @default(cuid())
+  jobId             String
+  job               AiImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  keyFileId         String
+  paperFileId       String?
+  sourceNumber      Int
+  section           String      @default("")
+  rawValue          String
+  labels            String[]
+  /// OK | WITHDRAWN | BONUS | AMBIGUOUS | DUPLICATE | UNMATCHED
+  status            String      @default("OK")
+  page              Int?
+  matchedQuestionId String?
+  createdAt         DateTime    @default(now())
+
+  @@index([jobId])
+  @@index([keyFileId])
+}
+
+/// Persistent result of one verification check (stage 1 source, 2 structure, 3 answer key, 4 final audit).
+model AiImportCheck {
+  id         String           @id @default(cuid())
+  questionId String
+  question   AiImportQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  stage      Int
+  name       String
+  passed     Boolean
+  /// INFO | WARNING | ERROR
+  severity   String
+  /// DETERMINISTIC | AI | OCR | ADMIN
+  method     String
+  model      String?
+  detail     String?
+  costInr    Float?
+  createdAt  DateTime         @default(now())
+
+  @@index([questionId, stage])
+}
+
+/// Append-only job log (start, pause, budget, retry, cancel, import, publish, cleanup).
+model AiImportEvent {
+  id        String      @id @default(cuid())
+  jobId     String
+  job       AiImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  actorId   String?
+  type      String
+  message   String
+  data      Json?
+  createdAt DateTime    @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+/// Every paid (or attempted) AI call of a job, with its cost. Mirrors the AiGatewayCall row (same requestId).
+model AiImportAiCall {
+  id           String      @id @default(cuid())
+  jobId        String
+  job          AiImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  task         String
+  pageId       String?
+  questionId   String?
+  requestId    String
+  attempt      Int         @default(1)
+  model        String
+  ok           Boolean
+  fallbackUsed Boolean     @default(false)
+  inputTokens  Int?
+  outputTokens Int?
+  estCostInr   Float?
+  costUsd      Float?
+  costInr      Float?
+  /// actual | pending | unknown | none
+  costStatus   String
+  fxRate       Float?
+  errorSummary String?
+  createdAt    DateTime    @default(now())
+
+  @@index([jobId, createdAt])
+  @@index([createdAt])
+}
+
+/// Import Storage Manager: one row per executed cleanup (what was removed and why).
+model AiImportCleanup {
+  id         String   @id @default(cuid())
+  actorId    String
+  categories String[]
+  fileCount  Int
+  bytes      BigInt
+  detail     Json
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
 }
