@@ -6,7 +6,7 @@ import { peekUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
 import { IMAGE_TOKENS, PRICE_MARGIN, estimateInputTokens, inputImagePriceUsd, modelProblem, notPricier, worstCaseUsd } from "@/lib/ai-import/ai";
 import { SOLVE_SYSTEM } from "@/lib/ai-import/prompts";
-import { PILOT_LIMITS, type ImporterSettings } from "@/lib/ai-import/config";
+import { MAX_IMPORTER_MODELS, PILOT_LIMITS, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { PROFILES as SELECT_PROFILES, computeModelPlan } from "@/lib/ai-import/select";
 import { getRouteSnapshot, routeStatus } from "@/lib/ai-import/routes";
@@ -35,17 +35,20 @@ function requestCost(m: AiModel, profile: Profile, fxRate: number | null): Reque
   return { inputTokens, maxOutputTokens: p.maxOut, maxUsd, maxInr: usdToInr(maxUsd, fxRate), typicalUsd, typicalInr: usdToInr(typicalUsd, fxRate) };
 }
 
-function toOption(m: AiModel, fxRate: number | null): ImporterModelOption {
+function toOption(m: AiModel, fxRate: number | null, importerModels: readonly string[]): ImporterModelOption {
   const vision = m.inputModalities.includes("image");
-  const textProblem = modelProblem(m, false);
+  // Problems other than list membership (the page applies its current, possibly unsaved, list itself).
+  const textProblem = modelProblem(m, false, [m.id]);
   return {
     id: m.id,
     name: m.name,
     vision,
-    approved: m.approved,
+    // On the importer's own list (the global AI → Models approval is shown for information only).
+    approved: importerModels.includes(m.id),
+    globallyApproved: m.approved,
     // Usable for text tasks / for vision tasks (null = usable).
     problem: textProblem,
-    visionProblem: modelProblem(m, true),
+    visionProblem: modelProblem(m, true, [m.id]),
     promptPerM: m.promptPrice !== null ? m.promptPrice * 1e6 : null,
     completionPerM: m.completionPrice !== null ? Math.max(m.completionPrice, m.reasoningPrice ?? 0) * 1e6 : null,
     imagePrice: vision ? inputImagePriceUsd(m) : null,
@@ -76,7 +79,7 @@ export async function importerModelCatalog(forSettings?: ImporterSettings): Prom
     computeModelPlan(settings, { refresh: false }),
     getRouteSnapshot(),
   ]);
-  const options = rows.map((m) => toOption(m, fx.rate));
+  const options = rows.map((m) => toOption(m, fx.rate, settings.importerModels));
   const lastSync = rows.reduce<Date | null>((a, m) => (!a || m.lastSyncedAt > a ? m.lastSyncedAt : a), null);
   return {
     provider: {
@@ -123,6 +126,22 @@ const SLOTS: { key: "extract" | "verify" | "classify" | "key"; label: string; vi
  */
 export async function importerSettingsProblems(raw: unknown, next: ImporterSettings): Promise<string[]> {
   const problems: string[] = [];
+  // The importer's own model list: real catalog text models only (an id dropped by normalization is reported).
+  const sentList = ((raw ?? {}) as { importerModels?: unknown }).importerModels;
+  if (Array.isArray(sentList)) {
+    for (const x of sentList) {
+      const id = typeof x === "string" ? x.trim() : "";
+      if (!next.importerModels.includes(id)) problems.push(`Importer models: “${String(x).slice(0, 120)}” is not a valid OpenRouter model ID${sentList.length > MAX_IMPORTER_MODELS ? ` (or the list is longer than ${MAX_IMPORTER_MODELS})` : ""}.`);
+    }
+  }
+  if (next.importerModels.length) {
+    const listed = new Map((await prisma.aiModel.findMany({ where: { id: { in: next.importerModels } } })).map((r) => [r.id, r]));
+    for (const id of next.importerModels) {
+      const r = listed.get(id);
+      if (!r) problems.push(`Importer models: ${id} is not in the model catalog (sync Admin → AI → Models).`);
+      else if (r.isImageModel || !r.outputModalities.includes("text")) problems.push(`Importer models: ${id} does not return text (image-generation models cannot read papers).`);
+    }
+  }
   const budgetProblems = () => {
     if (next.budget.maxRequestInr > next.budget.maxJobInr) problems.push(`The maximum per AI request (₹${next.budget.maxRequestInr}) cannot be above the hard limit per job (₹${next.budget.maxJobInr}).`);
     if (next.budget.maxJobInr > next.budget.totalInr) problems.push(`The hard limit per job (₹${next.budget.maxJobInr}) cannot be above the all-time importer budget (₹${next.budget.totalInr}).`);
@@ -140,7 +159,7 @@ export async function importerSettingsProblems(raw: unknown, next: ImporterSetti
     if (typeof was === "string" && was.trim() && next.models[s.key] === null) problems.push(`${s.label}: “${was.slice(0, 120)}” is not a valid OpenRouter model ID.`);
     const id = next.models[s.key];
     if (!id) continue;
-    const p = modelProblem(rows.get(id), s.vision);
+    const p = modelProblem(rows.get(id), s.vision, next.importerModels);
     if (p) problems.push(`${s.label}: ${id} — ${p}.`);
   }
   const sentFallbacks = Array.isArray(sent.extractFallbacks) ? sent.extractFallbacks : [];
@@ -151,7 +170,7 @@ export async function importerSettingsProblems(raw: unknown, next: ImporterSetti
   const extract = next.models.extract ? rows.get(next.models.extract) : undefined;
   for (const id of next.models.extractFallbacks) {
     const row = rows.get(id);
-    const p = modelProblem(row, true);
+    const p = modelProblem(row, true, next.importerModels);
     if (p) problems.push(`Fallback extraction model: ${id} — ${p}.`);
     // The runtime drops a fallback priced above the extraction model (never a pricier model): say so now.
     else if (extract && row && !notPricier(row, extract)) {

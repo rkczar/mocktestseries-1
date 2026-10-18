@@ -24,7 +24,7 @@ function slotProblem(options: ImporterModelOption[], id: string | null, vision: 
   if (!id) return null;
   const m = options.find((o) => o.id === id);
   if (!m) return "not in the synced model catalog";
-  if (!m.approved) return "not approved in AI → Models";
+  if (!m.approved) return "not on the importer's model list";
   return vision ? m.visionProblem : m.problem;
 }
 
@@ -51,7 +51,7 @@ function ProviderStatus({ catalog, aiEnabled, problems }: { catalog: ImporterCat
       text:
         catalog.catalog.models === 0
           ? "Unavailable — the model catalog is empty. Sync it in AI → Models (a free, read-only request to OpenRouter)."
-          : `${catalog.catalog.models} models synced${catalog.catalog.lastSyncAt ? ` (last sync ${catalog.catalog.lastSyncAt.slice(0, 10)})` : ""}; ${catalog.catalog.approved} approved, ${catalog.catalog.usableVision} of them can read page images.${catalog.catalog.usableVision === 0 ? " Approve a vision model in AI → Models to choose an extraction model." : ""}`,
+          : `${catalog.catalog.models} models synced${catalog.catalog.lastSyncAt ? ` (last sync ${catalog.catalog.lastSyncAt.slice(0, 10)})` : ""}; ${catalog.catalog.approved} on the importer's model list, ${catalog.catalog.usableVision} of them can read page images.${catalog.catalog.usableVision === 0 ? " Add a vision model under Importer models below so pages can be read." : ""}`,
     },
     {
       id: "routes",
@@ -59,7 +59,7 @@ function ProviderStatus({ catalog, aiEnabled, problems }: { catalog: ImporterCat
       tone: !catalog.routes.fetchedAt ? "error" : catalog.routes.stale || catalog.routes.zdrOk === false || catalog.routes.models.some((m) => !m.ok) ? "warning" : "success",
       text: !catalog.routes.fetchedAt
         ? "Not read yet — use Refresh provider routes (free, read-only OpenRouter requests). Until then no model can be chosen automatically."
-        : `Read ${catalog.routes.fetchedAt.slice(0, 16).replace("T", " ")} UTC for ${catalog.routes.models.length} approved model${catalog.routes.models.length === 1 ? "" : "s"}${catalog.routes.models.some((m) => !m.ok) ? ` (${catalog.routes.models.filter((m) => !m.ok).length} could not be read)` : ""}; Zero-Data-Retention list ${catalog.routes.zdrOk ? "read" : `NOT read${catalog.routes.zdrError ? ` (${catalog.routes.zdrError})` : ""}`}.${catalog.routes.stale ? " Older than 6 h: a job confirmation reads them again first." : ""}`,
+        : `Read ${catalog.routes.fetchedAt.slice(0, 16).replace("T", " ")} UTC for ${catalog.routes.models.length} importer model${catalog.routes.models.length === 1 ? "" : "s"}${catalog.routes.models.some((m) => !m.ok) ? ` (${catalog.routes.models.filter((m) => !m.ok).length} could not be read)` : ""}; Zero-Data-Retention list ${catalog.routes.zdrOk ? "read" : `NOT read${catalog.routes.zdrError ? ` (${catalog.routes.zdrError})` : ""}`}.${catalog.routes.stale ? " Older than 6 h: a job confirmation reads them again first." : ""}`,
     },
     {
       id: "fx",
@@ -134,7 +134,7 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
   const selected = value ? options.find((o) => o.id === value) ?? null : null;
   const problem = slotProblem(options, value, vision);
   const usable = (o: ImporterModelOption) => o.approved && (vision ? o.visionProblem : o.problem) === null;
-  const why = (o: ImporterModelOption) => (!o.approved ? "Not approved — approve it in AI → Models" : ((vision ? o.visionProblem : o.problem) ?? ""));
+  const why = (o: ImporterModelOption) => (!o.approved ? "Not on the importer's model list — add it under Importer models" : ((vision ? o.visionProblem : o.problem) ?? ""));
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
     const relevant = options.filter((o) => !vision || o.vision);
@@ -210,7 +210,7 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
             <ul id={listId} role="listbox" className="absolute z-20 mt-1 max-h-72 w-full overflow-y-auto rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-1 shadow-lg" data-testid={`${id}-list`}>
               {list.length === 0 && (
                 <li className="p-2 text-sm text-[var(--color-muted-foreground)]" data-testid={`${id}-empty`}>
-                  {query ? "No model matches." : vision ? "No approved model can read page images. Approve one in AI → Models, or search the catalog." : "No approved model. Approve one in AI → Models, or search the catalog."}
+                  {query ? "No model matches." : vision ? "No importer model can read page images. Add one under Importer models, or search the catalog." : "No importer model. Add one under Importer models, or search the catalog."}
                 </li>
               )}
               {list.map((o, i) => {
@@ -251,6 +251,71 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
       )}
       <p className="text-xs text-[var(--color-muted-foreground)]">{help}</p>
     </div>
+  );
+}
+
+/** The importer's own model list: approval here applies to the AI Question Importer only. */
+function ImporterModelsCard({ options, value, onChange, disabled }: { options: ImporterModelOption[]; value: string[]; onChange: (v: string[]) => void; disabled: boolean }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const hits = q ? options.filter((o) => !value.includes(o.id) && (o.id.toLowerCase().includes(q) || o.name.toLowerCase().includes(q))).slice(0, 12) : [];
+  return (
+    <Card data-testid="importer-models">
+      <CardHeader>
+        <CardTitle>Importer models</CardTitle>
+        <CardDescription>
+          Models approved for the AI Question Importer only. The importer never uses a model outside this list. Adding a model here does not approve it for student Ask AI, Instagram or any other AI feature, and the approvals in AI → Models do not apply to the importer.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-sm">
+        {value.length === 0 ? (
+          <p className="italic text-[var(--color-muted-foreground)]" data-testid="importer-models-empty">
+            No model is approved for the importer: paid AI processing cannot choose a model.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1" data-testid="importer-models-list">
+            {value.map((id) => {
+              const o = options.find((x) => x.id === id);
+              return (
+                <li key={id} className="flex flex-wrap items-center gap-2" data-testid="importer-model" data-model-id={id}>
+                  <code className="text-xs [overflow-wrap:anywhere]">{id}</code>
+                  {o?.vision && <Badge variant="info">vision</Badge>}
+                  {!o && <span className="text-xs text-[var(--color-error)]">not in the synced catalog</span>}
+                  {o && o.visionProblem && o.problem && <span className="text-xs text-[var(--color-warning)]">{o.problem}</span>}
+                  {!disabled && (
+                    <Button type="button" variant="ghost" size="compact" onClick={() => onChange(value.filter((x) => x !== id))} aria-label={`Remove ${id} from the importer models`} data-testid="importer-model-remove">
+                      Remove
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {!disabled && (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="importer-model-search">Add a model from the synced catalog</Label>
+            <Input id="importer-model-search" type="search" placeholder="Search by name or ID…" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="importer-model-search" />
+            {hits.length > 0 && (
+              <ul className="flex flex-col gap-1" data-testid="importer-model-hits">
+                {hits.map((o) => (
+                  <li key={o.id} className="flex flex-wrap items-center gap-2" data-model-id={o.id}>
+                    <Button type="button" variant="outline" size="compact" onClick={() => { onChange([...value, o.id]); setQuery(""); }} data-testid="importer-model-add">
+                      Add
+                    </Button>
+                    <code className="text-xs [overflow-wrap:anywhere]">{o.id}</code>
+                    {o.vision && <Badge variant="info">vision</Badge>}
+                    <span className="text-xs text-[var(--color-muted-foreground)]">in {perM(o.promptPerM)} / out {perM(o.completionPerM)} per M</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {q && hits.length === 0 && <p className="text-xs text-[var(--color-muted-foreground)]">No other catalog model matches.</p>}
+          </div>
+        )}
+        <p className="text-xs text-[var(--color-muted-foreground)]">Save the settings, then use Refresh provider routes so the automatic selection can price the new models.</p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -389,7 +454,8 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       {help && <p className="text-xs text-[var(--color-muted-foreground)]">{help}</p>}
     </div>
   );
-  const options = catalog.options;
+  // List membership follows the form's current (possibly unsaved) Importer models list.
+  const options = useMemo(() => catalog.options.map((o) => ({ ...o, approved: s.importerModels.includes(o.id) })), [catalog.options, s.importerModels]);
   const manual = s.selection.mode === "manual";
   const slots = [
     ["Extraction model", s.models.extract, true],
@@ -464,7 +530,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           </span>
         )}
         <Link className="text-xs underline text-[var(--color-muted-foreground)]" href="/admin/ai/models">
-          Approve or sync models in AI → Models
+          Sync the model catalog in AI → Models
         </Link>
       </div>
 
@@ -481,16 +547,18 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
         </CardContent>
       </Card>
 
+      <ImporterModelsCard options={options} value={s.importerModels} onChange={(v) => setS({ ...s, importerModels: v })} disabled={d} />
+
       <Card data-testid="selection-card">
         <CardHeader>
           <CardTitle>Model selection</CardTitle>
-          <CardDescription>Automatic (default): for each task the importer uses the cheapest approved model that can do it, is available on OpenRouter, meets the privacy settings and fits the per-request limit — judged by its conservative maximum cost, not the average. No model has to be picked per import.</CardDescription>
+          <CardDescription>Automatic (default): for each task the importer uses the cheapest model on its own list (Importer models) that can do it, is available on OpenRouter, meets the privacy settings and fits the per-request limit — judged by its conservative maximum cost, not the average. No model has to be picked per import.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2 text-sm" role="radiogroup" aria-label="Model selection">
             <label className="flex items-center gap-2">
               <input type="radio" name="sel" checked={!manual} onChange={() => setS({ ...s, selection: { mode: "auto" } })} disabled={d} data-testid="sel-auto" />
-              <span><strong>Automatic</strong> — cheapest suitable approved model per task (recommended)</span>
+              <span><strong>Automatic</strong> — cheapest suitable importer model per task (recommended)</span>
             </label>
             <label className="flex items-center gap-2">
               <input type="radio" name="sel" checked={manual} onChange={() => setS({ ...s, selection: { mode: "manual" } })} disabled={d} data-testid="sel-manual" />
@@ -508,7 +576,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       {manual && <Card data-testid="manual-models">
         <CardHeader>
           <CardTitle>Manual override models</CardTitle>
-          <CardDescription>Only models approved in AI → Models with a fixed published price can be selected. Search to see the rest of the catalog and why a model cannot be used.</CardDescription>
+          <CardDescription>Only models on the importer&apos;s list with a fixed published price can be selected. Search to see the rest of the catalog and why a model cannot be used.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           {catalog.catalog.models === 0 && (

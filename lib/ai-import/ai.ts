@@ -102,10 +102,14 @@ export function inputImagePriceUsd(m: Pick<AiModel, "pricingRaw">): number | nul
   return Number.isFinite(v) && v >= 0 ? v : null;
 }
 
-/** Why a configured model cannot be used for a task (null = usable). */
-export function modelProblem(m: AiModel | undefined, needsVision: boolean): string | null {
+/**
+ * Why a model cannot be used by the importer for a task (null = usable). Eligibility is the importer's
+ * OWN list (Import Settings → Importer models), never the global AI → Models approval, so approving a
+ * model for the importer cannot change any other AI feature's routing (and vice versa).
+ */
+export function modelProblem(m: AiModel | undefined, needsVision: boolean, importerModels: readonly string[]): string | null {
   if (!m) return "not in the model catalog (sync Admin → AI → Models)";
-  if (!m.approved) return "not approved in Admin → AI → Models";
+  if (!importerModels.includes(m.id)) return "not approved for the AI Question Importer (Import Settings → Importer models)";
   if (m.disabled) return "disabled";
   if (m.missingSince) return "no longer listed by OpenRouter";
   if (m.expirationDate && m.expirationDate <= new Date().toISOString().slice(0, 10)) return `expired ${m.expirationDate}`;
@@ -362,7 +366,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   // The confirmed model, still approved and usable now? (An admin may have withdrawn it meanwhile.)
   for (;;) {
     const catalog = await loadModels([choice.model!, ...choice.fallbacks]);
-    const p = modelProblem(catalog.get(choice.model!), input.needsVision);
+    const p = modelProblem(catalog.get(choice.model!), input.needsVision, input.settings.importerModels);
     if (!p) break;
     tried.push(choice.model!);
     choice = await replaceModel(input, plan, choice, p, tried);

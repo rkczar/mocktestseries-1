@@ -60,9 +60,11 @@ const saved = async () => (await db.query(`select value from "Setting" where key
 const URL_SETTINGS = `${BASE}/admin/ai-importer/settings`;
 
 await db.query(`delete from "Setting" where key in ('ai.importer', 'ai.importer.routes')`);
-// What an administrator approved in AI → Models (the selection only ever considers approved models).
+// What an administrator approves for the importer (Import Settings → Importer models). The global
+// AI → Models approval flags are never touched here; the suite checks they stay exactly as they were.
 const APPROVED = ["mockvision/reader", "mockvision/checker", "mockvision/mid", "mockvision/cheapnozdr", "mockvision/down", "mockvision/pricey", "mocktext/classifier"];
-await db.query(`update "AiModel" set approved = (id = any($1)) where id like 'mock%'`, [APPROVED]);
+const globalFlags = async () => JSON.stringify((await db.query(`select id, approved, "medicallyApproved" from "AiModel" order by id`)).rows);
+const flags0 = await globalFlags();
 const page = await newPage();
 await login(page, process.env.ADMIN_USER, process.env.ADMIN_PASS);
 
@@ -74,13 +76,23 @@ check("no key, key fragment, hint or cipher anywhere in the page HTML", !/sk-or-
 const tone = async (id) => page.locator(`[data-testid=status-${id}]`).getAttribute("data-tone");
 check("OpenRouter: connected (OK)", (await tone("provider")) === "success" && /Connected/.test(await page.locator("[data-testid=status-provider]").textContent()));
 check("paid AI: OFF by default, shown as info", (await tone("paid")) === "neutral" && /OFF/.test(await page.locator("[data-testid=status-paid]").textContent()));
-check("model metadata: synced, approved vision models counted", (await tone("catalog")) === "success" && /approved/.test(await page.locator("[data-testid=status-catalog]").textContent()));
+check("model metadata: synced; no importer model yet → asks to add a vision model", (await tone("catalog")) === "warning" && /0 on the importer's model list/.test(await page.locator("[data-testid=status-catalog]").textContent()) && /Add a vision model under Importer models/.test(await page.locator("[data-testid=status-catalog]").textContent()));
 check("prices in rupees: FX rate shown", (await tone("fx")) === "success" && /95\.00/.test(await page.locator("[data-testid=status-fx]").textContent()));
 
 section("A2. Automatic model selection (default)");
 check("automatic selection is the default; the manual pickers are hidden", await page.locator("[data-testid=sel-auto]").isChecked() && (await page.locator("[data-testid=manual-models]").count()) === 0 && (await page.locator("[data-testid=m-extract-search]").count()) === 0);
 check("more expensive fallbacks: off by default", !(await page.locator("[data-testid=b-pricier]").isChecked()));
 check("routes not read yet → status says so, no model chosen", (await tone("routes")) === "error" && /None — this task does not run/.test(await page.locator("[data-testid=sel-extract-model]").textContent()));
+check("Importer models card: empty, says it applies to the importer only", (await page.locator("[data-testid=importer-models-empty]").count()) === 1 && /does not approve it for student Ask AI, Instagram or any other AI feature/.test(await page.locator("[data-testid=importer-models]").textContent()));
+const addImporterModel = async (p, id) => {
+  await p.locator("[data-testid=importer-model-search]").fill(id);
+  await p.locator(`[data-testid=importer-model-hits] li[data-model-id="${id}"] [data-testid=importer-model-add]`).click();
+};
+for (const id of APPROVED) await addImporterModel(page, id);
+check("models added to the importer list through the card", (await page.locator("[data-testid=importer-model]").count()) === APPROVED.length);
+await page.locator("[data-testid=importer-model-search]").fill("reader");
+check("search does not offer a model already on the list", (await page.locator("[data-testid=importer-model-hits] li[data-model-id='mockvision/reader']").count()) === 0);
+await page.locator("[data-testid=importer-model-search]").fill("");
 await page.locator("[data-testid=routes-refresh]").click();
 check("Refresh provider routes → routes read, ZDR list read", await until(async () => (await tone("routes")) === "success" && /Zero-Data-Retention list read/.test(await page.locator("[data-testid=status-routes]").textContent())));
 const selModel = async (t) => page.locator(`[data-testid=sel-${t}]`).getAttribute("data-model");
@@ -106,8 +118,10 @@ check("pilot ceilings shown next to the budget fields", /Pilot ceiling ₹10/.te
 await page.locator("[data-testid=settings-save]").click();
 await page.locator("[data-testid=settings-msg]").waitFor();
 const va = await saved();
-check("saved: automatic selection, ZDR on, pricier fallbacks off, pilot limits", va?.selection?.mode === "auto" && va?.privacy?.zdr === true && va?.budget?.allowPricierFallback === false && va?.budget?.totalInr === 10 && va?.budget?.maxRequestInr === 1, va);
+check("saved: importer model list, automatic selection, ZDR on, pricier fallbacks off, pilot limits", JSON.stringify(va?.importerModels) === JSON.stringify(APPROVED) && va?.selection?.mode === "auto" && va?.privacy?.zdr === true && va?.budget?.allowPricierFallback === false && va?.budget?.totalInr === 10 && va?.budget?.maxRequestInr === 1, va);
+check("saving the importer list changed no global AI → Models approval", (await globalFlags()) === flags0);
 await page.reload();
+check("after refresh: the importer list is shown again", (await page.locator("[data-testid=importer-model]").count()) === APPROVED.length);
 check("after refresh: still automatic, same chosen model", (await page.locator("[data-testid=sel-auto]").isChecked()) && (await selModel("extract")) === "mockvision/reader");
 await page.locator("[data-testid=sel-manual]").check();
 check("manual override → the model pickers appear", (await page.locator("[data-testid=manual-models]").count()) === 1);
@@ -134,21 +148,20 @@ check("empty search result state", (await page.locator("[data-testid=m-extract-e
 await search.fill("");
 await page.keyboard.press("Escape");
 
-section("C. Unapproved / unusable models are listed but cannot be chosen");
-await db.query(`update "AiModel" set approved=false where id='mockvision/checker'`);
-await db.query(`update "AiModel" set approved=true where id='mockvision/badimg'`);
+section("C. Models off the importer list / unusable models are listed but cannot be chosen");
 await page.goto(URL_SETTINGS);
 await page.locator("[data-testid=sel-manual]").check();
+await page.locator("[data-testid=importer-model][data-model-id='mockvision/checker'] [data-testid=importer-model-remove]").click();
+await addImporterModel(page, "mockvision/badimg");
 await page.locator("[data-testid=m-verify-search]").fill("checker");
 const chk = page.locator("[data-testid=m-verify-list] [data-model-id='mockvision/checker']");
-check("an unapproved model is shown with the reason", (await chk.getAttribute("data-usable")) === "false" && /Not approved — approve it in AI → Models/.test(await chk.textContent()));
+check("a model removed from the importer list is shown with the reason", (await chk.getAttribute("data-usable")) === "false" && /Not on the importer's model list — add it under Importer models/.test(await chk.textContent()));
 await chk.click({ force: true });
 check("…and clicking it selects nothing", /None — no second read/.test(await page.locator("[data-testid=m-verify-current]").textContent()));
 await page.locator("[data-testid=m-verify-search]").fill("badimg");
 const bad = page.locator("[data-testid=m-verify-list] [data-model-id='mockvision/badimg']");
 check("a model whose image price cannot be read is not selectable, with the reason", (await bad.getAttribute("data-usable")) === "false" && /per-image input price/.test(await bad.textContent()));
 await page.keyboard.press("Escape");
-await db.query(`update "AiModel" set approved=true where id='mockvision/checker'`);
 
 section("D. Verification model, same-model notice and cost table");
 await page.goto(URL_SETTINGS);
@@ -229,16 +242,16 @@ await page.locator("[data-testid=models-retry]").click();
 check("retry shows the loading state", await until(async () => /Loading/.test(await page.locator("[data-testid=models-reload]").textContent()), 3000));
 check("retry succeeds → error cleared", await until(async () => (await page.locator("[data-testid=models-error]").count()) === 0 && !/Loading/.test(await page.locator("[data-testid=models-reload]").textContent())));
 await page.unroute("**/admin/ai-importer/settings");
-await db.query(`update "AiModel" set approved=false where id like 'mock%'`);
-await page.locator("[data-testid=models-reload]").click();
-check("no approved vision model → status asks to approve one", await until(async () => (await page.locator("[data-testid=status-catalog]").getAttribute("data-tone")) === "warning"));
-check("…the saved extraction model is reported as invalid configuration", /not approved/.test((await page.locator("[data-testid=status-invalid]").textContent().catch(() => "")) ?? ""));
+await db.query(`update "Setting" set value = jsonb_set(value, '{importerModels}', '[]') where key='ai.importer'`);
+await page.goto(URL_SETTINGS);
+check("importer list emptied → status asks to add a vision model", await until(async () => (await page.locator("[data-testid=status-catalog]").getAttribute("data-tone")) === "warning"));
+check("…the saved extraction model is reported as invalid configuration", /not on the importer's model list/.test((await page.locator("[data-testid=status-invalid]").textContent().catch(() => "")) ?? ""));
 await page.locator("[data-testid=m-extract-search]").click();
-check("…empty list explains how to fix it", /No approved model can read page images/.test((await page.locator("[data-testid=m-extract-empty]").textContent().catch(() => "")) ?? ""));
+check("…empty list explains how to fix it", /No importer model can read page images/.test((await page.locator("[data-testid=m-extract-empty]").textContent().catch(() => "")) ?? ""));
 await page.keyboard.press("Escape");
 await page.locator("[data-testid=settings-save]").click();
 check("…saving is blocked in the browser with the reason", /fix the invalid model selection/.test((await page.locator("[data-testid=settings-msg]").textContent()) ?? ""));
-await db.query(`update "AiModel" set approved=true where id like 'mock%'`);
+await db.query(`update "Setting" set value = jsonb_set(value, '{importerModels}', $1::jsonb) where key='ai.importer'`, [JSON.stringify(APPROVED)]);
 const cipher = keyRow.apiKeyCipher;
 await db.query(`update "Setting" set value = value - 'apiKeyCipher' where key='api.openrouter'`);
 await page.locator("[data-testid=models-reload]").click();
@@ -253,6 +266,7 @@ section("H. Read-only admin and mobile");
 const full = await newPage();
 await login(full, F.fullAdmin, F.password);
 await full.goto(URL_SETTINGS);
+check("FULL_ADMIN: importer list visible but not editable", (await full.locator("[data-testid=importer-models]").count()) === 1 && (await full.locator("[data-testid=importer-model-search]").count()) === 0 && (await full.locator("[data-testid=importer-model-remove]").count()) === 0);
 check("FULL_ADMIN: status + selection visible, no model search, no Save, no route refresh", (await full.locator("[data-testid=provider-status]").count()) === 1 && (await full.locator("[data-testid=selection]").count()) === 1 && (await full.locator("[data-testid=m-extract-search]").count()) === 0 && (await full.locator("[data-testid=settings-save]").count()) === 0 && (await full.locator("[data-testid=routes-refresh]").count()) === 0);
 const fullRaw = await full.evaluate(async ([id, b]) => { const r = await fetch(location.pathname, { method: "POST", headers: { "Next-Action": id, Accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify([b]) }); return r.text(); }, [saveId, { ...v, aiEnabled: true }]);
 check("FULL_ADMIN raw save refused; paid AI stays OFF", /do not have permission/.test(fullRaw) && (await saved())?.aiEnabled === false, fullRaw.slice(-160));
@@ -266,7 +280,7 @@ const box = await m.locator("[data-testid=m-extract-list]").boundingBox();
 check("mobile: model list fits the screen", !!box && box.x >= 0 && box.x + box.width <= 376, box);
 check("mobile: no horizontal page scroll", await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
 
-await db.query(`update "AiModel" set approved=true where id like 'mock%'`);
+check("whole suite: no global AI → Models approval changed", (await globalFlags()) === flags0);
 check("no page errors", errors.length === 0, errors);
 await browser.close();
 await db.end();

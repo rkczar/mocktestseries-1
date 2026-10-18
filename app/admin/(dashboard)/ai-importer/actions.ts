@@ -21,7 +21,7 @@ import {
   setTaxonomy,
   type QuestionEdit,
 } from "@/lib/ai-import/review";
-import { saveImporterSettings } from "@/lib/ai-import/settings";
+import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { importerModelCatalog, importerSettingsProblems } from "@/lib/ai-import/models";
 import { refreshRoutes } from "@/lib/ai-import/routes";
@@ -287,8 +287,9 @@ export async function refreshRoutesAction(draft?: ImporterSettings): Promise<Imp
   return run(
     await requireManage(),
     async () => {
-      await refreshRoutes();
-      return importerModelCatalog(draft ? normalizeImporterSettings(draft) : undefined);
+      const settings = draft ? normalizeImporterSettings(draft) : await getImporterSettings();
+      await refreshRoutes(settings.importerModels);
+      return importerModelCatalog(settings);
     },
     []
   );

@@ -61,6 +61,12 @@ export interface ImporterSettings {
    * OpenRouter prices and privacy routes when a job is confirmed. manual: the models below (authorised override).
    */
   selection: { mode: ModelSelectionMode };
+  /**
+   * Models approved for the AI Question Importer ONLY (its own eligibility list). The importer never
+   * uses a model outside this list, and this list never makes a model available to any other AI feature:
+   * the global approval in Admin → AI → Models is neither required nor sufficient here.
+   */
+  importerModels: string[];
   /** Manual override models (used only when selection.mode is "manual"). */
   models: ImporterModels;
   privacy: {
@@ -137,6 +143,7 @@ export interface ImporterSettings {
 export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   aiEnabled: false,
   selection: { mode: "auto" },
+  importerModels: [],
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
   privacy: { dataCollection: "deny", zdr: true },
   budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: PILOT_LIMITS.maxJobInr, maxJobInr: PILOT_LIMITS.maxJobInr, totalInr: PILOT_LIMITS.totalInr, maxRequestInr: PILOT_LIMITS.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
@@ -162,6 +169,9 @@ export const SETTINGS_BOUNDS = {
   intermediateDays: [1, 365],
 } as const;
 
+/** At most this many models on the importer's own list (each needs one route lookup per refresh). */
+export const MAX_IMPORTER_MODELS = 25;
+
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,60}\/[A-Za-z0-9._:-]{1,100}$/;
 
 const clamp = (v: unknown, [min, max]: readonly [number, number], fallback: number) => {
@@ -181,6 +191,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
   return {
     aiEnabled: r.aiEnabled === true,
     selection: { mode: r.selection?.mode === "manual" ? "manual" : "auto" },
+    importerModels: Array.isArray(r.importerModels) ? [...new Set((r.importerModels as unknown[]).map(model).filter((x): x is string => !!x))].slice(0, MAX_IMPORTER_MODELS) : [],
     models: {
       extract,
       extractFallbacks: Array.isArray(m.extractFallbacks) ? [...new Set(m.extractFallbacks.map(model).filter((x): x is string => !!x && x !== extract))].slice(0, 3) : [],

@@ -66,8 +66,9 @@ async function processJob(job: AiImportJob): Promise<void> {
   const current = await getImporterSettings();
   const frozen = job.config ? normalizeImporterSettings(job.config) : current;
   // Privacy: the stricter of the confirmed and the current settings. Budgets: the current (lowered limits apply).
+  // The importer's model list: the current one, so a model withdrawn from it mid-job is never used again.
   const privacy: ImporterSettings["privacy"] = { zdr: frozen.privacy.zdr || current.privacy.zdr, dataCollection: frozen.privacy.dataCollection === "deny" || current.privacy.dataCollection === "deny" ? "deny" : "allow" };
-  const base: ImporterSettings = { ...frozen, aiEnabled: current.aiEnabled && frozen.aiEnabled, privacy, budget: current.budget, selection: frozen.selection };
+  const base: ImporterSettings = { ...frozen, aiEnabled: current.aiEnabled && frozen.aiEnabled, privacy, budget: current.budget, selection: frozen.selection, importerModels: current.importerModels };
   // Models come only from the plan frozen at confirmation (a job confirmed before automatic selection gets one now).
   let plan = planOf(job.config);
   if (!plan && base.aiEnabled) {

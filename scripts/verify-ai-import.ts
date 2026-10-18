@@ -107,6 +107,11 @@ async function mockConfig(c: Record<string, unknown>) {
   await fetch(`${MOCK}/__mock/config`, { method: "POST", body: JSON.stringify(c) });
 }
 
+/** Every mock model id (the importer's own model list for the sections that test the pipeline itself). */
+async function allMockIds() {
+  return (await prisma.aiModel.findMany({ where: { id: { startsWith: "mock" }, isImageModel: false }, select: { id: true } })).map((m) => m.id);
+}
+
 /** A fresh pilot all-time / monthly budget for the next section (removes this suite's own importer reservations). */
 async function freshPilotBudget() {
   await prisma.aiBudgetReservation.deleteMany({ where: { feature: { startsWith: "qimport_" } } });
@@ -137,6 +142,7 @@ async function main() {
   await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
   // ONLY=U runs the automatic-selection section by itself (it sets up its own provider, catalog and settings).
   if (process.env.ONLY === "U") return sectionU(actor, exam.id);
+  if (process.env.ONLY === "V") return sectionV(actor, exam.id);
   // ------------------------------------------------------------------ A
   section("A. Settings defaults and normalization");
   const d = normalizeImporterSettings({});
@@ -321,9 +327,9 @@ async function main() {
   check("OpenRouter (mock) connection test", conn.ok, conn);
   await setOpenRouterEnabled(true);
   await syncCatalog();
-  await prisma.aiModel.updateMany({ where: { id: { startsWith: "mock" } }, data: { approved: true } });
+  const mockIds = await allMockIds();
   await freshPilotBudget();
-  await setSettings((s) => ({ ...s, aiEnabled: true, selection: { mode: "manual" }, models: { extract: "mockvision/reader", extractFallbacks: [], verify: "mockvision/checker", classify: "mocktext/classifier", key: null }, privacy: { dataCollection: "deny", zdr: false } }), actor);
+  await setSettings((s) => ({ ...s, aiEnabled: true, selection: { mode: "manual" }, importerModels: mockIds, models: { extract: "mockvision/reader", extractFallbacks: [], verify: "mockvision/checker", classify: "mocktext/classifier", key: null }, privacy: { dataCollection: "deny", zdr: false } }), actor);
   await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
   const jobK = await newJob(actor, exam.id, "FX scanned + formula");
   await upload(actor, jobK, "scanned.pdf");
@@ -753,6 +759,7 @@ async function main() {
 
   await sectionT(actor, exam.id);
   await sectionU(actor, exam.id);
+  await sectionV(actor, exam.id);
 }
 
 // ------------------------------------------------------------------ T
@@ -776,11 +783,12 @@ async function sectionT(actor: string, examId: string) {
   await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
   await freshPilotBudget();
   await syncCatalog();
-  await prisma.aiModel.updateMany({ where: { id: { startsWith: "mock" } }, data: { approved: true } });
+  const mockIdsT = await allMockIds();
   const pilot = (s: ImporterSettings): ImporterSettings => ({
     ...s,
     aiEnabled: true,
     selection: { mode: "manual" },
+    importerModels: mockIdsT,
     models: { extract: "mockvision/reader", extractFallbacks: [], verify: null, classify: "mocktext/classifier", key: null },
     privacy: { dataCollection: "deny", zdr: true },
     budget: { ...s.budget, monthlyInr: 10, totalInr: 10, maxJobInr: 8, defaultJobCapInr: 8, maxRequestInr: 1, keyReserveUsd: 5, retryTransient: false, allowPricierFallback: false },
@@ -929,7 +937,7 @@ async function sectionT(actor: string, examId: string) {
   const wReader = worstCaseUsd([reader], 1000, 1000, 1);
   check("worst case adds image price × image tokens (pricing.image read conservatively)", Math.abs(wImg - wReader - IMAGE_TOKENS * 0.0000005) < 1e-12, { wImg, wReader });
   const bad = await prisma.aiModel.findUniqueOrThrow({ where: { id: "mockvision/badimg" } });
-  check("unreadable image price → model unusable for page reading", /per-image input price/.test(modelProblem(bad, true) ?? "") && modelProblem(bad, false) === null, modelProblem(bad, true));
+  check("unreadable image price → model unusable for page reading", /per-image input price/.test(modelProblem(bad, true, mockIdsT) ?? "") && modelProblem(bad, false, mockIdsT) === null, modelProblem(bad, true, mockIdsT));
   const facts1 = [{ kind: "PNG", pages: 1, textPages: 0, scannedPages: 1, localQuestionCount: 0, pagesDetail: [{ page: 1, kind: "SCANNED", textChars: 0, localQuestions: 0, images: 0, risk: [] }] } as never];
   const planImg = await computeModelPlan({ ...cfg6, models: { ...cfg6.models, extract: "mockvision/imgpriced" } }, { refresh: true });
   const estImg = await estimateJobCost({ paperFacts: facts1, keyFacts: [], settings: cfg6, plan: planImg });
@@ -988,9 +996,11 @@ async function sectionT(actor: string, examId: string) {
   };
   check("valid configuration → no problems", (await probs({ extract: "mockvision/reader", verify: "mockvision/checker", classify: "mocktext/classifier", key: null, extractFallbacks: [] })).length === 0, await probs({}));
   check("text-only model as extraction model → refused", (await probs({ extract: "mocktext/classifier" })).some((p) => /Extraction model: mocktext\/classifier — cannot read images/.test(p)));
-  await prisma.aiModel.update({ where: { id: "mockvision/checker" }, data: { approved: false } });
-  check("unapproved verification model → refused", (await probs({ verify: "mockvision/checker" })).some((p) => /not approved/.test(p)));
-  await prisma.aiModel.update({ where: { id: "mockvision/checker" }, data: { approved: true } });
+  const probsWithout = async (id: string, patch: Partial<ImporterSettings["models"]>) => {
+    const next = { ...base11, selection: { mode: "manual" as const }, importerModels: base11.importerModels.filter((x) => x !== id), models: { ...base11.models, ...patch } };
+    return importerSettingsProblems(next, normalizeImporterSettings(next));
+  };
+  check("verification model not on the importer's list → refused", (await probsWithout("mockvision/checker", { verify: "mockvision/checker" })).some((p) => /not approved for the AI Question Importer/.test(p)));
   check("model not in the catalog → refused", (await probs({ classify: "acme/not-a-model" })).some((p) => /not in the model catalog/.test(p)));
   check("malformed model ID → refused (not silently cleared)", (await probs({}, {}, { ...base11, selection: { mode: "manual" }, models: { ...base11.models, extract: "this is not an id" } })).some((p) => /not a valid OpenRouter model ID/.test(p)));
   check("fallback priced above the extraction model → refused", (await probs({ extract: "mockvision/reader", extractFallbacks: ["mockvision/pricey"] })).some((p) => /costs more than the extraction model/.test(p)));
@@ -1040,14 +1050,13 @@ async function sectionU(actor: string, examId: string) {
   await testOpenRouterConnection();
   await setOpenRouterEnabled(true);
   await syncCatalog();
-  // A realistic approval list: what an administrator approved in AI → Models.
+  // A realistic importer model list: what an administrator approved for the importer (Import Settings → Importer models).
   const APPROVED = ["mockvision/reader", "mockvision/checker", "mockvision/mid", "mockvision/cheapnozdr", "mockvision/down", "mockvision/pricey", "mocktext/classifier"];
-  await prisma.aiModel.updateMany({ where: { id: { startsWith: "mock" } }, data: { approved: false } });
-  await prisma.aiModel.updateMany({ where: { id: { in: APPROVED } }, data: { approved: true } });
   const auto = (s: ImporterSettings): ImporterSettings => ({
     ...s,
     aiEnabled: true,
     selection: { mode: "auto" },
+    importerModels: APPROVED,
     models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
     privacy: { dataCollection: "deny", zdr: true },
     budget: { ...s.budget, monthlyInr: 10, totalInr: 10, maxJobInr: 8, defaultJobCapInr: 8, maxRequestInr: 1, keyReserveUsd: 5, retryTransient: false, allowPricierFallback: false },
@@ -1056,10 +1065,12 @@ async function sectionU(actor: string, examId: string) {
   });
   await setSettings(auto, actor);
   const cfg = () => getImporterSettings().then((x) => normalizeImporterSettings(x));
+  const refreshRoutesNow = async () => refreshRoutes((await cfg()).importerModels);
+  const setList = (ids: string[]) => setSettings((s) => ({ ...s, importerModels: ids }), actor);
 
   // U1 — route metadata comes from OpenRouter (provider routes + ZDR list), stored with its time.
   const reads0 = (await mockStats()).routeReads;
-  const snap = await refreshRoutes();
+  const snap = await refreshRoutesNow();
   check("routes read for every approved text model + the ZDR list", (await mockStats()).routeReads - reads0 === APPROVED.length + 1 && snap.zdr.ok && APPROVED.every((id) => snap.models[id]?.ok), { reads: (await mockStats()).routeReads - reads0, models: Object.keys(snap.models) });
   check("each route keeps its own price; reader has two ZDR routes, one 10 % dearer", snap.models["mockvision/reader"].routes.length === 2 && snap.models["mockvision/reader"].routes.every((r) => r.zdr) && Math.abs(snap.models["mockvision/reader"].routes[1].price.prompt! - 0.000000055) < 1e-15);
   check("cheapnozdr's only route is not on the ZDR list; down's route is unhealthy", !snap.models["mockvision/cheapnozdr"].routes[0].zdr && snap.models["mockvision/down"].routes[0].status === -5);
@@ -1096,7 +1107,7 @@ async function sectionU(actor: string, examId: string) {
 
   // U6 — metadata failures: never guess a price or route.
   await mockConfig({ endpointsStatus: 503 });
-  await refreshRoutes();
+  await refreshRoutesNow();
   const failPlan = await computeModelPlan(await cfg(), { refresh: false });
   check("provider routes unreadable → no model chosen, the reason says so", failPlan.tasks.extract.model === null && /provider routes could not be read/.test(failPlan.tasks.extract.reason), failPlan.tasks.extract.reason);
   const jobU6 = await newJob(actor, examId, "FX metadata failure");
@@ -1111,11 +1122,11 @@ async function sectionU(actor: string, examId: string) {
   await expectError("confirm with unreadable route metadata → refused, nothing started", () => confirmJob({ jobId: jobU6, actorId: actor, examId, paperType: u6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }), /Page reading.*provider routes could not be read.*Nothing was started/);
   check("…stale route data was read again at confirmation; no AI call", (await mockStats()).routeReads > readsU6 && (await mockStats()).chat === chatsU6);
   await mockConfig({ endpointsStatus: null, zdrStatus: 503 });
-  await refreshRoutes();
+  await refreshRoutesNow();
   const zdrFail = await computeModelPlan(await cfg(), { refresh: false });
   check("ZDR list unreadable with ZDR required → no model chosen (privacy never assumed)", zdrFail.tasks.extract.model === null && /Zero-Data-Retention route list could not be read/.test(zdrFail.tasks.extract.reason), zdrFail.tasks.extract.reason);
   await mockConfig({ zdrStatus: null });
-  await refreshRoutes();
+  await refreshRoutesNow();
   const stalePlan = await computeModelPlan(await cfg(), { refresh: false });
   check("fresh routes again → reader chosen", stalePlan.tasks.extract.model === "mockvision/reader");
 
@@ -1188,29 +1199,28 @@ async function sectionU(actor: string, examId: string) {
   check("…the call log marks replacements: tasks planned on reader used a fallback, verification kept its own model", ok9.length > 0 && ok9.every((c) => c.model !== "mockvision/reader" && (c.task === "verify" ? !c.fallbackUsed : c.fallbackUsed)) && ok9.filter((c) => c.task === "extract").every((c) => c.model === plan9.model), ok9.map((c) => [c.task, c.model, c.fallbackUsed]));
   await setSettings(auto, actor);
   await mockConfig({ noEndpoint: [] });
-  // A cheaper replacement is always allowed: confirm on mid (reader unapproved), then mid is withdrawn and reader approved again.
-  await prisma.aiModel.update({ where: { id: "mockvision/reader" }, data: { approved: false } });
-  await refreshRoutes();
+  // A cheaper replacement is always allowed: confirm on mid (reader off the importer list), then mid is withdrawn and reader added back.
+  await setList(APPROVED.filter((x) => x !== "mockvision/reader"));
+  await refreshRoutesNow();
   const jobU9b = await runJob("FX cheaper replacement");
   const u9bPlan = (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobU9b } })).config as { modelPlan: { tasks: { extract: { model: string } } } };
-  check("with reader unapproved, the job was confirmed on mid", u9bPlan.modelPlan.tasks.extract.model === "mockvision/mid", u9bPlan.modelPlan.tasks.extract);
-  await prisma.aiModel.update({ where: { id: "mockvision/reader" }, data: { approved: true } });
-  await prisma.aiModel.update({ where: { id: "mockvision/mid" }, data: { approved: false } });
-  await refreshRoutes();
+  check("with reader off the importer list, the job was confirmed on mid", u9bPlan.modelPlan.tasks.extract.model === "mockvision/mid", u9bPlan.modelPlan.tasks.extract);
+  await setList(APPROVED.filter((x) => x !== "mockvision/mid"));
+  await refreshRoutesNow();
   await runWorker(120_000);
   const u9b = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobU9b } });
   const ev9b = await prisma.aiImportEvent.findFirst({ where: { jobId: jobU9b, type: "MODEL_REPLACED" } });
-  check("mid withdrawn (unapproved) mid-job → cheaper reader takes over with pricier fallbacks OFF; recorded", u9b.status === "NEEDS_REVIEW" && !!ev9b && /now using mockvision\/reader/.test(ev9b.message) && !/MORE EXPENSIVE/.test(ev9b.message), { s: u9b.status, r: u9b.pauseReason, ev: ev9b?.message });
-  await prisma.aiModel.update({ where: { id: "mockvision/mid" }, data: { approved: true } });
+  check("mid withdrawn from the importer list mid-job → cheaper reader takes over with pricier fallbacks OFF; recorded", u9b.status === "NEEDS_REVIEW" && !!ev9b && /now using mockvision\/reader/.test(ev9b.message) && !/MORE EXPENSIVE/.test(ev9b.message), { s: u9b.status, r: u9b.pauseReason, ev: ev9b?.message });
+  await setList(APPROVED);
   // ZDR withdrawn at run time for the planned model: the request is refused by the provider, the job stops (privacy never weakened).
-  await refreshRoutes();
+  await refreshRoutesNow();
   const jobU9c = await runJob("FX ZDR withdrawn");
   await mockConfig({ zdrRemoved: ["mockvision/reader", "mockvision/mid", "mockvision/checker"] });
   await runWorker(120_000);
   const u9c = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobU9c } });
   check("ZDR route withdrawn for every model → job paused, no non-ZDR request sent", u9c.status === "PAUSED" && /no other approved model is suitable|more expensive fallbacks are OFF/.test(u9c.pauseReason ?? "") && (await mockStats()).zdr.every(Boolean), { s: u9c.status, r: u9c.pauseReason });
   await mockConfig({ zdrRemoved: [] });
-  await refreshRoutes();
+  await refreshRoutesNow();
 
   // U10 — concurrent jobs share the all-time cap: two worker loops at once never overspend it.
   await freshPilotBudget();
@@ -1286,6 +1296,111 @@ async function sectionU(actor: string, examId: string) {
   await prisma.aiImportJob.update({ where: { id: jobR3 }, data: { config: { lastImport: { mode: "DRAFT" } } } });
   await refuse("refused: an import into the Question Bank ran", jobR3, /No Question Bank records from this job/);
   await setSettings(auto, actor);
+}
+
+// ------------------------------------------------------------------ V
+/** The importer's own model list is isolated from the AI Engine's global approvals (both directions). */
+async function sectionV(actor: string, examId: string) {
+  section("V. Importer-only model list (isolated from AI Engine approvals and routing)");
+  const { computeModelPlan } = await import("@/lib/ai-import/select");
+  const { refreshRoutes } = await import("@/lib/ai-import/routes");
+  const { textCandidates, planText } = await import("@/lib/ai-engine/router");
+  const { DEFAULT_FEATURE_CONFIG } = await import("@/lib/ai-engine/config");
+  const { importerSettingsProblems } = await import("@/lib/ai-import/models");
+  await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+  await freshPilotBudget();
+  await saveOpenRouterKey(`sk-or-v1-mock${"x".repeat(40)}-valid`, "script");
+  await testOpenRouterConnection();
+  await setOpenRouterEnabled(true);
+  await syncCatalog();
+  // The AI Engine's world: only these are globally approved (one also medically).
+  const before = await prisma.aiModel.findMany({ where: { id: { startsWith: "mock" } }, select: { id: true, approved: true, medicallyApproved: true } });
+  await prisma.aiModel.updateMany({ where: { id: { startsWith: "mock" } }, data: { approved: false, medicallyApproved: false } });
+  await prisma.aiModel.updateMany({ where: { id: { in: ["mocktext/classifier", "mockvision/cheapnozdr"] } }, data: { approved: true } });
+  await prisma.aiModel.update({ where: { id: "mocktext/classifier" }, data: { medicallyApproved: true } });
+  const globalFlags = async () => JSON.stringify(await prisma.aiModel.findMany({ where: { id: { startsWith: "mock" } }, select: { id: true, approved: true, medicallyApproved: true, disabled: true }, orderBy: { id: "asc" } }));
+  const engineView = async () => {
+    const out: Record<string, unknown> = {};
+    for (const f of ["explanation", "variant", "ig_caption", "ig_trends", "ig_competitors"] as const) {
+      const cands = (await textCandidates(f, 800, 1200, 500)).map((c) => c.model.id);
+      const plan = await planText({ feature: f, cfg: { ...DEFAULT_FEATURE_CONFIG, provider: "openrouter", mode: "cheapest" }, inputTokens: 800, maxOut: 1200, typicalOut: 500, capUsd: 1 }).then((p) => p.models.map((m) => m.id), (e) => `error: ${(e as Error).message.slice(0, 60)}`);
+      out[f] = { cands, plan };
+    }
+    return JSON.stringify(out);
+  };
+  const flags0 = await globalFlags();
+  const engine0 = await engineView();
+  const base = (s: ImporterSettings): ImporterSettings => ({ ...s, aiEnabled: true, selection: { mode: "auto" }, privacy: { dataCollection: "deny", zdr: false }, budget: { ...s.budget, monthlyInr: 10, totalInr: 10, maxJobInr: 8, defaultJobCapInr: 8, maxRequestInr: 1, allowPricierFallback: false, retryTransient: false } });
+
+  // V1 — empty importer list: nothing is selectable, even with globally approved models.
+  await setSettings((s) => ({ ...base(s), importerModels: [] }), actor);
+  await refreshRoutes([]);
+  const empty = await computeModelPlan(normalizeImporterSettings(await getImporterSettings()), { refresh: false });
+  check("empty importer list → no model chosen, even though 2 models are approved globally", Object.values(empty.tasks).every((t) => t.model === null) && /No model is approved for the AI Question Importer yet/.test(empty.tasks.extract.reason), empty.tasks.extract.reason);
+  check("…and the globally approved models are not even evaluated by the importer", empty.tasks.extract.candidates.length === 0);
+
+  // V2 — importer list only: models that are NOT globally approved are selected; global flags untouched.
+  const LIST = ["mockvision/reader", "mockvision/mid", "mocktext/classifier"];
+  await setSettings((s) => ({ ...base(s), importerModels: LIST }), actor);
+  const snap = await refreshRoutes(LIST);
+  check("routes are read for the importer's list only", Object.keys(snap.models).sort().join() === [...LIST].sort().join(), Object.keys(snap.models));
+  const plan = await computeModelPlan(normalizeImporterSettings(await getImporterSettings()), { refresh: false });
+  check("importer selects from its own list: reader (not globally approved) reads pages, mid verifies", plan.tasks.extract.model === "mockvision/reader" && plan.tasks.verify.model === "mockvision/mid", [plan.tasks.extract.model, plan.tasks.verify.model]);
+  check("a globally approved model NOT on the importer list is never chosen (cheapnozdr is cheaper, ZDR off)", Object.values(plan.tasks).every((t) => t.model !== "mockvision/cheapnozdr" && !t.candidates.some((c) => c.id === "mockvision/cheapnozdr")));
+  check("saving the importer list changed no global approval flag", (await globalFlags()) === flags0);
+
+  // V3 — AI Engine routing is identical whatever the importer list says.
+  check("AI Engine candidates/plans for student + Instagram features unchanged by the importer list", (await engineView()) === engine0, { before: engine0, after: await engineView() });
+  const ig = JSON.parse(engine0).ig_caption as { cands: string[] };
+  check("…ig_caption (non-medical) still routes only to globally approved models (no importer-only model)", ig.cands.length > 0 && ig.cands.every((id: string) => ["mocktext/classifier", "mockvision/cheapnozdr"].includes(id)), ig);
+  const ex = JSON.parse(engine0).explanation as { cands: string[] };
+  check("…student Ask AI (medical) only the medically approved model", ex.cands.join() === "mocktext/classifier", ex);
+  await setSettings((s) => ({ ...s, importerModels: [...LIST, "mockvision/checker", "mockvision/pricey"] }), actor);
+  check("adding more importer models: AI Engine routing still unchanged", (await engineView()) === engine0);
+  await setSettings((s) => ({ ...s, importerModels: LIST }), actor);
+
+  // V4 — a full job on importer-only models: no global approval needed or changed.
+  const jobV = await newJob(actor, examId, "FX importer-only models");
+  await upload(actor, jobV, "photo.png");
+  const jv = await analyzeAndConfirm(actor, jobV, 8);
+  const callsV = await prisma.aiImportAiCall.findMany({ where: { jobId: jobV } });
+  check("job processed with importer-only models (reader), global approvals unchanged", jv.status === "NEEDS_REVIEW" && callsV.some((c) => c.model === "mockvision/reader" && c.ok) && (await globalFlags()) === flags0, { s: jv.status, calls: callsV.map((c) => c.model) });
+
+  // V5 — importer failures do not mark a model unhealthy for the AI Engine.
+  for (let i = 0; i < 8; i++) await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: "mocktext/classifier", modelRequested: "mocktext/classifier", kind: "text", routingMode: "manual", ok: false, errorCategory: "no_endpoint", latencyMs: 1, requestId: `v5-${i}`, attempt: 1, fallbackUsed: false, costStatus: "none" } });
+  check("8 failed importer calls on a model: the AI Engine still routes to it (importer calls excluded from health)", (await engineView()) === engine0);
+  await prisma.aiGatewayCall.deleteMany({ where: { requestId: { startsWith: "v5-" } } });
+
+  // V6 — removed from the importer list mid-job: the job stops (or uses an equal/cheaper listed model), never a non-listed one.
+  const jobV6 = await newJob(actor, examId, "FX removed from importer list");
+  await upload(actor, jobV6, "photo.png");
+  await requestAnalysis(jobV6, actor);
+  await runWorker(60_000);
+  const v6a = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobV6 } });
+  await confirmJob({ jobId: jobV6, actorId: actor, examId, paperType: v6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await setSettings((s) => ({ ...s, importerModels: ["mockvision/mid", "mocktext/classifier"] }), actor);
+  await prisma.aiModel.update({ where: { id: "mockvision/reader" }, data: { approved: true } }); // globally approved now — must not matter
+  const chatsV6 = (await mockStats()).byModel["mockvision/reader"] ?? 0;
+  await runWorker(120_000);
+  const v6 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobV6 } });
+  check("reader removed from the importer list (though now globally approved) → not used; no other listed model may read pages (mid is this job's verifier) → paused with the reason", v6.status === "PAUSED" && /not approved for the AI Question Importer/.test(v6.pauseReason ?? "") && /no other approved model is suitable/.test(v6.pauseReason ?? "") && ((await mockStats()).byModel["mockvision/reader"] ?? 0) === chatsV6, { s: v6.status, r: v6.pauseReason });
+  await prisma.aiModel.update({ where: { id: "mockvision/reader" }, data: { approved: false } });
+
+  // V7 — settings validation and persistence of the list.
+  await prisma.aiModel.upsert({ where: { id: "mockimage/gen" }, create: { id: "mockimage/gen", name: "mock image", vendor: "mockimage", inputModalities: ["text"], outputModalities: ["image"], supportedParameters: [], isImageModel: true, lastSyncedAt: new Date() }, update: {} });
+  const cur = normalizeImporterSettings(await getImporterSettings());
+  const raw = { ...cur, importerModels: ["mockvision/reader", "acme/not-a-model", "mockimage/gen", "not a model id"] };
+  const pr = await importerSettingsProblems(raw, normalizeImporterSettings(raw));
+  check("list validation: unknown model, image generator and malformed id refused", pr.some((p) => /acme\/not-a-model is not in the model catalog/.test(p)) && pr.some((p) => /mockimage\/gen does not return text/.test(p)) && pr.some((p) => /“not a model id” is not a valid OpenRouter model ID/.test(p)), pr);
+  await prisma.aiModel.delete({ where: { id: "mockimage/gen" } });
+  const n = normalizeImporterSettings({ importerModels: ["mockvision/reader", "mockvision/reader", " mockvision/mid ", 7] });
+  check("list normalization: duplicates removed, ids trimmed, junk dropped", n.importerModels.join() === "mockvision/reader,mockvision/mid", n.importerModels);
+  await saveImporterSettings({ ...cur, importerModels: ["mockvision/mid", "mockvision/reader"] }, actor);
+  check("list persists through save / read", (await getImporterSettings()).importerModels.join() === "mockvision/mid,mockvision/reader");
+  check("…and no global approval flag changed in this whole section except the test's own toggles (restored)", (await globalFlags()) === flags0);
+
+  // Restore the suite's global flags.
+  for (const b of before) await prisma.aiModel.update({ where: { id: b.id }, data: { approved: b.approved, medicallyApproved: b.medicallyApproved } });
 }
 
 async function analyzeAndConfirmExisting(actor: string, jobId: string, budgetInr: number) {

@@ -71,12 +71,21 @@ nothing is dropped or converted.
 
 ## Model selection
 
+**Importer models** (Import Settings, Master Admin) is the importer's OWN eligibility list
+(`ai.importer.importerModels`). The importer never uses a model outside it, and it never
+makes a model available to any other AI feature: the global approval in Admin → AI →
+Models is neither required nor sufficient for the importer, and saving the list changes
+no global flag. AI Engine routing (student Ask AI, variants, Instagram, …) is therefore
+independent of the importer; importer calls are also excluded from the AI Engine's
+"unhealthy model" check (`lib/ai-engine/router.ts`). Removing a model from the list takes
+effect at once, also for running jobs (the worker reads the current list).
+
 Import Settings → **Model selection** is **Automatic** by default: no model is chosen per
 import. For each task — page reading (digital and scanned / OCR pages), independent
 verification, answer-key reading, topic classification — `lib/ai-import/select.ts`
-evaluates every model APPROVED in Admin → AI → Models against the task's largest request:
+evaluates every model on the importer's list against the task's largest request:
 
-- approved, not disabled, still listed, not expired, fixed published price, returns text;
+- on the importer list, not disabled, still listed, not expired, fixed published price, returns text;
 - reads images when the task sends page images (an unreadable image price is refused);
 - provider routes read from OpenRouter (`GET /models/{id}/endpoints`), serving normally
   (endpoint status 0), accepting `max_tokens`, with room for the request;
@@ -97,7 +106,7 @@ The choice is **frozen on the job at confirmation** (`job.config.modelPlan`); la
 settings changes do not change a running job. If the frozen model becomes unavailable
 (unapproved, withdrawn, or OpenRouter answers "no endpoint" for it under the privacy and
 price constraints), the worker chooses again: an equal or cheaper replacement is used and
-recorded (event `MODEL_REPLACED`, shown on the job page); a more expensive one only when
+recorded (event `MODEL_REPLACED`, shown on the job page) — always from the importer list; a more expensive one only when
 "Allow a MORE EXPENSIVE model" is switched on (off by default) — otherwise the job pauses
 and says why. A replacement is never the job's model for the other of page reading /
 verification, so the second read stays independent. **Manual override** (Master Admin)

@@ -76,19 +76,23 @@ export function toRoute(e: RawEndpoint, zdrTags: Set<string> | null, modelId: st
   };
 }
 
-/** Text models the selection may consider: approved, usable, returning text (image generators excluded). */
-export async function candidateModels() {
+/**
+ * Text models the selection may consider: on the importer's own list (never the global approval),
+ * not disabled, still listed, returning text (image generators excluded).
+ */
+export async function candidateModels(importerModels: readonly string[]) {
+  if (!importerModels.length) return [];
   return prisma.aiModel.findMany({
-    where: { approved: true, disabled: false, missingSince: null, isImageModel: false, outputModalities: { has: "text" } },
+    where: { id: { in: [...importerModels] }, disabled: false, missingSince: null, isImageModel: false, outputModalities: { has: "text" } },
     orderBy: [{ promptPrice: { sort: "asc", nulls: "last" } }, { id: "asc" }],
     take: MAX_MODELS,
   });
 }
 
-/** Reads the routes of every candidate model + the ZDR list from OpenRouter and stores the snapshot. */
-export async function refreshRoutes(): Promise<RouteSnapshot> {
+/** Reads the routes of every importer model + the ZDR list from OpenRouter and stores the snapshot. */
+export async function refreshRoutes(importerModels: readonly string[]): Promise<RouteSnapshot> {
   const apiKey = await getOpenRouterApiKey().catch(() => null);
-  const models = await candidateModels();
+  const models = await candidateModels(importerModels);
   let zdrTags: Set<string> | null = null;
   const zdr = { ok: false, error: null as string | null, count: 0 };
   try {
@@ -126,10 +130,10 @@ export function isStale(s: RouteSnapshot | null, now = Date.now()): boolean {
   return !s || now - new Date(s.fetchedAt).getTime() > ROUTES_MAX_AGE_MS;
 }
 
-/** The stored snapshot, refreshed first when it is missing or older than ROUTES_MAX_AGE_MS. */
-export async function freshRouteSnapshot(): Promise<RouteSnapshot> {
+/** The stored snapshot, refreshed first when it is missing, older than ROUTES_MAX_AGE_MS or lacks a listed model. */
+export async function freshRouteSnapshot(importerModels: readonly string[]): Promise<RouteSnapshot> {
   const s = await getRouteSnapshot();
-  return isStale(s) ? refreshRoutes() : s!;
+  return isStale(s) || importerModels.some((id) => !s!.models[id]) ? refreshRoutes(importerModels) : s!;
 }
 
 export function routeStatus(s: RouteSnapshot | null): RouteStatus {

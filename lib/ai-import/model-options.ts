@@ -21,8 +21,11 @@ export interface ImporterModelOption {
   id: string;
   name: string;
   vision: boolean;
+  /** On the importer's own list (Import Settings → Importer models). */
   approved: boolean;
-  /** Why the model cannot be used for text tasks (null = usable). */
+  /** Approved in Admin → AI → Models for the other AI features (information only; the importer ignores it). */
+  globallyApproved: boolean;
+  /** Why the model cannot be used for text tasks, apart from list membership (null = usable once on the list). */
   problem: string | null;
   /** Why the model cannot read pages (null = usable for vision tasks). */
   visionProblem: string | null;

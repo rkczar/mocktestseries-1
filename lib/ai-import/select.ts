@@ -12,10 +12,11 @@ import type { CandidateRow, ModelPlan, PlanPrice, TaskChoice } from "@/lib/ai-im
  * Automatic model selection for the AI Question Importer.
  *
  * For each task (page reading, independent verification, answer-key reading,
- * topic classification) every APPROVED catalog model is evaluated against the
- * task's largest request as the worker sends it:
+ * topic classification) every model on the importer's OWN list (Import
+ * Settings → Importer models; the global AI → Models approval is not used) is
+ * evaluated against the task's largest request as the worker sends it:
  *
- *   approved / not disabled / still listed / not expired / fixed price
+ *   on the importer list / not disabled / still listed / not expired / fixed price
  *   → image input when the task reads page images
  *   → provider routes read from OpenRouter, serving normally (status 0)
  *   → Zero-Data-Retention routes only, when ZDR is required
@@ -62,7 +63,7 @@ interface Evaluation {
 export function evaluateModel(m: AiModel | undefined, id: string, task: SelectionTask, ctx: { snapshot: RouteSnapshot | null; settings: ImporterSettings; fxRate: number | null }): Evaluation {
   const vision = VISION[task];
   const fail = (reason: string, routes: string[] = []): Evaluation => ({ row: { id, eligible: false, reason, maxInr: null, typicalInr: null, routes }, price: null, maxUsd: null });
-  const problem = modelProblem(m, vision);
+  const problem = modelProblem(m, vision, ctx.settings.importerModels);
   if (problem || !m) return fail(problem ?? "not in the model catalog");
   if (m.isImageModel) return fail("an image-generation model");
   if (ctx.fxRate === null) return fail("no USD→INR rate, so its cost cannot be set");
@@ -148,7 +149,7 @@ export function choose(models: AiModel[], ctx: { snapshot: RouteSnapshot | null;
         reason = `Manual override by an administrator: ${want}, up to ${formatInr(row.maxInr)} per request.`;
       }
     } else if (!eligible.length) {
-      reason = rows.length ? `No approved model is suitable and affordable for ${label}. ${rows.slice(0, 4).map((r) => `${r.id}: ${r.reason}`).join("; ")}.` : `No approved text model exists (Admin → AI → Models).`;
+      reason = rows.length ? `No approved model is suitable and affordable for ${label}. ${rows.slice(0, 4).map((r) => `${r.id}: ${r.reason}`).join("; ")}.` : s.importerModels.length ? `None of the importer's approved models can be used (disabled, no longer listed, or not a text model).` : `No model is approved for the AI Question Importer yet (Import Settings → Importer models).`;
     } else {
       pick = eligible[0];
       const next = eligible[1];
@@ -198,7 +199,7 @@ export async function computeModelPlan(settings: ImporterSettings, opts: { refre
   const problems: string[] = [];
   let snapshot: RouteSnapshot | null = null;
   try {
-    snapshot = opts.refresh ? await freshRouteSnapshot() : await getRouteSnapshot();
+    snapshot = opts.refresh ? await freshRouteSnapshot(settings.importerModels) : await getRouteSnapshot();
   } catch (e) {
     problems.push(`Provider routes could not be read from OpenRouter (${e instanceof Error ? e.message.slice(0, 160) : "error"}).`);
     snapshot = null;
@@ -208,7 +209,7 @@ export async function computeModelPlan(settings: ImporterSettings, opts: { refre
   else if (stale) problems.push(`Provider route data is from ${snapshot.fetchedAt.slice(0, 16).replace("T", " ")} UTC (older than 6 h). It is read again when a job is confirmed.`);
   const fx = opts.refresh ? await getUsdInr() : await peekUsdInr();
   if (fx.rate === null) problems.push(`No USD→INR rate: ${fx.unavailableReason ?? "unavailable"}. No model can be priced.`);
-  const models = await candidateModels();
+  const models = await candidateModels(settings.importerModels);
   // A stale snapshot is never used to choose a model for a job.
   const usable = opts.refresh && stale ? null : snapshot;
   const tasks = choose(models, { snapshot: usable, settings, fxRate: fx.rate }, exclude);

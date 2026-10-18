@@ -86,11 +86,17 @@ for (const s of SECTIONS) {
   const ok = r.status() === 200 && (await admin.locator("[data-testid=ai-importer-subnav]").count()) === 1 && (await admin.locator("text=Application error").count()) === 0;
   check(`page ${s || "/"} renders`, ok, r.status());
 }
-// What an administrator approved in AI → Models; models are then chosen AUTOMATICALLY (none picked per import).
+// The administrator approves models for the importer only (Import Settings → Importer models); they are then
+// chosen AUTOMATICALLY (none picked per import). Global AI → Models approvals are left exactly as they are.
 await db.query(`delete from "Setting" where key in ('ai.importer', 'ai.importer.routes')`);
-await db.query(`update "AiModel" set approved = (id = any($1)) where id like 'mock%'`, [["mockvision/reader", "mockvision/checker", "mockvision/mid", "mockvision/cheapnozdr", "mockvision/pricey", "mocktext/classifier"]]);
+const globalFlags = async () => JSON.stringify((await db.query(`select id, approved, "medicallyApproved" from "AiModel" order by id`)).rows);
+const flags0 = await globalFlags();
 await admin.goto(`${BASE}/admin/ai-importer/settings`);
 await admin.locator("[data-testid=ai-enabled]").check();
+for (const id of ["mockvision/reader", "mockvision/checker", "mockvision/mid", "mockvision/cheapnozdr", "mockvision/pricey", "mocktext/classifier"]) {
+  await admin.locator("[data-testid=importer-model-search]").fill(id);
+  await admin.locator(`[data-testid=importer-model-hits] li[data-model-id="${id}"] [data-testid=importer-model-add]`).click();
+}
 check("automatic model selection is the default", await admin.locator("[data-testid=sel-auto]").isChecked());
 await admin.locator("[data-testid=routes-refresh]").click();
 await until(async () => (await admin.locator("[data-testid=sel-extract]").getAttribute("data-model")) === "mockvision/reader");
@@ -100,6 +106,7 @@ await admin.locator("[data-testid=settings-msg]").waitFor();
 check("settings saved", /saved/i.test(await admin.locator("[data-testid=settings-msg]").textContent()));
 const saved = (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0]?.value;
 check("settings persisted (AI on, automatic selection, no manual models, ZDR + no data collection)", saved?.aiEnabled === true && saved?.selection?.mode === "auto" && saved?.models?.extract === null && saved?.privacy?.dataCollection === "deny" && saved?.privacy?.zdr === true, saved);
+check("importer list saved (6 models) and no global AI → Models approval changed", saved?.importerModels?.length === 6 && (await globalFlags()) === flags0);
 
 // ------------------------------------------------------------------ new import → upload → analyze → confirm
 section("B. New import, upload, analysis, confirmation, processing");

@@ -21,10 +21,14 @@ import { ENGINE_FEATURE_MAP, imageMaxUsd, textCallMaxUsd, textCallTypicalUsd, ty
  *    model, since Auto itself has no fixed price.
  */
 
-/** Recent failure rate check: ≥ 5 calls in the last 24 h and under 50 % success → skipped. */
+/**
+ * Recent failure rate check: ≥ 5 calls in the last 24 h and under 50 % success → skipped.
+ * AI Question Importer calls (qimport_*) are not counted: they run under the importer's own privacy
+ * and price constraints, so their failures must not move other AI features off a model.
+ */
 async function unhealthyModels(): Promise<Set<string>> {
   const since = new Date(Date.now() - 24 * 3600_000);
-  const rows = await prisma.aiGatewayCall.groupBy({ by: ["model", "ok"], where: { provider: "openrouter", createdAt: { gte: since } }, _count: { _all: true } });
+  const rows = await prisma.aiGatewayCall.groupBy({ by: ["model", "ok"], where: { provider: "openrouter", createdAt: { gte: since }, NOT: { feature: { startsWith: "qimport_" } } }, _count: { _all: true } });
   const stats = new Map<string, { ok: number; all: number }>();
   for (const r of rows) {
     const s = stats.get(r.model) ?? { ok: 0, all: 0 };
