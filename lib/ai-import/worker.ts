@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { AiImportJobStatus, AiImportQuestionStatus, AiImportPageStatus, type AiImportJob, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
+import { JOB_STAGES, normalizeImporterSettings, type ImporterSettings, type JobStage } from "@/lib/ai-import/config";
 import { runAnalysis } from "@/lib/ai-import/analyze";
 import { runAiPages, runLocalPasses, type StepContext } from "@/lib/ai-import/process";
 import { runKeyFiles } from "@/lib/ai-import/keys";
@@ -39,6 +39,19 @@ async function lease(jobId: string): Promise<boolean> {
     data: { leaseOwner: WORKER_ID, leaseUntil: new Date(Date.now() + LEASE_MS), heartbeatAt: new Date() },
   });
   return r.count === 1;
+}
+
+/**
+ * A worker-side status change that only applies while this worker still leases the job in one of the
+ * expected states — so a cancellation (or any admin change) made meanwhile is never overwritten.
+ */
+async function transition(jobId: string, from: AiImportJobStatus[], data: Prisma.AiImportJobUpdateManyMutationInput): Promise<boolean> {
+  const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: { in: from }, leaseOwner: WORKER_ID }, data });
+  return r.count === 1;
+}
+
+async function stage(jobId: string, s: JobStage) {
+  await logEvent(jobId, "STAGE", JOB_STAGES[s], { stage: s });
 }
 
 async function release(jobId: string) {
@@ -82,34 +95,63 @@ async function processJob(job: AiImportJob): Promise<void> {
     job.subjectId ? prisma.subject.findUnique({ where: { id: job.subjectId }, select: { name: true } }) : null,
   ]);
   if (job.status === AiImportJobStatus.QUEUED) {
-    await prisma.aiImportJob.update({ where: { id: job.id }, data: { status: AiImportJobStatus.PROCESSING, startedAt: job.startedAt ?? new Date() } });
+    if (!(await transition(job.id, [AiImportJobStatus.QUEUED], { status: AiImportJobStatus.PROCESSING, startedAt: job.startedAt ?? new Date() }))) return;
     await logEvent(job.id, "PROCESSING", "Processing started");
   }
   const ctx = makeContext({ ...job, status: AiImportJobStatus.PROCESSING }, settings, { exam: exam?.name ?? "Exam", subject: subject?.name ?? null });
   try {
+    await stage(job.id, "PAGES");
     await runLocalPasses(ctx);
     if (!(await ctx.stillRunning())) return;
+    await stage(job.id, "EXTRACT");
     const { skippedNoAi } = await runAiPages(ctx);
     if (skippedNoAi) await logEvent(job.id, "AI_SKIPPED", `${skippedNoAi} page(s) need AI vision, which is switched off — their questions are flagged or missing.`);
     if (!(await ctx.stillRunning())) return;
+    await stage(job.id, "KEY");
     await runKeyFiles(ctx);
     if (!(await ctx.stillRunning())) return;
+    await stage(job.id, "VALIDATE");
     await runPostProcessing(ctx);
     if (!(await ctx.stillRunning())) return;
-    const failedPages = await prisma.aiImportPage.count({ where: { jobId: job.id, status: AiImportPageStatus.FAILED } });
-    await prisma.aiImportJob.update({ where: { id: job.id }, data: { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), errorMessage: failedPages ? `${failedPages} page(s) failed — use Resume to retry them once.` : null } });
-    await reconcileJob(job.id);
-    await logEvent(job.id, "PROCESSED", `Processing finished${failedPages ? ` (${failedPages} page(s) failed)` : ""}. Review the summary and choose how to import.`);
+    const [failedPages, skippedPages, questions] = await Promise.all([
+      prisma.aiImportPage.count({ where: { jobId: job.id, status: AiImportPageStatus.FAILED } }),
+      prisma.aiImportPage.count({ where: { jobId: job.id, status: AiImportPageStatus.SKIPPED, kind: "SCANNED" } }),
+      prisma.aiImportQuestion.count({ where: { jobId: job.id } }),
+    ]);
+    // A job that produced nothing says why, and what to do next (never a silent "ready to import").
+    const why = failedPages
+      ? `${failedPages} page(s) failed — use Retry to read them once more.`
+      : questions === 0 && skippedPages
+        ? `No questions could be read: ${skippedPages} scanned page(s) have no text layer and need AI vision, which is switched off. Upload a digital PDF or Word file of the paper, or ask the owner to approve paid AI for the importer.`
+        : questions === 0
+          ? "No numbered questions were recognized in this file. Check that it is a question paper (numbered questions with options A–D)."
+          : null;
+    if (!(await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), errorMessage: why }))) return;
+    const summary = await reconcileJob(job.id);
+    await logEvent(job.id, "PROCESSED", `Processing finished${failedPages ? ` (${failedPages} page(s) failed)` : ""}. ${summary.extracted} question(s) extracted, ${summary.eligibleImport} ready to import.`);
     await removeVaultDir("work", job.id).catch(() => undefined);
+    // One-page flow: eligible questions go to the Bulk Import right away (as Draft unless publishing was chosen).
+    const auto = (job.config as { autoImport?: { mode: "DRAFT" | "PUBLISH_ALL"; requestedById: string; done?: boolean } | null } | null)?.autoImport;
+    if (auto && !auto.done) {
+      const fresh = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { config: true } });
+      const cfg = { ...((fresh.config as Record<string, unknown>) ?? {}), autoImport: { ...auto, done: true } };
+      if (summary.eligibleImport > 0) {
+        const plan: ImportPlan = { mode: auto.mode, questionIds: null, requestedById: auto.requestedById, requestedAt: new Date().toISOString() };
+        if (await transition(job.id, [AiImportJobStatus.NEEDS_REVIEW], { status: AiImportJobStatus.IMPORTING, config: { ...cfg, importPlan: plan } as unknown as Prisma.InputJsonValue })) {
+          await logEvent(job.id, "IMPORT_REQUESTED", `Automatic import of ${summary.eligibleImport} eligible question(s) as Draft through the Bulk Import${auto.mode === "PUBLISH_ALL" ? ", then publishing those that pass every check" : ""}`, { mode: auto.mode, automatic: true });
+        }
+      } else {
+        await transition(job.id, [AiImportJobStatus.NEEDS_REVIEW], { config: cfg as Prisma.InputJsonValue });
+        await logEvent(job.id, "IMPORT_SKIPPED", "Automatic import: no question passed every check, so nothing was sent to the Bulk Import. Review the questions that need attention.");
+      }
+    }
   } catch (e) {
     if (e instanceof ImporterBudgetError) {
-      await prisma.aiImportJob.update({ where: { id: job.id }, data: { status: AiImportJobStatus.PAUSED_BUDGET, pauseReason: e.message } });
-      await logEvent(job.id, "PAUSED_BUDGET", e.message, { scope: e.scope });
+      if (await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.PAUSED_BUDGET, pauseReason: e.message })) await logEvent(job.id, "PAUSED_BUDGET", e.message, { scope: e.scope });
       return;
     }
     if (e instanceof ImporterAiUnavailable) {
-      await prisma.aiImportJob.update({ where: { id: job.id }, data: { status: AiImportJobStatus.PAUSED, pauseReason: e.message } });
-      await logEvent(job.id, "PAUSED", e.message);
+      if (await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.PAUSED, pauseReason: e.message })) await logEvent(job.id, "PAUSED", e.message);
       return;
     }
     throw e;
@@ -119,7 +161,7 @@ async function processJob(job: AiImportJob): Promise<void> {
 async function importJob(job: AiImportJob): Promise<void> {
   const plan = (job.config as { importPlan?: ImportPlan } | null)?.importPlan;
   if (!plan) {
-    await prisma.aiImportJob.update({ where: { id: job.id }, data: { status: AiImportJobStatus.NEEDS_REVIEW, errorMessage: "Import request missing — choose an import option again." } });
+    await transition(job.id, [AiImportJobStatus.IMPORTING], { status: AiImportJobStatus.NEEDS_REVIEW, errorMessage: "Import request missing — choose an import option again." });
     return;
   }
   const settings = await getImporterSettings();
@@ -132,11 +174,9 @@ async function importJob(job: AiImportJob): Promise<void> {
   const summary = await reconcileJob(job.id);
   const done = summary.unaccounted === 0 && summary.pendingDecision === 0;
   const issues = summary.needsCorrection + summary.notImportable + summary.importFailed + summary.duplicates > 0 || r.notPublished > 0;
-  const config = { ...((job.config as Record<string, unknown>) ?? {}), importPlan: null, lastImport: { ...plan, result: r, finishedAt: new Date().toISOString() } };
-  await prisma.aiImportJob.update({
-    where: { id: job.id },
-    data: { status: done ? (issues ? AiImportJobStatus.COMPLETED_WITH_ISSUES : AiImportJobStatus.COMPLETED) : AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), config: config as Prisma.InputJsonValue },
-  });
+  const latest = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { config: true } });
+  const config = { ...((latest.config as Record<string, unknown>) ?? {}), importPlan: null, lastImport: { ...plan, result: r, finishedAt: new Date().toISOString() } };
+  await transition(job.id, [AiImportJobStatus.IMPORTING], { status: done ? (issues ? AiImportJobStatus.COMPLETED_WITH_ISSUES : AiImportJobStatus.COMPLETED) : AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), config: config as Prisma.InputJsonValue });
 }
 
 /** One worker run: picks jobs that need work, oldest first, within a time budget. */
@@ -164,8 +204,10 @@ export async function runWorker(budgetMs = 9 * 60_000): Promise<{ handled: numbe
     } catch (e) {
       const message = e instanceof Error ? e.message.slice(0, 500) : "unexpected error";
       const back = job.status === AiImportJobStatus.IMPORTING ? AiImportJobStatus.NEEDS_REVIEW : job.status === AiImportJobStatus.ANALYZING ? AiImportJobStatus.DRAFT : AiImportJobStatus.FAILED;
-      await prisma.aiImportJob.update({ where: { id: job.id }, data: { status: back, errorMessage: message } });
-      await logEvent(job.id, "ERROR", `Stopped: ${message}`);
+      // Only from the state this run was in: a job cancelled meanwhile stays cancelled.
+      const from = job.status === AiImportJobStatus.QUEUED ? [AiImportJobStatus.QUEUED, AiImportJobStatus.PROCESSING] : [job.status];
+      if (await transition(job.id, from, { status: back, errorMessage: `Stopped by an unexpected error: ${message}` })) await logEvent(job.id, "ERROR", `Stopped: ${message}`);
+      await removeVaultDir("work", job.id).catch(() => undefined);
       console.error(`[ai-import] job ${job.id} failed: ${message}`);
     } finally {
       await release(job.id);

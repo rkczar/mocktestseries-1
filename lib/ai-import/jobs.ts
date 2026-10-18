@@ -4,7 +4,7 @@ import { mkdir, open, readdir, rename, stat, unlink, writeFile } from "node:fs/p
 import path from "node:path";
 import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPaperType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { CHUNK_BYTES, PILOT_LIMITS, fileRemovalBlockedReason } from "@/lib/ai-import/config";
+import { CHUNK_BYTES, PILOT_LIMITS, WORKER_STATUSES, fileRemovalBlockedReason } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { checkFilename, detectFile } from "@/lib/ai-import/detect";
 import { pdfInfo } from "@/lib/ai-import/pdf";
@@ -62,8 +62,14 @@ export async function validateContext(c: JobContextInput): Promise<void> {
   }
 }
 
-export async function createJob(input: JobContextInput & { actorId: string; title: string; budgetInr: number }): Promise<string> {
+export async function createJob(input: JobContextInput & { actorId: string; title: string; budgetInr: number; clientKey?: string | null }): Promise<string> {
   await validateContext(input);
+  // A repeated submission (double click, retried request) with the same client key returns the job it created.
+  const clientKey = typeof input.clientKey === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(input.clientKey) ? input.clientKey : null;
+  if (clientKey) {
+    const twin = await prisma.aiImportJob.findFirst({ where: { createdById: input.actorId, createdAt: { gt: new Date(Date.now() - 24 * 3_600_000) }, config: { path: ["clientKey"], equals: clientKey } }, select: { id: true } });
+    if (twin) return twin.id;
+  }
   const settings = await getImporterSettings();
   const title = input.title.trim().slice(0, 160) || "Untitled import";
   const budget = Number.isFinite(input.budgetInr) && input.budgetInr >= 0 ? input.budgetInr : settings.budget.defaultJobCapInr;
@@ -80,6 +86,7 @@ export async function createJob(input: JobContextInput & { actorId: string; titl
       createdById: input.actorId,
       budgetInr: budget,
       status: AiImportJobStatus.DRAFT,
+      ...(clientKey ? { config: { clientKey } } : {}),
     },
   });
   await logEvent(job.id, "CREATED", `Import "${title}" created`, { examId: input.examId, paperType: input.paperType, budgetInr: budget }, input.actorId);
@@ -229,13 +236,23 @@ export async function requestAnalysis(jobId: string, actorId: string) {
 }
 
 /** Admin confirms (or corrects) the exam context and budget, then queues processing. */
-export async function confirmJob(input: JobContextInput & { jobId: string; actorId: string; budgetInr: number }) {
+export interface ConfirmOptions {
+  /** One-page flow: import every eligible question as Draft through the Bulk Import as soon as processing ends. */
+  autoImport?: { mode: "DRAFT" | "PUBLISH_ALL" } | null;
+  /** This job only: use this model (from the importer's own list) for page and key reading instead of the automatic choice. */
+  modelOverride?: string | null;
+}
+
+export async function confirmJob(input: JobContextInput & { jobId: string; actorId: string; budgetInr: number } & ConfirmOptions) {
   const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status !== AiImportJobStatus.AWAITING_CONFIRMATION) throw new ImportJobError("Only an analyzed import can be confirmed.");
   await validateContext(input);
   if (!Number.isFinite(input.budgetInr) || input.budgetInr < 0) throw new ImportJobError("Enter a valid job budget.");
-  const settings = await getImporterSettings();
+  const saved = await getImporterSettings();
+  if (input.modelOverride && !saved.importerModels.includes(input.modelOverride)) throw new ImportJobError("That model is not on the importer's own model list. Nothing was started.");
+  // A per-job override goes through exactly the same suitability, privacy and price checks (manual mode).
+  const settings: typeof saved = input.modelOverride ? { ...saved, selection: { mode: "manual" }, models: { ...saved.models, extract: input.modelOverride, extractFallbacks: [], key: input.modelOverride } } : saved;
   assertWithinJobCeiling(input.budgetInr, settings.budget.maxJobInr);
   // Choose the models now, from fresh OpenRouter prices and privacy routes, and re-price with them.
   // The plan is frozen on the job: the worker never picks a different (or pricier) model by itself.
@@ -284,7 +301,7 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
       status: AiImportJobStatus.QUEUED,
       confirmedAt: new Date(),
       confirmedById: input.actorId,
-      config: JSON.parse(JSON.stringify({ ...settings, modelPlan: plan })) as Prisma.InputJsonValue,
+      config: JSON.parse(JSON.stringify({ ...settings, modelPlan: plan, clientKey: (job.config as { clientKey?: string } | null)?.clientKey ?? null, autoImport: input.autoImport ? { ...input.autoImport, requestedById: input.actorId, done: false } : null })) as Prisma.InputJsonValue,
     },
   });
   if (!confirmed.count) throw new ImportJobError("The files or analysis of this import changed while you were confirming. Nothing was started — review the page and confirm again.", 409);
@@ -321,13 +338,201 @@ export async function resumeJob(jobId: string, actorId: string, newBudgetInr?: n
   kickWorker();
 }
 
+/**
+ * Cancels a job. The status write is conditional, so it never races a worker's own transition; the
+ * worker sees the change at its next checkpoint (between pages and stages) and stops, and
+ * importerAiCall refuses any new AI request for a job that is not processing. Work files are removed;
+ * extracted questions and page records are kept so the job can be retried or deleted.
+ */
 export async function cancelJob(jobId: string, actorId: string) {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
-  if (job.status === AiImportJobStatus.IMPORTING) throw new ImportJobError("The import into the Question Bank is running; wait for it to finish.");
   if (job.status === AiImportJobStatus.CANCELLED) return;
-  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.CANCELLED, cancelledAt: new Date(), leaseOwner: null, leaseUntil: null } });
-  await logEvent(jobId, "CANCELLED", "Cancelled by an administrator. Questions already imported stay in the Question Bank (use Import History rollback to remove them).", undefined, actorId);
+  if (job.status === AiImportJobStatus.IMPORTING) throw new ImportJobError("Questions are being written to the Question Bank right now. That step cannot be interrupted safely; it takes a few seconds — refresh, then delete or keep the import.", 409);
+  // The worker's lease is kept: it releases it itself when it stops at its next checkpoint, so Delete
+  // and Retry wait until the worker has really stopped (a crashed worker's lease simply expires).
+  const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: job.status }, data: { status: AiImportJobStatus.CANCELLED, cancelledAt: new Date() } });
+  if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
+  const leased = !!job.leaseOwner && !!job.leaseUntil && job.leaseUntil > new Date();
+  await logEvent(jobId, "CANCELLED", `Cancelled by an administrator (was ${job.status.toLowerCase().replace(/_/g, " ")}).${leased ? " The worker stops at its next safe checkpoint; a request already sent to the AI finishes and is recorded, but no new request is sent." : ""} Questions already imported stay in the Question Bank (use Import History rollback to remove them).`, { previousStatus: job.status, workerWasActive: leased }, actorId);
+  await removeVaultDir("work", jobId).catch(() => undefined);
+}
+
+/**
+ * Retry / resume. Paused and failed jobs continue from their checkpoints (finished pages are never
+ * read or paid for again; failed pages get one more attempt). A cancelled job returns to where it was
+ * cancelled: before processing it is analyzed again; after confirmation it is queued again.
+ */
+export async function retryJob(jobId: string, actorId: string) {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
+  if (!job) throw new ImportJobError("Import job not found.", 404);
+  if (job.status === AiImportJobStatus.PAUSED || job.status === AiImportJobStatus.PAUSED_BUDGET || job.status === AiImportJobStatus.FAILED) {
+    if (job.status === AiImportJobStatus.PAUSED_BUDGET && job.budgetInr <= job.spentInr) throw new ImportJobError("This import used its whole budget. It cannot continue within the pilot limits — review its questions or delete it.");
+    return resumeJob(jobId, actorId, null);
+  }
+  if (job.status !== AiImportJobStatus.CANCELLED) throw new ImportJobError("Only a failed, paused or cancelled import can be retried.");
+  if (job.leaseUntil && job.leaseUntil > new Date()) throw new ImportJobError("The worker is still stopping (it finishes its current step first). Try again in a few seconds.", 409);
+  const toQueue = !!job.confirmedAt;
+  const r = await prisma.aiImportJob.updateMany({
+    where: { id: jobId, status: AiImportJobStatus.CANCELLED },
+    data: toQueue ? { status: AiImportJobStatus.QUEUED, cancelledAt: null, errorMessage: null, pauseReason: null, finishedAt: null, leaseOwner: null, leaseUntil: null } : { status: AiImportJobStatus.DRAFT, cancelledAt: null, errorMessage: null, analysis: Prisma.DbNull, estimate: Prisma.DbNull, estCostInr: null, estCostUsd: null },
+  });
+  if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
+  if (toQueue) await prisma.aiImportPage.updateMany({ where: { jobId, status: "FAILED" }, data: { status: "PENDING", errorMessage: null } });
+  else await prisma.aiImportFile.updateMany({ where: { jobId, status: AiImportFileStatus.ANALYZED }, data: { status: AiImportFileStatus.UPLOADED } });
+  await logEvent(jobId, "RETRIED", toQueue ? "Retried after cancellation: processing continues from the last finished page (finished pages are not read or charged again)." : "Retried after cancellation: the files are analyzed again.", undefined, actorId);
+  if (toQueue) kickWorker();
+  else await requestAnalysis(jobId, actorId);
+}
+
+/**
+ * A busy job whose worker lease is missing or expired: nothing is running it (a live worker renews
+ * its lease at every page). Starts the worker again; it picks the job up from its checkpoint. A job
+ * with a live lease is never touched.
+ */
+export async function recoverJob(jobId: string, actorId: string): Promise<{ restarted: boolean; message: string }> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { status: true, leaseOwner: true, leaseUntil: true, heartbeatAt: true } });
+  if (!job) throw new ImportJobError("Import job not found.", 404);
+  if (!(WORKER_STATUSES as readonly string[]).includes(job.status)) throw new ImportJobError("This import is not waiting for the worker.");
+  if (job.leaseUntil && job.leaseUntil > new Date()) {
+    return { restarted: false, message: `A worker is processing this import (last activity ${job.heartbeatAt ? `${Math.max(0, Math.round((Date.now() - job.heartbeatAt.getTime()) / 1000))} s ago` : "just now"}). Nothing was changed.` };
+  }
+  await logEvent(jobId, "WORKER_RESTARTED", `No worker held this import (status ${job.status.toLowerCase()}); the worker was started again. It continues from the last checkpoint.`, undefined, actorId);
+  kickWorker();
+  return { restarted: true, message: "The worker was started again. Progress appears here within a few seconds." };
+}
+
+export interface JobDeletePreview {
+  title: string;
+  status: string;
+  files: { name: string; role: AiImportFileRole; bytes: number; storedCopy: "deleted" | "kept-shared" | "missing" }[];
+  pages: number;
+  questions: number;
+  importedQuestions: number;
+  bulkImportRuns: string[];
+  figures: { total: number; deleted: number; keptShared: number };
+  spentInr: number;
+  blocked: string | null;
+}
+
+const ACTIVE_LEASE = (j: { leaseUntil: Date | null }) => !!j.leaseUntil && j.leaseUntil > new Date();
+
+async function deletePlan(db: Prisma.TransactionClient | typeof prisma, jobId: string) {
+  const job = await db.aiImportJob.findUnique({ where: { id: jobId }, include: { files: true } });
+  if (!job) return null;
+  const [pages, questions, imported, figures, runs] = await Promise.all([
+    db.aiImportPage.count({ where: { jobId } }),
+    db.aiImportQuestion.count({ where: { jobId } }),
+    db.aiImportQuestion.count({ where: { jobId, questionId: { not: null } } }),
+    db.aiImportFigure.findMany({ where: { jobId }, select: { id: true, originalKey: true, bytes: true } }),
+    db.aiImportQuestion.findMany({ where: { jobId, bulkImportRunId: { not: null } }, distinct: ["bulkImportRunId"], select: { bulkImportRunId: true } }),
+  ]);
+  const fileKeys = [...new Set(job.files.map((f) => f.storageKey).filter((k): k is string => !!k))];
+  const sharedFileKeys = new Set((await db.aiImportFile.findMany({ where: { storageKey: { in: fileKeys }, jobId: { not: jobId }, status: { not: AiImportFileStatus.PURGED } }, select: { storageKey: true } })).map((f) => f.storageKey!));
+  const figureKeys = [...new Set(figures.map((f) => f.originalKey).filter(Boolean))];
+  const sharedFigureKeys = new Set((await db.aiImportFigure.findMany({ where: { originalKey: { in: figureKeys }, jobId: { not: jobId } }, select: { originalKey: true } })).map((f) => f.originalKey));
+  let blocked: string | null = null;
+  if (job.status === AiImportJobStatus.IMPORTING) blocked = "Questions are being written to the Question Bank right now. Wait until that step finishes (a few seconds), then delete.";
+  else if ((WORKER_STATUSES as readonly string[]).includes(job.status) && ACTIVE_LEASE(job)) blocked = "A worker is processing this import right now. Cancel it first; once it has stopped (a few seconds), delete it.";
+  else if (ACTIVE_LEASE(job)) blocked = "The worker is still stopping (it finishes its current step first). Try again in a few seconds.";
+  return { job, pages, questions, imported, figures, runs: runs.map((r) => r.bulkImportRunId!), fileKeys, sharedFileKeys, figureKeys, sharedFigureKeys, blocked };
+}
+
+/** Read-only: exactly what Delete import would remove (shown in the confirmation dialog). */
+export async function deleteJobPreview(jobId: string): Promise<JobDeletePreview | null> {
+  const p = await deletePlan(prisma, jobId);
+  if (!p) return null;
+  const files: JobDeletePreview["files"] = [];
+  for (const f of p.job.files) {
+    const present = f.storageKey ? await stat(vaultPath(f.storageKey)).then((st) => st.isFile(), () => false) : false;
+    files.push({ name: f.originalName, role: f.role, bytes: f.bytes || f.declaredBytes, storedCopy: !f.storageKey || !present ? "missing" : p.sharedFileKeys.has(f.storageKey) ? "kept-shared" : "deleted" });
+  }
+  const keptShared = p.figures.filter((f) => p.sharedFigureKeys.has(f.originalKey)).length;
+  return { title: p.job.title, status: p.job.status, files, pages: p.pages, questions: p.questions, importedQuestions: p.imported, bulkImportRuns: p.runs, figures: { total: p.figures.length, deleted: p.figures.filter((f) => f.originalKey && !p.sharedFigureKeys.has(f.originalKey)).length, keptShared }, spentInr: p.job.spentInr, blocked: p.blocked };
+}
+
+export interface DeletedJob {
+  alreadyDeleted: boolean;
+  title: string | null;
+  storedFilesDeleted: number;
+  storedFilesKept: number;
+  figuresDeleted: number;
+  bytesFreed: number;
+  warnings: string[];
+}
+
+/**
+ * Deletes an import job with its uploaded originals, page renders, work files and extracted figures.
+ * Never touched: questions already in the Question Bank and their media (the Bulk Import copied them
+ * into the media library), Bulk Import history, AI cost records and budget reservations (they keep
+ * counting against the pilot limits), and any stored file or figure another import still uses.
+ * One transaction holds the vault-files lock and the job row lock; stored bytes are moved aside inside
+ * it (restored if it fails) and unlinked after commit. Repeating the call is harmless.
+ */
+export async function deleteJob(input: { jobId: string; actorId: string }): Promise<DeletedJob> {
+  const moved: { from: string; to: string; bytes: number }[] = [];
+  const fileIds: string[] = [];
+  let result: DeletedJob;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_FILES_LOCK}::bigint)`;
+      const locked = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "AiImportJob" WHERE "id" = ${input.jobId} FOR UPDATE`;
+      if (!locked.length) return { alreadyDeleted: true, title: null, storedFilesDeleted: 0, storedFilesKept: 0, figuresDeleted: 0, bytesFreed: 0, warnings: [] };
+      const p = (await deletePlan(tx, input.jobId))!;
+      if (p.blocked) throw new ImportJobError(p.blocked, 409);
+      fileIds.push(...p.job.files.map((f) => f.id));
+      const aside = async (key: string) => {
+        const from = vaultPath(key);
+        const to = path.join(/* turbopackIgnore: true */ path.dirname(/* turbopackIgnore: true */ from), `.removing-${randomBytes(6).toString("hex")}`);
+        try {
+          const size = (await stat(from)).size;
+          await rename(from, to);
+          moved.push({ from, to, bytes: size });
+          return true;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+          return false;
+        }
+      };
+      let storedFilesDeleted = 0;
+      for (const k of p.fileKeys) if (!p.sharedFileKeys.has(k) && (await aside(k))) storedFilesDeleted++;
+      let figuresDeleted = 0;
+      for (const k of p.figureKeys) if (!p.sharedFigureKeys.has(k) && (await aside(k))) figuresDeleted++;
+      await tx.aiImportJob.delete({ where: { id: input.jobId } });
+      const bytes = moved.reduce((a, m) => a + m.bytes, 0);
+      const detail = {
+        jobId: input.jobId,
+        title: p.job.title,
+        status: p.job.status,
+        examId: p.job.examId,
+        createdAt: p.job.createdAt.toISOString(),
+        files: p.job.files.map((f) => ({ id: f.id, name: f.originalName, role: f.role, sha256: f.sha256, bytes: f.bytes, pageCount: f.pageCount, sharedKept: !!f.storageKey && p.sharedFileKeys.has(f.storageKey) })),
+        pages: p.pages,
+        questions: p.questions,
+        importedQuestions: p.imported,
+        bulkImportRuns: p.runs,
+        figures: p.figures.length,
+        spentInr: p.job.spentInr,
+        spentUsd: p.job.spentUsd,
+      };
+      await tx.aiImportCleanup.create({ data: { actorId: input.actorId, categories: ["JOB_DELETED"], fileCount: moved.length, bytes: BigInt(bytes), detail: detail as unknown as Prisma.InputJsonValue } });
+      await tx.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_JOB_DELETED", entityType: "AiImportJob", entityId: input.jobId, metadata: detail as unknown as Prisma.InputJsonValue } });
+      return { alreadyDeleted: false, title: p.job.title, storedFilesDeleted, storedFilesKept: p.fileKeys.filter((k) => p.sharedFileKeys.has(k)).length, figuresDeleted, bytesFreed: bytes, warnings: [] };
+    }, VAULT_TX);
+  } catch (e) {
+    for (const m of moved) await rename(m.to, m.from).catch((err) => console.error(`[ai-import] could not restore ${m.from}: ${err instanceof Error ? err.message : err}`));
+    throw e;
+  }
+  for (const m of moved) {
+    await unlink(m.to).catch((e) => {
+      console.error(`[ai-import] deleted job bytes left at ${m.to}: ${e instanceof Error ? e.message : e}`);
+      result.warnings.push("A stored copy could not be deleted from disk. Run the Storage Manager scan later.");
+    });
+  }
+  if (!result.alreadyDeleted) {
+    await Promise.all([removeVaultDir("renders", input.jobId), removeVaultDir("work", input.jobId), ...fileIds.map((id) => removeVaultDir("tmp", id))]).catch(() => undefined);
+  }
+  return result;
 }
 
 const ROLE_LABEL: Record<AiImportFileRole, string> = { PAPER: "question paper", ANSWER_KEY: "answer key" };

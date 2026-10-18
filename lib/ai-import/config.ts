@@ -279,8 +279,68 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
 export function fileRemovalBlockedReason(status: string): string | null {
   if (status === "DRAFT" || status === "AWAITING_CONFIRMATION") return null;
   if (status === "ANALYZING") return "The files are being analyzed. Wait for the analysis to finish, then remove the file.";
-  if (status === "CANCELLED") return "This import was cancelled. Its files are kept as the original-paper record.";
-  return `Processing has started (${(JOB_STATUS_LABELS[status] ?? status).toLowerCase()}). Files used for processing are kept as the original-paper record — start a new import to use a different file.`;
+  if (status === "QUEUED" || status === "PROCESSING" || status === "IMPORTING") return "This import is running. Cancel it first; then the whole import (with its files) can be deleted.";
+  return "Files that were already processed are removed together with their import: use Delete import. The stored file is deleted unless another import uses the same file; questions already in the Question Bank are never touched.";
+}
+
+// ---- Plain job status (Jobs page and the one-page importer) ----------------------------------
+
+/** Worker stages recorded as STAGE events while a job is PROCESSING. */
+export const JOB_STAGES = { PAGES: "Processing pages", EXTRACT: "Extracting questions", KEY: "Matching answer key", VALIDATE: "Validating questions" } as const;
+export type JobStage = keyof typeof JOB_STAGES;
+
+export type PlainTone = "success" | "warning" | "error" | "info" | "neutral";
+
+/** Statuses a worker may be running (a job in one of these must hold a live lease, or it is stale). */
+export const WORKER_STATUSES = ["ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"] as const;
+
+/** A busy job whose worker lease is missing or expired for longer than this is reported as stalled. */
+export const STALL_AFTER_MS = 90_000;
+
+export interface PlainStatusInput {
+  status: string;
+  stage: string | null;
+  extracted: number;
+  eligibleImport: number;
+  imported: number;
+  needsReview: number;
+  skippedPages: number;
+  stalled: boolean;
+}
+
+/** One plain label per job, from the stored status and what the job produced. */
+export function plainJobStatus(j: PlainStatusInput): { label: string; tone: PlainTone } {
+  if (j.stalled) return { label: "Stalled — not running", tone: "warning" };
+  switch (j.status) {
+    case "DRAFT":
+      return { label: "Waiting for analysis", tone: "neutral" };
+    case "ANALYZING":
+      return { label: "Analyzing", tone: "info" };
+    case "AWAITING_CONFIRMATION":
+      return { label: "Ready to process", tone: "info" };
+    case "QUEUED":
+      return { label: "Queued", tone: "info" };
+    case "PROCESSING":
+      return { label: JOB_STAGES[(j.stage ?? "PAGES") as JobStage] ?? JOB_STAGES.PAGES, tone: "info" };
+    case "IMPORTING":
+      return { label: "Importing", tone: "info" };
+    case "PAUSED":
+    case "PAUSED_BUDGET":
+      return { label: "Paused", tone: "warning" };
+    case "NEEDS_REVIEW":
+      if (j.extracted === 0) return { label: "Needs review", tone: "warning" };
+      return j.eligibleImport > 0 ? { label: "Ready to import", tone: "info" } : { label: "Needs review", tone: "warning" };
+    case "COMPLETED":
+      return { label: "Imported", tone: "success" };
+    case "COMPLETED_WITH_ISSUES":
+      return { label: j.imported ? "Imported — some need review" : "Needs review", tone: "warning" };
+    case "FAILED":
+      return { label: "Failed", tone: "error" };
+    case "CANCELLED":
+      return { label: "Cancelled", tone: "neutral" };
+    default:
+      return { label: JOB_STATUS_LABELS[j.status] ?? j.status, tone: "neutral" };
+  }
 }
 
 export const QUESTION_STATUS_LABELS: Record<string, string> = {

@@ -4,53 +4,82 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getExamSubjects } from "@/lib/exam-taxonomy";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { NewImportForm, type ExamOption } from "./new-import-form";
+import { jobCards, remainingPilotBudget } from "@/lib/ai-import/job-view";
+import { analyzerVerdict } from "@/lib/ai-import/verdict";
+import type { JobAnalysis } from "@/lib/ai-import/analyze";
+import type { CostEstimate } from "@/lib/ai-import/estimate";
+import { OnePageImporter, type CurrentJob } from "./one-page-importer";
+import type { ExamOption } from "./new-import-form";
 
 export const metadata = { title: "AI Question Importer — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";
 
 /**
- * Admin → AI Question Importer → New Import. The administrator gives the
- * exam context (existing exams, subjects and papers only) and a job budget;
- * files are uploaded on the next screen, analyzed locally for free, and paid
- * processing starts only after an explicit confirmation of the estimate.
+ * Admin → AI Question Importer: one page for the whole workflow. Upload a
+ * paper → it is analyzed locally for free → the analyzer shows what was
+ * detected, the reading strategy, the model chosen automatically and the
+ * maximum cost → "Process & Import Questions" processes the file and sends
+ * eligible questions through the existing Bulk Import as Draft. The page
+ * follows the job (?job=…) until its result is shown.
  */
-export default async function AiImporterNewPage() {
+export default async function AiImporterPage({ searchParams }: { searchParams: Promise<{ job?: string }> }) {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="AI Question Importer" />;
-  const canUse = await hasPermission(PERMISSIONS.AI_IMPORTER_USE);
-  const [exams, papers, settings] = await Promise.all([
+  const { job: jobParam } = await searchParams;
+  const [canUse, canManage, settings, exams, papers, lastJob] = await Promise.all([
+    hasPermission(PERMISSIONS.AI_IMPORTER_USE),
+    hasPermission(PERMISSIONS.AI_IMPORTER_MANAGE),
+    getImporterSettings(),
     prisma.exam.findMany({ orderBy: [{ order: "asc" }, { name: "asc" }], select: { id: true, name: true, code: true, year: true, isActive: true } }),
     prisma.previousYearPaper.findMany({ orderBy: [{ year: "desc" }, { title: "asc" }], select: { id: true, examId: true, year: true, title: true, paperCode: true } }),
-    getImporterSettings(),
+    prisma.aiImportJob.findFirst({ orderBy: { createdAt: "desc" }, select: { examId: true } }),
   ]);
-  const options: ExamOption[] = await Promise.all(
-    exams.map(async (e) => ({ ...e, subjects: await getExamSubjects(prisma, e.id), papers: papers.filter((p) => p.examId === e.id) }))
-  );
+  const options: ExamOption[] = await Promise.all(exams.map(async (e) => ({ ...e, subjects: await getExamSubjects(prisma, e.id), papers: papers.filter((p) => p.examId === e.id) })));
+  const defaultExamId = (lastJob && exams.some((e) => e.id === lastJob.examId) ? lastJob.examId : null) ?? exams.find((e) => e.isActive)?.id ?? "";
+  const pilot = await remainingPilotBudget(settings);
+
+  let current: CurrentJob | null = null;
+  const jobId = typeof jobParam === "string" && /^[a-z0-9]{10,40}$/.test(jobParam) ? jobParam : null;
+  if (jobId) {
+    const [card] = await jobCards({ ids: [jobId] }, canManage);
+    const job = card ? await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { analysis: true, estimate: true, budgetInr: true, examId: true, paperType: true, year: true } }) : null;
+    if (card && job) {
+      const analysis = job.analysis as unknown as JobAnalysis | null;
+      const yearMissing = !job.year && !exams.find((e) => e.id === job.examId)?.year;
+      current = {
+        card,
+        examName: exams.find((e) => e.id === job.examId)?.name ?? "—",
+        verdict: analysis
+          ? analyzerVerdict({
+              analysis,
+              estimate: (job.estimate as unknown as CostEstimate | null) ?? null,
+              aiEnabled: settings.aiEnabled,
+              remainingBudgetInr: pilot.remainingInr,
+              jobBudgetInr: Math.min(job.budgetInr, settings.budget.maxJobInr),
+              limits: settings.limits,
+              paperType: job.paperType,
+              yearMissing,
+            })
+          : null,
+      };
+    }
+  }
+  const recent = (await jobCards({ take: 6 }, canManage)).filter((j) => j.id !== current?.card.id).slice(0, 5);
+
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-semibold text-[var(--color-foreground)]">AI Question Importer</h1>
-        <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">
-          Upload question papers and answer keys. Text layers, Word files and spreadsheets are read locally for free; scanned pages and complex layouts use AI vision only after you confirm the estimated cost. Approved questions enter the Question Bank through the existing Bulk Import.
-        </p>
-      </div>
-      {!settings.aiEnabled && (
-        <Card>
-          <CardContent className="py-3 text-sm text-[var(--color-warning)]" data-testid="ai-off-banner">
-            Paid AI processing is switched off in Import Settings. Digital PDFs, Word files and spreadsheets still work; scanned pages will be listed as needing AI.
-          </CardContent>
-        </Card>
-      )}
-      <Card>
-        <CardHeader>
-          <CardTitle>New import</CardTitle>
-          <CardDescription>Choose the exam the paper belongs to. Subjects and topics come from that exam&apos;s existing configuration.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {canUse ? <NewImportForm exams={options} defaultBudget={settings.budget.defaultJobCapInr} maxJobInr={settings.budget.maxJobInr} /> : <p className="text-sm text-[var(--color-muted-foreground)]">You can view imports but not start one (Master Admin only).</p>}
-        </CardContent>
-      </Card>
-    </div>
+    <OnePageImporter
+      canUse={canUse}
+      canManage={canManage}
+      exams={options}
+      defaultExamId={defaultExamId}
+      defaultBudget={settings.budget.defaultJobCapInr}
+      limits={{ maxFileMb: settings.limits.maxFileMb, maxPagesPerFile: settings.limits.maxPagesPerFile }}
+      aiEnabled={settings.aiEnabled}
+      selection={{ mode: settings.selection.mode, model: settings.selection.mode === "manual" ? settings.models.extract : null }}
+      importerModels={settings.importerModels}
+      pilot={pilot}
+      current={current}
+      missingJob={!!jobParam && !current}
+      recent={recent}
+    />
   );
 }

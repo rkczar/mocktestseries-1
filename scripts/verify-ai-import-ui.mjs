@@ -70,6 +70,32 @@ async function until(fn, timeout = 15000) {
   }
 }
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+/**
+ * Starts an import the normal way: the one-page importer (exam preselected, optional details under
+ * Advanced options), upload → automatic analysis. Returns the job id from the page URL.
+ */
+async function startOnMainPage(page, file, { name, examId, pyqId, year, key } = {}) {
+  await page.goto(`${BASE}/admin/ai-importer`);
+  if (examId) await page.selectOption("[data-testid=op-exam]", examId);
+  if (pyqId || year) {
+    await page.locator("[data-testid=op-advanced] summary").click();
+    if (pyqId) await page.selectOption("[data-testid=ai-pyq]", pyqId);
+    if (year) await page.fill("[data-testid=ai-year]", year);
+  }
+  if (await page.locator("[data-testid=op-year]").count()) await page.fill("[data-testid=op-year]", year ?? "2024");
+  if (key) await page.locator("[data-testid=op-key-input]").setInputFiles(path.join(FX, key));
+  const input = name ? { name, mimeType: file.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : file.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf", buffer: readFileSync(path.join(FX, file)) } : path.join(FX, file);
+  await Promise.all([page.waitForURL(/\/admin\/ai-importer\?job=[a-z0-9]+$/, { timeout: 90000 }), page.locator("[data-testid=op-upload-input]").setInputFiles(input)]);
+  return new URL(page.url()).searchParams.get("job");
+}
+async function waitFor(page, selector, timeout = 120000) {
+  const end = Date.now() + timeout;
+  for (;;) {
+    if (await page.locator(selector).count()) return true;
+    if (Date.now() > end) return false;
+    await page.waitForTimeout(1500);
+  }
+}
 async function imagesOk(page, scope) {
   return page.locator(`${scope} img`).evaluateAll((imgs) => imgs.map((im) => ({ ok: im.complete && im.naturalWidth > 0, src: im.getAttribute("src")?.slice(0, 60) })));
 }
@@ -110,18 +136,11 @@ check("importer list saved (6 models) and no global AI → Models approval chang
 
 // ------------------------------------------------------------------ new import → upload → analyze → confirm
 section("B. New import, upload, analysis, confirmation, processing");
-await admin.goto(`${BASE}/admin/ai-importer`);
-await admin.fill("[data-testid=ai-title]", `AIUI digital ${F.suffix}`);
-await admin.selectOption("[data-testid=ai-exam]", F.examId);
-await admin.selectOption("[data-testid=ai-pyq]", F.paperId);
-await admin.fill("[data-testid=ai-year]", "2024");
-await admin.fill("[data-testid=ai-budget]", "8");
-await Promise.all([admin.waitForURL(/\/admin\/ai-importer\/jobs\/[a-z0-9]+$/, { timeout: 30000 }), admin.click("[data-testid=create-import]")]);
-const jobId = admin.url().split("/").pop();
-check("job created", !!jobId);
-await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "digital-clean.pdf"));
-await admin.locator("[data-testid=upload-progress] li", { hasText: "2 page(s)" }).waitFor({ timeout: 60000 });
-check("upload progress reports PDF, 2 pages", true);
+const jobId = await startOnMainPage(admin, "digital-clean.pdf", { name: `AIUI digital ${F.suffix}.pdf`, examId: F.examId, pyqId: F.paperId, year: "2024" });
+check("job created from the main page (named after the file)", !!jobId && (await db.query(`select title from "AiImportJob" where id=$1`, [jobId])).rows[0]?.title === `AIUI digital ${F.suffix}`);
+// The detailed job page stays available for step-by-step work.
+await admin.goto(`${BASE}/admin/ai-importer/jobs/${jobId}`);
+await waitStatus(admin, /Awaiting confirmation/);
 await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "fake.pdf"));
 await admin.locator("[data-testid=upload-progress] li", { hasText: "content is PNG" }).waitFor({ timeout: 30000 });
 check("fake PDF refused with a clear reason in the UI", true);
@@ -150,7 +169,7 @@ const st1 = await waitStatus(admin, /Ready to import/, 180000);
 check("processing finished → Ready to import", /Ready to import/.test(st1), st1);
 check("job page shows the models chosen at confirmation, with the reason", (await admin.locator("[data-testid=plan-extract]").getAttribute("data-model")) === "mockvision/reader" && /Cheapest suitable/.test((await admin.locator("[data-testid=plan-extract]").textContent()) ?? ""));
 const blockedNote = (await admin.locator("[data-testid=files-remove-blocked]").textContent().catch(() => "")) ?? "";
-check("after processing, Remove is disabled with the reason shown", /Processing has started/.test(blockedNote) && (await admin.locator("[data-testid=file-remove]:not([disabled])").count()) === 0 && (await admin.locator("[data-testid=file-remove]").count()) > 0, blockedNote);
+check("after processing, Remove is disabled with the reason shown", /use Delete import/.test(blockedNote) && (await admin.locator("[data-testid=file-remove]:not([disabled])").count()) === 0 && (await admin.locator("[data-testid=file-remove]").count()) > 0, blockedNote);
 const summaryText = await admin.locator("[data-testid=batch-summary]").textContent();
 check("batch summary shows extracted / eligible / not importable", /Questionsextracted10/.test(summaryText.replace(/\s+/g, "")) && /Not importable/.test(summaryText), summaryText.slice(0, 200));
 
@@ -284,7 +303,7 @@ check("anonymous access to page images is refused", [302, 307, 403].includes(ano
 const full = await newPage();
 await adminLogin(full, F.fullAdmin, F.password);
 await full.goto(`${BASE}/admin/ai-importer`);
-check("FULL_ADMIN can view but not start an import", (await full.locator("text=You can view imports but not start one").count()) === 1 && (await full.locator("[data-testid=create-import]").count()) === 0);
+check("FULL_ADMIN can view but not start an import", (await full.locator("text=You can view imports but not start one").count()) === 1 && (await full.locator("[data-testid=op-upload-input]").count()) === 0);
 await full.goto(`${BASE}/admin/ai-importer/jobs/${jobId}`);
 check("FULL_ADMIN sees no import/publish buttons", (await full.locator("[data-testid=import-draft]").count()) === 0);
 const fullUpload = await inPage(full, "/api/admin/ai-importer/files", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jobId, name: "x.pdf", size: 10 }) });
@@ -304,15 +323,10 @@ check("existing Bulk Import page still renders", (await m.locator("text=Applicat
 
 // ------------------------------------------------------------------ remove / replace files
 section("I. Remove and replace uploaded files");
-await admin.goto(`${BASE}/admin/ai-importer`);
-await admin.fill("[data-testid=ai-title]", `AIUI remove ${F.suffix}`);
-await admin.selectOption("[data-testid=ai-exam]", F.examId);
-await admin.fill("[data-testid=ai-budget]", "5");
-await Promise.all([admin.waitForURL(/\/admin\/ai-importer\/jobs\/[a-z0-9]+$/, { timeout: 30000 }), admin.click("[data-testid=create-import]")]);
-const rmJob = admin.url().split("/").pop();
+const rmJob = await startOnMainPage(admin, "digital-clean.pdf", { examId: F.examId });
 const row = (name) => admin.locator("[data-testid=file-row]", { hasText: name });
-await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "digital-clean.pdf"));
-await admin.locator("[data-testid=upload-progress] li", { hasText: "2 page(s)" }).waitFor({ timeout: 60000 });
+await admin.goto(`${BASE}/admin/ai-importer/jobs/${rmJob}`);
+await waitStatus(admin, /Awaiting confirmation/);
 await admin.selectOption("[data-testid=upload-role]", "ANSWER_KEY");
 await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "key.csv"));
 await admin.locator("[data-testid=upload-progress] li", { hasText: /CSV/ }).waitFor({ timeout: 60000 });
@@ -361,7 +375,7 @@ await dlg.waitFor();
 await db.query(`update "AiImportJob" set status='PROCESSING' where id=$1`, [rmJob]);
 await dlg.locator("[data-testid=remove-file-confirm]").click();
 await dlg.locator("[data-testid=remove-file-error]").waitFor({ timeout: 15000 });
-check("server refusal shown in the dialog (job started meanwhile)", /Processing has started/.test(await dlg.locator("[data-testid=remove-file-error]").textContent()));
+check("server refusal shown in the dialog (job started meanwhile)", /import is running|use Delete import/.test(await dlg.locator("[data-testid=remove-file-error]").textContent()));
 await dlg.getByRole("button", { name: "Keep file" }).click();
 check("no success notice and the file is still there", (await admin.locator("[data-testid=job-notice]", { hasText: "key-digital" }).count()) === 0 && (await db.query(`select count(*)::int n from "AiImportFile" where "jobId"=$1 and "originalName"='key-digital.pdf'`, [rmJob])).rows[0].n === 1);
 await db.query(`update "AiImportJob" set status='DRAFT' where id=$1`, [rmJob]);
@@ -386,6 +400,137 @@ const keyId = (await db.query(`select id from "AiImportFile" where "jobId"=$1 an
 const rawRemove = await inPage(full, `/admin/ai-importer/jobs/${rmJob}`, { method: "POST", headers: { "Next-Action": removeActionId, Accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify([rmJob, keyId]) });
 check("FULL_ADMIN raw removeFileAction call is refused", !!removeActionId && /do not have permission/.test(rawRemove.text), { id: removeActionId, status: rawRemove.status, text: rawRemove.text.slice(-200) });
 check("…and the file still exists", (await db.query(`select count(*)::int n from "AiImportFile" where id=$1`, [keyId])).rows[0].n === 1);
+
+// ------------------------------------------------------------------ one-page importer (the normal workflow)
+section("N. One-page importer: Upload → Analyze → Process & Import, with defaults untouched");
+const settingsN0 = (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0]?.value;
+await admin.goto(`${BASE}/admin/ai-importer`);
+const subnav = await admin.locator("[data-testid=ai-importer-subnav] > a").allTextContents();
+check("main navigation is short: Import, Imports, Review Exceptions, Import Settings + More", JSON.stringify(subnav) === JSON.stringify(["Import", "Imports", "Review Exceptions", "Import Settings"]) && (await admin.locator("[data-testid=ai-importer-more]").count()) === 1, subnav);
+const upText = await admin.locator("[data-testid=upload-card]").textContent();
+check("upload area with formats and the real limits", /Upload PDF or Document/.test(upText) && /PDF, Word \(DOCX\), JPG, PNG, XLSX or CSV/.test(upText) && /up to 100 MB and 300 pages/.test(upText), upText.slice(0, 200));
+check("exam preselected from the last import (no form to fill)", (await admin.locator("[data-testid=op-exam]").inputValue()) === F.examId);
+const opJob = await startOnMainPage(admin, "digital-clean.pdf", { name: `AIUI onepage ${F.suffix}.pdf`, key: "key-digital.pdf" });
+check("upload → automatic analysis on the same page", !!opJob && (await waitFor(admin, "[data-testid=analyzer]", 90000)));
+const facts = await admin.locator("[data-testid=analyzer-fact]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-kind"), e.textContent]));
+check("analyzer: detected facts labelled (pages, digital, answer key)", facts.some(([k, t]) => k === "detected" && /Pages.*2/.test(t)) && facts.some(([, t]) => /Digital PDF/.test(t)) && facts.some(([, t]) => /Separate answer key uploaded/.test(t)), facts);
+check("analyzer says the analysis was local and free", /no AI request was made/.test(await admin.locator("[data-testid=analyzer-mode]").textContent()));
+const selModel = admin.locator("[data-testid=selected-model]");
+check("selected model + why shown without opening Settings (digital → local reader)", (await selModel.getAttribute("data-local")) === "true" && /Why this model\?/.test(await selModel.textContent()) && /Automatic — Cheapest Suitable Model/.test(await selModel.textContent()));
+check("estimated cost, maximum and remaining pilot budget shown", /₹[\d.]+/.test(await admin.locator("[data-testid=op-cost-estimate]").textContent()) && /₹[\d.]+/.test(await admin.locator("[data-testid=op-cost-max]").textContent()) && /₹[\d.]+/.test(await admin.locator("[data-testid=op-pilot-remaining]").textContent()));
+check("one primary action, enabled", (await admin.locator("[data-testid=process-import]").count()) === 1 && (await admin.locator("[data-testid=process-import]").isEnabled()));
+await admin.locator("[data-testid=process-import]").click();
+check("re-upload of an already imported paper: result shown on the same page", (await waitFor(admin, "[data-testid=op-result]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
+const val = async (t) => Number(await admin.locator(`[data-testid=${t}]`).getAttribute("data-value"));
+check("…nothing imported twice: duplicates skipped, unsupported kept out", (await val("result-imported")) === 0 && (await val("result-duplicates")) >= 5 && (await val("result-unsupported")) >= 2, { imp: await val("result-imported"), dup: await val("result-duplicates"), uns: await val("result-unsupported") });
+check("…and the next step is explained", /Next:/.test(await admin.locator("[data-testid=op-next-action]").textContent()) && (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='IMPORT_SKIPPED'`, [opJob])).rows[0].n === 1);
+
+// Paid AI off + scanned paper (the UPSC CMS case): blocked before processing, one reason, one next action, ₹0.
+await db.query(`update "Setting" set value = jsonb_set(value, '{aiEnabled}', 'false') where key='ai.importer'`);
+const offJob = await startOnMainPage(admin, "scanned.pdf", { name: `AIUI scanned off ${F.suffix}.pdf` });
+await waitFor(admin, "[data-testid=analyzer-blocker]", 90000);
+const blk = await admin.locator("[data-testid=analyzer-blocker]").textContent();
+check("AI off + scanned: blocked with the reason and one next action", /no text layer/.test(blk) && /Next:/.test(blk) && /digital PDF or Word/.test(blk), blk);
+check("…badge says Action needed, Process disabled, no contradictory Next line", /Action needed/.test(await admin.locator("[data-testid=current-status]").textContent()) && (await admin.locator("[data-testid=process-import]").isDisabled()) && (await admin.locator("[data-testid=op-next-action]").count()) === 0);
+check("…nothing charged", (await db.query(`select "spentInr" from "AiImportJob" where id=$1`, [offJob])).rows[0].spentInr === 0);
+await db.query(`update "Setting" set value = jsonb_set(value, '{aiEnabled}', 'true') where key='ai.importer'`);
+// The exam has no year: the upload asks for the paper's year instead of failing every question later.
+await admin.goto(`${BASE}/admin/ai-importer`);
+check("exam without a year → Paper year is asked for on the upload area", (await admin.locator("[data-testid=op-year]").count()) === 1);
+await admin.locator("[data-testid=op-upload-input]").setInputFiles(path.join(FX, "paper.docx"));
+await admin.locator("[data-testid=op-upload-error]").waitFor({ timeout: 10000 });
+check("…upload refused until the year is entered (nothing created)", /paper's year/.test(await admin.locator("[data-testid=op-upload-error]").textContent()) && /\/admin\/ai-importer$/.test(admin.url()));
+// A new paper with its key, defaults untouched (exam preselected, automatic model): one click imports it.
+const newJob = await startOnMainPage(admin, "paper.docx", { name: `AIUI word ${F.suffix}.docx`, key: "key.csv" });
+check("Word paper analyzed on the main page", await waitFor(admin, "[data-testid=analyzer]", 90000));
+check("the one button is enabled", await admin.locator("[data-testid=process-import]").isEnabled());
+await admin.locator("[data-testid=process-import]").dblclick();
+check("double click → one start (button disabled at once)", await until(async () => (await admin.locator("[data-testid=process-import]").count()) === 0 || (await admin.locator("[data-testid=process-import]").isDisabled())));
+check("result shown on the same page, without visiting other pages", (await waitFor(admin, "[data-testid=op-result]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
+const nImported = await val("result-imported");
+const wRows = (await db.query(`select q.status, q."questionId", qq.status qs from "AiImportQuestion" q left join "Question" qq on qq.id = q."questionId" where q."jobId"=$1`, [newJob])).rows;
+check("questions persisted through the Bulk Import, shown in the result", nImported > 0 && wRows.filter((r) => r.questionId).length === nImported, { nImported, rows: wRows });
+check("imported as DRAFT, none published", wRows.every((r) => !r.questionId || r.qs === "DRAFT") && !wRows.some((r) => r.status === "PUBLISHED"));
+check("exactly one confirmation and one import for the double click", (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type in ('IMPORT_REQUESTED','IMPORT_SKIPPED')`, [newJob])).rows[0].n === 1 && (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='CONFIRMED'`, [newJob])).rows[0].n === 1);
+check("Bulk Import run linked from the result", (await admin.locator("[data-testid=current-job] a", { hasText: "Bulk Import run" }).count()) >= 1);
+const settingsN1 = (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0]?.value;
+check("settings untouched by the one-page flow (automatic stays the default)", JSON.stringify(settingsN0) === JSON.stringify(settingsN1) && settingsN1?.selection?.mode === "auto");
+
+// Scanned paper: AI vision via the automatically chosen model; a one-off override; the saved preference.
+const scJob = await startOnMainPage(admin, "scanned.pdf", { name: `AIUI scanned ${F.suffix}.pdf` });
+await waitFor(admin, "[data-testid=analyzer]", 90000);
+check("scanned paper → AI vision strategy, no contradictory 'Action needed' badge", !/Action needed/.test(await admin.locator("[data-testid=current-status]").textContent()) && (await admin.locator("[data-testid=analyzer]").getAttribute("data-strategy")) === "AI");
+check("automatic choice: cheapest suitable vision model shown with its reason", (await selModel.getAttribute("data-model")) === "mockvision/reader" && /Why this model\?/.test(await selModel.textContent()));
+await admin.locator("[data-testid=op-change-model] summary").click();
+await admin.selectOption("[data-testid=op-model-select]", "mockvision/mid");
+check("override shows on the card", /mockvision\/mid/.test(await selModel.textContent()) && /override for this import/.test(await selModel.textContent()));
+await admin.locator("[data-testid=op-model-remember]").check();
+await admin.locator("[data-testid=op-model-save]").click();
+await until(async () => (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0].value.selection.mode === "manual");
+const savedPref = (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0].value;
+check("Remember saves the importer preference only when asked", savedPref.selection.mode === "manual" && savedPref.models.extract === "mockvision/mid");
+await admin.selectOption("[data-testid=op-model-select]", "");
+await admin.locator("[data-testid=op-model-save]").click();
+await until(async () => (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0].value.selection.mode === "auto");
+check("…and back to Automatic", (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0].value.selection.mode === "auto");
+check("no global AI → Models approval changed by the importer", (await globalFlags()) === flags0);
+await admin.reload();
+await waitFor(admin, "[data-testid=op-change-model]");
+await admin.locator("[data-testid=op-change-model] summary").click();
+await admin.selectOption("[data-testid=op-model-select]", "mockvision/mid");
+await admin.locator("[data-testid=process-import]").click();
+await until(async () => (await db.query(`select status from "AiImportJob" where id=$1`, [scJob])).rows[0].status !== "AWAITING_CONFIRMATION", 30000);
+const scPlan = (await db.query(`select config from "AiImportJob" where id=$1`, [scJob])).rows[0].config.modelPlan;
+check("this import used the override; the default stays Automatic", scPlan?.tasks?.extract?.model === "mockvision/mid" && scPlan?.mode === "manual" && (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0].value.selection.mode === "auto", scPlan?.tasks?.extract);
+check("scanned import reaches a result", await waitFor(admin, "[data-testid=op-result]", 300000));
+
+// Cancel and Delete from the main page.
+const cxJob = await startOnMainPage(admin, "sheet.xlsx", { name: `AIUI cancel ${F.suffix}.xlsx` });
+await waitFor(admin, "[data-testid=analyzer]", 90000);
+await admin.locator("[data-testid=current-job] [data-testid=job-cancel]").click();
+check("Cancel works from the main page", await until(async () => /Cancelled/.test(await admin.locator("[data-testid=current-status]").textContent()), 20000));
+check("Retry offered for the cancelled import", (await admin.locator("[data-testid=current-job] [data-testid=job-retry]").count()) === 1);
+await admin.locator("[data-testid=current-job] [data-testid=job-delete]").click();
+const del = admin.locator("[data-testid=delete-job-dialog]");
+await del.locator("[data-testid=delete-preview]").waitFor({ timeout: 15000 });
+check("delete dialog lists exactly what will be removed", /AIUI cancel/.test(await del.textContent()) && (await del.locator("[data-testid=delete-preview-file]").count()) === 1 && /Question Bank/.test(await del.textContent()));
+check("delete stays disabled until DELETE is typed", await del.locator("[data-testid=delete-job-confirm]").isDisabled());
+await del.locator("[data-testid=delete-confirm]").fill("DELETE");
+await Promise.all([admin.waitForURL(/\/admin\/ai-importer$/, { timeout: 20000 }), del.locator("[data-testid=delete-job-confirm]").click()]);
+check("deleted: job gone, audited, back to the upload area", (await db.query(`select count(*)::int n from "AiImportJob" where id=$1`, [cxJob])).rows[0].n === 0 && (await db.query(`select count(*)::int n from "AuditLog" where action='AI_IMPORT_JOB_DELETED' and "entityId"=$1`, [cxJob])).rows[0].n === 1 && (await admin.locator("[data-testid=upload-card]").count()) === 1);
+
+// Imports page: plain statuses, actions, stalled recovery.
+await admin.goto(`${BASE}/admin/ai-importer/jobs`);
+const opRow = admin.locator(`[data-testid=job-row][data-job-id="${opJob}"]`);
+check("Imports page: plain label + counts + next action", /^(Imported|Imported — some need review|Needs review)$/.test((await opRow.locator("[data-testid=job-label]").textContent()).trim()) && /extracted/.test(await opRow.textContent()) && /Next:/.test(await opRow.textContent()));
+await db.query(`update "AiImportJob" set status='PROCESSING', "leaseOwner"=null, "leaseUntil"=now() - interval '10 minutes', "updatedAt"=now() - interval '10 minutes' where id=$1`, [scJob]);
+const scStatusBefore = (await db.query(`select status from "AiImportJob" where id=$1`, [scJob])).rows[0].status;
+await admin.reload();
+const scRow = admin.locator(`[data-testid=job-row][data-job-id="${scJob}"]`);
+check("stalled job is labelled and offers Start again", /Stalled/.test(await scRow.locator("[data-testid=job-label]").textContent()) && (await scRow.locator("[data-testid=job-recover]").count()) === 1);
+await scRow.locator("[data-testid=job-recover]").click();
+check("Start again answers with what happened", await until(async () => /started again/.test((await scRow.locator("[data-testid=job-controls-message]").textContent().catch(() => "")) ?? ""), 15000));
+await db.query(`update "AiImportJob" set status='COMPLETED_WITH_ISSUES' where id=$1 and status=$2`, [scJob, scStatusBefore]);
+// The old blanket lock message is gone; the details page explains how to remove files.
+await admin.goto(`${BASE}/admin/ai-importer/jobs/${opJob}`);
+const why = (await admin.locator("[data-testid=file-remove-why]").allTextContents()).join(" | ");
+check("details page: no 'Kept as the original-paper record' — points to Delete instead", !/original-paper record/.test(why) && /Delete/.test(why), why);
+check("details page has the same controls (Delete)", (await admin.locator("[data-testid=job-controls] [data-testid=job-delete]").count()) === 1);
+// View-only admin and mobile.
+await full.goto(`${BASE}/admin/ai-importer/jobs`);
+check("FULL_ADMIN: Imports page shows no job controls", (await full.locator("[data-testid=job-row]").count()) > 0 && (await full.locator("[data-testid=job-controls]").count()) === 0);
+for (const u of ["", `?job=${opJob}`, "/jobs"]) {
+  await m.goto(`${BASE}/admin/ai-importer${u}`);
+  await m.waitForTimeout(800);
+  check(`mobile ${u || "/"}: no horizontal scroll`, (await noOverflow(m)) && (await m.locator("text=Application error").count()) === 0);
+}
+await m.goto(`${BASE}/admin/ai-importer?job=${opJob}`);
+await m.locator("[data-testid=current-job] [data-testid=job-delete]").click();
+const mDel = m.locator("[data-testid=delete-job-dialog]");
+await mDel.waitFor();
+const mdBox = await mDel.boundingBox();
+check("mobile: delete dialog fits the screen", !!mdBox && mdBox.x >= 0 && mdBox.x + mdBox.width <= 375, mdBox);
+await mDel.getByRole("button", { name: "Keep import" }).click();
 
 check("no page errors in any session", pages.every((p) => p.errors.length === 0), pages.map((p) => p.errors).flat());
 await browser.close();

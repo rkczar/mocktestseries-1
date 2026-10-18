@@ -246,9 +246,11 @@ export async function runAnalysis(jobId: string): Promise<void> {
   const plan = await computeModelPlan(settings, { refresh: settings.aiEnabled });
   const estimate = await estimateJobCost({ paperFacts, keyFacts, settings, plan });
   const analysis: JobAnalysis = { files: results, totals, estimate, analyzedAt: new Date().toISOString() };
-  await prisma.aiImportJob.update({
-    where: { id: jobId },
+  // Only while still analyzing: a job cancelled (or deleted) during the analysis stays that way.
+  const r = await prisma.aiImportJob.updateMany({
+    where: { id: jobId, status: AiImportJobStatus.ANALYZING },
     data: { analysis: analysis as unknown as Prisma.InputJsonValue, estCostInr: estimate.totalInr, estCostUsd: estimate.totalUsd, estimate: estimate as unknown as Prisma.InputJsonValue, status: AiImportJobStatus.AWAITING_CONFIRMATION },
   });
+  if (!r.count) return;
   await logEvent(jobId, "ANALYZED", `Analysis finished: ${totals.pages} page(s), ${totals.localQuestions} question(s) recognized locally, ${totals.scannedPages} scanned page(s). Estimated AI cost ${estimate.totalInr === null ? "not available" : `₹${estimate.totalInr.toFixed(2)} (maximum ${estimate.maxInr === null ? "not available" : `₹${estimate.maxInr.toFixed(2)}`})`}.`, { totals });
 }

@@ -9,6 +9,7 @@ import { getImporterSettings } from "@/lib/ai-import/settings";
 import { jobSummary } from "@/lib/ai-import/summary";
 import { resetEligibility } from "@/lib/ai-import/jobs";
 import { planOf } from "@/lib/ai-import/select";
+import { jobCards } from "@/lib/ai-import/job-view";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import { JobWorkspace, type JobView } from "./job-workspace";
 import type { ExamOption } from "../../new-import-form";
@@ -38,6 +39,7 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     prisma.aiImportKeyEntry.groupBy({ by: ["keyFileId"], where: { jobId: job.id }, _count: { _all: true } }),
   ]);
   const examOptions: ExamOption[] = await Promise.all(exams.map(async (e) => ({ ...e, subjects: await getExamSubjects(prisma, e.id), papers: papers.filter((p) => p.examId === e.id) })));
+  const [card] = await jobCards({ ids: [job.id] }, canManage);
   const runs = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, bulkImportRunId: { not: null } }, distinct: ["bulkImportRunId"], select: { bulkImportRunId: true } });
   const view: JobView = {
     id: job.id,
@@ -82,6 +84,9 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     plan: planOf(job.config),
     reset,
     canManage,
+    controls: { id: job.id, title: job.title, status: job.status, actions: card.actions },
+    plainLabel: card.label,
+    nextAction: card.nextAction,
   };
   return <JobWorkspace job={view} exams={examOptions} canUse={canUse} canPublish={canPublish && canUse} />;
 }

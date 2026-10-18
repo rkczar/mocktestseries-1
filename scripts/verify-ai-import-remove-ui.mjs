@@ -166,11 +166,11 @@ check("awaiting: no Confirm button until re-analysis", (await page.locator("[dat
 
 section("4. Processing / Ready to import / Cancelled — locked, with the reason");
 await page.goto(`${BASE}/admin/ai-importer/jobs/${S.processing}`);
-await lockedChecks(page, "processing", S.processing, ["formula.pdf"], /Processing has started \(processing\)/);
+await lockedChecks(page, "processing", S.processing, ["formula.pdf"], /This import is running\. Cancel it first/);
 await page.goto(`${BASE}/admin/ai-importer/jobs/${S.ready}`);
-await lockedChecks(page, "ready to import", S.ready, ["digital-clean.pdf", "key-digital.pdf"], /Processing has started \(ready to import\)/);
+await lockedChecks(page, "ready to import", S.ready, ["digital-clean.pdf", "key-digital.pdf"], /use Delete import/);
 await page.goto(`${BASE}/admin/ai-importer/jobs/${S.cancelled}`);
-await lockedChecks(page, "cancelled", S.cancelled, ["photo.png"], /cancelled/);
+await lockedChecks(page, "cancelled", S.cancelled, ["photo.png"], /use Delete import/);
 
 section("5. The server refuses independently (raw Server Action calls)");
 const manifest = JSON.parse(readFileSync(path.join(APP, ".next/server/server-reference-manifest.json"), "utf8"));
@@ -179,7 +179,7 @@ check("removeFileAction id found in the build manifest", !!actionId);
 for (const [label, jobId] of [["processing", S.processing], ["ready to import", S.ready], ["cancelled", S.cancelled]]) {
   const fid = (await db.query(`select id from "AiImportFile" where "jobId"=$1 limit 1`, [jobId])).rows[0].id;
   const r = await inPage(page, `/admin/ai-importer/jobs/${jobId}`, { method: "POST", headers: { "Next-Action": actionId, Accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify([jobId, fid]) });
-  check(`Master Admin raw call on a ${label} job: refused with the reason`, /Processing has started|cancelled/.test(r.text) && /"ok":false/.test(r.text), { status: r.status, text: r.text.slice(-200) });
+  check(`Master Admin raw call on a ${label} job: refused with the reason`, /import is running|use Delete import/.test(r.text) && /"ok":false/.test(r.text), { status: r.status, text: r.text.slice(-200) });
   check(`…${label} file still there`, (await db.query(`select count(*)::int n from "AiImportFile" where id=$1`, [fid])).rows[0].n === 1);
 }
 const anon = await newPage();

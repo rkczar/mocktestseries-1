@@ -143,6 +143,7 @@ async function main() {
   // ONLY=U runs the automatic-selection section by itself (it sets up its own provider, catalog and settings).
   if (process.env.ONLY === "U") return sectionU(actor, exam.id);
   if (process.env.ONLY === "V") return sectionV(actor, exam.id);
+  if (process.env.ONLY === "W") return sectionW(actor, exam.id, anatomy.id);
   // ------------------------------------------------------------------ A
   section("A. Settings defaults and normalization");
   const d = normalizeImporterSettings({});
@@ -693,16 +694,16 @@ async function main() {
   await runWorker(60_000);
   const cFiles = await prisma.aiImportFile.findMany({ where: { jobId: jobC }, select: { id: true, status: true } });
   const cStatus = (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobC } })).status;
-  await expectError(`removal refused after processing started (${cStatus})`, () => removeFile({ jobId: jobC, fileId: cFiles[0].id, actorId: actor }), /Processing has started/);
+  await expectError(`removal refused after processing started (${cStatus})`, () => removeFile({ jobId: jobC, fileId: cFiles[0].id, actorId: actor }), /import is running|use Delete import/);
   for (const st of ["QUEUED", "PROCESSING", "PAUSED", "IMPORTING"] as const) {
     await prisma.aiImportJob.update({ where: { id: jobR2 }, data: { status: st } });
-    await expectError(`removal refused while ${st.toLowerCase()}`, () => removeFile({ jobId: jobR2, fileId: shareB.fileId, actorId: actor }), /Processing has started/);
+    await expectError(`removal refused while ${st.toLowerCase()}`, () => removeFile({ jobId: jobR2, fileId: shareB.fileId, actorId: actor }), /import is running|use Delete import/);
   }
   await prisma.aiImportJob.update({ where: { id: jobR2 }, data: { status: "AWAITING_CONFIRMATION" } });
   // Even if a processed job were somehow editable again, files with extracted / imported questions stay.
   const cPaper = (await prisma.aiImportFile.findFirstOrThrow({ where: { jobId: jobC, role: "PAPER", status: "PROCESSED" } })).id;
   const cPaperStored = await stored(cPaper);
-  await expectError("a processed file is kept as the original-paper record", () => removeFile({ jobId: jobC, fileId: cPaper, actorId: actor }), /Processing has started/);
+  await expectError("a processed file is removed only with its whole import (Delete import)", () => removeFile({ jobId: jobC, fileId: cPaper, actorId: actor }), /import is running|use Delete import/);
   await prisma.aiImportJob.update({ where: { id: jobC }, data: { status: "DRAFT" } });
   await prisma.aiImportFile.update({ where: { id: cPaper }, data: { status: "UPLOADED" } });
   await expectError("file whose questions are in the Question Bank is never removed", () => removeFile({ jobId: jobC, fileId: cPaper, actorId: actor }), /already in the Question Bank/);
@@ -712,7 +713,7 @@ async function main() {
   const jobX = await newJob(actor, exam.id, "FX remove cancelled");
   const xFile = await upload(actor, jobX, "rm-key-right.csv", AiImportFileRole.PAPER, null, "x.csv");
   await prisma.aiImportJob.update({ where: { id: jobX }, data: { status: "CANCELLED" } });
-  await expectError("removal refused on a cancelled import", () => removeFile({ jobId: jobX, fileId: xFile.fileId, actorId: actor }), /cancelled/);
+  await expectError("removal refused on a cancelled import", () => removeFile({ jobId: jobX, fileId: xFile.fileId, actorId: actor }), /use Delete import/);
 
   // Confirm racing a removal: never a queued job built on the removed file.
   jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
@@ -760,6 +761,7 @@ async function main() {
   await sectionT(actor, exam.id);
   await sectionU(actor, exam.id);
   await sectionV(actor, exam.id);
+  await sectionW(actor, exam.id, anatomy.id);
 }
 
 // ------------------------------------------------------------------ T
@@ -768,7 +770,8 @@ async function attachPlan(jobId: string) {
   const { computeModelPlan } = await import("@/lib/ai-import/select");
   const plan = await computeModelPlan(normalizeImporterSettings(await getImporterSettings()), { refresh: true });
   const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
-  await prisma.aiImportJob.update({ where: { id: jobId }, data: { config: { ...((j.config as object) ?? {}), modelPlan: plan } as never } });
+  // AI requests are only sent for a PROCESSING job; the far lease keeps the suite's own worker runs away from it.
+  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: "PROCESSING", leaseOwner: "suite-direct-calls", leaseUntil: new Date(Date.now() + 3_600_000), config: { ...((j.config as object) ?? {}), modelPlan: plan } as never } });
   return plan;
 }
 
@@ -1250,7 +1253,7 @@ async function sectionU(actor: string, examId: string) {
   const wrong = await upload(actor, jobR, "photo.png");
   const r0 = await analyzeAndConfirm(actor, jobR, 8);
   check("AI off: processed, zero questions, ₹0 → needs review", r0.status === "NEEDS_REVIEW" && r0.spentInr === 0 && (await prisma.aiImportQuestion.count({ where: { jobId: jobR } })) === 0, r0.status);
-  await expectError("before reset: removing a processed file is refused", () => removeFile({ jobId: jobR, fileId: wrong.fileId, actorId: actor }), /Processing has started/);
+  await expectError("before reset: removing a processed file is refused", () => removeFile({ jobId: jobR, fileId: wrong.fileId, actorId: actor }), /import is running|use Delete import/);
   const el = await resetEligibility(jobR);
   check("reset eligibility: every check passes and is listed", el.allowed && el.checks.length >= 7 && el.checks.every((c) => c.ok), el.checks);
   const pagesBefore = await prisma.aiImportPage.count({ where: { jobId: jobR } });
@@ -1401,6 +1404,277 @@ async function sectionV(actor: string, examId: string) {
 
   // Restore the suite's global flags.
   for (const b of before) await prisma.aiModel.update({ where: { id: b.id }, data: { approved: b.approved, medicallyApproved: b.medicallyApproved } });
+}
+
+/** Recursively lists the files under a directory (empty when it does not exist). */
+function filesUnder(dir: string): string[] {
+  try {
+    return (readdirSync(dir, { recursive: true }) as string[]).filter((f) => statSync(path.join(dir, f)).isFile());
+  } catch {
+    return [];
+  }
+}
+
+/** Whether a vault key's bytes exist on disk. */
+function vaultOnDisk(key: string | null): boolean {
+  if (!key) return false;
+  try {
+    return statSync(path.join(vaultRoot(), key)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function sectionW(actor: string, examId: string, subjectId: string) {
+  section("W. One-page flow: analyzer verdict, Process & Import, cancel, retry, stalled recovery, delete");
+  const { deleteJob, deleteJobPreview, retryJob, recoverJob, cancelJob } = await import("@/lib/ai-import/jobs");
+  const { analyzerVerdict } = await import("@/lib/ai-import/verdict");
+  const { jobCards, isStalled } = await import("@/lib/ai-import/job-view");
+  const { importerAiCall } = await import("@/lib/ai-import/ai");
+  const fresh = process.env.ONLY === "W";
+  await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+  await freshPilotBudget();
+  // Mock provider (free): key, catalog and routes, so the AI path can be exercised below without real AI.
+  await saveOpenRouterKey(`sk-or-v1-mock${"x".repeat(40)}-valid`, "script");
+  await testOpenRouterConnection();
+  await setOpenRouterEnabled(true);
+  await syncCatalog();
+  await setSettings((s) => ({ ...s, aiEnabled: false, selection: { mode: "auto" }, importerModels: ["mockvision/reader", "mocktext/classifier"], privacy: { dataCollection: "deny", zdr: true } }), actor);
+  const settings = await getImporterSettings();
+  const limits = settings.limits;
+  const engineBefore = JSON.stringify([await prisma.setting.findUnique({ where: { key: "ai.engine" } }), await prisma.aiModel.findMany({ select: { id: true, approved: true, medicallyApproved: true, disabled: true }, orderBy: { id: "asc" } })]);
+
+  // A stand-in for the production UPSC job: CANCELLED, 32 skipped scanned pages, ₹0. Nothing below may touch it.
+  const upsc = await newJob(actor, examId, "FX UPSC stand-in (must stay untouched)");
+  const upscFile = await upload(actor, upsc, "scanned.pdf", AiImportFileRole.PAPER, null, "upsc-stand-in.pdf");
+  await prisma.aiImportPage.createMany({ data: Array.from({ length: 32 }, (_, i) => ({ jobId: upsc, fileId: upscFile.fileId, pageNumber: i + 1, kind: "SCANNED", status: "SKIPPED" as const })) });
+  await prisma.aiImportJob.update({ where: { id: upsc }, data: { status: "CANCELLED", cancelledAt: new Date() } });
+  const upscPrint = async () => JSON.stringify(await prisma.aiImportJob.findUnique({ where: { id: upsc }, include: { files: true, pages: { orderBy: { pageNumber: "asc" } }, _count: { select: { events: true, questions: true } } } }));
+  const upscBefore = await upscPrint();
+
+  // W1 — repeated submissions return the same job.
+  const key = `wk_${Date.now().toString(36)}`;
+  const mk = (clientKey: string | null) => createJob({ actorId: actor, title: "FX one-page", examId, paperType: AiImportPaperType.SINGLE_SUBJECT, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, clientKey });
+  const j1 = await mk(key);
+  const j1b = await mk(key);
+  const j1c = await mk(`${key}x`);
+  created.jobs.push(j1, j1c);
+  check("double submission with the same client key returns the same job", j1 === j1b && j1 !== j1c, { j1, j1b, j1c });
+  await prisma.aiImportJob.delete({ where: { id: j1c } });
+
+  // W2 — analyzer verdict for a digital paper with its answer key (AI off).
+  await upload(actor, j1, "digital-clean.pdf");
+  await upload(actor, j1, "key-digital.pdf", AiImportFileRole.ANSWER_KEY);
+  await requestAnalysis(j1, actor);
+  await runWorker(60_000);
+  let job = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j1 } });
+  const verdictOf = (j: typeof job, opts: Partial<{ aiEnabled: boolean; remaining: number }> = {}) =>
+    analyzerVerdict({ analysis: j.analysis as never, estimate: j.estimate as never, aiEnabled: opts.aiEnabled ?? false, remainingBudgetInr: opts.remaining ?? 10, jobBudgetInr: Math.min(j.budgetInr, settings.budget.maxJobInr), limits, paperType: j.paperType });
+  const v1 = verdictOf(job);
+  check("analysis done → awaiting the one click", job.status === "AWAITING_CONFIRMATION", job.status);
+  check("verdict: digital PDF read locally, ₹0, can process", v1.strategy === "LOCAL" && v1.model.local && v1.maxCostInr === 0 && v1.canProcess, { s: v1.strategy, m: v1.model, max: v1.maxCostInr });
+  check("verdict: facts are labelled detected, pages and questions measured", v1.facts.find((f) => f.label === "Pages")?.value === "2" && v1.facts.find((f) => f.label === "Questions")?.kind === "detected" && /10 recognized/.test(v1.facts.find((f) => f.label === "Questions")?.value ?? ""), v1.facts);
+  check("verdict: separate answer key detected (not invented)", /Separate answer key uploaded/.test(v1.facts.find((f) => f.label === "Answer key")?.value ?? ""));
+  check("verdict: numerical question warned as not importable", v1.warnings.some((w) => /Numerical/.test(w)), v1.warnings);
+  check("verdict: analysis is metadata-only (no AI)", /no AI request was made/.test(v1.analysisMode));
+  check("no AI call during upload or analysis", (await mockStats()).chat === 0);
+
+  // W3 — Process & Import: confirm with automatic Draft import, one worker run, real Bulk Import.
+  await expectError("a model that is not on the importer's own list is refused", () => confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" }, modelOverride: "mockvision/not-listed" }), /not on the importer's own model list/);
+  const qBefore = await prisma.question.count();
+  await confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
+  await expectError("a second click cannot confirm again", () => confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } }), /Only an analyzed import/);
+  await runWorker(300_000);
+  job = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j1 } });
+  const imp = await prisma.aiImportQuestion.findMany({ where: { jobId: j1, questionId: { not: null } } });
+  imp.forEach((x) => created.questions.push(x.questionId!));
+  const runs1 = [...new Set(imp.map((x) => x.bulkImportRunId!).filter(Boolean))];
+  created.runs.push(...runs1);
+  const stages = (await prisma.aiImportEvent.findMany({ where: { jobId: j1, type: "STAGE" }, orderBy: { createdAt: "asc" } })).map((e) => (e.data as { stage: string }).stage);
+  check("progress stages recorded in order", JSON.stringify(stages) === JSON.stringify(["PAGES", "EXTRACT", "KEY", "VALIDATE"]), stages);
+  check("processing chained into the import automatically (one click)", ["COMPLETED", "COMPLETED_WITH_ISSUES", "NEEDS_REVIEW"].includes(job.status) && (await prisma.aiImportEvent.count({ where: { jobId: j1, type: { in: ["IMPORT_REQUESTED", "IMPORT_SKIPPED"] } } })) === 1, job.status);
+  if (fresh) check("fresh DB: questions actually persisted through the Bulk Import", imp.length > 0 && (await prisma.question.count()) - qBefore === imp.length, { imported: imp.length });
+  const saved = await prisma.question.findMany({ where: { id: { in: imp.map((x) => x.questionId!) } }, select: { status: true, importBatchId: true } });
+  check("everything imported is DRAFT and belongs to an AI-importer RICH run", saved.every((x) => x.status === "DRAFT" && runs1.includes(x.importBatchId!)) && (await prisma.bulkImportRun.findMany({ where: { id: { in: runs1 } } })).every((r) => r.importMode === "RICH" && r.label?.startsWith("AI Importer")), { saved: saved.length, runs1 });
+  const held = await prisma.aiImportQuestion.findMany({ where: { jobId: j1, sourceLabel: { in: ["6", "7"] } } });
+  check("unsupported formats (5 options, numerical) kept out as Not importable", held.length === 2 && held.every((x) => x.status === "NOT_IMPORTABLE" && !x.questionId), held.map((x) => [x.sourceLabel, x.status]));
+  check("nothing was published automatically", !(await prisma.aiImportQuestion.count({ where: { jobId: j1, status: "PUBLISHED" } })));
+  let [card] = await jobCards({ ids: [j1] }, true);
+  check("plain status + counts for the result screen", ["Imported", "Imported — some need review", "Needs review", "Ready to import"].includes(card.label) && card.counts.imported === imp.length && card.counts.notImportable >= 2 && !!card.nextAction, { label: card.label, counts: card.counts, next: card.nextAction });
+  // A repeated import request never duplicates questions or runs.
+  const qc = await prisma.question.count();
+  const rc = await prisma.bulkImportRun.count();
+  if (["NEEDS_REVIEW", "COMPLETED_WITH_ISSUES", "COMPLETED"].includes(job.status)) {
+    await requestImport(j1, actor, "DRAFT", null);
+    await runWorker(120_000);
+  }
+  check("repeat import creates no duplicate questions or runs", (await prisma.question.count()) === qc && (await prisma.bulkImportRun.count()) === rc);
+  check("no AI call for the digital paper", (await mockStats()).chat === 0);
+
+  // W4 — full paper without subject headings, AI off: honest reason, never "ready".
+  const jF = await newJob(actor, examId, "FX full paper no headings");
+  await upload(actor, jF, "digital-clean.pdf");
+  await requestAnalysis(jF, actor);
+  await runWorker(60_000);
+  const vF = verdictOf(await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jF } }));
+  check("verdict warns that subjects come from headings when AI is off", vF.warnings.some((w) => /section headings/.test(w)), vF.warnings);
+  const jFrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jF } });
+  await confirmJob({ jobId: jF, actorId: actor, examId, paperType: jFrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
+  await runWorker(300_000);
+  [card] = await jobCards({ ids: [jF] }, true);
+  check("no subject → nothing imported, label Needs review, next action names the fix", card.counts.imported === 0 && card.counts.noSubject > 0 && card.label === "Needs review" && /Single-subject/.test(card.nextAction), { label: card.label, c: card.counts, next: card.nextAction });
+
+  // W5 — scanned paper, AI off: blocked before processing with one next action; if forced, the reason is explicit.
+  const jS = await newJob(actor, examId, "FX scanned, AI off");
+  await upload(actor, jS, "scanned.pdf");
+  await requestAnalysis(jS, actor);
+  await runWorker(60_000);
+  let jSrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jS } });
+  const vS = verdictOf(jSrow);
+  check("verdict: scanned + AI off → blocked, reason + next action, nothing charged", vS.strategy === "BLOCKED" && !vS.canProcess && /scanned/i.test(vS.blocker?.reason ?? "") && /digital PDF/.test(vS.blocker?.nextAction ?? ""), vS.blocker);
+  check("verdict: OCR need detected, question count not invented", /Yes/.test(vS.facts.find((f) => f.label === "OCR / vision needed")?.value ?? "") && vS.facts.find((f) => f.label === "Questions")?.kind === "unavailable", vS.facts);
+  await confirmJob({ jobId: jS, actorId: actor, examId, paperType: jSrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
+  await runWorker(300_000);
+  jSrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jS } });
+  [card] = await jobCards({ ids: [jS] }, true);
+  check("processed anyway: zero questions says why (scanned, AI off) — never 'Ready to import'", jSrow.status === "NEEDS_REVIEW" && /scanned page\(s\) have no text layer/.test(jSrow.errorMessage ?? "") && card.label === "Needs review" && card.nextAction === jSrow.errorMessage, { s: jSrow.status, e: jSrow.errorMessage, l: card.label });
+  check("no AI call for the scanned paper with AI off", (await mockStats()).chat === 0);
+
+  // W6 — pure verdict: model choice and budgets (scanned paper, AI on).
+  const fakePlan = (model: string | null, maxInr: number | null) => ({ ...(jSrow.estimate as object), maxInr, totalInr: maxInr === null ? null : maxInr / 2, plan: { mode: "auto", tasks: { extract: { model, routes: model ? ["vertex/zdr"] : [], reason: model ? "Cheapest suitable vision model" : "No importer model can read images", maxInr: 0.4 }, verify: { model: null, reason: "-" }, key: { model, reason: "-" }, classify: { model, reason: "-" } } } });
+  const vAi = (est: object, remaining = 10) => analyzerVerdict({ analysis: jSrow.analysis as never, estimate: est as never, aiEnabled: true, remainingBudgetInr: remaining, jobBudgetInr: 8, limits, paperType: "FULL_PAPER" });
+  const okV = vAi(fakePlan("mockvision/cheap", 2));
+  check("AI on: scanned pages use the planned vision model, shown with route and reason", okV.strategy === "AI" && okV.canProcess && okV.model.name === "mockvision/cheap" && okV.model.route === "vertex/zdr" && /Cheapest/.test(okV.model.reason) && okV.maxCostInr === 2, okV.model);
+  check("over the job budget → blocked (never silently processed)", !vAi(fakePlan("mockvision/cheap", 9)).canProcess);
+  const noYear = analyzerVerdict({ analysis: jSrow.analysis as never, estimate: fakePlan("mockvision/cheap", 2) as never, aiEnabled: true, remainingBudgetInr: 10, jobBudgetInr: 8, limits, paperType: "FULL_PAPER", yearMissing: true });
+  check("no paper year and no exam year → blocked before processing (the Bulk Import would refuse every question)", !noYear.canProcess && /no paper year/.test(noYear.blocker?.reason ?? ""), noYear.blocker);
+  check("over the remaining pilot budget → blocked", !vAi(fakePlan("mockvision/cheap", 3), 2).canProcess);
+  check("maximum cost unknown → blocked", !vAi(fakePlan("mockvision/cheap", null)).canProcess);
+  check("no eligible model → blocked with the reason, no fallback invented", (() => { const b = vAi(fakePlan(null, 2)); return !b.canProcess && b.model.name === "No suitable model" && /No importer model/.test(b.blocker?.reason ?? ""); })());
+
+  // W7 — cancel: queued work never starts; a late worker cannot overwrite; no AI request for a cancelled job.
+  const jC = await newJob(actor, examId, "FX cancel", { paperType: AiImportPaperType.SINGLE_SUBJECT, subjectId });
+  await upload(actor, jC, "paper.docx");
+  await requestAnalysis(jC, actor);
+  await runWorker(60_000);
+  let jCrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jC } });
+  await confirmJob({ jobId: jC, actorId: actor, examId, paperType: jCrow.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
+  await cancelJob(jC, actor);
+  await runWorker(60_000);
+  jCrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jC } });
+  check("cancelled while queued: stays CANCELLED, no stage ran, no question extracted", jCrow.status === "CANCELLED" && !(await prisma.aiImportEvent.count({ where: { jobId: jC, type: "STAGE" } })) && !(await prisma.aiImportQuestion.count({ where: { jobId: jC } })), jCrow.status);
+  // A worker still holding the lease when the admin cancels: its later writes are refused.
+  await prisma.aiImportJob.update({ where: { id: jC }, data: { status: "PROCESSING", cancelledAt: null, leaseOwner: "other-worker", leaseUntil: new Date(Date.now() + 60_000) } });
+  await cancelJob(jC, actor);
+  const late = await prisma.aiImportJob.updateMany({ where: { id: jC, status: { in: ["PROCESSING"] }, leaseOwner: "other-worker" }, data: { status: "NEEDS_REVIEW" } });
+  jCrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jC } });
+  check("late worker write after cancel is refused (status stays CANCELLED)", late.count === 0 && jCrow.status === "CANCELLED", jCrow.status);
+  check("lease kept until the worker stops: Retry and Delete wait", (await jobCards({ ids: [jC] }, true))[0].actions.retry === false && (await jobCards({ ids: [jC] }, true))[0].actions.delete === false);
+  await expectError("retry refused while the worker is still stopping", () => retryJob(jC, actor), /still stopping/);
+  check("delete preview says the worker is still stopping", /still stopping/.test((await deleteJobPreview(jC))?.blocked ?? ""));
+  await expectError("delete refused while the worker is still stopping", () => deleteJob({ jobId: jC, actorId: actor }), /still stopping/);
+  // AI path with the mock: a request for a PROCESSING job goes out (control); once cancelled, none is reserved or sent.
+  await setSettings((s) => ({ ...s, aiEnabled: true }), actor);
+  const jK = await newJob(actor, examId, "FX cancel stops AI");
+  await upload(actor, jK, "scanned.pdf");
+  await requestAnalysis(jK, actor);
+  await runWorker(60_000);
+  const jKrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jK } });
+  await confirmJob({ jobId: jK, actorId: actor, examId, paperType: jKrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await prisma.aiImportJob.update({ where: { id: jK }, data: { status: "PROCESSING" } });
+  const call = async () => importerAiCall({ jobId: jK, task: "classify", models: [], system: "Classify.", content: [{ type: "text", text: "Which nerve supplies the deltoid?" }], maxOutputTokens: 200, settings: await getImporterSettings(), needsVision: false });
+  const c0 = (await mockStats()).chat;
+  const okCall = await call().then(() => true, (e) => (e as Error).message);
+  check("control: an AI request for a processing job reaches the (mock) provider", okCall === true && (await mockStats()).chat === c0 + 1, okCall);
+  await cancelJob(jK, actor);
+  const r0 = await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${jK}:` } } });
+  const c1 = (await mockStats()).chat;
+  const refused = await call().then(() => "sent", (e) => (e as Error).message);
+  check("after cancel: refused before any reservation, nothing sent", /cancelled, so no AI request was sent/.test(refused) && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${jK}:` } } })) === r0 && (await mockStats()).chat === c1, refused);
+  await prisma.aiImportJob.update({ where: { id: jK }, data: { leaseOwner: null, leaseUntil: null } });
+  await setSettings((s) => ({ ...s, aiEnabled: false }), actor);
+
+  // W8 — retry after the worker stopped: continues and finishes; no duplicate questions.
+  await prisma.aiImportJob.update({ where: { id: jC }, data: { leaseOwner: null, leaseUntil: null } });
+  await retryJob(jC, actor);
+  check("retry of a confirmed, cancelled job queues it again", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jC } })).status === "QUEUED");
+  await runWorker(300_000);
+  jCrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jC } });
+  const cq = await prisma.aiImportQuestion.findMany({ where: { jobId: jC } });
+  cq.filter((x) => x.questionId).forEach((x) => created.questions.push(x.questionId!));
+  created.runs.push(...cq.map((x) => x.bulkImportRunId).filter((x): x is string => !!x));
+  check("retried job finished with questions", ["COMPLETED", "COMPLETED_WITH_ISSUES", "NEEDS_REVIEW"].includes(jCrow.status) && cq.length > 0, { s: jCrow.status, n: cq.length });
+  check("no duplicate extracted questions per source label", new Set(cq.map((x) => x.sourceLabel)).size === cq.length);
+  await expectError("retry refused for a finished job", () => retryJob(jC, actor), /Only a failed, paused or cancelled/);
+  // Cancel before confirmation → retry analyzes again.
+  const jA = await newJob(actor, examId, "FX cancel before confirm");
+  await upload(actor, jA, "paper.docx");
+  await requestAnalysis(jA, actor);
+  await runWorker(60_000);
+  await cancelJob(jA, actor);
+  await retryJob(jA, actor);
+  await runWorker(60_000);
+  check("cancelled before confirmation → retry analyzes again", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jA } })).status === "AWAITING_CONFIRMATION");
+
+  // W9 — stalled job recovery never touches a live worker.
+  const jR = await newJob(actor, examId, "FX stalled", { paperType: AiImportPaperType.SINGLE_SUBJECT, subjectId });
+  await upload(actor, jR, "paper.docx");
+  await requestAnalysis(jR, actor);
+  await runWorker(60_000);
+  const jRrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jR } });
+  await confirmJob({ jobId: jR, actorId: actor, examId, paperType: jRrow.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await prisma.aiImportJob.update({ where: { id: jR }, data: { status: "PROCESSING", leaseOwner: "live-worker", leaseUntil: new Date(Date.now() + 120_000), heartbeatAt: new Date() } });
+  const live = await recoverJob(jR, actor);
+  const liveRow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jR } });
+  check("live worker: Start again changes nothing", !live.restarted && liveRow.leaseOwner === "live-worker" && liveRow.status === "PROCESSING" && !isStalled(liveRow), live);
+  await prisma.$executeRaw`UPDATE "AiImportJob" SET "leaseUntil" = now() - interval '10 minutes', "updatedAt" = now() - interval '10 minutes' WHERE "id" = ${jR}`;
+  [card] = await jobCards({ ids: [jR] }, true);
+  check("expired lease + no activity → shown as stalled with Start again", card.stalled && card.actions.recover && /Start again/.test(card.nextAction) && card.label === "Stalled — not running", { l: card.label, a: card.actions });
+  const rec = await recoverJob(jR, actor);
+  await runWorker(300_000);
+  const recRow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jR } });
+  check("stalled job continues from its checkpoint and finishes", rec.restarted && ["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(recRow.status) && !recRow.leaseOwner, { rec, s: recRow.status });
+
+  // W10 — delete: exact preview, shared files kept, Question Bank untouched, audited, idempotent.
+  const jD = await newJob(actor, examId, "FX delete shares the paper of j1");
+  const shared = await upload(actor, jD, "digital-clean.pdf");
+  const sharedKey = (await prisma.aiImportFile.findUniqueOrThrow({ where: { id: shared.fileId } })).storageKey!;
+  const vault = vaultRoot();
+  const j1Files = await prisma.aiImportFile.findMany({ where: { jobId: j1 } });
+  const j1Figs = await prisma.aiImportFigure.findMany({ where: { jobId: j1 } });
+  const j1Assets = await prisma.questionAsset.findMany({ where: { questionId: { in: imp.map((x) => x.questionId!) } } });
+  const pre = await deleteJobPreview(j1);
+  check("preview lists every file and says the shared paper is kept", !!pre && pre.files.length === 2 && pre.files.find((f) => f.name === "digital-clean.pdf")?.storedCopy === "kept-shared" && pre.questions > 0 && pre.importedQuestions === imp.length && !pre.blocked, pre);
+  await prisma.aiImportJob.update({ where: { id: j1 }, data: { status: "IMPORTING" } });
+  await expectError("delete refused while questions are being written", () => deleteJob({ jobId: j1, actorId: actor }), /being written/);
+  await prisma.aiImportJob.update({ where: { id: j1 }, data: { status: job.status } });
+  const res = await deleteJob({ jobId: j1, actorId: actor });
+  check("job and its importer rows are gone", !(await prisma.aiImportJob.findUnique({ where: { id: j1 } })) && !(await prisma.aiImportQuestion.count({ where: { jobId: j1 } })) && !(await prisma.aiImportPage.count({ where: { jobId: j1 } })));
+  check("shared stored paper kept on disk for the other import", vaultOnDisk(sharedKey) && res.storedFilesKept >= 1 && res.storedFilesKept + res.storedFilesDeleted === 2, res);
+  const keyFile = j1Files.find((f) => f.role === "ANSWER_KEY")!;
+  const keyShared = await prisma.aiImportFile.count({ where: { storageKey: keyFile.storageKey } });
+  check("unshared answer key deleted from disk", keyShared > 0 || !vaultOnDisk(keyFile.storageKey!), { keyShared });
+  const figsLeft = await Promise.all(j1Figs.filter((f) => f.originalKey).map(async (f) => vaultOnDisk(f.originalKey) === (await prisma.aiImportFigure.count({ where: { originalKey: f.originalKey } })) > 0));
+  check("extracted figures removed from the vault unless another import uses them", j1Figs.length > 0 && figsLeft.every(Boolean), { figs: j1Figs.length, deleted: res.figuresDeleted });
+  check("imported questions and their media untouched", (await prisma.question.count({ where: { id: { in: imp.map((x) => x.questionId!) } } })) === imp.length && (await Promise.all(j1Assets.map((a) => mediaStorage().exists(a.storageKey)))).every(Boolean), { assets: j1Assets.length });
+  check("Bulk Import history kept", (await prisma.bulkImportRun.count({ where: { id: { in: runs1 } } })) === runs1.length);
+  check("audited (audit log + cleanup record)", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_JOB_DELETED", entityId: j1 } })) === 1 && (await prisma.aiImportCleanup.count({ where: { categories: { has: "JOB_DELETED" } } })) >= 1);
+  check("renders / work folders of the job removed", !filesUnder(path.join(vault, "renders", j1)).length && !filesUnder(path.join(vault, "work", j1)).length);
+  const again = await deleteJob({ jobId: j1, actorId: actor });
+  check("deleting again is harmless", again.alreadyDeleted && (await prisma.auditLog.count({ where: { action: "AI_IMPORT_JOB_DELETED", entityId: j1 } })) === 1);
+  const resD = await deleteJob({ jobId: jD, actorId: actor });
+  const stillUsed = await prisma.aiImportFile.count({ where: { storageKey: sharedKey } });
+  check("last import using the paper deleted → stored copy removed (unless another suite job still uses it)", stillUsed > 0 ? vaultOnDisk(sharedKey) : !vaultOnDisk(sharedKey) && resD.storedFilesDeleted === 1, { stillUsed, resD });
+  const jP = await newJob(actor, examId, "FX delete active lease");
+  await prisma.aiImportJob.update({ where: { id: jP }, data: { status: "PROCESSING", leaseOwner: "w", leaseUntil: new Date(Date.now() + 60_000) } });
+  await expectError("delete refused while a worker processes the job", () => deleteJob({ jobId: jP, actorId: actor }), /worker is processing/);
+  check("jobCards hide Delete without the manage right", (await jobCards({ ids: [jS] }, false))[0].actions.delete === false && (await jobCards({ ids: [jS] }, true))[0].actions.delete === true);
+  await prisma.aiImportJob.update({ where: { id: jP }, data: { status: "CANCELLED", leaseOwner: null, leaseUntil: null } });
+
+  // W11 — isolation: the UPSC stand-in and global AI Engine routing are unchanged.
+  check("UPSC stand-in (CANCELLED, 32 skipped pages) unchanged by every W operation", (await upscPrint()) === upscBefore);
+  check("global AI Engine settings and model approvals unchanged", JSON.stringify([await prisma.setting.findUnique({ where: { key: "ai.engine" } }), await prisma.aiModel.findMany({ select: { id: true, approved: true, medicallyApproved: true, disabled: true }, orderBy: { id: "asc" } })]) === engineBefore);
+  check("paid AI is off again after the section", (await getImporterSettings()).aiEnabled === false);
 }
 
 async function analyzeAndConfirmExisting(actor: string, jobId: string, budgetInr: number) {

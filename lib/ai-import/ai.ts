@@ -154,8 +154,10 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
       const staleJob = /^qi:([a-z0-9]+):/.exec(r.requestKey)?.[1];
       if (staleJob) await tx.aiImportJob.updateMany({ where: { id: staleJob }, data: { spentInr: { increment: r.reservedInr } } });
     }
-    const job = await tx.aiImportJob.findUnique({ where: { id: input.jobId }, select: { budgetInr: true, spentInr: true } });
+    const job = await tx.aiImportJob.findUnique({ where: { id: input.jobId }, select: { budgetInr: true, spentInr: true, status: true } });
     if (!job) throw new ImporterAiUnavailable("The import job no longer exists.");
+    // Cancelled, paused or deleted meanwhile: no new request is ever reserved (or sent) for it.
+    if (job.status !== "PROCESSING") throw new ImporterAiUnavailable(`The import is ${job.status.toLowerCase().replace(/_/g, " ")}, so no AI request was sent.`);
     const inflight = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "requestKey" LIKE $1 AND "status" = 'RESERVED'`, `qi:${input.jobId}:%`);
     const jobUsed = job.spentInr + (inflight[0]?.v ?? 0);
     // The hard per-job ceiling applies even to a job whose own budget was set before the ceiling was lowered.

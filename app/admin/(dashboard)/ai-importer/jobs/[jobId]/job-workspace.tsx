@@ -15,8 +15,9 @@ import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import type { ResetCheck } from "@/lib/ai-import/jobs";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { JobSummary } from "@/lib/ai-import/summary";
+import { JobControls, type JobControlState } from "@/components/admin/ai-importer/job-controls";
 import { JobContextFields, type ExamOption } from "../../new-import-form";
-import { analyzeJobAction, cancelJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resetJobAction, resumeJobAction } from "../../actions";
+import { analyzeJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resetJobAction, resumeJobAction } from "../../actions";
 
 export interface JobView {
   id: string;
@@ -52,6 +53,10 @@ export interface JobView {
   /** Safe reset to editable: every server-side check (null when the status can never be reset). */
   reset: { allowed: boolean; checks: ResetCheck[] } | null;
   canManage: boolean;
+  /** Cancel / Retry / Start again / Delete, as allowed now (shared with the Import and Imports pages). */
+  controls: JobControlState;
+  plainLabel: string;
+  nextAction: string;
 }
 
 const BUSY = ["ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"];
@@ -369,6 +374,20 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
           {JOB_STATUS_LABELS[job.status] ?? job.status}
         </Badge>
       </div>
+      <p className="text-sm" data-testid="job-next-action">
+        <span className="font-medium" data-testid="job-plain-status">{job.plainLabel}.</span> <span className="font-medium">Next: </span>
+        {job.nextAction}
+      </p>
+      {canUse && (
+        <JobControls
+          job={job.controls}
+          onDeleted={() => router.replace("/admin/ai-importer/jobs")}
+          onMessage={(m) => {
+            setError(m.error ? m.text : null);
+            setNotice(m.error ? null : m.text);
+          }}
+        />
+      )}
       {(job.pauseReason || job.errorMessage) && (
         <Card>
           <CardContent className="py-3 text-sm text-[var(--color-warning)]" data-testid="job-alert">
@@ -452,7 +471,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                                 Locked
                               </Button>
                               <span id={`remove-why-${f.id}`} className="mt-1 block max-w-[14rem] text-left text-xs text-[var(--color-muted-foreground)] sm:text-right" data-testid="file-remove-why">
-                                {removalBlocked ? "Kept as the original-paper record" : blocked}
+                                {removalBlocked ? (job.controls.actions.delete ? "Use Delete above to remove the import with its files" : "Cancel the import first, then delete it") : blocked}
                               </span>
                             </span>
                           ) : (
@@ -492,7 +511,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             <p className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-foreground)_4%,transparent)] p-3 text-sm text-[var(--color-foreground)]" role="note" data-testid="files-remove-blocked">
               <LockIcon />
               <span>
-                <strong>File removal is unavailable.</strong> {job.reset?.allowed ? "Processing has started. This import produced nothing, so it can be reset to editable below; then the files can be removed or replaced." : removalBlocked}
+                <strong>A single file cannot be removed now.</strong> {job.reset?.allowed ? "Processing has started. This import produced nothing, so it can be reset to editable below; then the files can be removed or replaced." : removalBlocked}
               </span>
             </p>
           )}
@@ -711,11 +730,6 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                       Resume{job.status === "PAUSED_BUDGET" ? " with this budget" : ""}
                     </Button>
                   </>
-                )}
-                {job.status !== "CANCELLED" && job.status !== "IMPORTING" && job.status !== "COMPLETED" && (
-                  <Button variant="outline" disabled={pending} onClick={() => confirm("Cancel this import? Questions already imported stay in the Question Bank.") && act(() => cancelJobAction(job.id), "Cancelled.")} data-testid="cancel">
-                    Cancel import
-                  </Button>
                 )}
               </div>
             )}
