@@ -49,7 +49,8 @@ export interface Route {
 
 export interface RouteSnapshot {
   fetchedAt: string;
-  zdr: { ok: boolean; error: string | null; count: number };
+  /** `models`: model ids with at least one ZDR route (from the same list; absent in snapshots written before it was kept). */
+  zdr: { ok: boolean; error: string | null; count: number; models?: string[] };
   models: Record<string, { ok: boolean; error: string | null; routes: Route[] }>;
 }
 
@@ -94,12 +95,13 @@ export async function refreshRoutes(importerModels: readonly string[]): Promise<
   const apiKey = await getOpenRouterApiKey().catch(() => null);
   const models = await candidateModels(importerModels);
   let zdrTags: Set<string> | null = null;
-  const zdr = { ok: false, error: null as string | null, count: 0 };
+  const zdr = { ok: false, error: null as string | null, count: 0, models: [] as string[] };
   try {
     const list = await zdrEndpoints(apiKey);
     zdrTags = new Set(list.filter((e) => typeof e.model_id === "string" && typeof e.tag === "string").map((e) => `${e.model_id}|${e.tag}`));
     zdr.ok = true;
     zdr.count = zdrTags.size;
+    zdr.models = [...new Set(list.map((e) => e.model_id).filter((id): id is string => typeof id === "string"))].sort();
   } catch (e) {
     zdr.error = sanitize(e instanceof Error ? e.message : "could not be read").slice(0, 200);
   }
@@ -142,6 +144,7 @@ export function routeStatus(s: RouteSnapshot | null): RouteStatus {
     stale: isStale(s),
     zdrOk: s ? s.zdr.ok : null,
     zdrError: s?.zdr.error ?? null,
+    zdrModels: s?.zdr.ok && Array.isArray(s.zdr.models) ? s.zdr.models : null,
     models: s ? Object.entries(s.models).map(([id, m]) => ({ id, ok: m.ok, routes: m.routes.length, error: m.error })) : [],
   };
 }

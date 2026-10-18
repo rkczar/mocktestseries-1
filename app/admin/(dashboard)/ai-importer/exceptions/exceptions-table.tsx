@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
 import { approveQuestionsAction, importAction, rejectQuestionsAction, reprocessQuestionsAction } from "../actions";
 import { statusVariant } from "@/lib/ai-import/config";
+import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 export interface ExceptionRow {
   id: string;
@@ -39,7 +40,7 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
   const ids = [...selected];
   const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string) =>
     start(async () => {
-      const r = await fn();
+      const r = await callImporter(fn);
       setMsg(r.ok ? { ok: true, text: ok } : { ok: false, text: r.error ?? "Failed" });
       if (r.ok) {
         setSelected(new Set());

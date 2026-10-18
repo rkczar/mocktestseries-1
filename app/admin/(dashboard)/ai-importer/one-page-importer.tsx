@@ -15,6 +15,7 @@ import type { JobCard } from "@/lib/ai-import/job-view";
 import type { AnalyzerVerdict } from "@/lib/ai-import/verdict";
 import { JobContextFields, type ExamOption } from "./new-import-form";
 import { analyzeJobAction, createJobAction, importAction, processAndImportAction, saveModelPreferenceAction } from "./actions";
+import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 export interface CurrentJob {
   card: JobCard;
@@ -107,7 +108,7 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
       // One key per chosen file: a double click or a retried request returns the same job.
       const clientKey = `up_${file.size}_${file.lastModified}_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
       setProgress("Creating the import…");
-      const created = await createJobAction({ title: file.name.replace(/\.[^.]+$/, "").slice(0, 160) || "Untitled import", ...ctx, year: ctx.year || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, paperCode: ctx.paperCode || null, budgetInr: defaultBudget, clientKey });
+      const created = await callImporter(() => createJobAction({ title: file.name.replace(/\.[^.]+$/, "").slice(0, 160) || "Untitled import", ...ctx, year: ctx.year || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, paperCode: ctx.paperCode || null, budgetInr: defaultBudget, clientKey }));
       if (!created.ok) throw new Error(created.error);
       const jobId = created.data.jobId;
       const up = await uploadFile(jobId, file, "PAPER", (p) => setProgress(`Uploading ${file.name}… ${p}%`));
@@ -117,7 +118,7 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
         if (!k.ok) throw new Error(`Answer key ${key.name}: ${k.error}`);
       }
       setProgress("Analyzing…");
-      const an = await analyzeJobAction(jobId);
+      const an = await callImporter(() => analyzeJobAction(jobId));
       if (!an.ok) throw new Error(an.error);
       router.replace(`/admin/ai-importer?job=${jobId}`);
     } catch (e) {
@@ -276,7 +277,7 @@ function ModelOverride({ jobId, importerModels, canManage, selection, value, onC
                 disabled={pending || !remember}
                 onClick={() =>
                   start(async () => {
-                    const r = await saveModelPreferenceAction(value || null);
+                    const r = await callImporter(() => saveModelPreferenceAction(value || null));
                     setMsg(r.ok ? { text: r.data.mode === "auto" ? "Saved: Automatic is the default." : `Saved: ${r.data.model} is the default.`, error: false } : { text: r.error, error: true });
                     if (r.ok) router.refresh();
                   })
@@ -315,7 +316,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
     setClicked(true);
     start(async () => {
       setMsg(null);
-      const r = await processAndImportAction(j.id, { modelOverride: override || null });
+      const r = await callImporter(() => processAndImportAction(j.id, { modelOverride: override || null }));
       if (!r.ok) {
         setMsg({ text: r.error, error: true });
         setClicked(false);
@@ -452,7 +453,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
                   disabled={pending}
                   onClick={() =>
                     start(async () => {
-                      const r = await importAction(j.id, "DRAFT", null);
+                      const r = await callImporter(() => importAction(j.id, "DRAFT", null));
                       if (!r.ok) setMsg({ text: r.error, error: true });
                       else router.refresh();
                     })

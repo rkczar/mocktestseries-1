@@ -9,9 +9,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
-import type { ImporterCatalog, ImporterModelOption, RequestCost } from "@/lib/ai-import/model-options";
+import { GEMINI_DIRECT_REASONS, suggestModels, type ImporterCatalog, type ImporterModelOption, type RequestCost } from "@/lib/ai-import/model-options";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import { importerModelsAction, refreshRoutesAction, saveSettingsAction } from "../actions";
+import { SESSION_EXPIRED, failureKind as probeFailure } from "@/components/admin/ai-importer/call-importer";
+
+const failureKind = () => probeFailure(SETTINGS_PATH);
 
 type Slot = "extract" | "fallback" | "verify" | "classify" | "key";
 type CostKey = "extract" | "verify" | "solve" | "classify" | "key";
@@ -24,23 +27,6 @@ type RoutesMessage = { tone: "success" | "warning" | "error"; text: string; sess
 const SETTINGS_PATH = "/admin/ai-importer/settings";
 // The login form only follows /admin… callbacks (app/admin/login/actions.ts).
 const LOGIN_URL = `/admin/login?callbackUrl=${encodeURIComponent(SETTINGS_PATH)}`;
-const SESSION_EXPIRED = "Your admin session has expired.";
-
-/**
- * Why a Server Action call threw. The admin proxy answers a request without a valid admin
- * session with a redirect to the login page, which the action client can only report as an
- * "unexpected response". Ask the same proxy about this page without following redirects:
- * a redirect means the session is gone; any other answer (or none) is not proof of that,
- * so it stays a connection problem. HEAD to the page only: the session cookie is not re-issued.
- */
-async function failureKind(): Promise<"session" | "network"> {
-  try {
-    const r = await fetch(SETTINGS_PATH, { method: "HEAD", redirect: "manual", cache: "no-store", credentials: "same-origin" });
-    return r.type === "opaqueredirect" ? "session" : "network";
-  } catch {
-    return "network";
-  }
-}
 
 function SignInAgain() {
   return (
@@ -95,6 +81,12 @@ function ProviderStatus({ catalog, aiEnabled, problems }: { catalog: ImporterCat
             : { tone: "success" as const, text: `Connected${p.lastTestAt ? ` (tested ${p.lastTestAt.slice(0, 10)})` : ""}.` };
   const rows: { label: string; tone: "success" | "warning" | "error" | "neutral"; text: string; id: string }[] = [
     { id: "provider", label: "OpenRouter", tone: provider.tone, text: provider.text },
+    {
+      id: "gemini",
+      label: "Gemini (direct)",
+      tone: "neutral",
+      text: `Not used by the importer (${catalog.gemini.configured ? (catalog.gemini.enabled ? "configured for other AI features" : "configured, switched off") : "not configured"}): ${GEMINI_DIRECT_REASONS.join("; ")}. Gemini models can still be added under Importer models through OpenRouter (IDs starting with google/), with the same price, privacy and budget checks.`,
+    },
     { id: "paid", label: "Paid AI for the importer", tone: aiEnabled ? "warning" : "neutral", text: aiEnabled ? "ON — AI requests run after a job's estimate is confirmed, inside the limits below." : "OFF — no AI request is sent. Local parsing, review and import still work." },
     ...(p.emergencyStop ? [{ id: "stop", label: "AI emergency stop", tone: "error" as const, text: "ON — every AI request is refused (Admin → AI → Budgets)." }] : []),
     {
@@ -308,8 +300,10 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
 }
 
 /** The importer's own model list: approval here applies to the AI Question Importer only. */
-function ImporterModelsCard({ options, value, onChange, disabled }: { options: ImporterModelOption[]; value: string[]; onChange: (v: string[]) => void; disabled: boolean }) {
+function ImporterModelsCard({ options, value, onChange, disabled, capInr, zdrRequired, zdrModels }: { options: ImporterModelOption[]; value: string[]; onChange: (v: string[]) => void; disabled: boolean; capInr: number; zdrRequired: boolean; zdrModels: string[] | null }) {
   const [query, setQuery] = useState("");
+  const tips = useMemo(() => suggestModels(options, { listed: value, capInr, zdrRequired, zdrModels }), [options, value, capInr, zdrRequired, zdrModels]);
+  const ex = tips.excluded;
   const q = query.trim().toLowerCase();
   const hits = q ? options.filter((o) => !value.includes(o.id) && (o.id.toLowerCase().includes(q) || o.name.toLowerCase().includes(q))).slice(0, 12) : [];
   return (
@@ -364,6 +358,36 @@ function ImporterModelsCard({ options, value, onChange, disabled }: { options: I
               </ul>
             )}
             {q && hits.length === 0 && <p className="text-xs text-[var(--color-muted-foreground)]">No other catalog model matches.</p>}
+          </div>
+        )}
+        {!disabled && !value.some((id) => options.find((o) => o.id === id && o.vision && !o.visionProblem)) && (
+          <div className="flex flex-col gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="importer-suggestions">
+            <p className="font-medium">Models that can read pages within your limits</p>
+            <p className="text-xs text-[var(--color-muted-foreground)]">
+              From the synced catalog: reads page images, fixed published price, at most ₹{capInr} per page at catalog prices{zdrRequired ? ", has a Zero-Data-Retention route" : ""}. Cheapest page first. Nothing is added until you choose Add and save; provider routes are checked after that.
+            </p>
+            {tips.privacyUnknown ? (
+              <p className="text-xs text-[var(--color-warning)]" data-testid="importer-suggestions-privacy">{tips.privacyUnknown}</p>
+            ) : tips.suggested.length === 0 ? (
+              <p className="text-xs text-[var(--color-warning)]" data-testid="importer-suggestions-none">No catalog model meets all of these. Sync the catalog in AI → Models, or review the per-request limit and privacy settings below.</p>
+            ) : (
+              <ul className="flex flex-col gap-1" data-testid="importer-suggestions-list">
+                {tips.suggested.map((o) => (
+                  <li key={o.id} className="flex flex-wrap items-center gap-2" data-model-id={o.id} data-testid="importer-suggestion">
+                    <Button type="button" variant="outline" size="compact" onClick={() => onChange([...value, o.id])} data-testid="importer-suggestion-add">
+                      Add
+                    </Button>
+                    <code className="text-xs [overflow-wrap:anywhere]">{o.id}</code>
+                    <span className="text-xs text-[var(--color-muted-foreground)]">
+                      {o.id.split("/")[0]} · vision · up to {inr(o.costs?.extract?.maxInr)} per page · in {perM(o.promptPerM)} / out {perM(o.completionPerM)} per M{zdrRequired ? " · ZDR route" : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="importer-suggestions-excluded">
+              Not suggested: {ex.notVision} cannot read images, {ex.unusable} disabled, unlisted or without a readable image price, {ex.noPrice} without a price in rupees, {ex.overCap} above ₹{capInr} per page{zdrRequired ? `, ${ex.noZdr} without a Zero-Data-Retention route` : ""}.
+            </p>
           </div>
         )}
         <p className="text-xs text-[var(--color-muted-foreground)]">Save the settings, then use Refresh provider routes so the automatic selection can price the new models.</p>
@@ -662,7 +686,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
         </CardContent>
       </Card>
 
-      <ImporterModelsCard options={options} value={s.importerModels} onChange={(v) => setS({ ...s, importerModels: v })} disabled={d} />
+      <ImporterModelsCard options={options} value={s.importerModels} onChange={(v) => setS({ ...s, importerModels: v })} disabled={d} capInr={s.budget.maxRequestInr} zdrRequired={s.privacy.zdr} zdrModels={catalog.routes.zdrModels} />
 
       <Card data-testid="selection-card">
         <CardHeader>

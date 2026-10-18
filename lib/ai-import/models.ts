@@ -2,6 +2,7 @@ import "server-only";
 import type { AiModel } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEngineConfig, getOpenRouterConfig } from "@/lib/ai-engine/settings";
+import { getGeminiConfig } from "@/lib/gemini-config";
 import { peekUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
 import { IMAGE_TOKENS, PRICE_MARGIN, estimateInputTokens, inputImagePriceUsd, modelProblem, notPricier, worstCaseUsd } from "@/lib/ai-import/ai";
@@ -69,7 +70,7 @@ function toOption(m: AiModel, fxRate: number | null, importerModels: readonly st
 
 export async function importerModelCatalog(forSettings?: ImporterSettings): Promise<ImporterCatalog> {
   const settings = forSettings ?? (await getImporterSettings());
-  const [openrouter, engine, fx, rows, plan, snapshot] = await Promise.all([
+  const [openrouter, engine, fx, rows, plan, snapshot, gemini] = await Promise.all([
     getOpenRouterConfig(),
     getEngineConfig(),
     peekUsdInr(), // read-only: never fetches or stores a rate
@@ -78,6 +79,8 @@ export async function importerModelCatalog(forSettings?: ImporterSettings): Prom
     // The automatic choice for these settings, from the stored route snapshot (no OpenRouter call here).
     computeModelPlan(settings, { refresh: false }),
     getRouteSnapshot(),
+    // Display only: an unreadable Gemini setting must not break the importer's settings page.
+    getGeminiConfig().catch(() => ({ configured: false, enabled: false })),
   ]);
   const options = rows.map((m) => toOption(m, fx.rate, settings.importerModels));
   const lastSync = rows.reduce<Date | null>((a, m) => (!a || m.lastSyncedAt > a ? m.lastSyncedAt : a), null);
@@ -95,6 +98,8 @@ export async function importerModelCatalog(forSettings?: ImporterSettings): Prom
       keyStatusAt: openrouter.keyStatus?.at ?? null,
       emergencyStop: engine.budgets.emergencyStop,
     },
+    // State only (never the key): the importer does not send requests through the direct Gemini API.
+    gemini: { configured: gemini.configured, enabled: gemini.enabled },
     catalog: {
       models: rows.length,
       approved: options.filter((o) => o.approved).length,

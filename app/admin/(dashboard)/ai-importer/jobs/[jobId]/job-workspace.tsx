@@ -18,6 +18,7 @@ import type { JobSummary } from "@/lib/ai-import/summary";
 import { JobControls, type JobControlState } from "@/components/admin/ai-importer/job-controls";
 import { JobContextFields, type ExamOption } from "../../new-import-form";
 import { analyzeJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resetJobAction, resumeJobAction } from "../../actions";
+import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 export interface JobView {
   id: string;
@@ -186,7 +187,7 @@ function RemoveFileDialog({ jobId, file, analyzed, onClose, onRemoved }: { jobId
   const remove = () =>
     start(async () => {
       setError(null);
-      const r = await removeFileAction(jobId, file.id);
+      const r = await callImporter(() => removeFileAction(jobId, file.id));
       if (!r.ok) return setError(r.error);
       const d = r.data;
       onRemoved(
@@ -297,7 +298,7 @@ function ResetCard({ jobId, reset, canManage, onDone }: { jobId: string; reset: 
               onClick={() =>
                 start(async () => {
                   setError(null);
-                  const r = await resetJobAction(jobId, typed);
+                  const r = await callImporter(() => resetJobAction(jobId, typed));
                   if (!r.ok) setError(r.error);
                   else onDone("The import is editable again: remove or replace files, then analyze them again before confirming.");
                 })
@@ -344,7 +345,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
     start(async () => {
       setError(null);
       setNotice(null);
-      const r = await fn();
+      const r = await callImporter(fn);
       if (!r.ok) setError(r.error ?? "Failed");
       else {
         if (ok) setNotice(ok);

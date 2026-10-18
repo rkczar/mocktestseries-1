@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { formatBytes } from "@/lib/ai-import/config";
 import type { CleanupCategory, CleanupItem, StorageReport } from "@/lib/ai-import/storage";
 import { executeCleanupAction, findDuplicatesAction, previewCleanupAction, scanStorageAction } from "../actions";
+import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 export function StorageManager({ categories }: { categories: { key: string; label: string }[] }) {
   const router = useRouter();
@@ -24,13 +25,13 @@ export function StorageManager({ categories }: { categories: { key: string; labe
     <div className="flex flex-col gap-4" data-testid="storage-manager">
       <div className="flex flex-wrap gap-2">
         <Button disabled={pending} onClick={() => start(async () => {
-          const r = await scanStorageAction();
+          const r = await callImporter(() => scanStorageAction());
           if (r.ok) setReport(r.data);
           else setMsg({ ok: false, text: r.error });
         })} data-testid="scan-storage">
           Scan storage
         </Button>
-        <Button variant="outline" disabled={pending} onClick={() => start(async () => setDups(await findDuplicatesAction()))} data-testid="find-duplicates">
+        <Button variant="outline" disabled={pending} onClick={() => start(async () => setDups(await callImporter(() => findDuplicatesAction())))} data-testid="find-duplicates">
           Find duplicate files
         </Button>
       </div>
@@ -69,7 +70,7 @@ export function StorageManager({ categories }: { categories: { key: string; labe
           <div>
             <Button variant="outline" disabled={pending || !cats.length} onClick={() => start(async () => {
               setConfirmText("");
-              const r = await previewCleanupAction(cats);
+              const r = await callImporter(() => previewCleanupAction(cats));
               if (r.ok) setPreview(r.data);
               else setMsg({ ok: false, text: r.error });
             })} data-testid="preview-cleanup">
@@ -93,7 +94,7 @@ export function StorageManager({ categories }: { categories: { key: string; labe
                 <div className="flex flex-wrap items-center gap-2">
                   <Input className="w-40" placeholder="Type DELETE" value={confirmText} onChange={(e) => setConfirmText(e.target.value)} data-testid="cleanup-confirm" />
                   <Button disabled={pending || confirmText !== "DELETE"} onClick={() => start(async () => {
-                    const r = await executeCleanupAction(cats, preview.items.map((i) => i.key), confirmText);
+                    const r = await callImporter(() => executeCleanupAction(cats, preview.items.map((i) => i.key), confirmText));
                     if (r.ok) {
                       setMsg({ ok: true, text: `Removed ${r.data.deleted} item(s), ${formatBytes(r.data.bytes)}.${r.data.skipped.length ? ` ${r.data.skipped.length} skipped because they are no longer safe to delete.` : ""}` });
                       setPreview(null);

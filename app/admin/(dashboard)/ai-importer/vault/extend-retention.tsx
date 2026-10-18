@@ -3,6 +3,7 @@
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { extendRetentionAction } from "../actions";
+import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 export function ExtendRetention({ fileId }: { fileId: string }) {
   const router = useRouter();
@@ -16,7 +17,7 @@ export function ExtendRetention({ fileId }: { fileId: string }) {
         const days = Number(prompt("Keep this file for how many more days?", "90"));
         if (!days) return;
         start(async () => {
-          const r = await extendRetentionAction(fileId, days);
+          const r = await callImporter(() => extendRetentionAction(fileId, days));
           if (!r.ok) alert(r.error);
           router.refresh();
         });

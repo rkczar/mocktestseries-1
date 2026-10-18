@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { formatBytes } from "@/lib/ai-import/config";
 import type { JobDeletePreview } from "@/lib/ai-import/jobs";
 import { cancelJobAction, deleteJobAction, deleteJobPreviewAction, recoverJobAction, retryJobAction } from "@/app/admin/(dashboard)/ai-importer/actions";
+import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 export interface JobControlState {
   id: string;
@@ -25,7 +26,7 @@ function DeleteJobDialog({ job, onClose, onDeleted }: { job: JobControlState; on
   const [pending, start] = useTransition();
   useEffect(() => {
     let live = true;
-    deleteJobPreviewAction(job.id).then((r) => live && (r.ok ? setPreview(r.data) : setError(r.error)));
+    callImporter(() => deleteJobPreviewAction(job.id)).then((r) => live && (r.ok ? setPreview(r.data) : setError(r.error)));
     return () => {
       live = false;
     };
@@ -33,7 +34,7 @@ function DeleteJobDialog({ job, onClose, onDeleted }: { job: JobControlState; on
   const remove = () =>
     start(async () => {
       setError(null);
-      const r = await deleteJobAction(job.id, typed);
+      const r = await callImporter(() => deleteJobAction(job.id, typed));
       if (!r.ok) return setError(r.error);
       const d = r.data;
       onDeleted(
@@ -119,7 +120,7 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
   const say = (m: { text: string; error: boolean }) => (onMessage ? onMessage(m) : setLocal(m));
   const act = (fn: () => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>, ok: string | ((d: unknown) => string)) =>
     start(async () => {
-      const r = await fn();
+      const r = await callImporter(fn);
       if (!r.ok) say({ text: r.error, error: true });
       else {
         say({ text: typeof ok === "string" ? ok : ok(r.data), error: false });

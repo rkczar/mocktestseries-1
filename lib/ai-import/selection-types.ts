@@ -66,5 +66,7 @@ export interface RouteStatus {
   stale: boolean;
   zdrOk: boolean | null;
   zdrError: string | null;
+  /** Model ids with a Zero-Data-Retention route (null = the ZDR list has not been read and kept yet). */
+  zdrModels: string[] | null;
   models: { id: string; ok: boolean; routes: number; error: string | null }[];
 }

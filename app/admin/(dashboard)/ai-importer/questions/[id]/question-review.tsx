@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
 import { Textarea } from "@/components/ui/textarea";
 import { allowDuplicateAction, approveQuestionsAction, editQuestionAction, rejectQuestionsAction, reprocessQuestionsAction, restoreQuestionAction, setAnswerAction, setFigureAction, setTaxonomyAction } from "../../actions";
+import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 interface ReviewQ {
   id: string;
@@ -39,7 +40,7 @@ export function QuestionReview({ q, taxonomy }: { q: ReviewQ; taxonomy: { id: st
   const [topicId, setTopicId] = useState(q.topicId ?? "");
   const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string) =>
     start(async () => {
-      const r = await fn();
+      const r = await callImporter(fn);
       setMsg(r.ok ? { ok: true, text: ok } : { ok: false, text: r.error ?? "Failed" });
       if (r.ok) router.refresh();
     });
