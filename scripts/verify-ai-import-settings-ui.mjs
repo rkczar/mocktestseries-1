@@ -280,6 +280,96 @@ const box = await m.locator("[data-testid=m-extract-list]").boundingBox();
 check("mobile: model list fits the screen", !!box && box.x >= 0 && box.x + box.width <= 376, box);
 check("mobile: no horizontal page scroll", await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
 
+section("I. Expired admin session vs dropped connection vs missing permission");
+// An expired 12 h admin JWT and a missing cookie look the same to the admin proxy (no valid session
+// → redirect to /admin/login); both are covered: the cookie removed, and its value made undecodable.
+const routesRow = async () => JSON.stringify((await db.query(`select value, "updatedAt" from "Setting" where key='ai.importer.routes'`)).rows[0] ?? null);
+const LOGIN_HREF = "/admin/login?callbackUrl=%2Fadmin%2Fai-importer%2Fsettings";
+const sx = await newPage();
+await login(sx, process.env.ADMIN_USER, process.env.ADMIN_PASS);
+await sx.goto(URL_SETTINGS);
+const sxText = (id) => sx.locator(`[data-testid=${id}]`).textContent().catch(() => "");
+// Waits until the element's text matches (the previous message may still be shown right after the click).
+const shows = (id, re) => until(async () => re.test(((await sxText(id)) ?? "").trim()));
+
+await sx.locator("[data-testid=models-reload]").click();
+await shows("models-reload", /^Reload status and selection$/);
+check("signed in: reload succeeds, no error", (await sx.locator("[data-testid=models-error]").count()) === 0);
+await sx.locator("[data-testid=routes-refresh]").click();
+await sx.locator("[data-testid=routes-refresh-msg]").waitFor({ timeout: 30000 });
+check("signed in: refresh succeeds (no error, no sign-in link)", (await sx.locator("[data-testid=routes-refresh-msg]").getAttribute("data-tone")) !== "error" && (await sx.locator("[data-testid=routes-refresh-msg] [data-testid=session-login]").count()) === 0, await sxText("routes-refresh-msg"));
+
+// Dropped connection: only the action POST fails; the page itself still answers, so this is not a session problem.
+await sx.route("**/admin/ai-importer/settings", (route) => (route.request().method() === "POST" ? route.abort() : route.continue()));
+await sx.locator("[data-testid=models-reload]").click();
+await sx.locator("[data-testid=models-error]").waitFor({ timeout: 10000 }).catch(() => {});
+check("dropped connection: reload says the server could not be reached, with Retry", /Could not load the model list: the server could not be reached/.test((await sxText("models-error")) ?? "") && (await sx.locator("[data-testid=models-retry]").count()) === 1 && (await sx.locator("[data-testid=session-login]").count()) === 0);
+await sx.locator("[data-testid=routes-refresh]").click();
+check("dropped connection: refresh keeps the could-not-be-reached message", (await shows("routes-refresh-msg", /^Provider routes were not refreshed: the server could not be reached/)) && (await sx.locator("[data-testid=routes-refresh-msg] [data-testid=session-login]").count()) === 0, await sxText("routes-refresh-msg"));
+await sx.locator("[data-testid=settings-save]").click();
+check("dropped connection: save says not saved / could not be reached (no success)", (await shows("settings-msg", /^Not saved: the server could not be reached/)) && (await sx.locator("[data-testid=session-login]").count()) === 0, await sxText("settings-msg"));
+await sx.unroute("**/admin/ai-importer/settings");
+await sx.locator("[data-testid=models-reload]").click();
+check("connection back: reload clears the error", await until(async () => (await sx.locator("[data-testid=models-error]").count()) === 0));
+
+// Signed in, but the account may no longer use the importer (deactivated): the existing permission message stays.
+const { rows: [adminRow] } = await db.query(`select id from "AdminUser" where username = $1`, [process.env.ADMIN_USER]);
+const before1 = JSON.stringify(await saved());
+await db.query(`update "AdminUser" set "isActive" = false where id = $1`, [adminRow.id]);
+try {
+  await sx.locator("[data-testid=models-reload]").click();
+  await sx.locator("[data-testid=models-error]").waitFor({ timeout: 10000 }).catch(() => {});
+  check("permission denied: reload shows the permission error (not session expiry)", /Could not load the model list: You do not have permission/.test((await sxText("models-error")) ?? "") && (await sx.locator("[data-testid=session-login]").count()) === 0, await sxText("models-error"));
+  await sx.locator("[data-testid=b-key]").fill("4");
+  await sx.locator("[data-testid=b-key]").blur();
+  await sx.locator("[data-testid=settings-save]").click();
+  check("permission denied: save shows the permission error; nothing saved", (await shows("settings-msg", /do not have permission/)) && JSON.stringify(await saved()) === before1, await sxText("settings-msg"));
+} finally {
+  await db.query(`update "AdminUser" set "isActive" = true where id = $1`, [adminRow.id]);
+}
+await sx.goto(URL_SETTINGS);
+
+// Session gone.
+const before2 = JSON.stringify(await saved());
+const routes2 = await routesRow();
+await sx.context().clearCookies();
+await sx.locator("[data-testid=models-reload]").click();
+await sx.locator("[data-testid=models-error]").waitFor({ timeout: 10000 }).catch(() => {});
+const expiredLink = sx.locator("[data-testid=models-error] [data-testid=session-login]");
+check("expired session: reload says “Your admin session has expired. Sign in again” (no network error, no Retry)", /^Your admin session has expired\. Sign in again$/.test(((await sxText("models-error")) ?? "").trim()) && (await sx.locator("[data-testid=models-retry]").count()) === 0, await sxText("models-error"));
+check("expired session: the sign-in link returns to Import Settings", (await expiredLink.getAttribute("href").catch(() => null)) === LOGIN_HREF);
+await sx.locator("[data-testid=routes-refresh]").click();
+check("expired session: refresh says the session expired, with the sign-in link", (await shows("routes-refresh-msg", /^Provider routes were not refreshed\. Your admin session has expired\. Sign in again$/)) && (await sx.locator("[data-testid=routes-refresh-msg]").getAttribute("data-tone")) === "error" && (await sx.locator("[data-testid=routes-refresh-msg] [data-testid=session-login]").getAttribute("href")) === LOGIN_HREF, await sxText("routes-refresh-msg"));
+check("expired session: refresh saved nothing", (await routesRow()) === routes2);
+await sx.locator("[data-testid=b-key]").fill("4");
+await sx.locator("[data-testid=b-key]").blur();
+await sx.locator("[data-testid=settings-save]").click();
+check("expired session: save shows “Not saved. Your admin session has expired. Sign in again”, no success", (await shows("settings-msg", /^Not saved\. Your admin session has expired\. Sign in again$/)) && (await sx.locator("[data-testid=settings-msg] [data-testid=session-login]").getAttribute("href")) === LOGIN_HREF, await sxText("settings-msg"));
+check("expired session: save persisted nothing", JSON.stringify(await saved()) === before2);
+check("expired session: the form is still there (no crash)", (await sx.locator("[data-testid=settings-form]").count()) === 1);
+
+// Undecodable session cookie (what an expired/forged token amounts to for the proxy).
+await login(sx, process.env.ADMIN_USER, process.env.ADMIN_PASS);
+await sx.goto(URL_SETTINGS);
+const jar = await sx.context().cookies();
+await sx.context().clearCookies();
+await sx.context().addCookies(jar.map((c) => (/session-token/.test(c.name) ? { ...c, value: `${c.value.slice(0, -8)}AAAAAAAA` } : c)));
+await sx.locator("[data-testid=models-reload]").click();
+await sx.locator("[data-testid=models-error]").waitFor({ timeout: 10000 }).catch(() => {});
+check("invalid session cookie: reload shows the session-expiry message", (await sx.locator("[data-testid=models-error]").getAttribute("data-kind").catch(() => null)) === "session", await sxText("models-error"));
+
+// Sign in again → back on Import Settings, no redirect loop, everything works.
+await sx.locator("[data-testid=models-error] [data-testid=session-login]").click();
+await sx.waitForURL(/\/admin\/login\?callbackUrl=%2Fadmin%2Fai-importer%2Fsettings$/);
+await sx.fill("input[name=username]", process.env.ADMIN_USER);
+await sx.fill("input[name=password]", process.env.ADMIN_PASS);
+await Promise.all([sx.waitForURL(/\/admin\/ai-importer\/settings$/, { timeout: 30000 }).catch(() => {}), sx.locator("form button[type=submit]").click()]);
+check("sign in again: returns to Import Settings", new URL(sx.url()).pathname === "/admin/ai-importer/settings", sx.url());
+await sx.locator("[data-testid=models-reload]").click();
+await shows("models-reload", /^Reload status and selection$/);
+check("after signing in again: reload works", (await sx.locator("[data-testid=models-error]").count()) === 0);
+check("after the session tests: saved settings unchanged", JSON.stringify(await saved()) === before2);
+
 check("whole suite: no global AI → Models approval changed", (await globalFlags()) === flags0);
 check("no page errors", errors.length === 0, errors);
 await browser.close();

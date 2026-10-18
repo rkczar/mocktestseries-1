@@ -19,7 +19,36 @@ type CostKey = "extract" | "verify" | "solve" | "classify" | "key";
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v < 0.01 ? `₹${v.toFixed(4)}` : `₹${v.toFixed(2)}`);
 const perM = (v: number | null) => (v === null ? "?" : `$${v < 0.1 ? v.toFixed(3) : v.toFixed(2)}`);
 
-type RoutesMessage = { tone: "success" | "warning" | "error"; text: string };
+type RoutesMessage = { tone: "success" | "warning" | "error"; text: string; session?: boolean };
+
+const SETTINGS_PATH = "/admin/ai-importer/settings";
+// The login form only follows /admin… callbacks (app/admin/login/actions.ts).
+const LOGIN_URL = `/admin/login?callbackUrl=${encodeURIComponent(SETTINGS_PATH)}`;
+const SESSION_EXPIRED = "Your admin session has expired.";
+
+/**
+ * Why a Server Action call threw. The admin proxy answers a request without a valid admin
+ * session with a redirect to the login page, which the action client can only report as an
+ * "unexpected response". Ask the same proxy about this page without following redirects:
+ * a redirect means the session is gone; any other answer (or none) is not proof of that,
+ * so it stays a connection problem. HEAD to the page only: the session cookie is not re-issued.
+ */
+async function failureKind(): Promise<"session" | "network"> {
+  try {
+    const r = await fetch(SETTINGS_PATH, { method: "HEAD", redirect: "manual", cache: "no-store", credentials: "same-origin" });
+    return r.type === "opaqueredirect" ? "session" : "network";
+  } catch {
+    return "network";
+  }
+}
+
+function SignInAgain() {
+  return (
+    <a href={LOGIN_URL} className="underline" data-testid="session-login">
+      Sign in again
+    </a>
+  );
+}
 
 /** What a finished "Refresh provider routes" read and saved, and what the administrator should do next. */
 function routesRefreshMessage(r: ImporterCatalog["routes"], listed: number): RoutesMessage {
@@ -470,7 +499,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
   const [refreshing, startRefreshing] = useTransition();
   const [routesMsg, setRoutesMsg] = useState<RoutesMessage | null>(null);
   const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; session?: boolean } | null>(null);
   const d = !canManage;
   const set = <K extends keyof ImporterSettings>(k: K, v: Partial<ImporterSettings[K]>) => setS((cur) => ({ ...cur, [k]: { ...(cur[k] as object), ...v } }));
   const field = (id: string, label: string, value: number, onChange: (n: number) => void, help?: string) => (
@@ -510,7 +539,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
         if (r.ok) setCatalog(r.data);
         else setLoadError(r.error);
       } catch {
-        setLoadError("the server could not be reached");
+        setLoadError((await failureKind()) === "session" ? SESSION_EXPIRED : "the server could not be reached");
       }
     });
   const refreshRoutes = () =>
@@ -528,7 +557,11 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           });
         }
       } catch {
-        setRoutesMsg({ tone: "error", text: "Provider routes were not refreshed: the server could not be reached or your session has expired. Reload the page (sign in again if asked), then retry." });
+        setRoutesMsg(
+          (await failureKind()) === "session"
+            ? { tone: "error", text: `Provider routes were not refreshed. ${SESSION_EXPIRED}`, session: true }
+            : { tone: "error", text: "Provider routes were not refreshed: the server could not be reached or your session has expired. Reload the page (sign in again if asked), then retry." }
+        );
       }
     });
   const picker = (slot: Slot, label: string, value: string | null, vision: boolean, cost: CostKey, onChange: (v: string | null) => void, help: string, allowNone: string) => (
@@ -545,7 +578,18 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           return;
         }
         start(async () => {
-          const r = await saveSettingsAction(s);
+          setMsg(null);
+          let r: Awaited<ReturnType<typeof saveSettingsAction>>;
+          try {
+            r = await saveSettingsAction(s);
+          } catch {
+            setMsg(
+              (await failureKind()) === "session"
+                ? { ok: false, text: `Not saved. ${SESSION_EXPIRED}`, session: true }
+                : { ok: false, text: "Not saved: the server could not be reached. Check your connection, then save again." }
+            );
+            return;
+          }
           if (r.ok) {
             setS(r.data);
             setMsg({ ok: true, text: `Settings saved at ${new Date().toLocaleTimeString("en-IN")}.` });
@@ -565,13 +609,19 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
             {refreshing ? "Refreshing provider routes…" : "Refresh provider routes"}
           </Button>
         )}
-        {loadError && (
-          <span className="text-[var(--color-error)]" role="alert" data-testid="models-error">
-            Could not load the model list: {loadError}{" "}
-            <button type="button" className="underline" onClick={() => reload()} data-testid="models-retry">
-              Retry
-            </button>
+        {loadError === SESSION_EXPIRED ? (
+          <span className="text-[var(--color-error)]" role="alert" data-testid="models-error" data-kind="session">
+            {SESSION_EXPIRED} <SignInAgain />
           </span>
+        ) : (
+          loadError && (
+            <span className="text-[var(--color-error)]" role="alert" data-testid="models-error">
+              Could not load the model list: {loadError}{" "}
+              <button type="button" className="underline" onClick={() => reload()} data-testid="models-retry">
+                Retry
+              </button>
+            </span>
+          )
         )}
         <Link className="text-xs underline text-[var(--color-muted-foreground)]" href="/admin/ai/models">
           Sync the model catalog in AI → Models
@@ -589,6 +639,12 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
             data-tone={routesMsg.tone}
           >
             {routesMsg.text}
+            {routesMsg.session && (
+              <>
+                {" "}
+                <SignInAgain />
+              </>
+            )}
           </span>
         )}
       </div>
@@ -750,6 +806,12 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       {msg && (
         <p className={`text-sm ${msg.ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`} role={msg.ok ? "status" : "alert"} data-testid="settings-msg">
           {msg.text}
+          {msg.session && (
+            <>
+              {" "}
+              <SignInAgain />
+            </>
+          )}
         </p>
       )}
       {canManage && (
