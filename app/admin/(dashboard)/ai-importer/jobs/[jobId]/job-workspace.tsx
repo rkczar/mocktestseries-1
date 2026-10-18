@@ -617,6 +617,11 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
               <p className="text-xs text-[var(--color-muted-foreground)]">
                 {a.estimate.plan ? `Models: ${a.estimate.plan.mode === "auto" ? "automatic" : "manual override"} — ${SELECTION_TASKS.map((t) => `${SELECTION_TASK_LABELS[t].toLowerCase()} ${a.estimate.plan!.tasks[t].model ?? "none"}`).join(", ")} (chosen again with fresh prices when you confirm) · ` : ""}Provider routes read {a.estimate.pricesSyncedAt ? a.estimate.pricesSyncedAt.slice(0, 16).replace("T", " ") : "—"} · USD→INR {a.estimate.fxRate ?? "—"} ({a.estimate.fxDate ?? "—"}) · computed {a.estimate.computedAt.slice(0, 16).replace("T", " ")} UTC
               </p>
+              {a.estimate.notes.length > 0 && (
+                <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="estimate-notes-asof">
+                  Notes as of this estimate ({a.estimate.computedAt.slice(0, 16).replace("T", " ")} UTC). Later changes in Import Settings (importer models, provider routes) are not shown here; they apply when a job is analyzed or confirmed again.
+                </p>
+              )}
               {a.estimate.notes.map((n, i) => (
                 <p key={i} className="text-xs text-[var(--color-warning)]">
                   {n}

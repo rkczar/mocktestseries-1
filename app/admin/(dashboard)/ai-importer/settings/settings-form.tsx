@@ -19,6 +19,30 @@ type CostKey = "extract" | "verify" | "solve" | "classify" | "key";
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v < 0.01 ? `₹${v.toFixed(4)}` : `₹${v.toFixed(2)}`);
 const perM = (v: number | null) => (v === null ? "?" : `$${v < 0.1 ? v.toFixed(3) : v.toFixed(2)}`);
 
+type RoutesMessage = { tone: "success" | "warning" | "error"; text: string };
+
+/** What a finished "Refresh provider routes" read and saved, and what the administrator should do next. */
+function routesRefreshMessage(r: ImporterCatalog["routes"], listed: number): RoutesMessage {
+  const at = r.fetchedAt ? `${r.fetchedAt.slice(11, 16)} UTC` : "now";
+  const failed = r.models.filter((m) => !m.ok);
+  const zdr = r.zdrOk ? "Zero-Data-Retention list read" : `Zero-Data-Retention list NOT read (${r.zdrError ?? "error"})`;
+  if (!r.zdrOk && failed.length === r.models.length) {
+    return { tone: "error", text: `OpenRouter could not be reached at ${at}: ${r.zdrError ?? "no answer"}${failed.length ? `; ${failed.length} model route read(s) failed too` : ""}. No usable route data was read, so no model can be chosen. Check OpenRouter in Admin → AI → Providers and try again in a few minutes.` };
+  }
+  if (!r.models.length) {
+    return {
+      tone: "warning",
+      text: listed
+        ? `Saved at ${at}: ${zdr}, but none of the ${listed} model(s) on the importer's list can be used (disabled, no longer in the catalog, or not a text model), so there were no model routes to read. Check them under Importer models.`
+        : `Saved at ${at}: ${zdr}, but no model is on the importer's model list, so there were no model routes to read. Add the models the importer may use under Importer models, save the settings, then refresh again. (No model is approved automatically.)`,
+    };
+  }
+  if (failed.length || !r.zdrOk) {
+    return { tone: "warning", text: `Saved at ${at}: routes read for ${r.models.length - failed.length} of ${r.models.length} model(s); ${zdr}.${failed.length ? ` Not read: ${failed.map((m) => `${m.id} (${m.error ?? "error"})`).join("; ")} — these models are not chosen.` : ""} Try again in a few minutes; if it persists, check the model in AI → Models.` };
+  }
+  return { tone: "success", text: `Provider routes refreshed and saved at ${at}: ${r.models.length} model(s) read, ${zdr}.` };
+}
+
 /** Why a selected model cannot be used in a slot (null = fine / not set). */
 function slotProblem(options: ImporterModelOption[], id: string | null, vision: boolean): string | null {
   if (!id) return null;
@@ -443,6 +467,8 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
   const [catalog, setCatalog] = useState(initialCatalog);
   const [loading, startLoading] = useTransition();
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshing, startRefreshing] = useTransition();
+  const [routesMsg, setRoutesMsg] = useState<RoutesMessage | null>(null);
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const d = !canManage;
@@ -476,15 +502,33 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           .filter((x): x is string => !!x)),
     ...(s.aiEnabled && !catalog.plan.tasks.extract.model ? [`Paid AI is on, but no page-reading model can be used: ${catalog.plan.tasks.extract.reason}`] : []),
   ];
-  const reload = (refresh = false) =>
+  const reload = () =>
     startLoading(async () => {
       setLoadError(null);
       try {
-        const r = refresh ? await refreshRoutesAction(s) : await importerModelsAction(s);
+        const r = await importerModelsAction(s);
         if (r.ok) setCatalog(r.data);
         else setLoadError(r.error);
       } catch {
         setLoadError("the server could not be reached");
+      }
+    });
+  const refreshRoutes = () =>
+    startRefreshing(async () => {
+      setRoutesMsg(null);
+      try {
+        const r = await refreshRoutesAction(s);
+        if (r.ok) {
+          setCatalog(r.data);
+          setRoutesMsg(routesRefreshMessage(r.data.routes, s.importerModels.length));
+        } else {
+          setRoutesMsg({
+            tone: "error",
+            text: `Provider routes were not refreshed: ${r.error} ${/permission/i.test(r.error) ? "Sign in again as a Master Admin (your session may have expired), then retry." : "Try again in a minute. If it keeps failing, ask the server administrator to check the server log for “[ai-importer]”."}`,
+          });
+        }
+      } catch {
+        setRoutesMsg({ tone: "error", text: "Provider routes were not refreshed: the server could not be reached or your session has expired. Reload the page (sign in again if asked), then retry." });
       }
     });
   const picker = (slot: Slot, label: string, value: string | null, vision: boolean, cost: CostKey, onChange: (v: string | null) => void, help: string, allowNone: string) => (
@@ -513,12 +557,12 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
     >
       <ProviderStatus catalog={catalog} aiEnabled={s.aiEnabled} problems={problems} />
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Button type="button" variant="outline" size="sm" onClick={() => reload()} disabled={loading} data-testid="models-reload">
+        <Button type="button" variant="outline" size="sm" onClick={() => reload()} disabled={loading || refreshing} data-testid="models-reload">
           {loading ? "Loading…" : "Reload status and selection"}
         </Button>
         {canManage && (
-          <Button type="button" variant="outline" size="sm" onClick={() => reload(true)} disabled={loading} data-testid="routes-refresh">
-            Refresh provider routes
+          <Button type="button" variant="outline" size="sm" onClick={refreshRoutes} disabled={loading || refreshing} aria-busy={refreshing} data-testid="routes-refresh">
+            {refreshing ? "Refreshing provider routes…" : "Refresh provider routes"}
           </Button>
         )}
         {loadError && (
@@ -532,6 +576,21 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
         <Link className="text-xs underline text-[var(--color-muted-foreground)]" href="/admin/ai/models">
           Sync the model catalog in AI → Models
         </Link>
+        {refreshing && (
+          <span className="basis-full text-[var(--color-muted-foreground)]" role="status" data-testid="routes-refresh-progress">
+            Reading provider routes from OpenRouter (free, read-only; no AI request is sent)…
+          </span>
+        )}
+        {routesMsg && !refreshing && (
+          <span
+            className={`basis-full ${routesMsg.tone === "error" ? "text-[var(--color-error)]" : routesMsg.tone === "warning" ? "text-[var(--color-warning)]" : "text-[var(--color-success)]"}`}
+            role={routesMsg.tone === "error" ? "alert" : "status"}
+            data-testid="routes-refresh-msg"
+            data-tone={routesMsg.tone}
+          >
+            {routesMsg.text}
+          </span>
+        )}
       </div>
 
       <Card>

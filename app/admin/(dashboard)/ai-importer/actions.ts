@@ -363,7 +363,13 @@ export async function refreshRoutesAction(draft?: ImporterSettings): Promise<Imp
     await requireManage(),
     async () => {
       const settings = draft ? normalizeImporterSettings(draft) : await getImporterSettings();
-      await refreshRoutes(settings.importerModels);
+      // OpenRouter failures are recorded inside the snapshot; what throws here is the database read or write.
+      try {
+        await refreshRoutes(settings.importerModels);
+      } catch (error) {
+        console.error("[ai-importer] route refresh", error instanceof Error ? error.message.slice(0, 200) : "error");
+        throw new ImportJobError("The provider routes could not be saved (database error), so the previous route data is unchanged.");
+      }
       return importerModelCatalog(settings);
     },
     []
