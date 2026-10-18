@@ -37,6 +37,10 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const rows = await prisma.aiImportQuestion.findMany({ where, orderBy: [{ jobId: "asc" }, { fileId: "asc" }, { orderIndex: "asc" }], take: 1000, include: { figures: true } });
   const subjects = await prisma.subject.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.subjectId).filter((x): x is string => !!x))] } }, select: { id: true, name: true } });
   const topics = await prisma.topic.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.topicId).filter((x): x is string => !!x))] } }, select: { id: true, name: true } });
+  // questionId has no FK (the import record outlives the question): only link saved questions that still exist.
+  const saved = new Set(
+    (await prisma.question.findMany({ where: { id: { in: rows.map((r) => r.questionId).filter((x): x is string => !!x) } }, select: { id: true } })).map((x) => x.id),
+  );
   const view: ExceptionRow[] = rows.map((r) => {
     const e = effective(r);
     return {
@@ -56,6 +60,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       importBlocker: importBlocker(r, settings),
       publishBlocker: r.questionId ? publishBlocker(r, settings) : importBlocker(r, settings) ?? publishBlocker(r, settings),
       questionId: r.questionId,
+      savedDeleted: !!r.questionId && !saved.has(r.questionId),
     };
   });
   const issueCounts = new Map<string, number>();

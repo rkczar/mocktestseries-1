@@ -38,6 +38,8 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     prisma.aiImportKeyEntry.findMany({ where: { matchedQuestionId: q.id }, select: { rawValue: true, page: true, status: true } }),
   ]);
   const file = await prisma.aiImportFile.findUnique({ where: { id: q.fileId }, select: { originalName: true, detected: true, status: true } });
+  // questionId has no FK (the import record outlives the question): don't link a deleted one.
+  const savedExists = q.questionId ? !!(await prisma.question.findUnique({ where: { id: q.questionId }, select: { id: true } })) : false;
   const e = effective(q);
   const kind = (file?.detected as { kind?: string } | null)?.kind;
   const hasPageImages = (kind === "pdf" || kind === "png" || kind === "jpeg") && file?.status !== "PURGED";
@@ -74,11 +76,16 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           <Badge variant={statusVariant(q.answerStatus)} data-testid="q-answer-status">
             {ANSWER_STATUS_LABELS[q.answerStatus]}
           </Badge>
-          {q.questionId && (
-            <Link className="text-sm underline" href={`/admin/questions/preview/${q.questionId}`} data-testid="open-saved">
-              Open saved question
-            </Link>
-          )}
+          {q.questionId &&
+            (savedExists ? (
+              <Link className="text-sm underline" href={`/admin/questions/preview/${q.questionId}`} data-testid="open-saved">
+                Open saved question
+              </Link>
+            ) : (
+              <span className="text-sm text-[var(--color-muted-foreground)]" data-testid="saved-deleted">
+                Saved question deleted
+              </span>
+            ))}
         </div>
       </div>
       <div className="grid gap-4 xl:grid-cols-2">

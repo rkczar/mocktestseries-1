@@ -26,6 +26,8 @@ export interface ExceptionRow {
   importBlocker: string | null;
   publishBlocker: string | null;
   questionId: string | null;
+  /** The saved question was deleted after import (questionId is kept for history). */
+  savedDeleted: boolean;
 }
 
 export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: ExceptionRow[]; canUse: boolean; canPublish: boolean; jobId: string | null }) {
@@ -110,11 +112,16 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
               </td>
               <td className="py-1.5 pr-2">
                 <Badge variant={statusVariant(r.status)}>{QUESTION_STATUS_LABELS[r.status] ?? r.status}</Badge>
-                {r.questionId && (
-                  <Link className="ml-1 text-xs underline" href={`/admin/questions/preview/${r.questionId}`}>
-                    open
-                  </Link>
-                )}
+                {r.questionId &&
+                  (r.savedDeleted ? (
+                    <span className="ml-1 text-xs text-[var(--color-muted-foreground)]" data-testid="saved-deleted">
+                      deleted
+                    </span>
+                  ) : (
+                    <Link className="ml-1 text-xs underline" href={`/admin/questions/preview/${r.questionId}`}>
+                      open
+                    </Link>
+                  ))}
               </td>
               <td className="py-1.5 pr-2">
                 <Badge variant={statusVariant(r.answerStatus)}>{ANSWER_STATUS_LABELS[r.answerStatus] ?? r.answerStatus}</Badge>
