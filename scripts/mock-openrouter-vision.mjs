@@ -18,8 +18,11 @@
  *   mockvision/imgpriced 0.0000005 / 0.000003, pricing.image 0.00001 — input-image price on top of tokens
  *   mockvision/badimg   vision, pricing.image "n/a" (unreadable image price → unusable)
  * GET /__mock/stats · POST /__mock/reset
- * POST /__mock/config {keyLimitRemaining: number|null, costMultiplier: number, modelsStatus: number|null, chatDelayMs: number}
- *   — key credit left (null = key without a limit), reported cost × multiplier, /models failure.
+ * POST /__mock/config {keyLimitRemaining: number|null, costMultiplier: number, modelsStatus: number|null, chatDelayMs: number,
+ *   endpointsStatus: number|null, zdrStatus: number|null, routeStatus: {id: status}, noEndpoint: [id], zdrRemoved: [id]}
+ *   — key credit left (null = key without a limit), reported cost × multiplier, /models failure, route-metadata
+ *   failures, per-model route status, models chat answers "no endpoints" for, models taken off the ZDR list.
+ * GET /models/{id}/endpoints and GET /endpoints/zdr serve the routes (stats.routeReads counts them).
  */
 import http from "node:http";
 import { readFileSync } from "node:fs";
@@ -28,22 +31,44 @@ import sharp from "sharp";
 const port = Number(process.argv[2] || 3501);
 const fixtures = JSON.parse(readFileSync(process.argv[3], "utf8"));
 
+// Prices fit the importer's pilot ceiling (₹1 per request) at the mock rate of ₹95/USD.
 const MODELS = {
-  "mockvision/reader": { p: 0.0000005, c: 0.000003, vision: true },
-  "mockvision/checker": { p: 0.00000025, c: 0.000002, vision: true },
-  "mockvision/fail": { p: 0.0000005, c: 0.000003, vision: true },
+  "mockvision/reader": { p: 0.00000005, c: 0.0000003, vision: true, routes: [["mockprov/zdr", 1], ["mockprov/zdr-eu", 1.1]] },
+  "mockvision/checker": { p: 0.00000008, c: 0.0000004, vision: true },
+  "mockvision/fail": { p: 0.00000005, c: 0.0000003, vision: true, routes: [["mockprov/zdr", 1], ["mockprov/zdr-eu", 1.1]] },
   "mockvision/pricey": { p: 0.00005, c: 0.00015, vision: true },
-  "mockvision/slow": { p: 0.0000005, c: 0.000003, vision: true },
+  "mockvision/slow": { p: 0.00000005, c: 0.0000003, vision: true },
   "mocktext/classifier": { p: 0.0000001, c: 0.0000004, vision: false },
-  "mockvision/imgpriced": { p: 0.0000005, c: 0.000003, vision: true, image: "0.00001" },
-  "mockvision/badimg": { p: 0.0000005, c: 0.000003, vision: true, image: "n/a" },
+  "mockvision/imgpriced": { p: 0.00000005, c: 0.0000003, vision: true, image: "0.0000005" },
+  "mockvision/badimg": { p: 0.00000005, c: 0.0000003, vision: true, image: "n/a" },
+  // Automatic selection fixtures: the cheapest vision model has no Zero-Data-Retention route;
+  // "down" is cheap but its only route is unhealthy; "mid" sits between reader and checker.
+  "mockvision/cheapnozdr": { p: 0.00000001, c: 0.0000001, vision: true, zdr: false },
+  "mockvision/down": { p: 0.00000002, c: 0.0000002, vision: true, status: -5 },
+  "mockvision/mid": { p: 0.00000006, c: 0.00000035, vision: true },
 };
-const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0 };
-const config = { ...DEFAULT_CONFIG };
+/** Provider routes of a model: [tag, price factor]; every model is ZDR unless `zdr: false`. */
+const routesOf = (id) => {
+  const m = MODELS[id];
+  return (m.routes ?? [[m.zdr === false ? "mockprov/std" : "mockprov/zdr", 1]]).map(([tag, f]) => ({
+    name: `Mock | ${id}`,
+    model_id: id,
+    provider_name: "MockProvider",
+    tag,
+    status: config.routeStatus[id] ?? m.status ?? 0,
+    context_length: 200000,
+    max_completion_tokens: 16000,
+    supported_parameters: ["max_tokens", "temperature"],
+    pricing: { prompt: String(m.p * f), completion: String(m.c * f), ...(m.image ? { image: m.image } : {}) },
+  }));
+};
+const zdrRoute = (id) => !config.zdrRemoved.includes(id) && routesOf(id).some((r) => r.tag !== "mockprov/std");
+const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [] };
+const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
 
-const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], bodies: 0 };
+const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], routeReads: 0, bodies: 0 };
 let seq = 0;
 
 function json(res, status, body) {
@@ -108,8 +133,8 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/__mock/stats") return json(res, 200, stats);
   if (url.pathname === "/__mock/reset") {
-    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], bodies: 0 });
-    Object.assign(config, DEFAULT_CONFIG);
+    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], routeReads: 0, bodies: 0 });
+    Object.assign(config, structuredClone(DEFAULT_CONFIG));
     return json(res, 200, { ok: true });
   }
   if (url.pathname === "/__mock/config") {
@@ -125,6 +150,19 @@ const server = http.createServer(async (req, res) => {
     });
   }
   if (req.method === "GET" && p === "/images/models") return json(res, 200, { data: [] });
+  if (req.method === "GET" && p === "/endpoints/zdr") {
+    stats.routeReads++;
+    if (config.zdrStatus) return err(res, config.zdrStatus, "mock: zdr list unavailable");
+    return json(res, 200, { data: Object.keys(MODELS).filter(zdrRoute).flatMap((id) => routesOf(id).filter((r) => r.tag !== "mockprov/std")) });
+  }
+  const epm = /^\/models\/(.+)\/endpoints$/.exec(p);
+  if (req.method === "GET" && epm) {
+    stats.routeReads++;
+    if (config.endpointsStatus) return err(res, config.endpointsStatus, "mock: endpoints unavailable");
+    const id = decodeURIComponent(epm[1]);
+    if (!MODELS[id]) return err(res, 404, "Model not found");
+    return json(res, 200, { data: { id, name: id, endpoints: routesOf(id) } });
+  }
   const auth = req.headers.authorization ?? "";
   if (!auth.startsWith("Bearer sk-or-")) return err(res, 401, "No auth credentials found");
   if (req.method === "GET" && p === "/key") return json(res, 200, { data: { label: "mock", limit: config.keyLimitRemaining === null ? null : 10, limit_remaining: config.keyLimitRemaining, usage: 1 } });
@@ -132,6 +170,7 @@ const server = http.createServer(async (req, res) => {
     stats.chat++;
     stats.privacy.push(body.provider?.data_collection ?? null);
     stats.zdr.push(body.provider?.zdr === true);
+    stats.requireParams.push(body.provider?.require_parameters === true);
     const system = String(body.messages?.find((m) => m.role === "system")?.content ?? "");
     const user = body.messages?.find((m) => m.role === "user")?.content;
     const parts = Array.isArray(user) ? user : [{ type: "text", text: String(user ?? "") }];
@@ -149,6 +188,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (image && !m.vision) {
         last = [404, "No endpoints found that support image input"];
+        continue;
+      }
+      if (config.noEndpoint.includes(id) || (body.provider?.zdr === true && !zdrRoute(id))) {
+        last = [404, "No endpoints found matching your data policy (Zero data retention)"];
         continue;
       }
       if (id === "mockvision/fail") {

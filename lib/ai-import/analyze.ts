@@ -11,6 +11,7 @@ import { parseImportFile } from "@/lib/bulk-import";
 import { vaultPath } from "@/lib/ai-import/vault";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { estimateJobCost, type CostEstimate } from "@/lib/ai-import/estimate";
+import { computeModelPlan } from "@/lib/ai-import/select";
 import { logEvent } from "@/lib/ai-import/jobs";
 
 /**
@@ -241,11 +242,13 @@ export async function runAnalysis(jobId: string): Promise<void> {
     embeddedImages: paperFacts.reduce((a, f) => a + f.embeddedImages, 0),
     answerKeyFiles: keyFacts.length,
   };
-  const estimate = await estimateJobCost({ paperFacts, keyFacts, settings });
+  // The model plan is chosen again (fresh routes) at confirmation; this one shows what it would be now.
+  const plan = await computeModelPlan(settings, { refresh: settings.aiEnabled });
+  const estimate = await estimateJobCost({ paperFacts, keyFacts, settings, plan });
   const analysis: JobAnalysis = { files: results, totals, estimate, analyzedAt: new Date().toISOString() };
   await prisma.aiImportJob.update({
     where: { id: jobId },
     data: { analysis: analysis as unknown as Prisma.InputJsonValue, estCostInr: estimate.totalInr, estCostUsd: estimate.totalUsd, estimate: estimate as unknown as Prisma.InputJsonValue, status: AiImportJobStatus.AWAITING_CONFIRMATION },
   });
-  await logEvent(jobId, "ANALYZED", `Analysis finished: ${totals.pages} page(s), ${totals.localQuestions} question(s) recognized locally, ${totals.scannedPages} scanned page(s). Estimated AI cost ${estimate.totalInr === null ? "not available" : `₹${estimate.totalInr.toFixed(2)}`}.`, { totals });
+  await logEvent(jobId, "ANALYZED", `Analysis finished: ${totals.pages} page(s), ${totals.localQuestions} question(s) recognized locally, ${totals.scannedPages} scanned page(s). Estimated AI cost ${estimate.totalInr === null ? "not available" : `₹${estimate.totalInr.toFixed(2)} (maximum ${estimate.maxInr === null ? "not available" : `₹${estimate.maxInr.toFixed(2)}`})`}.`, { totals });
 }

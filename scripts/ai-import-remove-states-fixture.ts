@@ -3,7 +3,9 @@
  * synthetic import job per lifecycle state, so the file Remove button can be
  * checked in each — Uploading (with an unfinished upload), Uploading with a
  * linked answer key, Awaiting confirmation, Processing, Ready to import and
- * Cancelled — plus two jobs sharing one stored file. AI stays OFF.
+ * Cancelled — plus two jobs sharing one stored file, and a processed job that
+ * produced nothing (scanned paper, AI off: 0 questions, ₹0 — like a mistaken
+ * upload that was confirmed) for the safe reset. AI stays OFF.
  *
  *   npx tsx scripts/ai-import-remove-states-fixture.ts setup <fixtures dir> > /tmp/states.json
  *   npx tsx scripts/ai-import-remove-states-fixture.ts cleanup /tmp/states.json
@@ -69,6 +71,13 @@ async function setup(fx: string) {
   // Frozen mid-processing, after the last worker run (the scratch server never starts one: AI_IMPORT_DISABLE_KICK=1).
   await prisma.aiImportJob.update({ where: { id: processing }, data: { status: AiImportJobStatus.PROCESSING, confirmedAt: new Date(), confirmedById: actor, leaseOwner: "frozen-fixture", leaseUntil: new Date(Date.now() + 7 * 86_400_000) } });
 
+  const zero = await job("SYNTHETIC zero output");
+  await upload(zero, "scanned.pdf");
+  await analyze(zero);
+  const z = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: zero } });
+  await confirmJob({ jobId: zero, actorId: actor, examId: z.examId, paperType: z.paperType, subjectId: null, year: 2026, paperCode: null, previousYearPaperId: null, budgetInr: 0 });
+  await runWorker(300_000);
+
   const cancelled = await job("SYNTHETIC cancelled");
   await upload(cancelled, "photo.png");
   await analyze(cancelled);
@@ -80,14 +89,14 @@ async function setup(fx: string) {
   await upload(sharedB, "paper.docx");
 
   const statusOf = async (id: string) => (await prisma.aiImportJob.findUniqueOrThrow({ where: { id } })).status;
-  const out = { draft, linked, awaiting, processing, ready, cancelled, sharedA, sharedB, statuses: {} as Record<string, string> };
-  for (const [k, id] of Object.entries({ draft, linked, awaiting, processing, ready, cancelled, sharedA, sharedB })) out.statuses[k] = await statusOf(id);
+  const out = { draft, linked, awaiting, processing, ready, cancelled, sharedA, sharedB, zero, statuses: {} as Record<string, string> };
+  for (const [k, id] of Object.entries({ draft, linked, awaiting, processing, ready, cancelled, sharedA, sharedB, zero })) out.statuses[k] = await statusOf(id);
   console.log(JSON.stringify(out));
 }
 
 async function cleanup(file: string) {
   const f = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
-  const ids = ["draft", "linked", "awaiting", "processing", "ready", "cancelled", "sharedA", "sharedB"].map((k) => f[k]).filter(Boolean);
+  const ids = ["draft", "linked", "awaiting", "processing", "ready", "cancelled", "sharedA", "sharedB", "zero"].map((k) => f[k]).filter(Boolean);
   await prisma.aiImportJob.deleteMany({ where: { id: { in: ids } } });
   console.log(JSON.stringify({ removedJobs: ids.length }));
 }

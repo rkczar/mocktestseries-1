@@ -34,14 +34,39 @@ export interface ImporterModels {
   key: string | null;
 }
 
+export type ModelSelectionMode = "auto" | "manual";
+
+/** Tasks the automatic model selection chooses a model for (lib/ai-import/select.ts). */
+export const SELECTION_TASKS = ["extract", "verify", "key", "classify"] as const;
+export type SelectionTask = (typeof SELECTION_TASKS)[number];
+export const SELECTION_TASK_LABELS: Record<SelectionTask, string> = {
+  extract: "Page reading (digital + scanned / OCR)",
+  verify: "Independent verification",
+  key: "Answer-key reading",
+  classify: "Topic classification",
+};
+
+/**
+ * HARD pilot ceilings, enforced in code: Import Settings can lower these but never raise them, and an
+ * older saved document above them is clamped when it is read. Raising them needs a code change + deploy.
+ * The all-time cap never resets, so a new month cannot grant another ₹10 during the pilot.
+ */
+export const PILOT_LIMITS = { totalInr: 10, monthlyInr: 10, maxJobInr: 8, maxRequestInr: 1, minKeyReserveUsd: 5 } as const;
+
 export interface ImporterSettings {
   /** Master switch for PAID AI calls. Local parsing, review, import and publishing work without it. */
   aiEnabled: boolean;
+  /**
+   * auto (default): the cheapest approved, available, suitable model per task is chosen from current
+   * OpenRouter prices and privacy routes when a job is confirmed. manual: the models below (authorised override).
+   */
+  selection: { mode: ModelSelectionMode };
+  /** Manual override models (used only when selection.mode is "manual"). */
   models: ImporterModels;
   privacy: {
     /** OpenRouter provider.data_collection for every importer call ("deny" = providers that do not store/train on prompts). */
     dataCollection: "deny" | "allow";
-    /** Only Zero-Data-Retention endpoints. */
+    /** Only Zero-Data-Retention endpoints (default on; an explicit false is respected). */
     zdr: boolean;
   };
   budget: {
@@ -55,10 +80,10 @@ export interface ImporterSettings {
      */
     maxJobInr: number;
     /**
-     * HARD all-time cap for importer AI spend (every month together; null = no all-time cap).
-     * Unlike monthlyInr it never resets, so a pilot cannot gain a fresh budget when the month changes.
+     * HARD all-time cap for importer AI spend (every month together). Unlike monthlyInr it never
+     * resets, so a pilot cannot gain a fresh budget when the month changes. At most PILOT_LIMITS.totalInr.
      */
-    totalInr: number | null;
+    totalInr: number;
     /** Hard ceiling for one AI request (INR). */
     maxRequestInr: number;
     /**
@@ -68,6 +93,11 @@ export interface ImporterSettings {
     keyReserveUsd: number;
     /** Retry once after a transient provider error (off = one attempt per request, never a retry). */
     retryTransient: boolean;
+    /**
+     * When the job's selected model becomes unavailable, a MORE EXPENSIVE suitable model may take over
+     * (still inside every budget). Off: processing stops and says why. A cheaper or equal one is always allowed.
+     */
+    allowPricierFallback: boolean;
   };
   limits: {
     maxFileMb: number;
@@ -106,9 +136,10 @@ export interface ImporterSettings {
 
 export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   aiEnabled: false,
+  selection: { mode: "auto" },
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
-  privacy: { dataCollection: "deny", zdr: false },
-  budget: { monthlyInr: 1500, defaultJobCapInr: 200, maxJobInr: 200, totalInr: null, maxRequestInr: 10, keyReserveUsd: 5, retryTransient: false },
+  privacy: { dataCollection: "deny", zdr: true },
+  budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: PILOT_LIMITS.maxJobInr, maxJobInr: PILOT_LIMITS.maxJobInr, totalInr: PILOT_LIMITS.totalInr, maxRequestInr: PILOT_LIMITS.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
   limits: { maxFileMb: 100, maxPagesPerFile: 300, maxFilesPerJob: 10, renderDpi: 150, concurrency: 2 },
   verification: { secondReadBelow: 0.8, independentAnswer: false, topicMinConfidence: 0.7, nearDuplicateAt: 0.85 },
   publish: { allowUnverifiedAnswers: false, requireTopic: true },
@@ -121,12 +152,12 @@ export const SETTINGS_BOUNDS = {
   maxFilesPerJob: [1, 20],
   renderDpi: [100, 220],
   concurrency: [1, 3],
-  monthlyInr: [0, 1_000_000],
-  defaultJobCapInr: [0, 100_000],
-  maxJobInr: [0, 100_000],
-  totalInr: [0, 10_000_000],
-  maxRequestInr: [0.01, 1_000],
-  keyReserveUsd: [0, 10_000],
+  monthlyInr: [0, PILOT_LIMITS.monthlyInr],
+  defaultJobCapInr: [0, PILOT_LIMITS.maxJobInr],
+  maxJobInr: [0, PILOT_LIMITS.maxJobInr],
+  totalInr: [0, PILOT_LIMITS.totalInr],
+  maxRequestInr: [0.01, PILOT_LIMITS.maxRequestInr],
+  keyReserveUsd: [PILOT_LIMITS.minKeyReserveUsd, 10_000],
   originalDays: [1, 3650],
   intermediateDays: [1, 365],
 } as const;
@@ -149,6 +180,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
   const maxJobInr = clamp(r.budget?.maxJobInr ?? r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.maxJobInr, d.budget.maxJobInr);
   return {
     aiEnabled: r.aiEnabled === true,
+    selection: { mode: r.selection?.mode === "manual" ? "manual" : "auto" },
     models: {
       extract,
       extractFallbacks: Array.isArray(m.extractFallbacks) ? [...new Set(m.extractFallbacks.map(model).filter((x): x is string => !!x && x !== extract))].slice(0, 3) : [],
@@ -158,17 +190,20 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
     },
     privacy: {
       dataCollection: r.privacy?.dataCollection === "allow" ? "allow" : "deny",
-      zdr: r.privacy?.zdr === true,
+      // ZDR is on unless an administrator explicitly switched it off.
+      zdr: r.privacy?.zdr !== false,
     },
     budget: {
       monthlyInr: clamp(r.budget?.monthlyInr, SETTINGS_BOUNDS.monthlyInr, d.budget.monthlyInr),
       // The default offered on New Import can never be above the hard per-job ceiling.
       defaultJobCapInr: Math.min(maxJobInr, clamp(r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.defaultJobCapInr, d.budget.defaultJobCapInr)),
       maxJobInr,
-      totalInr: r.budget?.totalInr === null || r.budget?.totalInr === undefined || (r.budget.totalInr as unknown) === "" ? null : clamp(r.budget.totalInr, SETTINGS_BOUNDS.totalInr, 0),
+      // Never "no cap": an absent or empty value means the pilot ceiling.
+      totalInr: clamp(r.budget?.totalInr, SETTINGS_BOUNDS.totalInr, PILOT_LIMITS.totalInr),
       maxRequestInr: clamp(r.budget?.maxRequestInr, SETTINGS_BOUNDS.maxRequestInr, d.budget.maxRequestInr),
       keyReserveUsd: clamp(r.budget?.keyReserveUsd, SETTINGS_BOUNDS.keyReserveUsd, d.budget.keyReserveUsd),
       retryTransient: r.budget?.retryTransient === true,
+      allowPricierFallback: r.budget?.allowPricierFallback === true,
     },
     limits: {
       maxFileMb: Math.round(clamp(r.limits?.maxFileMb, SETTINGS_BOUNDS.maxFileMb, d.limits.maxFileMb)),

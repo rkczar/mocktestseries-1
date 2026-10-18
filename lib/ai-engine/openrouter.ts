@@ -10,6 +10,9 @@ import "server-only";
  *                                    a failed generation is not billed.
  *   GET  /api/v1/models            — catalog; prices are strings, USD per token.
  *   GET  /api/v1/images/models[/{id}/endpoints] — image models + per-endpoint price lines.
+ *   GET  /api/v1/models/{id}/endpoints — per-provider routes of a model, each with its own
+ *                                    price, status and supported parameters.
+ *   GET  /api/v1/endpoints/zdr     — every Zero-Data-Retention route (seen 2026-10-18).
  *   GET  /api/v1/key               — key limit / usage (USD).
  *   GET  /api/v1/generation?id=    — `data.total_cost` (USD) for reconciliation.
  *
@@ -303,6 +306,32 @@ export async function imageModelEndpoints(apiKey: string | null, id: string): Pr
   const safe = id.split("/").map(encodeURIComponent).join("/");
   const { data } = await request<{ endpoints?: { provider_name?: string; pricing?: ImagePriceLine[] }[] }>(apiKey, `/images/models/${safe}/endpoints`, { timeoutMs: 20_000 });
   return (data.endpoints ?? []).map((e) => ({ provider: e.provider_name ?? "?", pricing: Array.isArray(e.pricing) ? e.pricing.filter((l) => typeof l?.cost_usd === "number") : [] }));
+}
+
+/** One provider route of a text model (GET /models/{id}/endpoints, GET /endpoints/zdr). Prices are USD strings per token. */
+export interface RawEndpoint {
+  model_id?: string;
+  provider_name?: string;
+  tag?: string;
+  status?: number;
+  context_length?: number | null;
+  max_completion_tokens?: number | null;
+  max_prompt_tokens?: number | null;
+  supported_parameters?: string[];
+  pricing?: Record<string, unknown>;
+}
+
+/** Every provider route of one text model, with its own price (public endpoint; the key is sent when present). */
+export async function modelEndpoints(apiKey: string | null, id: string): Promise<RawEndpoint[]> {
+  const safe = id.split("/").map(encodeURIComponent).join("/");
+  const { data } = await request<{ data?: { endpoints?: RawEndpoint[] } }>(apiKey, `/models/${safe}/endpoints`, { timeoutMs: 20_000 });
+  return Array.isArray(data.data?.endpoints) ? data.data!.endpoints! : [];
+}
+
+/** Every Zero-Data-Retention route OpenRouter currently offers (public endpoint). */
+export async function zdrEndpoints(apiKey: string | null): Promise<RawEndpoint[]> {
+  const { data } = await request<{ data?: RawEndpoint[] }>(apiKey, "/endpoints/zdr", { timeoutMs: 30_000 });
+  return Array.isArray(data.data) ? data.data : [];
 }
 
 export async function getKeyInfo(apiKey: string): Promise<{

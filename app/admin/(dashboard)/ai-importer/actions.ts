@@ -5,7 +5,7 @@ import { AiImportPaperType } from "@prisma/client";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { ImportJobError, cancelJob, confirmJob, createJob, discardUpload, pauseJob, removeFile, requestAnalysis, resumeJob, type RemovedFile } from "@/lib/ai-import/jobs";
+import { ImportJobError, cancelJob, confirmJob, createJob, discardUpload, pauseJob, removeFile, requestAnalysis, resetJob, resumeJob, type RemovedFile, type ResetCheck } from "@/lib/ai-import/jobs";
 import {
   allowDuplicate,
   approveQuestions,
@@ -24,6 +24,7 @@ import {
 import { saveImporterSettings } from "@/lib/ai-import/settings";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { importerModelCatalog, importerSettingsProblems } from "@/lib/ai-import/models";
+import { refreshRoutes } from "@/lib/ai-import/routes";
 import type { ImporterCatalog } from "@/lib/ai-import/model-options";
 import { CLEANUP_CATEGORIES, executeCleanup, findCandidates, findDuplicates, scanStorage, type CleanupCategory, type CleanupItem, type CleanupResult, type StorageReport } from "@/lib/ai-import/storage";
 import type { ImportMode } from "@/lib/ai-import/adapter";
@@ -157,6 +158,15 @@ export async function removeFileAction(jobId: string, fileId: string): Promise<I
   });
 }
 
+/** Returns a processed job that produced nothing to Uploading (every server-side check must pass; typed confirmation). */
+export async function resetJobAction(jobId: string, confirmation: string): Promise<ImporterResult<{ checks: ResetCheck[] }>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof jobId !== "string" || !jobId) throw new ImportJobError("Select an import.");
+    if (confirmation !== "RESET") throw new ImportJobError("Type RESET to confirm.");
+    return resetJob({ jobId, actorId });
+  });
+}
+
 async function jobOf(questionIds: string[]): Promise<string | null> {
   const q = questionIds.length ? await prisma.aiImportQuestion.findUnique({ where: { id: questionIds[0] }, select: { jobId: true } }) : null;
   return q?.jobId ?? null;
@@ -264,9 +274,24 @@ export async function saveSettingsAction(next: ImporterSettings): Promise<Import
   });
 }
 
-/** Re-reads the model catalog, provider status and prices for Import Settings (read-only; no OpenRouter call). */
-export async function importerModelsAction(): Promise<ImporterResult<ImporterCatalog>> {
-  return run(await requireView(), async () => importerModelCatalog(), []);
+/**
+ * Re-reads the model catalog, provider status, prices and the automatic choice for Import Settings
+ * (read-only; no OpenRouter call). `draft` = the unsaved form values the choice is shown for.
+ */
+export async function importerModelsAction(draft?: ImporterSettings): Promise<ImporterResult<ImporterCatalog>> {
+  return run(await requireView(), async () => importerModelCatalog(draft ? normalizeImporterSettings(draft) : undefined), []);
+}
+
+/** Reads every candidate model's provider routes and the ZDR route list from OpenRouter (free, public endpoints; no AI request). */
+export async function refreshRoutesAction(draft?: ImporterSettings): Promise<ImporterResult<ImporterCatalog>> {
+  return run(
+    await requireManage(),
+    async () => {
+      await refreshRoutes();
+      return importerModelCatalog(draft ? normalizeImporterSettings(draft) : undefined);
+    },
+    []
+  );
 }
 
 export async function scanStorageAction(): Promise<ImporterResult<StorageReport>> {

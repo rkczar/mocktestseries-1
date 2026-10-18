@@ -61,6 +61,14 @@ async function waitStatus(page, re, timeout = 120000) {
     await page.reload();
   }
 }
+async function until(fn, timeout = 15000) {
+  const end = Date.now() + timeout;
+  for (;;) {
+    const v = await fn().catch(() => false);
+    if (v || Date.now() > end) return v;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 async function imagesOk(page, scope) {
   return page.locator(`${scope} img`).evaluateAll((imgs) => imgs.map((im) => ({ ok: im.complete && im.naturalWidth > 0, src: im.getAttribute("src")?.slice(0, 60) })));
@@ -78,25 +86,20 @@ for (const s of SECTIONS) {
   const ok = r.status() === 200 && (await admin.locator("[data-testid=ai-importer-subnav]").count()) === 1 && (await admin.locator("text=Application error").count()) === 0;
   check(`page ${s || "/"} renders`, ok, r.status());
 }
+// What an administrator approved in AI → Models; models are then chosen AUTOMATICALLY (none picked per import).
+await db.query(`delete from "Setting" where key in ('ai.importer', 'ai.importer.routes')`);
+await db.query(`update "AiModel" set approved = (id = any($1)) where id like 'mock%'`, [["mockvision/reader", "mockvision/checker", "mockvision/mid", "mockvision/cheapnozdr", "mockvision/pricey", "mocktext/classifier"]]);
 await admin.goto(`${BASE}/admin/ai-importer/settings`);
 await admin.locator("[data-testid=ai-enabled]").check();
-// Searchable model pickers: type, then choose the option.
-const pickModel = async (slot, id) => {
-  await admin.locator(`[data-testid=m-${slot}-search]`).fill(id);
-  await admin.locator(`[data-testid=m-${slot}-list] [data-model-id="${id}"]`).click();
-};
-await pickModel("extract", "mockvision/reader");
-await pickModel("verify", "mockvision/checker");
-await pickModel("classify", "mocktext/classifier");
-await admin.locator("[data-testid=m-extract-search]").fill("classifier");
-check("vision pickers list only image-capable models", (await admin.locator("[data-testid=m-extract-list] [data-model-id='mocktext/classifier']").count()) === 0);
-await admin.locator("[data-testid=m-extract-search]").fill("");
-await admin.keyboard.press("Escape");
+check("automatic model selection is the default", await admin.locator("[data-testid=sel-auto]").isChecked());
+await admin.locator("[data-testid=routes-refresh]").click();
+await until(async () => (await admin.locator("[data-testid=sel-extract]").getAttribute("data-model")) === "mockvision/reader");
+check("automatic choice shown: page reading mockvision/reader (cheapest with a ZDR route), verification a different model", (await admin.locator("[data-testid=sel-extract]").getAttribute("data-model")) === "mockvision/reader" && (await admin.locator("[data-testid=sel-verify]").getAttribute("data-model")) === "mockvision/mid");
 await admin.locator("[data-testid=settings-save]").click();
 await admin.locator("[data-testid=settings-msg]").waitFor();
 check("settings saved", /saved/i.test(await admin.locator("[data-testid=settings-msg]").textContent()));
 const saved = (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0]?.value;
-check("settings persisted (AI on, models, privacy deny)", saved?.aiEnabled === true && saved?.models?.extract === "mockvision/reader" && saved?.privacy?.dataCollection === "deny", saved);
+check("settings persisted (AI on, automatic selection, no manual models, ZDR + no data collection)", saved?.aiEnabled === true && saved?.selection?.mode === "auto" && saved?.models?.extract === null && saved?.privacy?.dataCollection === "deny" && saved?.privacy?.zdr === true, saved);
 
 // ------------------------------------------------------------------ new import → upload → analyze → confirm
 section("B. New import, upload, analysis, confirmation, processing");
@@ -105,7 +108,7 @@ await admin.fill("[data-testid=ai-title]", `AIUI digital ${F.suffix}`);
 await admin.selectOption("[data-testid=ai-exam]", F.examId);
 await admin.selectOption("[data-testid=ai-pyq]", F.paperId);
 await admin.fill("[data-testid=ai-year]", "2024");
-await admin.fill("[data-testid=ai-budget]", "20");
+await admin.fill("[data-testid=ai-budget]", "8");
 await Promise.all([admin.waitForURL(/\/admin\/ai-importer\/jobs\/[a-z0-9]+$/, { timeout: 30000 }), admin.click("[data-testid=create-import]")]);
 const jobId = admin.url().split("/").pop();
 check("job created", !!jobId);
@@ -133,11 +136,12 @@ await waitStatus(admin, /Awaiting confirmation/);
 await admin.locator("[data-testid=analysis-report]").waitFor();
 const reportText = await admin.locator("[data-testid=analysis-report]").textContent();
 check("analysis report separates Detected and Estimated values", /Detected · pages/.test(reportText) && /Estimated · questions/.test(reportText));
-check("estimate table with model, price and total", (await admin.locator("[data-testid=estimate-total]").count()) === 1 && /mockvision\/reader|mocktext\/classifier/.test(await admin.locator("[data-testid=estimate]").textContent()));
-await admin.fill("[data-testid=confirm-budget]", "20");
+check("estimate table with the automatically chosen model, price, total and conservative maximum", (await admin.locator("[data-testid=estimate-total]").count()) === 1 && /mockvision\/reader/.test(await admin.locator("[data-testid=estimate]").textContent()) && /₹[\d.]+/.test((await admin.locator("[data-testid=estimate-max]").textContent()) ?? "") && /Models: automatic/.test(await admin.locator("[data-testid=estimate]").textContent()));
+await admin.fill("[data-testid=confirm-budget]", "8");
 await admin.click("[data-testid=confirm-start]");
 const st1 = await waitStatus(admin, /Ready to import/, 180000);
 check("processing finished → Ready to import", /Ready to import/.test(st1), st1);
+check("job page shows the models chosen at confirmation, with the reason", (await admin.locator("[data-testid=plan-extract]").getAttribute("data-model")) === "mockvision/reader" && /Cheapest suitable/.test((await admin.locator("[data-testid=plan-extract]").textContent()) ?? ""));
 const blockedNote = (await admin.locator("[data-testid=files-remove-blocked]").textContent().catch(() => "")) ?? "";
 check("after processing, Remove is disabled with the reason shown", /Processing has started/.test(blockedNote) && (await admin.locator("[data-testid=file-remove]:not([disabled])").count()) === 0 && (await admin.locator("[data-testid=file-remove]").count()) > 0, blockedNote);
 const summaryText = await admin.locator("[data-testid=batch-summary]").textContent();
@@ -180,7 +184,9 @@ const runLink = admin.locator("a", { hasText: "Bulk Import run" }).first();
 check("job links to its Bulk Import run in Import History", (await runLink.count()) === 1);
 const runHref = await runLink.getAttribute("href");
 const runPage = await admin.goto(`${BASE}${runHref}`);
-check("existing Bulk Import history page opens for the run", runPage.status() === 200 && (await admin.locator("text=Application error").count()) === 0 && (await admin.locator(`text=AI Importer — AIUI digital ${F.suffix}`).count()) > 0);
+// The run page streams in: wait for its label instead of counting immediately.
+const runLabel = await admin.locator(`text=AI Importer — AIUI digital ${F.suffix}`).first().waitFor({ timeout: 20000 }).then(() => true, () => false);
+check("existing Bulk Import history page opens for the run", runPage.status() === 200 && (await admin.locator("text=Application error").count()) === 0 && runLabel);
 const q8 = pub.find((r) => r.sourceLabel === "8");
 await admin.goto(`${BASE}/admin/questions/preview/${q8.questionId}`);
 check("saved question shows 'Answer unverified'", (await admin.locator("text=Answer unverified").count()) > 0);

@@ -10,11 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ANSWER_STATUS_LABELS, CHUNK_BYTES, JOB_STATUS_LABELS, fileRemovalBlockedReason, formatBytes, statusVariant } from "@/lib/ai-import/config";
+import { ANSWER_STATUS_LABELS, CHUNK_BYTES, JOB_STATUS_LABELS, SELECTION_TASKS, SELECTION_TASK_LABELS, fileRemovalBlockedReason, formatBytes, statusVariant } from "@/lib/ai-import/config";
+import type { ModelPlan } from "@/lib/ai-import/selection-types";
+import type { ResetCheck } from "@/lib/ai-import/jobs";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { JobSummary } from "@/lib/ai-import/summary";
 import { JobContextFields, type ExamOption } from "../../new-import-form";
-import { analyzeJobAction, cancelJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resumeJobAction } from "../../actions";
+import { analyzeJobAction, cancelJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resetJobAction, resumeJobAction } from "../../actions";
 
 export interface JobView {
   id: string;
@@ -45,6 +47,11 @@ export interface JobView {
   runIds: string[];
   aiEnabled: boolean;
   allowUnverified: boolean;
+  /** The model plan frozen when the job was confirmed (null: not confirmed, or confirmed before automatic selection). */
+  plan: ModelPlan | null;
+  /** Safe reset to editable: every server-side check (null when the status can never be reset). */
+  reset: { allowed: boolean; checks: ResetCheck[] } | null;
+  canManage: boolean;
 }
 
 const BUSY = ["ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"];
@@ -212,6 +219,94 @@ function RemoveFileDialog({ jobId, file, analyzed, onClose, onRemoved }: { jobId
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** The models a confirmed job uses (frozen at confirmation), with the reason for each. */
+function PlanCard({ plan }: { plan: ModelPlan }) {
+  return (
+    <Card data-testid="plan-card">
+      <CardHeader>
+        <CardTitle>Models for this job</CardTitle>
+        <CardDescription>
+          {plan.mode === "auto" ? "Chosen automatically" : "Manual override"} at confirmation ({plan.computedAt.slice(0, 16).replace("T", " ")} UTC) from OpenRouter prices and routes read {plan.routesFetchedAt ? plan.routesFetchedAt.slice(0, 16).replace("T", " ") : "—"} UTC; fixed for this job. {plan.privacy.zdr ? "Zero-Data-Retention routes only." : "ZDR not required."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="flex flex-col gap-2 text-sm">
+          {SELECTION_TASKS.map((t) => {
+            const c = plan.tasks[t];
+            return (
+              <li key={t} data-testid={`plan-${t}`} data-model={c.model ?? ""}>
+                <span className="font-medium">{SELECTION_TASK_LABELS[t]}:</span> {c.model ? <code className="text-xs">{c.model}</code> : <span className="italic text-[var(--color-muted-foreground)]">none</span>}
+                {c.model && <span className="text-xs text-[var(--color-muted-foreground)]"> · up to {inr(c.maxInr)} per request</span>}
+                <span className="block text-xs text-[var(--color-muted-foreground)]">{c.reason}</span>
+                {c.replaced && <span className="block text-xs text-[var(--color-warning)]" data-testid={`plan-${t}-replaced`}>Replaced {c.replaced.from} at {c.replaced.at.slice(0, 16).replace("T", " ")} UTC: {c.replaced.why}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Safe reset of a processed job that produced nothing: every check is shown; the button appears only when all pass. */
+function ResetCard({ jobId, reset, canManage, onDone }: { jobId: string; reset: { allowed: boolean; checks: ResetCheck[] }; canManage: boolean; onDone: (message: string) => void }) {
+  const [typed, setTyped] = useState("");
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Card data-testid="reset-card" data-allowed={reset.allowed ? "true" : "false"}>
+      <CardHeader>
+        <CardTitle>Reset to editable</CardTitle>
+        <CardDescription>
+          A processed import that produced nothing — zero questions, ₹0 AI spend, nothing imported — can return to Uploading so its files can be removed or replaced and analyzed again. The server re-checks every condition inside one locked transaction; the reset is audited.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-sm">
+        <ul className="flex flex-col gap-1" data-testid="reset-checks">
+          {reset.checks.map((c) => (
+            <li key={c.label} className="flex items-start gap-2" data-testid="reset-check" data-ok={c.ok ? "true" : "false"}>
+              <Badge variant={c.ok ? "success" : "error"}>{c.ok ? "OK" : "No"}</Badge>
+              <span>
+                <span className="font-medium">{c.label}</span> <span className="text-xs text-[var(--color-muted-foreground)]">— {c.detail}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        {!reset.allowed && (
+          <p className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-xs text-[var(--color-muted-foreground)]" data-testid="reset-refused">
+            This import cannot be reset, and it is kept unchanged as a record. To use different files: create a <Link className="underline" href="/admin/ai-importer">New Import</Link> with the same exam context, upload the correct question paper (and answer key), analyze it, check the models and maximum cost, then confirm. Cancel this import only if you no longer need it as a record.
+          </p>
+        )}
+        {reset.allowed && canManage && (
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="reset-confirm">Type RESET to confirm</Label>
+              <Input id="reset-confirm" className="w-32" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" data-testid="reset-confirm" />
+            </div>
+            <Button
+              variant="outline"
+              disabled={pending || typed !== "RESET"}
+              onClick={() =>
+                start(async () => {
+                  setError(null);
+                  const r = await resetJobAction(jobId, typed);
+                  if (!r.ok) setError(r.error);
+                  else onDone("The import is editable again: remove or replace files, then analyze them again before confirming.");
+                })
+              }
+              data-testid="reset-submit"
+            >
+              {pending ? "Resetting…" : "Reset to editable"}
+            </Button>
+          </div>
+        )}
+        {reset.allowed && !canManage && <p className="text-xs text-[var(--color-muted-foreground)]">Only a Master Admin can reset an import.</p>}
+        {error && <p className="text-sm text-[var(--color-error)]" role="alert" data-testid="reset-error">{error}</p>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -397,7 +492,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             <p className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-foreground)_4%,transparent)] p-3 text-sm text-[var(--color-foreground)]" role="note" data-testid="files-remove-blocked">
               <LockIcon />
               <span>
-                <strong>File removal is unavailable.</strong> {removalBlocked}
+                <strong>File removal is unavailable.</strong> {job.reset?.allowed ? "Processing has started. This import produced nothing, so it can be reset to editable below; then the files can be removed or replaced." : removalBlocked}
               </span>
             </p>
           )}
@@ -415,7 +510,8 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
               }}
             />
           )}
-          {canUse && job.status !== "CANCELLED" && !["PROCESSING", "IMPORTING", "ANALYZING"].includes(job.status) && <Uploader jobId={job.id} files={job.files} canAddPapers={editable} />}
+          {/* Keyed by editability: after a reset the file-type choice starts at "question paper" again. */}
+          {canUse && job.status !== "CANCELLED" && !["PROCESSING", "IMPORTING", "ANALYZING"].includes(job.status) && <Uploader key={editable ? "editable" : "keys-only"} jobId={job.id} files={job.files} canAddPapers={editable} />}
           {canUse && editable && (
             <div>
               <Button onClick={() => act(() => analyzeJobAction(job.id), "Analysis started — this takes a few seconds per file.")} disabled={pending || !job.files.some((f) => f.role === "PAPER" && f.status !== "REJECTED" && f.status !== "UPLOADING")} data-testid="analyze">
@@ -477,6 +573,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                     <th className="py-1 pr-2 font-medium">Tokens in / out</th>
                     <th className="py-1 pr-2 font-medium">Price ($/M in · out)</th>
                     <th className="py-1 pr-2 font-medium">Estimate</th>
+                    <th className="py-1 pr-2 font-medium">Maximum</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -490,15 +587,16 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                       </td>
                       <td className="py-1 pr-2">{l.pricePerM ? `${l.pricePerM.prompt.toFixed(3)} · ${l.pricePerM.completion.toFixed(3)}` : l.calls ? <span className="text-[var(--color-warning)]">{l.problem}</span> : "—"}</td>
                       <td className="py-1 pr-2">{l.calls ? inr(l.inr) : "—"}</td>
+                      <td className="py-1 pr-2">{l.maxCalls ? (l.maxInr === undefined ? "—" : `${inr(l.maxInr)} (${l.maxCalls} call${l.maxCalls === 1 ? "" : "s"})`) : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <p>
-                Estimated total: <strong data-testid="estimate-total">{inr(a.estimate.totalInr)}</strong> (includes a {a.estimate.reservePct}% reserve for retries) · per AI page {inr(a.estimate.perPageInr)} · per question {inr(a.estimate.perQuestionInr)} · {a.estimate.pagesNeedingAi} page(s) need AI · about {a.estimate.estimatedMinutes} min.
+                Estimated total: <strong data-testid="estimate-total">{inr(a.estimate.totalInr)}</strong> (includes a {a.estimate.reservePct}% reserve) · conservative maximum <strong data-testid="estimate-max">{inr(a.estimate.maxInr)}</strong> (every request at its reserved worst case) · per AI page {inr(a.estimate.perPageInr)} · per question {inr(a.estimate.perQuestionInr)} · {a.estimate.pagesNeedingAi} page(s) need AI · about {a.estimate.estimatedMinutes} min.
               </p>
               <p className="text-xs text-[var(--color-muted-foreground)]">
-                Prices synced {a.estimate.pricesSyncedAt ? a.estimate.pricesSyncedAt.slice(0, 10) : "—"} · USD→INR {a.estimate.fxRate ?? "—"} ({a.estimate.fxDate ?? "—"}) · computed {a.estimate.computedAt.slice(0, 16).replace("T", " ")} UTC
+                {a.estimate.plan ? `Models: ${a.estimate.plan.mode === "auto" ? "automatic" : "manual override"} — ${SELECTION_TASKS.map((t) => `${SELECTION_TASK_LABELS[t].toLowerCase()} ${a.estimate.plan!.tasks[t].model ?? "none"}`).join(", ")} (chosen again with fresh prices when you confirm) · ` : ""}Provider routes read {a.estimate.pricesSyncedAt ? a.estimate.pricesSyncedAt.slice(0, 16).replace("T", " ") : "—"} · USD→INR {a.estimate.fxRate ?? "—"} ({a.estimate.fxDate ?? "—"}) · computed {a.estimate.computedAt.slice(0, 16).replace("T", " ")} UTC
               </p>
               {a.estimate.notes.map((n, i) => (
                 <p key={i} className="text-xs text-[var(--color-warning)]">
@@ -524,6 +622,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
               <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="confirm-budget-limit">Hard limit per job: ₹{job.maxJobInr} (Import Settings).</p>
               {Number(budget) > job.maxJobInr && <p className="text-xs text-[var(--color-error)]">Above the hard limit per job — confirming will be refused.</p>}
               {a?.estimate.totalInr !== null && a?.estimate.totalInr !== undefined && Number(budget) < a.estimate.totalInr && <p className="text-xs text-[var(--color-warning)]">The budget is below the estimate, so confirming will be refused while paid AI is on. Reduce the files or raise the budget deliberately.</p>}
+              {job.aiEnabled && typeof a?.estimate.maxInr === "number" && Number(budget) < a.estimate.maxInr && <p className="text-xs text-[var(--color-warning)]" data-testid="confirm-below-max">The budget is below the conservative maximum ({inr(a.estimate.maxInr)}), so confirming will be refused. Process fewer pages or raise the budget within the hard limit.</p>}
             </div>
             <div className="flex gap-2">
               <Button disabled={pending} onClick={() => act(() => confirmJobAction(job.id, { title: job.title, ...ctx, year: ctx.year || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, paperCode: ctx.paperCode || null, budgetInr: Number(budget) }), "Processing queued.")} data-testid="confirm-start">
@@ -532,6 +631,21 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {job.plan && job.status !== "DRAFT" && job.status !== "AWAITING_CONFIRMATION" && <PlanCard plan={job.plan} />}
+
+      {job.reset && canUse && (
+        <ResetCard
+          jobId={job.id}
+          reset={job.reset}
+          canManage={job.canManage}
+          onDone={(m) => {
+            setError(null);
+            setNotice(m);
+            router.refresh();
+          }}
+        />
       )}
 
       {job.status !== "DRAFT" && job.status !== "AWAITING_CONFIRMATION" && job.status !== "ANALYZING" && (

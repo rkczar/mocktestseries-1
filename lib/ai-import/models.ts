@@ -5,27 +5,25 @@ import { getEngineConfig, getOpenRouterConfig } from "@/lib/ai-engine/settings";
 import { peekUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
 import { IMAGE_TOKENS, PRICE_MARGIN, estimateInputTokens, inputImagePriceUsd, modelProblem, notPricier, worstCaseUsd } from "@/lib/ai-import/ai";
-import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, KEY_SYSTEM, SOLVE_SYSTEM } from "@/lib/ai-import/prompts";
-import type { ImporterSettings } from "@/lib/ai-import/config";
+import { SOLVE_SYSTEM } from "@/lib/ai-import/prompts";
+import { PILOT_LIMITS, type ImporterSettings } from "@/lib/ai-import/config";
+import { getImporterSettings } from "@/lib/ai-import/settings";
+import { PROFILES as SELECT_PROFILES, computeModelPlan } from "@/lib/ai-import/select";
+import { getRouteSnapshot, routeStatus } from "@/lib/ai-import/routes";
 import type { ImporterCatalog, ImporterModelOption, RequestCost } from "@/lib/ai-import/model-options";
 
 /**
- * Model choices for Import Settings, read from the synced OpenRouter catalog
- * (Admin → AI → Models; prices are OpenRouter's published USD prices). Only an
- * APPROVED model without a problem can be selected; the rest of the catalog is
- * listed for search with the reason it cannot be used. Request costs use the
+ * Import Settings data: the automatic model choice per task (lib/ai-import/select.ts)
+ * and, for the manual override, the synced OpenRouter catalog (Admin → AI →
+ * Models; prices are OpenRouter's published USD prices). Only an APPROVED model
+ * without a problem can be selected; the rest of the catalog is listed for
+ * search with the reason it cannot be used. Request costs use the
  * same worst-case formula as the runtime guard (lib/ai-import/ai.ts), so the
  * page never shows a maximum the server would not enforce.
  */
 
-/** The largest request of each task, as the worker sends it (output limits from process.ts / keys.ts / post.ts). */
-const PROFILES = {
-  extract: { system: EXTRACT_SYSTEM, textChars: 12_600, images: 1, maxOut: 8_000 },
-  verify: { system: EXTRACT_SYSTEM, textChars: 12_600, images: 1, maxOut: 8_000 },
-  solve: { system: SOLVE_SYSTEM, textChars: 1_500, images: 0, maxOut: 600 },
-  classify: { system: CLASSIFY_SYSTEM, textChars: 30_000, images: 0, maxOut: 2_500 },
-  key: { system: KEY_SYSTEM, textChars: 100, images: 1, maxOut: 4_000 },
-} as const;
+/** Cost columns of the model list: the selection profiles plus the small text-only answer opinion. */
+const PROFILES = { ...SELECT_PROFILES, solve: { system: SOLVE_SYSTEM, textChars: 1_500, images: 0, maxOut: 600 } } as const;
 type Profile = keyof typeof PROFILES;
 
 function requestCost(m: AiModel, profile: Profile, fxRate: number | null): RequestCost {
@@ -66,13 +64,17 @@ function toOption(m: AiModel, fxRate: number | null): ImporterModelOption {
   };
 }
 
-export async function importerModelCatalog(): Promise<ImporterCatalog> {
-  const [openrouter, engine, fx, rows] = await Promise.all([
+export async function importerModelCatalog(forSettings?: ImporterSettings): Promise<ImporterCatalog> {
+  const settings = forSettings ?? (await getImporterSettings());
+  const [openrouter, engine, fx, rows, plan, snapshot] = await Promise.all([
     getOpenRouterConfig(),
     getEngineConfig(),
     peekUsdInr(), // read-only: never fetches or stores a rate
     // Text-returning models only (image generators are never importer models).
     prisma.aiModel.findMany({ where: { outputModalities: { has: "text" }, isImageModel: false }, orderBy: [{ approved: "desc" }, { promptPrice: "asc" }, { id: "asc" }] }),
+    // The automatic choice for these settings, from the stored route snapshot (no OpenRouter call here).
+    computeModelPlan(settings, { refresh: false }),
+    getRouteSnapshot(),
   ]);
   const options = rows.map((m) => toOption(m, fx.rate));
   const lastSync = rows.reduce<Date | null>((a, m) => (!a || m.lastSyncedAt > a ? m.lastSyncedAt : a), null);
@@ -101,6 +103,9 @@ export async function importerModelCatalog(): Promise<ImporterCatalog> {
     imageTokens: IMAGE_TOKENS,
     priceMargin: PRICE_MARGIN,
     options,
+    plan,
+    routes: routeStatus(snapshot),
+    pilot: { ...PILOT_LIMITS },
   };
 }
 
@@ -118,6 +123,15 @@ const SLOTS: { key: "extract" | "verify" | "classify" | "key"; label: string; vi
  */
 export async function importerSettingsProblems(raw: unknown, next: ImporterSettings): Promise<string[]> {
   const problems: string[] = [];
+  const budgetProblems = () => {
+    if (next.budget.maxRequestInr > next.budget.maxJobInr) problems.push(`The maximum per AI request (₹${next.budget.maxRequestInr}) cannot be above the hard limit per job (₹${next.budget.maxJobInr}).`);
+    if (next.budget.maxJobInr > next.budget.totalInr) problems.push(`The hard limit per job (₹${next.budget.maxJobInr}) cannot be above the all-time importer budget (₹${next.budget.totalInr}).`);
+  };
+  // Automatic selection: manual model fields are kept for a later override but not used, so not checked.
+  if (next.selection.mode === "auto") {
+    budgetProblems();
+    return problems;
+  }
   const sent = ((raw ?? {}) as { models?: Record<string, unknown> }).models ?? {};
   const ids = [...SLOTS.map((s) => next.models[s.key]), ...next.models.extractFallbacks].filter((x): x is string => !!x);
   const rows = new Map((await prisma.aiModel.findMany({ where: { id: { in: ids } } })).map((r) => [r.id, r]));
@@ -144,7 +158,6 @@ export async function importerSettingsProblems(raw: unknown, next: ImporterSetti
       problems.push(`Fallback extraction model: ${id} costs more than the extraction model, so it would never be used. Choose a model priced at or below the extraction model, or none.`);
     }
   }
-  if (next.budget.maxRequestInr > next.budget.maxJobInr) problems.push(`The maximum per AI request (₹${next.budget.maxRequestInr}) cannot be above the hard limit per job (₹${next.budget.maxJobInr}).`);
-  if (next.budget.totalInr !== null && next.budget.maxJobInr > next.budget.totalInr) problems.push(`The hard limit per job (₹${next.budget.maxJobInr}) cannot be above the all-time importer budget (₹${next.budget.totalInr}).`);
+  budgetProblems();
   return problems;
 }

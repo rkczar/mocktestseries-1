@@ -5,6 +5,7 @@ import { logEvent, ImportJobError } from "@/lib/ai-import/jobs";
 import { kickWorker } from "@/lib/ai-import/kick";
 import { effective, runPostProcessing } from "@/lib/ai-import/post";
 import { getImporterSettings } from "@/lib/ai-import/settings";
+import { planOf } from "@/lib/ai-import/select";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import type { ImportMode, ImportPlan } from "@/lib/ai-import/adapter";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
@@ -157,7 +158,7 @@ export async function reprocessQuestions(ids: string[], actorId: string) {
   const job = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
   if (BUSY.includes(job.status) || job.status === AiImportJobStatus.CANCELLED) throw new ImportJobError("The import is busy or cancelled.");
   const settings = await getImporterSettings();
-  if (!settings.aiEnabled || !settings.models.extract) throw new ImportJobError("Reprocessing reads the page again with AI, which is switched off or has no model (Import Settings).");
+  if (!settings.aiEnabled || !planOf(job.config)?.tasks.extract.model) throw new ImportJobError("Reprocessing reads the page again with AI, which is switched off or has no page-reading model in this job's confirmed model plan.");
   let pages = 0;
   for (const q of qs) {
     if (LOCKED.includes(q.status)) continue;

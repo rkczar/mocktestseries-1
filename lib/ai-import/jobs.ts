@@ -4,13 +4,15 @@ import { mkdir, open, readdir, rename, stat, unlink, writeFile } from "node:fs/p
 import path from "node:path";
 import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPaperType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { CHUNK_BYTES, fileRemovalBlockedReason } from "@/lib/ai-import/config";
+import { CHUNK_BYTES, PILOT_LIMITS, fileRemovalBlockedReason } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { checkFilename, detectFile } from "@/lib/ai-import/detect";
 import { pdfInfo } from "@/lib/ai-import/pdf";
 import { adoptFile, tmpDir, removeVaultDir, vaultPath } from "@/lib/ai-import/vault";
 import { kickWorker } from "@/lib/ai-import/kick";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
+import { computeModelPlan } from "@/lib/ai-import/select";
+import { BUDGET_LOCK_KEY, importerSpend } from "@/lib/ai-import/ai";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 
 export class ImportJobError extends Error {
@@ -235,18 +237,34 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
   if (!Number.isFinite(input.budgetInr) || input.budgetInr < 0) throw new ImportJobError("Enter a valid job budget.");
   const settings = await getImporterSettings();
   assertWithinJobCeiling(input.budgetInr, settings.budget.maxJobInr);
-  // Re-price with the settings that will be frozen on the job: stop before any AI call when
-  // the estimate cannot be priced or exceeds the job budget (the budget is never raised for you).
+  // Choose the models now, from fresh OpenRouter prices and privacy routes, and re-price with them.
+  // The plan is frozen on the job: the worker never picks a different (or pricier) model by itself.
+  const plan = await computeModelPlan(settings, { refresh: settings.aiEnabled });
   const analysis = job.analysis as unknown as JobAnalysis | null;
   const facts = (role: string) => (analysis?.files ?? []).filter((f) => f.role === role && f.facts).map((f) => f.facts!);
-  const estimate = await estimateJobCost({ paperFacts: facts(AiImportFileRole.PAPER), keyFacts: facts(AiImportFileRole.ANSWER_KEY), settings });
+  const estimate = await estimateJobCost({ paperFacts: facts(AiImportFileRole.PAPER), keyFacts: facts(AiImportFileRole.ANSWER_KEY), settings, plan });
+  if (settings.aiEnabled) {
+    // Pages or answer keys that need AI but have no affordable, suitable model: stop and say why.
+    for (const l of estimate.lines.filter((x) => x.calls > 0 && (x.task === "extract" || x.task === "key") && x.problem)) {
+      throw new ImportJobError(`${l.label}: ${l.problem} Nothing was started.`);
+    }
+  }
   // Lines without a usable model never run (their questions are flagged instead), so only priced lines count.
   const willCallAi = settings.aiEnabled && estimate.lines.some((l) => l.calls > 0 && l.model !== null && l.problem === null);
   if (willCallAi) {
-    if (estimate.totalInr === null) throw new ImportJobError(`The AI cost cannot be estimated (${estimate.notes[0] ?? "missing model price or exchange rate"}). Nothing was started.`);
+    if (estimate.totalInr === null || estimate.maxInr === null) throw new ImportJobError(`The AI cost cannot be established (${estimate.notes[0] ?? "missing model price or exchange rate"}). Nothing was started.`);
     if (estimate.totalInr > input.budgetInr) {
       throw new ImportJobError(`The estimated AI cost (₹${estimate.totalInr.toFixed(2)}) is above the job budget (₹${input.budgetInr.toFixed(2)}). Nothing was started — reduce the sample or raise the budget deliberately.`);
     }
+    // The conservative maximum (every request at its reserved worst case) must fit every limit, not just the estimate.
+    if (estimate.maxInr > input.budgetInr) {
+      throw new ImportJobError(`The conservative maximum AI cost (₹${estimate.maxInr.toFixed(2)}: every request at its reserved worst case) is above the job budget (₹${input.budgetInr.toFixed(2)}). Nothing was started — process fewer pages (for example a 2-page sample) or raise the job budget within the hard limit.`);
+    }
+    const spend = await importerSpend();
+    const totalLeft = Math.min(settings.budget.totalInr, PILOT_LIMITS.totalInr) - spend.allUsed;
+    const monthLeft = Math.min(settings.budget.monthlyInr, PILOT_LIMITS.monthlyInr) - spend.monthUsed;
+    if (estimate.maxInr > totalLeft) throw new ImportJobError(`The conservative maximum AI cost (₹${estimate.maxInr.toFixed(2)}) is above what is left of the importer's all-time budget (₹${Math.max(0, totalLeft).toFixed(2)} of ₹${Math.min(settings.budget.totalInr, PILOT_LIMITS.totalInr).toFixed(2)}). Nothing was started.`);
+    if (estimate.maxInr > monthLeft) throw new ImportJobError(`The conservative maximum AI cost (₹${estimate.maxInr.toFixed(2)}) is above what is left of this month's importer budget (₹${Math.max(0, monthLeft).toFixed(2)}). Nothing was started.`);
   }
   // Conditional on the job being unchanged since it was read: a file removed meanwhile
   // clears the analysis, and its stale estimate must never be confirmed.
@@ -266,11 +284,12 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
       status: AiImportJobStatus.QUEUED,
       confirmedAt: new Date(),
       confirmedById: input.actorId,
-      config: JSON.parse(JSON.stringify(settings)) as Prisma.InputJsonValue,
+      config: JSON.parse(JSON.stringify({ ...settings, modelPlan: plan })) as Prisma.InputJsonValue,
     },
   });
   if (!confirmed.count) throw new ImportJobError("The files or analysis of this import changed while you were confirming. Nothing was started — review the page and confirm again.", 409);
-  await logEvent(job.id, "CONFIRMED", `Processing confirmed with a job budget of ₹${input.budgetInr.toFixed(2)}`, { paperType: input.paperType, budgetInr: input.budgetInr, aiEnabled: settings.aiEnabled, models: settings.models }, input.actorId);
+  const chosen = Object.values(plan.tasks).map((t) => `${t.task}: ${t.model ?? "none"}`).join(", ");
+  await logEvent(job.id, "CONFIRMED", `Processing confirmed with a job budget of ₹${input.budgetInr.toFixed(2)}${settings.aiEnabled ? ` — models (${plan.mode}): ${chosen}; estimate ₹${(estimate.totalInr ?? 0).toFixed(2)}, maximum ₹${(estimate.maxInr ?? 0).toFixed(2)}` : " — paid AI is off"}`, { paperType: input.paperType, budgetInr: input.budgetInr, aiEnabled: settings.aiEnabled, selection: plan.mode, models: Object.fromEntries(Object.values(plan.tasks).map((t) => [t.task, t.model])), maxInr: estimate.maxInr }, input.actorId);
   kickWorker();
 }
 
@@ -407,6 +426,95 @@ export async function removeFile(input: { jobId: string; fileId: string; actorId
     }
   }
   return result;
+}
+
+// ---- Safe reset of a processed job that produced nothing ------------------------------------
+
+/** Statuses a job may be reset from (never while a worker may run it, never a cancelled record). */
+const RESETTABLE: AiImportJobStatus[] = [AiImportJobStatus.NEEDS_REVIEW, AiImportJobStatus.PAUSED, AiImportJobStatus.PAUSED_BUDGET, AiImportJobStatus.FAILED, AiImportJobStatus.COMPLETED, AiImportJobStatus.COMPLETED_WITH_ISSUES];
+
+export interface ResetCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * Every condition for returning a processed job to an editable state, read with `db` (the reset's
+ * own transaction, after it locked the job). All must hold: nothing extracted or imported, ₹0 spent
+ * and no AI request ever reserved, no worker lease, and consistent stored files.
+ */
+async function resetChecks(db: Prisma.TransactionClient | typeof prisma, jobId: string): Promise<{ job: { status: AiImportJobStatus; config: Prisma.JsonValue; confirmedAt: Date | null } | null; checks: ResetCheck[] }> {
+  const job = await db.aiImportJob.findUnique({ where: { id: jobId }, select: { status: true, leaseOwner: true, leaseUntil: true, spentInr: true, spentUsd: true, config: true, confirmedAt: true, files: { select: { id: true, originalName: true, status: true, storageKey: true } } } });
+  if (!job) return { job: null, checks: [{ label: "Import job exists", ok: false, detail: "Import job not found." }] };
+  const [questions, figures, keyEntries, aiCalls, reservations] = await Promise.all([
+    db.aiImportQuestion.count({ where: { jobId } }),
+    db.aiImportFigure.count({ where: { jobId } }),
+    db.aiImportKeyEntry.count({ where: { jobId } }),
+    db.aiImportAiCall.count({ where: { jobId } }),
+    db.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${jobId}:` } } }),
+  ]);
+  const cfg = (job.config ?? {}) as { lastImport?: unknown; importPlan?: unknown };
+  const leased = !!job.leaseOwner && !!job.leaseUntil && job.leaseUntil > new Date();
+  const missing: string[] = [];
+  for (const f of job.files) {
+    if (f.status === AiImportFileStatus.UPLOADING || f.status === AiImportFileStatus.REJECTED) continue;
+    if (f.status === AiImportFileStatus.PURGED || !f.storageKey) missing.push(`${f.originalName} (${f.status.toLowerCase()})`);
+    else {
+      const ok = await stat(vaultPath(f.storageKey)).then((st) => st.isFile(), () => false);
+      if (!ok) missing.push(`${f.originalName} (stored copy missing)`);
+    }
+  }
+  const unfinished = job.files.filter((f) => f.status === AiImportFileStatus.UPLOADING).length;
+  const checks: ResetCheck[] = [
+    { label: "Processing has finished or stopped", ok: RESETTABLE.includes(job.status), detail: RESETTABLE.includes(job.status) ? `Status: ${job.status.toLowerCase().replace(/_/g, " ")}.` : `Status ${job.status.toLowerCase().replace(/_/g, " ")} cannot be reset${job.status === AiImportJobStatus.CANCELLED ? " (a cancelled import is kept as a record)" : job.status === AiImportJobStatus.DRAFT || job.status === AiImportJobStatus.AWAITING_CONFIRMATION ? " (it is already editable)" : " (a worker may be running it)"}.` },
+    { label: "No worker is running the job", ok: !leased, detail: leased ? `A worker holds the job until ${job.leaseUntil!.toISOString().slice(11, 19)} UTC.` : "No active worker lease." },
+    { label: "Zero extracted questions", ok: questions === 0, detail: `${questions} extracted question${questions === 1 ? "" : "s"}.` },
+    { label: "No Question Bank records from this job", ok: questions === 0 && !cfg.lastImport && !cfg.importPlan, detail: cfg.lastImport || cfg.importPlan ? "An import into the Question Bank was requested or ran." : questions ? "Extracted questions exist (they may have been imported)." : "Nothing was imported." },
+    { label: "₹0 AI expenditure", ok: job.spentInr === 0 && job.spentUsd === 0 && aiCalls === 0 && reservations === 0, detail: `Spent ₹${job.spentInr.toFixed(4)} / $${job.spentUsd.toFixed(6)}; ${aiCalls} AI call record${aiCalls === 1 ? "" : "s"}; ${reservations} budget reservation${reservations === 1 ? "" : "s"}.` },
+    { label: "No figures or answer-key entries", ok: figures === 0 && keyEntries === 0, detail: `${figures} figure${figures === 1 ? "" : "s"}, ${keyEntries} answer-key entr${keyEntries === 1 ? "y" : "ies"}.` },
+    { label: "Stored files are complete", ok: missing.length === 0 && unfinished === 0, detail: missing.length ? `Missing or purged: ${missing.join(", ")}.` : unfinished ? `${unfinished} upload(s) unfinished.` : `${job.files.length} file${job.files.length === 1 ? "" : "s"} present in the vault.` },
+  ];
+  return { job: { status: job.status, config: job.config, confirmedAt: job.confirmedAt }, checks };
+}
+
+/** Read-only: whether a reset would be allowed now, with every check (Job page). */
+export async function resetEligibility(jobId: string): Promise<{ allowed: boolean; checks: ResetCheck[] }> {
+  const { checks } = await resetChecks(prisma, jobId);
+  return { allowed: checks.every((c) => c.ok), checks };
+}
+
+/**
+ * Returns a processed job that produced nothing (zero questions, ₹0, no AI request, no import) to
+ * Uploading, so its files can be removed or replaced and analyzed again. One transaction holds the
+ * vault-files lock, the importer budget lock and the job row lock, re-checks everything inside it,
+ * and is audited; any failed check refuses the reset and changes nothing.
+ */
+export async function resetJob(input: { jobId: string; actorId: string }): Promise<{ checks: ResetCheck[] }> {
+  const out = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_FILES_LOCK}::bigint)`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY}::bigint)`;
+    const locked = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "AiImportJob" WHERE "id" = ${input.jobId} FOR UPDATE`;
+    if (!locked.length) throw new ImportJobError("Import job not found.", 404);
+    const { job, checks } = await resetChecks(tx, input.jobId);
+    const failed = checks.filter((c) => !c.ok);
+    if (!job || failed.length) throw new ImportJobError(`Reset refused — nothing was changed. ${failed.map((c) => `${c.label}: ${c.detail}`).join(" ")}`, 409);
+    const pages = await tx.aiImportPage.deleteMany({ where: { jobId: input.jobId } });
+    await tx.aiImportFile.updateMany({ where: { jobId: input.jobId, status: { in: [AiImportFileStatus.ANALYZED, AiImportFileStatus.PROCESSED] } }, data: { status: AiImportFileStatus.UPLOADED, errorMessage: null } });
+    await tx.aiImportJob.update({
+      where: { id: input.jobId },
+      data: { status: AiImportJobStatus.DRAFT, analysis: Prisma.DbNull, estimate: Prisma.DbNull, estCostInr: null, estCostUsd: null, config: Prisma.DbNull, confirmedAt: null, confirmedById: null, startedAt: null, finishedAt: null, pauseReason: null, errorMessage: null, leaseOwner: null, leaseUntil: null, heartbeatAt: null },
+    });
+    const previous = job.config as { modelPlan?: { tasks?: Record<string, { model?: string | null }> }; aiEnabled?: boolean } | null;
+    const data = { previousStatus: job.status, previousConfirmedAt: job.confirmedAt?.toISOString() ?? null, previousAiEnabled: previous?.aiEnabled ?? null, previousModels: previous?.modelPlan?.tasks ? Object.fromEntries(Object.entries(previous.modelPlan.tasks).map(([k, v]) => [k, v?.model ?? null])) : null, pagesRemoved: pages.count, checks } as unknown as Prisma.InputJsonValue;
+    await tx.aiImportEvent.create({ data: { jobId: input.jobId, type: "JOB_RESET", message: `Reset to editable (was ${job.status.toLowerCase().replace(/_/g, " ")}): every check passed — zero questions, ₹0 AI spend, nothing imported. ${pages.count} page record(s) cleared; the files are kept. Remove or replace files, then analyze again.`, data, actorId: input.actorId } });
+    await tx.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_JOB_RESET", entityType: "AiImportJob", entityId: input.jobId, metadata: data } });
+    return { checks };
+  }, VAULT_TX);
+  // Page renders and working files of the old run are no longer referenced.
+  await removeVaultDir("renders", input.jobId).catch(() => undefined);
+  await removeVaultDir("work", input.jobId).catch(() => undefined);
+  return out;
 }
 
 /** Removes abandoned partial uploads of a job (tmp chunks). */

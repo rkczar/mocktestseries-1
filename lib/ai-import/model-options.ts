@@ -4,6 +4,7 @@
  * request costs are ESTIMATES (typical) and conservative MAXIMA (what the
  * runtime reserves before a call).
  */
+import type { ModelPlan, RouteStatus } from "@/lib/ai-import/selection-types";
 
 export interface RequestCost {
   inputTokens: number;
@@ -54,4 +55,9 @@ export interface ImporterCatalog {
   imageTokens: number;
   priceMargin: number;
   options: ImporterModelOption[];
+  /** The automatic (or manual) choice per task for the settings shown, with reasons. */
+  plan: ModelPlan;
+  routes: RouteStatus;
+  /** Hard pilot ceilings fixed in code (lib/ai-import/config.ts PILOT_LIMITS). */
+  pilot: { totalInr: number; monthlyInr: number; maxJobInr: number; maxRequestInr: number; minKeyReserveUsd: number };
 }

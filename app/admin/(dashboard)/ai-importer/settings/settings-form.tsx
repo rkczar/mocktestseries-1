@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { ImporterSettings } from "@/lib/ai-import/config";
+import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
 import type { ImporterCatalog, ImporterModelOption, RequestCost } from "@/lib/ai-import/model-options";
-import { importerModelsAction, saveSettingsAction } from "../actions";
+import type { ModelPlan } from "@/lib/ai-import/selection-types";
+import { importerModelsAction, refreshRoutesAction, saveSettingsAction } from "../actions";
 
 type Slot = "extract" | "fallback" | "verify" | "classify" | "key";
 type CostKey = "extract" | "verify" | "solve" | "classify" | "key";
@@ -51,6 +52,14 @@ function ProviderStatus({ catalog, aiEnabled, problems }: { catalog: ImporterCat
         catalog.catalog.models === 0
           ? "Unavailable — the model catalog is empty. Sync it in AI → Models (a free, read-only request to OpenRouter)."
           : `${catalog.catalog.models} models synced${catalog.catalog.lastSyncAt ? ` (last sync ${catalog.catalog.lastSyncAt.slice(0, 10)})` : ""}; ${catalog.catalog.approved} approved, ${catalog.catalog.usableVision} of them can read page images.${catalog.catalog.usableVision === 0 ? " Approve a vision model in AI → Models to choose an extraction model." : ""}`,
+    },
+    {
+      id: "routes",
+      label: "Provider routes",
+      tone: !catalog.routes.fetchedAt ? "error" : catalog.routes.stale || catalog.routes.zdrOk === false || catalog.routes.models.some((m) => !m.ok) ? "warning" : "success",
+      text: !catalog.routes.fetchedAt
+        ? "Not read yet — use Refresh provider routes (free, read-only OpenRouter requests). Until then no model can be chosen automatically."
+        : `Read ${catalog.routes.fetchedAt.slice(0, 16).replace("T", " ")} UTC for ${catalog.routes.models.length} approved model${catalog.routes.models.length === 1 ? "" : "s"}${catalog.routes.models.some((m) => !m.ok) ? ` (${catalog.routes.models.filter((m) => !m.ok).length} could not be read)` : ""}; Zero-Data-Retention list ${catalog.routes.zdrOk ? "read" : `NOT read${catalog.routes.zdrError ? ` (${catalog.routes.zdrError})` : ""}`}.${catalog.routes.stale ? " Older than 6 h: a job confirmation reads them again first." : ""}`,
     },
     {
       id: "fx",
@@ -245,6 +254,78 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
   );
 }
 
+const money = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `$${(v * 1e6).toFixed(v * 1e6 < 0.1 ? 3 : 2)}`);
+
+/** The model chosen per task (automatic or manual), why, its prices, costs and privacy route. */
+function SelectionTable({ plan, aiEnabled }: { plan: ModelPlan; aiEnabled: boolean }) {
+  return (
+    <div className="flex flex-col gap-3" data-testid="selection">
+      {plan.problems.length > 0 && (
+        <ul className="list-disc pl-5 text-xs text-[var(--color-warning)]" data-testid="selection-problems">
+          {plan.problems.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[44rem] text-left text-sm">
+          <thead className="text-xs text-[var(--color-muted-foreground)]">
+            <tr>
+              <th className="py-1 pr-2 font-medium">Task</th>
+              <th className="py-1 pr-2 font-medium">Selected model and reason</th>
+              <th className="py-1 pr-2 font-medium">Current price (per M tokens)</th>
+              <th className="py-1 pr-2 font-medium">Per request</th>
+              <th className="py-1 pr-2 font-medium">Image input</th>
+              <th className="py-1 pr-2 font-medium">Privacy route</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SELECTION_TASKS.map((t) => {
+              const c = plan.tasks[t];
+              return (
+                <tr key={t} className="border-t border-[var(--color-border)] align-top" data-testid={`sel-${t}`} data-model={c.model ?? ""}>
+                  <td className="py-1.5 pr-2 font-medium text-[var(--color-foreground)]">{SELECTION_TASK_LABELS[t]}</td>
+                  <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">
+                    {c.model ? <code className="text-xs font-semibold" data-testid={`sel-${t}-model`}>{c.model}</code> : <span className={aiEnabled ? "text-[var(--color-error)]" : "italic text-[var(--color-muted-foreground)]"} data-testid={`sel-${t}-model`}>None — this task does not run</span>}
+                    <span className="block text-xs text-[var(--color-muted-foreground)]" data-testid={`sel-${t}-reason`}>{c.reason}</span>
+                  </td>
+                  <td className="py-1.5 pr-2 text-xs">{c.price ? <>in {money(c.price.prompt)} · out {money(c.price.completion)}{c.vision && c.price.image ? ` · image ${money(c.price.image)}` : ""}{c.price.request ? ` · $${c.price.request}/request` : ""}</> : "—"}</td>
+                  <td className="py-1.5 pr-2 text-xs" data-testid={`sel-${t}-cost`}>{c.model ? <>about {inr(c.typicalInr)}<span className="block">max {inr(c.maxInr)}</span></> : "—"}</td>
+                  <td className="py-1.5 pr-2 text-xs">{c.vision ? (c.model ? "Required — supported" : "Required") : "Not needed"}</td>
+                  <td className="py-1.5 pr-2 text-xs [overflow-wrap:anywhere]" data-testid={`sel-${t}-privacy`}>
+                    {!c.model ? "—" : c.privacy.zdrRequired ? <>ZDR routes: {c.routes.join(", ")}<span className="block text-[var(--color-muted-foreground)]">On OpenRouter&apos;s public ZDR list; ZDR is also required on every request.</span></> : <>ZDR not required{c.privacy.dataCollection === "deny" ? "; providers that store or train on prompts are excluded by OpenRouter per request" : ""}.</>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {SELECTION_TASKS.map((t) => {
+        const rows = plan.tasks[t].candidates;
+        if (!rows.length) return null;
+        return (
+          <details key={t} className="text-xs" data-testid={`sel-candidates-${t}`}>
+            <summary className="cursor-pointer text-[var(--color-muted-foreground)]">
+              {SELECTION_TASK_LABELS[t]}: {rows.filter((r) => r.eligible).length} eligible of {rows.length} evaluated — why each model was or was not chosen
+            </summary>
+            <ul className="mt-1 flex flex-col gap-0.5 pl-4">
+              {rows.map((r) => (
+                <li key={r.id} data-testid="sel-candidate" data-model-id={r.id} data-eligible={r.eligible ? "true" : "false"}>
+                  <code>{r.id}</code> — {r.eligible ? <span className="text-[var(--color-success)]">eligible, up to {inr(r.maxInr)} per request</span> : <span className="text-[var(--color-error)]">{r.reason}</span>}
+                </li>
+              ))}
+            </ul>
+          </details>
+        );
+      })}
+      <p className="text-xs text-[var(--color-muted-foreground)]">
+        Prices are OpenRouter&apos;s current published prices — the highest over the catalog price and every provider route the model may be served by. The maximum per request assumes the full output limit, the longest page text and one page image, with the price margin. The choice is made again with fresh routes when a job is confirmed and is then fixed for that job; the worker never switches to a more expensive model unless allowed below.
+      </p>
+    </div>
+  );
+}
+
 function CostTable({ catalog, s }: { catalog: ImporterCatalog; s: ImporterSettings }) {
   const get = (id: string | null) => (id ? catalog.options.find((o) => o.id === id) ?? null : null);
   const keyModel = s.models.key ?? s.models.extract;
@@ -309,26 +390,31 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
     </div>
   );
   const options = catalog.options;
+  const manual = s.selection.mode === "manual";
+  const slots = [
+    ["Extraction model", s.models.extract, true],
+    ["Fallback extraction model", s.models.extractFallbacks[0] ?? null, true],
+    ["Verification model", s.models.verify, true],
+    ["Topic classification model", s.models.classify, false],
+    ["Answer-key reading model", s.models.key, true],
+  ] as const;
   const problems = [
-    ...([
-      ["Extraction model", s.models.extract, true],
-      ["Fallback extraction model", s.models.extractFallbacks[0] ?? null, true],
-      ["Verification model", s.models.verify, true],
-      ["Topic classification model", s.models.classify, false],
-      ["Answer-key reading model", s.models.key, true],
-    ] as const)
-      .map(([label, id, vision]) => {
-        const p = slotProblem(options, id, vision);
-        return p ? `${label}: ${id} — ${p}.` : null;
-      })
-      .filter((x): x is string => !!x),
-    ...(s.aiEnabled && !s.models.extract ? ["Paid AI is on, but no extraction model is selected: pages that need AI are only flagged."] : []),
+    // Manual model fields are only checked when the manual override is in use.
+    ...(!manual
+      ? []
+      : slots
+          .map(([label, id, vision]) => {
+            const p = slotProblem(options, id, vision);
+            return p ? `${label}: ${id} — ${p}.` : null;
+          })
+          .filter((x): x is string => !!x)),
+    ...(s.aiEnabled && !catalog.plan.tasks.extract.model ? [`Paid AI is on, but no page-reading model can be used: ${catalog.plan.tasks.extract.reason}`] : []),
   ];
-  const reload = () =>
+  const reload = (refresh = false) =>
     startLoading(async () => {
       setLoadError(null);
       try {
-        const r = await importerModelsAction();
+        const r = refresh ? await refreshRoutesAction(s) : await importerModelsAction(s);
         if (r.ok) setCatalog(r.data);
         else setLoadError(r.error);
       } catch {
@@ -361,13 +447,18 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
     >
       <ProviderStatus catalog={catalog} aiEnabled={s.aiEnabled} problems={problems} />
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Button type="button" variant="outline" size="sm" onClick={reload} disabled={loading} data-testid="models-reload">
-          {loading ? "Loading models…" : "Reload models and status"}
+        <Button type="button" variant="outline" size="sm" onClick={() => reload()} disabled={loading} data-testid="models-reload">
+          {loading ? "Loading…" : "Reload status and selection"}
         </Button>
+        {canManage && (
+          <Button type="button" variant="outline" size="sm" onClick={() => reload(true)} disabled={loading} data-testid="routes-refresh">
+            Refresh provider routes
+          </Button>
+        )}
         {loadError && (
           <span className="text-[var(--color-error)]" role="alert" data-testid="models-error">
             Could not load the model list: {loadError}{" "}
-            <button type="button" className="underline" onClick={reload} data-testid="models-retry">
+            <button type="button" className="underline" onClick={() => reload()} data-testid="models-retry">
               Retry
             </button>
           </span>
@@ -390,9 +481,33 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="selection-card">
         <CardHeader>
-          <CardTitle>Models</CardTitle>
+          <CardTitle>Model selection</CardTitle>
+          <CardDescription>Automatic (default): for each task the importer uses the cheapest approved model that can do it, is available on OpenRouter, meets the privacy settings and fits the per-request limit — judged by its conservative maximum cost, not the average. No model has to be picked per import.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2 text-sm" role="radiogroup" aria-label="Model selection">
+            <label className="flex items-center gap-2">
+              <input type="radio" name="sel" checked={!manual} onChange={() => setS({ ...s, selection: { mode: "auto" } })} disabled={d} data-testid="sel-auto" />
+              <span><strong>Automatic</strong> — cheapest suitable approved model per task (recommended)</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="radio" name="sel" checked={manual} onChange={() => setS({ ...s, selection: { mode: "manual" } })} disabled={d} data-testid="sel-manual" />
+              <span><strong>Manual override</strong> — an administrator chooses each model (same checks; refused if unsuitable)</span>
+            </label>
+          </div>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={s.budget.allowPricierFallback} onChange={(e) => set("budget", { allowPricierFallback: e.target.checked })} disabled={d} data-testid="b-pricier" />
+            <span>Allow a MORE EXPENSIVE model to take over when a job&apos;s selected model becomes unavailable (still inside every budget). Off: the job stops and says why. A cheaper or equally priced replacement is always allowed and recorded.</span>
+          </label>
+          <SelectionTable plan={catalog.plan} aiEnabled={s.aiEnabled} />
+        </CardContent>
+      </Card>
+
+      {manual && <Card data-testid="manual-models">
+        <CardHeader>
+          <CardTitle>Manual override models</CardTitle>
           <CardDescription>Only models approved in AI → Models with a fixed published price can be selected. Search to see the rest of the catalog and why a model cannot be used.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
@@ -420,7 +535,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
             <CostTable catalog={catalog} s={s} />
           </div>
         </CardContent>
-      </Card>
+      </Card>}
 
       <Card>
         <CardHeader>
@@ -438,7 +553,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           </label>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={s.privacy.zdr} onChange={(e) => set("privacy", { zdr: e.target.checked })} disabled={d} data-testid="privacy-zdr" />
-            Zero-data-retention endpoints only (fewer models; a model without a ZDR endpoint is refused by OpenRouter)
+            Zero-Data-Retention routes only (recommended; fewer models — automatic selection only considers models with a ZDR route on OpenRouter&apos;s public list)
           </label>
         </CardContent>
       </Card>
@@ -446,19 +561,15 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       <Card>
         <CardHeader>
           <CardTitle>Budgets and limits</CardTitle>
-          <CardDescription>Hard limits, checked by the server inside one lock before every AI request (parallel pages and other jobs included). A job pauses instead of exceeding any of them; retries count against the same limits.</CardDescription>
+          <CardDescription>Hard limits, checked by the server inside one lock before every AI request (parallel pages and other jobs included). A job pauses instead of exceeding any of them; retries and verification calls count against the same limits. During the pilot the server never allows more than the ceilings fixed in code (shown under each field), whatever is entered here.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="b-total">All-time importer budget (₹)</Label>
-            <Input id="b-total" inputMode="decimal" placeholder="No all-time limit" defaultValue={s.budget.totalInr === null ? "" : String(s.budget.totalInr)} onBlur={(e) => set("budget", { totalInr: e.target.value.trim() === "" ? null : num(e.target.value) })} disabled={d} data-testid="b-total" />
-            <p className="text-xs text-[var(--color-muted-foreground)]">Never resets. Use it for a pilot so a new month does not add budget.</p>
-          </div>
-          {field("b-month", "Monthly importer budget (₹)", s.budget.monthlyInr, (n) => set("budget", { monthlyInr: n }), "Resets each IST month.")}
-          {field("b-maxjob", "Hard limit per job (₹)", s.budget.maxJobInr, (n) => set("budget", { maxJobInr: n }), "No job budget can be set above this at confirm or resume.")}
+          {field("b-total", "All-time importer budget (₹)", s.budget.totalInr, (n) => set("budget", { totalInr: n }), `Never resets, so a new month adds nothing. Pilot ceiling ₹${catalog.pilot.totalInr}.`)}
+          {field("b-month", "Monthly importer budget (₹)", s.budget.monthlyInr, (n) => set("budget", { monthlyInr: n }), `Resets each IST month (the all-time budget still applies). Pilot ceiling ₹${catalog.pilot.monthlyInr}.`)}
+          {field("b-maxjob", "Hard limit per job (₹)", s.budget.maxJobInr, (n) => set("budget", { maxJobInr: n }), `No job budget can be set above this at confirm or resume. Pilot ceiling ₹${catalog.pilot.maxJobInr}.`)}
           {field("b-job", "Default job budget (₹)", s.budget.defaultJobCapInr, (n) => set("budget", { defaultJobCapInr: n }), "Offered on New Import; never above the hard limit.")}
-          {field("b-req", "Maximum per AI request (₹)", s.budget.maxRequestInr, (n) => set("budget", { maxRequestInr: n }), "A request whose conservative maximum is higher is refused.")}
-          {field("b-key", "Keep on the shared OpenRouter key for Ask AI ($)", s.budget.keyReserveUsd, (n) => set("budget", { keyReserveUsd: n }), "An importer request is refused if it could leave less than this on the key.")}
+          {field("b-req", "Maximum per AI request (₹)", s.budget.maxRequestInr, (n) => set("budget", { maxRequestInr: n }), `A request whose conservative maximum is higher is refused. Pilot ceiling ₹${catalog.pilot.maxRequestInr}.`)}
+          {field("b-key", "Keep on the shared OpenRouter key for Ask AI ($)", s.budget.keyReserveUsd, (n) => set("budget", { keyReserveUsd: n }), `An importer request is refused if it could leave less than this on the key. At least $${catalog.pilot.minKeyReserveUsd}.`)}
           <label className="flex items-center gap-2 self-end text-sm sm:col-span-3">
             <input type="checkbox" checked={s.budget.retryTransient} onChange={(e) => set("budget", { retryTransient: e.target.checked })} disabled={d} data-testid="b-retry" />
             Retry a request once after a temporary provider error (counts against the same budgets)

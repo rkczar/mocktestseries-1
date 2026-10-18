@@ -2,7 +2,10 @@
  * AI Question Importer — the per-file Remove button in every job state
  * (Uploading, linked answer key, Awaiting confirmation, Processing, Ready to
  * import, Cancelled, shared stored file), desktop + mobile, plus raw Server
- * Action calls (signed-in Master Admin against a locked job, signed out).
+ * Action calls (signed-in Master Admin against a locked job, signed out), and
+ * the safe Reset to editable of a processed job that produced nothing (then
+ * remove → replace → analyze again). FIXTURE (optional, from
+ * scripts/ai-import-ui-fixture.ts) adds the FULL_ADMIN (view-only) checks.
  * Scratch DB + synthetic jobs from scripts/ai-import-remove-states-fixture.ts.
  *
  *   BASE=http://localhost:3431 STATES=/tmp/states.json APP_DIR=<built app> ADMIN_USER=… ADMIN_PASS=… \
@@ -10,6 +13,7 @@
  */
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import pg from "pg";
 
@@ -197,6 +201,65 @@ const sb = (await db.query(`select "storageKey" from "AiImportFile" where "jobId
 const sharedEv = (await db.query(`select data from "AiImportEvent" where "jobId"=$1 and type='FILE_REMOVED'`, [S.sharedA])).rows[0]?.data;
 check("shared: removed from job A only; job B keeps its file; stored copy kept", (await fileCount(S.sharedA)) === 0 && sb.length === 1 && sharedEv?.storedFileDeleted === false && sharedEv?.sharedWith === 1, { a: await fileCount(S.sharedA), b: sb.length, sharedEv });
 
+section("8. Safe reset to editable");
+const resetId = Object.entries(manifest.node).find(([, v]) => JSON.stringify(v).includes("resetJobAction"))?.[0];
+check("resetJobAction id found in the build manifest", !!resetId);
+// A job with extracted questions: the panel lists the failed checks and offers no reset.
+await page.goto(`${BASE}/admin/ai-importer/jobs/${S.ready}`);
+const rcReady = page.locator("[data-testid=reset-card]");
+check("ready job with questions: reset refused, failed check shown, safe replacement procedure shown, no button", (await rcReady.getAttribute("data-allowed")) === "false" && (await rcReady.locator("[data-testid=reset-check][data-ok=false]", { hasText: "Zero extracted questions" }).count()) === 1 && /create a New Import/.test((await rcReady.locator("[data-testid=reset-refused]").textContent()) ?? "") && (await rcReady.locator("[data-testid=reset-submit]").count()) === 0);
+const rawReset = (p, jobId, conf) => inPage(p, `/admin/ai-importer/jobs/${jobId}`, { method: "POST", headers: { "Next-Action": resetId, Accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify([jobId, conf]) });
+const rr1 = await rawReset(page, S.ready, "RESET");
+check("raw reset of the job with questions: refused by the server with the reason", /"ok":false/.test(rr1.text) && /Reset refused.*Zero extracted questions/.test(rr1.text), rr1.text.slice(-200));
+const rr2 = await rawReset(page, S.zero, "reset");
+check("raw reset without the exact confirmation word: refused", /Type RESET to confirm/.test(rr2.text), rr2.text.slice(-160));
+const rr3 = await rawReset(anon, S.zero, "RESET");
+check("signed-out raw reset: refused", rr3.type === "opaqueredirect" || [303, 307, 308, 401, 403].includes(rr3.status) || /do not have permission/.test(rr3.text), { status: rr3.status, text: rr3.text.slice(0, 120) });
+if (process.env.FIXTURE) {
+  const F = JSON.parse(readFileSync(process.env.FIXTURE, "utf8"));
+  const fullP = await newPage();
+  await fullP.goto(`${BASE}/admin/login`);
+  await fullP.fill("input[name=username]", F.fullAdmin);
+  await fullP.fill("input[name=password]", F.password);
+  await Promise.all([fullP.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), fullP.locator("form button[type=submit]").click()]);
+  const rr4 = await rawReset(fullP, S.zero, "RESET");
+  check("FULL_ADMIN (view-only) raw reset: no permission", /do not have permission/.test(rr4.text), rr4.text.slice(-160));
+}
+check("…the zero-output job is unchanged after the refused calls", (await db.query(`select status from "AiImportJob" where id=$1`, [S.zero])).rows[0].status === "NEEDS_REVIEW");
+// The zero-output job (like a confirmed wrong upload): every check passes.
+await page.goto(`${BASE}/admin/ai-importer/jobs/${S.zero}`);
+const rc = page.locator("[data-testid=reset-card]");
+check("zero-output job: all checks OK, reset offered", (await rc.getAttribute("data-allowed")) === "true" && (await rc.locator("[data-testid=reset-check][data-ok=false]").count()) === 0 && (await rc.locator("[data-testid=reset-check]").count()) >= 7);
+check("…the locked-files note points to the reset", /can be reset to editable below/.test((await page.locator("[data-testid=files-remove-blocked]").textContent()) ?? ""));
+const sub = rc.locator("[data-testid=reset-submit]");
+check("…the button stays disabled until RESET is typed exactly", await sub.isDisabled());
+await rc.locator("[data-testid=reset-confirm]").fill("reset");
+check("…lower-case 'reset' is not accepted", await sub.isDisabled());
+await rc.locator("[data-testid=reset-confirm]").fill("RESET");
+await sub.click();
+check("reset done: Uploading, notice shown", await until(async () => /Uploading/.test((await page.locator("[data-testid=job-status]").textContent()) ?? "") && /editable again/.test((await page.locator("[data-testid=job-notice]").textContent()) ?? "")));
+const zr = (await db.query(`select status, analysis is null a, config is null c from "AiImportJob" where id=$1`, [S.zero])).rows[0];
+check("…database: DRAFT, analysis and frozen config cleared, page records removed", zr.status === "DRAFT" && zr.a && zr.c && (await db.query(`select count(*)::int n from "AiImportPage" where "jobId"=$1`, [S.zero])).rows[0].n === 0, zr);
+check("…audited once (event + admin audit log)", (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='JOB_RESET'`, [S.zero])).rows[0].n === 1 && (await db.query(`select count(*)::int n from "AuditLog" where "entityId"=$1 and action='AI_IMPORT_JOB_RESET'`, [S.zero])).rows[0].n === 1);
+const zst = await removeState(page, "scanned.pdf");
+check("…the file's Remove is now enabled", !zst.disabled && zst.redText, zst);
+await row(page, "scanned.pdf").locator("[data-testid=file-remove]").click();
+await dlg.waitFor({ timeout: 5000 }).catch(() => {});
+await dlg.locator("[data-testid=remove-file-confirm]").click().catch(() => {});
+await page.locator("[data-testid=job-notice]").waitFor({ timeout: 15000 }).catch(() => {});
+check("wrong paper removed after the reset", await until(async () => (await fileCount(S.zero)) === 0));
+check("after the reset the uploader offers a question paper again (not answer key only)", (await page.locator("[data-testid=upload-role]").inputValue()) === "PAPER");
+await page.locator("[data-testid=upload-input]").setInputFiles(path.join(process.env.FX_DIR, "digital-clean.pdf"));
+check("replacement question paper uploaded through the page", await until(async () => (await db.query(`select count(*)::int n from "AiImportFile" where "jobId"=$1 and status='UPLOADED' and role='PAPER'`, [S.zero])).rows[0].n === 1, 30000));
+await page.reload();
+await page.locator("[data-testid=analyze]").click();
+await until(async () => (await db.query(`select status from "AiImportJob" where id=$1`, [S.zero])).rows[0].status === "ANALYZING");
+execFileSync(path.join(APP, "node_modules/.bin/tsx"), ["scripts/ai-import-worker.ts", "--seconds=60"], { cwd: APP, env: { ...process.env, NODE_OPTIONS: "--conditions=react-server" }, stdio: "ignore" });
+const za = (await db.query(`select status, analysis->'totals'->>'pages' p from "AiImportJob" where id=$1`, [S.zero])).rows[0];
+check("fresh analysis of the replacement → awaiting confirmation with its own page count", za.status === "AWAITING_CONFIRMATION" && za.p === "2", za);
+await page.reload();
+check("…the page offers Confirm again and no reset panel", (await page.locator("[data-testid=confirm-start]").count()) === 1 && (await page.locator("[data-testid=reset-card]").count()) === 0);
+
 section("7. Mobile (375 px)");
 const m = await newPage(true);
 await login(m);
@@ -207,6 +270,9 @@ check("mobile: no horizontal page scroll", await m.evaluate(() => document.docum
 await m.goto(`${BASE}/admin/ai-importer/jobs/${S.linked}`);
 check("mobile uploading: Remove usable on the answer key", !(await removeState(m, "scanned-key.png")).disabled);
 check("mobile: no horizontal page scroll (uploading)", await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+await m.goto(`${BASE}/admin/ai-importer/jobs/${S.ready}`);
+const mrc = await m.locator("[data-testid=reset-card]").boundingBox();
+check("mobile: reset panel fits the screen, no horizontal page scroll", !!mrc && mrc.x >= 0 && mrc.x + mrc.width <= 376 && (await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)), mrc);
 
 check("no page errors", errors.length === 0, errors);
 await browser.close();

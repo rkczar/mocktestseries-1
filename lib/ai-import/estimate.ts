@@ -1,14 +1,18 @@
 import "server-only";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
-import { IMAGE_TOKENS, inputImagePriceUsd, loadModels, modelProblem } from "@/lib/ai-import/ai";
-import type { ImporterSettings, ImporterTask } from "@/lib/ai-import/config";
+import { IMAGE_TOKENS } from "@/lib/ai-import/ai";
+import type { ImporterSettings, ImporterTask, SelectionTask } from "@/lib/ai-import/config";
 import type { FileFacts } from "@/lib/ai-import/analyze";
+import type { ModelPlan } from "@/lib/ai-import/selection-types";
 
 /**
- * Pre-processing cost estimate from the CURRENT catalog prices (Admin → AI →
- * Models, synced from OpenRouter) and the current USD→INR rate. It is an
- * ESTIMATE: actual cost is what the provider reports per call (Cost Center).
+ * Pre-processing cost estimate from the job's model plan (lib/ai-import/select.ts:
+ * the highest current OpenRouter price over the routes each model may use) and
+ * the plan's USD→INR rate. `totalInr` is the typical ESTIMATE; `maxInr` is the
+ * conservative MAXIMUM — every possible request at the reserved worst case
+ * (full output limit, second reads of every AI page, a retry when enabled).
+ * Actual cost is what the provider reports per call (Cost Center).
  */
 
 export interface EstimateLine {
@@ -23,12 +27,19 @@ export interface EstimateLine {
   /** USD per million tokens used for this line. */
   pricePerM: { prompt: number; completion: number } | null;
   problem: string | null;
+  /** Conservative maximum of this line: calls (worst case) × the reserved maximum per request. */
+  maxCalls: number;
+  maxInr: number | null;
 }
 
 export interface CostEstimate {
   lines: EstimateLine[];
   totalUsd: number | null;
   totalInr: number | null;
+  /** Conservative maximum (₹) of every request this job may make; null when a line cannot be priced. */
+  maxInr: number | null;
+  /** The automatic (or manual) model choice per task, with reasons. */
+  plan: ModelPlan | null;
   /** 20% reserve for retries / fallbacks / longer answers. */
   reservePct: number;
   pagesNeedingAi: number;
@@ -46,12 +57,10 @@ export interface CostEstimate {
 
 const SYSTEM_TOKENS = 1_100;
 
-export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts: FileFacts[]; settings: ImporterSettings }): Promise<CostEstimate> {
-  const { settings } = input;
-  const fx = await getUsdInr();
-  const m = settings.models;
-  const catalog = await loadModels([m.extract, m.verify, m.classify, m.key ?? m.extract].filter((x): x is string => !!x));
-  const notes: string[] = [];
+export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts: FileFacts[]; settings: ImporterSettings; plan: ModelPlan | null }): Promise<CostEstimate> {
+  const { settings, plan } = input;
+  const fx = plan?.fxRate ? { rate: plan.fxRate, rateDate: plan.fxDate } : await getUsdInr();
+  const notes: string[] = [...(plan?.problems ?? [])];
 
   let pagesNeedingAi = 0;
   let extractIn = 0;
@@ -74,49 +83,52 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
     if (f.kind === "DOCX" || f.kind === "XLSX" || f.kind === "CSV") expectedQuestions += f.localQuestionCount;
   }
   const keyPages = input.keyFacts.reduce((a, f) => a + f.scannedPages, 0);
+  const attemptsPerRequest = settings.budget.retryTransient ? 2 : 1;
 
-  const price = (id: string | null, vision: boolean) => {
-    if (!id) return { model: null, problem: "not configured in Import Settings", p: null as { prompt: number; completion: number; image: number; request: number } | null };
-    const row = catalog.get(id);
-    const problem = modelProblem(row, vision);
-    if (problem || !row) return { model: id, problem, p: null };
-    return { model: id, problem: null, p: { prompt: row.promptPrice!, completion: Math.max(row.completionPrice!, row.reasoningPrice ?? 0), image: inputImagePriceUsd(row) ?? 0, request: row.requestPrice ?? 0 } };
-  };
-  // Vision lines send one page image per call (billed like the worst case in ai.ts: image tokens at the image price).
-  const line = (task: ImporterTask, label: string, id: string | null, vision: boolean, calls: number, inTok: number, outTok: number): EstimateLine => {
-    const pr = price(id, vision);
-    const usd = pr.p ? inTok * pr.p.prompt + outTok * pr.p.completion + calls * (pr.p.request + (vision ? IMAGE_TOKENS * pr.p.image : 0)) : null;
-    return { task, label, model: pr.model, calls, inputTokens: inTok, outputTokens: outTok, usd, inr: usdToInr(usd, fx.rate), pricePerM: pr.p ? { prompt: pr.p.prompt * 1e6, completion: pr.p.completion * 1e6 } : null, problem: calls ? pr.problem : null };
+  // Typical cost uses the plan's prices; the maximum uses each task's reserved worst case per request.
+  const line = (task: ImporterTask, sel: SelectionTask, label: string, vision: boolean, calls: number, inTok: number, outTok: number, maxCalls: number): EstimateLine => {
+    const c = plan?.tasks[sel];
+    const model = c?.model ?? null;
+    const pr = c?.price ?? null;
+    const problem = !plan ? "no model plan" : !model ? c?.reason ?? "no model" : !pr ? "no price" : null;
+    const usd = pr && model ? inTok * pr.prompt + outTok * pr.completion + calls * (pr.request + (vision ? IMAGE_TOKENS * pr.image : 0)) : null;
+    const maxInr = model && c?.maxInr !== null && c?.maxInr !== undefined ? maxCalls * attemptsPerRequest * c.maxInr : null;
+    return { task, label, model, calls, inputTokens: inTok, outputTokens: outTok, usd, inr: usdToInr(usd, fx.rate), pricePerM: pr ? { prompt: pr.prompt * 1e6, completion: pr.completion * 1e6 } : null, problem: calls ? problem : null, maxCalls, maxInr: calls ? maxInr : 0 };
   };
 
   const lines: EstimateLine[] = [];
-  lines.push(line("extract", "Page extraction (vision)", m.extract, true, pagesNeedingAi, extractIn, extractOut));
-  const lowConfidencePages = scannedPages;
-  if (m.verify && lowConfidencePages) {
-    const per = pagesNeedingAi ? { i: extractIn / pagesNeedingAi, o: extractOut / pagesNeedingAi } : { i: 0, o: 0 };
-    lines.push(line("verify", "Second read of scanned pages (different model)", m.verify, true, lowConfidencePages, Math.round(per.i * lowConfidencePages), Math.round(per.o * lowConfidencePages)));
+  lines.push(line("extract", "extract", "Page reading (vision; digital + scanned)", true, pagesNeedingAi, extractIn, extractOut, pagesNeedingAi));
+  const verifyModel = plan?.tasks.verify.model ?? null;
+  // A second read runs for scanned pages and for any page whose extraction confidence is low: at most every AI page.
+  if (verifyModel && pagesNeedingAi) {
+    const per = { i: extractIn / pagesNeedingAi, o: extractOut / pagesNeedingAi };
+    lines.push(line("verify", "verify", "Second read of scanned / low-confidence pages (different model)", true, scannedPages, Math.round(per.i * scannedPages), Math.round(per.o * scannedPages), pagesNeedingAi));
   }
-  if (settings.verification.independentAnswer) {
-    lines.push(line("verify", "Independent answer opinion (per question)", m.verify, false, expectedQuestions, expectedQuestions * 600, expectedQuestions * 250));
+  if (settings.verification.independentAnswer && verifyModel) {
+    lines.push(line("verify", "verify", "Independent answer opinion (per question)", false, expectedQuestions, expectedQuestions * 600, expectedQuestions * 250, expectedQuestions));
   }
   const classifyCalls = Math.ceil(expectedQuestions / 20);
-  lines.push(line("classify", "Topic classification (20 questions per call)", m.classify, false, classifyCalls, classifyCalls * (SYSTEM_TOKENS + 20 * 250 + 3_500), classifyCalls * 900));
-  if (keyPages) lines.push(line("key", "Scanned answer-key pages", m.key ?? m.extract, true, keyPages, keyPages * (SYSTEM_TOKENS + IMAGE_TOKENS + 200), keyPages * 1_200));
+  lines.push(line("classify", "classify", "Topic classification (20 questions per call)", false, classifyCalls, classifyCalls * (SYSTEM_TOKENS + 20 * 250 + 3_500), classifyCalls * 900, classifyCalls));
+  if (keyPages) lines.push(line("key", "key", "Scanned answer-key pages", true, keyPages, keyPages * (SYSTEM_TOKENS + IMAGE_TOKENS + 200), keyPages * 1_200, keyPages));
 
-  const active = lines.filter((l) => l.calls > 0);
-  const missing = active.filter((l) => l.usd === null);
+  const active = lines.filter((l) => l.calls > 0 || l.maxCalls > 0);
+  const missing = active.filter((l) => l.calls > 0 && l.usd === null);
   for (const l of missing) notes.push(`${l.label}: ${l.problem ?? "no price"} — these calls will not run; the affected questions are flagged for correction instead.`);
   if (!settings.aiEnabled) notes.push("Paid AI processing is OFF (Import Settings). Only local parsing runs; pages that need AI are flagged.");
   const reservePct = 20;
   const baseUsd = active.reduce((a, l) => a + (l.usd ?? 0), 0);
   const totalUsd = active.length && missing.length < active.length ? baseUsd * (1 + reservePct / 100) : active.length ? null : 0;
   const totalInr = usdToInr(totalUsd, fx.rate);
-  const pricesSyncedAt = [...catalog.values()].map((r) => r.lastSyncedAt).sort((a, b) => a.getTime() - b.getTime())[0]?.toISOString() ?? null;
+  // Lines that cannot run add nothing to the maximum (their calls are never made).
+  const runnable = active.filter((l) => l.model !== null && l.problem === null);
+  const maxInr = runnable.every((l) => l.maxInr !== null) ? Math.round(runnable.reduce((a, l) => a + (l.maxInr ?? 0), 0) * 10_000) / 10_000 : null;
   const concurrency = settings.limits.concurrency;
   return {
     lines,
     totalUsd,
     totalInr,
+    maxInr,
+    plan,
     reservePct,
     pagesNeedingAi,
     perPageInr: totalInr !== null && pagesNeedingAi ? totalInr / pagesNeedingAi : null,
@@ -124,7 +136,7 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
     expectedQuestions,
     fxRate: fx.rate,
     fxDate: fx.rateDate,
-    pricesSyncedAt,
+    pricesSyncedAt: plan?.routesFetchedAt ?? null,
     aiEnabled: settings.aiEnabled,
     estimatedMinutes: Math.max(1, Math.ceil((pagesNeedingAi * 30) / concurrency / 60 + (input.paperFacts.reduce((a, f) => a + f.pages, 0) * 2) / 60)),
     notes,

@@ -14,6 +14,7 @@ import { ImporterAiUnavailable, ImporterBudgetError } from "@/lib/ai-import/ai";
 import { reconcileJob } from "@/lib/ai-import/summary";
 import { removeVaultDir } from "@/lib/ai-import/vault";
 import { autoCleanup } from "@/lib/ai-import/storage";
+import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
 
 /**
  * The importer's durable background worker (scripts/ai-import-worker.ts,
@@ -64,7 +65,17 @@ async function processJob(job: AiImportJob): Promise<void> {
   // (an admin who turns AI off or lowers limits mid-job is obeyed).
   const current = await getImporterSettings();
   const frozen = job.config ? normalizeImporterSettings(job.config) : current;
-  const settings: ImporterSettings = { ...frozen, aiEnabled: current.aiEnabled && frozen.aiEnabled, models: current.models, privacy: current.privacy, budget: current.budget };
+  // Privacy: the stricter of the confirmed and the current settings. Budgets: the current (lowered limits apply).
+  const privacy: ImporterSettings["privacy"] = { zdr: frozen.privacy.zdr || current.privacy.zdr, dataCollection: frozen.privacy.dataCollection === "deny" || current.privacy.dataCollection === "deny" ? "deny" : "allow" };
+  const base: ImporterSettings = { ...frozen, aiEnabled: current.aiEnabled && frozen.aiEnabled, privacy, budget: current.budget, selection: frozen.selection };
+  // Models come only from the plan frozen at confirmation (a job confirmed before automatic selection gets one now).
+  let plan = planOf(job.config);
+  if (!plan && base.aiEnabled) {
+    plan = await computeModelPlan(base, { refresh: true });
+    await prisma.aiImportJob.update({ where: { id: job.id }, data: { config: { ...((job.config as Record<string, unknown>) ?? {}), modelPlan: plan } as unknown as Prisma.InputJsonValue } });
+    await logEvent(job.id, "MODEL_PLAN", `Models chosen (${plan.mode}): ${Object.values(plan.tasks).map((t) => `${t.task}: ${t.model ?? "none"}`).join(", ")}`);
+  }
+  const settings: ImporterSettings = { ...base, models: plan ? modelsFromPlan(plan) : { ...base.models, extract: null, extractFallbacks: [], verify: null, classify: null, key: null } };
   const [exam, subject] = await Promise.all([
     prisma.exam.findUnique({ where: { id: job.examId }, select: { name: true } }),
     job.subjectId ? prisma.subject.findUnique({ where: { id: job.subjectId }, select: { name: true } }) : null,

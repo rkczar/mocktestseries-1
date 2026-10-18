@@ -1,7 +1,8 @@
 /**
- * AI Question Importer — Import Settings: provider status, searchable model
- * pickers, cost estimates, server-side validation, persistence, loading /
- * error / retry / empty states, read-only view, desktop + mobile. Scratch DB +
+ * AI Question Importer — Import Settings: provider status, automatic model
+ * selection (routes, reasons, prices, privacy), the manual override's searchable
+ * model pickers, cost estimates, server-side validation and pilot ceilings,
+ * persistence, loading / error / retry / empty states, read-only view, desktop + mobile. Scratch DB +
  * mock OpenRouter; run scripts/ai-import-ui-fixture.ts setup first (key, synced
  * mock catalog, FULL_ADMIN). Never real AI.
  *
@@ -58,7 +59,10 @@ async function until(fn, timeout = 15000) {
 const saved = async () => (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0]?.value ?? null;
 const URL_SETTINGS = `${BASE}/admin/ai-importer/settings`;
 
-await db.query(`delete from "Setting" where key='ai.importer'`);
+await db.query(`delete from "Setting" where key in ('ai.importer', 'ai.importer.routes')`);
+// What an administrator approved in AI → Models (the selection only ever considers approved models).
+const APPROVED = ["mockvision/reader", "mockvision/checker", "mockvision/mid", "mockvision/cheapnozdr", "mockvision/down", "mockvision/pricey", "mocktext/classifier"];
+await db.query(`update "AiModel" set approved = (id = any($1)) where id like 'mock%'`, [APPROVED]);
 const page = await newPage();
 await login(page, process.env.ADMIN_USER, process.env.ADMIN_PASS);
 
@@ -73,7 +77,42 @@ check("paid AI: OFF by default, shown as info", (await tone("paid")) === "neutra
 check("model metadata: synced, approved vision models counted", (await tone("catalog")) === "success" && /approved/.test(await page.locator("[data-testid=status-catalog]").textContent()));
 check("prices in rupees: FX rate shown", (await tone("fx")) === "success" && /95\.00/.test(await page.locator("[data-testid=status-fx]").textContent()));
 
-section("B. Searchable extraction model picker");
+section("A2. Automatic model selection (default)");
+check("automatic selection is the default; the manual pickers are hidden", await page.locator("[data-testid=sel-auto]").isChecked() && (await page.locator("[data-testid=manual-models]").count()) === 0 && (await page.locator("[data-testid=m-extract-search]").count()) === 0);
+check("more expensive fallbacks: off by default", !(await page.locator("[data-testid=b-pricier]").isChecked()));
+check("routes not read yet → status says so, no model chosen", (await tone("routes")) === "error" && /None — this task does not run/.test(await page.locator("[data-testid=sel-extract-model]").textContent()));
+await page.locator("[data-testid=routes-refresh]").click();
+check("Refresh provider routes → routes read, ZDR list read", await until(async () => (await tone("routes")) === "success" && /Zero-Data-Retention list read/.test(await page.locator("[data-testid=status-routes]").textContent())));
+const selModel = async (t) => page.locator(`[data-testid=sel-${t}]`).getAttribute("data-model");
+check("page reading → mockvision/reader (cheapest eligible with a ZDR route)", (await selModel("extract")) === "mockvision/reader", await selModel("extract"));
+check("verification → a different model (mockvision/mid)", (await selModel("verify")) === "mockvision/mid", await selModel("verify"));
+const why = (await page.locator("[data-testid=sel-extract-reason]").textContent()) ?? "";
+check("reason shown: cheapest of N eligible, maximum per request, runner-up", /Cheapest suitable of \d+ eligible models: up to ₹[\d.]+ per request \(next: /.test(why), why);
+const costTxt = (await page.locator("[data-testid=sel-extract-cost]").textContent()) ?? "";
+check("estimated and conservative maximum cost shown", /about ₹[\d.]+max ₹[\d.]+/.test(costTxt), costTxt);
+check("current price shown (highest over routes: in $0.055 · out $0.33)", /in \$0\.055 · out \$0\.33/.test(await page.locator("[data-testid=sel-extract]").textContent()));
+check("image input requirement shown as supported", /Required — supported/.test(await page.locator("[data-testid=sel-extract]").textContent()));
+check("privacy route shown (ZDR routes listed)", /ZDR routes: mockprov\/zdr, mockprov\/zdr-eu/.test(await page.locator("[data-testid=sel-extract-privacy]").textContent()));
+await page.locator("[data-testid=sel-candidates-extract] summary").click();
+const cand = (id) => page.locator(`[data-testid=sel-candidates-extract] [data-model-id="${id}"]`);
+check("ineligible models listed with the reason (no ZDR route / unhealthy / over the ₹1 limit)", /no Zero-Data-Retention route/.test(await cand("mockvision/cheapnozdr").textContent()) && /serving normally/.test(await cand("mockvision/down").textContent()) && /above the per-request limit/.test(await cand("mockvision/pricey").textContent()));
+await page.locator("[data-testid=privacy-zdr]").uncheck();
+await page.locator("[data-testid=models-reload]").click();
+check("unsaved change (ZDR off) previewed: the cheaper non-ZDR model would be chosen", await until(async () => (await selModel("extract")) === "mockvision/cheapnozdr"));
+await page.locator("[data-testid=privacy-zdr]").check();
+await page.locator("[data-testid=models-reload]").click();
+await until(async () => (await selModel("extract")) === "mockvision/reader");
+check("pilot ceilings shown next to the budget fields", /Pilot ceiling ₹10/.test(await page.locator("body").textContent()) && /Pilot ceiling ₹1\./.test(await page.locator("body").textContent()));
+await page.locator("[data-testid=settings-save]").click();
+await page.locator("[data-testid=settings-msg]").waitFor();
+const va = await saved();
+check("saved: automatic selection, ZDR on, pricier fallbacks off, pilot limits", va?.selection?.mode === "auto" && va?.privacy?.zdr === true && va?.budget?.allowPricierFallback === false && va?.budget?.totalInr === 10 && va?.budget?.maxRequestInr === 1, va);
+await page.reload();
+check("after refresh: still automatic, same chosen model", (await page.locator("[data-testid=sel-auto]").isChecked()) && (await selModel("extract")) === "mockvision/reader");
+await page.locator("[data-testid=sel-manual]").check();
+check("manual override → the model pickers appear", (await page.locator("[data-testid=manual-models]").count()) === 1);
+
+section("B. Searchable extraction model picker (manual override)");
 const search = page.locator("[data-testid=m-extract-search]");
 await search.click();
 const list = page.locator("[data-testid=m-extract-list]");
@@ -85,7 +124,7 @@ const ids = await list.locator("[data-testid=model-option]").evaluateAll((els) =
 check("typing filters the list", ids.length === 1 && ids[0] === "mockvision/reader", ids);
 const opt = list.locator("[data-model-id='mockvision/reader']");
 const optText = (await opt.textContent()) ?? "";
-check("option shows name, ID, input/output price per M tokens and the max per request", /mockvision\/reader/.test(optText) && /in \$0\.50 \/ out \$3\.00 per M tokens/.test(optText) && /max ₹\d/.test(optText), optText);
+check("option shows name, ID, input/output price per M tokens and the max per request", /mockvision\/reader/.test(optText) && /in \$0\.050 \/ out \$0\.30 per M tokens/.test(optText) && /max ₹\d/.test(optText), optText);
 await search.press("Enter");
 check("Enter selects the highlighted model", /mockvision\/reader/.test(await page.locator("[data-testid=m-extract-current]").textContent()));
 const cost = (await page.locator("[data-testid=m-extract-cost]").textContent()) ?? "";
@@ -97,7 +136,9 @@ await page.keyboard.press("Escape");
 
 section("C. Unapproved / unusable models are listed but cannot be chosen");
 await db.query(`update "AiModel" set approved=false where id='mockvision/checker'`);
+await db.query(`update "AiModel" set approved=true where id='mockvision/badimg'`);
 await page.goto(URL_SETTINGS);
+await page.locator("[data-testid=sel-manual]").check();
 await page.locator("[data-testid=m-verify-search]").fill("checker");
 const chk = page.locator("[data-testid=m-verify-list] [data-model-id='mockvision/checker']");
 check("an unapproved model is shown with the reason", (await chk.getAttribute("data-usable")) === "false" && /Not approved — approve it in AI → Models/.test(await chk.textContent()));
@@ -111,6 +152,7 @@ await db.query(`update "AiModel" set approved=true where id='mockvision/checker'
 
 section("D. Verification model, same-model notice and cost table");
 await page.goto(URL_SETTINGS);
+await page.locator("[data-testid=sel-manual]").check();
 const pick = async (slot, id) => {
   await page.locator(`[data-testid=m-${slot}-search]`).fill(id);
   await page.locator(`[data-testid=m-${slot}-list] [data-model-id="${id}"]`).click();
@@ -145,10 +187,11 @@ await page.locator("[data-testid=settings-msg]").waitFor();
 const msg = (await page.locator("[data-testid=settings-msg]").textContent()) ?? "";
 check("save confirmation shown", /Settings saved at/.test(msg), msg);
 const v = await saved();
-check("persisted: models + pilot limits + ZDR; paid AI still OFF", v?.models?.extract === "mockvision/reader" && v?.models?.verify === "mockvision/checker" && v?.budget?.totalInr === 10 && v?.budget?.monthlyInr === 10 && v?.budget?.maxJobInr === 8 && v?.budget?.maxRequestInr === 1 && v?.budget?.keyReserveUsd === 5 && v?.privacy?.zdr === true && v?.aiEnabled === false && v?.budget?.retryTransient === false && (v?.models?.extractFallbacks ?? []).length === 0, v);
+check("persisted: manual override + models + pilot limits + ZDR; paid AI still OFF", v?.selection?.mode === "manual" && v?.models?.extract === "mockvision/reader" && v?.models?.verify === "mockvision/checker" && v?.budget?.totalInr === 10 && v?.budget?.monthlyInr === 10 && v?.budget?.maxJobInr === 8 && v?.budget?.maxRequestInr === 1 && v?.budget?.keyReserveUsd === 5 && v?.privacy?.zdr === true && v?.aiEnabled === false && v?.budget?.retryTransient === false && (v?.models?.extractFallbacks ?? []).length === 0, v);
 await page.reload();
 check("after refresh: selections shown again", /mockvision\/reader/.test(await page.locator("[data-testid=m-extract-current]").textContent()) && /mockvision\/checker/.test(await page.locator("[data-testid=m-verify-current]").textContent()) && (await page.locator("[data-testid=b-total]").inputValue()) === "10" && (await page.locator("[data-testid=b-maxjob]").inputValue()) === "8");
-check("with the ₹1 request cap the reader's maximum is flagged", (await page.locator("[data-testid=cost-over-cap]").count()) >= 1);
+check("with the ₹1 request cap the reader's maximum fits (not flagged)", (await page.locator("[data-testid=cost-over-cap]").count()) === 0);
+check("manual override evaluated with the same checks: shown in the selection table with the reason", /Manual override by an administrator/.test(await page.locator("[data-testid=sel-extract-reason]").textContent()));
 
 section("F. Invalid model IDs are refused by the server");
 const manifest = JSON.parse(readFileSync(path.join(APP, ".next/server/server-reference-manifest.json"), "utf8"));
@@ -165,8 +208,11 @@ for (const [label, patch, re] of [
   check(`raw save with ${label}: refused`, /"ok":false/.test(t) && re.test(t), t.slice(-200));
 }
 check("…the saved settings did not change", JSON.stringify(await saved()) === before);
-const t2 = await call({ ...v, budget: { ...v.budget, maxRequestInr: 9, maxJobInr: 8 } });
+const t2 = await call({ ...v, budget: { ...v.budget, maxRequestInr: 1, maxJobInr: 0.5 } });
 check("raw save with request cap above the hard job limit: refused", /cannot be above the hard limit per job/.test(t2), t2.slice(-200));
+const t3 = await call({ ...v, budget: { ...v.budget, monthlyInr: 1500, totalInr: 1000, maxJobInr: 200, defaultJobCapInr: 200, maxRequestInr: 50, keyReserveUsd: 0 } });
+const v3 = await saved();
+check("raw save above the pilot ceilings: stored clamped (₹10 / ₹10 / ₹8 / ₹1 / $5)", /"ok":true/.test(t3) && v3.budget.monthlyInr === 10 && v3.budget.totalInr === 10 && v3.budget.maxJobInr === 8 && v3.budget.maxRequestInr === 1 && v3.budget.keyReserveUsd === 5, v3.budget);
 
 section("G. Loading, error, retry");
 await page.goto(URL_SETTINGS);
@@ -180,7 +226,7 @@ await page.route("**/admin/ai-importer/settings", async (route) => {
   await route.continue();
 });
 await page.locator("[data-testid=models-retry]").click();
-check("retry shows the loading state", await until(async () => /Loading models/.test(await page.locator("[data-testid=models-reload]").textContent()), 3000));
+check("retry shows the loading state", await until(async () => /Loading/.test(await page.locator("[data-testid=models-reload]").textContent()), 3000));
 check("retry succeeds → error cleared", await until(async () => (await page.locator("[data-testid=models-error]").count()) === 0 && !/Loading/.test(await page.locator("[data-testid=models-reload]").textContent())));
 await page.unroute("**/admin/ai-importer/settings");
 await db.query(`update "AiModel" set approved=false where id like 'mock%'`);
@@ -207,18 +253,20 @@ section("H. Read-only admin and mobile");
 const full = await newPage();
 await login(full, F.fullAdmin, F.password);
 await full.goto(URL_SETTINGS);
-check("FULL_ADMIN: status visible, no model search, no Save", (await full.locator("[data-testid=provider-status]").count()) === 1 && (await full.locator("[data-testid=m-extract-search]").count()) === 0 && (await full.locator("[data-testid=settings-save]").count()) === 0);
+check("FULL_ADMIN: status + selection visible, no model search, no Save, no route refresh", (await full.locator("[data-testid=provider-status]").count()) === 1 && (await full.locator("[data-testid=selection]").count()) === 1 && (await full.locator("[data-testid=m-extract-search]").count()) === 0 && (await full.locator("[data-testid=settings-save]").count()) === 0 && (await full.locator("[data-testid=routes-refresh]").count()) === 0);
 const fullRaw = await full.evaluate(async ([id, b]) => { const r = await fetch(location.pathname, { method: "POST", headers: { "Next-Action": id, Accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify([b]) }); return r.text(); }, [saveId, { ...v, aiEnabled: true }]);
 check("FULL_ADMIN raw save refused; paid AI stays OFF", /do not have permission/.test(fullRaw) && (await saved())?.aiEnabled === false, fullRaw.slice(-160));
 const m = await newPage(true);
 await login(m, process.env.ADMIN_USER, process.env.ADMIN_PASS);
 await m.goto(URL_SETTINGS);
+check("mobile: selection table readable inside its card (no page scroll)", (await m.locator("[data-testid=sel-extract]").count()) === 1 && (await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)));
 await m.locator("[data-testid=m-extract-search]").click();
 await m.locator("[data-testid=m-extract-list]").waitFor();
 const box = await m.locator("[data-testid=m-extract-list]").boundingBox();
 check("mobile: model list fits the screen", !!box && box.x >= 0 && box.x + box.width <= 376, box);
 check("mobile: no horizontal page scroll", await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
 
+await db.query(`update "AiModel" set approved=true where id like 'mock%'`);
 check("no page errors", errors.length === 0, errors);
 await browser.close();
 await db.end();

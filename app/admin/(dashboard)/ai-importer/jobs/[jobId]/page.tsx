@@ -7,6 +7,8 @@ import { getExamSubjects } from "@/lib/exam-taxonomy";
 import { formatIst } from "@/lib/ist-time";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { jobSummary } from "@/lib/ai-import/summary";
+import { resetEligibility } from "@/lib/ai-import/jobs";
+import { planOf } from "@/lib/ai-import/select";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import { JobWorkspace, type JobView } from "./job-workspace";
 import type { ExamOption } from "../../new-import-form";
@@ -22,8 +24,11 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     include: { files: { orderBy: { createdAt: "asc" } }, events: { orderBy: { createdAt: "desc" }, take: 60 } },
   });
   if (!job) notFound();
-  const [canUse, canPublish, settings, summary, exams, papers, exam, keyEntries] = await Promise.all([
+  const resettable = ["NEEDS_REVIEW", "PAUSED", "PAUSED_BUDGET", "FAILED", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(job.status);
+  const [canUse, canManage, reset, canPublish, settings, summary, exams, papers, exam, keyEntries] = await Promise.all([
     hasPermission(PERMISSIONS.AI_IMPORTER_USE),
+    hasPermission(PERMISSIONS.AI_IMPORTER_MANAGE),
+    resettable ? resetEligibility(job.id) : null,
     hasPermission(PERMISSIONS.QUESTIONS_MANAGE),
     getImporterSettings(),
     jobSummary(job.id),
@@ -74,6 +79,9 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     runIds: runs.map((r) => r.bulkImportRunId!).filter(Boolean),
     aiEnabled: settings.aiEnabled,
     allowUnverified: settings.publish.allowUnverifiedAnswers,
+    plan: planOf(job.config),
+    reset,
+    canManage,
   };
   return <JobWorkspace job={view} exams={examOptions} canUse={canUse} canPublish={canPublish && canUse} />;
 }
