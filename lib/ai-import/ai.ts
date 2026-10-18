@@ -6,7 +6,7 @@ import { resolveOpenRouterKey, getEngineConfig, patchOpenRouterState } from "@/l
 import { getUsdInr, type FxRate } from "@/lib/ai-engine/fx";
 import { istDayMonth } from "@/lib/ai-engine/budget";
 import { formatInr, usdToInr } from "@/lib/ai-engine/config";
-import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, sanitize, type ChatContentPart } from "@/lib/ai-engine/openrouter";
+import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, getKeyInfo, sanitize, type ChatContentPart } from "@/lib/ai-engine/openrouter";
 import { importerFeature, type ImporterSettings, type ImporterTask } from "@/lib/ai-import/config";
 
 /**
@@ -21,13 +21,17 @@ import { importerFeature, type ImporterSettings, type ImporterTask } from "@/lib
  *
  * The importer budget is separate from the platform / student AI budgets
  * (lib/ai-engine/budget.ts excludes "qimport_*"). The OpenRouter key's own
- * limit is shared and remains the provider-side backstop.
+ * limit is shared with student Ask AI, so before every request the key's
+ * remaining credit is read and the request is refused unless the configured
+ * reserve (budget.keyReserveUsd) would remain after its worst case.
+ * One attempt per request unless budget.retryTransient is on; a fallback model
+ * priced above the preferred model is never used.
  */
 
 export class ImporterBudgetError extends Error {
   constructor(
     message: string,
-    readonly scope: "job" | "month" | "request"
+    readonly scope: "job" | "month" | "request" | "key"
   ) {
     super(message);
     this.name = "ImporterBudgetError";
@@ -41,6 +45,14 @@ const LOCK_KEY = 7_301_442_031; // importer budget advisory lock
 export const STALE_MS = 10 * 60_000;
 /** Conservative token allowance per image part (providers bill 250–1,800 tokens for a page image). */
 export const IMAGE_TOKENS = 2_000;
+/** OpenRouter max_price headroom over the catalog price; the worst-case reservation uses the same factor. */
+export const PRICE_MARGIN = 1.05;
+
+/** Fallbacks may never cost more than the preferred model (per prompt, completion and request price). */
+function notPricier(m: AiModel, preferred: AiModel): boolean {
+  const out = (x: AiModel) => Math.max(x.completionPrice ?? 0, x.reasoningPrice ?? 0);
+  return (m.promptPrice ?? 0) <= (preferred.promptPrice ?? 0) && out(m) <= out(preferred) && (m.requestPrice ?? 0) <= (preferred.requestPrice ?? 0);
+}
 
 export interface AiCallInput {
   jobId: string;
@@ -246,12 +258,23 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
     else usable.push(catalog.get(id)!);
   }
   if (!usable.length) throw new ImporterAiUnavailable(`No usable model for ${input.task}: ${problems.join("; ")}.`);
+  // Never switch to a more expensive model: drop fallbacks priced above the preferred one.
+  for (const m of usable.slice(1)) if (!notPricier(m, usable[0])) usable.splice(usable.indexOf(m), 1);
 
   const inputTokens = estimateInputTokens(input.system, input.content);
-  const worstUsd = worstCaseUsd(usable, inputTokens, input.maxOutputTokens);
+  const worstUsd = worstCaseUsd(usable, inputTokens, input.maxOutputTokens) * PRICE_MARGIN;
   const worstInr = usdToInr(worstUsd, fx.rate)!;
   if (worstInr > input.settings.budget.maxRequestInr) {
     throw new ImporterBudgetError(`One ${input.task} request could cost up to ${formatInr(worstInr)}, above the per-request limit of ${formatInr(input.settings.budget.maxRequestInr)} (Import Settings).`, "request");
+  }
+  // The key's limit is shared with student Ask AI: keep the configured reserve untouched (fail closed).
+  const keyInfo = await getKeyInfo(apiKey).catch(() => null);
+  if (!keyInfo) throw new ImporterAiUnavailable("The OpenRouter key's remaining credit could not be read, so nothing was sent.");
+  if (keyInfo.limit_remaining !== null && keyInfo.limit_remaining - worstUsd < input.settings.budget.keyReserveUsd) {
+    throw new ImporterBudgetError(
+      `The shared OpenRouter key has $${keyInfo.limit_remaining.toFixed(2)} left; this request could use up to $${worstUsd.toFixed(4)}, which would leave less than the $${input.settings.budget.keyReserveUsd.toFixed(2)} kept for student Ask AI (Import Settings).`,
+      "key"
+    );
   }
   const typicalUsd = worstCaseUsd(usable, inputTokens, Math.round(input.maxOutputTokens * 0.4));
   const maxPrompt = Math.max(...usable.map((m) => m.promptPrice ?? 0)) * 1e6;
@@ -261,8 +284,9 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   const feature = importerFeature(input.task);
 
   let lastError: OpenRouterError | null = null;
-  // At most ONE retry, only after a transient error — never a retry loop, never after a timeout.
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  // One attempt; at most ONE retry, only when enabled and only after a transient error — never a loop, never after a timeout.
+  const attempts = input.settings.budget.retryTransient ? 2 : 1;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     const requestKey = `qi:${input.jobId}:${requestId}:${attempt}`;
     await reserve({ jobId: input.jobId, requestKey, feature, amountInr: worstInr, settings: input.settings });
     const started = Date.now();
@@ -276,7 +300,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         maxTokens: input.maxOutputTokens,
         temperature: 0,
         provider: {
-          max_price: { prompt: maxPrompt * 1.05, completion: maxCompletion * 1.05 },
+          max_price: { prompt: maxPrompt * PRICE_MARGIN, completion: maxCompletion * PRICE_MARGIN },
           data_collection: input.settings.privacy.dataCollection,
           ...(input.settings.privacy.zdr ? { zdr: true } : {}),
           allow_fallbacks: true,

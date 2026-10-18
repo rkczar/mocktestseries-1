@@ -51,6 +51,13 @@ export interface ImporterSettings {
     defaultJobCapInr: number;
     /** Hard ceiling for one AI request (INR). */
     maxRequestInr: number;
+    /**
+     * The OpenRouter key is shared with student Ask AI: an importer request is refused
+     * unless at least this much (USD) of the key's limit would remain after its worst case.
+     */
+    keyReserveUsd: number;
+    /** Retry once after a transient provider error (off = one attempt per request, never a retry). */
+    retryTransient: boolean;
   };
   limits: {
     maxFileMb: number;
@@ -91,7 +98,7 @@ export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   aiEnabled: false,
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
   privacy: { dataCollection: "deny", zdr: false },
-  budget: { monthlyInr: 1500, defaultJobCapInr: 200, maxRequestInr: 10 },
+  budget: { monthlyInr: 1500, defaultJobCapInr: 200, maxRequestInr: 10, keyReserveUsd: 5, retryTransient: false },
   limits: { maxFileMb: 100, maxPagesPerFile: 300, maxFilesPerJob: 10, renderDpi: 150, concurrency: 2 },
   verification: { secondReadBelow: 0.8, independentAnswer: false, topicMinConfidence: 0.7, nearDuplicateAt: 0.85 },
   publish: { allowUnverifiedAnswers: false, requireTopic: true },
@@ -107,6 +114,7 @@ export const SETTINGS_BOUNDS = {
   monthlyInr: [0, 1_000_000],
   defaultJobCapInr: [0, 100_000],
   maxRequestInr: [0.01, 1_000],
+  keyReserveUsd: [0, 10_000],
   originalDays: [1, 3650],
   intermediateDays: [1, 365],
 } as const;
@@ -142,6 +150,8 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
       monthlyInr: clamp(r.budget?.monthlyInr, SETTINGS_BOUNDS.monthlyInr, d.budget.monthlyInr),
       defaultJobCapInr: clamp(r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.defaultJobCapInr, d.budget.defaultJobCapInr),
       maxRequestInr: clamp(r.budget?.maxRequestInr, SETTINGS_BOUNDS.maxRequestInr, d.budget.maxRequestInr),
+      keyReserveUsd: clamp(r.budget?.keyReserveUsd, SETTINGS_BOUNDS.keyReserveUsd, d.budget.keyReserveUsd),
+      retryTransient: r.budget?.retryTransient === true,
     },
     limits: {
       maxFileMb: Math.round(clamp(r.limits?.maxFileMb, SETTINGS_BOUNDS.maxFileMb, d.limits.maxFileMb)),

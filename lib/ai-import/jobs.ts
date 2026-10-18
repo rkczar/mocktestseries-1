@@ -9,6 +9,8 @@ import { checkFilename, detectFile } from "@/lib/ai-import/detect";
 import { pdfInfo } from "@/lib/ai-import/pdf";
 import { adoptFile, tmpDir, removeVaultDir } from "@/lib/ai-import/vault";
 import { kickWorker } from "@/lib/ai-import/kick";
+import { estimateJobCost } from "@/lib/ai-import/estimate";
+import type { JobAnalysis } from "@/lib/ai-import/analyze";
 
 export class ImportJobError extends Error {
   constructor(
@@ -221,9 +223,25 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
   await validateContext(input);
   if (!Number.isFinite(input.budgetInr) || input.budgetInr < 0) throw new ImportJobError("Enter a valid job budget.");
   const settings = await getImporterSettings();
+  // Re-price with the settings that will be frozen on the job: stop before any AI call when
+  // the estimate cannot be priced or exceeds the job budget (the budget is never raised for you).
+  const analysis = job.analysis as unknown as JobAnalysis | null;
+  const facts = (role: string) => (analysis?.files ?? []).filter((f) => f.role === role && f.facts).map((f) => f.facts!);
+  const estimate = await estimateJobCost({ paperFacts: facts(AiImportFileRole.PAPER), keyFacts: facts(AiImportFileRole.ANSWER_KEY), settings });
+  // Lines without a usable model never run (their questions are flagged instead), so only priced lines count.
+  const willCallAi = settings.aiEnabled && estimate.lines.some((l) => l.calls > 0 && l.model !== null && l.problem === null);
+  if (willCallAi) {
+    if (estimate.totalInr === null) throw new ImportJobError(`The AI cost cannot be estimated (${estimate.notes[0] ?? "missing model price or exchange rate"}). Nothing was started.`);
+    if (estimate.totalInr > Math.min(input.budgetInr, 100_000)) {
+      throw new ImportJobError(`The estimated AI cost (₹${estimate.totalInr.toFixed(2)}) is above the job budget (₹${input.budgetInr.toFixed(2)}). Nothing was started — reduce the sample or raise the budget deliberately.`);
+    }
+  }
   await prisma.aiImportJob.update({
     where: { id: job.id },
     data: {
+      estCostInr: estimate.totalInr,
+      estCostUsd: estimate.totalUsd,
+      estimate: estimate as unknown as Prisma.InputJsonValue,
       examId: input.examId,
       paperType: input.paperType,
       subjectId: input.paperType === AiImportPaperType.SINGLE_SUBJECT ? input.subjectId : null,

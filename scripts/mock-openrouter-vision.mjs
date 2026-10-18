@@ -11,7 +11,7 @@
  * Models (USD per token):
  *   mockvision/reader   0.0000005 / 0.000003   vision — primary extractor
  *   mockvision/checker  0.00000025 / 0.000002  vision — independent second read (fixture `checker` variant)
- *   mockvision/fail     vision, always 502 (fallback test)
+ *   mockvision/fail     0.0000005 / 0.000003   vision, always 502 (fallback test; same price as reader)
  *   mockvision/pricey   0.00005 / 0.00015      vision — exceeds the per-request ceiling
  *   mockvision/slow     vision, answers after 6 s (interrupt test)
  *   mocktext/classifier 0.0000001 / 0.0000004  text only
@@ -27,7 +27,7 @@ const fixtures = JSON.parse(readFileSync(process.argv[3], "utf8"));
 const MODELS = {
   "mockvision/reader": { p: 0.0000005, c: 0.000003, vision: true },
   "mockvision/checker": { p: 0.00000025, c: 0.000002, vision: true },
-  "mockvision/fail": { p: 0.0000004, c: 0.000002, vision: true },
+  "mockvision/fail": { p: 0.0000005, c: 0.000003, vision: true },
   "mockvision/pricey": { p: 0.00005, c: 0.00015, vision: true },
   "mockvision/slow": { p: 0.0000005, c: 0.000003, vision: true },
   "mocktext/classifier": { p: 0.0000001, c: 0.0000004, vision: false },

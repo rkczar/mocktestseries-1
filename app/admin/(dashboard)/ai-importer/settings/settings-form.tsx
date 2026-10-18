@@ -120,6 +120,11 @@ export function SettingsForm({ initial, models, canManage }: { initial: Importer
           {field("b-month", "Monthly importer budget (₹)", s.budget.monthlyInr, (n) => set("budget", { monthlyInr: n }))}
           {field("b-job", "Default job budget (₹)", s.budget.defaultJobCapInr, (n) => set("budget", { defaultJobCapInr: n }))}
           {field("b-req", "Maximum per AI request (₹)", s.budget.maxRequestInr, (n) => set("budget", { maxRequestInr: n }))}
+          {field("b-key", "Keep on the shared OpenRouter key for Ask AI ($)", s.budget.keyReserveUsd, (n) => set("budget", { keyReserveUsd: n }), "An importer request is refused if it could leave less than this on the key.")}
+          <label className="flex items-center gap-2 self-end text-sm sm:col-span-2">
+            <input type="checkbox" checked={s.budget.retryTransient} onChange={(e) => set("budget", { retryTransient: e.target.checked })} disabled={d} data-testid="b-retry" />
+            Retry a request once after a temporary provider error (counts against the same budgets)
+          </label>
           {field("l-file", "Maximum file size (MB)", s.limits.maxFileMb, (n) => set("limits", { maxFileMb: n }))}
           {field("l-pages", "Maximum pages per file", s.limits.maxPagesPerFile, (n) => set("limits", { maxPagesPerFile: n }))}
           {field("l-files", "Maximum files per import", s.limits.maxFilesPerJob, (n) => set("limits", { maxFilesPerJob: n }))}
