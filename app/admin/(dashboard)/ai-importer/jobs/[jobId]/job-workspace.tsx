@@ -9,11 +9,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
-import { ANSWER_STATUS_LABELS, CHUNK_BYTES, JOB_STATUS_LABELS, formatBytes, statusVariant } from "@/lib/ai-import/config";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ANSWER_STATUS_LABELS, CHUNK_BYTES, JOB_STATUS_LABELS, fileRemovalBlockedReason, formatBytes, statusVariant } from "@/lib/ai-import/config";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { JobSummary } from "@/lib/ai-import/summary";
 import { JobContextFields, type ExamOption } from "../../new-import-form";
-import { analyzeJobAction, cancelJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, resumeJobAction } from "../../actions";
+import { analyzeJobAction, cancelJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resumeJobAction } from "../../actions";
 
 export interface JobView {
   id: string;
@@ -152,6 +153,57 @@ function Uploader({ jobId, files, canAddPapers }: { jobId: string; files: JobVie
   );
 }
 
+type JobFile = JobView["files"][number];
+const roleLabel = (role: string) => (role === "PAPER" ? "Question paper" : "Answer key");
+
+/** Confirmation for removing one uploaded file; stays open with the server's reason when the removal is refused. */
+function RemoveFileDialog({ jobId, file, analyzed, onClose, onRemoved }: { jobId: string; file: JobFile; analyzed: boolean; onClose: () => void; onRemoved: (message: string) => void }) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const remove = () =>
+    start(async () => {
+      setError(null);
+      const r = await removeFileAction(jobId, file.id);
+      if (!r.ok) return setError(r.error);
+      const d = r.data;
+      onRemoved(
+        `Removed “${d.name}” (${roleLabel(d.role).toLowerCase()}).${d.analysisCleared ? " The analysis was cleared — analyze the files again before confirming." : ""} Upload the correct ${d.role === "PAPER" ? "question paper" : "answer key"} below if needed.${d.warning ? ` ${d.warning}` : ""}`
+      );
+    });
+  return (
+    <Dialog open onOpenChange={(o) => !o && !pending && onClose()}>
+      <DialogContent data-testid="remove-file-dialog">
+        <DialogHeader>
+          <DialogTitle>Remove this file?</DialogTitle>
+          <DialogDescription>It is removed from this import only. Files of other imports and questions already in the Question Bank are never touched.</DialogDescription>
+        </DialogHeader>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-sm">
+          <dt className="text-[var(--color-muted-foreground)]">File</dt>
+          <dd className="break-all font-medium" data-testid="remove-file-name">{file.name}</dd>
+          <dt className="text-[var(--color-muted-foreground)]">Type</dt>
+          <dd data-testid="remove-file-type">{roleLabel(file.role)}{file.kind ? ` · ${file.kind.toUpperCase()}` : ""}</dd>
+          <dt className="text-[var(--color-muted-foreground)]">Size</dt>
+          <dd>{formatBytes(file.bytes)}{file.pages ? ` · ${file.pages} page${file.pages === 1 ? "" : "s"}` : ""}</dd>
+        </dl>
+        <ul className="mt-3 list-disc pl-5 text-xs text-[var(--color-muted-foreground)]">
+          {analyzed && <li>The analysis report and cost estimate are cleared; analyze the files again before confirming.</li>}
+          <li>The stored copy is deleted unless another upload uses the identical file.</li>
+          <li>The removal is recorded in the activity log.</li>
+        </ul>
+        {error && <p className="mt-3 text-sm text-[var(--color-error)]" role="alert" data-testid="remove-file-error">{error}</p>}
+        <DialogFooter className="flex-wrap">
+          <Button variant="outline" size="sm" disabled={pending} onClick={onClose}>
+            Keep file
+          </Button>
+          <Button variant="danger" size="sm" disabled={pending} onClick={remove} data-testid="remove-file-confirm">
+            {pending ? "Removing…" : "Remove file"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: "warn" | "ok" | "err" }) {
   return (
     <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
@@ -168,6 +220,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
   const [notice, setNotice] = useState<string | null>(null);
   const [budget, setBudget] = useState(String(job.budgetInr));
   const [ctx, setCtx] = useState({ examId: job.examId, paperType: job.paperType, subjectId: job.subjectId ?? "", year: job.year ? String(job.year) : "", paperCode: job.paperCode ?? "", previousYearPaperId: job.previousYearPaperId ?? "" });
+  const [removing, setRemoving] = useState<JobFile | null>(null);
   const busy = BUSY.includes(job.status);
 
   useEffect(() => {
@@ -192,6 +245,10 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
   const a = job.analysis;
   const editable = job.status === "DRAFT" || job.status === "AWAITING_CONFIRMATION";
   const canImport = ["NEEDS_REVIEW", "COMPLETED_WITH_ISSUES", "COMPLETED"].includes(job.status);
+  const removalBlocked = fileRemovalBlockedReason(job.status);
+  const stored = job.files.filter((f) => f.status !== "UPLOADING" && f.status !== "REJECTED");
+  const totals = { papers: stored.filter((f) => f.role === "PAPER").length, keys: stored.filter((f) => f.role === "ANSWER_KEY").length, pages: stored.filter((f) => f.role === "PAPER").reduce((n, f) => n + (f.pages ?? 0), 0) };
+  const linkedKeys = (f: JobFile) => (f.role === "PAPER" ? job.files.filter((k) => k.role === "ANSWER_KEY" && k.paperFileId === f.id) : []);
 
   return (
     <div className="flex flex-col gap-4" data-testid="job-workspace">
@@ -222,46 +279,115 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
           <CardDescription>Question papers and their answer keys. Each file is checked by its content (not its name) and kept privately in the Original Paper Vault.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <table className="w-full text-left text-sm" data-testid="files-table">
-            <thead className="text-xs text-[var(--color-muted-foreground)]">
-              <tr>
-                <th className="py-1 pr-2 font-medium">File</th>
-                <th className="py-1 pr-2 font-medium">Type</th>
-                <th className="py-1 pr-2 font-medium">Size</th>
-                <th className="py-1 pr-2 font-medium">Pages</th>
-                <th className="py-1 pr-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {job.files.map((f) => (
-                <tr key={f.id} className="border-t border-[var(--color-border)]">
-                  <td className="py-1.5 pr-2">
-                    {f.name}
-                    {f.identicalTo && <span className="block text-xs text-[var(--color-muted-foreground)]">Identical to “{f.identicalTo}” — stored once</span>}
-                  </td>
-                  <td className="py-1.5 pr-2">{f.role === "PAPER" ? "Question paper" : `Answer key${f.keyEntries !== null ? ` · ${f.keyEntries} entries` : ""}`}</td>
-                  <td className="py-1.5 pr-2">{formatBytes(f.bytes)}</td>
-                  <td className="py-1.5 pr-2">{f.pages ?? "—"}</td>
-                  <td className="py-1.5 pr-2">
-                    <Badge variant={f.status === "REJECTED" ? "error" : f.status === "UPLOADING" ? "warning" : "neutral"}>{f.status.toLowerCase()}</Badge>
-                    {f.error && <span className="block text-xs text-[var(--color-error)]">{f.error}</span>}
-                    {canUse && (f.status === "UPLOADING" || f.status === "REJECTED") && (
-                      <button type="button" className="ml-2 text-xs underline" onClick={() => act(() => discardUploadAction(f.id))}>
-                        Remove
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {!job.files.length && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm" data-testid="files-table">
+              <thead className="text-xs text-[var(--color-muted-foreground)]">
                 <tr>
-                  <td colSpan={5} className="py-3 text-[var(--color-muted-foreground)]">
-                    No files yet.
-                  </td>
+                  <th className="py-1 pr-2 font-medium">File</th>
+                  <th className="py-1 pr-2 font-medium">Type</th>
+                  <th className="hidden py-1 pr-2 font-medium sm:table-cell">Size</th>
+                  <th className="hidden py-1 pr-2 font-medium sm:table-cell">Pages</th>
+                  <th className="hidden py-1 pr-2 font-medium sm:table-cell">Status</th>
+                  {canUse && <th className="py-1 text-right font-medium">Action</th>}
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {job.files.map((f) => {
+                  const unfinished = f.status === "UPLOADING" || f.status === "REJECTED";
+                  const keys = linkedKeys(f);
+                  const blocked = unfinished ? null : removalBlocked ?? (keys.length ? `Remove its answer key${keys.length === 1 ? "" : "s"} first.` : null);
+                  return (
+                    <tr key={f.id} className="border-t border-[var(--color-border)] align-top" data-testid="file-row" data-file-id={f.id}>
+                      <td className="py-1.5 pr-2 sm:max-w-[16rem]">
+                        <span className="font-medium [overflow-wrap:anywhere]" data-testid="file-name">{f.name}</span>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--color-muted-foreground)] sm:hidden">
+                          <span>
+                            {formatBytes(f.bytes)}
+                            {f.pages ? ` · ${f.pages} page${f.pages === 1 ? "" : "s"}` : ""}
+                          </span>
+                          <Badge variant={f.status === "REJECTED" ? "error" : f.status === "UPLOADING" ? "warning" : "neutral"}>{f.status.toLowerCase()}</Badge>
+                        </span>
+                        {f.error && <span className="block text-xs text-[var(--color-error)] sm:hidden">{f.error}</span>}
+                        {f.identicalTo && <span className="block text-xs text-[var(--color-muted-foreground)]">Identical to “{f.identicalTo}” — stored once</span>}
+                      </td>
+                      <td className="py-1.5 pr-2" data-testid="file-type">
+                        {roleLabel(f.role)}
+                        {f.kind && <span className="text-xs text-[var(--color-muted-foreground)]"> · {f.kind.toUpperCase()}</span>}
+                        {f.role === "ANSWER_KEY" && f.keyEntries !== null && <span className="block text-xs text-[var(--color-muted-foreground)]">{f.keyEntries} entries</span>}
+                      </td>
+                      <td className="hidden py-1.5 pr-2 sm:table-cell">{formatBytes(f.bytes)}</td>
+                      <td className="hidden py-1.5 pr-2 sm:table-cell">{f.pages ?? "—"}</td>
+                      <td className="hidden py-1.5 pr-2 sm:table-cell">
+                        <Badge variant={f.status === "REJECTED" ? "error" : f.status === "UPLOADING" ? "warning" : "neutral"}>{f.status.toLowerCase()}</Badge>
+                        {f.error && <span className="block text-xs text-[var(--color-error)]">{f.error}</span>}
+                      </td>
+                      {canUse && (
+                        <td className="py-1.5 text-right">
+                          {unfinished ? (
+                            <Button variant="outline" size="compact" disabled={pending} onClick={() => act(() => discardUploadAction(f.id), `Removed the unfinished upload “${f.name}”.`)} data-testid="file-remove">
+                              Remove upload
+                            </Button>
+                          ) : (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="compact"
+                                className="border-[color-mix(in_srgb,var(--color-error)_55%,transparent)] text-[var(--color-error)] hover:bg-[color-mix(in_srgb,var(--color-error)_12%,transparent)]"
+                                disabled={pending || !!blocked}
+                                aria-label={`Remove ${f.name}`}
+                                aria-describedby={blocked ? `remove-why-${f.id}` : undefined}
+                                onClick={() => setRemoving(f)}
+                                data-testid="file-remove"
+                              >
+                                Remove
+                              </Button>
+                              {blocked && keys.length > 0 && !removalBlocked && (
+                                <span id={`remove-why-${f.id}`} className="mt-1 block text-xs text-[var(--color-muted-foreground)]" data-testid="file-remove-why">
+                                  {blocked}
+                                </span>
+                              )}
+                              {removalBlocked && <span id={`remove-why-${f.id}`} className="sr-only">{removalBlocked}</span>}
+                            </>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+                {!job.files.length && (
+                  <tr>
+                    <td colSpan={canUse ? 6 : 5} className="py-3 text-[var(--color-muted-foreground)]">
+                      No files yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {stored.length > 0 && (
+            <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="files-totals">
+              {totals.papers} question paper{totals.papers === 1 ? "" : "s"} · {totals.keys} answer key{totals.keys === 1 ? "" : "s"} · {totals.pages} paper page{totals.pages === 1 ? "" : "s"}
+            </p>
+          )}
+          {canUse && removalBlocked && stored.length > 0 && (
+            <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="files-remove-blocked">
+              File removal is unavailable: {removalBlocked}
+            </p>
+          )}
+          {removing && (
+            <RemoveFileDialog
+              jobId={job.id}
+              file={removing}
+              analyzed={!!a || job.status === "AWAITING_CONFIRMATION"}
+              onClose={() => setRemoving(null)}
+              onRemoved={(m) => {
+                setRemoving(null);
+                setError(null);
+                setNotice(m);
+                router.refresh();
+              }}
+            />
+          )}
           {canUse && job.status !== "CANCELLED" && !["PROCESSING", "IMPORTING", "ANALYZING"].includes(job.status) && <Uploader jobId={job.id} files={job.files} canAddPapers={editable} />}
           {canUse && editable && (
             <div>

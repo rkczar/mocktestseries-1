@@ -13,12 +13,13 @@
  */
 import "dotenv/config";
 import { readFileSync, statSync, utimesSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { AiImportFileRole, AiImportPaperType, QuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { CHUNK_BYTES, DEFAULT_IMPORTER_SETTINGS, normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { saveImporterSettings, getImporterSettings } from "@/lib/ai-import/settings";
-import { addFile, completeFile, confirmJob, createJob, discardUpload, putChunk, requestAnalysis, resumeJob } from "@/lib/ai-import/jobs";
+import { addFile, completeFile, confirmJob, createJob, discardUpload, putChunk, removeFile, requestAnalysis, resumeJob } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
 import { approveQuestions, rejectQuestions, requestImport, setAnswer, setFigure, setTaxonomy, revalidateQuestions, allowDuplicate } from "@/lib/ai-import/review";
 import { jobSummary } from "@/lib/ai-import/summary";
@@ -550,6 +551,164 @@ async function main() {
   const ex = toExtracted(injected, 1, "m");
   check("model output with extra fields: only schema fields survive (no actions)", !("action" in (injected.questions[0] as object)) && !("tool_calls" in injected) && ex[0].stem.startsWith("Ignore previous"));
   check("injected instruction text stays question text, nothing else happens", ex.length === 1 && ex[0].options.length === 1);
+
+  // ------------------------------------------------------------------ S
+  section("S. Remove and replace uploaded files");
+  // Unique bytes per file, so "stored copy deleted" is observable (identical uploads share one stored file).
+  const tag = Date.now().toString(36);
+  writeFileSync(path.join(FX, "rm-paper-wrong.pdf"), Buffer.concat([readFileSync(path.join(FX, "digital-clean.pdf")), Buffer.from(`\n%rm-wrong-${tag}\n`)]));
+  writeFileSync(path.join(FX, "rm-paper-right.pdf"), Buffer.concat([readFileSync(path.join(FX, "formula.pdf")), Buffer.from(`\n%rm-right-${tag}\n`)]));
+  writeFileSync(path.join(FX, "rm-key-wrong.csv"), `Q,Answer\n1,A\n2,A\n3,A\n4,${tag.length % 4 === 0 ? "B" : "C"}\n5,D\n`);
+  writeFileSync(path.join(FX, "rm-key-right.csv"), `Q,Answer\n1,B\n2,C\n3,D\n4,A\n6,${tag.slice(-1) < "m" ? "A" : "B"}\n`);
+  const stored = async (fileId: string) => (await prisma.aiImportFile.findUnique({ where: { id: fileId }, select: { storageKey: true } }))?.storageKey ?? null;
+  const onDisk = (key: string | null) => !!key && (() => {
+    try {
+      return statSync(path.join(vaultRoot(), key)).isFile();
+    } catch {
+      return false;
+    }
+  })();
+  const jobR = await newJob(actor, exam.id, "FX remove/replace");
+  const pWrong = await upload(actor, jobR, "rm-paper-wrong.pdf");
+  const kWrong = await upload(actor, jobR, "rm-key-wrong.csv", AiImportFileRole.ANSWER_KEY);
+  check("wrong paper + wrong key uploaded", pWrong.ok && kWrong.ok, [pWrong, kWrong]);
+  await requestAnalysis(jobR, actor);
+  await runWorker(60_000);
+  let jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
+  check("analyzed → awaiting confirmation", jr.status === "AWAITING_CONFIRMATION" && jr.analysis !== null, jr.status);
+  const kWrongKey = await stored(kWrong.fileId);
+  const pWrongKey = await stored(pWrong.fileId);
+
+  // Wrong answer key → removed, replaced, re-analyzed.
+  const rk = await removeFile({ jobId: jobR, fileId: kWrong.fileId, actorId: actor });
+  jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
+  check("answer key removed: row gone", !(await prisma.aiImportFile.findUnique({ where: { id: kWrong.fileId } })));
+  check("answer key removed: unique stored copy deleted from the vault", rk.storedFileDeleted && rk.sharedWith === 0 && !onDisk(kWrongKey), rk);
+  check("removal cleared the analysis and estimate; job back to Uploading", jr.status === "DRAFT" && jr.analysis === null && jr.estimate === null && jr.estCostInr === null && rk.analysisCleared, [jr.status, rk.analysisCleared]);
+  check("the other file is untouched (row + stored bytes), status reset to uploaded", (await prisma.aiImportFile.findUniqueOrThrow({ where: { id: pWrong.fileId } })).status === "UPLOADED" && onDisk(pWrongKey));
+  const evK = await prisma.aiImportEvent.findFirst({ where: { jobId: jobR, type: "FILE_REMOVED" }, orderBy: { createdAt: "desc" } });
+  check("activity log records the removal with filename and time", !!evK && evK.message.includes("rm-key-wrong.csv") && evK.message.includes("answer key") && evK.actorId === actor && !!evK.createdAt);
+  check("audit log row written", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_FILE_REMOVED", entityId: jobR } })) === 1);
+  await expectError("stale analysis cannot be confirmed after a removal", () => confirmJob({ jobId: jobR, actorId: actor, examId: jr.examId, paperType: jr.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 20 }), /Only an analyzed import/);
+  await expectError("removing the same file twice is refused", () => removeFile({ jobId: jobR, fileId: kWrong.fileId, actorId: actor }), /not part of this import/);
+  const kRight = await upload(actor, jobR, "rm-key-right.csv", AiImportFileRole.ANSWER_KEY);
+  check("replacement answer key uploaded", kRight.ok, kRight);
+  await requestAnalysis(jobR, actor);
+  await runWorker(60_000);
+  jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
+  const ar = jr.analysis as { files: { fileId: string }[]; totals: { pages: number; answerKeyFiles: number } } | null;
+  check("re-analysis uses the replacement only (removed key absent)", jr.status === "AWAITING_CONFIRMATION" && !!ar && ar.totals.answerKeyFiles === 1 && ar.files.some((f) => f.fileId === kRight.fileId) && !ar.files.some((f) => f.fileId === kWrong.fileId), ar?.files);
+  check("paper totals unchanged by the key swap", ar?.totals.pages === 2, ar?.totals);
+
+  // Wrong question paper → removed and replaced (the key has no explicit paper link: single-paper import).
+  const rp = await removeFile({ jobId: jobR, fileId: pWrong.fileId, actorId: actor });
+  check("question paper removed; stored copy deleted", rp.storedFileDeleted && !onDisk(pWrongKey) && rp.role === "PAPER", rp);
+  check("the answer key survives the paper removal", !!(await prisma.aiImportFile.findUnique({ where: { id: kRight.fileId } })));
+  await expectError("analysis needs a paper again", () => requestAnalysis(jobR, actor), /at least one question paper/);
+  const pRight = await upload(actor, jobR, "rm-paper-right.pdf");
+  await requestAnalysis(jobR, actor);
+  await runWorker(60_000);
+  jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
+  const ar2 = jr.analysis as { files: { fileId: string }[]; totals: { pages: number } } | null;
+  const rightPages = (await prisma.aiImportFile.findUniqueOrThrow({ where: { id: pRight.fileId } })).pageCount;
+  check("re-analysis counts the replacement paper's pages only", jr.status === "AWAITING_CONFIRMATION" && ar2?.totals.pages === rightPages && !ar2?.files.some((f) => f.fileId === pWrong.fileId), [ar2?.totals, rightPages]);
+
+  // A paper with an explicitly linked key cannot be removed before its key.
+  const pSecond = await upload(actor, jobR, "rm-paper-wrong.pdf", AiImportFileRole.PAPER, null, "second-paper.pdf");
+  const kSecond = await upload(actor, jobR, "key.csv", AiImportFileRole.ANSWER_KEY, pSecond.fileId);
+  await expectError("paper with a linked answer key is refused (names the key)", () => removeFile({ jobId: jobR, fileId: pSecond.fileId, actorId: actor }), /linked to this paper first.*key\.csv/);
+  await removeFile({ jobId: jobR, fileId: kSecond.fileId, actorId: actor });
+  const rpSecond = await removeFile({ jobId: jobR, fileId: pSecond.fileId, actorId: actor });
+  check("after removing its key, the paper can be removed", rpSecond.name === "second-paper.pdf");
+
+  // Shared stored file: identical bytes in another job are never deleted.
+  const jobR2 = await newJob(actor, exam.id, "FX remove shared");
+  const shareA = await upload(actor, jobR, "rm-paper-wrong.pdf", AiImportFileRole.PAPER, null, "shared-a.pdf");
+  const shareB = await upload(actor, jobR2, "rm-paper-wrong.pdf", AiImportFileRole.PAPER, null, "shared-b.pdf");
+  const sharedKey = await stored(shareA.fileId);
+  check("identical uploads share one stored file", !!sharedKey && sharedKey === (await stored(shareB.fileId)));
+  const rs = await removeFile({ jobId: jobR, fileId: shareA.fileId, actorId: actor });
+  check("shared file: stored copy kept, other job's upload intact", !rs.storedFileDeleted && rs.sharedWith === 1 && onDisk(sharedKey) && !!(await prisma.aiImportFile.findUnique({ where: { id: shareB.fileId } })), rs);
+  check("shared file: the activity log says the stored copy was kept", /stored copy is kept/.test((await prisma.aiImportEvent.findFirstOrThrow({ where: { jobId: jobR, type: "FILE_REMOVED" }, orderBy: { createdAt: "desc" } })).message));
+  await requestAnalysis(jobR2, actor);
+  await runWorker(60_000);
+  check("the other job still analyzes its (shared) file", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR2 } })).status === "AWAITING_CONFIRMATION");
+
+  // Ownership: a file is removed only through its own job.
+  await expectError("a file of another job is refused", () => removeFile({ jobId: jobR, fileId: shareB.fileId, actorId: actor }), /not part of this import/);
+  await expectError("unknown job is refused", () => removeFile({ jobId: "nosuchjob0000000", fileId: shareB.fileId, actorId: actor }), /not found/);
+  check("refused removals changed nothing", !!(await prisma.aiImportFile.findUnique({ where: { id: shareB.fileId } })) && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR2 } })).analysis !== null);
+
+  // Job-state safety.
+  const kRightStored = await stored(kRight.fileId);
+  await requestAnalysis(jobR, actor);
+  await expectError("removal refused while the files are being analyzed", () => removeFile({ jobId: jobR, fileId: kRight.fileId, actorId: actor }), /being analyzed/);
+  await runWorker(60_000);
+  const cFiles = await prisma.aiImportFile.findMany({ where: { jobId: jobC }, select: { id: true, status: true } });
+  const cStatus = (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobC } })).status;
+  await expectError(`removal refused after processing started (${cStatus})`, () => removeFile({ jobId: jobC, fileId: cFiles[0].id, actorId: actor }), /Processing has started/);
+  for (const st of ["QUEUED", "PROCESSING", "PAUSED", "IMPORTING"] as const) {
+    await prisma.aiImportJob.update({ where: { id: jobR2 }, data: { status: st } });
+    await expectError(`removal refused while ${st.toLowerCase()}`, () => removeFile({ jobId: jobR2, fileId: shareB.fileId, actorId: actor }), /Processing has started/);
+  }
+  await prisma.aiImportJob.update({ where: { id: jobR2 }, data: { status: "AWAITING_CONFIRMATION" } });
+  // Even if a processed job were somehow editable again, files with extracted / imported questions stay.
+  const cPaper = (await prisma.aiImportFile.findFirstOrThrow({ where: { jobId: jobC, role: "PAPER", status: "PROCESSED" } })).id;
+  const cPaperStored = await stored(cPaper);
+  await expectError("a processed file is kept as the original-paper record", () => removeFile({ jobId: jobC, fileId: cPaper, actorId: actor }), /Processing has started/);
+  await prisma.aiImportJob.update({ where: { id: jobC }, data: { status: "DRAFT" } });
+  await prisma.aiImportFile.update({ where: { id: cPaper }, data: { status: "UPLOADED" } });
+  await expectError("file whose questions are in the Question Bank is never removed", () => removeFile({ jobId: jobC, fileId: cPaper, actorId: actor }), /already in the Question Bank/);
+  await prisma.aiImportFile.update({ where: { id: cPaper }, data: { status: "PROCESSED" } });
+  await prisma.aiImportJob.update({ where: { id: jobC }, data: { status: cStatus } });
+  check("imported paper and its stored copy intact", !!(await prisma.aiImportFile.findUnique({ where: { id: cPaper } })) && onDisk(cPaperStored));
+  const jobX = await newJob(actor, exam.id, "FX remove cancelled");
+  const xFile = await upload(actor, jobX, "rm-key-right.csv", AiImportFileRole.PAPER, null, "x.csv");
+  await prisma.aiImportJob.update({ where: { id: jobX }, data: { status: "CANCELLED" } });
+  await expectError("removal refused on a cancelled import", () => removeFile({ jobId: jobX, fileId: xFile.fileId, actorId: actor }), /cancelled/);
+
+  // Confirm racing a removal: never a queued job built on the removed file.
+  jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
+  const [cr, rr] = await Promise.allSettled([
+    confirmJob({ jobId: jobR, actorId: actor, examId: jr.examId, paperType: jr.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 20 }),
+    removeFile({ jobId: jobR, fileId: kRight.fileId, actorId: actor }),
+  ]);
+  jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
+  const keyLeft = !!(await prisma.aiImportFile.findUnique({ where: { id: kRight.fileId } }));
+  const raceOk = (jr.status === "QUEUED" && keyLeft && rr.status === "rejected" && cr.status === "fulfilled") || (jr.status === "DRAFT" && !keyLeft && jr.analysis === null && cr.status === "rejected" && rr.status === "fulfilled");
+  check("confirm vs remove race: exactly one wins, consistently", raceOk, { status: jr.status, keyLeft, cr: cr.status, rr: rr.status });
+  const kRightOthers = await prisma.aiImportFile.count({ where: { storageKey: kRightStored, status: { not: "PURGED" } } });
+  check("race loser left the stored copy consistent", keyLeft || kRightOthers > 0 ? onDisk(kRightStored) : !onDisk(kRightStored), { keyLeft, kRightOthers });
+  if (jr.status === "QUEUED") await prisma.aiImportJob.update({ where: { id: jobR }, data: { status: "CANCELLED" } });
+
+  // Storage failure: the vault refuses the delete → nothing changes, no success.
+  const jobF = await newJob(actor, exam.id, "FX remove storage failure");
+  writeFileSync(path.join(FX, "rm-locked.pdf"), Buffer.concat([readFileSync(path.join(FX, "formula.pdf")), Buffer.from(`\n%rm-locked-${tag}\n`)]));
+  const lockUp = await upload(actor, jobF, "rm-locked.pdf");
+  await upload(actor, jobF, "rm-key-wrong.csv", AiImportFileRole.ANSWER_KEY);
+  await requestAnalysis(jobF, actor);
+  await runWorker(60_000);
+  const lockKey = await stored(lockUp.fileId);
+  const lockDir = path.dirname(path.join(vaultRoot(), lockKey!));
+  const beforeF = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobF } });
+  const evBefore = await prisma.aiImportEvent.count({ where: { jobId: jobF, type: "FILE_REMOVED" } });
+  execFileSync("chattr", ["+i", lockDir]);
+  try {
+    let threw: unknown = null;
+    try {
+      await removeFile({ jobId: jobF, fileId: lockUp.fileId, actorId: actor });
+    } catch (e) {
+      threw = e;
+    }
+    check("storage error → removal fails (no success reported)", threw !== null, threw);
+    const afterF = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobF } });
+    check("storage error → file row kept", !!(await prisma.aiImportFile.findUnique({ where: { id: lockUp.fileId } })));
+    check("storage error → job status and analysis unchanged (rolled back)", afterF.status === beforeF.status && afterF.status === "AWAITING_CONFIRMATION" && JSON.stringify(afterF.analysis) === JSON.stringify(beforeF.analysis));
+    check("storage error → no removal logged, stored copy intact", (await prisma.aiImportEvent.count({ where: { jobId: jobF, type: "FILE_REMOVED" } })) === evBefore && onDisk(lockKey));
+  } finally {
+    execFileSync("chattr", ["-i", lockDir]);
+  }
+  check("after the storage error clears, the removal succeeds", (await removeFile({ jobId: jobF, fileId: lockUp.fileId, actorId: actor })).storedFileDeleted && !onDisk(lockKey));
 }
 
 async function analyzeAndConfirmExisting(actor: string, jobId: string, budgetInr: number) {

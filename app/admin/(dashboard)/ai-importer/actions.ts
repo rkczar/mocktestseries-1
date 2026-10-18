@@ -5,7 +5,7 @@ import { AiImportPaperType } from "@prisma/client";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { ImportJobError, cancelJob, confirmJob, createJob, discardUpload, pauseJob, requestAnalysis, resumeJob } from "@/lib/ai-import/jobs";
+import { ImportJobError, cancelJob, confirmJob, createJob, discardUpload, pauseJob, removeFile, requestAnalysis, resumeJob, type RemovedFile } from "@/lib/ai-import/jobs";
 import {
   allowDuplicate,
   approveQuestions,
@@ -135,6 +135,14 @@ export async function discardUploadAction(fileId: string): Promise<ImporterResul
   return run(await requireUse(), async (actorId) => {
     await discardUpload(fileId, actorId);
     return null;
+  });
+}
+
+/** Removes one uploaded paper or answer key from a job that has not started processing (re-checked on the server). */
+export async function removeFileAction(jobId: string, fileId: string): Promise<ImporterResult<RemovedFile>> {
+  return run(await requireUse(), async (actorId) => {
+    if (typeof jobId !== "string" || typeof fileId !== "string" || !jobId || !fileId) throw new ImportJobError("Select a file to remove.");
+    return removeFile({ jobId, fileId, actorId });
   });
 }
 

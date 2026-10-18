@@ -1,13 +1,14 @@
 import "server-only";
-import { mkdir, open, readdir, stat, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, open, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPaperType, type Prisma } from "@prisma/client";
+import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPaperType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { CHUNK_BYTES } from "@/lib/ai-import/config";
+import { CHUNK_BYTES, fileRemovalBlockedReason } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { checkFilename, detectFile } from "@/lib/ai-import/detect";
 import { pdfInfo } from "@/lib/ai-import/pdf";
-import { adoptFile, tmpDir, removeVaultDir } from "@/lib/ai-import/vault";
+import { adoptFile, tmpDir, removeVaultDir, vaultPath } from "@/lib/ai-import/vault";
 import { kickWorker } from "@/lib/ai-import/kick";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
@@ -28,6 +29,11 @@ export async function logEvent(jobId: string, type: string, message: string, dat
 
 const TERMINAL: AiImportJobStatus[] = [AiImportJobStatus.CANCELLED];
 const EDITABLE: AiImportJobStatus[] = [AiImportJobStatus.DRAFT, AiImportJobStatus.AWAITING_CONFIRMATION];
+
+// Serializes "stored file still referenced?" decisions: an upload adopting identical bytes and a
+// file removal deleting them never interleave (originals are content-addressed and shared).
+const VAULT_FILES_LOCK = 7_301_442_047;
+const VAULT_TX = { timeout: 10 * 60_000, maxWait: 60_000 };
 
 export interface JobContextInput {
   examId: string;
@@ -178,14 +184,18 @@ export async function completeFile(input: { fileId: string; actorId: string }) {
     }
   } else if (det.kind === "png" || det.kind === "jpeg") pageCount = 1;
   const kind = det.kind!;
-  const adopted = await adoptFile(assembled, "files", kind === "jpeg" ? "jpg" : file.ext);
-  await removeVaultDir("tmp", file.id).catch(() => undefined);
-  const twin = await prisma.aiImportFile.findFirst({ where: { sha256: adopted.sha256, id: { not: file.id }, status: { not: AiImportFileStatus.PURGED } }, select: { jobId: true, originalName: true } });
   const retainUntil = new Date(Date.now() + settings.retention.originalDays * 86_400_000);
-  await prisma.aiImportFile.update({
-    where: { id: file.id },
-    data: { status: AiImportFileStatus.UPLOADED, bytes: adopted.bytes, sha256: adopted.sha256, storageKey: adopted.key, mime: det.mime, pageCount, retainUntil, detected: { kind, ...(twin ? { identicalTo: { jobId: twin.jobId, name: twin.originalName } } : {}) } },
-  });
+  const { adopted, twin } = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_FILES_LOCK}::bigint)`;
+    const adopted = await adoptFile(assembled, "files", kind === "jpeg" ? "jpg" : file.ext);
+    const twin = await tx.aiImportFile.findFirst({ where: { sha256: adopted.sha256, id: { not: file.id }, status: { not: AiImportFileStatus.PURGED } }, select: { jobId: true, originalName: true } });
+    await tx.aiImportFile.update({
+      where: { id: file.id },
+      data: { status: AiImportFileStatus.UPLOADED, bytes: adopted.bytes, sha256: adopted.sha256, storageKey: adopted.key, mime: det.mime, pageCount, retainUntil, detected: { kind, ...(twin ? { identicalTo: { jobId: twin.jobId, name: twin.originalName } } : {}) } },
+    });
+    return { adopted, twin };
+  }, VAULT_TX);
+  await removeVaultDir("tmp", file.id).catch(() => undefined);
   // An answer key added after processing: read it and re-match (no paper is re-read).
   if (file.role === AiImportFileRole.ANSWER_KEY) {
     const requeued = await prisma.aiImportJob.updateMany({
@@ -236,8 +246,10 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
       throw new ImportJobError(`The estimated AI cost (₹${estimate.totalInr.toFixed(2)}) is above the job budget (₹${input.budgetInr.toFixed(2)}). Nothing was started — reduce the sample or raise the budget deliberately.`);
     }
   }
-  await prisma.aiImportJob.update({
-    where: { id: job.id },
+  // Conditional on the job being unchanged since it was read: a file removed meanwhile
+  // clears the analysis, and its stale estimate must never be confirmed.
+  const confirmed = await prisma.aiImportJob.updateMany({
+    where: { id: job.id, status: AiImportJobStatus.AWAITING_CONFIRMATION, updatedAt: job.updatedAt },
     data: {
       estCostInr: estimate.totalInr,
       estCostUsd: estimate.totalUsd,
@@ -255,6 +267,7 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
       config: JSON.parse(JSON.stringify(settings)) as Prisma.InputJsonValue,
     },
   });
+  if (!confirmed.count) throw new ImportJobError("The files or analysis of this import changed while you were confirming. Nothing was started — review the page and confirm again.", 409);
   await logEvent(job.id, "CONFIRMED", `Processing confirmed with a job budget of ₹${input.budgetInr.toFixed(2)}`, { paperType: input.paperType, budgetInr: input.budgetInr, aiEnabled: settings.aiEnabled, models: settings.models }, input.actorId);
   kickWorker();
 }
@@ -286,6 +299,104 @@ export async function cancelJob(jobId: string, actorId: string) {
   if (job.status === AiImportJobStatus.CANCELLED) return;
   await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.CANCELLED, cancelledAt: new Date(), leaseOwner: null, leaseUntil: null } });
   await logEvent(jobId, "CANCELLED", "Cancelled by an administrator. Questions already imported stay in the Question Bank (use Import History rollback to remove them).", undefined, actorId);
+}
+
+const ROLE_LABEL: Record<AiImportFileRole, string> = { PAPER: "question paper", ANSWER_KEY: "answer key" };
+
+export interface RemovedFile {
+  name: string;
+  role: AiImportFileRole;
+  /** The stored bytes were deleted (false: another upload still uses the same file, or the copy was already gone). */
+  storedFileDeleted: boolean;
+  /** Other uploads (any job) that share the same stored file. */
+  sharedWith: number;
+  /** The analysis was cleared and must be run again. */
+  analysisCleared: boolean;
+  /** Set when the database change succeeded but the stored copy could not be deleted. */
+  warning: string | null;
+}
+
+/**
+ * Removes one uploaded paper or answer key from a job that has not started processing.
+ * The job, file and reference checks run inside one transaction that row-locks the job;
+ * any analysis is cleared (the job returns to Uploading and must be analyzed again).
+ * The stored original is deleted only when no other upload (of any job) uses the same bytes.
+ */
+export async function removeFile(input: { jobId: string; fileId: string; actorId: string }): Promise<RemovedFile> {
+  let moved: { from: string; to: string } | null = null;
+  let result: RemovedFile;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_FILES_LOCK}::bigint)`;
+      const locked = await tx.$queryRaw<{ status: AiImportJobStatus }[]>`SELECT "status" FROM "AiImportJob" WHERE "id" = ${input.jobId} FOR UPDATE`;
+      if (!locked.length) throw new ImportJobError("Import job not found.", 404);
+      const file = await tx.aiImportFile.findUnique({ where: { id: input.fileId } });
+      if (!file || file.jobId !== input.jobId) throw new ImportJobError("That file is not part of this import.", 404);
+      const blocked = fileRemovalBlockedReason(locked[0].status);
+      if (blocked) throw new ImportJobError(blocked, 409);
+      if (file.status === AiImportFileStatus.UPLOADING || file.status === AiImportFileStatus.REJECTED) throw new ImportJobError("This upload is unfinished or was refused — use Remove upload instead.", 409);
+      if (file.status !== AiImportFileStatus.UPLOADED && file.status !== AiImportFileStatus.ANALYZED) throw new ImportJobError(`This file is ${file.status.toLowerCase()} and is kept as the original-paper record.`, 409);
+      // Nothing extracted, matched or imported may point at the file.
+      const [pages, questions, imported, figures, keyRows] = await Promise.all([
+        tx.aiImportPage.count({ where: { fileId: file.id } }),
+        tx.aiImportQuestion.count({ where: { fileId: file.id } }),
+        tx.aiImportQuestion.count({ where: { fileId: file.id, OR: [{ questionId: { not: null } }, { bulkImportRunId: { not: null } }] } }),
+        tx.aiImportFigure.count({ where: { fileId: file.id } }),
+        tx.aiImportKeyEntry.count({ where: { OR: [{ keyFileId: file.id }, { paperFileId: file.id }] } }),
+      ]);
+      if (imported) throw new ImportJobError("Questions from this file are already in the Question Bank. The file is kept as their original-paper record.", 409);
+      if (pages || questions || figures || keyRows) throw new ImportJobError("This file already has extracted pages, questions or answer-key entries. It is kept as their original-paper record.", 409);
+      if (file.role === AiImportFileRole.PAPER) {
+        const keys = await tx.aiImportFile.findMany({ where: { jobId: file.jobId, paperFileId: file.id }, select: { originalName: true } });
+        if (keys.length) throw new ImportJobError(`Remove the answer key${keys.length === 1 ? "" : "s"} linked to this paper first (${keys.map((k) => `“${k.originalName}”`).join(", ")}).`, 409);
+      }
+
+      await tx.aiImportFile.delete({ where: { id: file.id } });
+      const sharedWith = file.storageKey ? await tx.aiImportFile.count({ where: { storageKey: file.storageKey, status: { not: AiImportFileStatus.PURGED } } }) : 0;
+      // Analysis results may include the removed file: clear them and require a new analysis.
+      const job = await tx.aiImportJob.findUniqueOrThrow({ where: { id: file.jobId }, select: { analysis: true, status: true } });
+      const analysisCleared = job.analysis !== null || job.status === AiImportJobStatus.AWAITING_CONFIRMATION;
+      await tx.aiImportJob.update({ where: { id: file.jobId }, data: { status: AiImportJobStatus.DRAFT, analysis: Prisma.DbNull, estimate: Prisma.DbNull, estCostInr: null, estCostUsd: null } });
+      await tx.aiImportFile.updateMany({ where: { jobId: file.jobId, status: AiImportFileStatus.ANALYZED }, data: { status: AiImportFileStatus.UPLOADED } });
+
+      // The stored original: moved aside now (restored if the transaction fails), deleted after commit.
+      let storedFileDeleted = false;
+      if (file.storageKey && sharedWith === 0) {
+        const from = vaultPath(file.storageKey);
+        const to = path.join(/* turbopackIgnore: true */ path.dirname(/* turbopackIgnore: true */ from), `.removing-${randomBytes(6).toString("hex")}`);
+        try {
+          await rename(from, to);
+          moved = { from, to };
+          storedFileDeleted = true;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        }
+      }
+      const label = ROLE_LABEL[file.role];
+      const message = `“${file.originalName}” (${label}) removed${analysisCleared ? " — analysis cleared; analyze the files again before confirming" : ""}${sharedWith ? `. The stored copy is kept: ${sharedWith} other upload${sharedWith === 1 ? "" : "s"} use${sharedWith === 1 ? "s" : ""} the same file` : ""}.`;
+      const data = { fileId: file.id, name: file.originalName, role: file.role, sha256: file.sha256, bytes: file.bytes, pageCount: file.pageCount, uploadedAt: file.createdAt.toISOString(), storedFileDeleted, sharedWith, analysisCleared };
+      await tx.aiImportEvent.create({ data: { jobId: file.jobId, type: "FILE_REMOVED", message: message.slice(0, 1000), data, actorId: input.actorId } });
+      await tx.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_FILE_REMOVED", entityType: "AiImportJob", entityId: file.jobId, metadata: data } });
+      return { name: file.originalName, role: file.role, storedFileDeleted, sharedWith, analysisCleared, warning: null };
+    }, VAULT_TX);
+  } catch (e) {
+    const m = moved as { from: string; to: string } | null;
+    if (m) await rename(m.to, m.from).catch((err) => console.error(`[ai-import] could not restore ${m.from}: ${err instanceof Error ? err.message : err}`));
+    throw e;
+  }
+  await removeVaultDir("tmp", input.fileId).catch(() => undefined);
+  const m = moved as { from: string; to: string } | null;
+  if (m) {
+    try {
+      await unlink(m.to);
+    } catch (e) {
+      const warning = "The file was removed from this import, but its stored copy could not be deleted. Run the Storage Manager scan later.";
+      console.error(`[ai-import] removed file bytes left at ${m.to}: ${e instanceof Error ? e.message : e}`);
+      await logEvent(input.jobId, "FILE_REMOVED_STORAGE_KEPT", warning, { fileId: input.fileId }, input.actorId).catch(() => undefined);
+      return { ...result, storedFileDeleted: false, warning };
+    }
+  }
+  return result;
 }
 
 /** Removes abandoned partial uploads of a job (tmp chunks). */

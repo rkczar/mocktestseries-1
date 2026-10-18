@@ -212,6 +212,14 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
   CANCELLED: "Cancelled",
 };
 
+/** Why a stored file of a job in this status cannot be removed (null = removable: before processing starts). */
+export function fileRemovalBlockedReason(status: string): string | null {
+  if (status === "DRAFT" || status === "AWAITING_CONFIRMATION") return null;
+  if (status === "ANALYZING") return "The files are being analyzed. Wait for the analysis to finish, then remove the file.";
+  if (status === "CANCELLED") return "This import was cancelled. Its files are kept as the original-paper record.";
+  return `Processing has started (${(JOB_STATUS_LABELS[status] ?? status).toLowerCase()}). Files used for processing are kept as the original-paper record — start a new import to use a different file.`;
+}
+
 export const QUESTION_STATUS_LABELS: Record<string, string> = {
   EXTRACTED: "Extracted",
   READY: "Ready",

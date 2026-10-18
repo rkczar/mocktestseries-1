@@ -113,11 +113,13 @@ await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "k
 await admin.locator("[data-testid=upload-progress] li", { hasText: "1 page(s)" }).waitFor({ timeout: 60000 });
 await admin.reload();
 // Remove the refused upload, then analyze.
-const remove = admin.locator("[data-testid=files-table] button", { hasText: "Remove" });
+const remove = admin.locator("[data-testid=file-row]", { hasText: "fake.pdf" }).locator("[data-testid=file-remove]");
 if (await remove.count()) {
-  await remove.first().click();
-  await admin.waitForTimeout(1500);
+  check("refused upload offers Remove upload", /Remove upload/.test(await remove.textContent()));
+  await remove.click();
+  await admin.locator("[data-testid=file-row]", { hasText: "fake.pdf" }).waitFor({ state: "detached", timeout: 15000 });
 }
+check("every stored file has its own Remove button before processing", (await admin.locator("[data-testid=file-row] [data-testid=file-remove]:not([disabled])").count()) === (await admin.locator("[data-testid=file-row]").count()));
 await admin.click("[data-testid=analyze]");
 await waitStatus(admin, /Awaiting confirmation/);
 await admin.locator("[data-testid=analysis-report]").waitFor();
@@ -128,6 +130,8 @@ await admin.fill("[data-testid=confirm-budget]", "20");
 await admin.click("[data-testid=confirm-start]");
 const st1 = await waitStatus(admin, /Ready to import/, 180000);
 check("processing finished → Ready to import", /Ready to import/.test(st1), st1);
+const blockedNote = (await admin.locator("[data-testid=files-remove-blocked]").textContent().catch(() => "")) ?? "";
+check("after processing, Remove is disabled with the reason shown", /Processing has started/.test(blockedNote) && (await admin.locator("[data-testid=file-remove]:not([disabled])").count()) === 0 && (await admin.locator("[data-testid=file-remove]").count()) > 0, blockedNote);
 const summaryText = await admin.locator("[data-testid=batch-summary]").textContent();
 check("batch summary shows extracted / eligible / not importable", /Questionsextracted10/.test(summaryText.replace(/\s+/g, "")) && /Not importable/.test(summaryText), summaryText.slice(0, 200));
 
@@ -276,6 +280,91 @@ for (const s of ["", `/jobs/${jobId}`, "/exceptions", "/storage", "/settings", `
 }
 await m.goto(`${BASE}/admin/questions/bulk-import`);
 check("existing Bulk Import page still renders", (await m.locator("text=Application error").count()) === 0);
+
+// ------------------------------------------------------------------ remove / replace files
+section("I. Remove and replace uploaded files");
+await admin.goto(`${BASE}/admin/ai-importer`);
+await admin.fill("[data-testid=ai-title]", `AIUI remove ${F.suffix}`);
+await admin.selectOption("[data-testid=ai-exam]", F.examId);
+await admin.fill("[data-testid=ai-budget]", "5");
+await Promise.all([admin.waitForURL(/\/admin\/ai-importer\/jobs\/[a-z0-9]+$/, { timeout: 30000 }), admin.click("[data-testid=create-import]")]);
+const rmJob = admin.url().split("/").pop();
+const row = (name) => admin.locator("[data-testid=file-row]", { hasText: name });
+await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "digital-clean.pdf"));
+await admin.locator("[data-testid=upload-progress] li", { hasText: "2 page(s)" }).waitFor({ timeout: 60000 });
+await admin.selectOption("[data-testid=upload-role]", "ANSWER_KEY");
+await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "key.csv"));
+await admin.locator("[data-testid=upload-progress] li", { hasText: /CSV/ }).waitFor({ timeout: 60000 });
+await admin.reload();
+await admin.click("[data-testid=analyze]");
+await waitStatus(admin, /Awaiting confirmation/);
+check("wrong key analyzed: report + confirm card shown", (await admin.locator("[data-testid=analysis-report]").count()) === 1 && (await admin.locator("[data-testid=confirm-card]").count()) === 1);
+check("files show name and type clearly", /Answer key/.test(await row("key.csv").locator("[data-testid=file-type]").textContent()) && /Question paper/.test(await row("digital-clean.pdf").locator("[data-testid=file-type]").textContent()));
+await row("key.csv").locator("[data-testid=file-remove]").click();
+const dlg = admin.locator("[data-testid=remove-file-dialog]");
+await dlg.waitFor();
+check("confirmation dialog names the file and its type", (await dlg.locator("[data-testid=remove-file-name]").textContent()) === "key.csv" && /Answer key/.test(await dlg.locator("[data-testid=remove-file-type]").textContent()));
+await dlg.getByRole("button", { name: "Keep file" }).click();
+await dlg.waitFor({ state: "detached" });
+check("Keep file closes the dialog and changes nothing", (await row("key.csv").count()) === 1 && (await admin.locator("[data-testid=analysis-report]").count()) === 1);
+await row("key.csv").locator("[data-testid=file-remove]").click();
+await dlg.locator("[data-testid=remove-file-confirm]").click();
+await admin.locator("[data-testid=job-notice]", { hasText: "Removed" }).waitFor({ timeout: 15000 });
+await row("key.csv").waitFor({ state: "detached", timeout: 15000 });
+check("wrong key removed: row gone, other file kept", (await row("key.csv").count()) === 0 && (await row("digital-clean.pdf").count()) === 1);
+check("analysis cleared: report and confirm card gone, Analyze offered again", (await admin.locator("[data-testid=analysis-report]").count()) === 0 && (await admin.locator("[data-testid=confirm-card]").count()) === 0 && /Analyze files/.test(await admin.locator("[data-testid=analyze]").textContent()));
+check("notice tells the admin to re-analyze", /analyze the files again/i.test(await admin.locator("[data-testid=job-notice]").textContent()));
+check("activity log shows the removal", /file removed.*key\.csv/i.test(await admin.locator("[data-testid=job-events]").textContent()));
+check("file totals recalculated", /1 question paper · 0 answer keys · 2 paper pages/.test(await admin.locator("[data-testid=files-totals]").textContent()));
+await admin.selectOption("[data-testid=upload-role]", "ANSWER_KEY");
+await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "key-digital.pdf"));
+await admin.locator("[data-testid=upload-progress] li", { hasText: "1 page(s)" }).waitFor({ timeout: 60000 });
+await admin.reload();
+await admin.click("[data-testid=analyze]");
+await waitStatus(admin, /Awaiting confirmation/);
+const rep2 = await admin.locator("[data-testid=analysis-report]").textContent();
+check("replacement key re-analyzed (old key absent from the report)", rep2.includes("key-digital.pdf") && !rep2.includes("key.csv"));
+// Replace the paper too (single paper: the key has no explicit link).
+await row("digital-clean.pdf").locator("[data-testid=file-remove]").click();
+check("paper dialog says Question paper", /Question paper · PDF/.test(await dlg.locator("[data-testid=remove-file-type]").textContent()));
+await dlg.locator("[data-testid=remove-file-confirm]").click();
+await row("digital-clean.pdf").waitFor({ state: "detached", timeout: 15000 });
+check("paper removed, answer key kept", (await row("key-digital.pdf").count()) === 1);
+await admin.locator("[data-testid=upload-input]").setInputFiles(path.join(FX, "formula.pdf"));
+await admin.locator("[data-testid=upload-progress] li", { hasText: "page(s)" }).waitFor({ timeout: 60000 });
+await admin.reload();
+check("replacement paper listed with its own page count", (await row("formula.pdf").count()) === 1 && /1 question paper · 1 answer key/.test(await admin.locator("[data-testid=files-totals]").textContent()));
+// A refusal from the server is shown in the dialog; nothing is reported as removed.
+await row("key-digital.pdf").locator("[data-testid=file-remove]").click();
+await dlg.waitFor();
+await db.query(`update "AiImportJob" set status='PROCESSING' where id=$1`, [rmJob]);
+await dlg.locator("[data-testid=remove-file-confirm]").click();
+await dlg.locator("[data-testid=remove-file-error]").waitFor({ timeout: 15000 });
+check("server refusal shown in the dialog (job started meanwhile)", /Processing has started/.test(await dlg.locator("[data-testid=remove-file-error]").textContent()));
+await dlg.getByRole("button", { name: "Keep file" }).click();
+check("no success notice and the file is still there", (await admin.locator("[data-testid=job-notice]", { hasText: "key-digital" }).count()) === 0 && (await db.query(`select count(*)::int n from "AiImportFile" where "jobId"=$1 and "originalName"='key-digital.pdf'`, [rmJob])).rows[0].n === 1);
+await db.query(`update "AiImportJob" set status='DRAFT' where id=$1`, [rmJob]);
+// Mobile: rows, button and dialog fit a 375 px screen.
+await m.goto(`${BASE}/admin/ai-importer/jobs/${rmJob}`);
+await m.waitForTimeout(500);
+const mBtn = m.locator("[data-testid=file-row]", { hasText: "formula.pdf" }).locator("[data-testid=file-remove]");
+const mBox = await mBtn.boundingBox();
+check("mobile: no horizontal scroll and Remove visible on screen", (await noOverflow(m)) && !!mBox && mBox.x >= 0 && mBox.x + mBox.width <= 375, mBox);
+await mBtn.click();
+const mDlg = m.locator("[data-testid=remove-file-dialog]");
+await mDlg.waitFor();
+const dBox = await mDlg.boundingBox();
+check("mobile: confirmation dialog fits the screen", !!dBox && dBox.x >= 0 && dBox.x + dBox.width <= 375, dBox);
+await mDlg.getByRole("button", { name: "Keep file" }).click();
+// View-only admin: no button, and the Server Action refuses.
+await full.goto(`${BASE}/admin/ai-importer/jobs/${rmJob}`);
+check("FULL_ADMIN sees the files but no Remove buttons", (await full.locator("[data-testid=file-row]").count()) === 2 && (await full.locator("[data-testid=file-remove]").count()) === 0);
+const manifest = JSON.parse(readFileSync(".next/server/server-reference-manifest.json", "utf8"));
+const removeActionId = Object.entries(manifest.node).find(([, v]) => v.exportedName === "removeFileAction" || JSON.stringify(v).includes("removeFileAction"))?.[0];
+const keyId = (await db.query(`select id from "AiImportFile" where "jobId"=$1 and "originalName"='key-digital.pdf'`, [rmJob])).rows[0].id;
+const rawRemove = await inPage(full, `/admin/ai-importer/jobs/${rmJob}`, { method: "POST", headers: { "Next-Action": removeActionId, Accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify([rmJob, keyId]) });
+check("FULL_ADMIN raw removeFileAction call is refused", !!removeActionId && /do not have permission/.test(rawRemove.text), { id: removeActionId, status: rawRemove.status, text: rawRemove.text.slice(-200) });
+check("…and the file still exists", (await db.query(`select count(*)::int n from "AiImportFile" where id=$1`, [keyId])).rows[0].n === 1);
 
 check("no page errors in any session", pages.every((p) => p.errors.length === 0), pages.map((p) => p.errors).flat());
 await browser.close();
