@@ -96,6 +96,30 @@ check("no NaN / undefined anywhere", !/NaN|undefined/.test(await page.locator("m
 check("direct Gemini API shown with 0 calls (not used by the importer)", /Gemini \(direct API\): 0 calls — not used by the importer/.test(await text("[data-testid=cost-gemini-direct]")));
 check("limits shown: ₹10 all-time, ₹10 monthly, ₹8 per job, ₹1 per request; paid AI state shown", /of ₹10\.00[\s\S]*of ₹10\.00[\s\S]*₹8\.00[\s\S]*₹1\.00/.test(await text("[data-testid=cost-limits]")) && /^(On|Off)$/.test(await text("[data-testid=cost-paid]")));
 
+// Unreported / in-flight costs are never shown as ₹0.00 actual spend (synthetic ledger rows, removed below).
+const istNow = new Date(Date.now() + 5.5 * 3_600_000).toISOString();
+const [ccDay, ccMonth] = [istNow.slice(0, 10), istNow.slice(0, 7)];
+const ccRow = (key, status, reserved, settled, known) =>
+  db.query(`insert into "AiBudgetReservation" (id, "requestKey", feature, "reservedInr", "settledInr", "costKnown", status, "istDay", "istMonth", "settledAt") values ($1, $1, 'qimport_extract', $2, $3, $4, $5::"AiReservationStatus", $6, $7, case when $5 = 'RESERVED' then null else now() end)`, [key, reserved, settled, known, status, ccDay, ccMonth]);
+try {
+  await ccRow("qi:ccfxunk:ccfx-1:1", "SETTLED", 0.4, 0.4, false);
+  await ccRow("qi:ccfxpend:ccfx-2:1", "RESERVED", 0.3, null, false);
+  await ccRow("qi:ccfxmix:ccfx-3:1", "SETTLED", 0.5, 0.12, true);
+  await ccRow("qi:ccfxmix:ccfx-4:1", "SETTLED", 0.2, 0.2, false);
+  await page.reload();
+  const jobCell = async (id) => text(`[data-testid=cost-job][data-job-id="${id}"] [data-testid=cost-job-actual]`);
+  const jobRow = async (id) => text(`[data-testid=cost-job][data-job-id="${id}"]`);
+  check("Cost Center: job whose cost was never reported → 'unknown' with the held maximum, not ₹0.00", (await jobCell("ccfxunk")) === "unknown" && /1 \(up to ₹0\.40 held\)/.test(await jobRow("ccfxunk")), await jobRow("ccfxunk"));
+  check("Cost Center: job with only an in-flight request → 'pending', not ₹0.00", (await jobCell("ccfxpend")) === "pending", await jobRow("ccfxpend"));
+  check("Cost Center: mixed job → reported ₹0.12 plus 1 unknown; no per-page / per-question cost", (await jobCell("ccfxmix")) === "₹0.12" && /1 \(up to ₹0\.20 held\)/.test(await jobRow("ccfxmix")) && !/₹0\.00/.test(await jobRow("ccfxmix")), await jobRow("ccfxmix"));
+  const actToday = await text("[data-testid=cost-actual-today]");
+  check("Cost Center: actual today names the unknown cost (never a bare ₹ figure)", /(Unknown — |reported \+ )\d+ request\(s\) with unknown cost \(up to ₹[\d.]+ held\)/.test(actToday), actToday);
+  check("Cost Center: estimated today names the calls it covers", /Typical estimate of \d+ call\(s\) today/.test(await text("[data-testid=cost-summary]")));
+  check("Cost Center: still no NaN / undefined", !/NaN|undefined/.test(await page.locator("main").innerText()));
+} finally {
+  await db.query(`delete from "AiBudgetReservation" where "requestKey" like 'qi:ccfx%'`);
+}
+
 check("no page errors", errors.length === 0, errors);
 await browser.close();
 await db.end();

@@ -7,17 +7,33 @@ import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TASK_LABELS, type ImporterTask } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { importerLedger, type LedgerPeriod } from "@/lib/ai-import/ledger";
+import { actualState, importerLedger } from "@/lib/ai-import/ledger";
 
 export const metadata = { title: "AI Cost Center — AI Question Importer" };
 export const dynamic = "force-dynamic";
 
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v > 0 && v < 0.01 ? `₹${v.toFixed(4)}` : `₹${v.toFixed(2)}`);
 
-/** Actual spend, never mixed with estimates: unknown provider costs are named as unknown, with the maximum held for them. */
-function actualText(p: Pick<LedgerPeriod, "actualInr" | "unknownRequests" | "unknownHeldInr">) {
-  return p.unknownRequests ? `${inr(p.actualInr)} + ${p.unknownRequests} request(s) with unknown cost (up to ${inr(p.unknownHeldInr)} held)` : inr(p.actualInr);
+/**
+ * Actual spend, never mixed with estimates: a cost OpenRouter did not report is named as unknown
+ * (with the maximum held for it) and never shown as ₹0; requests still in flight are "pending".
+ */
+function actualText(p: { actualInr: number; actualRequests: number; unknownRequests: number; heldInr: number; inflightRequests?: number; inflightInr?: number }) {
+  const unknown = `${p.unknownRequests} request(s) with unknown cost (up to ${inr(p.heldInr)} held)`;
+  switch (actualState(p)) {
+    case "none":
+      return "₹0.00 (no AI request)";
+    case "pending":
+      return `Pending — ${p.inflightRequests} request(s) in flight (up to ${inr(p.inflightInr)} held)`;
+    case "unknown":
+      return `Unknown — ${unknown}`;
+    case "mixed":
+      return `${inr(p.actualInr)} reported + ${unknown}`;
+    default:
+      return inr(p.actualInr);
+  }
 }
+const periodActual = (p: { actualInr: number; actualRequests: number; unknownRequests: number; unknownHeldInr: number; inflightRequests: number; inflightInr: number }) => actualText({ ...p, heldInr: p.unknownHeldInr });
 
 function Stat({ label, value, sub, id }: { label: string; value: string; sub?: string; id: string }) {
   return (
@@ -67,9 +83,9 @@ export default async function CostsPage() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="cost-summary">
-        <Stat id="cost-est-today" label={`Estimated cost today (${ledger.istDay}, IST)`} value={est.todayInr === null ? "No requests" : inr(est.todayInr)} sub={`Typical estimate of ${today.requests + today.releasedRequests} request(s); the maximum reserved was ${inr(today.reservedMaxInr)}.`} />
-        <Stat id="cost-actual-today" label="Actual spend today" value={actualText(today)} sub={today.inflightRequests ? `${today.inflightRequests} in flight (up to ${inr(today.inflightInr)} held)` : undefined} />
-        <Stat id="cost-actual-total" label="Total actual importer spend (all time)" value={actualText(all)} sub={`${all.actualRequests} request(s) with a reported cost`} />
+        <Stat id="cost-est-today" label={`Estimated cost today (${ledger.istDay}, IST)`} value={est.todayCalls ? inr(est.todayInr) : est.todayUnestimated ? "No estimate" : "No requests"} sub={`Typical estimate of ${est.todayCalls} call(s) today${est.todayUnestimated ? `; ${est.todayUnestimated} more call(s) had no estimate and are not included` : ""} — an estimate, not spend. The maximum reserved for today's requests was ${inr(today.reservedMaxInr)}.`} />
+        <Stat id="cost-actual-today" label="Actual spend today" value={periodActual(today)} sub={today.inflightRequests && today.actualRequests + today.unknownRequests ? `${today.inflightRequests} more in flight (up to ${inr(today.inflightInr)} held)` : undefined} />
+        <Stat id="cost-actual-total" label="Total actual importer spend (all time)" value={periodActual(all)} sub={`${all.actualRequests} request(s) with a reported cost`} />
         <Stat id="cost-remaining" label="Budget remaining" value={`${inr(ledger.remaining.totalInr)} of ${inr(ledger.limits.totalInr)} (all time)`} sub={`This month (${ledger.istMonth}): ${inr(month.committedInr)} used; ${inr(ledger.remaining.monthInr)} can still be used — the monthly limit never exceeds what is left of the all-time limit.`} />
       </div>
 
@@ -165,7 +181,7 @@ export default async function CostsPage() {
                     <tr key={d.day} className="border-t border-[var(--color-border)]">
                       <td className="py-1 pr-2">{d.day}</td>
                       <td className="py-1 pr-2">{d.requests}</td>
-                      <td className="py-1 pr-2">{inr(d.actualInr)}</td>
+                      <td className="py-1 pr-2" data-testid="cost-history-actual">{d.actualRequests ? inr(d.actualInr) : d.unknownRequests ? "unknown" : d.inflightRequests ? "pending" : "—"}</td>
                       <td className="py-1 pr-2">{d.unknownRequests ? `${d.unknownRequests} (up to ${inr(d.heldInr)} held)` : "—"}</td>
                       <td className="py-1 pr-2">{inr(d.reservedMaxInr)}</td>
                     </tr>
@@ -198,6 +214,8 @@ export default async function CostsPage() {
             <tbody>
               {ledger.jobs.map((j) => {
                 const aiPages = pagesByJob.find((p) => p.jobId === j.jobId)?._count._all ?? 0;
+                // Per-unit costs only when every request's cost is known (an unknown or pending cost would read as ₹0).
+                const costComplete = actualState(j) === "known" && !j.inflightRequests;
                 return (
                   <tr key={j.jobId} className="border-t border-[var(--color-border)]" data-testid="cost-job" data-job-id={j.jobId}>
                     <td className="py-1.5 pr-2">
@@ -210,12 +228,12 @@ export default async function CostsPage() {
                       )}
                     </td>
                     <td className="py-1.5 pr-2">{inr(j.jobEstimateInr)}</td>
-                    <td className="py-1.5 pr-2">{inr(j.actualInr)}</td>
+                    <td className="py-1.5 pr-2" data-testid="cost-job-actual">{j.actualRequests ? inr(j.actualInr) : j.unknownRequests ? "unknown" : j.inflightRequests ? "pending" : "—"}</td>
                     <td className="py-1.5 pr-2">{j.unknownRequests ? `${j.unknownRequests} (up to ${inr(j.heldInr)} held)` : "—"}</td>
                     <td className="py-1.5 pr-2">{inr(j.budgetInr)}</td>
                     <td className="py-1.5 pr-2">{j.requests}</td>
-                    <td className="py-1.5 pr-2">{aiPages && !j.unknownRequests ? inr(j.actualInr / aiPages) : "—"}</td>
-                    <td className="py-1.5 pr-2">{j.questions && !j.unknownRequests ? inr(j.actualInr / j.questions) : "—"}</td>
+                    <td className="py-1.5 pr-2">{aiPages && costComplete ? inr(j.actualInr / aiPages) : "—"}</td>
+                    <td className="py-1.5 pr-2">{j.questions && costComplete ? inr(j.actualInr / j.questions) : "—"}</td>
                   </tr>
                 );
               })}

@@ -159,7 +159,7 @@ function ProviderStatus({ catalog, aiEnabled, problems }: { catalog: ImporterCat
 }
 
 /** Searchable model list (keyboard: type to filter, arrows + Enter, Escape closes). */
-function ModelPicker({ id, label, help, value, options, vision, cost, capInr, allowNone, onChange, disabled }: {
+function ModelPicker({ id, label, help, value, options, vision, cost, capInr, allowNone, onChange, disabled, staleRoutesAt }: {
   id: string;
   label: string;
   help: string;
@@ -171,6 +171,8 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
   allowNone: string;
   onChange: (v: string | null) => void;
   disabled: boolean;
+  /** Set when the provider route data is older than 6 h: the selection is then shown as unverified. */
+  staleRoutesAt: string | null;
 }) {
   const listId = useId();
   const [open, setOpen] = useState(false);
@@ -206,6 +208,11 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
           </span>
         ) : (
           <span className="italic text-[var(--color-muted-foreground)]">{allowNone}</span>
+        )}
+        {value && !problem && staleRoutesAt && (
+          <span className="basis-full text-xs text-[var(--color-warning)]" data-testid={`${id}-stale`}>
+            Unverified: provider routes were last read {staleRoutesAt} (older than 6 h), so its route, privacy and price are not confirmed now. They are read again and every check is repeated when a job is confirmed.
+          </span>
         )}
         {!disabled && value && (
           <Button type="button" variant="ghost" size="compact" onClick={() => pick(null)} data-testid={`${id}-clear`}>
@@ -398,10 +405,23 @@ function ImporterModelsCard({ options, value, onChange, disabled, capInr, zdrReq
 
 const money = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `$${(v * 1e6).toFixed(v * 1e6 < 0.1 ? 3 : 2)}`);
 
-/** The model chosen per task (automatic or manual), why, its prices, costs and privacy route. */
+/** "2026-10-18 10:15 UTC"-style time of the stored route data, for stale-data notices. */
+const routesAt = (iso: string | null) => (iso ? `${iso.slice(0, 16).replace("T", " ")} UTC` : null);
+
+/**
+ * The model chosen per task (automatic or manual), why, its prices, costs and privacy route.
+ * With route data older than 6 h (plan.routesStale) nothing here is presented as verified: every
+ * "eligible" is qualified, and the job confirmation reads the routes again and repeats every check.
+ */
 function SelectionTable({ plan, aiEnabled }: { plan: ModelPlan; aiEnabled: boolean }) {
+  const stale = plan.routesStale && !!plan.routesFetchedAt;
   return (
-    <div className="flex flex-col gap-3" data-testid="selection">
+    <div className="flex flex-col gap-3" data-testid="selection" data-routes-stale={stale ? "true" : "false"}>
+      {stale && (
+        <p className="rounded-[var(--radius-card)] border border-[var(--color-warning)] p-2 text-xs text-[var(--color-warning)]" data-testid="selection-stale">
+          <strong>Unverified — provider route data is older than 6 hours</strong> (read {routesAt(plan.routesFetchedAt)}). The models, routes and costs below come from that old data and are not currently verified. When a job is confirmed, the routes are read again from OpenRouter and the route, price, privacy and budget checks are repeated; a model that no longer passes is not used. Refresh provider routes to verify now.
+        </p>
+      )}
       {plan.problems.length > 0 && (
         <ul className="list-disc pl-5 text-xs text-[var(--color-warning)]" data-testid="selection-problems">
           {plan.problems.map((p) => (
@@ -429,13 +449,18 @@ function SelectionTable({ plan, aiEnabled }: { plan: ModelPlan; aiEnabled: boole
                   <td className="py-1.5 pr-2 font-medium text-[var(--color-foreground)]">{SELECTION_TASK_LABELS[t]}</td>
                   <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">
                     {c.model ? <code className="text-xs font-semibold" data-testid={`sel-${t}-model`}>{c.model}</code> : <span className={aiEnabled ? "text-[var(--color-error)]" : "italic text-[var(--color-muted-foreground)]"} data-testid={`sel-${t}-model`}>None — this task does not run</span>}
+                    {c.model && stale && (
+                      <span className="block text-xs font-medium text-[var(--color-warning)]" data-testid={`sel-${t}-stale`}>
+                        Unverified (route data older than 6 h) — checked again at job confirmation
+                      </span>
+                    )}
                     <span className="block text-xs text-[var(--color-muted-foreground)]" data-testid={`sel-${t}-reason`}>{c.reason}</span>
                   </td>
                   <td className="py-1.5 pr-2 text-xs">{c.price ? <>in {money(c.price.prompt)} · out {money(c.price.completion)}{c.vision && c.price.image ? ` · image ${money(c.price.image)}` : ""}{c.price.request ? ` · $${c.price.request}/request` : ""}</> : "—"}</td>
                   <td className="py-1.5 pr-2 text-xs" data-testid={`sel-${t}-cost`}>{c.model ? <>about {inr(c.typicalInr)}<span className="block">max {inr(c.maxInr)}</span></> : "—"}</td>
                   <td className="py-1.5 pr-2 text-xs">{c.vision ? (c.model ? "Required — supported" : "Required") : "Not needed"}</td>
                   <td className="py-1.5 pr-2 text-xs [overflow-wrap:anywhere]" data-testid={`sel-${t}-privacy`}>
-                    {!c.model ? "—" : c.privacy.zdrRequired ? <>ZDR routes: {c.routes.join(", ")}<span className="block text-[var(--color-muted-foreground)]">On OpenRouter&apos;s public ZDR list; ZDR is also required on every request.</span></> : <>ZDR not required{c.privacy.dataCollection === "deny" ? "; providers that store or train on prompts are excluded by OpenRouter per request" : ""}.</>}
+                    {!c.model ? "—" : c.privacy.zdrRequired ? <>ZDR routes{stale ? ` (as of ${routesAt(plan.routesFetchedAt)}, not rechecked)` : ""}: {c.routes.join(", ")}<span className="block text-[var(--color-muted-foreground)]">On OpenRouter&apos;s public ZDR list; ZDR is also required on every request.</span></> : <>ZDR not required{c.privacy.dataCollection === "deny" ? "; providers that store or train on prompts are excluded by OpenRouter per request" : ""}.</>}
                   </td>
                 </tr>
               );
@@ -449,12 +474,12 @@ function SelectionTable({ plan, aiEnabled }: { plan: ModelPlan; aiEnabled: boole
         return (
           <details key={t} className="text-xs" data-testid={`sel-candidates-${t}`}>
             <summary className="cursor-pointer text-[var(--color-muted-foreground)]">
-              {SELECTION_TASK_LABELS[t]}: {rows.filter((r) => r.eligible).length} eligible of {rows.length} evaluated — why each model was or was not chosen
+              {SELECTION_TASK_LABELS[t]}: {rows.filter((r) => r.eligible).length} {stale ? "eligible on unverified (older than 6 h) route data" : "eligible"} of {rows.length} evaluated — why each model was or was not chosen
             </summary>
             <ul className="mt-1 flex flex-col gap-0.5 pl-4">
               {rows.map((r) => (
                 <li key={r.id} data-testid="sel-candidate" data-model-id={r.id} data-eligible={r.eligible ? "true" : "false"}>
-                  <code>{r.id}</code> — {r.eligible ? <span className="text-[var(--color-success)]">eligible, up to {inr(r.maxInr)} per request</span> : <span className="text-[var(--color-error)]">{r.reason}</span>}
+                  <code>{r.id}</code> — {r.eligible ? (stale ? <span className="text-[var(--color-warning)]">eligible on route data older than 6 h (unverified; checked again at job confirmation), up to {inr(r.maxInr)} per request</span> : <span className="text-[var(--color-success)]">eligible, up to {inr(r.maxInr)} per request</span>) : <span className="text-[var(--color-error)]">{r.reason}</span>}
                 </li>
               ))}
             </ul>
@@ -589,7 +614,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       }
     });
   const picker = (slot: Slot, label: string, value: string | null, vision: boolean, cost: CostKey, onChange: (v: string | null) => void, help: string, allowNone: string) => (
-    <ModelPicker id={`m-${slot}`} label={label} value={value} options={options} vision={vision} cost={cost} capInr={s.budget.maxRequestInr} onChange={onChange} disabled={d} help={help} allowNone={allowNone} />
+    <ModelPicker id={`m-${slot}`} label={label} value={value} options={options} vision={vision} cost={cost} capInr={s.budget.maxRequestInr} onChange={onChange} disabled={d} help={help} allowNone={allowNone} staleRoutesAt={catalog.plan.routesStale ? routesAt(catalog.plan.routesFetchedAt) : null} />
   );
   const sameModel = !!s.models.extract && s.models.verify === s.models.extract;
   return (

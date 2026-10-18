@@ -1133,6 +1133,25 @@ async function sectionU(actor: string, examId: string) {
   const stalePlan = await computeModelPlan(await cfg(), { refresh: false });
   check("fresh routes again → reader chosen", stalePlan.tasks.extract.model === "mockvision/reader");
 
+  // U6b — route data older than 6 h is only a display; the confirmation path (refresh) reads it again and decides on fresh data.
+  const ageRoutes = async () => prisma.setting.update({ where: { key: "ai.importer.routes" }, data: { value: { ...((await getRouteSnapshot()) as object), fetchedAt: new Date(Date.now() - 7 * 3_600_000).toISOString() } as never } });
+  await ageRoutes();
+  const shown = await computeModelPlan(await cfg(), { refresh: false });
+  check("stale routes (Settings view): flagged routesStale, no OpenRouter read on page load", shown.routesStale && /older than 6 h\). It is read again when a job is confirmed/.test(shown.problems.join(" ")), shown.problems);
+  const readsB = (await mockStats()).routeReads;
+  const chatsB = (await mockStats()).chat;
+  const rechecked = await computeModelPlan(await cfg(), { refresh: true });
+  check("confirmation path: stale routes are read again first, then the model is chosen on fresh data", (await mockStats()).routeReads > readsB && !rechecked.routesStale && rechecked.tasks.extract.model === "mockvision/reader", { stale: rechecked.routesStale, m: rechecked.tasks.extract.model });
+  await ageRoutes();
+  await mockConfig({ zdrStatus: 503 });
+  const lost = await computeModelPlan(await cfg(), { refresh: true });
+  check("confirmation path: stale data that can no longer be verified (ZDR list unreadable) → no model; old 'eligible' never reused", lost.tasks.extract.model === null && /Zero-Data-Retention route list could not be read/.test(lost.tasks.extract.reason), lost.tasks.extract.reason);
+  await ageRoutes();
+  await expectError("confirm with stale routes that fail the recheck → refused, nothing started", () => confirmJob({ jobId: jobU6, actorId: actor, examId, paperType: u6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }), /Zero-Data-Retention route list could not be read[\s\S]*Nothing was started/);
+  check("…no AI request was made by any recheck", (await mockStats()).chat === chatsB);
+  await mockConfig({ zdrStatus: null });
+  await refreshRoutesNow();
+
   // U7 — no affordable model: stop and explain.
   await setSettings((s) => ({ ...s, budget: { ...s.budget, maxRequestInr: 0.1 } }), actor);
   const poor = await computeModelPlan(await cfg(), { refresh: false });

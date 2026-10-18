@@ -2,7 +2,8 @@
  * AI Question Importer — Import Settings: provider status, automatic model
  * selection (routes, reasons, prices, privacy), the manual override's searchable
  * model pickers, cost estimates, server-side validation and pilot ceilings,
- * persistence, loading / error / retry / empty states, read-only view, desktop + mobile. Scratch DB +
+ * persistence, loading / error / retry / empty states, read-only view, desktop + mobile, and route data
+ * older than 6 h shown as unverified (section K). Scratch DB +
  * mock OpenRouter; run scripts/ai-import-ui-fixture.ts setup first (key, synced
  * mock catalog, FULL_ADMIN). Never real AI.
  *
@@ -392,6 +393,36 @@ check("…nothing is saved or approved until Save", JSON.stringify(await saved()
 await sg.reload();
 check("after reload without Save: the list is still empty", (await sg.locator("[data-testid=importer-models-empty]").count()) === 1);
 await db.query(`update "Setting" set value = jsonb_set(value, '{importerModels}', $1::jsonb) where key='ai.importer'`, [JSON.stringify(APPROVED)]);
+
+section("K. Route data older than 6 h: shown as unverified (Settings table and Manual picker)");
+const keepK = JSON.stringify(await saved());
+await db.query(`update "Setting" set value = jsonb_set(jsonb_set(value, '{selection}', '{"mode":"manual"}'), '{models,extract}', '"mockvision/reader"') where key='ai.importer'`);
+const st = await newPage();
+await login(st, process.env.ADMIN_USER, process.env.ADMIN_PASS);
+await st.goto(URL_SETTINGS);
+const stText = async (id) => ((await st.locator(`[data-testid=${id}]`).textContent().catch(() => "")) ?? "").trim();
+await st.locator("[data-testid=routes-refresh]").click();
+check("fresh routes: manual extraction model evaluated, no stale notice", await until(async () => (await st.locator("[data-testid=status-routes]").getAttribute("data-tone")) === "success" && (await st.locator("[data-testid=sel-extract]").getAttribute("data-model")) === "mockvision/reader"));
+check("…no 'unverified' qualifier anywhere while routes are fresh", (await st.locator("[data-testid=selection-stale]").count()) === 0 && (await st.locator("[data-testid=sel-extract-stale]").count()) === 0 && (await st.locator("[data-testid=m-extract-stale]").count()) === 0 && (await st.locator("[data-testid=selection]").getAttribute("data-routes-stale")) === "false");
+const routesBefore = (await db.query(`select value from "Setting" where key='ai.importer.routes'`)).rows[0].value;
+const oldAt = new Date(Date.now() - 7 * 3_600_000).toISOString();
+await db.query(`update "Setting" set value = jsonb_set(value, '{fetchedAt}', to_jsonb($1::text)) where key='ai.importer.routes'`, [oldAt]);
+await st.reload();
+const oldShown = `${oldAt.slice(0, 16).replace("T", " ")} UTC`;
+check("stale: Settings shows an 'Unverified' notice with the read time and the confirmation recheck", /Unverified — provider route data is older than 6 hours/.test(await stText("selection-stale")) && (await stText("selection-stale")).includes(oldShown) && /When a job is confirmed, the routes are read again/.test(await stText("selection-stale")) && (await st.locator("[data-testid=selection]").getAttribute("data-routes-stale")) === "true", await stText("selection-stale"));
+check("stale: the selected model row is qualified as unverified, checked again at job confirmation", /Unverified \(route data older than 6 h\) — checked again at job confirmation/.test(await stText("sel-extract-stale")));
+check("stale: privacy routes marked as not rechecked", /ZDR routes \(as of .* UTC, not rechecked\)/.test(await stText("sel-extract-privacy")), await stText("sel-extract-privacy"));
+await st.locator("[data-testid=sel-candidates-extract] summary").click();
+const eligibleCand = st.locator(`[data-testid=sel-candidates-extract] [data-eligible="true"]`).first();
+const candTxt = (await eligibleCand.textContent().catch(() => "")) ?? "";
+check("stale: candidate list never says plain 'eligible' — it says unverified", /eligible on route data older than 6 h \(unverified; checked again at job confirmation\)/.test(candTxt) && /eligible on unverified \(older than 6 h\) route data of/.test(await stText("sel-candidates-extract")), candTxt);
+check("stale: Manual picker qualifies the selected model as unverified, rechecked at confirmation", (await st.locator("[data-testid=manual-models]").count()) === 1 && /Unverified: provider routes were last read/.test(await stText("m-extract-stale")) && (await stText("m-extract-stale")).includes(oldShown) && /every check is repeated when a job is confirmed/.test(await stText("m-extract-stale")), await stText("m-extract-stale"));
+check("stale: route status card also says the confirmation reads routes again", (await st.locator("[data-testid=status-routes]").getAttribute("data-tone")) === "warning" && /a job confirmation reads them again first/.test(await stText("status-routes")));
+check("viewing stale data saved nothing (settings and route snapshot untouched)", JSON.stringify((await saved())?.selection) === '{"mode":"manual"}' && (await db.query(`select value from "Setting" where key='ai.importer.routes'`)).rows[0].value.fetchedAt === oldAt);
+await st.locator("[data-testid=routes-refresh]").click();
+check("Refresh provider routes → the unverified notices disappear", await until(async () => (await st.locator("[data-testid=selection-stale]").count()) === 0 && (await st.locator("[data-testid=m-extract-stale]").count()) === 0 && (await st.locator("[data-testid=sel-extract-stale]").count()) === 0));
+check("…and the snapshot was read again (newer than before)", new Date((await db.query(`select value from "Setting" where key='ai.importer.routes'`)).rows[0].value.fetchedAt) > new Date(routesBefore.fetchedAt));
+await db.query(`update "Setting" set value = $1::jsonb where key='ai.importer'`, [keepK]);
 
 check("whole suite: no global AI → Models approval changed", (await globalFlags()) === flags0);
 check("no page errors", errors.length === 0, errors);

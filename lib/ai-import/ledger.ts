@@ -43,8 +43,11 @@ export interface ImporterLedger {
   istDay: string;
   istMonth: string;
   periods: { today: LedgerPeriod; month: LedgerPeriod; all: LedgerPeriod };
-  /** Typical estimates (AiGatewayCall) — what a request was expected to cost, for comparison with actual. */
-  estimates: { todayInr: number | null; allInr: number | null; comparedEstimateInr: number | null; comparedActualInr: number | null; comparedRequests: number };
+  /**
+   * Typical estimates (AiGatewayCall) — what a request was expected to cost, for comparison with actual.
+   * todayInr sums exactly the todayCalls calls (today's IST day, with an estimate); todayUnestimated are today's calls without one.
+   */
+  estimates: { todayInr: number | null; todayCalls: number; todayUnestimated: number; allInr: number | null; comparedEstimateInr: number | null; comparedActualInr: number | null; comparedRequests: number };
   limits: { totalInr: number; monthlyInr: number; maxJobInr: number; maxRequestInr: number };
   remaining: { totalInr: number; monthInr: number };
   usage: {
@@ -57,8 +60,8 @@ export interface ImporterLedger {
     /** The direct Gemini API is never used by the importer (see GEMINI_DIRECT_REASONS). */
     geminiDirectCalls: 0;
   };
-  history: { day: string; requests: number; reservedMaxInr: number; actualInr: number; unknownRequests: number; heldInr: number }[];
-  jobs: { jobId: string; title: string | null; deleted: boolean; jobEstimateInr: number | null; budgetInr: number | null; requests: number; actualInr: number; unknownRequests: number; heldInr: number; inflightInr: number; committedInr: number; questions: number | null }[];
+  history: { day: string; requests: number; reservedMaxInr: number; actualInr: number; actualRequests: number; unknownRequests: number; heldInr: number; inflightRequests: number }[];
+  jobs: { jobId: string; title: string | null; deleted: boolean; jobEstimateInr: number | null; budgetInr: number | null; requests: number; actualInr: number; actualRequests: number; unknownRequests: number; heldInr: number; inflightRequests: number; inflightInr: number; committedInr: number; questions: number | null }[];
 }
 
 type PeriodRow = { status: string; known: boolean; n: number; reserved: number; settled: number };
@@ -87,20 +90,36 @@ export function toPeriod(rows: readonly PeriodRow[]): LedgerPeriod {
   return p;
 }
 
+/**
+ * How an actual figure must be read: "none" = no request; "known" = every request has a reported cost;
+ * "pending" = only requests still in flight; "mixed" = some reported, some unknown; "unknown" = requests exist but no cost was reported — the
+ * actual spend is then UNKNOWN, never ₹0.
+ */
+export function actualState(p: { actualRequests: number; unknownRequests: number; inflightRequests?: number }): "none" | "pending" | "known" | "mixed" | "unknown" {
+  if (!p.actualRequests && !p.unknownRequests) return p.inflightRequests ? "pending" : "none";
+  if (!p.unknownRequests) return "known";
+  return p.actualRequests ? "mixed" : "unknown";
+}
+
 const FAMILY = (model: string) => (model.startsWith("google/") ? "Gemini models (google/*) via OpenRouter" : "Other models via OpenRouter");
 
 export async function importerLedger(settings: ImporterSettings, now = new Date()): Promise<ImporterLedger> {
   const { istDay, istMonth } = istDayMonth(now);
   const since = new Date(now.getTime() - 13 * 86_400_000);
   const { istDay: firstDay } = istDayMonth(since);
+  // One IST day for both the estimated total and its call count.
+  const dayStart = istStart(istDay);
+  const dayEnd = new Date(dayStart.getTime() + 86_400_000);
   const [periodRows, est, calls, byModel, history, jobRows] = await Promise.all([
     prisma.$queryRaw<(PeriodRow & { day: boolean; month: boolean })[]>`
       SELECT "status"::text AS status, "costKnown" AS known, ("istDay" = ${istDay}) AS day, ("istMonth" = ${istMonth}) AS month,
              COUNT(*)::int AS n, COALESCE(SUM("reservedInr"), 0)::float8 AS reserved, COALESCE(SUM("settledInr"), 0)::float8 AS settled
       FROM "AiBudgetReservation" WHERE left("feature", 8) = 'qimport_'
       GROUP BY 1, 2, 3, 4`,
-    prisma.$queryRaw<{ today: number | null; total: number | null; known_est: number | null; known_actual: number | null; compared: number }[]>`
-      SELECT SUM("estCostInr") FILTER (WHERE "createdAt" >= ${istStart(istDay)})::float8 AS today,
+    prisma.$queryRaw<{ today: number | null; today_calls: number; today_unestimated: number; total: number | null; known_est: number | null; known_actual: number | null; compared: number }[]>`
+      SELECT SUM("estCostInr") FILTER (WHERE "createdAt" >= ${dayStart} AND "createdAt" < ${dayEnd})::float8 AS today,
+             COUNT(*) FILTER (WHERE "createdAt" >= ${dayStart} AND "createdAt" < ${dayEnd} AND "estCostInr" IS NOT NULL)::int AS today_calls,
+             COUNT(*) FILTER (WHERE "createdAt" >= ${dayStart} AND "createdAt" < ${dayEnd} AND "estCostInr" IS NULL)::int AS today_unestimated,
              SUM("estCostInr")::float8 AS total,
              SUM("estCostInr") FILTER (WHERE "costStatus" = 'actual' AND "actualCostInr" IS NOT NULL)::float8 AS known_est,
              SUM("actualCostInr") FILTER (WHERE "costStatus" = 'actual' AND "estCostInr" IS NOT NULL)::float8 AS known_actual,
@@ -147,7 +166,7 @@ export async function importerLedger(settings: ImporterSettings, now = new Date(
     .sort(([a], [b]) => b.localeCompare(a))
     .map(([day, rows]) => {
       const p = toPeriod(rows);
-      return { day, requests: p.requests, reservedMaxInr: p.reservedMaxInr, actualInr: p.actualInr, unknownRequests: p.unknownRequests, heldInr: p.unknownHeldInr };
+      return { day, requests: p.requests, reservedMaxInr: p.reservedMaxInr, actualInr: p.actualInr, actualRequests: p.actualRequests, unknownRequests: p.unknownRequests, heldInr: p.unknownHeldInr, inflightRequests: p.inflightRequests };
     });
 
   const byJob = new Map<string, PeriodRow[]>();
@@ -158,7 +177,7 @@ export async function importerLedger(settings: ImporterSettings, now = new Date(
     .map(([jobId, rows]) => {
       const p = toPeriod(rows);
       const j = liveById.get(jobId);
-      return { jobId, title: j?.title ?? null, deleted: !j, jobEstimateInr: j?.estCostInr ?? null, budgetInr: j?.budgetInr ?? null, requests: p.requests, actualInr: p.actualInr, unknownRequests: p.unknownRequests, heldInr: p.unknownHeldInr, inflightInr: p.inflightInr, committedInr: p.committedInr, questions: j ? j._count.questions : null };
+      return { jobId, title: j?.title ?? null, deleted: !j, jobEstimateInr: j?.estCostInr ?? null, budgetInr: j?.budgetInr ?? null, requests: p.requests, actualInr: p.actualInr, actualRequests: p.actualRequests, unknownRequests: p.unknownRequests, heldInr: p.unknownHeldInr, inflightRequests: p.inflightRequests, inflightInr: p.inflightInr, committedInr: p.committedInr, questions: j ? j._count.questions : null };
     })
     .filter((j) => j.requests > 0)
     .sort((a, b) => b.committedInr - a.committedInr);
@@ -175,7 +194,7 @@ export async function importerLedger(settings: ImporterSettings, now = new Date(
     istDay,
     istMonth,
     periods,
-    estimates: { todayInr: e?.today ?? null, allInr: e?.total ?? null, comparedEstimateInr: e?.known_est ?? null, comparedActualInr: e?.known_actual ?? null, comparedRequests: e?.compared ?? 0 },
+    estimates: { todayInr: e?.today ?? null, todayCalls: e?.today_calls ?? 0, todayUnestimated: e?.today_unestimated ?? 0, allInr: e?.total ?? null, comparedEstimateInr: e?.known_est ?? null, comparedActualInr: e?.known_actual ?? null, comparedRequests: e?.compared ?? 0 },
     limits,
     // The budget guard also checks the monthly cap against this month's rows and the all-time cap against every row.
     remaining: { totalInr: Math.max(0, limits.totalInr - periods.all.committedInr), monthInr: Math.max(0, Math.min(limits.monthlyInr - periods.month.committedInr, limits.totalInr - periods.all.committedInr)) },

@@ -9,7 +9,7 @@ import "dotenv/config";
 import { prisma } from "@/lib/prisma";
 import { istDayMonth } from "@/lib/ai-engine/budget";
 import { DEFAULT_IMPORTER_SETTINGS } from "@/lib/ai-import/config";
-import { importerLedger, toPeriod } from "@/lib/ai-import/ledger";
+import { actualState, importerLedger, toPeriod } from "@/lib/ai-import/ledger";
 import { suggestModels, type ImporterModelOption } from "@/lib/ai-import/model-options";
 
 if (/\/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
@@ -54,6 +54,15 @@ async function main() {
   check("released (refused before any charge) not counted", p.releasedRequests === 3 && p.requests === 4 && near(p.reservedMaxInr, 1.9), p);
   check("committed = actual + unknown held + in flight (what the budget guard counts)", near(p.committedInr, 1.2), p);
 
+  section("A2. How an actual figure is read (never ₹0 for an unreported cost)");
+  check("no recorded call → none", actualState({ actualRequests: 0, unknownRequests: 0, inflightRequests: 0 }) === "none" && actualState(toPeriod([])) === "none");
+  check("only in flight → pending (not ₹0)", actualState({ actualRequests: 0, unknownRequests: 0, inflightRequests: 2 }) === "pending");
+  check("every cost reported → known", actualState({ actualRequests: 3, unknownRequests: 0 }) === "known");
+  check("known + in flight → known (in flight shown apart)", actualState({ actualRequests: 1, unknownRequests: 0, inflightRequests: 1 }) === "known");
+  check("some reported, some not → mixed", actualState({ actualRequests: 1, unknownRequests: 1 }) === "mixed");
+  check("requests exist but no cost reported → unknown, even though actualInr is 0", actualState(toPeriod([{ status: "SETTLED", known: false, n: 2, reserved: 0.4, settled: 0.4 }])) === "unknown");
+  check("released only (refused before any charge) → none", actualState(toPeriod([{ status: "RELEASED", known: true, n: 2, reserved: 0.4, settled: 0 }])) === "none");
+
   const baseline = await importerLedger(settings, now);
   const exam = await prisma.exam.findFirst({ select: { id: true } });
   const admin = await prisma.adminUser.findFirst({ select: { id: true } });
@@ -69,6 +78,11 @@ async function main() {
     await res(`qi:${liveJob.id}:${TAG}-3:1`, "qimport_extract", "RESERVED", 0.7, null, false);
     await res(`qi:${liveJob.id}:${TAG}-4:1`, "qimport_extract", "RELEASED", 0.7, 0, true);
     await res(`qi:${goneJob}:${TAG}-5:1`, "qimport_classify", "SETTLED", 0.2, 0.05, true, oldDay, oldMonth);
+    // One deleted job per actual state, for the per-job and history reading.
+    const { istDay: pendDay, istMonth: pendMonth } = istDayMonth(new Date(now.getTime() - 3 * 86_400_000));
+    await res(`qi:${TAG}pend:${TAG}-7:1`, "qimport_extract", "RESERVED", 0.3, null, false, pendDay, pendMonth);
+    await res(`qi:${TAG}unk:${TAG}-8:1`, "qimport_extract", "SETTLED", 0.4, 0.4, false);
+    await res(`qi:${TAG}unk:${TAG}-9:1`, "qimport_verify", "SETTLED", 0.2, 0.2, false);
     // Another AI feature's spend: must never appear in the importer's ledger.
     await res(`ask:${TAG}-6`, "ask_ai", "SETTLED", 5, 4, true);
     let dup = false;
@@ -84,15 +98,20 @@ async function main() {
     await gw(`${TAG}-1`, "google/gemini-fx-vision", true, 0.2, 0.25, "actual");
     await gw(`${TAG}-2`, "mockvision/fx", false, 0.3, null, "unknown", 2, true, "qimport_verify");
     await gw(`${TAG}-6`, "google/gemini-fx-vision", true, 3, 4, "actual", 1, false, "ask_ai");
+    // Estimated-today window: one call without an estimate today; one estimated call yesterday and one tomorrow (IST) — both outside today.
+    await gw(`${TAG}-10`, "mockvision/fx-est", true, null, null, "none");
+    const dayStart = new Date(`${istDay}T00:00:00+05:30`);
+    await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: "mockvision/fx-est", ok: true, latencyMs: 10, estCostInr: 1.5, costStatus: "unknown", actualCostInr: null, requestId: `${TAG}-11`, createdAt: new Date(dayStart.getTime() - 60_000) } });
+    await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: "mockvision/fx-est", ok: true, latencyMs: 10, estCostInr: 2.5, costStatus: "unknown", actualCostInr: null, requestId: `${TAG}-12`, createdAt: new Date(dayStart.getTime() + 86_400_000 + 60_000) } });
 
     const L = await importerLedger(settings, now);
     const d = (a: number, b: number) => a - b;
     check("today: actual ₹0.25 from the one reported cost", near(d(L.periods.today.actualInr, baseline.periods.today.actualInr), 0.25), L.periods.today);
-    check("today: 1 unknown-cost request with ₹0.60 held (not in actual)", L.periods.today.unknownRequests - baseline.periods.today.unknownRequests === 1 && near(d(L.periods.today.unknownHeldInr, baseline.periods.today.unknownHeldInr), 0.6));
+    check("today: 3 unknown-cost requests with ₹1.20 held (not in actual)", L.periods.today.unknownRequests - baseline.periods.today.unknownRequests === 3 && near(d(L.periods.today.unknownHeldInr, baseline.periods.today.unknownHeldInr), 1.2));
     check("today: 1 in flight (₹0.70 held); released request not counted", L.periods.today.inflightRequests - baseline.periods.today.inflightRequests === 1 && L.periods.today.releasedRequests - baseline.periods.today.releasedRequests === 1);
     check("all time includes the deleted job's older spend (₹0.05)", near(d(L.periods.all.actualInr, baseline.periods.all.actualInr), 0.3));
     check("this month excludes the 40-day-old request", near(d(L.periods.month.actualInr, baseline.periods.month.actualInr), 0.25));
-    check("another feature's ₹4 is not in any importer total", near(d(L.periods.all.committedInr, baseline.periods.all.committedInr), 0.25 + 0.6 + 0.7 + 0.05));
+    check("another feature's ₹4 is not in any importer total", near(d(L.periods.all.committedInr, baseline.periods.all.committedInr), 0.25 + 0.6 + 0.7 + 0.05 + 0.3 + 0.6));
     check("budget remaining = all-time limit − committed", near(L.remaining.totalInr, Math.max(0, L.limits.totalInr - L.periods.all.committedInr)), L.remaining);
     check("monthly remaining never exceeds what is left of the all-time limit", L.remaining.monthInr <= L.remaining.totalInr + 1e-9);
     check("limits are the pilot ceilings (₹10 / ₹10 / ₹8 / ₹1)", L.limits.totalInr === 10 && L.limits.monthlyInr === 10 && L.limits.maxJobInr === 8 && L.limits.maxRequestInr === 1, L.limits);
@@ -109,6 +128,25 @@ async function main() {
     check("usage: direct Gemini API calls are 0", L.usage.geminiDirectCalls === 0);
     check("estimate vs actual compares only requests with both (₹0.20 estimated vs ₹0.25 actual)", L.estimates.comparedRequests - baseline.estimates.comparedRequests === 1 && near((L.estimates.comparedActualInr ?? 0) - (baseline.estimates.comparedActualInr ?? 0), 0.25), L.estimates);
     check("history has today's row", L.history.some((h) => h.day === istDay));
+
+    section("B2. Actual states per job and per day; estimated today");
+    const jobState = (id: string) => {
+      const j = L.jobs.find((x) => x.jobId === id);
+      return j ? actualState(j) : "missing";
+    };
+    check("job with only an in-flight request → pending (actual ₹0 never shown as spend)", jobState(`${TAG}pend`) === "pending");
+    check("job whose costs were never reported → unknown, ₹0.60 held", jobState(`${TAG}unk`) === "unknown" && near(L.jobs.find((x) => x.jobId === `${TAG}unk`)!.heldInr, 0.6));
+    check("job with one reported and one unreported cost → mixed", jobState(liveJob.id) === "mixed");
+    check("job with every cost reported → known", jobState(goneJob) === "known");
+    const pendRow = L.history.find((h) => h.day === pendDay);
+    check("history day with only an in-flight request: no actual, no unknown, 1 in flight (shown as pending)", !!pendRow && pendRow.actualRequests === 0 && pendRow.unknownRequests === 0 && pendRow.inflightRequests >= 1, pendRow);
+    const dCalls = L.estimates.todayCalls - baseline.estimates.todayCalls;
+    const dUnest = L.estimates.todayUnestimated - baseline.estimates.todayUnestimated;
+    check("estimated today: the total (₹0.50) covers exactly the 2 estimated importer calls of today", dCalls === 2 && near((L.estimates.todayInr ?? 0) - (baseline.estimates.todayInr ?? 0), 0.5), { dCalls, L: L.estimates, b: baseline.estimates });
+    check("estimated today: the call without an estimate is counted apart, not in the total", dUnest === 1, { dUnest });
+    check("estimated today: yesterday's and tomorrow's calls (IST) and the other feature's call are outside the window", near((L.estimates.todayInr ?? 0) - (baseline.estimates.todayInr ?? 0), 0.5) && dCalls === 2);
+    const empty = await importerLedger(settings, new Date(now.getTime() + 400 * 86_400_000));
+    check("a day with no recorded call: no estimated calls, actual state none", empty.estimates.todayCalls === 0 && empty.estimates.todayInr === null && actualState(empty.periods.today) === "none", { e: empty.estimates, t: empty.periods.today });
   } finally {
     await cleanup(liveJob.id);
   }
