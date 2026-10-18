@@ -28,6 +28,8 @@ export interface JobView {
   paperCode: string | null;
   previousYearPaperId: string | null;
   budgetInr: number;
+  /** Hard limit per job (Import Settings): confirm and resume refuse a larger budget. */
+  maxJobInr: number;
   spentInr: number;
   estCostInr: number | null;
   pauseReason: string | null;
@@ -154,6 +156,15 @@ function Uploader({ jobId, files, canAddPapers }: { jobId: string; files: JobVie
 }
 
 type JobFile = JobView["files"][number];
+
+function LockIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12" className="mt-0.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <rect x="3" y="7" width="10" height="7" rx="1.5" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    </svg>
+  );
+}
 const roleLabel = (role: string) => (role === "PAPER" ? "Question paper" : "Answer key");
 
 /** Confirmation for removing one uploaded file; stays open with the server's reason when the removal is refused. */
@@ -327,27 +338,40 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                             <Button variant="outline" size="compact" disabled={pending} onClick={() => act(() => discardUploadAction(f.id), `Removed the unfinished upload “${f.name}”.`)} data-testid="file-remove">
                               Remove upload
                             </Button>
-                          ) : (
-                            <>
+                          ) : blocked ? (
+                            // Locked: a neutral, natively disabled button (no click, no keyboard activation) with its reason
+                            // visible next to it — never the red destructive style, which made it look usable but broken.
+                            <span className="inline-flex cursor-not-allowed flex-col items-end" title={blocked}>
                               <Button
                                 variant="outline"
                                 size="compact"
-                                className="border-[color-mix(in_srgb,var(--color-error)_55%,transparent)] text-[var(--color-error)] hover:bg-[color-mix(in_srgb,var(--color-error)_12%,transparent)]"
-                                disabled={pending || !!blocked}
-                                aria-label={`Remove ${f.name}`}
-                                aria-describedby={blocked ? `remove-why-${f.id}` : undefined}
-                                onClick={() => setRemoving(f)}
+                                className="border-dashed text-[var(--color-muted-foreground)] disabled:opacity-70"
+                                disabled
+                                aria-disabled="true"
+                                aria-label={`Remove ${f.name} (unavailable)`}
+                                aria-describedby={`remove-why-${f.id}`}
                                 data-testid="file-remove"
+                                data-locked="true"
                               >
-                                Remove
+                                <LockIcon />
+                                Locked
                               </Button>
-                              {blocked && keys.length > 0 && !removalBlocked && (
-                                <span id={`remove-why-${f.id}`} className="mt-1 block text-xs text-[var(--color-muted-foreground)]" data-testid="file-remove-why">
-                                  {blocked}
-                                </span>
-                              )}
-                              {removalBlocked && <span id={`remove-why-${f.id}`} className="sr-only">{removalBlocked}</span>}
-                            </>
+                              <span id={`remove-why-${f.id}`} className="mt-1 block max-w-[14rem] text-left text-xs text-[var(--color-muted-foreground)] sm:text-right" data-testid="file-remove-why">
+                                {removalBlocked ? "Kept as the original-paper record" : blocked}
+                              </span>
+                            </span>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="compact"
+                              className="border-[color-mix(in_srgb,var(--color-error)_55%,transparent)] text-[var(--color-error)] hover:bg-[color-mix(in_srgb,var(--color-error)_12%,transparent)]"
+                              disabled={pending}
+                              aria-label={`Remove ${f.name}`}
+                              onClick={() => setRemoving(f)}
+                              data-testid="file-remove"
+                            >
+                              Remove
+                            </Button>
                           )}
                         </td>
                       )}
@@ -370,8 +394,11 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             </p>
           )}
           {canUse && removalBlocked && stored.length > 0 && (
-            <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="files-remove-blocked">
-              File removal is unavailable: {removalBlocked}
+            <p className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-foreground)_4%,transparent)] p-3 text-sm text-[var(--color-foreground)]" role="note" data-testid="files-remove-blocked">
+              <LockIcon />
+              <span>
+                <strong>File removal is unavailable.</strong> {removalBlocked}
+              </span>
             </p>
           )}
           {removing && (
@@ -494,7 +521,9 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             <div className="flex max-w-xs flex-col gap-1.5">
               <Label htmlFor="ai-confirm-budget">Job budget (₹)</Label>
               <Input id="ai-confirm-budget" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^\d.]/g, ""))} data-testid="confirm-budget" />
-              {a?.estimate.totalInr !== null && a?.estimate.totalInr !== undefined && Number(budget) < a.estimate.totalInr && <p className="text-xs text-[var(--color-warning)]">The budget is below the estimate; the job will pause when it is reached.</p>}
+              <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="confirm-budget-limit">Hard limit per job: ₹{job.maxJobInr} (Import Settings).</p>
+              {Number(budget) > job.maxJobInr && <p className="text-xs text-[var(--color-error)]">Above the hard limit per job — confirming will be refused.</p>}
+              {a?.estimate.totalInr !== null && a?.estimate.totalInr !== undefined && Number(budget) < a.estimate.totalInr && <p className="text-xs text-[var(--color-warning)]">The budget is below the estimate, so confirming will be refused while paid AI is on. Reduce the files or raise the budget deliberately.</p>}
             </div>
             <div className="flex gap-2">
               <Button disabled={pending} onClick={() => act(() => confirmJobAction(job.id, { title: job.title, ...ctx, year: ctx.year || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, paperCode: ctx.paperCode || null, budgetInr: Number(budget) }), "Processing queued.")} data-testid="confirm-start">
@@ -563,7 +592,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                 )}
                 {(job.status === "PAUSED" || job.status === "PAUSED_BUDGET" || job.status === "FAILED") && (
                   <>
-                    <Input className="w-32" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^\d.]/g, ""))} aria-label="Job budget" data-testid="resume-budget" />
+                    <Input className="w-32" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^\d.]/g, ""))} aria-label={`Job budget (hard limit ₹${job.maxJobInr})`} title={`Hard limit per job: ₹${job.maxJobInr}`} data-testid="resume-budget" />
                     <Button disabled={pending} onClick={() => act(() => resumeJobAction(job.id, Number(budget)), "Resumed.")} data-testid="resume">
                       Resume{job.status === "PAUSED_BUDGET" ? " with this budget" : ""}
                     </Button>

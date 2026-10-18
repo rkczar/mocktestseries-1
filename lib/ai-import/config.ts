@@ -49,6 +49,16 @@ export interface ImporterSettings {
     monthlyInr: number;
     /** Default per-job cap offered on New Import. */
     defaultJobCapInr: number;
+    /**
+     * HARD ceiling for any one job's budget: confirm and resume refuse a larger job budget, and every
+     * request is reserved against min(job budget, this ceiling) — so an old job cannot spend past it either.
+     */
+    maxJobInr: number;
+    /**
+     * HARD all-time cap for importer AI spend (every month together; null = no all-time cap).
+     * Unlike monthlyInr it never resets, so a pilot cannot gain a fresh budget when the month changes.
+     */
+    totalInr: number | null;
     /** Hard ceiling for one AI request (INR). */
     maxRequestInr: number;
     /**
@@ -98,7 +108,7 @@ export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   aiEnabled: false,
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
   privacy: { dataCollection: "deny", zdr: false },
-  budget: { monthlyInr: 1500, defaultJobCapInr: 200, maxRequestInr: 10, keyReserveUsd: 5, retryTransient: false },
+  budget: { monthlyInr: 1500, defaultJobCapInr: 200, maxJobInr: 200, totalInr: null, maxRequestInr: 10, keyReserveUsd: 5, retryTransient: false },
   limits: { maxFileMb: 100, maxPagesPerFile: 300, maxFilesPerJob: 10, renderDpi: 150, concurrency: 2 },
   verification: { secondReadBelow: 0.8, independentAnswer: false, topicMinConfidence: 0.7, nearDuplicateAt: 0.85 },
   publish: { allowUnverifiedAnswers: false, requireTopic: true },
@@ -113,6 +123,8 @@ export const SETTINGS_BOUNDS = {
   concurrency: [1, 3],
   monthlyInr: [0, 1_000_000],
   defaultJobCapInr: [0, 100_000],
+  maxJobInr: [0, 100_000],
+  totalInr: [0, 10_000_000],
   maxRequestInr: [0.01, 1_000],
   keyReserveUsd: [0, 10_000],
   originalDays: [1, 3650],
@@ -133,6 +145,8 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
   const d = DEFAULT_IMPORTER_SETTINGS;
   const m = (r.models ?? {}) as Partial<ImporterModels>;
   const extract = model(m.extract);
+  // Settings saved before the hard per-job ceiling existed keep their old effective behaviour (the default job cap).
+  const maxJobInr = clamp(r.budget?.maxJobInr ?? r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.maxJobInr, d.budget.maxJobInr);
   return {
     aiEnabled: r.aiEnabled === true,
     models: {
@@ -148,7 +162,10 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
     },
     budget: {
       monthlyInr: clamp(r.budget?.monthlyInr, SETTINGS_BOUNDS.monthlyInr, d.budget.monthlyInr),
-      defaultJobCapInr: clamp(r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.defaultJobCapInr, d.budget.defaultJobCapInr),
+      // The default offered on New Import can never be above the hard per-job ceiling.
+      defaultJobCapInr: Math.min(maxJobInr, clamp(r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.defaultJobCapInr, d.budget.defaultJobCapInr)),
+      maxJobInr,
+      totalInr: r.budget?.totalInr === null || r.budget?.totalInr === undefined || (r.budget.totalInr as unknown) === "" ? null : clamp(r.budget.totalInr, SETTINGS_BOUNDS.totalInr, 0),
       maxRequestInr: clamp(r.budget?.maxRequestInr, SETTINGS_BOUNDS.maxRequestInr, d.budget.maxRequestInr),
       keyReserveUsd: clamp(r.budget?.keyReserveUsd, SETTINGS_BOUNDS.keyReserveUsd, d.budget.keyReserveUsd),
       retryTransient: r.budget?.retryTransient === true,

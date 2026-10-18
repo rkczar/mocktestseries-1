@@ -82,9 +82,29 @@ Hard guards (all fail closed, nothing is sent when they refuse):
 - The worst-case reservation uses the same 5% margin as the `max_price` sent to OpenRouter.
 - The OpenRouter key is shared with student Ask AI: before each request the key's remaining
   credit is read and the request is refused unless `budget.keyReserveUsd` (default $5)
-  would remain after its worst case.
-- One attempt per request; `budget.retryTransient` re-enables a single retry.
-- A fallback model priced above the preferred model is never used.
+  would remain after its worst case AND every other importer request still in flight
+  (checked inside the reservation lock). A key without a credit limit is refused while
+  the reserve is above $0 (the reserve cannot be guaranteed).
+- `budget.maxJobInr` is a hard ceiling per job: create, confirm and resume refuse a larger
+  job budget, and every reservation uses min(job budget, ceiling), so lowering the ceiling
+  also stops older jobs. Settings saved before it existed use their `defaultJobCapInr`.
+- `budget.totalInr` (optional) is an all-time importer cap that never resets: a pilot cannot
+  gain a fresh monthly budget when the IST month changes.
+- Worst case = input tokens (page images counted as 3,500 tokens each — above the published
+  per-image formulas for a 1600 px page) + the full output limit + request price + the
+  model's `pricing.image` read as a per-image-token price (the larger reading). A vision
+  model whose image price cannot be read is unusable. If the provider still reports a cost
+  above the reservation, the charge is recorded in full and the job pauses (scope
+  `overrun`) — never silently.
+- A second read refused by a limit keeps the extracted page (no paid re-read on resume),
+  marks its questions for correction and pauses the job.
+- One attempt per request; `budget.retryTransient` re-enables a single retry, which reserves
+  again under the same limits.
+- A fallback model priced above the preferred model is never used (Import Settings refuses
+  to save one).
+- Import Settings only accepts approved, priced catalog models that can do the task
+  (vision for page reading); the page shows provider status (never any part of the key)
+  and per-request estimates / conservative maxima from the same formula.
 
 ## Storage
 

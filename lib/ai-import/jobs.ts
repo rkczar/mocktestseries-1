@@ -64,7 +64,8 @@ export async function createJob(input: JobContextInput & { actorId: string; titl
   await validateContext(input);
   const settings = await getImporterSettings();
   const title = input.title.trim().slice(0, 160) || "Untitled import";
-  const budget = Number.isFinite(input.budgetInr) && input.budgetInr >= 0 ? Math.min(input.budgetInr, 100_000) : settings.budget.defaultJobCapInr;
+  const budget = Number.isFinite(input.budgetInr) && input.budgetInr >= 0 ? input.budgetInr : settings.budget.defaultJobCapInr;
+  assertWithinJobCeiling(budget, settings.budget.maxJobInr);
   const job = await prisma.aiImportJob.create({
     data: {
       title,
@@ -233,6 +234,7 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
   await validateContext(input);
   if (!Number.isFinite(input.budgetInr) || input.budgetInr < 0) throw new ImportJobError("Enter a valid job budget.");
   const settings = await getImporterSettings();
+  assertWithinJobCeiling(input.budgetInr, settings.budget.maxJobInr);
   // Re-price with the settings that will be frozen on the job: stop before any AI call when
   // the estimate cannot be priced or exceeds the job budget (the budget is never raised for you).
   const analysis = job.analysis as unknown as JobAnalysis | null;
@@ -242,7 +244,7 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
   const willCallAi = settings.aiEnabled && estimate.lines.some((l) => l.calls > 0 && l.model !== null && l.problem === null);
   if (willCallAi) {
     if (estimate.totalInr === null) throw new ImportJobError(`The AI cost cannot be estimated (${estimate.notes[0] ?? "missing model price or exchange rate"}). Nothing was started.`);
-    if (estimate.totalInr > Math.min(input.budgetInr, 100_000)) {
+    if (estimate.totalInr > input.budgetInr) {
       throw new ImportJobError(`The estimated AI cost (₹${estimate.totalInr.toFixed(2)}) is above the job budget (₹${input.budgetInr.toFixed(2)}). Nothing was started — reduce the sample or raise the budget deliberately.`);
     }
   }
@@ -260,7 +262,7 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
       year: input.year,
       paperCode: input.paperCode?.trim().slice(0, 40) || null,
       previousYearPaperId: input.previousYearPaperId,
-      budgetInr: Math.min(input.budgetInr, 100_000),
+      budgetInr: input.budgetInr,
       status: AiImportJobStatus.QUEUED,
       confirmedAt: new Date(),
       confirmedById: input.actorId,
@@ -270,6 +272,13 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
   if (!confirmed.count) throw new ImportJobError("The files or analysis of this import changed while you were confirming. Nothing was started — review the page and confirm again.", 409);
   await logEvent(job.id, "CONFIRMED", `Processing confirmed with a job budget of ₹${input.budgetInr.toFixed(2)}`, { paperType: input.paperType, budgetInr: input.budgetInr, aiEnabled: settings.aiEnabled, models: settings.models }, input.actorId);
   kickWorker();
+}
+
+/** The per-job budget can never be set above the hard ceiling in Import Settings (confirm and resume). */
+function assertWithinJobCeiling(budgetInr: number, maxJobInr: number) {
+  if (budgetInr > maxJobInr) {
+    throw new ImportJobError(`The job budget (₹${budgetInr.toFixed(2)}) is above the hard limit per job (₹${maxJobInr.toFixed(2)}, Import Settings). Nothing was changed.`);
+  }
 }
 
 export async function pauseJob(jobId: string, actorId: string) {
@@ -283,7 +292,8 @@ export async function resumeJob(jobId: string, actorId: string, newBudgetInr?: n
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status !== AiImportJobStatus.PAUSED && job.status !== AiImportJobStatus.PAUSED_BUDGET && job.status !== AiImportJobStatus.FAILED) throw new ImportJobError("Only a paused or failed import can be resumed.");
-  const budget = newBudgetInr !== null && newBudgetInr !== undefined && Number.isFinite(newBudgetInr) ? Math.min(Math.max(newBudgetInr, 0), 100_000) : job.budgetInr;
+  const budget = newBudgetInr !== null && newBudgetInr !== undefined && Number.isFinite(newBudgetInr) ? Math.max(newBudgetInr, 0) : job.budgetInr;
+  if (budget !== job.budgetInr) assertWithinJobCeiling(budget, (await getImporterSettings()).budget.maxJobInr);
   if (job.status === AiImportJobStatus.PAUSED_BUDGET && budget <= job.spentInr) throw new ImportJobError("Raise the job budget above what was already spent to continue.");
   await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, budgetInr: budget, leaseOwner: null, leaseUntil: null } });
   // Failed pages get one more attempt on resume (never automatically in a loop).

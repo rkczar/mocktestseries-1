@@ -15,7 +15,11 @@
  *   mockvision/pricey   0.00005 / 0.00015      vision — exceeds the per-request ceiling
  *   mockvision/slow     vision, answers after 6 s (interrupt test)
  *   mocktext/classifier 0.0000001 / 0.0000004  text only
+ *   mockvision/imgpriced 0.0000005 / 0.000003, pricing.image 0.00001 — input-image price on top of tokens
+ *   mockvision/badimg   vision, pricing.image "n/a" (unreadable image price → unusable)
  * GET /__mock/stats · POST /__mock/reset
+ * POST /__mock/config {keyLimitRemaining: number|null, costMultiplier: number, modelsStatus: number|null, chatDelayMs: number}
+ *   — key credit left (null = key without a limit), reported cost × multiplier, /models failure.
  */
 import http from "node:http";
 import { readFileSync } from "node:fs";
@@ -31,11 +35,15 @@ const MODELS = {
   "mockvision/pricey": { p: 0.00005, c: 0.00015, vision: true },
   "mockvision/slow": { p: 0.0000005, c: 0.000003, vision: true },
   "mocktext/classifier": { p: 0.0000001, c: 0.0000004, vision: false },
+  "mockvision/imgpriced": { p: 0.0000005, c: 0.000003, vision: true, image: "0.00001" },
+  "mockvision/badimg": { p: 0.0000005, c: 0.000003, vision: true, image: "n/a" },
 };
+const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0 };
+const config = { ...DEFAULT_CONFIG };
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
 
-const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], bodies: 0 };
+const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], bodies: 0 };
 let seq = 0;
 
 function json(res, status, body) {
@@ -100,23 +108,30 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/__mock/stats") return json(res, 200, stats);
   if (url.pathname === "/__mock/reset") {
-    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], bodies: 0 });
+    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], bodies: 0 });
+    Object.assign(config, DEFAULT_CONFIG);
     return json(res, 200, { ok: true });
+  }
+  if (url.pathname === "/__mock/config") {
+    Object.assign(config, body);
+    return json(res, 200, config);
   }
   if (url.pathname === "/v1/latest") return json(res, 200, { amount: 1, base: "USD", date: "2026-10-16", rates: { INR: 95 } });
   const p = url.pathname.replace(/^\/api\/v1/, "");
   if (req.method === "GET" && p === "/models") {
+    if (config.modelsStatus) return err(res, config.modelsStatus, "mock: models unavailable");
     return json(res, 200, {
-      data: Object.entries(MODELS).map(([id, m]) => ({ id, name: id, context_length: 200000, architecture: { input_modalities: m.vision ? ["text", "image"] : ["text"], output_modalities: ["text"] }, pricing: { prompt: String(m.p), completion: String(m.c) }, top_provider: { max_completion_tokens: 16000 }, supported_parameters: ["max_tokens", "temperature"] })),
+      data: Object.entries(MODELS).map(([id, m]) => ({ id, name: id, context_length: 200000, architecture: { input_modalities: m.vision ? ["text", "image"] : ["text"], output_modalities: ["text"] }, pricing: { prompt: String(m.p), completion: String(m.c), ...(m.image ? { image: m.image } : {}) }, top_provider: { max_completion_tokens: 16000 }, supported_parameters: ["max_tokens", "temperature"] })),
     });
   }
   if (req.method === "GET" && p === "/images/models") return json(res, 200, { data: [] });
   const auth = req.headers.authorization ?? "";
   if (!auth.startsWith("Bearer sk-or-")) return err(res, 401, "No auth credentials found");
-  if (req.method === "GET" && p === "/key") return json(res, 200, { data: { label: "mock", limit: 10, limit_remaining: 9, usage: 1 } });
+  if (req.method === "GET" && p === "/key") return json(res, 200, { data: { label: "mock", limit: config.keyLimitRemaining === null ? null : 10, limit_remaining: config.keyLimitRemaining, usage: 1 } });
   if (req.method === "POST" && p === "/chat/completions") {
     stats.chat++;
     stats.privacy.push(body.provider?.data_collection ?? null);
+    stats.zdr.push(body.provider?.zdr === true);
     const system = String(body.messages?.find((m) => m.role === "system")?.content ?? "");
     const user = body.messages?.find((m) => m.role === "user")?.content;
     const parts = Array.isArray(user) ? user : [{ type: "text", text: String(user ?? "") }];
@@ -146,6 +161,7 @@ const server = http.createServer(async (req, res) => {
         continue;
       }
       if (id === "mockvision/slow") await new Promise((r) => setTimeout(r, 6000));
+      if (config.chatDelayMs) await new Promise((r) => setTimeout(r, config.chatDelayMs));
       stats.byModel[id] = (stats.byModel[id] ?? 0) + 1;
       let out;
       if (task === "extract") {
@@ -163,7 +179,7 @@ const server = http.createServer(async (req, res) => {
       const content = JSON.stringify(out);
       const pt = Math.ceil((system.length + text.length) / 4) + (image ? 1200 : 0);
       const ct = Math.ceil(content.length / 4);
-      const cost = Math.round((pt * m.p + ct * m.c) * 1e12) / 1e12;
+      const cost = Math.round((pt * m.p + ct * m.c + (image && m.image ? Number(m.image) || 0 : 0)) * config.costMultiplier * 1e12) / 1e12;
       return json(res, 200, { id: `gen-vision-${Date.now()}-${++seq}`, model: id, choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct, cost } });
     }
     return err(res, last[0], last[1]);

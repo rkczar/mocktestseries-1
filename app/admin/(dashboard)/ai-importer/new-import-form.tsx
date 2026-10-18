@@ -87,7 +87,7 @@ export function JobContextFields({
   );
 }
 
-export function NewImportForm({ exams, defaultBudget }: { exams: ExamOption[]; defaultBudget: number }) {
+export function NewImportForm({ exams, defaultBudget, maxJobInr }: { exams: ExamOption[]; defaultBudget: number; maxJobInr: number }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +116,7 @@ export function NewImportForm({ exams, defaultBudget }: { exams: ExamOption[]; d
       <div className="flex max-w-xs flex-col gap-1.5">
         <Label htmlFor="ai-budget">Job budget for paid AI (₹)</Label>
         <Input id="ai-budget" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^\d.]/g, ""))} data-testid="ai-budget" />
-        <p className="text-xs text-[var(--color-muted-foreground)]">Processing pauses before this amount would be exceeded. You confirm the estimate before anything paid runs.</p>
+        <p className="text-xs text-[var(--color-muted-foreground)]">Processing pauses before this amount would be exceeded. You confirm the estimate before anything paid runs. Hard limit per job: ₹{maxJobInr}.</p>
       </div>
       {error && <p className="text-sm text-[var(--color-error)]" role="alert">{error}</p>}
       <div>

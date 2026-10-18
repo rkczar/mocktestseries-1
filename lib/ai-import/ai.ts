@@ -31,7 +31,7 @@ import { importerFeature, type ImporterSettings, type ImporterTask } from "@/lib
 export class ImporterBudgetError extends Error {
   constructor(
     message: string,
-    readonly scope: "job" | "month" | "request" | "key"
+    readonly scope: "job" | "month" | "total" | "request" | "key" | "overrun"
   ) {
     super(message);
     this.name = "ImporterBudgetError";
@@ -43,15 +43,21 @@ export class ImporterAiFailure extends Error {}
 const LOCK_KEY = 7_301_442_031; // importer budget advisory lock
 /** A reservation older than this belongs to a killed worker (an importer request never runs this long). */
 export const STALE_MS = 10 * 60_000;
-/** Conservative token allowance per image part (providers bill 250–1,800 tokens for a page image). */
-export const IMAGE_TOKENS = 2_000;
+/**
+ * Conservative token allowance per image part. Page images are sent at most 1600 px on the long side
+ * (figures.ts visionImage). Published per-image formulas stay below this for such an image:
+ * Anthropic ≈ w·h/750 (≤ 3,414 even for a 1600×1600 square), Qwen-VL ≈ w·h/784, OpenAI high
+ * detail ≤ 1,105, Gemini 258 per 768-px tile. A provider that bills more is caught after the call
+ * (actual cost above the reservation pauses the job).
+ */
+export const IMAGE_TOKENS = 3_500;
 /** OpenRouter max_price headroom over the catalog price; the worst-case reservation uses the same factor. */
 export const PRICE_MARGIN = 1.05;
 
-/** Fallbacks may never cost more than the preferred model (per prompt, completion and request price). */
-function notPricier(m: AiModel, preferred: AiModel): boolean {
+/** Fallbacks may never cost more than the preferred model (per prompt, completion, request and input-image price). */
+export function notPricier(m: AiModel, preferred: AiModel): boolean {
   const out = (x: AiModel) => Math.max(x.completionPrice ?? 0, x.reasoningPrice ?? 0);
-  return (m.promptPrice ?? 0) <= (preferred.promptPrice ?? 0) && out(m) <= out(preferred) && (m.requestPrice ?? 0) <= (preferred.requestPrice ?? 0);
+  return (m.promptPrice ?? 0) <= (preferred.promptPrice ?? 0) && out(m) <= out(preferred) && (m.requestPrice ?? 0) <= (preferred.requestPrice ?? 0) && (inputImagePriceUsd(m) ?? Infinity) <= (inputImagePriceUsd(preferred) ?? Infinity);
 }
 
 export interface AiCallInput {
@@ -78,6 +84,19 @@ export interface AiCallResult {
   fallbackUsed: boolean;
 }
 
+/**
+ * OpenRouter `pricing.image` for input images (USD). Whether a model bills it per image or per image
+ * token is not stated consistently (Gemini lists the same value as its per-token prompt price), so the
+ * worst case assumes the larger reading: per image token, for IMAGE_TOKENS tokens, on top of the prompt
+ * tokens. 0 when the model publishes no such price; null when a price is published but unusable.
+ */
+export function inputImagePriceUsd(m: Pick<AiModel, "pricingRaw">): number | null {
+  const raw = (m.pricingRaw ?? {}) as Record<string, unknown>;
+  if (raw.image === undefined || raw.image === null || raw.image === "") return 0;
+  const v = typeof raw.image === "number" ? raw.image : typeof raw.image === "string" ? Number(raw.image) : NaN;
+  return Number.isFinite(v) && v >= 0 ? v : null;
+}
+
 /** Why a configured model cannot be used for a task (null = usable). */
 export function modelProblem(m: AiModel | undefined, needsVision: boolean): string | null {
   if (!m) return "not in the model catalog (sync Admin → AI → Models)";
@@ -88,6 +107,7 @@ export function modelProblem(m: AiModel | undefined, needsVision: boolean): stri
   if (m.promptPrice === null || m.completionPrice === null || m.promptPrice < 0 || m.completionPrice < 0) return "no fixed published price";
   if (!m.outputModalities.includes("text")) return "does not return text";
   if (needsVision && !m.inputModalities.includes("image")) return "cannot read images";
+  if (needsVision && inputImagePriceUsd(m) === null) return "its per-image input price cannot be read, so a maximum cost cannot be set";
   return null;
 }
 
@@ -96,12 +116,12 @@ export async function loadModels(ids: string[]): Promise<Map<string, AiModel>> {
   return new Map(rows.map((r) => [r.id, r]));
 }
 
-/** Worst-case USD of one call on the most expensive of the listed models. */
-export function worstCaseUsd(models: AiModel[], inputTokens: number, maxOut: number): number {
+/** Worst-case USD of one call on the most expensive of the listed models (images: per-image price on top of their tokens). */
+export function worstCaseUsd(models: AiModel[], inputTokens: number, maxOut: number, images = 0): number {
   let worst = 0;
   for (const m of models) {
     const out = Math.max(m.completionPrice ?? 0, m.reasoningPrice ?? 0);
-    worst = Math.max(worst, inputTokens * (m.promptPrice ?? 0) + maxOut * out + (m.requestPrice ?? 0));
+    worst = Math.max(worst, inputTokens * (m.promptPrice ?? 0) + maxOut * out + (m.requestPrice ?? 0) + images * IMAGE_TOKENS * (inputImagePriceUsd(m) ?? 0));
   }
   return worst;
 }
@@ -114,7 +134,7 @@ export function estimateInputTokens(system: string, content: ChatContentPart[]):
 
 const SPEND = `COALESCE(SUM(COALESCE("settledInr", "reservedInr")), 0)::float8`;
 
-async function reserve(input: { jobId: string; requestKey: string; feature: string; amountInr: number; settings: ImporterSettings }): Promise<void> {
+async function reserve(input: { jobId: string; requestKey: string; feature: string; amountInr: number; settings: ImporterSettings; key: { remainingUsd: number | null; fxRate: number } }): Promise<void> {
   const { istDay, istMonth } = istDayMonth();
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_KEY}::bigint)`;
@@ -129,27 +149,54 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
     if (!job) throw new ImporterAiUnavailable("The import job no longer exists.");
     const inflight = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "requestKey" LIKE $1 AND "status" = 'RESERVED'`, `qi:${input.jobId}:%`);
     const jobUsed = job.spentInr + (inflight[0]?.v ?? 0);
-    if (jobUsed + input.amountInr > job.budgetInr) {
-      throw new ImporterBudgetError(`The job budget is reached (${formatInr(jobUsed)} of ${formatInr(job.budgetInr)} used; the next request may cost up to ${formatInr(input.amountInr)}). Raise the job budget to continue.`, "job");
+    // The hard per-job ceiling applies even to a job whose own budget was set before the ceiling was lowered.
+    const jobCap = Math.min(job.budgetInr, input.settings.budget.maxJobInr);
+    if (jobUsed + input.amountInr > jobCap) {
+      const capped = jobCap < job.budgetInr;
+      throw new ImporterBudgetError(`The job budget is reached (${formatInr(jobUsed)} of ${formatInr(jobCap)} used; the next request may cost up to ${formatInr(input.amountInr)}).${capped ? " The hard limit per job in Import Settings applies." : " Raise the job budget to continue."}`, "job");
     }
     const month = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "istMonth" = $1 AND "status" <> 'RELEASED' AND left("feature", 8) = 'qimport_'`, istMonth);
     const monthUsed = month[0]?.v ?? 0;
     if (monthUsed + input.amountInr > input.settings.budget.monthlyInr) {
       throw new ImporterBudgetError(`The importer's monthly AI budget is reached (${formatInr(monthUsed)} of ${formatInr(input.settings.budget.monthlyInr)}). A Master Admin can raise it in Import Settings.`, "month");
     }
+    if (input.settings.budget.totalInr !== null) {
+      const all = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "status" <> 'RELEASED' AND left("feature", 8) = 'qimport_'`);
+      const allUsed = all[0]?.v ?? 0;
+      if (allUsed + input.amountInr > input.settings.budget.totalInr) {
+        throw new ImporterBudgetError(`The importer's all-time AI budget is reached (${formatInr(allUsed)} of ${formatInr(input.settings.budget.totalInr)}; it does not reset monthly). A Master Admin can change it in Import Settings.`, "total");
+      }
+    }
+    // The key's limit is shared with student Ask AI. Requests of other importer jobs still in flight are not
+    // yet in the key's usage, so they are subtracted too (they hold this same lock while reserving).
+    if (input.key.remainingUsd !== null) {
+      const pending = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT COALESCE(SUM("reservedInr"), 0)::float8 AS v FROM "AiBudgetReservation" WHERE "status" = 'RESERVED' AND left("feature", 8) = 'qimport_'`);
+      const pendingUsd = (pending[0]?.v ?? 0) / input.key.fxRate;
+      const afterUsd = input.key.remainingUsd - pendingUsd - input.amountInr / input.key.fxRate;
+      if (afterUsd < input.settings.budget.keyReserveUsd) {
+        throw new ImporterBudgetError(
+          `The shared OpenRouter key has $${input.key.remainingUsd.toFixed(2)} left${pendingUsd > 0 ? ` ($${pendingUsd.toFixed(4)} of it held by importer requests in flight)` : ""}; this request could use up to $${(input.amountInr / input.key.fxRate).toFixed(4)}, which would leave less than the $${input.settings.budget.keyReserveUsd.toFixed(2)} kept for student Ask AI (Import Settings).`,
+          "key"
+        );
+      }
+    }
     await tx.aiBudgetReservation.create({ data: { requestKey: input.requestKey, feature: input.feature, reservedInr: input.amountInr, istDay, istMonth } });
   });
 }
 
-/** Settles a reservation and adds the charge to the job (atomic increment; idempotent per request key). */
-async function settle(jobId: string, requestKey: string, actualInr: number | null, actualUsd: number | null): Promise<number> {
+/**
+ * Settles a reservation and adds the charge to the job (atomic increment; idempotent per request key).
+ * `overrunInr` > 0 when the provider charged more than the reserved worst case: the charge is still
+ * recorded in full (never hidden), and the caller stops the job.
+ */
+async function settle(jobId: string, requestKey: string, actualInr: number | null, actualUsd: number | null): Promise<{ charged: number; overrunInr: number }> {
   return prisma.$transaction(async (tx) => {
     const r = await tx.aiBudgetReservation.findUnique({ where: { requestKey } });
-    if (!r || r.status !== "RESERVED") return r?.settledInr ?? 0;
+    if (!r || r.status !== "RESERVED") return { charged: r?.settledInr ?? 0, overrunInr: 0 };
     const charge = actualInr ?? r.reservedInr;
     await tx.aiBudgetReservation.update({ where: { requestKey }, data: { status: "SETTLED", settledInr: charge, costKnown: actualInr !== null, settledAt: new Date() } });
     await tx.aiImportJob.update({ where: { id: jobId }, data: { spentInr: { increment: charge }, ...(actualUsd !== null ? { spentUsd: { increment: actualUsd } } : {}) } });
-    return charge;
+    return { charged: charge, overrunInr: Math.max(0, charge - r.reservedInr) };
   });
 }
 
@@ -262,21 +309,20 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   for (const m of usable.slice(1)) if (!notPricier(m, usable[0])) usable.splice(usable.indexOf(m), 1);
 
   const inputTokens = estimateInputTokens(input.system, input.content);
-  const worstUsd = worstCaseUsd(usable, inputTokens, input.maxOutputTokens) * PRICE_MARGIN;
+  const images = input.content.filter((p) => p.type === "image_url").length;
+  const worstUsd = worstCaseUsd(usable, inputTokens, input.maxOutputTokens, images) * PRICE_MARGIN;
   const worstInr = usdToInr(worstUsd, fx.rate)!;
   if (worstInr > input.settings.budget.maxRequestInr) {
     throw new ImporterBudgetError(`One ${input.task} request could cost up to ${formatInr(worstInr)}, above the per-request limit of ${formatInr(input.settings.budget.maxRequestInr)} (Import Settings).`, "request");
   }
   // The key's limit is shared with student Ask AI: keep the configured reserve untouched (fail closed).
+  // A key without a credit limit gives no way to guarantee that reserve, so it is refused too.
   const keyInfo = await getKeyInfo(apiKey).catch(() => null);
   if (!keyInfo) throw new ImporterAiUnavailable("The OpenRouter key's remaining credit could not be read, so nothing was sent.");
-  if (keyInfo.limit_remaining !== null && keyInfo.limit_remaining - worstUsd < input.settings.budget.keyReserveUsd) {
-    throw new ImporterBudgetError(
-      `The shared OpenRouter key has $${keyInfo.limit_remaining.toFixed(2)} left; this request could use up to $${worstUsd.toFixed(4)}, which would leave less than the $${input.settings.budget.keyReserveUsd.toFixed(2)} kept for student Ask AI (Import Settings).`,
-      "key"
-    );
+  if (keyInfo.limit_remaining === null && input.settings.budget.keyReserveUsd > 0) {
+    throw new ImporterBudgetError(`The shared OpenRouter key has no credit limit, so the $${input.settings.budget.keyReserveUsd.toFixed(2)} kept for student Ask AI cannot be guaranteed. Nothing was sent — set a limit on the key at OpenRouter, or set the reserve to $0 in Import Settings.`, "key");
   }
-  const typicalUsd = worstCaseUsd(usable, inputTokens, Math.round(input.maxOutputTokens * 0.4));
+  const typicalUsd = worstCaseUsd(usable, inputTokens, Math.round(input.maxOutputTokens * 0.4), images);
   const maxPrompt = Math.max(...usable.map((m) => m.promptPrice ?? 0)) * 1e6;
   const maxCompletion = Math.max(...usable.map((m) => Math.max(m.completionPrice ?? 0, m.reasoningPrice ?? 0))) * 1e6;
   const requestId = crypto.randomUUID();
@@ -288,7 +334,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   const attempts = input.settings.budget.retryTransient ? 2 : 1;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const requestKey = `qi:${input.jobId}:${requestId}:${attempt}`;
-    await reserve({ jobId: input.jobId, requestKey, feature, amountInr: worstInr, settings: input.settings });
+    await reserve({ jobId: input.jobId, requestKey, feature, amountInr: worstInr, settings: input.settings, key: { remainingUsd: keyInfo.limit_remaining, fxRate: fx.rate } });
     const started = Date.now();
     try {
       const r = await chatCompletion({
@@ -309,20 +355,23 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         timeoutMs: 150_000,
       });
       const actualInr = r.costUsd !== null ? usdToInr(r.costUsd, fx.rate) : null;
-      const charged = await settle(input.jobId, requestKey, actualInr, r.costUsd);
+      const { charged, overrunInr } = await settle(input.jobId, requestKey, actualInr, r.costUsd);
       const fallbackUsed = r.model !== requested && !r.model.startsWith(`${requested}-`);
       const empty = !r.text.trim();
       await log({ input, requestId, attempt, model: r.model, requested, ok: !empty && r.finishReason !== "length", latencyMs: Date.now() - started, fx, estUsd: typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, generationId: r.generationId, fallbackUsed, errorCategory: empty ? "empty_response" : r.finishReason === "length" ? "truncated" : null, errorSummary: empty ? describeCategory("empty_response") : r.finishReason === "length" ? describeCategory("truncated") : null });
       await patchOpenRouterState({ lastSuccessAt: new Date().toISOString() });
+      if (overrunInr > 0) {
+        throw new ImporterBudgetError(`A ${input.task} request cost ${formatInr(charged)}, more than its reserved maximum of ${formatInr(worstInr)} (the provider billed more tokens than the conservative bound). The charge is recorded in full and the job is paused — review the Cost Center before resuming.`, "overrun");
+      }
       if (empty) throw new ImporterAiFailure(describeCategory("empty_response"));
       if (r.finishReason === "length") throw new ImporterAiFailure("The model's answer was cut off at the output limit.");
       return { text: r.text, model: r.model, costInr: charged, inputTokens: r.inputTokens, outputTokens: r.outputTokens, fallbackUsed };
     } catch (error) {
-      if (error instanceof ImporterAiFailure) throw error;
+      if (error instanceof ImporterAiFailure || error instanceof ImporterBudgetError) throw error;
       const e = error instanceof OpenRouterError ? error : new OpenRouterError("provider_error", error instanceof Error ? error.message : "request failed");
       lastError = e;
       const billedUnknown = e.category === "timeout" || e.generationId !== null;
-      const charged = billedUnknown ? await settle(input.jobId, requestKey, null, null) : (await release(requestKey), 0);
+      const charged = billedUnknown ? (await settle(input.jobId, requestKey, null, null)).charged : (await release(requestKey), 0);
       await log({ input, requestId, attempt, model: requested, requested, ok: false, latencyMs: Date.now() - started, fx, estUsd: typicalUsd, costUsd: null, chargedInr: charged, costStatus: billedUnknown ? "unknown" : "none", generationId: e.generationId, errorCategory: e.category, errorSummary: e.message, fallbackUsed: false });
       await patchOpenRouterState({ lastError: { category: e.category, message: sanitize(e.message), at: new Date().toISOString() } });
       if (!TRANSIENT_OPENROUTER_ERRORS.includes(e.category)) break;

@@ -1,7 +1,7 @@
 import "server-only";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
-import { IMAGE_TOKENS, loadModels, modelProblem } from "@/lib/ai-import/ai";
+import { IMAGE_TOKENS, inputImagePriceUsd, loadModels, modelProblem } from "@/lib/ai-import/ai";
 import type { ImporterSettings, ImporterTask } from "@/lib/ai-import/config";
 import type { FileFacts } from "@/lib/ai-import/analyze";
 
@@ -76,15 +76,16 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
   const keyPages = input.keyFacts.reduce((a, f) => a + f.scannedPages, 0);
 
   const price = (id: string | null, vision: boolean) => {
-    if (!id) return { model: null, problem: "not configured in Import Settings", p: null as { prompt: number; completion: number } | null };
+    if (!id) return { model: null, problem: "not configured in Import Settings", p: null as { prompt: number; completion: number; image: number; request: number } | null };
     const row = catalog.get(id);
     const problem = modelProblem(row, vision);
     if (problem || !row) return { model: id, problem, p: null };
-    return { model: id, problem: null, p: { prompt: row.promptPrice!, completion: Math.max(row.completionPrice!, row.reasoningPrice ?? 0) } };
+    return { model: id, problem: null, p: { prompt: row.promptPrice!, completion: Math.max(row.completionPrice!, row.reasoningPrice ?? 0), image: inputImagePriceUsd(row) ?? 0, request: row.requestPrice ?? 0 } };
   };
+  // Vision lines send one page image per call (billed like the worst case in ai.ts: image tokens at the image price).
   const line = (task: ImporterTask, label: string, id: string | null, vision: boolean, calls: number, inTok: number, outTok: number): EstimateLine => {
     const pr = price(id, vision);
-    const usd = pr.p ? inTok * pr.p.prompt + outTok * pr.p.completion : null;
+    const usd = pr.p ? inTok * pr.p.prompt + outTok * pr.p.completion + calls * (pr.p.request + (vision ? IMAGE_TOKENS * pr.p.image : 0)) : null;
     return { task, label, model: pr.model, calls, inputTokens: inTok, outputTokens: outTok, usd, inr: usdToInr(usd, fx.rate), pricePerM: pr.p ? { prompt: pr.p.prompt * 1e6, completion: pr.p.completion * 1e6 } : null, problem: calls ? pr.problem : null };
   };
 

@@ -48,7 +48,7 @@ export default async function AiImporterNewPage() {
           <CardDescription>Choose the exam the paper belongs to. Subjects and topics come from that exam&apos;s existing configuration.</CardDescription>
         </CardHeader>
         <CardContent>
-          {canUse ? <NewImportForm exams={options} defaultBudget={settings.budget.defaultJobCapInr} /> : <p className="text-sm text-[var(--color-muted-foreground)]">You can view imports but not start one (Master Admin only).</p>}
+          {canUse ? <NewImportForm exams={options} defaultBudget={settings.budget.defaultJobCapInr} maxJobInr={settings.budget.maxJobInr} /> : <p className="text-sm text-[var(--color-muted-foreground)]">You can view imports but not start one (Master Admin only).</p>}
         </CardContent>
       </Card>
     </div>

@@ -187,6 +187,8 @@ async function main() {
     "app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#previewImportSelectionAction",
     "app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#planResolveAction",
     "app/admin/(dashboard)/questions/bulk-import/history/[runId]/actions.ts#previewForceDeleteAction",
+    // Import Settings model list + provider status (lib/ai-import/models.ts: DB reads and the cached FX rate only; no OpenRouter call).
+    "app/admin/(dashboard)/ai-importer/actions.ts#importerModelsAction",
   ]);
   // POST handlers that write nothing (file generation only) — any admin may use them.
   const READ_ONLY_POST = new Set(["app/api/admin/questions/templates/generate/route.ts#POST"]);

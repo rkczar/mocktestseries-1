@@ -46,6 +46,7 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     paperCode: job.paperCode,
     previousYearPaperId: job.previousYearPaperId,
     budgetInr: job.budgetInr,
+    maxJobInr: settings.budget.maxJobInr,
     spentInr: job.spentInr,
     estCostInr: job.estCostInr,
     pauseReason: job.pauseReason,

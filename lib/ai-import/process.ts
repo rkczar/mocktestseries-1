@@ -278,6 +278,10 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
 
   // Second read by a DIFFERENT model for scanned / low-confidence pages.
   let second: ExtractedQuestion[] | null = null;
+  // Set when the second read was needed but did not run: the page is saved (its extraction is already paid
+  // for), its questions are marked for correction, and a budget stop pauses the job after the page.
+  let secondMissing: string | null = null;
+  let budgetStop: Error | null = null;
   const verifyModel = ctx.settings.models.verify;
   const lowConfidence = page.kind === "SCANNED" || qs.some((q) => q.confidence < ctx.settings.verification.secondReadBelow);
   if (verifyModel && verifyModel !== ctx.settings.models.extract && lowConfidence) {
@@ -287,8 +291,10 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       assignSections(second, state.startState);
     } catch (e) {
       if (e instanceof ImporterAiUnavailable) throw e;
-      // A failed second read never blocks the page; the questions keep their own confidence.
+      if (e instanceof Error && e.name === "ImporterBudgetError") budgetStop = e;
+      // A failed second read never blocks the page, but its questions are not treated as checked.
       second = null;
+      secondMissing = e instanceof Error ? e.message.slice(0, 200) : "request failed";
     }
   }
 
@@ -312,6 +318,9 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       q.notes = [...(q.notes ?? []), `Second read (${verifyModel}): ${verdict.detail}.`];
       if (!verdict.agree) q.confidence = Math.min(q.confidence, 0.5);
       else q.confidence = Math.max(q.confidence, 0.9);
+    } else if (secondMissing) {
+      q.notes = [...(q.notes ?? []), `The independent second read did not run (${secondMissing}).`];
+      q.confidence = Math.min(q.confidence, 0.5);
     }
     const existingLocal = localOnPage.find((l) => l.sourceKey === sourceKeyOf(q));
     aiKeys.add(sourceKeyOf(q));
@@ -344,6 +353,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   if (primary.out.answer_key.length) {
     await saveKeyEntries(ctx, file.id, file.id, page.pageNumber, primary.out.answer_key.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: "", raw: e.answer })));
   }
+  if (budgetStop) throw budgetStop;
 }
 
 // ---- DOCX / sheets / images -----------------------------------------------------------------------

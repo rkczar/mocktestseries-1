@@ -23,6 +23,8 @@ import {
 } from "@/lib/ai-import/review";
 import { saveImporterSettings } from "@/lib/ai-import/settings";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
+import { importerModelCatalog, importerSettingsProblems } from "@/lib/ai-import/models";
+import type { ImporterCatalog } from "@/lib/ai-import/model-options";
 import { CLEANUP_CATEGORIES, executeCleanup, findCandidates, findDuplicates, scanStorage, type CleanupCategory, type CleanupItem, type CleanupResult, type StorageReport } from "@/lib/ai-import/storage";
 import type { ImportMode } from "@/lib/ai-import/adapter";
 
@@ -37,6 +39,15 @@ export type ImporterResult<T> = { ok: true; data: T } | { ok: false; error: stri
 async function requireUse(): Promise<string | null> {
   try {
     return (await requirePermission(PERMISSIONS.AI_IMPORTER_USE)).user.id ?? null;
+  } catch (error) {
+    if (error instanceof UnauthorizedError) return null;
+    throw error;
+  }
+}
+
+async function requireView(): Promise<string | null> {
+  try {
+    return (await requirePermission(PERMISSIONS.AI_IMPORTER_VIEW)).user.id ?? null;
   } catch (error) {
     if (error instanceof UnauthorizedError) return null;
     throw error;
@@ -244,7 +255,18 @@ export async function extendRetentionAction(fileId: string, days: number): Promi
 }
 
 export async function saveSettingsAction(next: ImporterSettings): Promise<ImporterResult<ImporterSettings>> {
-  return run(await requireManage(), async (actorId) => saveImporterSettings(normalizeImporterSettings(next), actorId));
+  return run(await requireManage(), async (actorId) => {
+    const normalized = normalizeImporterSettings(next);
+    // Unsupported, unapproved or unpriced model IDs are refused (never saved and never silently cleared).
+    const problems = await importerSettingsProblems(next, normalized);
+    if (problems.length) throw new ImportJobError(`Not saved. ${problems.join(" ")}`);
+    return saveImporterSettings(normalized, actorId);
+  });
+}
+
+/** Re-reads the model catalog, provider status and prices for Import Settings (read-only; no OpenRouter call). */
+export async function importerModelsAction(): Promise<ImporterResult<ImporterCatalog>> {
+  return run(await requireView(), async () => importerModelCatalog(), []);
 }
 
 export async function scanStorageAction(): Promise<ImporterResult<StorageReport>> {

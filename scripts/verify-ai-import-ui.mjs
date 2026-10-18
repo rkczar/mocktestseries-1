@@ -80,10 +80,18 @@ for (const s of SECTIONS) {
 }
 await admin.goto(`${BASE}/admin/ai-importer/settings`);
 await admin.locator("[data-testid=ai-enabled]").check();
-await admin.locator("[data-testid=m-extract]").selectOption("mockvision/reader");
-await admin.locator("[data-testid=m-verify]").selectOption("mockvision/checker");
-await admin.locator("[data-testid=m-classify]").selectOption("mocktext/classifier");
-check("vision selects list only image-capable models", !(await admin.locator("[data-testid=m-extract] option[value='mocktext/classifier']").count()));
+// Searchable model pickers: type, then choose the option.
+const pickModel = async (slot, id) => {
+  await admin.locator(`[data-testid=m-${slot}-search]`).fill(id);
+  await admin.locator(`[data-testid=m-${slot}-list] [data-model-id="${id}"]`).click();
+};
+await pickModel("extract", "mockvision/reader");
+await pickModel("verify", "mockvision/checker");
+await pickModel("classify", "mocktext/classifier");
+await admin.locator("[data-testid=m-extract-search]").fill("classifier");
+check("vision pickers list only image-capable models", (await admin.locator("[data-testid=m-extract-list] [data-model-id='mocktext/classifier']").count()) === 0);
+await admin.locator("[data-testid=m-extract-search]").fill("");
+await admin.keyboard.press("Escape");
 await admin.locator("[data-testid=settings-save]").click();
 await admin.locator("[data-testid=settings-msg]").waitFor();
 check("settings saved", /saved/i.test(await admin.locator("[data-testid=settings-msg]").textContent()));
