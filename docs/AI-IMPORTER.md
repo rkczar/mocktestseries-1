@@ -76,6 +76,16 @@ worst case against the job cap and the monthly importer budget under one advisor
 the job pauses (Paused — budget limit) before exceeding either. Unknown costs keep the
 worst case. Privacy is sent per request (`provider.data_collection`, optional `zdr`).
 
+Hard guards (all fail closed, nothing is sent when they refuse):
+- Confirm re-prices the job with the settings it freezes; an AI job whose estimate is
+  unpriced or above the job budget is not started (the budget is never raised for you).
+- The worst-case reservation uses the same 5% margin as the `max_price` sent to OpenRouter.
+- The OpenRouter key is shared with student Ask AI: before each request the key's remaining
+  credit is read and the request is refused unless `budget.keyReserveUsd` (default $5)
+  would remain after its worst case.
+- One attempt per request; `budget.retryTransient` re-enables a single retry.
+- A fallback model priced above the preferred model is never used.
+
 ## Storage
 
 Vault: `files/` originals (content-addressed, deduplicated), `figures/` original figure
