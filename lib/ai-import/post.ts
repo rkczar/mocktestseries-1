@@ -29,8 +29,11 @@ export const IMPORTABLE = new Set(["SINGLE_CORRECT", "MULTIPLE_CORRECT", "MATCH_
 
 const WITHDRAWN = /^(bonus|dropped|deleted|withdrawn|\*|x)$/i;
 
-/** Flags an admin's "Approve" clears. Structural problems (options, type, images, answer) must be fixed, not approved. */
-export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "IMAGE_MAPPING_UNCERTAIN", "TOPIC_UNCERTAIN"];
+/**
+ * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
+ * approved — and an uncertain image placement is cleared only by confirming each figure's placement.
+ */
+export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES"];
 
 interface Check {
   stage: number;
@@ -159,6 +162,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     await prisma.aiImportKeyEntry.updateMany({ where: { id: { in: rows.map((r) => r.id).filter((id) => !matchedIds.has(id)) } }, data: { status: "UNMATCHED" } });
   }
   const anyKey = keyRowsRaw.length > 0;
+  const rescanWaiting = new Set((await prisma.aiImportQuestionVersion.findMany({ where: { jobId: job.id, kind: "RESCAN", status: "PENDING" }, select: { questionId: true } })).map((v) => v.questionId));
 
   // ---- Taxonomy ----
   const taxonomy = await getExamTaxonomy(prisma, job.examId);
@@ -240,6 +244,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     checks.push({ stage: 1, name: "Extraction confidence", passed: !lowConf, severity: lowConf ? "WARNING" : "INFO", method: e.method?.startsWith("AI") ? "AI" : "DETERMINISTIC", model: e.model ?? null, detail: `${Math.round(conf * 100)}% · ${e.method}${e.unreadable.length ? ` · unreadable: ${e.unreadable.join("; ").slice(0, 200)}` : ""}${e.notes?.length ? ` · ${e.notes.join(" ").slice(0, 300)}` : ""}` });
     if (e.unreadable.length) add("UNREADABLE_TEXT", e.unreadable.join("; ").slice(0, 300));
     if (lowConf) add("EXTRACTION_UNCERTAIN", e.notes?.join(" ").slice(0, 300) || `Extraction confidence ${Math.round(conf * 100)}%.`);
+    // Independent verification evidence (Agent B), kept on the original extraction.
+    const ver = (q.data as unknown as ExtractedQuestion).verification;
+    if (ver) {
+      checks.push({ stage: 1, name: "Independent verification", passed: ver.agree, severity: ver.agree ? "INFO" : "WARNING", method: "AI", model: ver.model, detail: ver.agree ? "A different model read the same page independently and every compared field matched." : `A different model read the same page independently: ${ver.detail}.${q.editedData ? " (Compared with the original extraction; your correction is kept.)" : ""}` });
+      if (!ver.agree) add("VERIFY_DISAGREES", `Independent read (${ver.model}): ${ver.detail}.`);
+    }
+    if (rescanWaiting.has(q.id)) add("RESCAN_PENDING", "A re-scan result is waiting: compare it with the current question and choose what to keep.");
     const nums = numbersByFile.get(q.fileId) ?? [];
     if (e.number !== null && e.number > 1 && !nums.includes(e.number - 1) && !(e.section && e.number === 1)) add("NUMBERING_GAP", `Q${e.number - 1} was not found before this question.`);
     // Figures

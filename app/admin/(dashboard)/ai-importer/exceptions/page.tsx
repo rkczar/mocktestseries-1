@@ -10,6 +10,8 @@ import { getImporterSettings } from "@/lib/ai-import/settings";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { effective } from "@/lib/ai-import/post";
 import { ExceptionsTable, type ExceptionRow } from "./exceptions-table";
+import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
+import { jobMapping } from "@/lib/ai-import/job-view";
 
 export const metadata = { title: "AI Import Review Exceptions — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";
@@ -27,11 +29,11 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const [canUse, canPublish, settings] = await Promise.all([hasPermission(PERMISSIONS.AI_IMPORTER_USE), hasPermission(PERMISSIONS.QUESTIONS_MANAGE), getImporterSettings()]);
   const jobs = await prisma.aiImportJob.findMany({ orderBy: { updatedAt: "desc" }, take: 100, select: { id: true, title: true, status: true } });
   const jobId = sp.job && jobs.some((j) => j.id === sp.job) ? sp.job : undefined;
-  const status = sp.status === "all" ? null : sp.status && sp.status in QUESTION_STATUS_LABELS ? sp.status : "exceptions";
+  const status = sp.status === "all" ? null : sp.status === "approval" ? "approval" : sp.status && sp.status in QUESTION_STATUS_LABELS ? sp.status : "exceptions";
   const issue = sp.issue && sp.issue in ISSUE_DEFS ? sp.issue : undefined;
   const where: Prisma.AiImportQuestionWhereInput = {
     ...(jobId ? { jobId } : {}),
-    ...(status === "exceptions" ? { status: { in: [...EXCEPTION_STATUSES] } } : status ? { status: status as never } : {}),
+    ...(status === "exceptions" ? { status: { in: [...EXCEPTION_STATUSES] } } : status === "approval" ? { status: "READY", approvedById: null, questionId: null } : status ? { status: status as never } : {}),
     ...(issue ? { issueCodes: { has: issue } } : {}),
   };
   const rows = await prisma.aiImportQuestion.findMany({ where, orderBy: [{ jobId: "asc" }, { fileId: "asc" }, { orderIndex: "asc" }], take: 1000, include: { figures: true } });
@@ -41,6 +43,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const saved = new Set(
     (await prisma.question.findMany({ where: { id: { in: rows.map((r) => r.questionId).filter((x): x is string => !!x) } }, select: { id: true } })).map((x) => x.id),
   );
+  const pendingRescan = new Set((await prisma.aiImportQuestionVersion.findMany({ where: { questionId: { in: rows.map((r) => r.id) }, kind: "RESCAN", status: "PENDING" }, select: { questionId: true } })).map((v) => v.questionId));
   const view: ExceptionRow[] = rows.map((r) => {
     const e = effective(r);
     return {
@@ -61,8 +64,11 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       publishBlocker: r.questionId ? publishBlocker(r, settings) : importBlocker(r, settings) ?? publishBlocker(r, settings),
       questionId: r.questionId,
       savedDeleted: !!r.questionId && !saved.has(r.questionId),
+      approved: !!r.approvedById,
+      rescanPending: pendingRescan.has(r.id),
     };
   });
+  const mapping = jobId ? await jobMapping(jobId) : null;
   const issueCounts = new Map<string, number>();
   for (const r of rows) for (const c of r.issueCodes) issueCounts.set(c, (issueCounts.get(c) ?? 0) + 1);
   const link = (patch: Record<string, string | undefined>) => {
@@ -75,9 +81,10 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Review Exceptions</h1>
         <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">
-          Only questions that need a decision are listed. Questions that pass every check import (and publish) in bulk from the job page — no one-by-one review needed.
+          Questions that need a decision are listed first. Nothing enters the Question Bank until it is approved: approve clean questions in bulk, fix or decide the rest, then add the approved ones from the import page.
         </p>
       </div>
+      {mapping && <PaperMapping m={mapping} compact />}
       <Card>
         <CardContent className="flex flex-col gap-2 py-3 text-sm">
           <div className="flex flex-wrap gap-2">
@@ -95,6 +102,9 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
             <span className="text-[var(--color-muted-foreground)]">Show:</span>
             <Link className={status === "exceptions" ? "font-semibold underline" : "underline"} href={link({ status: undefined })}>
               Exceptions
+            </Link>
+            <Link className={status === "approval" ? "font-semibold underline" : "underline"} href={link({ status: "approval" })} data-testid="filter-approval">
+              Awaiting approval
             </Link>
             <Link className={status === null ? "font-semibold underline" : "underline"} href={link({ status: "all" })}>
               All questions

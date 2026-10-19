@@ -748,22 +748,22 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
           <CardHeader>
             <CardTitle>Import into the Question Bank</CardTitle>
             <CardDescription>
-              Questions go through the existing Bulk Import (validation, duplicate check, Import History, rollback). Questions that fail a mandatory check are isolated in Review Exceptions; the rest proceed.
+              Only questions an administrator approved are added. They go through the existing Bulk Import (validation, duplicate check, Import History, rollback); questions that fail a mandatory check stay in Review Exceptions. {s.pendingDecision - s.approvedReady > 0 ? `${s.pendingDecision - s.approvedReady} checked question(s) still await approval.` : ""}
               {job.allowUnverified ? " Policy: questions without an official key may be published with their answer marked UNVERIFIED." : " Policy: answers without an official key or independent verification are imported as drafts only."}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
-            <Button disabled={pending || !s.eligibleImport} onClick={() => act(() => importAction(job.id, "DRAFT", null), "Import started.")} data-testid="import-draft">
-              Import as Draft ({s.eligibleImport})
+            <Button disabled={pending || !s.approvedReady} onClick={() => act(() => importAction(job.id, "DRAFT", null), "Import started.")} data-testid="import-draft">
+              Add approved as Draft ({s.approvedReady})
             </Button>
             {canPublish && (
               <Button
                 variant="outline"
-                disabled={pending || (!s.eligibleImport && !s.eligiblePublish)}
-                onClick={() => confirm("Import and publish every question that passes all automated checks? Students will see published questions.") && act(() => importAction(job.id, "PUBLISH_ALL", null), "Import & publish started.")}
+                disabled={pending || (!s.approvedReady && !s.eligiblePublish)}
+                onClick={() => confirm("Add the approved questions and publish those that pass every automated check? Students will see published questions.") && act(() => importAction(job.id, "PUBLISH_ALL", null), "Import & publish started.")}
                 data-testid="import-publish-all"
               >
-                Import &amp; Publish All Eligible
+                Add approved &amp; Publish Eligible
               </Button>
             )}
             {canPublish && (

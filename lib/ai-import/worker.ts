@@ -5,14 +5,14 @@ import { prisma } from "@/lib/prisma";
 import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { JOB_STAGES, type ImporterSettings, type JobStage } from "@/lib/ai-import/config";
 import { runAnalysis } from "@/lib/ai-import/analyze";
-import { runAiPages, runLocalPasses, type StepContext } from "@/lib/ai-import/process";
+import { runAiPages, runLocalPasses, runVerifyPages, type StepContext } from "@/lib/ai-import/process";
 import { runKeyFiles } from "@/lib/ai-import/keys";
 import { runPostProcessing } from "@/lib/ai-import/post";
 import { runImport, type ImportPlan } from "@/lib/ai-import/adapter";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { ImporterAiUnavailable, ImporterBudgetError, resetRateLimitStreak } from "@/lib/ai-import/ai";
 import { summarizeFailures } from "@/lib/ai-import/failure";
-import { reconcileJob } from "@/lib/ai-import/summary";
+import { jobQuality, reconcileJob } from "@/lib/ai-import/summary";
 import { removeVaultDir } from "@/lib/ai-import/vault";
 import { autoCleanup } from "@/lib/ai-import/storage";
 import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
@@ -63,6 +63,7 @@ function makeContext(job: AiImportJob, settings: ImporterSettings, names: { exam
   return {
     job,
     settings,
+    verifyMode: (job.config as { verifyMode?: string } | null)?.verifyMode === "all" ? "all" : "risk",
     examName: names.exam,
     subjectName: names.subject,
     stillRunning: async () => {
@@ -110,6 +111,12 @@ async function processJob(job: AiImportJob): Promise<void> {
     await stage(job.id, "KEY");
     await runKeyFiles(ctx);
     if (!(await ctx.stillRunning())) return;
+    if (ctx.verifyMode === "all") {
+      await stage(job.id, "VERIFY");
+      const v = await runVerifyPages(ctx);
+      if (v.verified || v.failed) await logEvent(job.id, "VERIFIED", `Independent verification of locally read pages: ${v.verified} page(s) verified${v.failed ? `, ${v.failed} failed (their questions stay unverified)` : ""}.`, v);
+      if (!(await ctx.stillRunning())) return;
+    }
     await stage(job.id, "VALIDATE");
     await runPostProcessing(ctx);
     if (!(await ctx.stillRunning())) return;
@@ -135,20 +142,13 @@ async function processJob(job: AiImportJob): Promise<void> {
     const summary = await reconcileJob(job.id);
     await logEvent(job.id, "PROCESSED", `Processing finished${failedPages ? ` (${failedPages} page(s) failed)` : ""}. ${summary.extracted} question(s) extracted, ${summary.eligibleImport} ready to import.`);
     await removeVaultDir("work", job.id).catch(() => undefined);
-    // One-page flow: eligible questions go to the Bulk Import right away (as Draft unless publishing was chosen).
+    // Nothing enters the Question Bank before an administrator approves it. An older job confirmed with
+    // "import automatically" is not imported either: its request is recorded as replaced by approval.
     const auto = (job.config as { autoImport?: { mode: "DRAFT" | "PUBLISH_ALL"; requestedById: string; done?: boolean } | null } | null)?.autoImport;
     if (auto && !auto.done) {
       const fresh = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { config: true } });
-      const cfg = { ...((fresh.config as Record<string, unknown>) ?? {}), autoImport: { ...auto, done: true } };
-      if (summary.eligibleImport > 0) {
-        const plan: ImportPlan = { mode: auto.mode, questionIds: null, requestedById: auto.requestedById, requestedAt: new Date().toISOString() };
-        if (await transition(job.id, [AiImportJobStatus.NEEDS_REVIEW], { status: AiImportJobStatus.IMPORTING, config: { ...cfg, importPlan: plan } as unknown as Prisma.InputJsonValue })) {
-          await logEvent(job.id, "IMPORT_REQUESTED", `Automatic import of ${summary.eligibleImport} eligible question(s) as Draft through the Bulk Import${auto.mode === "PUBLISH_ALL" ? ", then publishing those that pass every check" : ""}`, { mode: auto.mode, automatic: true });
-        }
-      } else {
-        await transition(job.id, [AiImportJobStatus.NEEDS_REVIEW], { config: cfg as Prisma.InputJsonValue });
-        await logEvent(job.id, "IMPORT_SKIPPED", "Automatic import: no question passed every check, so nothing was sent to the Bulk Import. Review the questions that need attention.");
-      }
+      await transition(job.id, [AiImportJobStatus.NEEDS_REVIEW], { config: { ...((fresh.config as Record<string, unknown>) ?? {}), autoImport: { ...auto, done: true, replacedByApproval: true } } as Prisma.InputJsonValue });
+      await logEvent(job.id, "AWAITING_APPROVAL", "Automatic import is replaced by approval: review and approve the questions, then add the approved ones to the Question Bank.");
     }
   } catch (e) {
     if (e instanceof ImporterBudgetError) {
@@ -176,12 +176,16 @@ async function importJob(job: AiImportJob): Promise<void> {
   // Image processing for a large batch can take a while: hold the lease for it.
   await prisma.aiImportJob.update({ where: { id: job.id }, data: { leaseUntil: new Date(Date.now() + 60 * 60_000), heartbeatAt: new Date() } });
   const r = await runImport(job, plan, settings);
-  const summary = await reconcileJob(job.id);
-  const done = summary.unaccounted === 0 && summary.pendingDecision === 0;
-  const issues = summary.needsCorrection + summary.notImportable + summary.importFailed + summary.duplicates > 0 || r.notPublished > 0;
+  await reconcileJob(job.id);
+  // The final quality gate: "Completed" only when every expected question is accounted for and nothing
+  // waits for a decision; warnings (acknowledged differences, unsupported or duplicate questions,
+  // unverified answers) complete "with warnings"; anything unresolved goes back to review.
+  const quality = await jobQuality(job.id);
+  const status = quality?.state === "COMPLETED" && r.notPublished === 0 ? AiImportJobStatus.COMPLETED : quality?.state === "COMPLETED" || quality?.state === "COMPLETED_WITH_WARNINGS" ? AiImportJobStatus.COMPLETED_WITH_ISSUES : AiImportJobStatus.NEEDS_REVIEW;
   const latest = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { config: true } });
   const config = { ...((latest.config as Record<string, unknown>) ?? {}), importPlan: null, lastImport: { ...plan, result: r, finishedAt: new Date().toISOString() } };
-  await transition(job.id, [AiImportJobStatus.IMPORTING], { status: done ? (issues ? AiImportJobStatus.COMPLETED_WITH_ISSUES : AiImportJobStatus.COMPLETED) : AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), config: config as Prisma.InputJsonValue });
+  await transition(job.id, [AiImportJobStatus.IMPORTING], { status, finishedAt: new Date(), config: config as Prisma.InputJsonValue });
+  if (quality) await logEvent(job.id, "QUALITY_GATE", `${r.imported} question(s) stored as Draft. Quality: ${quality.state.toLowerCase().replace(/_/g, " ")}${quality.blockers.length ? ` — ${quality.blockers.join(" ")}` : ""}`, { state: quality.state, blockers: quality.blockers, warnings: quality.warnings });
 }
 
 /** One worker run: picks jobs that need work, oldest first, within a time budget. */

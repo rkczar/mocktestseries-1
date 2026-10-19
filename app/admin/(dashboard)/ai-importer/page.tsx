@@ -4,7 +4,8 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getExamSubjects } from "@/lib/exam-taxonomy";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { jobCards, remainingPilotBudget } from "@/lib/ai-import/job-view";
+import { jobCards, jobMapping, remainingPilotBudget } from "@/lib/ai-import/job-view";
+import { jobQuality } from "@/lib/ai-import/summary";
 import { analyzerVerdict } from "@/lib/ai-import/verdict";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { CostEstimate } from "@/lib/ai-import/estimate";
@@ -41,13 +42,22 @@ export default async function AiImporterPage({ searchParams }: { searchParams: P
   const jobId = typeof jobParam === "string" && /^[a-z0-9]{10,40}$/.test(jobParam) ? jobParam : null;
   if (jobId) {
     const [card] = await jobCards({ ids: [jobId] }, canManage);
-    const job = card ? await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { analysis: true, estimate: true, budgetInr: true, examId: true, paperType: true, year: true } }) : null;
-    if (card && job) {
+    const job = card ? await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { analysis: true, estimate: true, budgetInr: true, examId: true, paperType: true, year: true, previousYearPaperId: true, files: { where: { role: "PAPER", status: { not: "REJECTED" } }, select: { id: true, originalName: true, pageCount: true }, orderBy: { createdAt: "asc" } } } }) : null;
+    const [mapping, quality, stage] = job ? await Promise.all([jobMapping(jobId), jobQuality(jobId), prisma.aiImportEvent.findFirst({ where: { jobId, type: "STAGE" }, orderBy: { createdAt: "desc" }, select: { message: true } })]) : [null, null, null];
+    if (card && job && mapping) {
       const analysis = job.analysis as unknown as JobAnalysis | null;
-      const yearMissing = !job.year && !exams.find((e) => e.id === job.examId)?.year;
+      const yearMissing = !job.year && !job.previousYearPaperId && !exams.find((e) => e.id === job.examId)?.year;
+      const estimate = (job.estimate as unknown as CostEstimate | null) ?? analysis?.estimate ?? null;
       current = {
         card,
-        examName: exams.find((e) => e.id === job.examId)?.name ?? "—",
+        examName: mapping.examName,
+        mapping,
+        quality,
+        estimatedQuestions: estimate?.expectedQuestions || null,
+        papers: papers.filter((p) => p.examId === job.examId),
+        files: job.files.map((f) => ({ id: f.id, name: f.originalName, pageCount: f.pageCount })),
+        stage: stage?.message ?? null,
+        verifyAvailable: !!estimate?.plan?.tasks.verify.model,
         verdict: analysis
           ? analyzerVerdict({
               analysis,

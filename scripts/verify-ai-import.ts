@@ -23,10 +23,10 @@ import { AiImportFileRole, AiImportPaperType, QuestionStatus } from "@prisma/cli
 import { prisma } from "@/lib/prisma";
 import { CHUNK_BYTES, DEFAULT_IMPORTER_SETTINGS, normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { saveImporterSettings, getImporterSettings } from "@/lib/ai-import/settings";
-import { addFile, completeFile, confirmJob, createJob, discardUpload, putChunk, removeFile, requestAnalysis, resumeJob } from "@/lib/ai-import/jobs";
+import { addFile, completeFile, confirmJob, createJob, discardUpload, putChunk, removeFile, requestAnalysis, resumeJob, setExpectedQuestions } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
-import { approveQuestions, rejectQuestions, requestImport, setAnswer, setFigure, setTaxonomy, revalidateQuestions, allowDuplicate } from "@/lib/ai-import/review";
-import { jobSummary } from "@/lib/ai-import/summary";
+import { approveQuestions, rejectQuestions, requestImport, setAnswer, setFigure, setTaxonomy, revalidateQuestions, allowDuplicate, acknowledgeSequence } from "@/lib/ai-import/review";
+import { jobQuality, jobSummary, settleJobStatus } from "@/lib/ai-import/summary";
 import { findCandidates, executeCleanup, scanStorage, findDuplicates } from "@/lib/ai-import/storage";
 import { isVaultKey, vaultRoot, contentKey } from "@/lib/ai-import/vault";
 import { toExtracted, pageSchema } from "@/lib/ai-import/prompts";
@@ -270,18 +270,34 @@ async function main() {
   // ------------------------------------------------------------------ G
   section("G. Review decisions");
   await setTaxonomy(q1.id, actor, anatomy.id, headNeck.id);
-  await expectError("topic from another subject is refused", () => setTaxonomy(q1.id, actor, physiology.id, headNeck.id), /does not belong/);
+  await expectError("topic from another subject is refused", () => setTaxonomy(q1.id, actor, physiology.id, headNeck.id), /does not belong|keep the selected subject/);
   await setAnswer(q2k.id, actor, ["C"]);
   await expectError("two answers on a single-correct question are refused", () => setAnswer(q2k.id, actor, ["A", "B"]), /exactly one/);
   await rejectQuestions([q10k.id], actor, "withdrawn in official key");
   await approveQuestions([q1.id], actor);
+  check("approval recorded on Q1", !!(await q(jobC, "1")).approvedById);
   await allowDuplicate(q1.id, actor, true);
+  check("a later decision (allow duplicate) withdraws the approval", !(await q(jobC, "1")).approvedById);
   await revalidateQuestions(jobC, [q1.id, q2k.id, q10k.id]);
   const q1r = await q(jobC, "1");
   const q2r = await q(jobC, "2");
-  check("approved + topic set → Q1 ready", q1r.status === "READY", [q1r.status, q1r.issueCodes]);
+  check("reviewed + topic set → Q1 ready", q1r.status === "READY", [q1r.status, q1r.issueCodes]);
   check("admin-chosen answer settles the mismatch", q2r.answerConfirmedById === actor && !q2r.issueCodes.includes("ANSWER_MISMATCH"), q2r.issueCodes);
   check("rejected stays rejected", (await q(jobC, "10")).status === "REJECTED");
+  // Nothing is stored before approval: an import request now adds nothing.
+  {
+    const qBefore0 = await prisma.question.count();
+    await requestImport(jobC, actor, "DRAFT", null);
+    await runWorker(120_000);
+    check("import before approval stores nothing (approval gate)", (await prisma.question.count()) === qBefore0 && (await prisma.aiImportQuestion.count({ where: { jobId: jobC, questionId: { not: null } } })) === 0);
+    check("job returns to review, not Completed", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobC } })).status === "NEEDS_REVIEW");
+  }
+  // Approve every question of the job: structural problems are refused with their reason, never hidden.
+  const allC = await prisma.aiImportQuestion.findMany({ where: { jobId: jobC }, select: { id: true, sourceLabel: true, status: true } });
+  const appr = await approveQuestions(allC.map((x) => x.id), actor);
+  await revalidateQuestions(jobC, allC.map((x) => x.id));
+  check("approval refuses rejected / not-importable / duplicate questions with a reason", appr.refused.some((r) => r.label === "10" && /rejected/.test(r.reason)) && appr.refused.every((r) => r.reason.length > 3), appr.refused);
+  check("approval does not confirm figure placements by itself", (await prisma.aiImportFigure.count({ where: { jobId: jobC, mappingStatus: "UNCERTAIN", confirmedById: { not: null } } })) === 0);
 
   // ------------------------------------------------------------------ H
   section("H. Import as Draft through the existing Bulk Import");
@@ -312,7 +328,21 @@ async function main() {
   check("Q8 (printed answer, no key) imported with UNVERIFIED provenance", verif.find((v) => v.id === imported.find((x) => x.sourceLabel === "8")?.questionId)?.answerVerification === "UNVERIFIED");
   sum = await jobSummary(jobC);
   check("not-importable / duplicate / rejected stay out", !imported.some((x) => ["6", "7", "9", "10"].includes(x.sourceLabel)));
-  check("job completed with issues, nothing unaccounted", jc.status === "COMPLETED_WITH_ISSUES" && sum.unaccounted === 0 && sum.pendingDecision === 0, { s: jc.status, sum });
+  // Final quality gate: never "Completed" while the expected count is unconfirmed or numbers are missing.
+  {
+    let qr = await jobQuality(jobC);
+    check("gate: stored questions but no expected count → stays in review", jc.status === "NEEDS_REVIEW" && !!qr?.blockers.some((b) => /expected number of questions was not confirmed/.test(b)), { s: jc.status, b: qr?.blockers });
+    await setExpectedQuestions({ jobId: jobC, actorId: actor, expected: 11 });
+    await settleJobStatus(jobC);
+    qr = await jobQuality(jobC);
+    check("gate: one question fewer than expected → missing Q11 + count difference reported, still not complete", JSON.stringify(qr!.missing) === JSON.stringify(["Q11"]) && qr!.countDifference === 1 && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobC } })).status === "NEEDS_REVIEW", { m: qr!.missing, d: qr!.countDifference });
+    await expectError("an explanation needs words", () => acknowledgeSequence(jobC, actor, "ok"), /Explain the difference/);
+    await acknowledgeSequence(jobC, actor, "The printed paper has a misprinted total of 11");
+    jc = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobC } });
+    qr = await jobQuality(jobC);
+    check("gate: explained difference → Completed with warnings (never plain Completed)", jc.status === "COMPLETED_WITH_ISSUES" && qr!.ackValid && qr!.warnings.some((w) => /acknowledged/.test(w)), { s: jc.status, w: qr!.warnings, b: qr!.blockers });
+  }
+  check("nothing unaccounted after storing", sum.unaccounted === 0 && sum.pendingDecision === 0, { sum });
   // Retry safety: request the same import again.
   const runsBefore = await prisma.bulkImportRun.count();
   const qBefore = await prisma.question.count();
@@ -388,9 +418,10 @@ async function main() {
   check("calls also appear in platform AI usage (qimport_* features)", gw >= calls.length);
   const usage = await budgetUsage();
   check("importer spend does not count against the platform/student budget", Object.keys(usage.byFeatureToday).every((f) => !f.startsWith("qimport_")), usage.byFeatureToday);
-  // Confirm the shared figure for Q2/Q3, approve Q3 after checking it, then import & publish all eligible.
+  // Confirm the shared figure for Q2/Q3, approve both after checking them, then import & publish all eligible.
   for (const f of [...sk2.figures, ...sk3.figures]) await setFigure(f.id, actor, "STEM", null);
-  await approveQuestions([sk3.id], actor);
+  const apK = await approveQuestions([sk2.id, sk3.id], actor);
+  check("approval sees the figure placements confirmed a moment earlier (re-checked first)", apK.approved === 2, apK.refused);
   await revalidateQuestions(jobK, [sk2.id, sk3.id]);
   await requestImport(jobK, actor, "PUBLISH_ALL", null);
   await runWorker(300_000);
@@ -1552,7 +1583,20 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   created.runs.push(...runs1);
   const stages = (await prisma.aiImportEvent.findMany({ where: { jobId: j1, type: "STAGE" }, orderBy: { createdAt: "asc" } })).map((e) => (e.data as { stage: string }).stage);
   check("progress stages recorded in order", JSON.stringify(stages) === JSON.stringify(["PAGES", "EXTRACT", "KEY", "VALIDATE"]), stages);
-  check("processing chained into the import automatically (one click)", ["COMPLETED", "COMPLETED_WITH_ISSUES", "NEEDS_REVIEW"].includes(job.status) && (await prisma.aiImportEvent.count({ where: { jobId: j1, type: { in: ["IMPORT_REQUESTED", "IMPORT_SKIPPED"] } } })) === 1, job.status);
+  check("processing does NOT store anything by itself (approval first)", job.status === "NEEDS_REVIEW" && imp.length === 0 && (await prisma.aiImportEvent.count({ where: { jobId: j1, type: "AWAITING_APPROVAL" } })) === 1, { status: job.status, imported: imp.length });
+  {
+    const all1 = await prisma.aiImportQuestion.findMany({ where: { jobId: j1 }, select: { id: true } });
+    const ap1 = await approveQuestions(all1.map((x) => x.id), actor);
+    check("approval: importable questions approved, unsupported ones refused with a reason", (ap1.approved > 0 || (!fresh && ap1.refused.some((r) => r.reason === "duplicate"))) && ap1.refused.some((r) => /not importable|not a 4-option/.test(r.reason)), { approved: ap1.approved, refused: ap1.refused.map((r) => r.reason) });
+    await requestImport(j1, actor, "DRAFT", null);
+    await runWorker(300_000);
+    job = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j1 } });
+    imp.splice(0, imp.length, ...(await prisma.aiImportQuestion.findMany({ where: { jobId: j1, questionId: { not: null } } })));
+    imp.forEach((x) => created.questions.push(x.questionId!));
+    runs1.push(...new Set(imp.map((x) => x.bulkImportRunId!).filter(Boolean)));
+    created.runs.push(...runs1);
+    check("approved questions stored after the explicit import", imp.length === ap1.approved || imp.length + (await prisma.aiImportQuestion.count({ where: { jobId: j1, status: "DUPLICATE" } })) >= ap1.approved, { imported: imp.length, approved: ap1.approved });
+  }
   if (fresh) check("fresh DB: questions actually persisted through the Bulk Import", imp.length > 0 && (await prisma.question.count()) - qBefore === imp.length, { imported: imp.length });
   const saved = await prisma.question.findMany({ where: { id: { in: imp.map((x) => x.questionId!) } }, select: { status: true, importBatchId: true } });
   check("everything imported is DRAFT and belongs to an AI-importer RICH run", saved.every((x) => x.status === "DRAFT" && runs1.includes(x.importBatchId!)) && (await prisma.bulkImportRun.findMany({ where: { id: { in: runs1 } } })).every((r) => r.importMode === "RICH" && r.label?.startsWith("AI Importer")), { saved: saved.length, runs1 });
@@ -1560,7 +1604,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   check("unsupported formats (5 options, numerical) kept out as Not importable", held.length === 2 && held.every((x) => x.status === "NOT_IMPORTABLE" && !x.questionId), held.map((x) => [x.sourceLabel, x.status]));
   check("nothing was published automatically", !(await prisma.aiImportQuestion.count({ where: { jobId: j1, status: "PUBLISHED" } })));
   let [card] = await jobCards({ ids: [j1] }, true);
-  check("plain status + counts for the result screen", ["Imported", "Imported — some need review", "Needs review", "Ready to import"].includes(card.label) && card.counts.imported === imp.length && card.counts.notImportable >= 2 && !!card.nextAction, { label: card.label, counts: card.counts, next: card.nextAction });
+  check("plain status + counts for the result screen", ["Completed", "Completed with Warnings", "Needs Correction", "Ready for Review"].includes(card.label) && card.counts.imported === imp.length && card.counts.notImportable >= 2 && !!card.nextAction, { label: card.label, counts: card.counts, next: card.nextAction });
   // A repeated import request never duplicates questions or runs.
   const qc = await prisma.question.count();
   const rc = await prisma.bulkImportRun.count();
@@ -1582,7 +1626,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   await confirmJob({ jobId: jF, actorId: actor, examId, paperType: jFrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
   await runWorker(300_000);
   [card] = await jobCards({ ids: [jF] }, true);
-  check("no subject → nothing imported, label Needs review, next action names the fix", card.counts.imported === 0 && card.counts.noSubject > 0 && card.label === "Needs review" && /Single-subject/.test(card.nextAction), { label: card.label, c: card.counts, next: card.nextAction });
+  check("no subject → nothing imported, label Needs review, next action names the fix", card.counts.imported === 0 && card.counts.noSubject > 0 && card.label === "Needs Correction" && /Single-subject/.test(card.nextAction), { label: card.label, c: card.counts, next: card.nextAction });
 
   // W5 — scanned paper, AI off: blocked before processing with one next action; if forced, the reason is explicit.
   const jS = await newJob(actor, examId, "FX scanned, AI off");
@@ -1597,7 +1641,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   await runWorker(300_000);
   jSrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jS } });
   [card] = await jobCards({ ids: [jS] }, true);
-  check("processed anyway: zero questions says why (scanned, AI off) — never 'Ready to import'", jSrow.status === "NEEDS_REVIEW" && /scanned page\(s\) have no text layer/.test(jSrow.errorMessage ?? "") && card.label === "Needs review" && card.nextAction === jSrow.errorMessage, { s: jSrow.status, e: jSrow.errorMessage, l: card.label });
+  check("processed anyway: zero questions says why (scanned, AI off) — never 'Ready to import'", jSrow.status === "NEEDS_REVIEW" && /scanned page\(s\) have no text layer/.test(jSrow.errorMessage ?? "") && card.label === "Needs Correction" && card.nextAction === jSrow.errorMessage, { s: jSrow.status, e: jSrow.errorMessage, l: card.label });
   check("no AI call for the scanned paper with AI off", (await mockStats()).chat === 0);
 
   // W6 — pure verdict: model choice and budgets (scanned paper, AI on).

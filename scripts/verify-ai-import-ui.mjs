@@ -74,19 +74,25 @@ const noOverflow = (page) => page.evaluate(() => document.documentElement.scroll
  * Starts an import the normal way: the one-page importer (exam preselected, optional details under
  * Advanced options), upload → automatic analysis. Returns the job id from the page URL.
  */
-async function startOnMainPage(page, file, { name, examId, pyqId, year, key } = {}) {
+async function startOnMainPage(page, file, { name, examId, pyqId, year, key, expected } = {}) {
   await page.goto(`${BASE}/admin/ai-importer`);
   if (examId) await page.selectOption("[data-testid=op-exam]", examId);
-  if (pyqId || year) {
-    await page.locator("[data-testid=op-advanced] summary").click();
-    if (pyqId) await page.selectOption("[data-testid=ai-pyq]", pyqId);
-    if (year) await page.fill("[data-testid=ai-year]", year);
-  }
+  // Step 2: the Previous Year Paper is chosen on the main card (its year comes from the paper).
+  if (pyqId) await page.selectOption("[data-testid=op-pyq]", pyqId);
   if (await page.locator("[data-testid=op-year]").count()) await page.fill("[data-testid=op-year]", year ?? "2024");
+  if (expected) await page.fill("[data-testid=op-expected]", expected);
   if (key) await page.locator("[data-testid=op-key-input]").setInputFiles(path.join(FX, key));
   const input = name ? { name, mimeType: file.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : file.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf", buffer: readFileSync(path.join(FX, file)) } : path.join(FX, file);
   await Promise.all([page.waitForURL(/\/admin\/ai-importer\?job=[a-z0-9]+$/, { timeout: 90000 }), page.locator("[data-testid=op-upload-input]").setInputFiles(input)]);
   return new URL(page.url()).searchParams.get("job");
+}
+/** Confirm summary → Start Import (expected count required, explicit confirmation). */
+async function startImport(page, { expected, dbl = false } = {}) {
+  const exp = page.locator("[data-testid=op-confirm-expected]");
+  if (expected || !(await exp.inputValue())) await exp.fill(expected ?? "10");
+  await page.locator("[data-testid=op-confirm-check]").check();
+  if (dbl) await page.locator("[data-testid=process-import]").dblclick();
+  else await page.locator("[data-testid=process-import]").click();
 }
 async function waitFor(page, selector, timeout = 120000) {
   const end = Date.now() + timeout;
@@ -136,7 +142,9 @@ check("importer list saved (6 models) and no global AI → Models approval chang
 
 // ------------------------------------------------------------------ new import → upload → analyze → confirm
 section("B. New import, upload, analysis, confirmation, processing");
-const jobId = await startOnMainPage(admin, "digital-clean.pdf", { name: `AIUI digital ${F.suffix}.pdf`, examId: F.examId, pyqId: F.paperId, year: "2024" });
+const jobId = await startOnMainPage(admin, "digital-clean.pdf", { name: `AIUI digital ${F.suffix}.pdf`, examId: F.examId, pyqId: F.paperId, expected: "10" });
+check("the selected Previous Year Paper is kept on the job, with the paper's own year", await until(async () => { const r = (await db.query(`select "previousYearPaperId", year, "expectedQuestions" from "AiImportJob" where id=$1`, [jobId])).rows[0]; return r?.previousYearPaperId === F.paperId && r.year !== null && r.expectedQuestions === 10; }));
+check("the main page shows the exam AND the selected paper", (await admin.locator("[data-testid=paper-mapping]").getAttribute("data-paper-id")) === F.paperId && !/None — Question Bank only/.test(await admin.locator("[data-testid=pm-paper]").textContent()));
 check("job created from the main page (named after the file)", !!jobId && (await db.query(`select title from "AiImportJob" where id=$1`, [jobId])).rows[0]?.title === `AIUI digital ${F.suffix}`);
 // The detailed job page stays available for step-by-step work.
 await admin.goto(`${BASE}/admin/ai-importer/jobs/${jobId}`);
@@ -165,8 +173,9 @@ check("analysis report separates Detected and Estimated values", /Detected · pa
 check("estimate table with the automatically chosen model, price, total and conservative maximum", (await admin.locator("[data-testid=estimate-total]").count()) === 1 && /mockvision\/reader/.test(await admin.locator("[data-testid=estimate]").textContent()) && /₹[\d.]+/.test((await admin.locator("[data-testid=estimate-max]").textContent()) ?? "") && /Models: automatic/.test(await admin.locator("[data-testid=estimate]").textContent()));
 await admin.fill("[data-testid=confirm-budget]", "8");
 await admin.click("[data-testid=confirm-start]");
-const st1 = await waitStatus(admin, /Ready to import/, 180000);
-check("processing finished → Ready to import", /Ready to import/.test(st1), st1);
+const st1 = await waitStatus(admin, /Review & approval/, 180000);
+check("processing finished → Review & approval (nothing stored yet)", /Review & approval/.test(st1) && (await db.query(`select count(*)::int n from "AiImportQuestion" where "jobId"=$1 and "questionId" is not null`, [jobId])).rows[0].n === 0, st1);
+check("job page shows the paper mapping and the quality summary", (await admin.locator("[data-testid=paper-mapping]").getAttribute("data-paper-id")) === F.paperId && (await admin.locator("[data-testid=quality-panel]").count()) === 1);
 check("job page shows the models chosen at confirmation, with the reason", (await admin.locator("[data-testid=plan-extract]").getAttribute("data-model")) === "mockvision/reader" && /Cheapest suitable/.test((await admin.locator("[data-testid=plan-extract]").textContent()) ?? ""));
 const blockedNote = (await admin.locator("[data-testid=files-remove-blocked]").textContent().catch(() => "")) ?? "";
 check("after processing, Remove is disabled with the reason shown", /use Delete import/.test(blockedNote) && (await admin.locator("[data-testid=file-remove]:not([disabled])").count()) === 0 && (await admin.locator("[data-testid=file-remove]").count()) > 0, blockedNote);
@@ -197,15 +206,40 @@ for (const l of ["A", "B", "C", "D"]) opt.push(await imagesOk(admin, `[data-test
 check("preview: each option shows its own image", opt.every((x) => x.length === 1 && x[0].ok), opt);
 
 // ------------------------------------------------------------------ import & publish
-section("D. Import & Publish All Eligible (existing Bulk Import underneath)");
+section("D. Approve, then Add approved & Publish Eligible (existing Bulk Import underneath)");
+await admin.goto(`${BASE}/admin/ai-importer/jobs/${jobId}`);
+check("nothing can be added before approval", await admin.locator("[data-testid=import-draft]").isDisabled());
+await admin.goto(`${BASE}/admin/ai-importer/exceptions?job=${jobId}&status=all`);
+await admin.locator("[data-testid=bulk-bar] button", { hasText: "Select all" }).click();
+await admin.click("[data-testid=bulk-approve]");
+await admin.locator("[data-testid=bulk-msg]").waitFor({ timeout: 30000 });
+const approveMsg = await admin.locator("[data-testid=bulk-msg]").textContent();
+check("bulk approval approves what is ready and names what it refused, with reasons", /\d+ approved/.test(approveMsg) && /not approved — Q\d+:/.test(approveMsg), approveMsg);
+await admin.reload();
+check("review list shows the approval of each question", (await admin.locator("[data-testid=row-approval][data-approved=true]").count()) > 0);
 await admin.goto(`${BASE}/admin/ai-importer/jobs/${jobId}`);
 await admin.click("[data-testid=import-publish-all]");
-const st2 = await waitStatus(admin, /Completed/, 240000);
-check("import finished (completed, possibly with issues)", /Completed/.test(st2), st2);
+await until(async () => (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='QUALITY_GATE'`, [jobId])).rows[0].n > 0, 240000);
+await admin.reload();
+const st2 = await waitStatus(admin, /Review & approval|Completed/, 60000);
+check("approved questions added; the job waits for the remaining decisions", /Review & approval|Completed/.test(st2), st2);
 const pub = (await db.query(`select "sourceLabel", status, "questionId" from "AiImportQuestion" where "jobId"=$1 order by "orderIndex"`, [jobId])).rows;
 const published = pub.filter((r) => r.status === "PUBLISHED");
 check("eligible questions published (incl. option-image Q3, admin-answered Q2)", published.some((r) => r.sourceLabel === "3") && published.some((r) => r.sourceLabel === "2"), pub);
 check("Q8 (answer unverified) imported but not published", pub.find((r) => r.sourceLabel === "8")?.status === "IMPORTED", pub.find((r) => r.sourceLabel === "8"));
+check("stored questions carry the job's exam and Previous Year Paper", (await db.query(`select count(*)::int n from "Question" q join "AiImportQuestion" a on a."questionId"=q.id where a."jobId"=$1 and (q."examId"<>$2 or q."previousYearPaperId" is distinct from $3)`, [jobId, F.examId, F.paperId])).rows[0].n === 0);
+// The remaining questions are decided (rejected): the job then completes with warnings, never plain Completed.
+await admin.goto(`${BASE}/admin/ai-importer/exceptions?job=${jobId}`);
+if (await admin.locator("[data-testid=exception-row]").count()) {
+  await admin.locator("[data-testid=bulk-bar] button", { hasText: "Select all" }).click();
+  admin.nextPrompt = "synthetic: not stored";
+  await admin.click("[data-testid=bulk-reject]");
+  await admin.locator("[data-testid=bulk-msg]").waitFor({ timeout: 30000 });
+  admin.nextPrompt = undefined;
+}
+await admin.goto(`${BASE}/admin/ai-importer/jobs/${jobId}`);
+const st3 = await waitStatus(admin, /Completed/, 60000);
+check("every question decided and the count matches → Completed with Warnings", /Completed with Warnings/.test(st3), st3);
 const runLink = admin.locator("a", { hasText: "Bulk Import run" }).first();
 check("job links to its Bulk Import run in Import History", (await runLink.count()) === 1);
 const runHref = await runLink.getAttribute("href");
@@ -408,7 +442,7 @@ await admin.goto(`${BASE}/admin/ai-importer`);
 const subnav = await admin.locator("[data-testid=ai-importer-subnav] > a").allTextContents();
 check("main navigation is short: Import, Imports, Review Exceptions, Import Settings + More", JSON.stringify(subnav) === JSON.stringify(["Import", "Imports", "Review Exceptions", "Import Settings"]) && (await admin.locator("[data-testid=ai-importer-more]").count()) === 1, subnav);
 const upText = await admin.locator("[data-testid=upload-card]").textContent();
-check("upload area with formats and the real limits", /Upload PDF or Document/.test(upText) && /PDF, Word \(DOCX\), JPG, PNG, XLSX or CSV/.test(upText) && /up to 100 MB and 300 pages/.test(upText), upText.slice(0, 200));
+check("upload area with formats and the real limits", /New import/.test(upText) && /PDF, Word \(DOCX\), JPG, PNG, XLSX or CSV/.test(upText) && /up to 100 MB and 300 pages/.test(upText), upText.slice(0, 200));
 check("exam preselected from the last import (no form to fill)", (await admin.locator("[data-testid=op-exam]").inputValue()) === F.examId);
 const opJob = await startOnMainPage(admin, "digital-clean.pdf", { name: `AIUI onepage ${F.suffix}.pdf`, key: "key-digital.pdf" });
 check("upload → automatic analysis on the same page", !!opJob && (await waitFor(admin, "[data-testid=analyzer]", 90000)));
@@ -418,12 +452,14 @@ check("analyzer says the analysis was local and free", /no AI request was made/.
 const selModel = admin.locator("[data-testid=selected-model]");
 check("selected model + why shown without opening Settings (digital → local reader)", (await selModel.getAttribute("data-local")) === "true" && /Why this model\?/.test(await selModel.textContent()) && /Automatic — Cheapest Suitable Model/.test(await selModel.textContent()));
 check("estimated cost, maximum and remaining pilot budget shown", /₹[\d.]+/.test(await admin.locator("[data-testid=op-cost-estimate]").textContent()) && /₹[\d.]+/.test(await admin.locator("[data-testid=op-cost-max]").textContent()) && /₹[\d.]+/.test(await admin.locator("[data-testid=op-pilot-remaining]").textContent()));
-check("one primary action, enabled", (await admin.locator("[data-testid=process-import]").count()) === 1 && (await admin.locator("[data-testid=process-import]").isEnabled()));
-await admin.locator("[data-testid=process-import]").click();
-check("re-upload of an already imported paper: result shown on the same page", (await waitFor(admin, "[data-testid=op-result]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
+const confirmText = await admin.locator("[data-testid=op-confirm-summary]").textContent();
+check("confirmation summary before Start: exam, paper, year, code", /Exam:/.test(confirmText) && /Previous Year Paper:/.test(confirmText) && /Year:/.test(confirmText) && /Paper set \/ code:/.test(confirmText), confirmText);
+check("one primary action, disabled until the summary is confirmed", (await admin.locator("[data-testid=process-import]").count()) === 1 && (await admin.locator("[data-testid=process-import]").isDisabled()));
+await startImport(admin, { expected: "10" });
+check("re-upload of an already imported paper: quality summary shown on the same page", (await waitFor(admin, "[data-testid=quality-panel]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
 const val = async (t) => Number(await admin.locator(`[data-testid=${t}]`).getAttribute("data-value"));
-check("…nothing imported twice: duplicates skipped, unsupported kept out", (await val("result-imported")) === 0 && (await val("result-duplicates")) >= 5 && (await val("result-unsupported")) >= 2, { imp: await val("result-imported"), dup: await val("result-duplicates"), uns: await val("result-unsupported") });
-check("…and the next step is explained", /Next:/.test(await admin.locator("[data-testid=op-next-action]").textContent()) && (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='IMPORT_SKIPPED'`, [opJob])).rows[0].n === 1);
+check("…nothing stored by processing; duplicates found; counts from the backend", (await val("q-stored")) === 0 && (await val("q-duplicates")) >= 5 && (await val("q-extracted")) === 10 && (await val("q-expected")) === 10, { st: await val("q-stored"), dup: await val("q-duplicates") });
+check("…and the next step is explained", /Next:/.test(await admin.locator("[data-testid=op-next-action]").textContent()) && (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type in ('IMPORT_REQUESTED','IMPORT_SKIPPED')`, [opJob])).rows[0].n === 0);
 
 // Paid AI off + scanned paper (the UPSC CMS case): blocked before processing, one reason, one next action, ₹0.
 await db.query(`update "Setting" set value = jsonb_set(value, '{aiEnabled}', 'false') where key='ai.importer'`);
@@ -431,7 +467,7 @@ const offJob = await startOnMainPage(admin, "scanned.pdf", { name: `AIUI scanned
 await waitFor(admin, "[data-testid=analyzer-blocker]", 90000);
 const blk = await admin.locator("[data-testid=analyzer-blocker]").textContent();
 check("AI off + scanned: blocked with the reason and one next action", /no text layer/.test(blk) && /Next:/.test(blk) && /digital PDF or Word/.test(blk), blk);
-check("…badge says Action needed, Process disabled, no contradictory Next line", /Action needed/.test(await admin.locator("[data-testid=current-status]").textContent()) && (await admin.locator("[data-testid=process-import]").isDisabled()) && (await admin.locator("[data-testid=op-next-action]").count()) === 0);
+check("…badge says Action needed, no Start button, no contradictory Next line", /Action needed/.test(await admin.locator("[data-testid=current-status]").textContent()) && (await admin.locator("[data-testid=process-import]").count()) === 0 && (await admin.locator("[data-testid=op-next-action]").count()) === 0);
 check("…nothing charged", (await db.query(`select "spentInr" from "AiImportJob" where id=$1`, [offJob])).rows[0].spentInr === 0);
 await db.query(`update "Setting" set value = jsonb_set(value, '{aiEnabled}', 'true') where key='ai.importer'`);
 // The exam has no year: the upload asks for the paper's year instead of failing every question later.
@@ -443,16 +479,29 @@ check("…upload refused until the year is entered (nothing created)", /paper's 
 // A new paper with its key, defaults untouched (exam preselected, automatic model): one click imports it.
 const newJob = await startOnMainPage(admin, "paper.docx", { name: `AIUI word ${F.suffix}.docx`, key: "key.csv" });
 check("Word paper analyzed on the main page", await waitFor(admin, "[data-testid=analyzer]", 90000));
-check("the one button is enabled", await admin.locator("[data-testid=process-import]").isEnabled());
-await admin.locator("[data-testid=process-import]").dblclick();
+await startImport(admin, { dbl: true, expected: (await admin.locator("[data-testid=op-confirm-expected]").inputValue()) || "3" });
 check("double click → one start (button disabled at once)", await until(async () => (await admin.locator("[data-testid=process-import]").count()) === 0 || (await admin.locator("[data-testid=process-import]").isDisabled())));
-check("result shown on the same page, without visiting other pages", (await waitFor(admin, "[data-testid=op-result]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
-const nImported = await val("result-imported");
+check("quality summary shown on the same page, without visiting other pages", (await waitFor(admin, "[data-testid=quality-panel]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
+check("nothing stored before approval", (await val("q-stored")) === 0);
+// Every question of this paper carries a flag (no subject on the paper → topic uncertain): no one-click approval.
+check("no 'Approve all without flags' when every question has a flag", (await admin.locator("[data-testid=qp-approve-clean]").count()) === 0 && (await val("q-topics")) > 0);
+const wordUrl = admin.url();
+await admin.goto(`${BASE}/admin/ai-importer/exceptions?job=${newJob}`);
+await waitFor(admin, "[data-testid=exception-row]", 30000);
+for (const box of await admin.locator("[data-testid=exception-row] input[type=checkbox]").all()) await box.check();
+await admin.click("[data-testid=bulk-approve]");
+await admin.locator("[data-testid=bulk-msg]").waitFor({ timeout: 30000 });
+check("flagged questions approved one by one after review (bulk selection)", /^[1-9]\d* approved/.test(await admin.locator("[data-testid=bulk-msg]").textContent()), await admin.locator("[data-testid=bulk-msg]").textContent());
+await admin.goto(wordUrl);
+await waitFor(admin, "[data-testid=qp-store-approved]", 30000);
+await admin.locator("[data-testid=qp-store-approved]").click();
+await until(async () => { await admin.reload(); return (await admin.locator("[data-testid=q-stored]").count()) && (await val("q-stored")) > 0; }, 240000);
+const nImported = await val("q-stored");
 const wRows = (await db.query(`select q.status, q."questionId", qq.status qs from "AiImportQuestion" q left join "Question" qq on qq.id = q."questionId" where q."jobId"=$1`, [newJob])).rows;
 check("questions persisted through the Bulk Import, shown in the result", nImported > 0 && wRows.filter((r) => r.questionId).length === nImported, { nImported, rows: wRows });
 check("imported as DRAFT, none published", wRows.every((r) => !r.questionId || r.qs === "DRAFT") && !wRows.some((r) => r.status === "PUBLISHED"));
-check("exactly one confirmation and one import for the double click", (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type in ('IMPORT_REQUESTED','IMPORT_SKIPPED')`, [newJob])).rows[0].n === 1 && (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='CONFIRMED'`, [newJob])).rows[0].n === 1);
-check("Bulk Import run linked from the result", (await admin.locator("[data-testid=current-job] a", { hasText: "Bulk Import run" }).count()) >= 1);
+check("exactly one confirmation for the double click, one import after approval", (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type in ('IMPORT_REQUESTED','IMPORT_SKIPPED')`, [newJob])).rows[0].n === 1 && (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='CONFIRMED'`, [newJob])).rows[0].n === 1);
+check("Bulk Import run and the Question Bank linked from the result", (await admin.locator("[data-testid=current-job] a", { hasText: "Bulk Import run" }).count()) >= 1 && (await admin.locator("[data-testid=qp-open-bank] a").count()) >= 1);
 const settingsN1 = (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0]?.value;
 check("settings untouched by the one-page flow (automatic stays the default)", JSON.stringify(settingsN0) === JSON.stringify(settingsN1) && settingsN1?.selection?.mode === "auto");
 
@@ -478,11 +527,11 @@ await admin.reload();
 await waitFor(admin, "[data-testid=op-change-model]");
 await admin.locator("[data-testid=op-change-model] summary").click();
 await admin.selectOption("[data-testid=op-model-select]", "mockvision/mid");
-await admin.locator("[data-testid=process-import]").click();
+await startImport(admin, { expected: "3" });
 await until(async () => (await db.query(`select status from "AiImportJob" where id=$1`, [scJob])).rows[0].status !== "AWAITING_CONFIRMATION", 30000);
 const scPlan = (await db.query(`select config from "AiImportJob" where id=$1`, [scJob])).rows[0].config.modelPlan;
 check("this import used the override; the default stays Automatic", scPlan?.tasks?.extract?.model === "mockvision/mid" && scPlan?.mode === "manual" && (await db.query(`select value from "Setting" where key='ai.importer'`)).rows[0].value.selection.mode === "auto", scPlan?.tasks?.extract);
-check("scanned import reaches a result", await waitFor(admin, "[data-testid=op-result]", 300000));
+check("scanned import reaches a result", await waitFor(admin, "[data-testid=quality-panel]", 300000));
 
 // Cancel and Delete from the main page.
 const cxJob = await startOnMainPage(admin, "sheet.xlsx", { name: `AIUI cancel ${F.suffix}.xlsx` });
@@ -502,7 +551,7 @@ check("deleted: job gone, audited, back to the upload area", (await db.query(`se
 // Imports page: plain statuses, actions, stalled recovery.
 await admin.goto(`${BASE}/admin/ai-importer/jobs`);
 const opRow = admin.locator(`[data-testid=job-row][data-job-id="${opJob}"]`);
-check("Imports page: plain label + counts + next action", /^(Imported|Imported — some need review|Needs review)$/.test((await opRow.locator("[data-testid=job-label]").textContent()).trim()) && /extracted/.test(await opRow.textContent()) && /Next:/.test(await opRow.textContent()));
+check("Imports page: plain label + counts + next action", /^(Completed|Completed with Warnings|Needs Correction|Ready for Review)$/.test((await opRow.locator("[data-testid=job-label]").textContent()).trim()) && /extracted/.test(await opRow.textContent()) && /Next:/.test(await opRow.textContent()));
 await db.query(`update "AiImportJob" set status='PROCESSING', "leaseOwner"=null, "leaseUntil"=now() - interval '10 minutes', "updatedAt"=now() - interval '10 minutes' where id=$1`, [scJob]);
 const scStatusBefore = (await db.query(`select status from "AiImportJob" where id=$1`, [scJob])).rows[0].status;
 await admin.reload();

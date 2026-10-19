@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/rbac";
@@ -38,8 +39,13 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
       explanation: true,
       questionType: true,
       matchSpec: true,
+      examYear: true,
+      source: true,
       exam: { select: { name: true } },
       subject: { select: { name: true } },
+      topic: { select: { name: true } },
+      subTopic: { select: { name: true } },
+      previousYearPaper: { select: { title: true, year: true, paperCode: true } },
       options: { orderBy: { order: "asc" }, select: { label: true, text: true, imageUrl: true, isCorrect: true } },
       assets: {
         orderBy: [{ role: "asc" }, { optionLabel: "asc" }, { order: "asc" }],
@@ -48,6 +54,9 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
     },
   });
   if (!q) notFound();
+  // Provenance of a question added by the AI Question Importer (the import record outlives the question).
+  const imported = await prisma.aiImportQuestion.findFirst({ where: { questionId: q.id }, orderBy: { importedAt: "desc" }, select: { jobId: true, id: true, sourceLabel: true, pages: true, data: true, editedData: true, answerStatus: true, job: { select: { title: true } } } });
+  const importedSection = imported ? (((imported.editedData ?? imported.data) as { section?: string } | null)?.section ?? "") : "";
   const { rich, explanation } = liveRichViews(q);
   const match = liveMatchView(q);
   const spec = q.questionType === "MATCH_THE_FOLLOWING" ? readMatchSpec(q.matchSpec) : null;
@@ -66,6 +75,41 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
         {q.answerVerification === "OFFICIAL_KEY" ? <Badge variant="success">Official answer key</Badge> : null}
         {q.answerVerification === "INDEPENDENTLY_VERIFIED" ? <Badge variant="success">Answer independently verified</Badge> : null}
       </div>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-xs sm:grid-cols-3" data-testid="question-facts">
+        <div>
+          <dt className="text-[var(--color-muted-foreground)]">Exam</dt>
+          <dd className="font-medium" data-testid="qf-exam">{q.exam.name}</dd>
+        </div>
+        <div>
+          <dt className="text-[var(--color-muted-foreground)]">Subject › Topic › Sub-topic</dt>
+          <dd className="font-medium" data-testid="qf-taxonomy">
+            {q.subject.name} › {q.topic?.name ?? "—"}
+            {q.subTopic ? ` › ${q.subTopic.name}` : ""}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[var(--color-muted-foreground)]">Previous Year Paper</dt>
+          <dd className="font-medium" data-testid="qf-paper">{q.previousYearPaper ? `${q.previousYearPaper.title} (${q.previousYearPaper.year}${q.previousYearPaper.paperCode ? `, ${q.previousYearPaper.paperCode}` : ""})` : "—"}</dd>
+        </div>
+        <div>
+          <dt className="text-[var(--color-muted-foreground)]">Year · Source</dt>
+          <dd className="font-medium">
+            {q.examYear ?? "—"} · {q.source === "PYQ" ? "Previous Year Paper" : q.source.replace(/_/g, " ").toLowerCase()}
+          </dd>
+        </div>
+        {imported && (
+          <div className="col-span-2" data-testid="qf-import">
+            <dt className="text-[var(--color-muted-foreground)]">Imported by the AI Question Importer</dt>
+            <dd className="font-medium">
+              Original question {importedSection ? `${importedSection} ` : ""}
+              {imported.sourceLabel} · page {imported.pages.join(", ") || "—"} ·{" "}
+              <Link className="underline" href={`/admin/ai-importer/questions/${imported.id}`}>
+                {imported.job.title}
+              </Link>
+            </dd>
+          </div>
+        )}
+      </dl>
       <Card>
         <CardContent className="flex flex-col gap-3 pt-5" data-testid="admin-question-preview">
           <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">

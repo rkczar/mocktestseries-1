@@ -25,6 +25,8 @@ export interface JobCounts {
   unverifiedAnswers: number;
   /** Questions held back because no subject of the exam could be determined. */
   noSubject: number;
+  /** Approved by an administrator and not in the Question Bank yet. */
+  approved: number;
 }
 
 export interface JobCard {
@@ -75,7 +77,7 @@ function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCa
     case "IMPORTING":
       return "Working — this page updates by itself. You can leave it and come back.";
     case "AWAITING_CONFIRMATION":
-      return "Review the analysis, then click Process & Import Questions.";
+      return "Check the exam, the Previous Year Paper and the expected number of questions, then click Start Import.";
     case "PAUSED":
     case "PAUSED_BUDGET":
       return j.pauseReason ? `${j.pauseReason} Then click Retry.` : "Click Retry to continue from the last finished page.";
@@ -86,7 +88,8 @@ function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCa
     case "NEEDS_REVIEW":
       if (c.extracted === 0) return j.errorMessage ?? "No questions could be read from this file.";
       if (canRetryFailed(j, pages, failedKeys)) return `${j.errorMessage ?? `${pages.failed} page(s) failed.`} The ${c.extracted} question(s) already read are kept.`;
-      if (c.ready > 0) return `${c.ready} question(s) are ready. Click Import ready questions to add them to the Question Bank as Draft.`;
+      if (c.approved > 0) return `${c.approved} approved question(s) are ready. Click Add approved questions to the Question Bank to store them as Draft.`;
+      if (c.ready > 0) return `${c.ready} question(s) passed every check. Review and approve them — nothing enters the Question Bank before approval.`;
       if (c.noSubject > 0) return `${c.noSubject} question(s) have no subject (the file has no subject headings and AI classification is off). Open Review questions and set the subject — or delete this import and upload again as a Single-subject paper (Advanced options).`;
       return `${c.needsReview + c.notImportable + c.duplicates} question(s) need attention before they can be imported — open Review questions.`;
     case "COMPLETED":
@@ -100,11 +103,12 @@ function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCa
 }
 
 async function countsFor(jobIds: string[]): Promise<Map<string, JobCounts>> {
-  const [byStatus, imported, unverified, noSubject] = await Promise.all([
+  const [byStatus, imported, unverified, noSubject, approved] = await Promise.all([
     prisma.aiImportQuestion.groupBy({ by: ["jobId", "status"], where: { jobId: { in: jobIds } }, _count: { _all: true } }),
     prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: { not: null } }, _count: { _all: true } }),
     prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, answerStatus: "UNVERIFIED" }, _count: { _all: true } }),
     prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: null, issueCodes: { has: "SUBJECT_UNKNOWN" } }, _count: { _all: true } }),
+    prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: null, approvedById: { not: null }, status: { notIn: [AiImportQuestionStatus.REJECTED] } }, _count: { _all: true } }),
   ]);
   const out = new Map<string, JobCounts>();
   for (const id of jobIds) {
@@ -121,6 +125,7 @@ async function countsFor(jobIds: string[]): Promise<Map<string, JobCounts>> {
       importFailed: n(AiImportQuestionStatus.IMPORT_FAILED),
       unverifiedAnswers: unverified.find((r) => r.jobId === id)?._count._all ?? 0,
       noSubject: noSubject.find((r) => r.jobId === id)?._count._all ?? 0,
+      approved: approved.find((r) => r.jobId === id)?._count._all ?? 0,
     });
   }
   return out;
@@ -189,4 +194,43 @@ export async function remainingPilotBudget(settings: ImporterSettings): Promise<
   const totalCapInr = Math.min(settings.budget.totalInr, PILOT_LIMITS.totalInr);
   const monthCapInr = Math.min(settings.budget.monthlyInr, PILOT_LIMITS.monthlyInr);
   return { remainingInr: Math.max(0, Math.min(totalCapInr - spend.allUsed, monthCapInr - spend.monthUsed)), totalCapInr, monthCapInr, allUsedInr: spend.allUsed, monthUsedInr: spend.monthUsed };
+}
+
+/** Exam ↔ Previous Year Paper mapping of a job, shown on every importer screen (from the stored records). */
+export interface JobMapping {
+  jobId: string;
+  examId: string;
+  examName: string;
+  paper: { id: string; title: string; year: number; paperCode: string | null } | null;
+  /** The job points at a paper record that no longer exists. */
+  paperMissing: boolean;
+  year: number | null;
+  paperCode: string | null;
+  subjectName: string | null;
+  paperType: string;
+  expectedQuestions: number | null;
+  status: string;
+}
+
+export async function jobMapping(jobId: string): Promise<JobMapping | null> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { id: true, examId: true, previousYearPaperId: true, year: true, paperCode: true, subjectId: true, paperType: true, expectedQuestions: true, status: true } });
+  if (!job) return null;
+  const [exam, paper, subject] = await Promise.all([
+    prisma.exam.findUnique({ where: { id: job.examId }, select: { name: true } }),
+    job.previousYearPaperId ? prisma.previousYearPaper.findUnique({ where: { id: job.previousYearPaperId }, select: { id: true, title: true, year: true, paperCode: true } }) : null,
+    job.subjectId ? prisma.subject.findUnique({ where: { id: job.subjectId }, select: { name: true } }) : null,
+  ]);
+  return {
+    jobId: job.id,
+    examId: job.examId,
+    examName: exam?.name ?? "(deleted exam)",
+    paper,
+    paperMissing: !!job.previousYearPaperId && !paper,
+    year: paper?.year ?? job.year,
+    paperCode: paper?.paperCode ?? job.paperCode,
+    subjectName: subject?.name ?? null,
+    paperType: job.paperType,
+    expectedQuestions: job.expectedQuestions,
+    status: job.status,
+  };
 }

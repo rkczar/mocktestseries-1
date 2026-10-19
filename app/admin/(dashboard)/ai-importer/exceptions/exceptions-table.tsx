@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
-import { approveQuestionsAction, importAction, rejectQuestionsAction, reprocessQuestionsAction } from "../actions";
+import { approveQuestionsAction, importAction, reclassifyQuestionsAction, rejectQuestionsAction, rescanQuestionsAction, unapproveQuestionsAction } from "../actions";
 import { statusVariant } from "@/lib/ai-import/config";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
@@ -29,6 +29,8 @@ export interface ExceptionRow {
   questionId: string | null;
   /** The saved question was deleted after import (questionId is kept for history). */
   savedDeleted: boolean;
+  approved: boolean;
+  rescanPending: boolean;
 }
 
 export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: ExceptionRow[]; canUse: boolean; canPublish: boolean; jobId: string | null }) {
@@ -38,10 +40,10 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const toggle = (id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
   const ids = [...selected];
-  const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string) =>
+  const act = <T,>(fn: () => Promise<{ ok: true; data: T } | { ok: false; error: string }>, ok: string | ((d: T) => string)) =>
     start(async () => {
       const r = await callImporter(fn);
-      setMsg(r.ok ? { ok: true, text: ok } : { ok: false, text: r.error ?? "Failed" });
+      setMsg(r.ok ? { ok: true, text: typeof ok === "function" ? ok(r.data) : ok } : { ok: false, text: r.error ?? "Failed" });
       if (r.ok) {
         setSelected(new Set());
         router.refresh();
@@ -57,8 +59,11 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
           <Button size="sm" variant="outline" onClick={() => setSelected(new Set(rows.map((r) => r.id)))}>
             Select all
           </Button>
-          <Button size="sm" variant="outline" disabled={!ids.length || pending} onClick={() => act(() => approveQuestionsAction(ids), "Approved. Structural problems (if any) still need fixing.")} data-testid="bulk-approve">
+          <Button size="sm" variant="outline" disabled={!ids.length || pending} onClick={() => act(() => approveQuestionsAction(ids), (d) => `${d.approved} approved${d.refused.length ? `; ${d.refused.length} not approved — ${d.refused.slice(0, 4).map((x) => `Q${x.label}: ${x.reason}`).join("; ")}${d.refused.length > 4 ? " …" : ""}` : ""}.`)} data-testid="bulk-approve">
             Approve
+          </Button>
+          <Button size="sm" variant="outline" disabled={!ids.length || pending} onClick={() => act(() => unapproveQuestionsAction(ids), (d) => `${d.withdrawn} approval(s) withdrawn.`)} data-testid="bulk-unapprove">
+            Withdraw approval
           </Button>
           <Button size="sm" variant="outline" disabled={!ids.length || pending} onClick={() => {
             const reason = prompt("Reason for rejecting (optional):") ?? "";
@@ -66,8 +71,11 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
           }} data-testid="bulk-reject">
             Reject
           </Button>
-          <Button size="sm" variant="outline" disabled={!ids.length || pending} onClick={() => act(() => reprocessQuestionsAction(ids), "Queued for another AI read.")} data-testid="bulk-reprocess">
-            Reprocess
+          <Button size="sm" variant="outline" disabled={!sameJob || pending} onClick={() => act(() => rescanQuestionsAction(ids, "question"), (d) => `Re-scan queued: ${d.questions} question(s) on ${d.pages} page(s). Manual corrections are kept.`)} data-testid="bulk-reprocess">
+            Re-scan selected
+          </Button>
+          <Button size="sm" variant="outline" disabled={!sameJob || pending} onClick={() => act(() => reclassifyQuestionsAction(ids), (d) => `${d.queued} question(s) queued for subject/topic classification.`)} data-testid="bulk-reclassify">
+            Re-classify
           </Button>
           {canPublish && (
             <Button size="sm" disabled={!sameJob || !publishable || pending} onClick={() => confirm(`Import and publish the ${publishable} selected question(s) that pass every check? The others stay as drafts/exceptions.`) && act(() => importAction(rows.find((r) => selected.has(r.id))!.jobId, "PUBLISH_SELECTED", ids), "Import & publish of the selection started — see the job page.")} data-testid="publish-selected">
@@ -89,6 +97,7 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
             <th className="py-1 pr-2 font-medium">Q</th>
             <th className="py-1 pr-2 font-medium">Question</th>
             <th className="py-1 pr-2 font-medium">Status</th>
+            <th className="py-1 pr-2 font-medium">Approval</th>
             <th className="py-1 pr-2 font-medium">Answer</th>
             <th className="py-1 pr-2 font-medium">Subject › Topic</th>
             <th className="py-1 pr-2 font-medium">Issues</th>
@@ -124,6 +133,9 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
                     </Link>
                   ))}
               </td>
+              <td className="py-1.5 pr-2 text-xs" data-testid="row-approval" data-approved={r.approved ? "true" : "false"}>
+                {r.questionId ? <span className="text-[var(--color-success)]">in Question Bank</span> : r.approved ? <Badge variant="success">Approved</Badge> : r.rescanPending ? <Badge variant="warning">Re-scan to decide</Badge> : <span className="text-[var(--color-muted-foreground)]">not approved</span>}
+              </td>
               <td className="py-1.5 pr-2">
                 <Badge variant={statusVariant(r.answerStatus)}>{ANSWER_STATUS_LABELS[r.answerStatus] ?? r.answerStatus}</Badge>
                 {r.finalAnswer.length > 0 && <span className="ml-1 font-mono text-xs">{r.finalAnswer.join(",")}</span>}
@@ -148,7 +160,7 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
           ))}
           {!rows.length && (
             <tr>
-              <td colSpan={7} className="py-4 text-[var(--color-muted-foreground)]">
+              <td colSpan={8} className="py-4 text-[var(--color-muted-foreground)]">
                 Nothing here.
               </td>
             </tr>

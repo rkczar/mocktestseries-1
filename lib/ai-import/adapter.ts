@@ -45,8 +45,11 @@ const BENIGN_ROW_WARNINGS = [/^Explanation: missing/];
 const answerVerification = (q: AiImportQuestion): string =>
   q.answerConfirmedById && q.answerStatus !== AiImportAnswerStatus.OFFICIAL_MATCHED ? "ADMIN_CONFIRMED" : q.answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED ? "OFFICIAL_KEY" : q.answerStatus === AiImportAnswerStatus.INDEPENDENTLY_VERIFIED ? "INDEPENDENTLY_VERIFIED" : "UNVERIFIED";
 
-/** Why a question cannot be imported now (null = importable). */
-export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] }, settings: ImporterSettings): string | null {
+/**
+ * Why a question cannot be imported now (null = importable). Only questions an administrator approved
+ * enter the Question Bank; `ignoreApproval` answers "would it be importable once approved?".
+ */
+export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] }, settings: ImporterSettings, opts: { ignoreApproval?: boolean } = {}): string | null {
   if (q.questionId) return "already imported";
   if (q.status === AiImportQuestionStatus.REJECTED) return "rejected";
   if (q.status === AiImportQuestionStatus.NOT_IMPORTABLE) return "not importable";
@@ -61,6 +64,7 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
   const stemImgs = q.figures.filter((f) => f.owner !== "OPTION").length;
   if (stemImgs > 8) return "more than 8 question images";
   for (const l of ["A", "B", "C", "D"]) if (q.figures.filter((f) => f.owner === "OPTION" && f.optionLabel === l).length > 3) return `more than 3 images on option ${l}`;
+  if (!opts.ignoreApproval && !q.approvedById) return "not approved yet";
   return null;
 }
 
@@ -100,7 +104,7 @@ interface BuiltPackage {
   expectedImages: Map<string, { question: number; options: Record<string, number> }>;
 }
 
-async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figures: AiImportFigure[] })[], names: { subjects: Map<string, string>; topics: Map<string, string> }, settings: ImporterSettings, paperCode: string | null): Promise<BuiltPackage> {
+async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figures: AiImportFigure[] })[], names: { subjects: Map<string, string>; topics: Map<string, string>; subTopics: Map<string, string> }, settings: ImporterSettings, paperCode: string | null): Promise<BuiltPackage> {
   const files = new Map<string, Buffer>();
   const codes = new Map<string, string>();
   const expectedImages: BuiltPackage["expectedImages"] = new Map();
@@ -137,11 +141,14 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
     const flags = reviewFlags(q, settings);
     questions.push({
       code,
-      ...(e.number !== null ? { questionNumber: e.number } : {}),
+      // The Question Bank holds one number per paper: a section whose numbering restarts (S2, S3 …) keeps its
+      // original number in the importer's source reference instead of colliding with section 1.
+      ...(e.number !== null && !e.section ? { questionNumber: e.number } : {}),
       ...(job.year ? { year: job.year } : {}),
       ...(paperCode ? { paperCode } : {}),
       subject: names.subjects.get(q.subjectId!)!,
       ...(q.topicId && names.topics.get(q.topicId) ? { topic: names.topics.get(q.topicId) } : {}),
+      ...(q.topicId && q.subTopicId && names.subTopics.get(q.subTopicId) ? { subtopic: names.subTopics.get(q.subTopicId) } : {}),
       type,
       contentFormat: rich ? "RICH_V1" : "PLAIN",
       question: stemImages.length ? { text: rich && e.contentFormat !== "RICH_V1" ? escapeForRich(stem) : stem, images: stemImages } : rich && e.contentFormat !== "RICH_V1" ? escapeForRich(stem) : stem,
@@ -176,12 +183,17 @@ async function uploadBundle(zip: Buffer, actorId: string, filename: string): Pro
 async function importBatch(job: AiImportJob, rows: (AiImportQuestion & { figures: AiImportFigure[] })[], plan: ImportPlan, batchNo: number, settings: ImporterSettings): Promise<{ imported: string[]; skipped: number; failed: number }> {
   const subjectIds = [...new Set(rows.map((r) => r.subjectId!))];
   const topicIds = [...new Set(rows.map((r) => r.topicId).filter((x): x is string => !!x))];
-  const [subjects, topics, paper] = await Promise.all([
+  const subTopicIds = [...new Set(rows.map((r) => r.subTopicId).filter((x): x is string => !!x))];
+  const [subjects, topics, subTopics, paper] = await Promise.all([
     prisma.subject.findMany({ where: { id: { in: subjectIds } }, select: { id: true, name: true } }),
     prisma.topic.findMany({ where: { id: { in: topicIds } }, select: { id: true, name: true } }),
-    job.previousYearPaperId ? prisma.previousYearPaper.findUnique({ where: { id: job.previousYearPaperId }, select: { paperCode: true } }) : null,
+    prisma.subTopic.findMany({ where: { id: { in: subTopicIds } }, select: { id: true, name: true } }),
+    job.previousYearPaperId ? prisma.previousYearPaper.findUnique({ where: { id: job.previousYearPaperId }, select: { paperCode: true, year: true } }) : null,
   ]);
-  const names = { subjects: new Map(subjects.map((s) => [s.id, s.name])), topics: new Map(topics.map((t) => [t.id, t.name])) };
+  if (job.previousYearPaperId && !paper) throw new Error("The import's Previous Year Paper no longer exists. Select an existing paper for this import (Change paper), then add the questions again.");
+  // A linked paper is the only source of the year (jobs created before this rule may lack it).
+  if (paper) job = { ...job, year: paper.year };
+  const names = { subjects: new Map(subjects.map((s) => [s.id, s.name])), topics: new Map(topics.map((t) => [t.id, t.name])), subTopics: new Map(subTopics.map((t) => [t.id, t.name])) };
   const pkg = await buildPackage(job, rows, names, settings, paper?.paperCode ?? null);
   const idKey = `aiimp-${crypto.createHash("sha256").update(`${job.id}|${batchNo}|${rows.map((r) => r.id).sort().join(",")}`).digest("hex").slice(0, 40)}`;
 

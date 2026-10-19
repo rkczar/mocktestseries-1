@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { AiImportFileStatus, AiImportJobStatus } from "@prisma/client";
+import { AiImportFileStatus, AiImportJobStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { stagingRoot, discardBundleFiles } from "@/lib/rich-import/bundle";
 import { mediaRootDir } from "@/lib/media-storage";
@@ -36,6 +36,17 @@ export interface CleanupItem {
   bytes: number;
   label: string;
   jobId?: string | null;
+}
+
+/**
+ * Figure originals kept by question versions (re-scan results waiting for a decision, extractions a
+ * re-scan replaced, manual corrections). They stay restorable, so they are never orphans.
+ */
+async function versionFigureKeys(): Promise<Set<string>> {
+  const rows = await prisma.aiImportQuestionVersion.findMany({ where: { figures: { not: Prisma.DbNull } }, select: { figures: true } });
+  const keys = new Set<string>();
+  for (const r of rows) for (const f of (Array.isArray(r.figures) ? r.figures : []) as { originalKey?: string }[]) if (f?.originalKey) keys.add(f.originalKey);
+  return keys;
 }
 
 export interface StorageReport {
@@ -123,10 +134,10 @@ export async function findCandidates(now = new Date()): Promise<CleanupItem[]> {
     if (!job || (FINISHED.includes(job.status) && old)) items.push({ category: "RENDERS", key: `renders:${id}`, bytes: g.bytes, label: job ? `Page images of "${job.title}"` : `Page images of a deleted job`, jobId: job?.id ?? null });
   }
 
-  // Figure originals with no AiImportFigure row pointing at them.
+  // Figure originals with no AiImportFigure row (and no kept question version) pointing at them.
   const figs = await listArea("figures");
   if (figs.length) {
-    const referenced = new Set((await prisma.aiImportFigure.findMany({ where: { originalKey: { in: figs.map((f) => f.key) } }, select: { originalKey: true } })).map((r) => r.originalKey));
+    const referenced = new Set([...(await prisma.aiImportFigure.findMany({ where: { originalKey: { in: figs.map((f) => f.key) } }, select: { originalKey: true } })).map((r) => r.originalKey), ...(await versionFigureKeys())]);
     for (const f of figs) if (!referenced.has(f.key) && now.getTime() - f.mtime.getTime() > day) items.push({ category: "ORPHAN_FIGURES", key: f.key, bytes: f.bytes, label: `Unreferenced figure ${f.key.slice(-20)}` });
   }
 
@@ -161,7 +172,7 @@ export async function scanStorage(): Promise<StorageReport> {
     cats[i.category].count++;
     cats[i.category].bytes += i.bytes;
   }
-  const referencedFigs = new Set((await prisma.aiImportFigure.findMany({ select: { originalKey: true }, distinct: ["originalKey"] })).map((f) => f.originalKey));
+  const referencedFigs = new Set([...(await prisma.aiImportFigure.findMany({ select: { originalKey: true }, distinct: ["originalKey"] })).map((f) => f.originalKey), ...(await versionFigureKeys())]);
   const media = await dirSize(mediaRootDir());
   const [mediaObjects, referencedMedia] = await Promise.all([
     prisma.mediaObject.count(),
@@ -260,7 +271,7 @@ export async function executeCleanup(input: { actorId: string; categories: Clean
         await prisma.aiImportFile.updateMany({ where: { storageKey: key }, data: { status: AiImportFileStatus.PURGED, purgedAt: new Date() } });
       } else if (item.category === "ORPHAN_FIGURES") {
         // Re-check the reference at the last moment.
-        if (await prisma.aiImportFigure.count({ where: { originalKey: key } })) {
+        if ((await prisma.aiImportFigure.count({ where: { originalKey: key } })) || (await versionFigureKeys()).has(key)) {
           skipped.push({ key, reason: "referenced again" });
           continue;
         }

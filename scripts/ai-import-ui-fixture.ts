@@ -28,6 +28,8 @@ async function setup() {
   const full = await prisma.adminUser.create({ data: { name: "AIUI Full Admin", username: `aiui-full-${suffix}`, email: `aiui-full-${suffix}@example.test`, passwordHash: hash, roleId: role.id } });
   const ruhs = await prisma.exam.findFirstOrThrow({ where: { code: "RUHSMO" }, select: { id: true } });
   const paper = await prisma.previousYearPaper.create({ data: { examId: ruhs.id, year: 2024, title: `SYNTHETIC RUHS 2024 AIUI ${suffix}`, paperCode: `AIUI-${suffix}`, isActive: true } });
+  // A second paper for the Importer 2.0 browser suite (its own question numbers).
+  const paper2 = await prisma.previousYearPaper.create({ data: { examId: ruhs.id, year: 2022, title: `SYNTHETIC RUHS 2022 AIUI ${suffix}`, isActive: true } });
   const { nextStudentId } = await import("@/lib/student-id");
   const st = await prisma.student.create({ data: { studentId: await nextStudentId(), name: "AIUI Student", email: `aiui-student-${suffix}@example.test`, passwordHash: hash, authProvider: StudentAuthProvider.CREDENTIALS, mobileVerifiedAt: new Date(), emailVerifiedAt: new Date() } });
   await prisma.studentExamEnrollment.create({ data: { studentId: st.id, examId: ruhs.id } }).catch(() => undefined);
@@ -40,7 +42,7 @@ async function setup() {
   await setOpenRouterEnabled(true);
   await syncCatalog();
   await prisma.aiModel.updateMany({ where: { id: { startsWith: "mock" } }, data: { approved: true } });
-  console.log(JSON.stringify({ suffix, password, fullAdmin: full.username, fullAdminId: full.id, paperId: paper.id, paperTitle: paper.title, examId: ruhs.id, student: { id: st.id, email: st.email } }, null, 2));
+  console.log(JSON.stringify({ suffix, password, fullAdmin: full.username, fullAdminId: full.id, paperId: paper.id, paperTitle: paper.title, paper2Id: paper2.id, paper2Title: paper2.title, examId: ruhs.id, student: { id: st.id, email: st.email } }, null, 2));
 }
 
 async function attempt(file: string) {
@@ -62,7 +64,7 @@ async function cleanup(file: string) {
   const jobs = await prisma.aiImportJob.findMany({ where: { title: { startsWith: "AIUI " } }, select: { id: true } });
   const qs = await prisma.aiImportQuestion.findMany({ where: { jobId: { in: jobs.map((j) => j.id) }, questionId: { not: null } }, select: { questionId: true, bulkImportRunId: true } });
   const runs = [...new Set(qs.map((q) => q.bulkImportRunId).filter((x): x is string => !!x))];
-  const extra = await prisma.question.findMany({ where: { OR: [{ previousYearPaperId: F.paperId }, { code: { startsWith: "AIUI-" } }] }, select: { id: true } });
+  const extra = await prisma.question.findMany({ where: { OR: [{ previousYearPaperId: { in: [F.paperId, F.paper2Id].filter(Boolean) } }, { code: { startsWith: "AIUI-" } }] }, select: { id: true } });
   const ids = [...new Set([...qs.map((q) => q.questionId!), ...extra.map((x) => x.id)])];
   await prisma.questionAsset.deleteMany({ where: { questionId: { in: ids } } });
   await prisma.questionOption.deleteMany({ where: { questionId: { in: ids } } });
@@ -73,6 +75,7 @@ async function cleanup(file: string) {
   await prisma.importBundle.deleteMany({ where: { id: { in: bundles } } });
   await prisma.aiImportJob.deleteMany({ where: { id: { in: jobs.map((j) => j.id) } } });
   await prisma.previousYearPaper.delete({ where: { id: F.paperId } }).catch(() => undefined);
+  if (F.paper2Id) await prisma.previousYearPaper.delete({ where: { id: F.paper2Id } }).catch(() => undefined);
   await prisma.auditLog.deleteMany({ where: { actorId: F.fullAdminId } });
   await prisma.adminUser.delete({ where: { id: F.fullAdminId } }).catch(() => undefined);
   await prisma.setting.deleteMany({ where: { key: { in: ["api.openrouter", "ai.importer"] } } });

@@ -64,6 +64,18 @@ export interface ExtractedQuestion {
   continuesOnNextPage?: boolean;
   continuedFromPreviousPage?: boolean;
   notes?: string[];
+  /** Independent verification (Agent B): a different model read the same source page without seeing this result. */
+  verification?: QuestionVerification | null;
+}
+
+export interface QuestionVerification {
+  model: string;
+  /** True only when the independent read found this question and every compared field matched. */
+  agree: boolean;
+  /** Fields that differ ("question text", "option B", "options count", "printed answer", "figures", "not found"). */
+  fields: string[];
+  detail: string;
+  at: string;
 }
 
 export interface PageExtraction {

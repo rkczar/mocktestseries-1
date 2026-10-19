@@ -2,7 +2,7 @@ import "server-only";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
 import { IMAGE_TOKENS } from "@/lib/ai-import/ai";
-import type { ImporterSettings, ImporterTask, SelectionTask } from "@/lib/ai-import/config";
+import type { ImporterSettings, ImporterTask, SelectionTask, VerifyMode } from "@/lib/ai-import/config";
 import type { FileFacts } from "@/lib/ai-import/analyze";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
 
@@ -57,7 +57,7 @@ export interface CostEstimate {
 
 const SYSTEM_TOKENS = 1_100;
 
-export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts: FileFacts[]; settings: ImporterSettings; plan: ModelPlan | null }): Promise<CostEstimate> {
+export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts: FileFacts[]; settings: ImporterSettings; plan: ModelPlan | null; verifyMode?: VerifyMode }): Promise<CostEstimate> {
   const { settings, plan } = input;
   const fx = plan?.fxRate ? { rate: plan.fxRate, rateDate: plan.fxDate } : await getUsdInr();
   const notes: string[] = [...(plan?.problems ?? [])];
@@ -67,6 +67,10 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
   let extractOut = 0;
   let scannedPages = 0;
   let expectedQuestions = 0;
+  // "Verify every page": the second model also reads every page the local reader handled (text layer).
+  let localPages = 0;
+  let localIn = 0;
+  let localOut = 0;
   for (const f of input.paperFacts) {
     const qpp = f.textPages ? Math.max(2, Math.round(f.localQuestionCount / Math.max(1, f.textPages))) : 5;
     for (const p of f.pagesDetail) {
@@ -74,7 +78,14 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
       const aiNeeded = p.kind === "SCANNED" || p.risk.length > 0 || p.images > 0 || (p.kind === "TEXT" && p.localQuestions === 0);
       const q = p.kind === "SCANNED" ? qpp : Math.max(p.localQuestions, 1);
       expectedQuestions += p.kind === "BLANK" ? 0 : q;
-      if (!aiNeeded) continue;
+      if (!aiNeeded) {
+        if (p.kind !== "BLANK") {
+          localPages++;
+          localIn += SYSTEM_TOKENS + IMAGE_TOKENS + Math.ceil(Math.min(p.textChars * 1.3, 12_000) / 3) + 120;
+          localOut += 400 + 350 * q;
+        }
+        continue;
+      }
       pagesNeedingAi++;
       if (p.kind === "SCANNED") scannedPages++;
       extractIn += SYSTEM_TOKENS + IMAGE_TOKENS + Math.ceil(Math.min(p.textChars * 1.3, 12_000) / 3) + 120;
@@ -100,7 +111,10 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
   lines.push(line("extract", "extract", "Page reading (vision; digital + scanned)", true, pagesNeedingAi, extractIn, extractOut, pagesNeedingAi));
   const verifyModel = plan?.tasks.verify.model ?? null;
   // A second read runs for scanned pages and for any page whose extraction confidence is low: at most every AI page.
-  if (verifyModel && pagesNeedingAi) {
+  if (input.verifyMode === "all" && verifyModel && pagesNeedingAi + localPages) {
+    // Every page is read a second time by a different model: all AI pages plus the locally read ones.
+    lines.push(line("verify", "verify", "Independent verification of every page (different model)", true, pagesNeedingAi + localPages, extractIn + localIn, extractOut + localOut, pagesNeedingAi + localPages));
+  } else if (verifyModel && pagesNeedingAi) {
     const per = { i: extractIn / pagesNeedingAi, o: extractOut / pagesNeedingAi };
     lines.push(line("verify", "verify", "Second read of scanned / low-confidence pages (different model)", true, scannedPages, Math.round(per.i * scannedPages), Math.round(per.o * scannedPages), pagesNeedingAi));
   }

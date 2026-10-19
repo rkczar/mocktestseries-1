@@ -3681,6 +3681,8 @@ model AiImportJob {
   year                Int?
   paperCode           String?
   previousYearPaperId String?
+  /// Number of questions the administrator confirmed the paper should contain (sequence / completeness gate).
+  expectedQuestions   Int?
   createdById         String
   /// Job spending cap (INR) for paid AI calls; the job pauses before exceeding it.
   budgetInr           Float
@@ -3839,17 +3841,49 @@ model AiImportQuestion {
   publishedAt          DateTime?
   reviewedById         String?
   reviewedAt           DateTime?
+  /// Explicit administrator approval for the Question Bank. Only approved questions are stored; any later edit clears it.
+  approvedById         String?
+  approvedAt           DateTime?
   rejectedReason       String?
   costInr              Float                  @default(0)
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
 
-  checks  AiImportCheck[]
-  figures AiImportFigure[]
+  checks   AiImportCheck[]
+  figures  AiImportFigure[]
+  versions AiImportQuestionVersion[]
 
   @@unique([fileId, sourceKey])
   @@index([jobId, status])
   @@index([questionId])
+}
+
+/// History of one extracted question: every extraction, re-scan result and manual correction is kept, so a
+/// re-scan never overwrites manual work and the administrator can compare and choose field by field.
+model AiImportQuestionVersion {
+  id          String           @id @default(cuid())
+  questionId  String
+  question    AiImportQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  jobId       String
+  /// EXTRACTION (snapshot before it was replaced) | RESCAN (a new read) | ADMIN_EDIT (a manual correction)
+  kind        String
+  /// RESCAN only: PENDING (awaiting the administrator's choice) | APPLIED | AUTO_APPLIED | DISCARDED | NOT_FOUND
+  status      String?
+  /// The question content (ExtractedQuestion) of this version.
+  data        Json
+  /// Figures of this version: stored originals (vault keys) with owner/option/box, so they can be restored.
+  figures     Json?
+  /// ADMIN_EDIT: the fields that changed, with before/after values.
+  changes     Json?
+  model       String?
+  actorId     String?
+  note        String?
+  createdAt   DateTime         @default(now())
+  decidedAt   DateTime?
+  decidedById String?
+
+  @@index([questionId, createdAt])
+  @@index([jobId, kind, status])
 }
 
 /// One image ↔ question relationship. The same original bytes may serve several questions (a shared diagram).

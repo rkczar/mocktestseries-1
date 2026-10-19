@@ -265,12 +265,12 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
   AWAITING_CONFIRMATION: "Awaiting confirmation",
   QUEUED: "Queued",
   PROCESSING: "Processing",
-  NEEDS_REVIEW: "Ready to import",
+  NEEDS_REVIEW: "Review & approval",
   PAUSED: "Paused",
   PAUSED_BUDGET: "Paused — budget limit",
-  IMPORTING: "Importing",
+  IMPORTING: "Adding to the Question Bank",
   COMPLETED: "Completed",
-  COMPLETED_WITH_ISSUES: "Completed with issues",
+  COMPLETED_WITH_ISSUES: "Completed with Warnings",
   FAILED: "Failed",
   CANCELLED: "Cancelled",
 };
@@ -286,8 +286,11 @@ export function fileRemovalBlockedReason(status: string): string | null {
 // ---- Plain job status (Jobs page and the one-page importer) ----------------------------------
 
 /** Worker stages recorded as STAGE events while a job is PROCESSING. */
-export const JOB_STAGES = { PAGES: "Processing pages", EXTRACT: "Extracting questions", KEY: "Matching answer key", VALIDATE: "Validating questions" } as const;
+export const JOB_STAGES = { PAGES: "Processing pages", EXTRACT: "Extracting questions", KEY: "Matching answer key", VERIFY: "Independent verification", VALIDATE: "Validating questions" } as const;
 export type JobStage = keyof typeof JOB_STAGES;
+
+/** Independent verification of a job: second read of risky pages only (default), or of every page. */
+export type VerifyMode = "risk" | "all";
 
 export type PlainTone = "success" | "warning" | "error" | "info" | "neutral";
 
@@ -317,7 +320,7 @@ export function plainJobStatus(j: PlainStatusInput): { label: string; tone: Plai
     case "ANALYZING":
       return { label: "Analyzing", tone: "info" };
     case "AWAITING_CONFIRMATION":
-      return { label: "Ready to process", tone: "info" };
+      return { label: "Ready to start", tone: "info" };
     case "QUEUED":
       return { label: "Queued", tone: "info" };
     case "PROCESSING":
@@ -328,12 +331,12 @@ export function plainJobStatus(j: PlainStatusInput): { label: string; tone: Plai
     case "PAUSED_BUDGET":
       return { label: "Paused", tone: "warning" };
     case "NEEDS_REVIEW":
-      if (j.extracted === 0) return { label: "Needs review", tone: "warning" };
-      return j.eligibleImport > 0 ? { label: "Ready to import", tone: "info" } : { label: "Needs review", tone: "warning" };
+      if (j.extracted === 0) return { label: "Needs Correction", tone: "warning" };
+      return j.eligibleImport > 0 ? { label: "Ready for Review", tone: "info" } : { label: "Needs Correction", tone: "warning" };
     case "COMPLETED":
-      return { label: "Imported", tone: "success" };
+      return { label: "Completed", tone: "success" };
     case "COMPLETED_WITH_ISSUES":
-      return { label: j.imported ? "Imported — some need review" : "Needs review", tone: "warning" };
+      return { label: j.imported ? "Completed with Warnings" : "Needs Correction", tone: "warning" };
     case "FAILED":
       return { label: "Failed", tone: "error" };
     case "CANCELLED":
@@ -386,6 +389,8 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   DUPLICATE_NEAR: { label: "Near-duplicate of an existing question", blocking: false, publishBlocking: true },
   DUPLICATE_IN_BATCH: { label: "Duplicate within this batch", blocking: true, publishBlocking: true },
   AI_OPINION_DIFFERS: { label: "AI opinion differs from the key", blocking: false, publishBlocking: false },
+  VERIFY_DISAGREES: { label: "Independent verification disagrees", blocking: false, publishBlocking: true },
+  RESCAN_PENDING: { label: "Re-scan result waiting for your choice", blocking: true, publishBlocking: true },
 };
 
 export function issueLabel(code: string): string {

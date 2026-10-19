@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { renderText } from "@/lib/rich-content";
 import { RichText } from "@/components/content/rich-text";
+import { QuestionMedia } from "@/components/content/question-media";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
@@ -14,7 +15,13 @@ import { getImporterSettings } from "@/lib/ai-import/settings";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { effective } from "@/lib/ai-import/post";
 import { statusVariant } from "@/lib/ai-import/config";
-import { QuestionReview } from "./question-review";
+import { QuestionReview, type RescanCompareView, type VersionView } from "./question-review";
+import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
+import { jobMapping } from "@/lib/ai-import/job-view";
+import { compareVersions, snapshotFigures, type FigureSnapshot } from "@/lib/ai-import/versions";
+import { planOf } from "@/lib/ai-import/select";
+import { formatIst } from "@/lib/ist-time";
+import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
 export const metadata = { title: "Review Question — AI Question Importer" };
 export const dynamic = "force-dynamic";
@@ -30,32 +37,79 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
   const { id } = await params;
   const q = await prisma.aiImportQuestion.findUnique({ where: { id }, include: { figures: { orderBy: { createdAt: "asc" } }, checks: { orderBy: [{ stage: "asc" }, { createdAt: "asc" }] }, job: true } });
   if (!q) notFound();
-  const [canUse, settings, taxonomy, pages, keyEntries] = await Promise.all([
+  const figurePages = [...new Set(q.figures.map((f) => f.pageNumber))];
+  const [canUse, settings, taxonomy, pages, keyEntries, mapping, versions] = await Promise.all([
     hasPermission(PERMISSIONS.AI_IMPORTER_USE),
     getImporterSettings(),
     getExamTaxonomy(prisma, q.job.examId),
-    prisma.aiImportPage.findMany({ where: { fileId: q.fileId, pageNumber: { in: q.pages } }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true, kind: true, model: true, errorMessage: true } }),
+    prisma.aiImportPage.findMany({ where: { fileId: q.fileId, pageNumber: { in: [...new Set([...q.pages, ...figurePages])] } }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true, kind: true, model: true, errorMessage: true, status: true, rawOutput: true } }),
     prisma.aiImportKeyEntry.findMany({ where: { matchedQuestionId: q.id }, select: { rawValue: true, page: true, status: true } }),
+    jobMapping(q.jobId),
+    prisma.aiImportQuestionVersion.findMany({ where: { questionId: q.id }, orderBy: { createdAt: "desc" }, take: 50 }),
   ]);
-  const file = await prisma.aiImportFile.findUnique({ where: { id: q.fileId }, select: { originalName: true, detected: true, status: true } });
+  const file = await prisma.aiImportFile.findUnique({ where: { id: q.fileId }, select: { originalName: true, detected: true, status: true, storageKey: true, pageCount: true } });
+  const actorIds = [...new Set([...versions.map((v) => v.actorId), q.approvedById].filter((x): x is string => !!x))];
+  const actors = new Map((await prisma.adminUser.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, email: true } })).map((a) => [a.id, a.name || a.email]));
   // questionId has no FK (the import record outlives the question): don't link a deleted one.
   const savedExists = q.questionId ? !!(await prisma.question.findUnique({ where: { id: q.questionId }, select: { id: true } })) : false;
   const e = effective(q);
   const kind = (file?.detected as { kind?: string } | null)?.kind;
   const hasPageImages = (kind === "pdf" || kind === "png" || kind === "jpeg") && file?.status !== "PURGED";
   const stemFigures = q.figures.filter((f) => f.owner !== "OPTION");
+  const pendingRescan = versions.find((v) => v.kind === "RESCAN" && v.status === "PENDING") ?? null;
+  const compare: RescanCompareView | null = pendingRescan
+    ? {
+        versionId: pendingRescan.id,
+        model: pendingRescan.model,
+        createdAt: formatIst(pendingRescan.createdAt),
+        rows: compareVersions(effective(q), snapshotFigures(q.figures), pendingRescan.data as unknown as ExtractedQuestion, (pendingRescan.figures as unknown as FigureSnapshot[] | null) ?? []),
+      }
+    : null;
+  const history: VersionView[] = versions.map((v) => ({
+    id: v.id,
+    kind: v.kind,
+    status: v.status,
+    createdAt: formatIst(v.createdAt),
+    model: v.model,
+    actor: v.actorId ? actors.get(v.actorId) ?? "an administrator" : null,
+    note: v.note,
+    changes: Array.isArray(v.changes) ? (v.changes as { field: string; before: string; after: string }[]) : [],
+  }));
+  const rescanBlocked =
+    q.job.status === "CANCELLED"
+      ? "This import was cancelled."
+      : ["ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"].includes(q.job.status)
+        ? "The import is running — re-scan when it has finished."
+        : !q.job.confirmedAt
+          ? "This import was never processed."
+          : kind === "docx" || kind === "xlsx" || kind === "csv"
+            ? "Word and spreadsheet files are read exactly, without AI — correct the question by hand."
+            : file?.status === "PURGED" || !file?.storageKey
+              ? "The original file is no longer stored (retention), so its pages cannot be re-scanned. Correct the question by hand."
+              : !settings.aiEnabled
+                ? "Paid AI is switched off in Import Settings, so pages cannot be read again. Correct the question by hand."
+                : !planOf(q.job.config)?.tasks.extract.model
+                  ? "This import's model plan has no page-reading model (use Reconfigure Models on the job)."
+                  : q.job.spentInr >= q.job.budgetInr
+                    ? "This import has used its whole budget."
+                    : null;
+  const pageIdOf = new Map(pages.map((p) => [p.pageNumber, p.id]));
+  const verification = (q.data as unknown as ExtractedQuestion).verification ?? null;
   const fmt = e.contentFormat;
   const blockerImport = importBlocker(q, settings);
   const blockerPublish = q.questionId ? publishBlocker(q, settings) : blockerImport ?? publishBlocker(q, settings);
+  // Complete figure at its stored aspect ratio (never cropped to a box), tap to zoom.
   const figureImg = (f: (typeof q.figures)[number]) =>
     f.originalKey ? (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src={`/api/admin/ai-importer/figures/${f.id}/image`} alt={f.description ?? "Figure"} className="max-h-64 max-w-full rounded border border-[var(--color-border)] bg-white p-1" data-testid="preview-figure" />
+      <div data-testid="preview-figure">
+        <QuestionMedia size={f.owner === "OPTION" ? "option" : "question"} assets={[{ role: f.owner === "OPTION" ? "OPTION" : "QUESTION", optionLabel: f.optionLabel, order: 0, url: `/api/admin/ai-importer/figures/${f.id}/image`, alt: f.description ?? "Figure", caption: null, width: f.width, height: f.height, darkBacking: true }]} />
+      </div>
     ) : (
-      <span className="text-xs text-[var(--color-error)]">Figure missing</span>
+      <span className="text-xs text-[var(--color-error)]">Figure missing{f.description ? ` — ${f.description}` : ""}</span>
     );
   return (
     <div className="flex flex-col gap-4">
+      {mapping && <PaperMapping m={mapping} compact />}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold text-[var(--color-foreground)]">
@@ -67,6 +121,15 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             </Link>{" "}
             · {file?.originalName} · page {q.pages.join(", ")} · read by {e.method.replace(/_/g, " ").toLowerCase()}
             {e.model ? ` (${e.model})` : ""}
+          </p>
+          <p className="text-xs" data-testid="q-verification" data-agree={verification ? String(verification.agree) : "none"}>
+            {verification ? (
+              <span className={verification.agree ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}>
+                Independent read by {verification.model}: {verification.agree ? "every compared field matched" : verification.detail}
+              </span>
+            ) : (
+              <span className="text-[var(--color-muted-foreground)]">Not independently verified (no second read for this page).</span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -88,7 +151,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             ))}
         </div>
       </div>
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Source</CardTitle>
@@ -96,12 +159,12 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {hasPageImages &&
-              pages.map((p) => (
+              pages.filter((p) => q.pages.includes(p.pageNumber)).map((p) => (
                 <figure key={p.id} className="flex flex-col gap-1">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={`/api/admin/ai-importer/pages/${p.id}/image`} alt={`Page ${p.pageNumber}`} className="w-full rounded border border-[var(--color-border)] bg-white" loading="lazy" data-testid="source-page" />
                   <figcaption className="text-xs text-[var(--color-muted-foreground)]">
-                    Page {p.pageNumber} · {p.kind?.toLowerCase().replace(/_/g, " ")} · {p.model ?? "—"}
+                    Page {p.pageNumber} · {p.kind?.toLowerCase().replace(/_/g, " ")} · {p.model ?? "—"} · {p.status === "PENDING" && (p.rawOutput as { rescan?: unknown } | null)?.rescan ? "re-scan queued" : p.status.toLowerCase()}
                     {p.errorMessage ? ` · ${p.errorMessage}` : ""}
                   </figcaption>
                 </figure>
@@ -197,16 +260,27 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             status: q.status,
             type: e.type,
             contentFormat: fmt,
+            number: e.number,
+            section: e.section ?? "",
             stem: e.stem,
             options: e.options.map((o) => ({ label: o.label, text: o.text })),
+            explanation: e.hints?.explanation ?? "",
+            pages: e.pages?.length ? e.pages : q.pages,
+            pageCount: file?.pageCount ?? Math.max(1, ...q.pages),
             finalAnswer: q.finalAnswer,
             subjectId: q.subjectId,
             topicId: q.topicId,
+            subTopicId: q.subTopicId,
             allowDuplicate: q.allowDuplicate,
             duplicate: q.duplicateKind,
-            figures: q.figures.map((f) => ({ id: f.id, owner: f.owner, optionLabel: f.optionLabel, mappingStatus: f.mappingStatus, source: f.source, confirmed: !!f.confirmedById, page: f.pageNumber })),
+            approved: !!q.approvedById,
+            approvedBy: q.approvedById ? actors.get(q.approvedById) ?? "an administrator" : null,
+            figures: q.figures.map((f) => ({ id: f.id, owner: f.owner, optionLabel: f.optionLabel, mappingStatus: f.mappingStatus, source: f.source, confirmed: !!f.confirmedById, page: f.pageNumber, pageId: hasPageImages ? pageIdOf.get(f.pageNumber) ?? null : null, width: f.width, height: f.height, description: f.description, box: (f.box as { x: number; y: number; w: number; h: number } | null) ?? null })),
+            rescanAllowed: { ok: !rescanBlocked, reason: rescanBlocked },
           }}
-          taxonomy={taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name })) }))}
+          taxonomy={taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((st) => ({ id: st.id, name: st.name })) })) }))}
+          compare={compare}
+          history={history}
         />
       )}
     </div>

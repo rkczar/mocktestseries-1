@@ -14,13 +14,26 @@ import { CHUNK_BYTES } from "@/lib/ai-import/config";
 import type { JobCard } from "@/lib/ai-import/job-view";
 import type { AnalyzerVerdict } from "@/lib/ai-import/verdict";
 import { JobContextFields, type ExamOption } from "./new-import-form";
-import { analyzeJobAction, createJobAction, importAction, processAndImportAction, saveModelPreferenceAction } from "./actions";
+import { analyzeJobAction, changeJobPaperAction, createJobAction, processAndImportAction, saveModelPreferenceAction } from "./actions";
+import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
+import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
+import type { JobMapping } from "@/lib/ai-import/job-view";
+import type { QualityReport } from "@/lib/ai-import/quality";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 export interface CurrentJob {
   card: JobCard;
   examName: string;
   verdict: AnalyzerVerdict | null;
+  mapping: JobMapping;
+  quality: QualityReport | null;
+  /** The analyzer's estimate of the question count (a starting value for the confirmation, never trusted). */
+  estimatedQuestions: number | null;
+  /** Papers of the job's exam, for an explicit change of the Previous Year Paper. */
+  papers: ExamOption["papers"];
+  files: { id: string; name: string; pageCount: number | null }[];
+  stage: string | null;
+  verifyAvailable: boolean;
 }
 
 const BUSY = ["DRAFT", "ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"];
@@ -66,19 +79,13 @@ function Fact({ f }: { f: AnalyzerVerdict["facts"][number] }) {
   );
 }
 
-function Result({ label, value, tone, testId }: { label: string; value: number; tone?: "ok" | "warn" | "err"; testId: string }) {
-  return (
-    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid={testId} data-value={value}>
-      <div className="text-xs text-[var(--color-muted-foreground)]">{label}</div>
-      <div className={`text-2xl font-semibold ${value && tone === "ok" ? "text-[var(--color-success)]" : value && tone === "warn" ? "text-[var(--color-warning)]" : value && tone === "err" ? "text-[var(--color-error)]" : ""}`}>{value}</div>
-    </div>
-  );
-}
+const paperLabel = (p: ExamOption["papers"][number]) => `${p.year} — ${p.title}${p.paperCode ? ` (${p.paperCode})` : ""}`;
 
-/** Upload area: exam (remembered from the last import), the paper, an optional answer key, and rarely needed details. */
+/** Upload area: 1 exam → 2 Previous Year Paper → 3 question paper (+ 4 answer key, expected count). */
 function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: { exams: ExamOption[]; defaultExamId: string; defaultBudget: number; limits: { maxFileMb: number; maxPagesPerFile: number }; aiEnabled: boolean }) {
   const router = useRouter();
   const [ctx, setCtx] = useState({ examId: defaultExamId, paperType: "FULL_PAPER", subjectId: "", year: "", paperCode: "", previousYearPaperId: "" });
+  const [expected, setExpected] = useState("");
   const [paper, setPaper] = useState<File | null>(null);
   const [key, setKey] = useState<File | null>(null);
   const [drag, setDrag] = useState(false);
@@ -88,15 +95,18 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
   const paperInput = useRef<HTMLInputElement>(null);
   const keyInput = useRef<HTMLInputElement>(null);
   const exam = exams.find((e) => e.id === ctx.examId);
-  // The Bulk Import needs a year for every question: the exam's own year, or the paper's year entered here.
-  const needsYear = !!exam && !exam.year;
+  const pyq = exam?.papers.find((p) => p.id === ctx.previousYearPaperId) ?? null;
+  // The Bulk Import needs a year for every question: the selected paper's year, the exam's own year, or one entered here.
+  const needsYear = !!exam && !exam.year && !pyq;
   const contextMissing = !ctx.examId
     ? "Select the exam first."
     : needsYear && !/^\d{4}$/.test(ctx.year)
-      ? "Enter the paper's year — this exam has no year set, and the Question Bank needs one."
+      ? "Select the Previous Year Paper, or enter the paper's year — this exam has no year set, and the Question Bank needs one."
       : ctx.paperType === "SINGLE_SUBJECT" && !ctx.subjectId
         ? "Select the subject (Advanced options)."
-        : null;
+        : expected && !/^\d{1,4}$/.test(expected)
+          ? "Enter the expected number of questions as a whole number."
+          : null;
 
   async function go(file: File) {
     if (busy) return;
@@ -108,7 +118,7 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
       // One key per chosen file: a double click or a retried request returns the same job.
       const clientKey = `up_${file.size}_${file.lastModified}_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
       setProgress("Creating the import…");
-      const created = await callImporter(() => createJobAction({ title: file.name.replace(/\.[^.]+$/, "").slice(0, 160) || "Untitled import", ...ctx, year: ctx.year || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, paperCode: ctx.paperCode || null, budgetInr: defaultBudget, clientKey }));
+      const created = await callImporter(() => createJobAction({ title: file.name.replace(/\.[^.]+$/, "").slice(0, 160) || "Untitled import", ...ctx, year: pyq ? null : ctx.year || null, paperCode: pyq ? null : ctx.paperCode || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, budgetInr: defaultBudget, clientKey, expectedQuestions: expected || null }));
       if (!created.ok) throw new Error(created.error);
       const jobId = created.data.jobId;
       const up = await uploadFile(jobId, file, "PAPER", (p) => setProgress(`Uploading ${file.name}… ${p}%`));
@@ -131,32 +141,58 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
   return (
     <Card data-testid="upload-card">
       <CardHeader>
-        <CardTitle>Upload PDF or Document</CardTitle>
+        <CardTitle>New import</CardTitle>
         <CardDescription>
-          PDF, Word (DOCX), JPG, PNG, XLSX or CSV · up to {limits.maxFileMb} MB and {limits.maxPagesPerFile} pages per file. The file is analyzed automatically on this server (free); nothing is charged before you click Process.
+          PDF, Word (DOCX), JPG, PNG, XLSX or CSV · up to {limits.maxFileMb} MB and {limits.maxPagesPerFile} pages per file. The file is analyzed automatically on this server (free); nothing is charged before you confirm and click Start Import.
           {!aiEnabled && " Paid AI is off: digital PDFs and Word files work fully; scanned pages cannot be read."}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="flex max-w-md flex-col gap-1.5">
-          <Label htmlFor="op-exam">Exam</Label>
-          <SelectNative id="op-exam" value={ctx.examId} disabled={busy} onChange={(e) => setCtx((c) => ({ ...c, examId: e.target.value, subjectId: "", previousYearPaperId: "" }))} data-testid="op-exam">
-            <option value="">Select an exam…</option>
-            {exams.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name}
-                {e.isActive ? "" : " (inactive)"}
-              </option>
-            ))}
-          </SelectNative>
-        </div>
-        {needsYear && (
-          <div className="flex max-w-[12rem] flex-col gap-1.5">
-            <Label htmlFor="op-year">Paper year</Label>
-            <Input id="op-year" inputMode="numeric" maxLength={4} placeholder="e.g. 2024" value={ctx.year} disabled={busy} onChange={(e) => setCtx((c) => ({ ...c, year: e.target.value.replace(/\D/g, "") }))} data-testid="op-year" />
-            <span className="text-xs text-[var(--color-muted-foreground)]">Required: this exam has no year set.</span>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="op-exam">1. Exam</Label>
+            <SelectNative id="op-exam" value={ctx.examId} disabled={busy} onChange={(e) => setCtx((c) => ({ ...c, examId: e.target.value, subjectId: "", previousYearPaperId: "" }))} data-testid="op-exam">
+              <option value="">Select an exam…</option>
+              {exams.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name}
+                  {e.isActive ? "" : " (inactive)"}
+                </option>
+              ))}
+            </SelectNative>
           </div>
-        )}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="op-pyq">2. Previous Year Paper</Label>
+            <SelectNative id="op-pyq" value={ctx.previousYearPaperId} disabled={busy || !exam} onChange={(e) => setCtx((c) => ({ ...c, previousYearPaperId: e.target.value, year: "", paperCode: "" }))} data-testid="op-pyq">
+              <option value="">{exam ? "None — add to the Question Bank only" : "Select the exam first"}</option>
+              {exam?.papers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {paperLabel(p)}
+                </option>
+              ))}
+            </SelectNative>
+            <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="op-pyq-hint">
+              {pyq ? `Questions are linked to "${pyq.title}" with its year ${pyq.year}${pyq.paperCode ? ` and code ${pyq.paperCode}` : ""}.` : exam && !exam.papers.length ? "This exam has no Previous Year Paper yet. " : "The paper record must already exist; it is never created or guessed from the file name. "}
+              {!pyq && (
+                <Link className="underline" href="/admin/exams/previous-year-papers">
+                  Manage Previous Year Papers
+                </Link>
+              )}
+            </span>
+          </div>
+          {needsYear && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="op-year">Paper year</Label>
+              <Input id="op-year" inputMode="numeric" maxLength={4} placeholder="e.g. 2024" value={ctx.year} disabled={busy} onChange={(e) => setCtx((c) => ({ ...c, year: e.target.value.replace(/\D/g, "") }))} data-testid="op-year" />
+              <span className="text-xs text-[var(--color-muted-foreground)]">Required: no paper is selected and this exam has no year set.</span>
+            </div>
+          )}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="op-expected">Expected number of questions</Label>
+            <Input id="op-expected" inputMode="numeric" maxLength={4} placeholder="e.g. 100" value={expected} disabled={busy} onChange={(e) => setExpected(e.target.value.replace(/\D/g, ""))} data-testid="op-expected" />
+            <span className="text-xs text-[var(--color-muted-foreground)]">As printed on the paper. You confirm it again before processing; missing questions are detected against it.</span>
+          </div>
+        </div>
         <div
           role="button"
           tabIndex={0}
@@ -184,8 +220,8 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
             <path d="M12 16V4m0 0-4 4m4-4 4 4" />
             <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
           </svg>
-          <span className="text-base font-medium">{busy ? progress ?? "Working…" : paper ? paper.name : "Drop the question paper here, or click to choose"}</span>
-          <span className="text-xs text-[var(--color-muted-foreground)]">{busy ? "Keep this page open until the analysis appears." : "Upload starts as soon as a file is chosen."}</span>
+          <span className="text-base font-medium">{busy ? progress ?? "Working…" : paper ? paper.name : "3. Drop the question paper here, or click to choose"}</span>
+          <span className="text-xs text-[var(--color-muted-foreground)]">{busy ? "Keep this page open until the analysis appears." : "Upload starts as soon as a file is chosen — choose the answer key first if you have one."}</span>
           <input
             ref={paperInput}
             type="file"
@@ -204,7 +240,7 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
           />
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-[var(--color-muted-foreground)]">Separate answer key (optional, choose before the paper):</span>
+          <span className="text-[var(--color-muted-foreground)]">4. Official answer key (optional, choose before the paper):</span>
           <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => keyInput.current?.click()} data-testid="op-key-button">
             {key ? key.name : "Choose answer key"}
           </Button>
@@ -228,9 +264,9 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
         </div>
         <details className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="op-advanced">
           <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>
-          <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">Rarely needed. The defaults import a full paper of the selected exam into the Question Bank as Draft.</p>
+          <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">Rarely needed: paper type (single-subject papers) and a paper code when no Previous Year Paper is selected.</p>
           <div className="mt-3">
-            <JobContextFields exams={exams} value={ctx} onChange={(v) => setCtx((c) => ({ ...c, ...v }))} />
+            <JobContextFields exams={exams} value={ctx} onChange={(v) => setCtx((c) => ({ ...c, ...v }))} hidePaper />
           </div>
         </details>
         {error && (
@@ -240,6 +276,46 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** Explicit change of the import's Previous Year Paper (before any question is stored). */
+function ChangePaper({ jobId, papers, current }: { jobId: string; papers: ExamOption["papers"]; current: string | null }) {
+  const router = useRouter();
+  const [value, setValue] = useState(current ?? "");
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  return (
+    <details className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-sm" data-testid="op-change-paper">
+      <summary className="cursor-pointer font-medium">Change Previous Year Paper</summary>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        <SelectNative aria-label="Previous Year Paper" value={value} onChange={(e) => setValue(e.target.value)} data-testid="op-change-paper-select">
+          <option value="">None — Question Bank only</option>
+          {papers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {paperLabel(p)}
+            </option>
+          ))}
+        </SelectNative>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={pending || value === (current ?? "")}
+          onClick={() =>
+            start(async () => {
+              const r = await callImporter(() => changeJobPaperAction(jobId, value || null));
+              setMsg(r.ok ? { ok: true, text: "Paper changed (recorded in the import log)." } : { ok: false, text: r.error });
+              if (r.ok) router.refresh();
+            })
+          }
+          data-testid="op-change-paper-save"
+        >
+          Change paper
+        </Button>
+      </div>
+      <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">The year and code come from the selected paper. Not possible once questions of this import are in the Question Bank.</p>
+      {msg && <p className={`mt-1 text-xs ${msg.ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>{msg.text}</p>}
+    </details>
   );
 }
 
@@ -303,6 +379,9 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
   const [clicked, setClicked] = useState(false);
   const [override, setOverride] = useState("");
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const [expected, setExpected] = useState(String(current.mapping.expectedQuestions ?? current.estimatedQuestions ?? ""));
+  const [verifyMode, setVerifyMode] = useState<"risk" | "all">("risk");
+  const [confirmed, setConfirmed] = useState(false);
   const busy = BUSY.includes(j.status) && !j.stalled;
 
   useEffect(() => {
@@ -316,7 +395,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
     setClicked(true);
     start(async () => {
       setMsg(null);
-      const r = await callImporter(() => processAndImportAction(j.id, { modelOverride: override || null }));
+      const r = await callImporter(() => processAndImportAction(j.id, { modelOverride: override || null, expectedQuestions: expected, verifyMode }));
       if (!r.ok) {
         setMsg({ text: r.error, error: true });
         setClicked(false);
@@ -335,7 +414,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
           <div className="min-w-0">
             <CardTitle className="[overflow-wrap:anywhere]">{j.title}</CardTitle>
             <CardDescription>
-              {current.examName} · {j.files.map((f) => `${f.name}${f.role === "ANSWER_KEY" ? " (answer key)" : ""}`).join(", ") || "no files"} · uploaded {j.createdAt}
+              {j.files.map((f) => `${f.name}${f.role === "ANSWER_KEY" ? " (answer key)" : ""}`).join(", ") || "no files"} · uploaded {j.createdAt}
             </CardDescription>
           </div>
           <Badge variant={blocked ? "warning" : toneVariant(j.tone)} data-testid="current-status">
@@ -344,6 +423,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <PaperMapping m={current.mapping} />
         {(j.status === "DRAFT" || j.status === "ANALYZING") && !j.stalled && (
           <p className="text-sm" data-testid="op-analyzing">
             Analyzing the file on this server (free)… this usually takes a few seconds.
@@ -415,62 +495,89 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
               </div>
             ) : null}
             {canUse && v.strategy === "AI" && <ModelOverride jobId={j.id} importerModels={importerModels} canManage={canManage} selection={selection} value={override} onChange={setOverride} />}
-            {canUse && (
-              <div className="flex flex-col gap-1">
-                <Button size="lg" className="w-full sm:w-auto sm:self-start" disabled={!v.canProcess || pending || clicked} onClick={processNow} data-testid="process-import">
-                  {pending || clicked ? "Starting…" : "Process & Import Questions"}
-                </Button>
-                <p className="text-xs text-[var(--color-muted-foreground)]">Eligible questions are added to the Question Bank as Draft through the existing Bulk Import. Questions with unverified answers or unsupported formats are kept for review — nothing is published automatically.</p>
+            {canUse && !v.blocker && (
+              <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-primary)]/40 p-3" data-testid="op-confirm">
+                <h3 className="text-sm font-semibold">Confirm before starting</h3>
+                <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2" data-testid="op-confirm-summary">
+                  <div>
+                    <dt className="inline text-[var(--color-muted-foreground)]">Exam: </dt>
+                    <dd className="inline font-medium">{current.mapping.examName}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline text-[var(--color-muted-foreground)]">Previous Year Paper: </dt>
+                    <dd className="inline font-medium" data-testid="op-confirm-paper">{current.mapping.paper ? current.mapping.paper.title : current.mapping.paperMissing ? "missing record — select a paper" : "None (Question Bank only)"}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline text-[var(--color-muted-foreground)]">Year: </dt>
+                    <dd className="inline font-medium" data-testid="op-confirm-year">{current.mapping.year ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline text-[var(--color-muted-foreground)]">Paper set / code: </dt>
+                    <dd className="inline font-medium">{current.mapping.paperCode ?? "—"}</dd>
+                  </div>
+                </dl>
+                <ChangePaper jobId={j.id} papers={current.papers} current={current.mapping.paper?.id ?? null} />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor="op-confirm-expected">Expected number of questions</Label>
+                    <Input id="op-confirm-expected" inputMode="numeric" maxLength={4} value={expected} onChange={(e) => setExpected(e.target.value.replace(/\D/g, ""))} data-testid="op-confirm-expected" />
+                    <span className="text-xs text-[var(--color-muted-foreground)]">{current.estimatedQuestions ? `The analyzer counted about ${current.estimatedQuestions} — check it against the paper.` : "Check it against the paper."}</span>
+                  </div>
+                  {aiEnabled && current.verifyAvailable && (
+                    <div className="flex flex-col gap-1">
+                      <Label htmlFor="op-verify-mode">Independent verification</Label>
+                      <SelectNative id="op-verify-mode" value={verifyMode} onChange={(e) => setVerifyMode(e.target.value === "all" ? "all" : "risk")} data-testid="op-verify-mode">
+                        <option value="risk">Scanned and low-confidence pages (default)</option>
+                        <option value="all">Every page (higher cost — re-checked against the budget)</option>
+                      </SelectNative>
+                      <span className="text-xs text-[var(--color-muted-foreground)]">A second, different model reads the original page without seeing the first result. Agreement is evidence, not proof.</span>
+                    </div>
+                  )}
+                </div>
+                <label className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} data-testid="op-confirm-check" />
+                  <span>The exam, Previous Year Paper and expected question count above are correct.</span>
+                </label>
+                <div className="flex flex-col gap-1">
+                  <Button size="lg" className="w-full sm:w-auto sm:self-start" disabled={!v.canProcess || pending || clicked || !confirmed || !/^\d{1,4}$/.test(expected) || current.mapping.paperMissing} onClick={processNow} data-testid="process-import">
+                    {pending || clicked ? "Starting…" : "Start Import"}
+                  </Button>
+                  <p className="text-xs text-[var(--color-muted-foreground)]">Questions are extracted and checked. Nothing enters the Question Bank until you review and approve it; approved questions are added as Draft and are never published automatically.</p>
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {(j.status === "QUEUED" || j.status === "PROCESSING" || j.status === "IMPORTING") && (
+        {(j.status === "QUEUED" || j.status === "PROCESSING" || j.status === "IMPORTING" || j.status === "PAUSED" || j.status === "PAUSED_BUDGET") && (
           <div className="flex flex-col gap-2" data-testid="op-progress">
-            <p className="text-sm font-medium">{j.label}…</p>
+            <p className="text-sm font-medium" data-testid="op-stage">
+              {j.label}
+              {j.status === "PROCESSING" && current.stage ? "" : j.status === "QUEUED" ? " — waiting for the worker" : ""}
+              …
+            </p>
             {j.pages.total > 0 && (
               <>
-                <div className="h-2 w-full overflow-hidden rounded bg-[var(--color-border)]">
+                <div className="h-2 w-full overflow-hidden rounded bg-[var(--color-border)]" role="progressbar" aria-valuemin={0} aria-valuemax={j.pages.total} aria-valuenow={j.pages.done + j.pages.skipped + j.pages.failed}>
                   <span className="block h-full bg-[var(--color-primary)] transition-[width]" style={{ width: `${Math.round(((j.pages.done + j.pages.skipped + j.pages.failed) / j.pages.total) * 100)}%` }} />
                 </div>
-                <p className="text-xs text-[var(--color-muted-foreground)]">
-                  Pages {j.pages.done + j.pages.skipped + j.pages.failed} of {j.pages.total} · {c.extracted} question(s) so far · AI spend {inr(j.spentInr)}
-                </p>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4" data-testid="op-live">
+                  <div>Pages: <strong>{j.pages.done}</strong> of {j.pages.total} done</div>
+                  <div>Failed: <strong className={j.pages.failed ? "text-[var(--color-error)]" : ""}>{j.pages.failed}</strong></div>
+                  <div>Retrying / waiting: <strong>{current.quality?.pages.retrying ?? 0}</strong> / {current.quality?.pages.pending ?? j.pages.pending}</div>
+                  <div>Skipped: <strong>{j.pages.skipped}</strong></div>
+                  <div>Expected: <strong>{current.mapping.expectedQuestions ?? "—"}</strong></div>
+                  <div>Extracted: <strong>{c.extracted}</strong></div>
+                  <div>Verified: <strong>{current.quality?.verified ?? 0}</strong></div>
+                  <div>AI spend: <strong>{inr(j.spentInr)}</strong>{j.maxCostInr !== null ? ` (max ${inr(j.maxCostInr)})` : ""}</div>
+                </dl>
               </>
             )}
           </div>
         )}
 
-        {finished && (
-          <div className="flex flex-col gap-3" data-testid="op-result">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-              <Result label="Imported (Draft)" value={c.imported} tone="ok" testId="result-imported" />
-              <Result label="Needs review" value={c.needsReview + c.ready} tone="warn" testId="result-review" />
-              <Result label="Unsupported (not importable)" value={c.notImportable} tone="err" testId="result-unsupported" />
-              <Result label="Failed" value={c.importFailed + j.pages.failed} tone="err" testId="result-failed" />
-              <Result label="Duplicates skipped" value={c.duplicates} tone="warn" testId="result-duplicates" />
-              <Result label="Answer unverified" value={c.unverifiedAnswers} tone="warn" testId="result-unverified" />
-            </div>
-            {j.status === "NEEDS_REVIEW" && c.ready > 0 && canUse && (
-              <div>
-                <Button
-                  disabled={pending}
-                  onClick={() =>
-                    start(async () => {
-                      const r = await callImporter(() => importAction(j.id, "DRAFT", null));
-                      if (!r.ok) setMsg({ text: r.error, error: true });
-                      else router.refresh();
-                    })
-                  }
-                  data-testid="op-import-ready"
-                >
-                  Import ready questions ({c.ready})
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
+        {finished && current.quality && <QualityPanel jobId={j.id} report={current.quality} canUse={canUse} jobStatus={j.status} files={current.files} runIds={j.runIds} />}
+        {finished && canUse && !j.counts.imported && <ChangePaper jobId={j.id} papers={current.papers} current={current.mapping.paper?.id ?? null} />}
 
         {j.message && !(j.status === "AWAITING_CONFIRMATION" && v?.blocker) && (
           <p className="text-sm text-[var(--color-warning)]" data-testid="op-job-message">

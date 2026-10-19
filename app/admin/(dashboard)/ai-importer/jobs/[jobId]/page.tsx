@@ -9,7 +9,10 @@ import { getImporterSettings } from "@/lib/ai-import/settings";
 import { jobSummary } from "@/lib/ai-import/summary";
 import { resetEligibility } from "@/lib/ai-import/jobs";
 import { planOf } from "@/lib/ai-import/select";
-import { jobCards } from "@/lib/ai-import/job-view";
+import { jobCards, jobMapping } from "@/lib/ai-import/job-view";
+import { jobQuality } from "@/lib/ai-import/summary";
+import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
+import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import { JobWorkspace, type JobView } from "./job-workspace";
 import type { ExamOption } from "../../new-import-form";
@@ -39,7 +42,7 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     prisma.aiImportKeyEntry.groupBy({ by: ["keyFileId"], where: { jobId: job.id }, _count: { _all: true } }),
   ]);
   const examOptions: ExamOption[] = await Promise.all(exams.map(async (e) => ({ ...e, subjects: await getExamSubjects(prisma, e.id), papers: papers.filter((p) => p.examId === e.id) })));
-  const [card] = await jobCards({ ids: [job.id] }, canManage);
+  const [[card], mapping, quality] = await Promise.all([jobCards({ ids: [job.id] }, canManage), jobMapping(job.id), jobQuality(job.id)]);
   const runs = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, bulkImportRunId: { not: null } }, distinct: ["bulkImportRunId"], select: { bulkImportRunId: true } });
   const view: JobView = {
     id: job.id,
@@ -88,5 +91,14 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     plainLabel: card.label,
     nextAction: card.nextAction,
   };
-  return <JobWorkspace job={view} exams={examOptions} canUse={canUse} canPublish={canPublish && canUse} />;
+  const finished = ["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(job.status);
+  return (
+    <div className="flex flex-col gap-4">
+      {mapping && <PaperMapping m={mapping} />}
+      {finished && quality && (
+        <QualityPanel jobId={job.id} report={quality} canUse={canUse} jobStatus={job.status} files={job.files.filter((f) => f.role === "PAPER" && f.status !== "REJECTED").map((f) => ({ id: f.id, name: f.originalName, pageCount: f.pageCount }))} runIds={view.runIds} />
+      )}
+      <JobWorkspace job={view} exams={examOptions} canUse={canUse} canPublish={canPublish && canUse} />
+    </div>
+  );
 }

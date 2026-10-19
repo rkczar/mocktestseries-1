@@ -14,6 +14,7 @@ import { estimateJobCost } from "@/lib/ai-import/estimate";
 import { computeModelPlan } from "@/lib/ai-import/select";
 import { BUDGET_LOCK_KEY, importerSpend } from "@/lib/ai-import/ai";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
+import type { VerifyMode } from "@/lib/ai-import/config";
 
 export class ImportJobError extends Error {
   constructor(
@@ -46,8 +47,13 @@ export interface JobContextInput {
   previousYearPaperId: string | null;
 }
 
-/** Checks the exam context against the existing taxonomy (never creates anything). */
-export async function validateContext(c: JobContextInput): Promise<void> {
+/**
+ * Checks the exam context against the existing taxonomy (never creates anything) and returns it
+ * normalized. A selected Previous Year Paper is the single source of the paper's year and code: the
+ * questions are saved with THAT paper's year (never the exam's own year), and a different year or code
+ * typed by hand is refused instead of being silently attached to another paper.
+ */
+export async function validateContext(c: JobContextInput): Promise<JobContextInput> {
   const exam = await prisma.exam.findUnique({ where: { id: c.examId }, select: { id: true } });
   if (!exam) throw new ImportJobError("Select an existing exam.");
   if (c.paperType === AiImportPaperType.SINGLE_SUBJECT) {
@@ -56,14 +62,21 @@ export async function validateContext(c: JobContextInput): Promise<void> {
     if (!link) throw new ImportJobError("That subject is not configured for the selected exam.");
   }
   if (c.year !== null && (c.year < 1950 || c.year > 2100)) throw new ImportJobError("Enter a valid 4-digit year.");
+  const code = c.paperCode?.trim().slice(0, 40) || null;
   if (c.previousYearPaperId) {
-    const paper = await prisma.previousYearPaper.findUnique({ where: { id: c.previousYearPaperId }, select: { examId: true } });
-    if (!paper || paper.examId !== c.examId) throw new ImportJobError("The selected Previous Year Paper does not belong to the selected exam.");
+    const paper = await prisma.previousYearPaper.findUnique({ where: { id: c.previousYearPaperId }, select: { examId: true, year: true, title: true, paperCode: true } });
+    if (!paper) throw new ImportJobError("The selected Previous Year Paper no longer exists. Select an existing paper (or create it under Previous Year Papers first). Nothing was changed.");
+    if (paper.examId !== c.examId) throw new ImportJobError("The selected Previous Year Paper does not belong to the selected exam.");
+    if (c.year !== null && c.year !== paper.year) throw new ImportJobError(`The year ${c.year} does not match the selected paper "${paper.title}" (${paper.year}). Clear the year or select the right paper. Nothing was changed.`);
+    if (code && paper.paperCode && code.toLowerCase() !== paper.paperCode.toLowerCase()) throw new ImportJobError(`The paper code "${code}" does not match the selected paper "${paper.title}" (${paper.paperCode}). Nothing was changed.`);
+    return { ...c, year: paper.year, paperCode: paper.paperCode ?? code };
   }
+  return { ...c, paperCode: code };
 }
 
-export async function createJob(input: JobContextInput & { actorId: string; title: string; budgetInr: number; clientKey?: string | null }): Promise<string> {
-  await validateContext(input);
+export async function createJob(raw: JobContextInput & { actorId: string; title: string; budgetInr: number; clientKey?: string | null; expectedQuestions?: number | null }): Promise<string> {
+  const input = { ...raw, ...(await validateContext(raw)) };
+  const expected = expectedCount(raw.expectedQuestions);
   // A repeated submission (double click, retried request) with the same client key returns the job it created.
   const clientKey = typeof input.clientKey === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(input.clientKey) ? input.clientKey : null;
   if (clientKey) {
@@ -81,16 +94,17 @@ export async function createJob(input: JobContextInput & { actorId: string; titl
       paperType: input.paperType,
       subjectId: input.paperType === AiImportPaperType.SINGLE_SUBJECT ? input.subjectId : null,
       year: input.year,
-      paperCode: input.paperCode?.trim().slice(0, 40) || null,
+      paperCode: input.paperCode,
       previousYearPaperId: input.previousYearPaperId,
+      expectedQuestions: expected,
       createdById: input.actorId,
       budgetInr: budget,
       status: AiImportJobStatus.DRAFT,
       ...(clientKey ? { config: { clientKey } } : {}),
     },
   });
-  await logEvent(job.id, "CREATED", `Import "${title}" created`, { examId: input.examId, paperType: input.paperType, budgetInr: budget }, input.actorId);
-  await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_JOB_CREATED", entityType: "AiImportJob", entityId: job.id, metadata: { title, examId: input.examId } } });
+  await logEvent(job.id, "CREATED", `Import "${title}" created`, { examId: input.examId, previousYearPaperId: input.previousYearPaperId, year: input.year, paperCode: input.paperCode, expectedQuestions: expected, paperType: input.paperType, budgetInr: budget }, input.actorId);
+  await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_JOB_CREATED", entityType: "AiImportJob", entityId: job.id, metadata: { title, examId: input.examId, previousYearPaperId: input.previousYearPaperId } } });
   return job.id;
 }
 
@@ -241,13 +255,23 @@ export interface ConfirmOptions {
   autoImport?: { mode: "DRAFT" | "PUBLISH_ALL" } | null;
   /** This job only: use this model (from the importer's own list) for page and key reading instead of the automatic choice. */
   modelOverride?: string | null;
+  /** The number of questions the administrator confirmed (required by the one-page flow; kept when omitted). */
+  expectedQuestions?: number | null;
+  /** Independent verification: "risk" = second read of scanned / low-confidence pages (default), "all" = every page. */
+  verifyMode?: VerifyMode | null;
+  /** The one-page flow requires an explicit expected question count before processing starts. */
+  requireExpected?: boolean;
 }
 
-export async function confirmJob(input: JobContextInput & { jobId: string; actorId: string; budgetInr: number } & ConfirmOptions) {
-  const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId } });
+export async function confirmJob(raw: JobContextInput & { jobId: string; actorId: string; budgetInr: number } & ConfirmOptions) {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: raw.jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status !== AiImportJobStatus.AWAITING_CONFIRMATION) throw new ImportJobError("Only an analyzed import can be confirmed.");
-  await validateContext(input);
+  const input = { ...raw, ...(await validateContext(raw)) };
+  const expected = raw.expectedQuestions === undefined ? job.expectedQuestions : expectedCount(raw.expectedQuestions);
+  if (raw.requireExpected && !expected) throw new ImportJobError("Confirm the expected number of questions in this paper before starting. Nothing was started.");
+  const verifyMode: VerifyMode = raw.verifyMode === "all" ? "all" : "risk";
+  const paperChanged = job.previousYearPaperId !== input.previousYearPaperId || job.examId !== input.examId;
   if (!Number.isFinite(input.budgetInr) || input.budgetInr < 0) throw new ImportJobError("Enter a valid job budget.");
   const saved = await getImporterSettings();
   if (input.modelOverride && !saved.importerModels.includes(input.modelOverride)) throw new ImportJobError("That model is not on the importer's own model list. Nothing was started.");
@@ -259,7 +283,7 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
   const plan = await computeModelPlan(settings, { refresh: settings.aiEnabled });
   const analysis = job.analysis as unknown as JobAnalysis | null;
   const facts = (role: string) => (analysis?.files ?? []).filter((f) => f.role === role && f.facts).map((f) => f.facts!);
-  const estimate = await estimateJobCost({ paperFacts: facts(AiImportFileRole.PAPER), keyFacts: facts(AiImportFileRole.ANSWER_KEY), settings, plan });
+  const estimate = await estimateJobCost({ paperFacts: facts(AiImportFileRole.PAPER), keyFacts: facts(AiImportFileRole.ANSWER_KEY), settings, plan, verifyMode });
   if (settings.aiEnabled) {
     // Pages or answer keys that need AI but have no affordable, suitable model: stop and say why.
     for (const l of estimate.lines.filter((x) => x.calls > 0 && (x.task === "extract" || x.task === "key") && x.problem)) {
@@ -295,19 +319,62 @@ export async function confirmJob(input: JobContextInput & { jobId: string; actor
       paperType: input.paperType,
       subjectId: input.paperType === AiImportPaperType.SINGLE_SUBJECT ? input.subjectId : null,
       year: input.year,
-      paperCode: input.paperCode?.trim().slice(0, 40) || null,
+      paperCode: input.paperCode,
       previousYearPaperId: input.previousYearPaperId,
+      expectedQuestions: expected,
       budgetInr: input.budgetInr,
       status: AiImportJobStatus.QUEUED,
       confirmedAt: new Date(),
       confirmedById: input.actorId,
-      config: JSON.parse(JSON.stringify({ ...settings, modelPlan: plan, clientKey: (job.config as { clientKey?: string } | null)?.clientKey ?? null, autoImport: input.autoImport ? { ...input.autoImport, requestedById: input.actorId, done: false } : null })) as Prisma.InputJsonValue,
+      config: JSON.parse(JSON.stringify({ ...settings, modelPlan: plan, verifyMode, clientKey: (job.config as { clientKey?: string } | null)?.clientKey ?? null, autoImport: input.autoImport ? { ...input.autoImport, requestedById: input.actorId, done: false } : null })) as Prisma.InputJsonValue,
     },
   });
   if (!confirmed.count) throw new ImportJobError("The files or analysis of this import changed while you were confirming. Nothing was started — review the page and confirm again.", 409);
+  if (paperChanged) await logEvent(job.id, "PAPER_CHANGED", "Exam / Previous Year Paper changed at confirmation", { from: { examId: job.examId, previousYearPaperId: job.previousYearPaperId }, to: { examId: input.examId, previousYearPaperId: input.previousYearPaperId, year: input.year } }, input.actorId);
   const chosen = Object.values(plan.tasks).map((t) => `${t.task}: ${t.model ?? "none"}`).join(", ");
-  await logEvent(job.id, "CONFIRMED", `Processing confirmed with a job budget of ₹${input.budgetInr.toFixed(2)}${settings.aiEnabled ? ` — models (${plan.mode}): ${chosen}; estimate ₹${(estimate.totalInr ?? 0).toFixed(2)}, maximum ₹${(estimate.maxInr ?? 0).toFixed(2)}` : " — paid AI is off"}`, { paperType: input.paperType, budgetInr: input.budgetInr, aiEnabled: settings.aiEnabled, selection: plan.mode, models: Object.fromEntries(Object.values(plan.tasks).map((t) => [t.task, t.model])), maxInr: estimate.maxInr }, input.actorId);
+  await logEvent(job.id, "CONFIRMED", `Processing confirmed with a job budget of ₹${input.budgetInr.toFixed(2)}${settings.aiEnabled ? ` — models (${plan.mode}): ${chosen}; estimate ₹${(estimate.totalInr ?? 0).toFixed(2)}, maximum ₹${(estimate.maxInr ?? 0).toFixed(2)}` : " — paid AI is off"}`, { paperType: input.paperType, previousYearPaperId: input.previousYearPaperId, year: input.year, expectedQuestions: expected, verifyMode, budgetInr: input.budgetInr, aiEnabled: settings.aiEnabled, selection: plan.mode, models: Object.fromEntries(Object.values(plan.tasks).map((t) => [t.task, t.model])), maxInr: estimate.maxInr }, input.actorId);
   kickWorker();
+}
+
+/**
+ * Explicitly changes the Previous Year Paper (or "Question Bank only") of an import whose questions have
+ * not entered the Question Bank yet. The new paper must belong to the job's exam; its year and code
+ * replace the old ones; the change is logged with both values. Questions already stored keep their
+ * paper (they are edited in the Question Bank), so the change is refused once any question is stored.
+ */
+export async function changeJobPaper(input: { jobId: string; actorId: string; previousYearPaperId: string | null }): Promise<{ previousYearPaperId: string | null; year: number | null }> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId } });
+  if (!job) throw new ImportJobError("Import job not found.", 404);
+  if (([AiImportJobStatus.ANALYZING, AiImportJobStatus.QUEUED, AiImportJobStatus.PROCESSING, AiImportJobStatus.IMPORTING, AiImportJobStatus.CANCELLED] as AiImportJobStatus[]).includes(job.status)) {
+    throw new ImportJobError("The paper can be changed while the import is waiting for confirmation or review — not while it is running or cancelled.");
+  }
+  const stored = await prisma.aiImportQuestion.count({ where: { jobId: job.id, questionId: { not: null } } });
+  if (stored) throw new ImportJobError(`${stored} question(s) of this import are already in the Question Bank with the current paper. Change their paper in the Question Bank instead. Nothing was changed.`);
+  const next = await validateContext({ examId: job.examId, paperType: job.paperType, subjectId: job.subjectId, year: input.previousYearPaperId ? null : job.year, paperCode: input.previousYearPaperId ? null : job.paperCode, previousYearPaperId: input.previousYearPaperId });
+  const r = await prisma.aiImportJob.updateMany({ where: { id: job.id, updatedAt: job.updatedAt }, data: { previousYearPaperId: next.previousYearPaperId, year: next.year, paperCode: next.paperCode } });
+  if (!r.count) throw new ImportJobError("The import changed at the same moment. Refresh and try again.", 409);
+  await logEvent(job.id, "PAPER_CHANGED", next.previousYearPaperId ? "Previous Year Paper changed by an administrator" : "Previous Year Paper removed (Question Bank only)", { from: { previousYearPaperId: job.previousYearPaperId, year: job.year, paperCode: job.paperCode }, to: { previousYearPaperId: next.previousYearPaperId, year: next.year, paperCode: next.paperCode } }, input.actorId);
+  await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_PAPER_CHANGED", entityType: "AiImportJob", entityId: job.id, metadata: { from: job.previousYearPaperId, to: next.previousYearPaperId } } });
+  return { previousYearPaperId: next.previousYearPaperId, year: next.year };
+}
+
+/** Records the confirmed expected question count of an import (any time before it is completed). */
+export async function setExpectedQuestions(input: { jobId: string; actorId: string; expected: unknown }): Promise<number | null> {
+  const expected = expectedCount(input.expected);
+  const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { expectedQuestions: true, status: true } });
+  if (!job) throw new ImportJobError("Import job not found.", 404);
+  if (job.status === AiImportJobStatus.CANCELLED) throw new ImportJobError("This import was cancelled.");
+  await prisma.aiImportJob.update({ where: { id: input.jobId }, data: { expectedQuestions: expected } });
+  await logEvent(input.jobId, "EXPECTED_SET", `Expected question count set to ${expected ?? "—"}${job.expectedQuestions ? ` (was ${job.expectedQuestions})` : ""}`, { from: job.expectedQuestions, to: expected }, input.actorId);
+  return expected;
+}
+
+/** A confirmed expected question count: a whole number 1–1000, or null when not given. */
+export function expectedCount(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : Number(String(v).trim());
+  if (!Number.isInteger(n) || n < 1 || n > 1000) throw new ImportJobError("Enter the expected number of questions as a whole number from 1 to 1000.");
+  return n;
 }
 
 /** The per-job budget can never be set above the hard ceiling in Import Settings (confirm and resume). */
@@ -457,8 +524,13 @@ async function deletePlan(db: Prisma.TransactionClient | typeof prisma, jobId: s
   ]);
   const fileKeys = [...new Set(job.files.map((f) => f.storageKey).filter((k): k is string => !!k))];
   const sharedFileKeys = new Set((await db.aiImportFile.findMany({ where: { storageKey: { in: fileKeys }, jobId: { not: jobId }, status: { not: AiImportFileStatus.PURGED } }, select: { storageKey: true } })).map((f) => f.storageKey!));
-  const figureKeys = [...new Set(figures.map((f) => f.originalKey).filter(Boolean))];
-  const sharedFigureKeys = new Set((await db.aiImportFigure.findMany({ where: { originalKey: { in: figureKeys }, jobId: { not: jobId } }, select: { originalKey: true } })).map((f) => f.originalKey));
+  // Figure originals of this job: its figure rows and its kept question versions (re-scan results, history).
+  const versionKeys = (rows: { figures: Prisma.JsonValue }[]) => rows.flatMap((r) => ((Array.isArray(r.figures) ? r.figures : []) as { originalKey?: string }[]).map((f) => f?.originalKey ?? "")).filter(Boolean);
+  const ownVersions = await db.aiImportQuestionVersion.findMany({ where: { jobId, figures: { not: Prisma.DbNull } }, select: { figures: true } });
+  const figureKeys = [...new Set([...figures.map((f) => f.originalKey), ...versionKeys(ownVersions)].filter(Boolean))];
+  const otherVersions = figureKeys.length ? await db.aiImportQuestionVersion.findMany({ where: { jobId: { not: jobId }, figures: { not: Prisma.DbNull } }, select: { figures: true } }) : [];
+  const otherVersionKeys = new Set(versionKeys(otherVersions));
+  const sharedFigureKeys = new Set([...(await db.aiImportFigure.findMany({ where: { originalKey: { in: figureKeys }, jobId: { not: jobId } }, select: { originalKey: true } })).map((f) => f.originalKey), ...figureKeys.filter((k) => otherVersionKeys.has(k))]);
   let blocked: string | null = null;
   if (job.status === AiImportJobStatus.IMPORTING) blocked = "Questions are being written to the Question Bank right now. Wait until that step finishes (a few seconds), then delete.";
   else if ((WORKER_STATUSES as readonly string[]).includes(job.status) && ACTIVE_LEASE(job)) blocked = "A worker is processing this import right now. Cancel it first; once it has stopped (a few seconds), delete it.";
