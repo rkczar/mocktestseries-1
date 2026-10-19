@@ -161,6 +161,7 @@ async function main() {
   if (process.env.ONLY === "V") return sectionV(actor, exam.id);
   if (process.env.ONLY === "W") return sectionW(actor, exam.id, anatomy.id);
   if (process.env.ONLY === "X") return sectionX(actor, exam.id);
+  if (process.env.ONLY === "Y") return sectionY(actor, exam.id);
   // ------------------------------------------------------------------ A
   section("A. Settings defaults and normalization");
   const d = normalizeImporterSettings({});
@@ -780,6 +781,7 @@ async function main() {
   await sectionV(actor, exam.id);
   await sectionW(actor, exam.id, anatomy.id);
   await sectionX(actor, exam.id);
+  await sectionY(actor, exam.id);
 }
 
 // ------------------------------------------------------------------ T
@@ -2048,6 +2050,288 @@ async function sectionX(actor: string, examId: string) {
       } catch {
         /* already gone */
       }
+    }
+  }
+}
+
+// ------------------------------------------------------------------ Y
+async function sectionY(actor: string, examId: string) {
+  section("Y. AI Auto-Configure Everything (preview, re-validated atomic apply) and Reconfigure Models for This Job");
+  const { previewAutoConfig, applyAutoConfig, assertSafeProposal, AutoConfigError } = await import("@/lib/ai-import/autoconfig");
+  const { reconfigurePreview, reconfigureJob } = await import("@/lib/ai-import/reconfigure");
+  const { computeModelPlan, planOf } = await import("@/lib/ai-import/select");
+  const { refreshRoutes, getRouteSnapshot } = await import("@/lib/ai-import/routes");
+  const { pauseJob } = await import("@/lib/ai-import/jobs");
+  const { jobCards } = await import("@/lib/ai-import/job-view");
+  const { RATE_LIMIT_STOP } = await import("@/lib/ai-import/ai");
+  const yStats = async () => (await (await fetch(`${MOCK}/__mock/stats`)).json()) as { chat: number; routeReads: number; byModel: Record<string, number> };
+  const raw = async () => (await prisma.setting.findUnique({ where: { key: "ai.importer" } }))?.value ?? null;
+  const routesRaw = async () => JSON.stringify((await prisma.setting.findUnique({ where: { key: "ai.importer.routes" } }))?.value ?? null);
+  const others = async () => JSON.stringify(await prisma.setting.findMany({ where: { key: { notIn: ["ai.importer", "ai.importer.routes"] } }, orderBy: { key: "asc" }, select: { key: true, value: true } }));
+  const globalFlags = async () => JSON.stringify(await prisma.aiModel.findMany({ where: { id: { startsWith: "mock" }, NOT: { id: { in: X_FAKE } } }, select: { id: true, approved: true, medicallyApproved: true, disabled: true }, orderBy: { id: "asc" } }));
+  const current = async () => normalizeImporterSettings(await getImporterSettings());
+  const budgets = (x: ImporterSettings) => JSON.stringify([x.budget.monthlyInr, x.budget.defaultJobCapInr, x.budget.maxJobInr, x.budget.totalInr, x.budget.maxRequestInr, x.budget.keyReserveUsd, x.budget.retryTransient]);
+  const pages = async (jobId: string) => {
+    const rows = await prisma.aiImportPage.findMany({ where: { jobId }, select: { status: true } });
+    const n = (st: string) => rows.filter((r) => r.status === st).length;
+    return { done: n("DONE"), pending: n("PENDING"), failed: n("FAILED"), total: rows.length };
+  };
+  const analyzed = async (title: string, file: string) => {
+    const id = await newJob(actor, examId, title);
+    await upload(actor, id, file);
+    await requestAnalysis(id, actor);
+    await runWorker(120_000);
+    return id;
+  };
+  const confirm = async (jobId: string, budgetInr = 8) => {
+    const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
+    await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, budgetInr });
+  };
+  const VISION_ROWS = ["scanned", "digital", "mathematics", "chemistry", "diagrams"];
+  const FREE_RL = "y-rl-";
+  const { FX_SETTING_KEY: FX_KEY } = await import("@/lib/ai-engine/fx");
+  // The mock merges config: every knob this section uses is reset explicitly.
+  const CLEAN = { extraModels: true, routeStatus: {}, zdrStatus: null, rateLimit: {}, chatDelayMs: 0 };
+
+  await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+  await mockConfig(CLEAN);
+  await freshPilotBudget();
+  await prisma.aiGatewayCall.deleteMany({ where: { model: { startsWith: "mock" } } });
+  await saveOpenRouterKey(`sk-or-v1-mock${"x".repeat(40)}-valid`, "script");
+  await testOpenRouterConnection();
+  await setOpenRouterEnabled(true);
+  await syncCatalog();
+  await prisma.aiModel.upsert({ where: { id: X_FAKE[0] }, create: { id: X_FAKE[0], name: "Vision Math Chemistry OCR Pro", vendor: "mockname", inputModalities: ["text"], outputModalities: ["text"], supportedParameters: ["max_tokens", "response_format"], promptPrice: 0.00000001, completionPrice: 0.00000002, lastSyncedAt: new Date() }, update: {} });
+  await prisma.aiModel.upsert({ where: { id: X_FAKE[1] }, create: { id: X_FAKE[1], name: "Unpriced vision", vendor: "mockunpriced", inputModalities: ["text", "image"], outputModalities: ["text"], supportedParameters: ["max_tokens"], promptPrice: null, completionPrice: null, lastSyncedAt: new Date() }, update: {} });
+  await syntheticScannedPdf("y-scan6.pdf", 6);
+  const START = ["mockvision/reader", "mocktext/classifier"];
+  const startSettings = (x: ImporterSettings): ImporterSettings => ({
+    ...x,
+    aiEnabled: false,
+    importerModels: START,
+    selection: { mode: "auto" },
+    models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
+    privacy: { dataCollection: "deny", zdr: true },
+    budget: { ...x.budget, totalInr: 10, monthlyInr: 10, maxJobInr: 8, defaultJobCapInr: 8, maxRequestInr: 1, keyReserveUsd: 5, allowPricierFallback: false, retryTransient: false },
+    limits: { ...x.limits, concurrency: 2, renderDpi: 120 },
+    verification: { ...x.verification, independentAnswer: false },
+  });
+  const flags0 = await globalFlags();
+  const others0 = await others();
+
+  try {
+    // Y1 — preview with Paid AI OFF (ZDR required): nothing saved, no AI request, routes read now.
+    await setSettings(startSettings, actor);
+    await refreshRoutes(START);
+    const raw1 = JSON.stringify(await raw());
+    const routes1 = await routesRaw();
+    const st1 = await yStats();
+    const p1 = await previewAutoConfig();
+    const st1b = await yStats();
+    const row = (t: string) => p1.tasks.find((x) => x.task === t)!;
+    check("Y1 eight tasks: scanned OCR, digital PDF, mathematics, chemistry, diagrams, answer key, verification, classification", p1.tasks.map((t) => t.task).join() === "scanned,digital,mathematics,chemistry,diagrams,answer_key,verification,classification");
+    check("Y1 no AI request (mock chat counter unchanged; aiRequestsSent 0; method catalog)", st1b.chat === st1.chat && p1.aiRequestsSent === 0 && p1.method === "catalog");
+    check("Y1 provider routes were read now (free metadata requests)", st1b.routeReads > st1.routeReads && !!p1.routesFetchedAt && p1.routesError === null, { reads: st1b.routeReads - st1.routeReads, err: p1.routesError });
+    check("Y1 the preview saved nothing (importer settings and route snapshot unchanged)", JSON.stringify(await raw()) === raw1 && (await routesRaw()) === routes1);
+    check("Y1 nothing blocks the apply", p1.blocking.length === 0, p1.blocking);
+    const E = row("scanned").model!;
+    check("Y1 one page-reading model serves scanned, digital, maths, chemistry and diagrams", !!E && VISION_ROWS.every((t) => row(t).model === E), VISION_ROWS.map((t) => row(t).model));
+    check("Y1 page-reading model reads images (published modality), route verified with timestamp, priced (not zero, not unknown)", row("scanned").imageInput === true && row("scanned").route.state === "verified" && row("scanned").route.at === p1.routesFetchedAt && row("scanned").price.state === "published" && (row("scanned").price.maxInr ?? 2) <= 1);
+    check("Y1 privacy: every chosen model is served by ZDR routes", p1.tasks.filter((t) => t.model).every((t) => t.privacy.eligible === true && /Zero-Data-Retention routes/.test(t.privacy.text)));
+    check("Y1 verification uses a different model than page reading", !!row("verification").model && row("verification").model !== E, row("verification").model);
+    check("Y1 classification model chosen; quality “Not tested” everywhere", !!row("classification").model && p1.tasks.every((t) => t.quality === "not_tested"));
+    check("Y1 a text-only model NAMED “Vision Math Chemistry OCR” is never chosen for image tasks (no name inference)", p1.tasks.filter((t) => t.engineTask !== "classify").every((t) => t.model !== X_FAKE[0]));
+    check("Y1 an unpriced model is never chosen (unknown is not ₹0); a model with no serving route is never chosen", p1.tasks.every((t) => t.model !== X_FAKE[1] && t.model !== "mockvision/down"));
+    check("Y1 a model without a ZDR route is never chosen while ZDR is required", p1.tasks.every((t) => t.model !== "mockvision/cheapnozdr"));
+    check("Y1 digital PDFs: local parsing first, explained", /parsed locally/.test(row("digital").reason) && /Not tested/.test(row("mathematics").reason) && /Not tested/.test(row("chemistry").reason));
+    const pr = p1.proposed;
+    const s1 = await current();
+    check("Y1 proposal keeps Paid AI OFF, every budget, privacy; no pricier fallback; no fallback model", pr.aiEnabled === false && budgets(pr) === budgets(s1) && JSON.stringify(pr.privacy) === JSON.stringify(s1.privacy) && !pr.budget.allowPricierFallback && pr.models.extractFallbacks.length === 0);
+    check("Y1 proposal pins the chosen models (manual), keeps the old list and adds only what is needed", pr.selection.mode === "manual" && pr.models.extract === E && START.every((id) => pr.importerModels.includes(id)) && pr.importerModels.length <= START.length + 4);
+    check("Y1 OCR resolution raised to 150 DPI (images stay capped, cost unchanged); concurrency not increased", pr.limits.renderDpi === 150 && pr.limits.concurrency <= 2);
+    const ch = (k: string) => p1.changes.find((c) => c.key === k)!;
+    check("Y1 current-versus-proposed table: models and DPI changed; Paid AI, budgets, privacy unchanged", ch("models.extract").changed && ch("limits.renderDpi").changed && !ch("aiEnabled").changed && ch("budget").proposed === "unchanged" && ch("privacy").proposed === "unchanged");
+    check("Y1 job cost: estimate and conservative maximum known, compared with the ₹8 job limit", p1.jobCost.estimateInr !== null && p1.jobCost.maxInr !== null && p1.jobCost.jobCapInr === 8 && typeof p1.jobCost.fitsJobCap === "boolean" && (p1.jobCost.maxScannedPagesPerJob ?? -1) >= 0, p1.jobCost);
+    check("Y1 Paid AI status stated (OFF; not switched on)", p1.paidAiOn === false && /does not switch it on/.test(p1.paidAiText));
+    await expectError("Y1 safety guard: a proposal that raises a budget is refused", async () => assertSafeProposal(s1, { ...pr, budget: { ...pr.budget, maxJobInr: 9 } }), /a budget would change/);
+    await expectError("Y1 safety guard: a proposal that switches Paid AI on is refused", async () => assertSafeProposal(s1, { ...pr, aiEnabled: true }), /Paid AI would change/);
+    await expectError("Y1 safety guard: a proposal that enables a pricier fallback is refused", async () => assertSafeProposal(s1, { ...pr, budget: { ...pr.budget, allowPricierFallback: true } }), /more expensive fallback/);
+
+    // Y2 — apply: stale baseline / changed proposal refused (nothing saved); atomic; audited; isolated.
+    await expectError("Y2 apply with a stale baseline → refused", () => applyAutoConfig({ baselineKey: "stale", proposalKey: p1.proposalKey, actorId: actor }), /changed since the preview/);
+    await expectError("Y2 apply with a different proposal → refused", () => applyAutoConfig({ baselineKey: p1.baselineKey, proposalKey: "other", actorId: actor }), /different configuration/);
+    check("Y2 …refusals saved nothing", JSON.stringify(await raw()) === raw1 && (await routesRaw()) === routes1);
+    const audits0 = await prisma.auditLog.count({ where: { action: "AI_IMPORTER_AUTOCONFIG_APPLIED" } });
+    let atomicErr = "";
+    try {
+      await applyAutoConfig({ baselineKey: p1.baselineKey, proposalKey: p1.proposalKey, actorId: "no-such-admin-y" });
+    } catch (e) {
+      atomicErr = e instanceof Error ? e.message : String(e);
+    }
+    check("Y2 atomic: when the audit entry cannot be written, neither settings nor route snapshot are saved", !!atomicErr && JSON.stringify(await raw()) === raw1 && (await routesRaw()) === routes1 && (await prisma.auditLog.count({ where: { action: "AI_IMPORTER_AUTOCONFIG_APPLIED" } })) === audits0, atomicErr.slice(0, 120));
+    // An existing paused job keeps its confirmed models when the configuration changes.
+    await setSettings((x) => ({ ...x, aiEnabled: true }), actor);
+    const jOld = await analyzed("FY existing job", "y-scan6.pdf");
+    await confirm(jOld);
+    await pauseJob(jOld, actor);
+    const planOld = JSON.stringify(planOf((await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jOld } })).config));
+    await setSettings((x) => ({ ...x, aiEnabled: false }), actor);
+    const p2 = await previewAutoConfig();
+    const raw2 = JSON.stringify(await raw());
+    const st2 = await yStats();
+    const ap = await applyAutoConfig({ baselineKey: p2.baselineKey, proposalKey: p2.proposalKey, actorId: actor });
+    const s2 = await current();
+    const comparable = (x: ImporterSettings) => JSON.stringify({ ...x, updatedAt: undefined });
+    check("Y2 apply saves exactly the previewed settings", comparable(s2) === comparable(normalizeImporterSettings(p2.proposed)) && JSON.stringify(await raw()) !== raw2);
+    check("Y2 …Paid AI still OFF, budgets unchanged", s2.aiEnabled === false && budgets(s2) === budgets(s1));
+    const audit = await prisma.auditLog.findUnique({ where: { id: ap.auditId } });
+    const am = audit?.metadata as { before?: ImporterSettings; after?: ImporterSettings; aiRequestsSent?: number } | null;
+    check("Y2 …audited with before / after and 0 AI requests", audit?.action === "AI_IMPORTER_AUTOCONFIG_APPLIED" && audit.actorId === actor && am?.aiRequestsSent === 0 && am?.before?.selection.mode === "auto" && am?.after?.selection.mode === "manual");
+    const snap = await getRouteSnapshot();
+    check("Y2 …route snapshot stored with the re-read routes (only the importer's list)", !!snap && snap.fetchedAt >= p2.routesFetchedAt! && Object.keys(snap.models).every((id) => s2.importerModels.includes(id)) && s2.importerModels.filter((id) => [s2.models.extract, s2.models.verify, s2.models.key, s2.models.classify].includes(id)).every((id) => snap.models[id]?.ok));
+    check("Y2 …re-validated before saving (routes read again), still no AI request", (await yStats()).routeReads > st2.routeReads && (await yStats()).chat === st2.chat);
+    check("Y2 …no other Setting changed (Ask AI, Instagram, payments, Premium) and no AI → Models approval changed", (await others()) === others0 && (await globalFlags()) === flags0);
+    const planNow = await computeModelPlan(s2, { refresh: false });
+    check("Y2 …a job confirmed now would use exactly the previewed models", ["extract", "verify", "classify"].every((t) => planNow.tasks[t as "extract"].model === p2.tasks.find((r) => r.engineTask === t)!.model), Object.values(planNow.tasks).map((t) => t.model));
+    check("Y2 …the existing paused job kept its confirmed models (no silent change)", JSON.stringify(planOf((await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jOld } })).config)) === planOld);
+
+    // Y3 — failed re-validation preserves the previous settings.
+    const p3 = await previewAutoConfig();
+    const raw3 = JSON.stringify(await raw());
+    await mockConfig({ ...CLEAN, routeStatus: { [p3.tasks[0].model!]: -5 } });
+    await expectError("Y3 a route stops serving between preview and apply → refused with the reason", () => applyAutoConfig({ baselineKey: p3.baselineKey, proposalKey: p3.proposalKey, actorId: actor }), /re-check before saving/);
+    check("Y3 …previous settings preserved", JSON.stringify(await raw()) === raw3);
+    await mockConfig({ ...CLEAN, zdrStatus: 503 });
+    const p3z = await previewAutoConfig();
+    check("Y3 ZDR list unreadable while ZDR is required → preview blocks (privacy cannot be verified)", p3z.blocking.some((b) => /Zero-Data-Retention route list could not be read/.test(b)));
+    await expectError("Y3 …and apply refuses", () => applyAutoConfig({ baselineKey: p3z.baselineKey, proposalKey: p3z.proposalKey, actorId: actor }), /re-check before saving failed/);
+    check("Y3 …previous settings preserved", JSON.stringify(await raw()) === raw3);
+    await mockConfig(CLEAN);
+    await expectError("Y3 a non-Error refusal type is typed for the admin", async () => {
+      throw new AutoConfigError("typed");
+    }, /typed/);
+
+    // Y4 — limits are respected, never raised; unknown vs zero; rate-limit history.
+    await setSettings((x) => ({ ...startSettings(x), budget: { ...startSettings(x).budget, maxRequestInr: 0.01 } }), actor);
+    for (let i = 0; i < 2; i++) await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: "mockfree/reader", modelRequested: "mockfree/reader", kind: "text", routingMode: "manual", ok: false, errorCategory: "rate_limited", latencyMs: 1, requestId: `${FREE_RL}${i}`, attempt: 1, fallbackUsed: false, costStatus: "none" } });
+    const p4 = await previewAutoConfig();
+    const r4 = (t: string) => p4.tasks.find((x) => x.task === t)!;
+    check("Y4 with a ₹0.01 request limit (the lowest allowed) only published-₹0 models qualify; shown as a known zero, not unknown", r4("scanned").model === "mockfree/checker" && r4("scanned").price.state === "zero" && /published free price/.test(r4("scanned").price.text), [r4("scanned").model, r4("scanned").price]);
+    check("Y4 the model rate-limited in its latest importer requests is skipped", p4.tasks.every((t) => t.model !== "mockfree/reader"));
+    check("Y4 no other free model left for verification → “No suitable model”, with reasons", r4("verification").model === null && /No suitable model/.test(r4("verification").reason), r4("verification").reason);
+    check("Y4 the request limit stays ₹0.01 in the proposal (never raised)", p4.proposed.budget.maxRequestInr === 0.01 && budgets(p4.proposed) === budgets(await current()));
+    await prisma.aiGatewayCall.deleteMany({ where: { requestId: { startsWith: FREE_RL } } });
+    await setSettings(startSettings, actor);
+    const p4b = await previewAutoConfig();
+    const E4 = p4b.tasks[0].model!;
+    await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: E4, modelRequested: E4, kind: "text", routingMode: "manual", ok: false, errorCategory: "rate_limited", latencyMs: 1, requestId: `${FREE_RL}a`, attempt: 1, fallbackUsed: false, costStatus: "none", createdAt: new Date(Date.now() - 60_000) } });
+    await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: E4, modelRequested: E4, kind: "text", routingMode: "manual", ok: true, latencyMs: 1, requestId: `${FREE_RL}b`, attempt: 1, fallbackUsed: false, costStatus: "known" } });
+    const p4c = await previewAutoConfig();
+    check("Y4 a recent rate limit is shown as a warning and parallel requests drop to 1", p4c.tasks[0].model === E4 && !!p4c.tasks[0].rateLimit.warning && p4c.proposed.limits.concurrency === 1, [p4c.tasks[0].rateLimit, p4c.proposed.limits.concurrency]);
+    await prisma.aiGatewayCall.deleteMany({ where: { requestId: { startsWith: FREE_RL } } });
+    await setSettings((x) => ({ ...startSettings(x), aiEnabled: true }), actor);
+    const st4 = await yStats();
+    const p4d = await previewAutoConfig();
+    check("Y4 with Paid AI ON: still no AI request; the proposal keeps it ON (unchanged)", (await yStats()).chat === st4.chat && p4d.paidAiOn && p4d.proposed.aiEnabled === true && /does not change it/.test(p4d.paidAiText));
+
+    // Y5 — Reconfigure Models for This Job.
+    await setSettings((x) => ({ ...startSettings(x), aiEnabled: true, selection: { mode: "manual" }, importerModels: ["mockvision/reader", "mockvision/checker", "mocktext/classifier"], models: { extract: "mockvision/reader", extractFallbacks: [], verify: "mockvision/checker", classify: "mocktext/classifier", key: null } }), actor);
+    await refreshRoutes(["mockvision/reader", "mockvision/checker", "mocktext/classifier"]);
+    const j5 = await analyzed("FY reconfigure", "y-scan6.pdf");
+    await confirm(j5);
+    await mockConfig({ ...CLEAN, chatDelayMs: 400 });
+    const w5 = runWorker(300_000);
+    const until5 = Date.now() + 30_000;
+    while ((await prisma.aiImportPage.count({ where: { jobId: j5, status: "DONE" } })) < 1 && Date.now() < until5) await new Promise((r) => setTimeout(r, 100));
+    await pauseJob(j5, actor);
+    await w5;
+    await mockConfig(CLEAN);
+    const before5 = await pages(j5);
+    const doneRows = JSON.stringify(await prisma.aiImportPage.findMany({ where: { jobId: j5, status: "DONE" }, orderBy: { pageNumber: "asc" }, select: { pageNumber: true, model: true, processedAt: true } }));
+    const job5 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } });
+    check("Y5 setup: the job paused with some pages finished and some left", job5.status === "PAUSED" && before5.done >= 1 && before5.done < 6, before5);
+    const [card5] = await jobCards({ ids: [j5] }, true);
+    check("Y5 the paused job offers Reconfigure Models for This Job", card5.actions.reconfigure === true);
+    // The administrator re-configures the importer (pinned to other models), then the job.
+    const pa = await previewAutoConfig();
+    await applyAutoConfig({ baselineKey: pa.baselineKey, proposalKey: pa.proposalKey, actorId: actor });
+    const NEW = (await current()).models.extract!;
+    check("Y5 the new configuration pins a different page-reading model", NEW !== "mockvision/reader", NEW);
+    check("Y5 …and the job was not changed by that (still the confirmed model)", planOf((await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).config)?.tasks.extract.model === "mockvision/reader");
+    await prisma.aiImportJob.update({ where: { id: j5 }, data: { leaseOwner: "other-worker", leaseUntil: new Date(Date.now() + 60_000) } });
+    await expectError("Y5 refused while a worker holds the job", () => reconfigurePreview(j5), /worker still holds/);
+    await prisma.aiImportJob.update({ where: { id: j5 }, data: { leaseOwner: null, leaseUntil: null } });
+    const st5 = await yStats();
+    const rp = await reconfigurePreview(j5);
+    check("Y5 preview: current → proposed models, finished pages kept, only failed/pending pages to read, cost known, no AI request", rp.tasks.find((t) => t.task === "extract")!.current === "mockvision/reader" && rp.tasks.find((t) => t.task === "extract")!.proposed === NEW && rp.donePages === before5.done && rp.retryPages === before5.pending + before5.failed && rp.maxInr !== null && rp.blocking.length === 0 && (await yStats()).chat === st5.chat && rp.aiRequestsSent === 0, { rp: { ...rp, tasks: undefined }, before5 });
+    await expectError("Y5 confirmation with a different preview → refused", () => reconfigureJob({ jobId: j5, proposalKey: "other", actorId: actor }), /changed since the preview/);
+    const spent5 = job5.spentInr;
+    await prisma.aiImportJob.update({ where: { id: j5 }, data: { spentInr: 7.9999 } });
+    const rpb = await reconfigurePreview(j5);
+    check("Y5 no model fits what the job may still spend → stops safely (budget never raised)", rpb.blocking.some((b) => /No suitable model fits the existing budget/.test(b)));
+    await expectError("Y5 …and confirming is refused", () => reconfigureJob({ jobId: j5, proposalKey: rpb.proposalKey, actorId: actor }), /fits the existing budget/);
+    check("Y5 …the job is unchanged (paused, same models, same budget)", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).status === "PAUSED" && planOf((await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).config)?.tasks.extract.model === "mockvision/reader" && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).budgetInr === job5.budgetInr);
+    await prisma.aiImportJob.update({ where: { id: j5 }, data: { spentInr: spent5 } });
+    const rp2 = await reconfigurePreview(j5);
+    const res5 = await reconfigureJob({ jobId: j5, proposalKey: rp2.proposalKey, actorId: actor });
+    const after5 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } });
+    check("Y5 confirmed: queued with the new models; spending kept; event + audit recorded", res5.queued && after5.status === "QUEUED" && planOf(after5.config)?.tasks.extract.model === NEW && after5.spentInr === spent5 && (await prisma.aiImportEvent.count({ where: { jobId: j5, type: "MODEL_RECONFIGURED" } })) === 1 && (await prisma.auditLog.count({ where: { action: "AI_IMPORTER_JOB_RECONFIGURED", entityId: j5 } })) === 1);
+    const t5 = new Date();
+    await runWorker(300_000);
+    const fin5 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } });
+    const qs5 = await prisma.aiImportQuestion.findMany({ where: { jobId: j5 }, select: { fileId: true, sourceKey: true } });
+    check("Y5 the job finishes: all 6 pages done, no duplicate question", fin5.status === "NEEDS_REVIEW" && (await pages(j5)).done === 6 && qs5.length === new Set(qs5.map((q) => `${q.fileId}|${q.sourceKey}`)).size, { s: fin5.status, p: await pages(j5) });
+    check("Y5 finished pages were not read again (same model and time)", JSON.stringify(JSON.parse(doneRows)) === JSON.stringify(await prisma.aiImportPage.findMany({ where: { jobId: j5, pageNumber: { in: (JSON.parse(doneRows) as { pageNumber: number }[]).map((r) => r.pageNumber) } }, orderBy: { pageNumber: "asc" }, select: { pageNumber: true, model: true, processedAt: true } }).then((r) => JSON.parse(JSON.stringify(r)))));
+    check("Y5 only the remaining pages were read, all with the new model", (await prisma.aiImportAiCall.count({ where: { jobId: j5, task: "extract", createdAt: { gte: t5 } } })) === rp2.retryPages && (await prisma.aiImportAiCall.count({ where: { jobId: j5, task: "extract", createdAt: { gte: t5 }, model: { not: NEW } } })) === 0);
+    check("Y5 cost accounting kept: the job's spending only grew", fin5.spentInr >= spent5);
+
+    // Y6 — the rate-limit breaker still applies after a reconfiguration; Paid AI OFF keeps the job paused.
+    const j6 = await analyzed("FY breaker after reconfigure", "y-scan6.pdf");
+    await confirm(j6);
+    await pauseJob(j6, actor);
+    const rp6 = await reconfigurePreview(j6);
+    await reconfigureJob({ jobId: j6, proposalKey: rp6.proposalKey, actorId: actor });
+    await mockConfig({ ...CLEAN, rateLimit: { [NEW]: -1 } });
+    const c6 = (await yStats()).chat;
+    await runWorker(300_000);
+    const r6 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j6 } });
+    const sent6 = (await yStats()).chat - c6;
+    check("Y6 breaker: rate-limited new model → paused after ≤ RATE_LIMIT_STOP+1 requests, nothing charged", r6.status === "PAUSED" && sent6 >= RATE_LIMIT_STOP && sent6 <= RATE_LIMIT_STOP + 1 && r6.spentInr === 0, { s: r6.status, sent6 });
+    await mockConfig(CLEAN);
+    await prisma.aiGatewayCall.deleteMany({ where: { model: NEW } });
+    await setSettings((x) => ({ ...x, aiEnabled: false }), actor);
+    const c6b = (await yStats()).chat;
+    const rp6b = await reconfigurePreview(j6);
+    const res6 = await reconfigureJob({ jobId: j6, proposalKey: rp6b.proposalKey, actorId: actor });
+    const r6b = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j6 } });
+    check("Y6 with Paid AI OFF the models are saved but the job stays paused; nothing sent", !res6.queued && r6b.status === "PAUSED" && /Paid AI is OFF/.test(r6b.pauseReason ?? "") && (await yStats()).chat === c6b && (await current()).aiEnabled === false);
+
+    // Y7 — every request re-checks the provider route: a route that stopped serving is never used.
+    await setSettings((x) => ({ ...x, aiEnabled: true }), actor);
+    const j7 = await analyzed("FY route re-check", "y-scan6.pdf");
+    await confirm(j7);
+    const s7 = await getRouteSnapshot();
+    await prisma.setting.update({ where: { key: "ai.importer.routes" }, data: { value: { ...s7!, fetchedAt: new Date(Date.now() - 7 * 3600_000).toISOString() } as never } });
+    await mockConfig({ ...CLEAN, routeStatus: { [NEW]: -5 } });
+    const before7 = (await yStats()).byModel[NEW] ?? 0;
+    const reads7 = (await yStats()).routeReads;
+    await runWorker(300_000);
+    const r7 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j7 } });
+    check("Y7 old route data is read again before the request and the unserved model gets no request", (await yStats()).routeReads > reads7 && ((await yStats()).byModel[NEW] ?? 0) === before7, { reads: (await yStats()).routeReads - reads7 });
+    check("Y7 …the job stops with the reason or continues on an equal-or-cheaper model (never silently pricier)", (r7.status === "PAUSED" && /unavailable|route/.test(r7.pauseReason ?? "")) || (await prisma.aiImportEvent.count({ where: { jobId: j7, type: "MODEL_REPLACED" } })) > 0, { s: r7.status, r: r7.pauseReason });
+    check("Y7 …no pricier replacement", (await prisma.aiImportEvent.findMany({ where: { jobId: j7, type: "MODEL_REPLACED" } })).every((e) => (e.data as { pricier?: boolean } | null)?.pricier !== true));
+    await mockConfig(CLEAN);
+    // Real (mock) requests in Y5–Y7 update the provider status and the cached exchange rate, as every request does.
+    const strip = (j: string) => JSON.stringify((JSON.parse(j) as { key: string }[]).filter((r) => r.key !== "api.openrouter" && r.key !== FX_KEY));
+    check("Y after the job runs: AI → Models approvals and every unrelated setting (Ask AI, Instagram, payments, Premium) untouched", (await globalFlags()) === flags0 && strip(await others()) === strip(others0));
+  } finally {
+    await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+    await prisma.aiGatewayCall.deleteMany({ where: { requestId: { startsWith: FREE_RL } } });
+    await prisma.aiModel.deleteMany({ where: { id: { in: [...X_MODELS, ...X_FAKE] } } });
+    try {
+      execFileSync("rm", ["-f", path.join(FX, "y-scan6.pdf")]);
+    } catch {
+      /* already gone */
     }
   }
 }

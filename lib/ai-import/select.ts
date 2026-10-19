@@ -206,11 +206,12 @@ function manualModel(s: ImporterSettings, task: SelectionTask): string | null {
  * from OpenRouter first (job confirmation); otherwise the stored snapshot is used and its age is reported
  * (Import Settings page — no network call on page load).
  */
-export async function computeModelPlan(settings: ImporterSettings, opts: { refresh: boolean }, exclude: Partial<Record<SelectionTask, string[]>> = {}): Promise<ModelPlan> {
+export async function computeModelPlan(settings: ImporterSettings, opts: { refresh: boolean; snapshot?: RouteSnapshot }, exclude: Partial<Record<SelectionTask, string[]>> = {}): Promise<ModelPlan> {
   const problems: string[] = [];
   let snapshot: RouteSnapshot | null = null;
   try {
-    snapshot = opts.refresh ? await freshRouteSnapshot(settings.importerModels) : await getRouteSnapshot();
+    // `snapshot`: routes the caller just read (a preview reads them without storing them).
+    snapshot = opts.snapshot ?? (opts.refresh ? await freshRouteSnapshot(settings.importerModels) : await getRouteSnapshot());
   } catch (e) {
     problems.push(`Provider routes could not be read from OpenRouter (${e instanceof Error ? e.message.slice(0, 160) : "error"}).`);
     snapshot = null;

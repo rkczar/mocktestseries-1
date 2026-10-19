@@ -92,8 +92,18 @@ export async function candidateModels(importerModels: readonly string[]) {
 
 /** Reads the routes of every importer model + the ZDR list from OpenRouter and stores the snapshot. */
 export async function refreshRoutes(importerModels: readonly string[]): Promise<RouteSnapshot> {
+  const snapshot = await readRoutes(importerModels);
+  await storeRouteSnapshot(snapshot);
+  return snapshot;
+}
+
+/**
+ * Reads the routes of these models + the ZDR list from OpenRouter WITHOUT storing anything (free public
+ * metadata requests, never an AI request). Used by previews, which must not change saved data.
+ */
+export async function readRoutes(modelIds: readonly string[]): Promise<RouteSnapshot> {
   const apiKey = await getOpenRouterApiKey().catch(() => null);
-  const models = await candidateModels(importerModels);
+  const models = await candidateModels(modelIds);
   let zdrTags: Set<string> | null = null;
   const zdr = { ok: false, error: null as string | null, count: 0, models: [] as string[] };
   try {
@@ -114,12 +124,15 @@ export async function refreshRoutes(importerModels: readonly string[]): Promise<
       out[m.id] = { ok: false, error: sanitize(e instanceof Error ? e.message : "could not be read").slice(0, 200), routes: [] };
     }
   }
-  const snapshot: RouteSnapshot = { fetchedAt: new Date().toISOString(), zdr, models: out };
+  return { fetchedAt: new Date().toISOString(), zdr, models: out };
+}
+
+/** Stores a route snapshot (`db` = a transaction when it must be saved together with other changes). */
+export async function storeRouteSnapshot(snapshot: RouteSnapshot, db: Pick<Prisma.TransactionClient, "$executeRaw"> = prisma): Promise<void> {
   const value = JSON.stringify(snapshot);
-  await prisma.$executeRaw(Prisma.sql`
+  await db.$executeRaw(Prisma.sql`
     INSERT INTO "Setting" ("key", "value", "updatedAt") VALUES (${ROUTES_SETTING_KEY}, ${value}::jsonb, now())
     ON CONFLICT ("key") DO UPDATE SET "value" = ${value}::jsonb, "updatedAt" = now()`);
-  return snapshot;
 }
 
 export async function getRouteSnapshot(): Promise<RouteSnapshot | null> {

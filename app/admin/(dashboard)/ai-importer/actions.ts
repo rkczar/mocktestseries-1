@@ -28,6 +28,9 @@ import { refreshRoutes } from "@/lib/ai-import/routes";
 import type { ImporterCatalog } from "@/lib/ai-import/model-options";
 import { AssistantApplyError, applyRecommendedModels, modelAssistant, testImporterModels } from "@/lib/ai-import/assistant";
 import type { ApplyResult, AssistantResult, ModelTestReport } from "@/lib/ai-import/assistant-types";
+import { AutoConfigError, applyAutoConfig, previewAutoConfig } from "@/lib/ai-import/autoconfig";
+import { ReconfigureError, reconfigureJob, reconfigurePreview } from "@/lib/ai-import/reconfigure";
+import type { AutoConfigApplied, AutoConfigPreview, ReconfigurePreview, ReconfigureResult } from "@/lib/ai-import/autoconfig-types";
 import { CLEANUP_CATEGORIES, executeCleanup, findCandidates, findDuplicates, scanStorage, type CleanupCategory, type CleanupItem, type CleanupResult, type StorageReport } from "@/lib/ai-import/storage";
 import type { ImportMode } from "@/lib/ai-import/adapter";
 
@@ -408,6 +411,58 @@ export async function applyRecommendedModelsAction(add: string[], expectedList: 
     },
     ["/admin/ai-importer/settings"]
   );
+}
+
+/**
+ * "AI Auto-Configure Everything": the preview for the SAVED settings. Deterministic and catalog-based —
+ * provider routes are read from OpenRouter (free metadata) but nothing is saved and no AI request is sent.
+ */
+export async function autoConfigPreviewAction(): Promise<ImporterResult<AutoConfigPreview>> {
+  return run(await requireManage(), async () => previewAutoConfig(), []);
+}
+
+/** "Apply Configuration" after confirmation: re-validated on the server; saved atomically with an audit entry. */
+export async function autoConfigApplyAction(baselineKey: string, proposalKey: string): Promise<ImporterResult<AutoConfigApplied>> {
+  return run(
+    await requireManage(),
+    async (actorId) => {
+      if (typeof baselineKey !== "string" || typeof proposalKey !== "string" || !baselineKey || !proposalKey) throw new ImportJobError("Run the preview first. Nothing was saved.");
+      try {
+        return await applyAutoConfig({ baselineKey, proposalKey, actorId });
+      } catch (error) {
+        if (error instanceof AutoConfigError) throw new ImportJobError(error.message);
+        throw error;
+      }
+    },
+    ["/admin/ai-importer/settings"]
+  );
+}
+
+/** "Reconfigure Models for This Job": a new model and cost preview for a paused import (nothing is changed). */
+export async function reconfigurePreviewAction(jobId: string): Promise<ImporterResult<ReconfigurePreview>> {
+  return run(
+    await requireUse(),
+    async () => {
+      try {
+        return await reconfigurePreview(String(jobId));
+      } catch (error) {
+        if (error instanceof ReconfigureError) throw new ImportJobError(error.message);
+        throw error;
+      }
+    },
+    []
+  );
+}
+
+export async function reconfigureJobAction(jobId: string, proposalKey: string): Promise<ImporterResult<ReconfigureResult>> {
+  return run(await requireUse(), async (actorId) => {
+    try {
+      return await reconfigureJob({ jobId: String(jobId), proposalKey: String(proposalKey), actorId });
+    } catch (error) {
+      if (error instanceof ReconfigureError) throw new ImportJobError(error.message);
+      throw error;
+    }
+  });
 }
 
 export async function scanStorageAction(): Promise<ImporterResult<StorageReport>> {

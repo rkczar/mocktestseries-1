@@ -9,14 +9,14 @@ export async function getImporterSettings(): Promise<ImporterSettings & { update
   return { ...normalizeImporterSettings(raw), updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null };
 }
 
-/** Replaces the whole (normalized) settings document. */
-export async function saveImporterSettings(next: ImporterSettings, actorId: string): Promise<ImporterSettings> {
+/** Replaces the whole (normalized) settings document. `db` = a transaction when it must be saved together with other changes. */
+export async function saveImporterSettings(next: ImporterSettings, actorId: string, db: Prisma.TransactionClient | typeof prisma = prisma): Promise<ImporterSettings> {
   const normalized = normalizeImporterSettings(next);
   const value = JSON.stringify({ ...normalized, updatedAt: new Date().toISOString(), updatedById: actorId });
-  await prisma.$executeRaw(Prisma.sql`
+  await db.$executeRaw(Prisma.sql`
     INSERT INTO "Setting" ("key", "value", "updatedAt") VALUES (${IMPORTER_SETTING_KEY}, ${value}::jsonb, now())
     ON CONFLICT ("key") DO UPDATE SET "value" = ${value}::jsonb, "updatedAt" = now()`);
-  await prisma.auditLog.create({
+  await db.auditLog.create({
     data: { actorId, action: "AI_IMPORTER_SETTINGS_SAVED", entityType: "Setting", entityId: IMPORTER_SETTING_KEY, metadata: normalized as unknown as Prisma.InputJsonValue },
   });
   return normalized;

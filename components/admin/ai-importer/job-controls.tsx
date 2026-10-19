@@ -8,14 +8,16 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatBytes } from "@/lib/ai-import/config";
 import type { JobDeletePreview } from "@/lib/ai-import/jobs";
-import { cancelJobAction, deleteJobAction, deleteJobPreviewAction, recoverJobAction, retryJobAction } from "@/app/admin/(dashboard)/ai-importer/actions";
+import { cancelJobAction, deleteJobAction, deleteJobPreviewAction, reconfigureJobAction, reconfigurePreviewAction, recoverJobAction, retryJobAction } from "@/app/admin/(dashboard)/ai-importer/actions";
+import type { ReconfigurePreview } from "@/lib/ai-import/autoconfig-types";
+import { formatInr } from "@/lib/ai-engine/config";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
 export interface JobControlState {
   id: string;
   title: string;
   status: string;
-  actions: { cancel: boolean; retry: boolean; delete: boolean; recover: boolean };
+  actions: { cancel: boolean; retry: boolean; delete: boolean; recover: boolean; reconfigure?: boolean };
 }
 
 /** Exactly what Delete import removes (read from the server), with a typed confirmation. */
@@ -108,6 +110,83 @@ function DeleteJobDialog({ job, onClose, onDeleted }: { job: JobControlState; on
 }
 
 /**
+ * "Reconfigure Models for This Job" (paused imports): a new model and cost preview from the server, then an
+ * explicit confirmation. Finished pages are kept; only failed and pending pages are read again.
+ */
+function ReconfigureDialog({ job, onClose, onDone }: { job: JobControlState; onClose: () => void; onDone: (message: string) => void }) {
+  const [preview, setPreview] = useState<ReconfigurePreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  useEffect(() => {
+    let live = true;
+    callImporter(() => reconfigurePreviewAction(job.id)).then((r) => live && (r.ok ? setPreview(r.data) : setError(r.error)));
+    return () => {
+      live = false;
+    };
+  }, [job.id]);
+  const confirm = () =>
+    start(async () => {
+      if (!preview) return;
+      setError(null);
+      const r = await callImporter(() => reconfigureJobAction(job.id, preview.proposalKey));
+      if (r.ok) onDone(r.data.message);
+      else setError(r.error);
+    });
+  return (
+    <Dialog open onOpenChange={(o) => !o && !pending && onClose()}>
+      <DialogContent data-testid="reconfigure-dialog">
+        <DialogHeader>
+          <DialogTitle>Reconfigure models for this import?</DialogTitle>
+          <DialogDescription>The models are chosen again from the current Import Settings on provider routes read now. No AI request is sent for this preview, and no budget is raised.</DialogDescription>
+        </DialogHeader>
+        {!preview && !error && <p className="text-sm text-[var(--color-muted-foreground)]">Reading provider routes and prices…</p>}
+        {preview && (
+          <div className="flex flex-col gap-2 text-sm" data-testid="reconfigure-preview" data-ai-requests={preview.aiRequestsSent}>
+            <ul className="flex flex-col gap-1 text-xs">
+              {preview.tasks.map((t) => (
+                <li key={t.task} data-testid="reconfigure-task" data-task={t.task} data-current={t.current ?? ""} data-proposed={t.proposed ?? ""}>
+                  <strong>{t.label}:</strong> {t.current ?? "none"} → <code>{t.proposed ?? "none"}</code>
+                  {t.proposed && t.maxInr !== null ? ` (up to ${formatInr(t.maxInr, 4)} per request)` : ""}
+                </li>
+              ))}
+            </ul>
+            <ul className="list-disc pl-5 text-xs">
+              <li data-testid="reconfigure-pages">
+                Kept: {preview.donePages} finished page(s). Read: {preview.retryPages} failed or pending page(s){preview.failedKeyFiles ? ` and ${preview.failedKeyFiles} answer-key file(s)` : ""}.
+              </li>
+              <li data-testid="reconfigure-cost">
+                Remaining work: estimate {preview.estimateInr === null ? "unknown" : formatInr(preview.estimateInr)}, conservative maximum {preview.maxInr === null ? "unknown" : formatInr(preview.maxInr)}. Left: {formatInr(preview.jobLeftInr)} of this job (spent {formatInr(preview.spentInr)}), {formatInr(preview.monthLeftInr)} this month, {formatInr(preview.totalLeftInr)} all-time.
+              </li>
+              <li>{preview.next}</li>
+            </ul>
+            {preview.blocking.length > 0 && (
+              <ul className="list-disc pl-5 text-xs text-[var(--color-error)]" role="alert" data-testid="reconfigure-blocking">
+                {preview.blocking.map((b) => (
+                  <li key={b}>{b}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {error && (
+          <p className="mt-2 text-sm text-[var(--color-error)]" role="alert" data-testid="reconfigure-error">
+            {error}
+          </p>
+        )}
+        <DialogFooter className="flex-wrap">
+          <Button variant="outline" size="sm" disabled={pending} onClick={onClose} data-testid="reconfigure-cancel">
+            Cancel
+          </Button>
+          <Button size="sm" disabled={pending || !preview || preview.blocking.length > 0} onClick={confirm} data-testid="reconfigure-confirm">
+            {pending ? "Checking…" : "Confirm new models"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
  * Cancel / Retry / Start again / Delete for one import. Each button appears only when the server
  * would allow it now, and every action re-checks on the server. A click disables all buttons until
  * the answer arrives, so a double click never sends two requests.
@@ -116,6 +195,7 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
   const router = useRouter();
   const [pending, start] = useTransition();
   const [deleting, setDeleting] = useState(false);
+  const [reconfiguring, setReconfiguring] = useState(false);
   const [local, setLocal] = useState<{ text: string; error: boolean } | null>(null);
   const say = (m: { text: string; error: boolean }) => (onMessage ? onMessage(m) : setLocal(m));
   const act = (fn: () => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>, ok: string | ((d: unknown) => string)) =>
@@ -128,7 +208,7 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
       }
     });
   const a = job.actions;
-  if (!a.cancel && !a.retry && !a.delete && !a.recover) return null;
+  if (!a.cancel && !a.retry && !a.delete && !a.recover && !a.reconfigure) return null;
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap gap-2" data-testid="job-controls" data-job-id={job.id}>
@@ -140,6 +220,11 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
         {a.retry && (
           <Button size={size} disabled={pending} onClick={() => act(() => retryJobAction(job.id), job.status === "NEEDS_REVIEW" ? "Retrying the failed pages and answer key only — finished pages are not read or charged again." : "Retrying — it continues from the last finished step.")} data-testid="job-retry">
             {job.status === "NEEDS_REVIEW" ? "Retry failed pages" : "Retry"}
+          </Button>
+        )}
+        {a.reconfigure && (
+          <Button size={size} variant="outline" disabled={pending} onClick={() => setReconfiguring(true)} data-testid="job-reconfigure">
+            Reconfigure Models for This Job
           </Button>
         )}
         {a.cancel && (
@@ -163,6 +248,17 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
         <p className={`text-xs ${local.error ? "text-[var(--color-error)]" : "text-[var(--color-success)]"}`} role={local.error ? "alert" : "status"} data-testid="job-controls-message">
           {local.text}
         </p>
+      )}
+      {reconfiguring && (
+        <ReconfigureDialog
+          job={job}
+          onClose={() => setReconfiguring(false)}
+          onDone={(m) => {
+            setReconfiguring(false);
+            say({ text: m, error: false });
+            router.refresh();
+          }}
+        />
       )}
       {deleting && (
         <DeleteJobDialog

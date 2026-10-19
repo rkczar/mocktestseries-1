@@ -9,7 +9,8 @@ import { formatInr, usdToInr } from "@/lib/ai-engine/config";
 import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, getKeyInfo, sanitize, type ChatContentPart } from "@/lib/ai-engine/openrouter";
 import { IMPORTER_SETTING_KEY, PILOT_LIMITS, SELECTION_TASK_LABELS, importerFeature, normalizeImporterSettings, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
 import { FAILURE_ADVICE, failureMessage, kindOfCategory, type FailureKind } from "@/lib/ai-import/failure";
-import { computeModelPlan, planOf, requestUsd } from "@/lib/ai-import/select";
+import { computeModelPlan, evaluateModel, planOf, requestUsd } from "@/lib/ai-import/select";
+import { freshRouteSnapshot } from "@/lib/ai-import/routes";
 import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
 
 /**
@@ -355,6 +356,24 @@ async function log(e: {
     .catch(() => undefined);
 }
 
+/**
+ * The provider route, price and privacy route of the model about to be used, checked with the selection
+ * engine's own rules (serving route, ZDR when required, readable prices, output limit, per-request limit).
+ * Route data that cannot be read means nothing is sent (fail closed).
+ */
+async function recheckRoute(choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"] }> {
+  let snapshot;
+  try {
+    snapshot = await freshRouteSnapshot(settings.importerModels.includes(choice.model!) ? settings.importerModels : [...settings.importerModels, choice.model!]);
+  } catch (e) {
+    throw new ImporterAiUnavailable(`The provider route of ${choice.model} could not be re-checked before the request (${e instanceof Error ? sanitize(e.message).slice(0, 160) : "error"}). Nothing was sent.`);
+  }
+  const ev = evaluateModel(model, choice.model!, choice.task, { snapshot, settings, fxRate });
+  // A usable route over the per-request limit (the only refusal that still carries a price) is left to the
+  // reservation below, so it stops as a budget limit (page kept, questions capped) instead of "unavailable".
+  return ev.row.eligible || ev.price ? { problem: null, price: ev.price } : { problem: ev.row.reason ?? "not usable", price: null };
+}
+
 const SELECTION_TASK_OF: Record<ImporterTask, SelectionTask> = { analyze: "extract", extract: "extract", verify: "verify", key: "key", classify: "classify" };
 /** Provider answers that mean "this model cannot be served under these constraints" (never billed). */
 const UNAVAILABLE_ERRORS = ["no_endpoint", "model_unavailable"];
@@ -420,12 +439,24 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
 
   const tried: string[] = [];
   // The confirmed model, still approved and usable now? (An admin may have withdrawn it meanwhile.)
+  // Then its provider route, price and privacy route, re-checked before this request (stored route data,
+  // read again from OpenRouter when older than 6 h; free metadata, never an AI request).
   for (;;) {
     const catalog = await loadModels([choice.model!, ...choice.fallbacks]);
     const p = modelProblem(catalog.get(choice.model!), input.needsVision, input.settings.importerModels);
-    if (!p) break;
+    if (p) {
+      tried.push(choice.model!);
+      choice = await replaceModel(input, plan, choice, p, tried);
+      continue;
+    }
+    const route = await recheckRoute(choice, catalog.get(choice.model!), input.settings, fx.rate);
+    if (route.problem === null) {
+      // Never below the confirmed price: the higher of the confirmed and the current price is reserved.
+      if (route.price && choice.price) choice = { ...choice, price: { prompt: Math.max(choice.price.prompt, route.price.prompt), completion: Math.max(choice.price.completion, route.price.completion), image: Math.max(choice.price.image, route.price.image), request: Math.max(choice.price.request, route.price.request) } };
+      break;
+    }
     tried.push(choice.model!);
-    choice = await replaceModel(input, plan, choice, p, tried);
+    choice = await replaceModel(input, plan, choice, `route re-check: ${route.problem}`, tried);
   }
 
   const inputTokens = estimateInputTokens(input.system, input.content);

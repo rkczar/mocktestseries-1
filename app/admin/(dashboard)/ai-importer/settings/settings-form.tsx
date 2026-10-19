@@ -14,6 +14,7 @@ import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import { importerModelsAction, refreshRoutesAction, saveSettingsAction } from "../actions";
 import { SESSION_EXPIRED, failureKind as probeFailure } from "@/components/admin/ai-importer/call-importer";
 import { ModelAssistant } from "./model-assistant";
+import { AutoConfigure } from "./auto-configure";
 
 const failureKind = () => probeFailure(SETTINGS_PATH);
 
@@ -570,12 +571,14 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
   const [routesMsg, setRoutesMsg] = useState<RoutesMessage | null>(null);
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string; session?: boolean } | null>(null);
+  // Bumped when the server saved settings outside this form (Auto-Configure): number fields show the saved values again.
+  const [version, setVersion] = useState(0);
   const d = !canManage;
   const set = <K extends keyof ImporterSettings>(k: K, v: Partial<ImporterSettings[K]>) => setS((cur) => ({ ...cur, [k]: { ...(cur[k] as object), ...v } }));
   const field = (id: string, label: string, value: number, onChange: (n: number) => void, help?: string) => (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={id}>{label}</Label>
-      <Input id={id} inputMode="decimal" defaultValue={String(value)} onBlur={(e) => onChange(num(e.target.value))} disabled={d} data-testid={id} />
+      <Input key={`${id}-${version}`} id={id} inputMode="decimal" defaultValue={String(value)} onBlur={(e) => onChange(num(e.target.value))} disabled={d} data-testid={id} />
       {help && <p className="text-xs text-[var(--color-muted-foreground)]">{help}</p>}
     </div>
   );
@@ -734,6 +737,19 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       </Card>
 
       <ImporterModelsCard options={options} value={s.importerModels} onChange={(v) => setS({ ...s, importerModels: v })} disabled={d} capInr={s.budget.maxRequestInr} zdrRequired={s.privacy.zdr} zdrModels={catalog.routes.zdrModels} />
+
+      <AutoConfigure
+        canManage={canManage}
+        dirty={dirty}
+        onApplied={(next) => {
+          // The server saved exactly the previewed settings; the form had no unsaved edits.
+          setS(next);
+          setSaved(next);
+          setVersion((v) => v + 1);
+          reload(next);
+          router.refresh();
+        }}
+      />
 
       <ModelAssistant
         canManage={canManage}

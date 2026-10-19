@@ -46,7 +46,7 @@ export interface JobCard {
   maxCostInr: number | null;
   message: string | null;
   nextAction: string;
-  actions: { cancel: boolean; retry: boolean; delete: boolean; recover: boolean };
+  actions: { cancel: boolean; retry: boolean; delete: boolean; recover: boolean; reconfigure: boolean };
   runIds: string[];
 }
 
@@ -175,6 +175,8 @@ export async function jobCards(where: { ids?: string[]; take?: number }, canMana
         retry: !leased && (j.status === "FAILED" || j.status === "PAUSED" || j.status === "CANCELLED" || (j.status === "PAUSED_BUDGET" && j.budgetInr > j.spentInr) || canRetryFailed(j, pg, failedKeys)),
         delete: canManage && j.status !== "IMPORTING" && !leased,
         recover: stalled,
+        // Paused after confirmation, no worker holding it (lib/ai-import/reconfigure.ts re-checks everything).
+        reconfigure: !leased && !!j.confirmedAt && (j.status === "PAUSED" || j.status === "PAUSED_BUDGET"),
       },
       runIds: [...new Set(runs.filter((r) => r.jobId === j.id).map((r) => r.bulkImportRunId!))],
     };

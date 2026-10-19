@@ -44,7 +44,7 @@ const PER_PURPOSE = 3;
 
 const at = (iso: string | null | undefined) => (iso ? `${iso.slice(0, 16).replace("T", " ")} UTC` : "never");
 
-interface Ctx {
+export interface Ctx {
   settings: ImporterSettings;
   catalog: ImporterCatalog;
   snapshot: RouteSnapshot | null;
@@ -132,8 +132,8 @@ function candidateFor(o: ImporterModelOption, purpose: AssistantPurpose, ctx: Ct
   };
 }
 
-/** Pure: recommendations per purpose from the given data. */
-export function recommend(ctx: Ctx): AssistantResult {
+/** Pure: recommendations per purpose from the given data (`perPurpose` best candidates each). */
+export function recommend(ctx: Ctx, perPurpose = PER_PURPOSE): AssistantResult {
   const cap = Math.min(ctx.settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
   const zdrModels = ctx.catalog.routes.zdrModels ? new Set(ctx.catalog.routes.zdrModels) : null;
   const purposes: PurposeRecommendation[] = [];
@@ -194,7 +194,7 @@ export function recommend(ctx: Ctx): AssistantResult {
         a.id.localeCompare(b.id)
     );
     const privacyUnknown = ctx.settings.privacy.zdr && !zdrModels ? "Zero-Data-Retention is required, but the ZDR route list has not been read — use Refresh provider routes first (free, no AI request)." : null;
-    const candidates = privacyUnknown ? [] : pool.slice(0, PER_PURPOSE);
+    const candidates = privacyUnknown ? [] : pool.slice(0, perPurpose);
     if (purpose === "ocr") ocrPick = candidates[0] ?? null;
     purposes.push({
       purpose,
@@ -223,7 +223,7 @@ export function recommend(ctx: Ctx): AssistantResult {
   };
 }
 
-async function loadCtx(settings: ImporterSettings): Promise<Ctx> {
+export async function loadCtx(settings: ImporterSettings): Promise<Ctx> {
   const [catalog, snapshot] = await Promise.all([importerModelCatalog(settings), getRouteSnapshot()]);
   const health = await importerModelHealth(catalog.options.map((o) => o.id));
   return { settings, catalog, snapshot, health, now: Date.now() };
