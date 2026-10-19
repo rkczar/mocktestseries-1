@@ -11,6 +11,7 @@ import { IMPORTER_SETTING_KEY, PILOT_LIMITS, SELECTION_TASK_LABELS, importerFeat
 import { FAILURE_ADVICE, failureMessage, kindOfCategory, type FailureKind } from "@/lib/ai-import/failure";
 import { computeModelPlan, evaluateModel, planOf, requestUsd } from "@/lib/ai-import/select";
 import { freshRouteSnapshot } from "@/lib/ai-import/routes";
+import { importerModelHealth } from "@/lib/ai-import/health";
 import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
 
 /**
@@ -98,6 +99,12 @@ export const STALE_MS = 10 * 60_000;
 export const IMAGE_TOKENS = 3_500;
 /** OpenRouter max_price headroom over the catalog price; the worst-case reservation uses the same factor. */
 export const PRICE_MARGIN = 1.05;
+/**
+ * The request parameters every importer request sends (importerAiCall → chatCompletion: max_tokens bounds the
+ * cost, temperature 0). Requests use require_parameters, so a provider route must support all of them; the
+ * selection engine (select.ts evaluateModel) only accepts routes that publish every one.
+ */
+export const IMPORTER_REQUEST_PARAMS = ["max_tokens", "temperature"] as const;
 
 /** Fallbacks may never cost more than the preferred model (per prompt, completion, request and input-image price). */
 export function notPricier(m: AiModel, preferred: AiModel): boolean {
@@ -361,14 +368,15 @@ async function log(e: {
  * engine's own rules (serving route, ZDR when required, readable prices, output limit, per-request limit).
  * Route data that cannot be read means nothing is sent (fail closed).
  */
-async function recheckRoute(choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"] }> {
+async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"] }> {
   let snapshot;
   try {
     snapshot = await freshRouteSnapshot(settings.importerModels.includes(choice.model!) ? settings.importerModels : [...settings.importerModels, choice.model!]);
   } catch (e) {
     throw new ImporterAiUnavailable(`The provider route of ${choice.model} could not be re-checked before the request (${e instanceof Error ? sanitize(e.message).slice(0, 160) : "error"}). Nothing was sent.`);
   }
-  const ev = evaluateModel(model, choice.model!, choice.task, { snapshot, settings, fxRate });
+  const refusals = await importerModelHealth([choice.model!], Date.now(), jobId);
+  const ev = evaluateModel(model, choice.model!, choice.task, { snapshot, settings, fxRate, refusals });
   // A usable route over the per-request limit (the only refusal that still carries a price) is left to the
   // reservation below, so it stops as a budget limit (page kept, questions capped) instead of "unavailable".
   return ev.row.eligible || ev.price ? { problem: null, price: ev.price } : { problem: ev.row.reason ?? "not usable", price: null };
@@ -383,19 +391,30 @@ const UNAVAILABLE_ERRORS = ["no_endpoint", "model_unavailable"];
  * A cheaper or equally priced replacement is used (and recorded); a more expensive one only when
  * Import Settings allow it. Otherwise the job stops with the reason (ImporterAiUnavailable → paused).
  */
-async function replaceModel(input: AiCallInput, plan: ModelPlan, choice: TaskChoice, why: string, tried: string[]): Promise<TaskChoice> {
+async function replaceModel(input: AiCallInput, plan: ModelPlan, choice: TaskChoice, why: string, tried: string[], refusedByProvider = false): Promise<TaskChoice> {
   const sel = choice.task;
   const label = SELECTION_TASK_LABELS[sel].toLowerCase();
   // Page reading and verification stay independent: a replacement is never the job's model for the other one.
   const other = sel === "verify" ? plan.tasks.extract.model : sel === "extract" ? plan.tasks.verify.model : null;
   const exclude: Partial<Record<SelectionTask, string[]>> = { [sel]: other ? [...tried, other] : tried };
-  const fresh = await computeModelPlan(input.settings, { refresh: true }, exclude);
+  const fresh = await computeModelPlan(input.settings, { refresh: true, jobId: input.jobId }, exclude);
   const alt = fresh.tasks[sel];
   const failed = choice.model!;
-  if (!alt.model) throw new ImporterAiUnavailable(`The selected ${label} model ${failed} is unavailable (${why}) and no other approved model is suitable: ${alt.reason} Nothing was sent.`);
+  // Honest about what happened: a refused request reached OpenRouter but no model ran and nothing was charged.
+  const sent = refusedByProvider ? "OpenRouter refused the request before any model ran; no AI cost was charged." : "Nothing was sent.";
+  if (!alt.model) {
+    let advice = "";
+    if (input.settings.selection.mode === "manual") {
+      // Guidance only (nothing is changed or sent): what Reconfigure Models for This Job would propose.
+      // No run-time exclusions: the same proposal the Reconfigure preview computes (a refused model is excluded by the job's history).
+      const sub = (await computeModelPlan(input.settings, { refresh: false, substitute: true, jobId: input.jobId })).tasks[sel];
+      advice = sub.model && sub.model !== failed ? ` Use Reconfigure Models for This Job: it would propose ${sub.model} (up to ${formatInr(sub.maxInr)} per request) and shows the cost before anything is saved.` : " No other model on the importer's list is suitable either: add an image-capable model with a verified route and a known price within the per-request limit (Import Settings → AI Auto-Configure), then use Reconfigure Models for This Job.";
+    }
+    throw new ImporterAiUnavailable(`The selected ${label} model ${failed} is unavailable (${why}) and no other approved model is suitable: ${alt.reason} ${sent}${advice}`);
+  }
   const pricier = (alt.maxInr ?? Infinity) > (choice.maxInr ?? 0) + 1e-9;
   if (pricier && !input.settings.budget.allowPricierFallback) {
-    throw new ImporterAiUnavailable(`The selected ${label} model ${failed} is unavailable (${why}). The next suitable model, ${alt.model}, could cost up to ${formatInr(alt.maxInr)} per request instead of ${formatInr(choice.maxInr)}; more expensive fallbacks are OFF in Import Settings, so processing stopped. Nothing was sent.`);
+    throw new ImporterAiUnavailable(`The selected ${label} model ${failed} is unavailable (${why}). The next suitable model, ${alt.model}, could cost up to ${formatInr(alt.maxInr)} per request instead of ${formatInr(choice.maxInr)}; more expensive fallbacks are OFF in Import Settings, so processing stopped. ${sent} Use Reconfigure Models for This Job to review it with its cost.`);
   }
   const replaced: TaskChoice = { ...alt, replaced: { from: failed, at: new Date().toISOString(), why: why.slice(0, 200) } };
   await prisma.$transaction(async (tx) => {
@@ -449,7 +468,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       choice = await replaceModel(input, plan, choice, p, tried);
       continue;
     }
-    const route = await recheckRoute(choice, catalog.get(choice.model!), input.settings, fx.rate);
+    const route = await recheckRoute(input.jobId, choice, catalog.get(choice.model!), input.settings, fx.rate);
     if (route.problem === null) {
       // Never below the confirmed price: the higher of the confirmed and the current price is reserved.
       if (route.price && choice.price) choice = { ...choice, price: { prompt: Math.max(choice.price.prompt, route.price.prompt), completion: Math.max(choice.price.completion, route.price.completion), image: Math.max(choice.price.image, route.price.image), request: Math.max(choice.price.request, route.price.request) } };
@@ -540,7 +559,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       // No route can serve the model under the privacy / price constraints: choose again (never silently pricier).
       if (UNAVAILABLE_ERRORS.includes(e.category) && !billedUnknown && replacements === 0) {
         tried.push(requested);
-        choice = await replaceModel(input, plan, choice, describeCategory(e.category), tried);
+        // OpenRouter's own words (e.g. "can handle the requested parameters"), not only the generic category text.
+        choice = await replaceModel(input, plan, choice, `OpenRouter: ${sanitize(e.message).slice(0, 160)}`, tried, true);
         cost = priced(choice);
         replacements++;
         attempt--;

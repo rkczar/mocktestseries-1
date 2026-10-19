@@ -5,6 +5,7 @@ import { MAX_IMPORTER_MODELS, PILOT_LIMITS, SELECTION_TASK_LABELS, type Importer
 import { importerModelCatalog } from "@/lib/ai-import/models";
 import { getRouteSnapshot, isStale, refreshRoutes, type RouteSnapshot } from "@/lib/ai-import/routes";
 import { importerModelHealth, rateLimitAvoidance } from "@/lib/ai-import/health";
+import { IMPORTER_REQUEST_PARAMS } from "@/lib/ai-import/ai";
 import { computeModelPlan } from "@/lib/ai-import/select";
 import { saveImporterSettings } from "@/lib/ai-import/settings";
 import type { ImporterCatalog, ImporterModelOption } from "@/lib/ai-import/model-options";
@@ -56,6 +57,11 @@ function costOf(o: ImporterModelOption, task: SelectionTask) {
   return o.costs?.[task] ?? null;
 }
 
+/** ₹0 for input tokens but not output tokens (or the reverse): an incomplete price, never treated as a verified cost. */
+export function partlyZero(o: Pick<ImporterModelOption, "promptPerM" | "completionPerM">): boolean {
+  return o.promptPerM !== null && o.completionPerM !== null && (o.promptPerM === 0) !== (o.completionPerM === 0);
+}
+
 /** OpenRouter publishes a price of exactly 0 for every part (a known zero, not an unknown price). */
 export function publishedZero(o: Pick<ImporterModelOption, "promptPerM" | "completionPerM" | "imagePrice" | "requestPrice">): boolean {
   return o.promptPerM === 0 && o.completionPerM === 0 && !o.imagePrice && !o.requestPrice;
@@ -66,8 +72,11 @@ function routeState(id: string, ctx: Ctx): { state: RouteState; text: string } {
   const info = s?.models[id];
   if (!s || !info) return { state: "not_read", text: "Not read yet — the provider routes are read when the model is added (free metadata request, no AI request)." };
   if (!info.ok) return { state: "unavailable", text: `Could not be read (${info.error ?? "error"}) at ${at(s.fetchedAt)}.` };
-  const serving = info.routes.filter((r) => r.status === 0);
-  if (!serving.length) return { state: "unavailable", text: `No provider route was serving normally at ${at(s.fetchedAt)}.` };
+  const up = info.routes.filter((r) => r.status === 0);
+  if (!up.length) return { state: "unavailable", text: `No provider route was serving normally at ${at(s.fetchedAt)}.` };
+  // Importer requests use require_parameters: a route must accept every parameter they send (as select.ts checks).
+  const serving = up.filter((r) => r.params !== null && IMPORTER_REQUEST_PARAMS.every((x) => r.params!.includes(x)));
+  if (!serving.length) return { state: "unavailable", text: `No serving provider route accepts every parameter the importer sends (${IMPORTER_REQUEST_PARAMS.join(", ")}) at ${at(s.fetchedAt)}, so OpenRouter would refuse its requests.` };
   if (ctx.settings.privacy.zdr && !serving.some((r) => r.zdr)) return { state: "no_zdr", text: `No Zero-Data-Retention route at ${at(s.fetchedAt)} (ZDR is required).` };
   const tags = (ctx.settings.privacy.zdr ? serving.filter((r) => r.zdr) : serving).map((r) => r.tag || r.provider).join(", ");
   return isStale(s, ctx.now) ? { state: "stale", text: `Serving at ${at(s.fetchedAt)} (older than 6 h — not verified now): ${tags}.` } : { state: "verified", text: `Verified ${at(s.fetchedAt)}: ${tags}.` };
@@ -97,6 +106,7 @@ export function modelConfigChecks(o: ImporterModelOption | undefined, id: string
   );
   const r = routeState(id, ctx);
   checks.push({ label: "Provider route verified", ok: r.state === "verified", detail: r.text });
+  if (partlyZero(o)) checks.push({ label: "Complete price", ok: false, detail: `Published price is ₹0 for ${o.completionPerM === 0 ? "output" : "input"} tokens only — not a verified cost, so the importer does not use it.` });
   const avoid = rateLimitAvoidance(ctx.health[id], ctx.now);
   checks.push({ label: "Recent provider answers", ok: !avoid, detail: avoid ? `Rate-limited: ${avoid}.` : historyText(ctx.health[id]) });
   return checks;
@@ -165,6 +175,10 @@ export function recommend(ctx: Ctx, perPurpose = PER_PURPOSE): AssistantResult {
       }
       if (ctx.settings.privacy.zdr && zdrModels && !zdrModels.has(o.id)) {
         out("no Zero-Data-Retention route (ZDR is required)");
+        continue;
+      }
+      if (partlyZero(o)) {
+        out("a partly-zero published price (₹0 for input or output tokens only — not a verified cost)");
         continue;
       }
       if (rateLimitAvoidance(ctx.health[o.id], ctx.now)) {

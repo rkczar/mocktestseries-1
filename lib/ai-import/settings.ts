@@ -21,3 +21,14 @@ export async function saveImporterSettings(next: ImporterSettings, actorId: stri
   });
   return normalized;
 }
+
+/**
+ * The settings a job runs with (the worker) and is reconfigured with: settings frozen at confirmation, but the
+ * AI switch, budgets and the importer's model list follow the CURRENT settings (an admin who turns AI off,
+ * lowers a limit or withdraws a model mid-job is obeyed), and privacy is the stricter of the two.
+ */
+export function jobRunSettings(jobConfig: unknown, current: ImporterSettings): ImporterSettings {
+  const frozen = jobConfig ? normalizeImporterSettings(jobConfig) : current;
+  const privacy: ImporterSettings["privacy"] = { zdr: frozen.privacy.zdr || current.privacy.zdr, dataCollection: frozen.privacy.dataCollection === "deny" || current.privacy.dataCollection === "deny" ? "deny" : "allow" };
+  return { ...frozen, aiEnabled: current.aiEnabled && frozen.aiEnabled, privacy, budget: current.budget, selection: frozen.selection, importerModels: current.importerModels };
+}

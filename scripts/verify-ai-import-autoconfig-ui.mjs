@@ -146,6 +146,15 @@ try {
   const after = await job();
   check("…the job holds the new models, is still paused, nothing spent", after.status === "PAUSED" && after.config.modelPlan.tasks.extract.model === proposedModel && after.spentInr === 0 && /Paid AI is OFF/.test(after.pauseReason));
   check("…event and audit recorded", (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='MODEL_RECONFIGURED'`, [A.jobId])).rows[0].n === 1 && (await db.query(`select count(*)::int n from "AuditLog" where action='AI_IMPORTER_JOB_RECONFIGURED' and "entityId"=$1`, [A.jobId])).rows[0].n === 1);
+  // A saved manual choice that cannot read page images: the dialog proposes a substitute and says why.
+  await db.query(`update "Setting" set value = jsonb_set(value, '{models,extract}', '"mocktext/classifier"') where key = 'ai.importer'`);
+  await jp.reload();
+  await rb.click();
+  await until(() => rpv.isVisible());
+  const ext = jp.locator("[data-testid=reconfigure-task][data-task=extract]");
+  const why = ext.locator("[data-testid=reconfigure-task-reason]");
+  check("substitution: the unusable manual choice is replaced, with the cause, the substitute and “Not tested” shown", (await ext.getAttribute("data-substituted")) === "mocktext/classifier" && !!(await ext.getAttribute("data-proposed")) && (await ext.getAttribute("data-proposed")) !== "mocktext/classifier" && /cannot read images/.test(await why.textContent()) && /Proposed instead/.test(await why.textContent()) && /Not tested/.test(await ext.textContent()), await ext.textContent().catch(() => null));
+  await jp.locator("[data-testid=reconfigure-cancel]").click();
 
   section("G. Mobile and read-only");
   const m = await newPage(true);

@@ -25,17 +25,36 @@ export function rateLimitAvoidance(h: ModelHealth | undefined, now = Date.now())
   return `its provider rate-limited its last ${h.consecutiveRateLimited} importer request(s) (latest ${h.lastRateLimitedAt.slice(0, 16).replace("T", " ")} UTC), so automatic selection skips it until ${new Date(at + RATE_LIMIT_AVOID_MS).toISOString().slice(0, 16).replace("T", " ")} UTC — choose it under Manual override to try it again`;
 }
 
-export async function importerModelHealth(ids: readonly string[], now = Date.now()): Promise<Record<string, ModelHealth>> {
+/** Provider answers meaning "no route can serve this request" (OpenRouter 404: parameters, data policy, price ceiling, ZDR). */
+export const REFUSED_CATEGORIES = ["no_endpoint", "model_unavailable"];
+
+/**
+ * Whether the model must not be used now for a job because OpenRouter refused that job's most recent request(s)
+ * to it as unservable (null = usable). Measured history of the JOB (importerModelHealth with its jobId), applied
+ * by Reconfigure, replacement and the re-check before each request, so a refused model is not tried again and
+ * again for the same job; other jobs and settings (privacy can differ) are not affected.
+ */
+export function routeRefusal(h: ModelHealth | undefined, now = Date.now()): string | null {
+  if (!h || !h.consecutiveRefused || !h.lastRefusedAt) return null;
+  const at = new Date(h.lastRefusedAt).getTime();
+  if (now - at > RATE_LIMIT_AVOID_MS) return null;
+  return `OpenRouter refused its last ${h.consecutiveRefused} importer request(s) because no provider route could serve them (latest ${h.lastRefusedAt.slice(0, 16).replace("T", " ")} UTC${h.lastRefusal ? `: “${h.lastRefusal}”` : ""}), so it is not used again until ${new Date(at + RATE_LIMIT_AVOID_MS).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+/** `jobId`: only that import job's requests (its refusal history); otherwise every importer request. */
+export async function importerModelHealth(ids: readonly string[], now = Date.now(), jobId?: string): Promise<Record<string, ModelHealth>> {
   if (!ids.length) return {};
+  const ofJob = jobId ? (await prisma.aiImportAiCall.findMany({ where: { jobId, createdAt: { gte: new Date(now - HEALTH_WINDOW_MS) } }, select: { requestId: true } })).map((r) => r.requestId) : null;
+  if (ofJob && !ofJob.length) return {};
   const rows = await prisma.aiGatewayCall.findMany({
-    where: { feature: { startsWith: IMPORTER_FEATURE_PREFIX }, model: { in: [...ids] }, createdAt: { gte: new Date(now - HEALTH_WINDOW_MS) } },
+    where: { feature: { startsWith: IMPORTER_FEATURE_PREFIX }, model: { in: [...ids] }, createdAt: { gte: new Date(now - HEALTH_WINDOW_MS) }, ...(ofJob ? { requestId: { in: [...new Set(ofJob)] } } : {}) },
     orderBy: { createdAt: "desc" },
-    select: { model: true, ok: true, errorCategory: true, createdAt: true },
+    select: { model: true, ok: true, errorCategory: true, errorSummary: true, createdAt: true },
     take: 2_000,
   });
   const out: Record<string, ModelHealth> = {};
   for (const r of rows) {
-    const h = (out[r.model] ??= { requests: 0, ok: 0, rateLimited: 0, consecutiveRateLimited: 0, streakOpen: true, lastRateLimitedAt: null, lastOkAt: null });
+    const h = (out[r.model] ??= { requests: 0, ok: 0, rateLimited: 0, consecutiveRateLimited: 0, streakOpen: true, lastRateLimitedAt: null, lastOkAt: null, consecutiveRefused: 0, refusedOpen: true, lastRefusedAt: null, lastRefusal: null });
     h.requests++;
     if (r.ok) h.ok++;
     const limited = r.errorCategory === "rate_limited";
@@ -48,6 +67,13 @@ export async function importerModelHealth(ids: readonly string[], now = Date.now
     if (h.streakOpen) {
       if (limited) h.consecutiveRateLimited++;
       else h.streakOpen = false;
+    }
+    if (h.refusedOpen) {
+      if (r.errorCategory && REFUSED_CATEGORIES.includes(r.errorCategory)) {
+        h.consecutiveRefused++;
+        h.lastRefusedAt ??= r.createdAt.toISOString();
+        h.lastRefusal ??= r.errorSummary ? r.errorSummary.slice(0, 120) : null;
+      } else h.refusedOpen = false;
     }
   }
   return out;

@@ -7,8 +7,7 @@ import { IMPORTER_SETTING_KEY, MAX_IMPORTER_MODELS, PILOT_LIMITS, SELECTION_TASK
 import { loadCtx, publishedZero, recommend, type Ctx } from "@/lib/ai-import/assistant";
 import type { AssistantPurpose } from "@/lib/ai-import/assistant-types";
 import { readRoutes, storeRouteSnapshot, type RouteSnapshot } from "@/lib/ai-import/routes";
-import { choose, evaluateModel } from "@/lib/ai-import/select";
-import { rateLimitAvoidance } from "@/lib/ai-import/health";
+import { autoSkip, choose, evaluateModel } from "@/lib/ai-import/select";
 import { importerSettingsProblems } from "@/lib/ai-import/models";
 import { saveImporterSettings } from "@/lib/ai-import/settings";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
@@ -151,24 +150,32 @@ async function build(saved: ImporterSettings): Promise<Built> {
   const rows = new Map((await prisma.aiModel.findMany({ where: { id: { in: [...new Set([...ids, ...saved.importerModels])] } } })).map((m) => [m.id, m]));
   const usable = fresh && !routesError && fxRate !== null ? fresh : null;
 
-  // 4. Per task: the first candidate the selection engine accepts on the routes just read.
+  // 4. Per task: the candidates the selection engine accepts on the routes just read — the Model Assistant's
+  // ranking plus the models already on the importer's list — cheapest conservative maximum first.
   const pick: Record<SelectionTask, string | null> = { extract: null, key: null, verify: null, classify: null };
   const why: Record<SelectionTask, string[]> = { extract: [], key: [], verify: [], classify: [] };
   const eligibleOf: Record<SelectionTask, string[]> = { extract: [], key: [], verify: [], classify: [] };
   for (const t of PICK_ORDER) {
-    for (const id of poolOf(rec, t)) {
+    const maxOf = new Map<string, number>();
+    for (const id of [...new Set([...poolOf(rec, t), ...saved.importerModels])]) {
       if (t === "verify" && id === pick.extract) continue;
+      // The selection engine's own checks, then automatic selection's own skips (recent rate limits; never
+      // chosen for a ₹0 price) — exactly what `choose` applies for a new job.
       const ev = evaluateModel(rows.get(id) as AiModel | undefined, id, t, { snapshot: usable, settings: { ...saved, importerModels: [...new Set([...saved.importerModels, id])] }, fxRate });
-      const avoid = ev.row.eligible ? rateLimitAvoidance(ctx.health[id], now) : null;
+      const avoid = autoSkip(ev.row, ctx.health, now);
       if (!ev.row.eligible || avoid) {
         why[t].push(`${id}: ${avoid ?? ev.row.reason}`);
         continue;
       }
       eligibleOf[t].push(id);
+      maxOf.set(id, ev.row.maxInr ?? Infinity);
     }
+    // Verification: another vendor than the page reader first (a more independent second read), then by cost.
+    const vendor = (id: string | null) => (id ? rows.get(id)?.vendor ?? null : null);
+    eligibleOf[t].sort((a, b) => (t === "verify" && pick.extract ? Number(vendor(a) === vendor(pick.extract)) - Number(vendor(b) === vendor(pick.extract)) : 0) || maxOf.get(a)! - maxOf.get(b)! || a.localeCompare(b));
     pick[t] = eligibleOf[t][0] ?? null;
   }
-  if (!pick.extract && !blocking.length) blocking.push("No model is suitable for page reading (scanned pages and formulas need a model that reads images, has a verified route, a known price within the per-request limit and meets the privacy settings). Nothing can be applied.");
+  if (!pick.extract && !blocking.length) blocking.push(`No model is suitable for page reading (scanned pages and formulas need a model that reads images, has a verified route accepting the importer's request parameters, a known non-zero price within the per-request limit and meets the privacy settings). Checked: ${why.extract.slice(0, 4).join("; ") || "no candidate"}. Nothing can be applied — add such a model to the catalog's importer candidates, or review the per-request limit yourself; limits are never raised automatically.`);
 
   // 5. The proposed settings. Budgets, Paid AI and privacy are copied unchanged.
   const picks = [...new Set(PICK_ORDER.map((t) => pick[t]).filter((x): x is string => !!x))];
@@ -230,8 +237,7 @@ async function build(saved: ImporterSettings): Promise<Built> {
     const id = pick[t]!;
     const c = tasks[t];
     const n = eligibleOf[t].length;
-    const zero = option(id) && publishedZero(option(id)!);
-    return `${id}: ${zero ? "published price ₹0 (no priced model qualified)" : `up to ${formatInr(c.maxInr, 4)} per request`} — best of ${n} suitable model${n === 1 ? "" : "s"} checked on routes read now${eligibleOf[t][1] ? ` (next: ${eligibleOf[t][1]})` : ""}. Ranked like the Model Assistant: priced before published-₹0 models (shared rate limits), then by conservative maximum cost; models rate-limited recently are skipped.`;
+    return `${id}: up to ${formatInr(c.maxInr, 4)} per request — best of ${n} suitable model${n === 1 ? "" : "s"} checked on routes read now${eligibleOf[t][1] ? ` (next: ${eligibleOf[t][1]})` : ""}. Ranked by conservative maximum cost; published-₹0 models are never chosen automatically, and models rate-limited recently are skipped. Quality: Not tested.`;
   };
   const SPECIFIC: Record<AutoTask, string> = {
     scanned: "Reads page images (published input modality) and returns text.",

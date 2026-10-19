@@ -29,6 +29,11 @@
  * HTTP 429 "Provider returned error" (n = -1: always); {badRequest: {id: message}} answers HTTP 400;
  * {failTask: {extract|key|solve|classify: [status, message]}} fails every request of one importer task.
  * stats.attempts counts every chat attempt per model (rate-limited ones included).
+ * Request-parameter / price-integrity fixtures (config {paramModels: true}; off by default): mockparam/notemp — the
+ * cheapest priced vision model, but its only route accepts max_tokens only (no temperature), like a route OpenRouter
+ * refuses under require_parameters; mockparam/zeroout — vision, ₹0 output price but a non-zero input price.
+ * Every chat request with provider.require_parameters is refused (404 "No endpoints found that can handle the
+ * requested parameters.") when the model's routes do not list every parameter the request sends.
  */
 import http from "node:http";
 import { readFileSync } from "node:fs";
@@ -60,7 +65,12 @@ const EXTRA = {
   "mockpaid/verify": { p: 0.00000007, c: 0.00000035, vision: true, json: true },
   "mocktext/cheap": { p: 0.00000005, c: 0.0000002, vision: false, json: true },
 };
-const M = () => (config.extraModels ? { ...MODELS, ...EXTRA } : MODELS);
+const PARAM = {
+  "mockparam/notemp": { p: 0.00000002, c: 0.0000001, vision: true, json: true, params: ["max_tokens"] },
+  "mockparam/zeroout": { p: 0.00000003, c: 0, vision: true, json: true },
+};
+const M = () => ({ ...MODELS, ...(config.extraModels ? EXTRA : {}), ...(config.paramModels ? PARAM : {}) });
+const paramsOf = (m) => m.params ?? ["max_tokens", "temperature", ...(m.json ? ["response_format"] : [])];
 /** Provider routes of a model: [tag, price factor]; every model is ZDR unless `zdr: false`. */
 const routesOf = (id) => {
   const m = M()[id];
@@ -72,12 +82,12 @@ const routesOf = (id) => {
     status: config.routeStatus[id] ?? m.status ?? 0,
     context_length: 200000,
     max_completion_tokens: 16000,
-    supported_parameters: ["max_tokens", "temperature"],
+    supported_parameters: m.params ?? ["max_tokens", "temperature"],
     pricing: { prompt: String(m.p * f), completion: String(m.c * f), ...(m.image ? { image: m.image } : {}) },
   }));
 };
 const zdrRoute = (id) => !config.zdrRemoved.includes(id) && routesOf(id).some((r) => r.tag !== "mockprov/std");
-const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, rateLimit: {}, badRequest: {}, failTask: {} };
+const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, rateLimit: {}, badRequest: {}, failTask: {} };
 const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
@@ -160,7 +170,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && p === "/models") {
     if (config.modelsStatus) return err(res, config.modelsStatus, "mock: models unavailable");
     return json(res, 200, {
-      data: Object.entries(M()).map(([id, m]) => ({ id, name: id, context_length: 200000, architecture: { input_modalities: m.vision ? ["text", "image"] : ["text"], output_modalities: ["text"] }, pricing: { prompt: String(m.p), completion: String(m.c), ...(m.image ? { image: m.image } : {}) }, top_provider: { max_completion_tokens: 16000 }, supported_parameters: ["max_tokens", "temperature", ...(m.json ? ["response_format"] : [])] })),
+      data: Object.entries(M()).map(([id, m]) => ({ id, name: id, context_length: 200000, architecture: { input_modalities: m.vision ? ["text", "image"] : ["text"], output_modalities: ["text"] }, pricing: { prompt: String(m.p), completion: String(m.c), ...(m.image ? { image: m.image } : {}) }, top_provider: { max_completion_tokens: 16000 }, supported_parameters: paramsOf(m) })),
     });
   }
   if (req.method === "GET" && p === "/images/models") return json(res, 200, { data: [] });
@@ -214,6 +224,12 @@ const server = http.createServer(async (req, res) => {
       }
       if (config.failTask[task]) {
         last = config.failTask[task];
+        continue;
+      }
+      // require_parameters: a route must support every parameter sent (as OpenRouter enforces it).
+      const sentParams = ["max_tokens", "temperature", "response_format"].filter((k) => body[k] !== undefined);
+      if (body.provider?.require_parameters === true && sentParams.some((k) => !(m.params ?? ["max_tokens", "temperature"]).includes(k))) {
+        last = [404, "No endpoints found that can handle the requested parameters. To learn more about provider routing, visit: https://openrouter.ai/docs/guides/routing/provider-selection"];
         continue;
       }
       if (image && !m.vision) {

@@ -117,6 +117,10 @@ export interface ReconfigureTaskRow {
   proposed: string | null;
   maxInr: number | null;
   reason: string;
+  /** The manual choice could not be used, so `proposed` replaces it (explained before saving). */
+  substituted: { from: string; why: string } | null;
+  /** Measured quality of the model for this task: none has been tested. */
+  quality: "not_tested";
 }
 
 export interface ReconfigurePreview {

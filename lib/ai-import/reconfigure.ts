@@ -4,7 +4,7 @@ import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPageSt
 import { prisma } from "@/lib/prisma";
 import { formatInr } from "@/lib/ai-engine/config";
 import { PILOT_LIMITS, SELECTION_TASKS, SELECTION_TASK_LABELS } from "@/lib/ai-import/config";
-import { getImporterSettings } from "@/lib/ai-import/settings";
+import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { readRoutes } from "@/lib/ai-import/routes";
 import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
@@ -24,6 +24,11 @@ import type { ReconfigurePreview, ReconfigureResult } from "@/lib/ai-import/auto
  * maximum does not fit what the job, the month and the all-time pilot budget still allow — budgets are
  * never raised. Spending, cost records, pages, questions and events are kept; the change is an event and
  * an audit entry. With Paid AI off the new models are saved and the job stays paused.
+ *
+ * Eligibility is the selection engine's own (select.ts evaluateModel / choose), judged with the settings the
+ * worker will run the job with (settings.ts jobRunSettings: the stricter privacy, the current budgets and model
+ * list) — the same checks the worker repeats before every request. When a manual choice cannot be used, the
+ * cheapest model automatic selection would accept is proposed instead and the substitution is explained.
  */
 
 export class ReconfigureError extends Error {}
@@ -43,7 +48,9 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
   if (!RECONFIGURABLE.includes(job.status)) throw new ReconfigureError("Only a paused import can be reconfigured. Pause it first.");
   if (!job.confirmedAt) throw new ReconfigureError("This import was never confirmed for processing, so it has no models to reconfigure.");
   if (leased(job)) throw new ReconfigureError(`A worker still holds this import (until ${job.leaseUntil!.toISOString().slice(11, 19)} UTC). Nothing was changed — try again when it has stopped.`);
-  const settings = await getImporterSettings();
+  const current = await getImporterSettings();
+  // The worker's run settings for this job, with the models and selection mode of the CURRENT Import Settings.
+  const settings = { ...jobRunSettings(job.config, current), selection: current.selection, models: current.models };
   const blocking: string[] = [];
   let snapshot = null;
   try {
@@ -51,8 +58,8 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
   } catch (e) {
     blocking.push(`Provider routes could not be read from OpenRouter (${e instanceof Error ? e.message.slice(0, 160) : "error"}). Nothing was changed.`);
   }
-  const plan = snapshot ? await computeModelPlan(settings, { refresh: false, snapshot }) : null;
-  const current = planOf(job.config);
+  const plan = snapshot ? await computeModelPlan(settings, { refresh: false, snapshot, substitute: true, jobId }) : null;
+  const confirmed = planOf(job.config);
 
   const pages = await prisma.aiImportPage.findMany({ where: { jobId }, select: { fileId: true, pageNumber: true, status: true, kind: true, textChars: true, imageCount: true } });
   const todo = pages.filter((p) => p.status === AiImportPageStatus.FAILED || p.status === AiImportPageStatus.PENDING);
@@ -92,7 +99,8 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
   const totalLeft = Math.max(0, Math.min(settings.budget.totalInr, PILOT_LIMITS.totalInr) - spend.allUsed);
   const monthLeft = Math.max(0, Math.min(settings.budget.monthlyInr, PILOT_LIMITS.monthlyInr) - spend.monthUsed);
   if (!unreadPages && !failedKeys.length) blocking.push("Nothing is left to read in this import (no failed or pending page), so there is nothing to reconfigure.");
-  if (plan && !plan.tasks.extract.model && unreadPages) blocking.push(`No page-reading model is suitable now: ${plan.tasks.extract.reason} Nothing was changed.`);
+  const GUIDE = "Add an image-capable model with a verified route and a known price within the per-request limit to the importer's list (Import Settings → AI Auto-Configure shows what qualifies), then reconfigure again. Limits are never raised automatically.";
+  if (plan && !plan.tasks.extract.model && unreadPages) blocking.push(`No page-reading model is suitable now: ${plan.tasks.extract.reason} Nothing was changed. ${GUIDE}`);
   if (plan && failedKeys.length && !plan.tasks.key.model) blocking.push(`No answer-key model is suitable now: ${plan.tasks.key.reason} Nothing was changed.`);
   if (est && !blocking.length) {
     if (est.maxInr === null) blocking.push(`The cost of the remaining work cannot be established (${est.notes[0] ?? "missing price"}). Nothing was changed.`);
@@ -100,12 +108,16 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
       const room = Math.min(jobLeft, totalLeft, monthLeft);
       if (est.maxInr > room) {
         const which = room === jobLeft ? `this job's budget (${formatInr(jobLeft)} left of ${formatInr(jobCap)})` : room === totalLeft ? `the all-time importer budget (${formatInr(totalLeft)} left)` : `this month's importer budget (${formatInr(monthLeft)} left)`;
-        blocking.push(`No suitable model fits the existing budget: the conservative maximum for the remaining ${unreadPages} page(s) is ${formatInr(est.maxInr)}, above ${which}. Budgets are never raised automatically. Nothing was changed.`);
+        const perPage = unreadPages ? est.maxInr / unreadPages : null;
+        const fit = perPage ? Math.floor(room / perPage) : 0;
+        blocking.push(
+          `No suitable model fits the existing budget: the conservative maximum for the remaining ${unreadPages} page(s) is ${formatInr(est.maxInr)}, above ${which}. Budgets are never raised automatically. Nothing was changed.${perPage ? ` At about ${formatInr(perPage)} per page (page reading${plan?.tasks.verify.model ? ", second read" : ""} and classification at their maximum), ${fit} page(s) fit. Options (an administrator's decision): import the paper in smaller parts${plan?.tasks.verify.model ? ", or choose a cheaper or no verification model in Import Settings (fewer independent checks)" : ""}.` : ""}`
+        );
       }
     }
   }
-  const tasks = SELECTION_TASKS.map((t) => ({ task: t, label: SELECTION_TASK_LABELS[t], current: current?.tasks[t]?.model ?? null, proposed: plan?.tasks[t].model ?? null, maxInr: plan?.tasks[t].maxInr ?? null, reason: plan?.tasks[t].reason ?? "Not computed." }));
-  const paidAiOn = settings.aiEnabled;
+  const tasks = SELECTION_TASKS.map((t) => ({ task: t, label: SELECTION_TASK_LABELS[t], current: confirmed?.tasks[t]?.model ?? null, proposed: plan?.tasks[t].model ?? null, maxInr: plan?.tasks[t].maxInr ?? null, reason: plan?.tasks[t].reason ?? "Not computed.", substituted: plan?.tasks[t].substituted ?? null, quality: "not_tested" as const }));
+  const paidAiOn = current.aiEnabled;
   const preview: ReconfigurePreview = {
     jobId,
     title: job.title,
@@ -159,7 +171,7 @@ export async function reconfigureJob(input: { jobId: string; proposalKey: string
     });
     // Finished pages are never touched; failed pages get their next attempt with the new models.
     if (queue) await tx.aiImportPage.updateMany({ where: { jobId: input.jobId, status: AiImportPageStatus.FAILED }, data: { status: AiImportPageStatus.PENDING } });
-    const summary = preview.tasks.filter((t) => t.current !== t.proposed).map((t) => `${t.label}: ${t.current ?? "none"} → ${t.proposed ?? "none"}`).join("; ") || "same models, current routes and prices";
+    const summary = preview.tasks.filter((t) => t.current !== t.proposed).map((t) => `${t.label}: ${t.current ?? "none"} → ${t.proposed ?? "none"}${t.substituted ? ` (substitute: ${t.substituted.from} cannot be used — ${t.substituted.why.slice(0, 120)})` : ""}`).join("; ") || "same models, current routes and prices";
     await tx.aiImportEvent.create({ data: { jobId: input.jobId, type: "MODEL_RECONFIGURED", message: `Models reconfigured by an administrator (${summary}). ${preview.retryPages} page(s) to read, conservative maximum ${formatInr(preview.maxInr)}; ${preview.donePages} finished page(s) kept.${queue ? " Queued again." : " Paid AI is OFF: the import stays paused."}`.slice(0, 1000), data: { from, to, maxInr: preview.maxInr, retryPages: preview.retryPages, queued: queue }, actorId: input.actorId } });
     await tx.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORTER_JOB_RECONFIGURED", entityType: "AiImportJob", entityId: input.jobId, metadata: { from, to, maxInr: preview.maxInr, retryPages: preview.retryPages, donePages: preview.donePages, spentInr: preview.spentInr, queued: queue, aiRequestsSent: 0 } } });
   });

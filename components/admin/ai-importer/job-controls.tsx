@@ -144,9 +144,14 @@ function ReconfigureDialog({ job, onClose, onDone }: { job: JobControlState; onC
           <div className="flex flex-col gap-2 text-sm" data-testid="reconfigure-preview" data-ai-requests={preview.aiRequestsSent}>
             <ul className="flex flex-col gap-1 text-xs">
               {preview.tasks.map((t) => (
-                <li key={t.task} data-testid="reconfigure-task" data-task={t.task} data-current={t.current ?? ""} data-proposed={t.proposed ?? ""}>
+                <li key={t.task} data-testid="reconfigure-task" data-task={t.task} data-current={t.current ?? ""} data-proposed={t.proposed ?? ""} data-substituted={t.substituted?.from ?? ""}>
                   <strong>{t.label}:</strong> {t.current ?? "none"} → <code>{t.proposed ?? "none"}</code>
-                  {t.proposed && t.maxInr !== null ? ` (up to ${formatInr(t.maxInr, 4)} per request)` : ""}
+                  {t.proposed && t.maxInr !== null ? ` (up to ${formatInr(t.maxInr, 4)} per request; quality: Not tested)` : ""}
+                  {(t.substituted || !t.proposed) && (
+                    <span className="block text-[var(--color-muted-foreground)]" data-testid="reconfigure-task-reason">
+                      {t.reason}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

@@ -24,6 +24,8 @@ export interface CandidateRow {
   typicalInr: number | null;
   /** Provider routes that satisfy the privacy settings (tags, e.g. "google-vertex/eu"). */
   routes: string[];
+  /** Every token / request price is a published ₹0 (a known zero): never chosen automatically because of it. */
+  zeroPrice?: boolean;
 }
 
 export interface TaskChoice {
@@ -44,6 +46,8 @@ export interface TaskChoice {
   privacy: { zdrRequired: boolean; dataCollection: "deny" | "allow"; zdrVerified: boolean };
   /** Every evaluated candidate (eligible first, cheapest first). */
   candidates: CandidateRow[];
+  /** Reconfigure only: the manual choice could not be used, so this model was proposed instead (shown before saving). */
+  substituted?: { from: string; why: string };
   /** Set when the worker replaced the confirmed model (unavailable model; never silently pricier). */
   replaced?: { from: string; at: string; why: string };
 }
@@ -82,4 +86,11 @@ export interface ModelHealth {
   streakOpen: boolean;
   lastRateLimitedAt: string | null;
   lastOkAt: string | null;
+  /** OpenRouter refusals ("no route can serve this request") in a row, counted from the newest request. */
+  consecutiveRefused: number;
+  /** Internal while counting: still inside the newest refused run. */
+  refusedOpen: boolean;
+  lastRefusedAt: string | null;
+  /** OpenRouter's (sanitized) message of the newest refusal. */
+  lastRefusal: string | null;
 }

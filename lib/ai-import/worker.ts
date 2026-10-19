@@ -2,8 +2,8 @@ import "server-only";
 import crypto from "node:crypto";
 import { AiImportJobStatus, AiImportQuestionStatus, AiImportPageStatus, type AiImportJob, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getImporterSettings } from "@/lib/ai-import/settings";
-import { JOB_STAGES, normalizeImporterSettings, type ImporterSettings, type JobStage } from "@/lib/ai-import/config";
+import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
+import { JOB_STAGES, type ImporterSettings, type JobStage } from "@/lib/ai-import/config";
 import { runAnalysis } from "@/lib/ai-import/analyze";
 import { runAiPages, runLocalPasses, type StepContext } from "@/lib/ai-import/process";
 import { runKeyFiles } from "@/lib/ai-import/keys";
@@ -77,12 +77,9 @@ function makeContext(job: AiImportJob, settings: ImporterSettings, names: { exam
 async function processJob(job: AiImportJob): Promise<void> {
   // Settings frozen at confirmation; the AI switch, models and budget follow the CURRENT settings
   // (an admin who turns AI off or lowers limits mid-job is obeyed).
-  const current = await getImporterSettings();
-  const frozen = job.config ? normalizeImporterSettings(job.config) : current;
   // Privacy: the stricter of the confirmed and the current settings. Budgets: the current (lowered limits apply).
   // The importer's model list: the current one, so a model withdrawn from it mid-job is never used again.
-  const privacy: ImporterSettings["privacy"] = { zdr: frozen.privacy.zdr || current.privacy.zdr, dataCollection: frozen.privacy.dataCollection === "deny" || current.privacy.dataCollection === "deny" ? "deny" : "allow" };
-  const base: ImporterSettings = { ...frozen, aiEnabled: current.aiEnabled && frozen.aiEnabled, privacy, budget: current.budget, selection: frozen.selection, importerModels: current.importerModels };
+  const base: ImporterSettings = jobRunSettings(job.config, await getImporterSettings());
   // Models come only from the plan frozen at confirmation (a job confirmed before automatic selection gets one now).
   let plan = planOf(job.config);
   if (!plan && base.aiEnabled) {
