@@ -49,6 +49,22 @@ if (!process.env.AI_IMPORT_VAULT_DIR || !process.env.STORAGE_DIR || !process.env
 const FX = process.argv[2];
 const MOCK = process.env.OPENROUTER_TEST_BASE_URL!;
 
+// Network guard for the whole suite: every HTTP request made by this process (the importer, the AI
+// Engine, the FX rate) must go to the loopback mock. Anything else is refused and reported, so a pass
+// proves no real AI provider (OpenRouter, Gemini, OpenAI, …) was contacted.
+const requestHosts = new Set<string>();
+const blockedHosts = new Set<string>();
+const realFetch = globalThis.fetch;
+globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+  const host = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).host;
+  requestHosts.add(host);
+  if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host)) {
+    blockedHosts.add(host);
+    throw new Error(`test network guard: request to ${host} refused`);
+  }
+  return realFetch(input, init);
+}) as typeof fetch;
+
 let pass = 0;
 let fail = 0;
 const section = (s: string) => console.log(`\n=== ${s}`);
@@ -144,6 +160,7 @@ async function main() {
   if (process.env.ONLY === "U") return sectionU(actor, exam.id);
   if (process.env.ONLY === "V") return sectionV(actor, exam.id);
   if (process.env.ONLY === "W") return sectionW(actor, exam.id, anatomy.id);
+  if (process.env.ONLY === "X") return sectionX(actor, exam.id);
   // ------------------------------------------------------------------ A
   section("A. Settings defaults and normalization");
   const d = normalizeImporterSettings({});
@@ -762,6 +779,7 @@ async function main() {
   await sectionU(actor, exam.id);
   await sectionV(actor, exam.id);
   await sectionW(actor, exam.id, anatomy.id);
+  await sectionX(actor, exam.id);
 }
 
 // ------------------------------------------------------------------ T
@@ -875,7 +893,7 @@ async function sectionT(actor: string, examId: string) {
   const okN = results.filter((r) => r.status === "fulfilled").length;
   const refused = results.filter((r) => r.status === "rejected" && /all-time AI budget/.test(String((r.reason as Error).message))).length;
   const after5 = await used();
-  check("12 concurrent requests on 2 jobs: at most what the all-time cap allows ran (worst-case reservations, one lock)", okN >= 1 && okN <= 3 && okN + refused === 12 && (await mockStats()).chat - chats5 === okN, { okN, refused, chats: (await mockStats()).chat - chats5 });
+  check("12 concurrent requests on 2 jobs: at most what the all-time cap allows ran (worst-case reservations, one lock)", okN >= 1 && okN <= 3 && okN + refused === 12 && (await mockStats()).chat - chats5 === okN, { okN, refused, chats: (await mockStats()).chat - chats5, other: results.filter((r) => r.status === "rejected" && !/all-time AI budget/.test(String((r.reason as Error).message))).map((r) => String(((r as PromiseRejectedResult).reason as Error).message).slice(0, 160)) });
   check("…total importer spend stays within the all-time cap", after5 <= capTotal + 1e-9, { after5, capTotal, before5 });
   // A new IST month does not refresh an all-time (pilot) budget: spend up to the cap, then move every
   // reservation into an earlier month (the monthly budget is free again, the all-time one is not).
@@ -1624,7 +1642,8 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   created.runs.push(...cq.map((x) => x.bulkImportRunId).filter((x): x is string => !!x));
   check("retried job finished with questions", ["COMPLETED", "COMPLETED_WITH_ISSUES", "NEEDS_REVIEW"].includes(jCrow.status) && cq.length > 0, { s: jCrow.status, n: cq.length });
   check("no duplicate extracted questions per source label", new Set(cq.map((x) => x.sourceLabel)).size === cq.length);
-  await expectError("retry refused for a finished job", () => retryJob(jC, actor), /Only a failed, paused or cancelled/);
+  // A finished job is offered "Retry failed pages" only when something failed; with nothing failed it is refused.
+  await expectError("retry refused for a finished job (nothing failed)", () => retryJob(jC, actor), /Only a failed, paused or cancelled|Nothing failed in this import/);
   // Cancel before confirmation → retry analyzes again.
   const jA = await newJob(actor, examId, "FX cancel before confirm");
   await upload(actor, jA, "paper.docx");
@@ -1696,6 +1715,324 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   check("paid AI is off again after the section", (await getImporterSettings()).aiEnabled === false);
 }
 
+// ------------------------------------------------------------------ X
+/** Models the reliability / Model Assistant section adds to the mock catalog (config {extraModels: true}). */
+const X_MODELS = ["mockfree/reader", "mockfree/checker", "mockpaid/ocr", "mockpaid/verify", "mocktext/cheap"];
+/** Catalog rows written directly by the section: a text-only model whose NAME claims vision/maths/chemistry, and an unpriced vision model. */
+const X_FAKE = ["mockname/vision-math-chemistry-pro", "mockunpriced/vision"];
+
+/** A synthetic scanned paper: every page is one image with the marker-5 square (the mock answers two questions per page). */
+async function syntheticScannedPdf(file: string, pages: number) {
+  const { PDFDocument } = await import("pdf-lib");
+  const sharp = (await import("sharp")).default;
+  const W = 1240;
+  const H = 1754;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><rect width="100%" height="100%" fill="#fafaf7"/><rect x="${W - 80}" y="0" width="80" height="80" fill="rgb(150,0,150)"/><text x="90" y="140" font-size="30" font-family="DejaVu Sans">Synthetic scanned page (test fixture)</text><text x="90" y="220" font-size="28" font-family="DejaVu Sans">(A) Alpha  (B) Beta  (C) Gamma  (D) Delta</text></svg>`;
+  const doc = await PDFDocument.create();
+  const img = await doc.embedPng(await sharp(Buffer.from(svg)).png().toBuffer());
+  for (let i = 0; i < pages; i++) doc.addPage([595, 842]).drawImage(img, { x: 0, y: 0, width: 595, height: 842 });
+  writeFileSync(path.join(FX, file), await doc.save());
+}
+
+async function sectionX(actor: string, examId: string) {
+  section("X. Reliability: rate-limit breaker, current Paid AI switch, failed-page / answer-key recovery, cost labels, Model Assistant");
+  const { computeModelPlan } = await import("@/lib/ai-import/select");
+  const { refreshRoutes } = await import("@/lib/ai-import/routes");
+  const { retryJob, pauseJob, cancelJob } = await import("@/lib/ai-import/jobs");
+  const { jobCards } = await import("@/lib/ai-import/job-view");
+  const { RATE_LIMIT_STOP } = await import("@/lib/ai-import/ai");
+  const { kindOfCategory, failureKindOf, summarizeFailures } = await import("@/lib/ai-import/failure");
+  const { analyzerVerdict } = await import("@/lib/ai-import/verdict");
+  const { modelAssistant, testImporterModels, applyRecommendedModels } = await import("@/lib/ai-import/assistant");
+  const { openRouterBase } = await import("@/lib/ai-engine/openrouter");
+  const xStats = async () => (await (await fetch(`${MOCK}/__mock/stats`)).json()) as { chat: number; attempts: Record<string, number>; rateLimited: number; routeReads: number; byTask: Record<string, number> };
+  /** Importer AI requests of a job for one task (every attempt is logged, failed ones included). */
+  const calls = (jobId: string, task: string, since = new Date(0)) => prisma.aiImportAiCall.count({ where: { jobId, task, createdAt: { gte: since } } });
+  const clearHistory = () => prisma.aiGatewayCall.deleteMany({ where: { model: { in: [...X_MODELS, ...X_FAKE] } } });
+  const pages = async (jobId: string) => {
+    const rows = await prisma.aiImportPage.findMany({ where: { jobId }, select: { status: true } });
+    const n = (s: string) => rows.filter((r) => r.status === s).length;
+    return { done: n("DONE"), pending: n("PENDING"), failed: n("FAILED"), skipped: n("SKIPPED"), total: rows.length };
+  };
+  const qCount = async (jobId: string) => {
+    const rows = await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { sourceKey: true, fileId: true } });
+    return { n: rows.length, distinct: new Set(rows.map((r) => `${r.fileId}|${r.sourceKey}`)).size };
+  };
+  const confirm = async (jobId: string) => {
+    const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
+    await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, budgetInr: 8 });
+  };
+  const analyzed = async (title: string, file: string, key?: string) => {
+    const id = await newJob(actor, examId, title);
+    const up = await upload(actor, id, file);
+    if (key) await upload(actor, id, key, AiImportFileRole.ANSWER_KEY, up.fileId);
+    await requestAnalysis(id, actor);
+    await runWorker(120_000);
+    return id;
+  };
+  /** Runs the worker in the background and calls `during` once the mock has received its next chat request. */
+  const runWithInterrupt = async (during: () => Promise<void>) => {
+    const before = (await xStats()).chat;
+    const w = runWorker(300_000);
+    const until = Date.now() + 30_000;
+    while ((await xStats()).chat <= before && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+    await during();
+    await w;
+    return (await xStats()).chat - before;
+  };
+  const globalFlags = async () => JSON.stringify(await prisma.aiModel.findMany({ where: { id: { startsWith: "mock", notIn: X_FAKE } }, select: { id: true, approved: true, medicallyApproved: true, disabled: true }, orderBy: { id: "asc" } }));
+  const base = (s: ImporterSettings, list: string[], concurrency = 2): ImporterSettings => ({
+    ...s,
+    aiEnabled: true,
+    importerModels: list,
+    selection: { mode: "auto" },
+    privacy: { dataCollection: "deny", zdr: false },
+    budget: { ...s.budget, totalInr: 10, monthlyInr: 10, maxJobInr: 8, defaultJobCapInr: 8, maxRequestInr: 1, allowPricierFallback: false, retryTransient: false },
+    limits: { ...s.limits, concurrency },
+    verification: { ...s.verification, independentAnswer: false },
+  });
+
+  await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+  await mockConfig({ extraModels: true });
+  await freshPilotBudget();
+  await clearHistory();
+  await saveOpenRouterKey(`sk-or-v1-mock${"x".repeat(40)}-valid`, "script");
+  await testOpenRouterConnection();
+  await setOpenRouterEnabled(true);
+  await syncCatalog();
+  check("the provider base URL is the loopback mock (never openrouter.ai)", /^http:\/\/127\.0\.0\.1:\d+\/api\/v1$/.test(openRouterBase()), openRouterBase());
+  check("the reliability fixture models are in the catalog (published ₹0 and priced vision, a text model)", (await prisma.aiModel.count({ where: { id: { in: X_MODELS } } })) === X_MODELS.length);
+  await syntheticScannedPdf("x-scan6.pdf", 6);
+  await syntheticScannedPdf("x-scan2.pdf", 2);
+  const flags0 = await globalFlags();
+
+  try {
+    // X1 — the production incident, reproduced: a scanned paper on a published-₹0 model whose provider rate-limits every request.
+    const FREE = ["mockfree/reader", "mockfree/checker", "mockpaid/ocr", "mockpaid/verify", "mocktext/cheap"];
+    await setSettings((s) => base(s, FREE, 2), actor);
+    await refreshRoutes(FREE);
+    const p1 = await computeModelPlan(normalizeImporterSettings(await getImporterSettings()), { refresh: false });
+    const E = p1.tasks.extract.model!;
+    check("X1 automatic choice: a published-₹0 vision model reads pages (a known zero, priced ₹0.00)", E.startsWith("mockfree/") && p1.tasks.extract.maxInr === 0 && p1.tasks.extract.price?.prompt === 0 && p1.tasks.verify.model?.startsWith("mockfree/") === true, { m: E, max: p1.tasks.extract.maxInr });
+    await mockConfig({ rateLimit: { "mockfree/reader": -1, "mockfree/checker": -1 } });
+    const j1 = await analyzed("FX rate-limited free model", "x-scan6.pdf");
+    await confirm(j1);
+    const a1 = (await xStats()).chat;
+    await runWorker(300_000);
+    const r1 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j1 } });
+    const sent1 = (await xStats()).chat - a1;
+    const pg1 = await pages(j1);
+    check(`X1 breaker: after ${RATE_LIMIT_STOP} rate-limited answers in a row the job pauses (not all 6 pages sent; concurrency 2 lets at most one more in-flight request finish)`, sent1 >= RATE_LIMIT_STOP && sent1 <= RATE_LIMIT_STOP + 1, { sent1 });
+    check("X1 paused with the explicit reason “Rate limited by the provider”", r1.status === "PAUSED" && /^Rate limited by the provider: /.test(r1.pauseReason ?? ""), { s: r1.status, r: r1.pauseReason });
+    check("X1 unprocessed pages stay pending (not failed); nothing done; no question; never reported as success", pg1.done === 0 && pg1.failed <= 1 && pg1.pending >= 6 - 1 - (sent1 - RATE_LIMIT_STOP) && (await qCount(j1)).n === 0, pg1);
+    check("X1 no retry: one attempt per request; nothing charged (rate-limited requests are released)", r1.spentInr === 0 && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${j1}:` }, status: { not: "RELEASED" } } })) === 0);
+    check("X1 every request went to the confirmed page-reading model (no switch to another model); none was a second read", (await calls(j1, "extract")) === sent1 && (await calls(j1, "verify")) === 0 && (await prisma.aiImportAiCall.count({ where: { jobId: j1, model: { not: E } } })) === 0);
+    const [c1] = await jobCards({ ids: [j1] }, true);
+    check("X1 job card: Retry offered, the next action names the cause", c1.actions.retry && /Rate limited by the provider/.test(c1.nextAction), c1.nextAction);
+
+    // X2 — automatic selection now skips the model its provider just rate-limited (measured history, not its name).
+    const p2 = await computeModelPlan(normalizeImporterSettings(await getImporterSettings()), { refresh: false });
+    const readerRow = p2.tasks.extract.candidates.find((c) => c.id === E);
+    check("X2 automatic selection skips the rate-limited model, with the reason", p2.tasks.extract.model !== E && !!readerRow && !readerRow.eligible && /rate-limited its last \d+ importer request/.test(readerRow.reason ?? ""), { m: p2.tasks.extract.model, r: readerRow?.reason });
+    await setSettings((s) => ({ ...s, selection: { mode: "manual" }, models: { ...s.models, extract: E, verify: "mockpaid/verify", classify: "mocktext/cheap", key: null, extractFallbacks: [] } }), actor);
+    const p2m = await computeModelPlan(normalizeImporterSettings(await getImporterSettings()), { refresh: false });
+    check("X2 manual override may still choose it, with a warning", p2m.tasks.extract.model === E && /Warning: its provider rate-limited/.test(p2m.tasks.extract.reason), p2m.tasks.extract.reason);
+    await setSettings((s) => ({ ...s, selection: { mode: "auto" } }), actor);
+
+    // X3 — recovery: the provider accepts again; Retry continues with the job's confirmed model (no silent switch).
+    await mockConfig({ rateLimit: {} });
+    const t3 = new Date();
+    await retryJob(j1, actor);
+    await runWorker(300_000);
+    const r3 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j1 } });
+    const q3 = await qCount(j1);
+    check("X3 after Retry the job finishes: 6 pages done, 12 questions, none duplicated", r3.status === "NEEDS_REVIEW" && (await pages(j1)).done === 6 && q3.n === 12 && q3.distinct === 12, { s: r3.status, p: await pages(j1), q3 });
+    check("X3 each unread page is sent exactly once on Retry (6 page reads + 6 second reads); the confirmed models are kept", (await calls(j1, "extract", t3)) === 6 && (await calls(j1, "verify", t3)) === 6 && (await prisma.aiImportAiCall.count({ where: { jobId: j1, task: "extract", model: { not: E } } })) === 0 && (await prisma.aiImportEvent.count({ where: { jobId: j1, type: "MODEL_REPLACED" } })) === 0, { e: await calls(j1, "extract", t3), v: await calls(j1, "verify", t3) });
+    await clearHistory();
+
+    // X4 — one page fails (a single 429 does not trip the breaker); Retry failed pages reads ONLY that page.
+    const PAID = ["mockpaid/ocr", "mockpaid/verify", "mocktext/cheap"];
+    await freshPilotBudget();
+    await setSettings((s) => base(s, PAID, 1), actor);
+    await refreshRoutes(PAID);
+    await mockConfig({ rateLimit: { "mockpaid/ocr": 1 } });
+    const j4 = await analyzed("FX one page rate-limited", "x-scan6.pdf");
+    await confirm(j4);
+    await runWorker(300_000);
+    const r4 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j4 } });
+    const pg4 = await pages(j4);
+    check("X4 a single rate-limited answer: that page fails, the other 5 are read (the breaker needs 2 in a row)", r4.status === "NEEDS_REVIEW" && pg4.failed === 1 && pg4.done === 5 && (await qCount(j4)).n === 10, { s: r4.status, pg4 });
+    const failedPage = await prisma.aiImportPage.findFirstOrThrow({ where: { jobId: j4, status: "FAILED" } });
+    check("X4 the page error names the cause (rate limit) and is classified", /^Rate limited by the provider: /.test(failedPage.errorMessage ?? "") && failureKindOf(failedPage.errorMessage) === "rate_limited", failedPage.errorMessage);
+    check("X4 the job says what failed and what to do (never a silent success)", /1 page\(s\) failed \(1 rate limited by the provider\)/.test(r4.errorMessage ?? "") && /Retry failed pages/.test(r4.errorMessage ?? ""), r4.errorMessage);
+    const [c4] = await jobCards({ ids: [j4] }, true);
+    check("X4 job card: Retry failed pages offered for the Needs-review job; read questions are kept", c4.actions.retry && /10 question\(s\) already read are kept/.test(c4.nextAction), { a: c4.actions, n: c4.nextAction });
+    // Paid AI off: the recovery is refused and nothing changes.
+    await setSettings((s) => ({ ...s, aiEnabled: false }), actor);
+    await expectError("X4 Retry failed pages with Paid AI OFF → refused, nothing changed", () => retryJob(j4, actor), /Paid AI is switched off/);
+    check("X4 …the job is still Needs review and the page still failed", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j4 } })).status === "NEEDS_REVIEW" && (await pages(j4)).failed === 1);
+    await setSettings((s) => ({ ...s, aiEnabled: true }), actor);
+    const t4 = new Date();
+    const b4 = { resv: await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${j4}:` } } }) };
+    await retryJob(j4, actor);
+    check("X4 Retry failed pages: queued; only the failed page went back to pending", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j4 } })).status === "QUEUED" && (await pages(j4)).pending === 1 && (await pages(j4)).done === 5);
+    await runWorker(300_000);
+    const r4b = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j4 } });
+    const q4 = await qCount(j4);
+    check("X4 after the retry: 6 pages done, 12 questions, no duplicate", r4b.status === "NEEDS_REVIEW" && (await pages(j4)).done === 6 && q4.n === 12 && q4.distinct === 12, { s: r4b.status, q4 });
+    check("X4 completed pages were not resubmitted: exactly 1 more page read and 1 more second read", (await calls(j4, "extract", t4)) === 1 && (await calls(j4, "verify", t4)) === 1, { e: await calls(j4, "extract", t4), v: await calls(j4, "verify", t4) });
+    const okReads = await prisma.aiImportAiCall.groupBy({ by: ["pageId"], where: { jobId: j4, task: "extract", ok: true }, _count: { _all: true } });
+    check("X4 every page has exactly one successful (charged) page read", okReads.length === 6 && okReads.every((r) => r._count._all === 1), okReads.map((r) => r._count._all));
+    const settled4 = await prisma.aiBudgetReservation.aggregate({ where: { requestKey: { startsWith: `qi:${j4}:` }, status: "SETTLED" }, _sum: { settledInr: true } });
+    check("X4 the job's spend equals its settled reservations (reserved and actual never both counted)", Math.abs((settled4._sum.settledInr ?? 0) - r4b.spentInr) < 1e-9 && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${j4}:` }, status: "RESERVED" } })) === 0, { settled: settled4._sum.settledInr, spent: r4b.spentInr, before: b4.resv });
+    check("X4 the page's earlier error and the events are kept as history", (await prisma.aiImportEvent.count({ where: { jobId: j4, type: { in: ["PAGE_FAILED", "RETRY_FAILED"] } } })) === 2);
+    await expectError("X4 Retry when nothing failed → refused", () => retryJob(j4, actor), /Nothing failed in this import/);
+
+    // X5 — Paid AI switched off WHILE a request is in flight: that request finishes and is saved; nothing more is sent.
+    await mockConfig({ rateLimit: {}, chatDelayMs: 1500 });
+    const j5 = await analyzed("FX Paid AI switched off mid-run", "x-scan6.pdf");
+    await confirm(j5);
+    const sent5 = await runWithInterrupt(() => setSettings((s) => ({ ...s, aiEnabled: false }), actor));
+    const r5 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } });
+    const pg5 = await pages(j5);
+    check("X5 switched off mid-run: exactly the 1 in-flight request was sent, then none (the next one is refused before sending)", sent5 === 1, { sent5 });
+    check("X5 paused with “Paid AI is off”; the in-flight page is saved; the other 5 stay pending", r5.status === "PAUSED" && /^Paid AI is off: /.test(r5.pauseReason ?? "") && pg5.done === 1 && pg5.pending === 5 && (await qCount(j5)).n === 2, { s: r5.status, r: r5.pauseReason, pg5 });
+    check("X5 the finished in-flight request is recorded with its cost", (await prisma.aiImportAiCall.count({ where: { jobId: j5, task: "extract", ok: true } })) === 1 && r5.spentInr > 0);
+    await setSettings((s) => ({ ...s, aiEnabled: true }), actor);
+    await mockConfig({ chatDelayMs: 0 });
+    const t5 = new Date();
+    await retryJob(j5, actor);
+    await runWorker(300_000);
+    const firstPage5 = await prisma.aiImportPage.findFirstOrThrow({ where: { jobId: j5, pageNumber: 1 } });
+    check("X5 switched on + Retry: the 5 pending pages are read (the saved page is not read again)", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).status === "NEEDS_REVIEW" && (await calls(j5, "extract", t5)) === 5 && (await prisma.aiImportAiCall.count({ where: { jobId: j5, task: "extract", pageId: firstPage5.id } })) === 1 && (await qCount(j5)).n === 12, { e: await calls(j5, "extract", t5) });
+
+    // X6 — cancel / pause while a request is in flight.
+    await mockConfig({ chatDelayMs: 1500 });
+    const j6 = await analyzed("FX cancelled mid-run", "x-scan6.pdf");
+    await confirm(j6);
+    const sent6 = await runWithInterrupt(() => cancelJob(j6, actor));
+    const r6 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j6 } });
+    check("X6 cancelled mid-run: only the in-flight request was sent; its paid page is kept; job stays cancelled", sent6 === 1 && r6.status === "CANCELLED" && (await pages(j6)).done === 1 && (await qCount(j6)).n === 2, { sent6, s: r6.status, p: await pages(j6) });
+    const j6b = await analyzed("FX paused mid-run", "x-scan6.pdf");
+    await confirm(j6b);
+    const sent6b = await runWithInterrupt(() => pauseJob(j6b, actor));
+    const r6b = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j6b } });
+    check("X6 paused mid-run: only the in-flight request was sent; its page is kept; the rest stay pending", sent6b === 1 && r6b.status === "PAUSED" && r6b.pauseReason === "Paused by an administrator" && (await pages(j6b)).done === 1 && (await pages(j6b)).pending === 5, { sent6b, s: r6b.status, p: await pages(j6b) });
+    await mockConfig({ chatDelayMs: 0 });
+
+    // X7 — the answer key cannot be read (image input refused): the file is NOT marked processed; Retry reads only the key.
+    await freshPilotBudget();
+    await mockConfig({ failTask: { key: [400, "image input is not supported by this endpoint"] } });
+    const j7 = await analyzed("FX answer key fails", "x-scan2.pdf", "scanned-key.png");
+    await confirm(j7);
+    await runWorker(300_000);
+    const r7 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j7 } });
+    const key7 = await prisma.aiImportFile.findFirstOrThrow({ where: { jobId: j7, role: AiImportFileRole.ANSWER_KEY } });
+    check("X7 failed key reading: file not marked processed, error names the cause (image input) and says Retry", key7.status === "ANALYZED" && /^Image input not supported: /.test(key7.errorMessage ?? "") && /use Retry/.test(key7.errorMessage ?? ""), { st: key7.status, e: key7.errorMessage });
+    check("X7 the job says the answer key could not be read; pages are done", r7.status === "NEEDS_REVIEW" && /answer-key file\(s\) could not be read/.test(r7.errorMessage ?? "") && (await pages(j7)).done === 2, { s: r7.status, e: r7.errorMessage });
+    const [c7] = await jobCards({ ids: [j7] }, true);
+    check("X7 job card: 1 failed key, Retry offered", c7.failedKeys === 1 && c7.actions.retry);
+    await mockConfig({ failTask: {} });
+    const t7 = new Date();
+    const b7 = { keyCalls: (await xStats()).byTask.key ?? 0 };
+    await retryJob(j7, actor);
+    await runWorker(300_000);
+    const key7b = await prisma.aiImportFile.findFirstOrThrow({ where: { id: key7.id } });
+    check("X7 after Retry: the key is read (3 entries, not duplicated), the file is processed, no page re-read", key7b.status === "PROCESSED" && key7b.errorMessage === null && (await prisma.aiImportKeyEntry.count({ where: { keyFileId: key7.id } })) === 3 && (await calls(j7, "extract", t7)) === 0 && (await calls(j7, "key", t7)) === 1 && ((await xStats()).byTask.key ?? 0) - b7.keyCalls === 1, { st: key7b.status, e: await calls(j7, "extract", t7), k: await calls(j7, "key", t7) });
+    await expectError("X7 Retry again → nothing failed", () => retryJob(j7, actor), /Nothing failed/);
+
+    // X8 — error kinds and cost labels.
+    check("X8 error kinds: 429 → rate limit; 404 no endpoint → route; image refusal → image input; empty → model output", kindOfCategory("rate_limited") === "rate_limited" && kindOfCategory("no_endpoint", "No endpoints found matching your data policy") === "route_unavailable" && kindOfCategory("bad_request", "image input is not supported") === "image_unsupported" && kindOfCategory("bad_request", "invalid max_tokens") === "bad_request" && kindOfCategory("empty_response") === "model_output" && kindOfCategory("insufficient_credits") === "budget");
+    check("X8 a stored pre-fix error (“OpenRouter rate-limited the request.”) is still recognized as a rate limit", failureKindOf("OpenRouter failed: OpenRouter rate-limited the request. (Provider returned error)") === "rate_limited");
+    check("X8 failure summary groups by cause", summarizeFailures(["Rate limited by the provider: x", "Rate limited by the provider: y", "Model output failure: z", null]).text === "2 rate limited by the provider, 1 model output failure, 1 other error");
+    const verdictOf = async (jobId: string, patch?: (e: Record<string, unknown>) => Record<string, unknown>) => {
+      const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
+      const est = j.estimate as Record<string, unknown>;
+      return analyzerVerdict({ analysis: j.analysis as never, estimate: (patch ? patch(est) : est) as never, aiEnabled: true, remainingBudgetInr: 10, jobBudgetInr: 8, limits: { maxPagesPerFile: 300, maxFileMb: 100 } });
+    };
+    const v1 = await verdictOf(j1);
+    check("X8 a job on published-₹0 models: cost basis “zero_published” (₹0.00 is a known zero) and a rate-limit warning", v1.costBasis === "zero_published" && v1.estimatedCostInr === 0 && v1.warnings.some((w) => /published price of ₹0/.test(w) && /rate-limited/.test(w)), { b: v1.costBasis, e: v1.estimatedCostInr });
+    const v4 = await verdictOf(j4);
+    check("X8 a job on priced models: cost basis “estimated”, above ₹0", v4.costBasis === "estimated" && (v4.estimatedCostInr ?? 0) > 0, { b: v4.costBasis, e: v4.estimatedCostInr });
+    const vU = await verdictOf(j4, (e) => ({ ...e, totalInr: null, maxInr: null }));
+    check("X8 an unpriced estimate: cost basis “unknown” (never ₹0) and processing is blocked", vU.costBasis === "unknown" && vU.estimatedCostInr === null && !vU.canProcess, { b: vU.costBasis });
+    const { estimateJobCost } = await import("@/lib/ai-import/estimate");
+    const jEst = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j4 } });
+    const planE = (jEst.estimate as unknown as { plan: import("@/lib/ai-import/selection-types").ModelPlan }).plan;
+    const unpriced = { ...planE, tasks: { ...planE.tasks, extract: { ...planE.tasks.extract, price: null, maxInr: null } } };
+    const eU = await estimateJobCost({ paperFacts: (jEst.analysis as { files: { role: string; facts: never }[] }).files.filter((f) => f.role === "PAPER").map((f) => f.facts), keyFacts: [], settings: normalizeImporterSettings(await getImporterSettings()), plan: unpriced });
+    const lineU = eU.lines.find((l) => l.task === "extract")!;
+    check("X8 estimate line without a price: ₹ value is null (unknown), never 0, and the reason is given", lineU.inr === null && lineU.usd === null && lineU.problem === "no price", lineU);
+
+    // X9 — Model Assistant (deterministic, catalog-based: no AI request, no network call).
+    await prisma.aiModel.upsert({ where: { id: X_FAKE[0] }, create: { id: X_FAKE[0], name: "Vision Math Chemistry Pro", vendor: "mockname", inputModalities: ["text"], outputModalities: ["text"], supportedParameters: ["max_tokens", "response_format"], promptPrice: 0.00000001, completionPrice: 0.00000002, lastSyncedAt: new Date() }, update: {} });
+    await prisma.aiModel.upsert({ where: { id: X_FAKE[1] }, create: { id: X_FAKE[1], name: "Unpriced vision", vendor: "mockunpriced", inputModalities: ["text", "image"], outputModalities: ["text"], supportedParameters: ["max_tokens"], promptPrice: null, completionPrice: null, lastSyncedAt: new Date() }, update: {} });
+    // The free reader was just rate-limited again (recorded history).
+    for (let i = 0; i < 2; i++) await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: "mockfree/reader", modelRequested: "mockfree/reader", kind: "text", routingMode: "manual", ok: false, errorCategory: "rate_limited", latencyMs: 1, requestId: `x9-${i}`, attempt: 1, fallbackUsed: false, costStatus: "none" } });
+    await setSettings((s) => base(s, ["mockpaid/ocr", "mocktext/cheap"], 2), actor);
+    await refreshRoutes(["mockpaid/ocr", "mocktext/cheap"]);
+    const s9 = normalizeImporterSettings(await getImporterSettings());
+    const st9 = await xStats();
+    const r9 = await modelAssistant(s9);
+    const by = (p: string) => r9.purposes.find((x) => x.purpose === p)!;
+    const ids = (p: string) => by(p).candidates.map((c) => c.id);
+    check("X9 method is catalog-based, with Paid AI on still no AI reasoning", r9.method === "catalog" && /no AI request was sent/.test(r9.methodNote), r9.methodNote);
+    check("X9 seven purposes: OCR, mathematics, chemistry, diagrams, answer key, verification, classification", r9.purposes.map((p) => p.purpose).join() === "ocr,mathematics,chemistry,diagrams,answer_key,verification,classification");
+    const visionPurposes = ["ocr", "mathematics", "chemistry", "diagrams", "answer_key", "verification"];
+    check("X9 every page-reading recommendation reads images (published modality) and has a known price", visionPurposes.every((p) => by(p).candidates.length > 0 && by(p).candidates.every((c) => c.imageInput && c.price.state !== "unknown")), visionPurposes.map((p) => ids(p)));
+    check("X9 a text-only model NAMED “vision-math-chemistry” is never recommended for pages, maths or chemistry (no name inference)", visionPurposes.every((p) => !ids(p).includes(X_FAKE[0])));
+    check("X9 mathematics / chemistry / diagrams get the same candidates as OCR (the catalog publishes no subject ability)", ["mathematics", "chemistry", "diagrams"].every((p) => ids(p).join() === ids("ocr").join()) && /Not tested/.test(by("mathematics").requirements) && /Not tested/.test(by("chemistry").requirements));
+    check("X9 an unpriced model is never recommended (unknown price is not ₹0) and is counted as excluded", r9.purposes.every((p) => !ids(p.purpose).includes(X_FAKE[1])) && by("ocr").excluded.some((e) => /no fixed published price \(unknown — never treated as ₹0\)/.test(e.reason)));
+    check("X9 the model its provider just rate-limited is not recommended", r9.purposes.every((p) => !ids(p.purpose).includes("mockfree/reader")) && by("ocr").excluded.some((e) => /rate-limited/.test(e.reason)));
+    // With a ₹0.10 request cap only the cheapest priced model and the published-₹0 ones qualify.
+    const r9z = await modelAssistant({ ...s9, budget: { ...s9.budget, maxRequestInr: 0.1 } });
+    const ocrZ = r9z.purposes.find((p) => p.purpose === "ocr")!.candidates;
+    const firstZero = ocrZ.findIndex((c) => c.price.state === "zero");
+    check("X9 published-₹0 models come after priced ones, show ₹0.00 as a published free price and warn about rate limits", firstZero > 0 && ocrZ.slice(0, firstZero).every((c) => c.price.state === "published") && ocrZ.slice(firstZero).every((c) => c.price.state === "zero" && /published free price/.test(c.price.text) && c.limitations.some((l) => /HTTP 429/.test(l))), ocrZ.map((c) => [c.id, c.price.state]));
+    check("X9 independent verification is a different model than page reading", !!by("verification").recommended && by("verification").recommended !== by("ocr").recommended, [by("ocr").recommended, by("verification").recommended]);
+    check("X9 quality is “Not tested” for every candidate (no benchmark claimed)", r9.purposes.every((p) => p.candidates.every((c) => c.test.quality === "not_tested" && c.limitations.some((l) => /Not tested/.test(l)))));
+    const listed = r9.purposes.flatMap((p) => p.candidates).find((c) => c.id === "mockpaid/ocr");
+    check("X9 a listed model shows a verified route and its configuration test; unlisted ones say routes are read when added", !!listed && listed.onList && listed.route.state === "verified" && listed.test.config === "passed" && r9.purposes.flatMap((p) => p.candidates).filter((c) => !c.onList).every((c) => c.route.state === "not_read" && c.test.config === "not_run"), listed);
+    check("X9 recent rate-limit history is shown as measured counts", r9.purposes.flatMap((p) => p.candidates).every((c) => /importer request/.test(c.history.text)));
+    const rep9 = await testImporterModels(s9);
+    check("X9 Test Models: configuration checks only — 0 AI requests, quality tests disabled", rep9.aiRequestsSent === 0 && rep9.quality.enabled === false && rep9.models.map((m) => m.id).join() === "mockpaid/ocr,mocktext/cheap" && rep9.models.every((m) => m.checks.length > 0));
+    const st9b = await xStats();
+    check("X9 Find + Test sent no chat request and read no route from the provider", st9b.chat === st9.chat && st9b.routeReads === st9.routeReads, { chat: st9b.chat - st9.chat, routes: st9b.routeReads - st9.routeReads });
+    // Apply: preview-guarded, importer list only.
+    const { AssistantApplyError } = await import("@/lib/ai-import/assistant");
+    await expectError("X9 Apply with a stale preview (list changed) → refused, nothing saved", () => applyRecommendedModels({ settings: s9, add: r9.toAdd, expectedList: ["something/else"], actorId: actor }), /changed since the recommendations were shown/);
+    await expectError("X9 Apply of a model the assistant does not recommend → refused", () => applyRecommendedModels({ settings: s9, add: ["mockvision/pricey"], expectedList: s9.importerModels, actorId: actor }), /not recommended now/);
+    check("X9 refusals are typed (shown to the admin as-is)", AssistantApplyError.name === "AssistantApplyError");
+    const keep = (x: ImporterSettings) => JSON.stringify({ ...x, importerModels: [], updatedAt: undefined });
+    const beforeApply = normalizeImporterSettings(await getImporterSettings());
+    const routeReads0 = (await xStats()).routeReads;
+    const ap = await applyRecommendedModels({ settings: s9, add: r9.toAdd, expectedList: s9.importerModels, actorId: actor });
+    const afterApply = normalizeImporterSettings(await getImporterSettings());
+    check("X9 Apply adds exactly the previewed models to the importer list", r9.toAdd.length > 0 && afterApply.importerModels.join() === [...s9.importerModels, ...r9.toAdd].join(), { add: r9.toAdd, list: afterApply.importerModels });
+    check("X9 …and changes no other importer setting (Paid AI, budgets, privacy, selection)", keep(afterApply) === keep(beforeApply));
+    check("X9 …and no global AI → Models approval (student Ask AI / Instagram routing unaffected)", (await globalFlags()) === flags0);
+    check("X9 …audited", (await prisma.auditLog.count({ where: { action: "AI_IMPORTER_MODELS_APPLIED", actorId: actor } })) >= 1);
+    check("X9 …then re-validates: routes re-read (free metadata) and every task re-checked", (await xStats()).routeReads > routeReads0 && ap.tasks.length === 4 && ap.routesError === null && ap.tasks.every((t) => typeof t.reason === "string"), ap.tasks);
+    check("X9 Apply sent no chat (AI) request", (await xStats()).chat === st9.chat);
+    await expectError("X9 Apply again with nothing new → refused", () => applyRecommendedModels({ settings: afterApply, add: [], expectedList: afterApply.importerModels, actorId: actor }), /Nothing to add/);
+    await setSettings((s) => ({ ...s, aiEnabled: false }), actor);
+    const r10 = await modelAssistant(normalizeImporterSettings(await getImporterSettings()));
+    check("X10 with Paid AI OFF the assistant still works, says so, and sends nothing", r10.paidAiOn === false && /^Paid AI is OFF/.test(r10.methodNote) && (await xStats()).chat === st9.chat);
+  } finally {
+    await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+    await prisma.aiGatewayCall.deleteMany({ where: { requestId: { startsWith: "x9-" } } });
+    await clearHistory();
+    await prisma.aiModel.deleteMany({ where: { id: { in: [...X_MODELS, ...X_FAKE] } } });
+    for (const f of ["x-scan6.pdf", "x-scan2.pdf"]) {
+      try {
+        execFileSync("rm", ["-f", path.join(FX, f)]);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+}
+
 async function analyzeAndConfirmExisting(actor: string, jobId: string, budgetInr: number) {
   const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
   await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, budgetInr });
@@ -1733,6 +2070,7 @@ main()
   })
   .finally(async () => {
     if (process.env.KEEP !== "1") await cleanup().catch((e) => console.error("cleanup failed", e));
+    check(`network guard: every request of this run went to the loopback mock (hosts: ${[...requestHosts].join(", ") || "none"})`, blockedHosts.size === 0, [...blockedHosts]);
     console.log(`\n${pass} passed, ${fail} failed`);
     console.log(fail ? "SOME CHECKS FAILED" : "ALL PASS");
     await prisma.$disconnect();

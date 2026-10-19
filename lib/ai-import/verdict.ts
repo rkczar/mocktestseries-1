@@ -9,7 +9,7 @@
  */
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { CostEstimate } from "@/lib/ai-import/estimate";
-import { SELECTION_TASK_LABELS } from "@/lib/ai-import/config";
+import { SELECTION_TASK_LABELS, type SelectionTask } from "@/lib/ai-import/config";
 
 export type FactKind = "detected" | "estimate" | "unavailable";
 
@@ -33,6 +33,12 @@ export interface AnalyzerVerdict {
   /** Conservative maximum this job can spend (₹0 for local reading); null when it cannot be priced. */
   maxCostInr: number | null;
   estimatedCostInr: number | null;
+  /**
+   * What the cost figures are: "local" (no AI, ₹0), "zero_published" (every AI step uses a model whose
+   * published price is ₹0 — a known zero), "estimated" (priced), "unknown" (a price or the rate is missing —
+   * never shown as ₹0).
+   */
+  costBasis: "local" | "zero_published" | "estimated" | "unknown";
   /** Whether the analysis is metadata-only (no AI was or will be used for analysis — always true here). */
   analysisMode: string;
   canProcess: boolean;
@@ -160,6 +166,13 @@ export function analyzerVerdict(input: {
     blocker = { reason: "This import has no paper year and its exam has no year set, so the Question Bank would refuse every question.", nextAction: "Delete this import and upload the file again, entering the paper's year." };
     strategy = "BLOCKED";
   }
+  const runLines = usesAi && est ? est.lines.filter((l) => l.calls > 0 && l.model) : [];
+  const zeroPrice = (t: string) => {
+    const p = plan?.tasks[t as SelectionTask]?.price;
+    return !!p && p.prompt === 0 && p.completion === 0 && p.image === 0 && p.request === 0;
+  };
+  const costBasis: AnalyzerVerdict["costBasis"] = !usesAi ? "local" : maxCostInr === null || est?.totalInr === null || est?.totalInr === undefined ? "unknown" : runLines.length && runLines.every((l) => zeroPrice(l.task)) ? "zero_published" : "estimated";
+  if (costBasis === "zero_published") warnings.push("Every model chosen for this job has a published price of ₹0 (a known zero, not a missing price). Free-price provider routes are often rate-limited: if the provider refuses 2 requests in a row, processing pauses with the reason and the unread pages stay pending for Retry.");
   const otherModels = usesAi && plan ? (["verify", "key", "classify"] as const).map((k) => ({ task: SELECTION_TASK_LABELS[k], model: plan.tasks[k].model, reason: plan.tasks[k].reason })) : [];
   if (usesAi && strategy !== "AI") model = { ...model, reason: `${model.reason} Paid AI is on, so the steps listed below (for example topic classification) use the cheapest suitable importer model; their cost is included.` };
   const strategyLabel = {
@@ -177,6 +190,7 @@ export function analyzerVerdict(input: {
     otherModels,
     maxCostInr,
     estimatedCostInr: usesAi ? (est?.totalInr ?? null) : 0,
+    costBasis,
     analysisMode: "Local, metadata-only analysis on this server — no AI request was made and nothing was charged.",
     canProcess: blocker === null,
     blocker,

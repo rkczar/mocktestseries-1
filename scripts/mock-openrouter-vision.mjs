@@ -23,6 +23,12 @@
  *   — key credit left (null = key without a limit), reported cost × multiplier, /models failure, route-metadata
  *   failures, per-model route status, models chat answers "no endpoints" for, models taken off the ZDR list.
  * GET /models/{id}/endpoints and GET /endpoints/zdr serve the routes (stats.routeReads counts them).
+ * Model Assistant / reliability fixtures (config {extraModels: true}; off by default so the other suites see the
+ * usual catalog): mockfree/reader + mockfree/checker (published price 0), mockpaid/ocr + mockpaid/verify (priced
+ * vision), mocktext/cheap (text only). config {rateLimit: {id: n}} answers the next n requests to a model with
+ * HTTP 429 "Provider returned error" (n = -1: always); {badRequest: {id: message}} answers HTTP 400;
+ * {failTask: {extract|key|solve|classify: [status, message]}} fails every request of one importer task.
+ * stats.attempts counts every chat attempt per model (rate-limited ones included).
  */
 import http from "node:http";
 import { readFileSync } from "node:fs";
@@ -47,9 +53,17 @@ const MODELS = {
   "mockvision/down": { p: 0.00000002, c: 0.0000002, vision: true, status: -5 },
   "mockvision/mid": { p: 0.00000006, c: 0.00000035, vision: true },
 };
+const EXTRA = {
+  "mockfree/reader": { p: 0, c: 0, vision: true, json: true },
+  "mockfree/checker": { p: 0, c: 0, vision: true, json: true },
+  "mockpaid/ocr": { p: 0.00000004, c: 0.00000025, vision: true, json: true },
+  "mockpaid/verify": { p: 0.00000007, c: 0.00000035, vision: true, json: true },
+  "mocktext/cheap": { p: 0.00000005, c: 0.0000002, vision: false, json: true },
+};
+const M = () => (config.extraModels ? { ...MODELS, ...EXTRA } : MODELS);
 /** Provider routes of a model: [tag, price factor]; every model is ZDR unless `zdr: false`. */
 const routesOf = (id) => {
-  const m = MODELS[id];
+  const m = M()[id];
   return (m.routes ?? [[m.zdr === false ? "mockprov/std" : "mockprov/zdr", 1]]).map(([tag, f]) => ({
     name: `Mock | ${id}`,
     model_id: id,
@@ -63,12 +77,12 @@ const routesOf = (id) => {
   }));
 };
 const zdrRoute = (id) => !config.zdrRemoved.includes(id) && routesOf(id).some((r) => r.tag !== "mockprov/std");
-const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [] };
+const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, rateLimit: {}, badRequest: {}, failTask: {} };
 const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
 
-const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], routeReads: 0, bodies: 0 };
+const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0 };
 let seq = 0;
 
 function json(res, status, body) {
@@ -133,7 +147,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/__mock/stats") return json(res, 200, stats);
   if (url.pathname === "/__mock/reset") {
-    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], routeReads: 0, bodies: 0 });
+    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0 });
     Object.assign(config, structuredClone(DEFAULT_CONFIG));
     return json(res, 200, { ok: true });
   }
@@ -146,21 +160,21 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && p === "/models") {
     if (config.modelsStatus) return err(res, config.modelsStatus, "mock: models unavailable");
     return json(res, 200, {
-      data: Object.entries(MODELS).map(([id, m]) => ({ id, name: id, context_length: 200000, architecture: { input_modalities: m.vision ? ["text", "image"] : ["text"], output_modalities: ["text"] }, pricing: { prompt: String(m.p), completion: String(m.c), ...(m.image ? { image: m.image } : {}) }, top_provider: { max_completion_tokens: 16000 }, supported_parameters: ["max_tokens", "temperature"] })),
+      data: Object.entries(M()).map(([id, m]) => ({ id, name: id, context_length: 200000, architecture: { input_modalities: m.vision ? ["text", "image"] : ["text"], output_modalities: ["text"] }, pricing: { prompt: String(m.p), completion: String(m.c), ...(m.image ? { image: m.image } : {}) }, top_provider: { max_completion_tokens: 16000 }, supported_parameters: ["max_tokens", "temperature", ...(m.json ? ["response_format"] : [])] })),
     });
   }
   if (req.method === "GET" && p === "/images/models") return json(res, 200, { data: [] });
   if (req.method === "GET" && p === "/endpoints/zdr") {
     stats.routeReads++;
     if (config.zdrStatus) return err(res, config.zdrStatus, "mock: zdr list unavailable");
-    return json(res, 200, { data: Object.keys(MODELS).filter(zdrRoute).flatMap((id) => routesOf(id).filter((r) => r.tag !== "mockprov/std")) });
+    return json(res, 200, { data: Object.keys(M()).filter(zdrRoute).flatMap((id) => routesOf(id).filter((r) => r.tag !== "mockprov/std")) });
   }
   const epm = /^\/models\/(.+)\/endpoints$/.exec(p);
   if (req.method === "GET" && epm) {
     stats.routeReads++;
     if (config.endpointsStatus) return err(res, config.endpointsStatus, "mock: endpoints unavailable");
     const id = decodeURIComponent(epm[1]);
-    if (!MODELS[id]) return err(res, 404, "Model not found");
+    if (!M()[id]) return err(res, 404, "Model not found");
     return json(res, 200, { data: { id, name: id, endpoints: routesOf(id) } });
   }
   const auth = req.headers.authorization ?? "";
@@ -181,9 +195,25 @@ const server = http.createServer(async (req, res) => {
     const order = Array.isArray(body.models) && body.models.length ? body.models : [body.model];
     let last = [404, "No endpoints found"];
     for (const id of order) {
-      const m = MODELS[id];
+      const m = M()[id];
       if (!m) {
         last = [404, `${id} is not a valid model ID`];
+        continue;
+      }
+      stats.attempts[id] = (stats.attempts[id] ?? 0) + 1;
+      const rl = config.rateLimit[id];
+      if (rl === -1 || rl > 0) {
+        if (rl > 0) config.rateLimit[id] = rl - 1;
+        stats.rateLimited++;
+        last = [429, "Provider returned error"];
+        continue;
+      }
+      if (config.badRequest[id]) {
+        last = [400, config.badRequest[id]];
+        continue;
+      }
+      if (config.failTask[task]) {
+        last = config.failTask[task];
         continue;
       }
       if (image && !m.vision) {
@@ -211,7 +241,10 @@ const server = http.createServer(async (req, res) => {
         const marker = image ? await markerOf(image) : null;
         stats.byMarker[marker ?? "none"] = (stats.byMarker[marker ?? "none"] ?? 0) + 1;
         const fx = marker ? fixtures.pages[marker] : null;
-        if (!fx) out = { questions: [], answer_key: [], page_notes: "nothing recognized" };
+        // Marker 5: a synthetic multi-page scanned paper — two questions per page, numbered from the page number.
+        const pageNo = Number(/Page (\d+) of/.exec(text)?.[1] ?? 0);
+        if (marker === "5") out = { questions: [1, 2].map((k) => ({ number: 2 * pageNo - 2 + k, type: "SINGLE_CORRECT", stem: `Synthetic scanned page ${pageNo}, item ${k}: which option is the synthetic answer?`, options: ["Alpha", "Beta", "Gamma", "Delta"].map((t, i) => ({ label: `(${"ABCD"[i]})`, text: `${t} ${pageNo}.${k}` })), figures: [], confidence: 0.95 })), answer_key: [], page_notes: "" };
+        else if (!fx) out = { questions: [], answer_key: [], page_notes: "nothing recognized" };
         else out = { questions: id === "mockvision/checker" && fx.checker ? fx.checker.questions : fx.questions, answer_key: fx.answer_key ?? [], page_notes: "" };
       } else if (task === "key") {
         const marker = image ? await markerOf(image) : null;

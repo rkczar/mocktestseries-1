@@ -7,7 +7,8 @@ import { getUsdInr, type FxRate } from "@/lib/ai-engine/fx";
 import { istDayMonth } from "@/lib/ai-engine/budget";
 import { formatInr, usdToInr } from "@/lib/ai-engine/config";
 import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, getKeyInfo, sanitize, type ChatContentPart } from "@/lib/ai-engine/openrouter";
-import { PILOT_LIMITS, SELECTION_TASK_LABELS, importerFeature, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
+import { IMPORTER_SETTING_KEY, PILOT_LIMITS, SELECTION_TASK_LABELS, importerFeature, normalizeImporterSettings, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
+import { FAILURE_ADVICE, failureMessage, kindOfCategory, type FailureKind } from "@/lib/ai-import/failure";
 import { computeModelPlan, planOf, requestUsd } from "@/lib/ai-import/select";
 import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
 
@@ -29,6 +30,13 @@ import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
  * remaining credit is read and the request is refused unless the configured
  * reserve (budget.keyReserveUsd) would remain after its worst case.
  * One attempt per request unless budget.retryTransient is on.
+ *
+ * Immediately before each request is sent, the reservation (one transaction)
+ * re-reads the AUTHORITATIVE importer settings and the job's status from the
+ * database: with Paid AI switched off, or the job paused / cancelled
+ * meanwhile, nothing is sent. A request already sent finishes and is recorded.
+ * After RATE_LIMIT_STOP consecutive rate-limited answers in one job run, no
+ * further request is sent for that job (ImporterRateLimited → paused).
  */
 
 export class ImporterBudgetError extends Error {
@@ -41,7 +49,38 @@ export class ImporterBudgetError extends Error {
   }
 }
 export class ImporterAiUnavailable extends Error {}
-export class ImporterAiFailure extends Error {}
+/** The provider answered with an error, or the model's answer was unusable; `kind` says which (lib/ai-import/failure.ts). */
+export class ImporterAiFailure extends Error {
+  constructor(
+    message: string,
+    readonly kind: FailureKind = "provider"
+  ) {
+    super(message);
+  }
+}
+/** The job was paused, cancelled or deleted meanwhile: no request was sent (its own status says why). */
+export class ImporterJobStopped extends ImporterAiUnavailable {}
+/** Paid AI was switched off after the job started: no request was sent (the job pauses). */
+export class ImporterAiSwitchedOff extends ImporterAiUnavailable {}
+/** The provider rate-limited RATE_LIMIT_STOP requests in a row: nothing more is sent for the job (it pauses). */
+export class ImporterRateLimited extends ImporterAiUnavailable {}
+
+/** Consecutive rate-limited answers after which a job run sends nothing more (circuit breaker). */
+export const RATE_LIMIT_STOP = 2;
+/**
+ * Consecutive rate-limited answers per job in this worker process. One worker leases a job at a time,
+ * so the count is per run; processJob resets it when a run starts (a resumed job starts at 0).
+ */
+const rateLimitStreak = new Map<string, { n: number; model: string; detail: string }>();
+export function resetRateLimitStreak(jobId: string): void {
+  rateLimitStreak.delete(jobId);
+}
+function rateLimitStop(jobId: string): ImporterRateLimited {
+  const s = rateLimitStreak.get(jobId)!;
+  return new ImporterRateLimited(
+    `${failureMessage("rate_limited", `the last ${s.n} requests to ${s.model} were refused by the provider (HTTP 429${s.detail ? `: ${s.detail}` : ""})`)} Processing paused and no further AI request was sent. Pages not yet read stay pending. ${FAILURE_ADVICE.rate_limited}`
+  );
+}
 
 /** Importer budget advisory lock (every reservation holds it; a job reset takes it too). */
 export const BUDGET_LOCK_KEY = 7_301_442_031;
@@ -155,27 +194,41 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
       if (staleJob) await tx.aiImportJob.updateMany({ where: { id: staleJob }, data: { spentInr: { increment: r.reservedInr } } });
     }
     const job = await tx.aiImportJob.findUnique({ where: { id: input.jobId }, select: { budgetInr: true, spentInr: true, status: true } });
-    if (!job) throw new ImporterAiUnavailable("The import job no longer exists.");
+    if (!job) throw new ImporterJobStopped("The import job no longer exists.");
     // Cancelled, paused or deleted meanwhile: no new request is ever reserved (or sent) for it.
-    if (job.status !== "PROCESSING") throw new ImporterAiUnavailable(`The import is ${job.status.toLowerCase().replace(/_/g, " ")}, so no AI request was sent.`);
+    if (job.status !== "PROCESSING") throw new ImporterJobStopped(`The import is ${job.status.toLowerCase().replace(/_/g, " ")}, so no AI request was sent.`);
+    // The authoritative settings, read now (not the copy the worker started with): an administrator who
+    // switched Paid AI off or lowered a limit after the job started is obeyed before this request is sent.
+    const row = await tx.setting.findUnique({ where: { key: IMPORTER_SETTING_KEY } });
+    const current = normalizeImporterSettings(row?.value ?? {});
+    if (!current.aiEnabled) throw new ImporterAiSwitchedOff(`${failureMessage("paid_ai_off", "it was switched off in Import Settings after this job started, so no further AI request was sent")} Pages not yet read stay pending. ${FAILURE_ADVICE.paid_ai_off}`);
+    const budget = {
+      maxJobInr: Math.min(input.settings.budget.maxJobInr, current.budget.maxJobInr),
+      monthlyInr: Math.min(input.settings.budget.monthlyInr, current.budget.monthlyInr),
+      totalInr: Math.min(input.settings.budget.totalInr ?? PILOT_LIMITS.totalInr, current.budget.totalInr ?? PILOT_LIMITS.totalInr),
+      maxRequestInr: Math.min(input.settings.budget.maxRequestInr, current.budget.maxRequestInr),
+      keyReserveUsd: Math.max(input.settings.budget.keyReserveUsd, current.budget.keyReserveUsd),
+    };
+    const requestCap = Math.min(budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
+    if (input.amountInr > requestCap) throw new ImporterBudgetError(`One request could cost up to ${formatInr(input.amountInr)}, above the per-request limit of ${formatInr(requestCap)}.`, "request");
     const inflight = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "requestKey" LIKE $1 AND "status" = 'RESERVED'`, `qi:${input.jobId}:%`);
     const jobUsed = job.spentInr + (inflight[0]?.v ?? 0);
     // The hard per-job ceiling applies even to a job whose own budget was set before the ceiling was lowered.
-    const jobCap = Math.min(job.budgetInr, input.settings.budget.maxJobInr, PILOT_LIMITS.maxJobInr);
+    const jobCap = Math.min(job.budgetInr, budget.maxJobInr, PILOT_LIMITS.maxJobInr);
     if (jobUsed + input.amountInr > jobCap) {
       const capped = jobCap < job.budgetInr;
       throw new ImporterBudgetError(`The job budget is reached (${formatInr(jobUsed)} of ${formatInr(jobCap)} used; the next request may cost up to ${formatInr(input.amountInr)}).${capped ? " The hard limit per job in Import Settings applies." : " Raise the job budget to continue."}`, "job");
     }
     const month = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "istMonth" = $1 AND "status" <> 'RELEASED' AND left("feature", 8) = 'qimport_'`, istMonth);
     const monthUsed = month[0]?.v ?? 0;
-    const monthCap = Math.min(input.settings.budget.monthlyInr, PILOT_LIMITS.monthlyInr);
+    const monthCap = Math.min(budget.monthlyInr, PILOT_LIMITS.monthlyInr);
     if (monthUsed + input.amountInr > monthCap) {
       throw new ImporterBudgetError(`The importer's monthly AI budget is reached (${formatInr(monthUsed)} of ${formatInr(monthCap)}; the next request may cost up to ${formatInr(input.amountInr)}).`, "month");
     }
     // All-time cap: every importer request ever made (never resets with the month).
     const all = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "status" <> 'RELEASED' AND left("feature", 8) = 'qimport_'`);
     const allUsed = all[0]?.v ?? 0;
-    const totalCap = Math.min(input.settings.budget.totalInr ?? PILOT_LIMITS.totalInr, PILOT_LIMITS.totalInr);
+    const totalCap = Math.min(budget.totalInr, PILOT_LIMITS.totalInr);
     if (allUsed + input.amountInr > totalCap) {
       throw new ImporterBudgetError(`The importer's all-time AI budget is reached (${formatInr(allUsed)} of ${formatInr(totalCap)}; it does not reset monthly; the next request may cost up to ${formatInr(input.amountInr)}).`, "total");
     }
@@ -185,9 +238,9 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
       const pending = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT COALESCE(SUM("reservedInr"), 0)::float8 AS v FROM "AiBudgetReservation" WHERE "status" = 'RESERVED' AND left("feature", 8) = 'qimport_'`);
       const pendingUsd = (pending[0]?.v ?? 0) / input.key.fxRate;
       const afterUsd = input.key.remainingUsd - pendingUsd - input.amountInr / input.key.fxRate;
-      if (afterUsd < Math.max(input.settings.budget.keyReserveUsd, PILOT_LIMITS.minKeyReserveUsd)) {
+      if (afterUsd < Math.max(budget.keyReserveUsd, PILOT_LIMITS.minKeyReserveUsd)) {
         throw new ImporterBudgetError(
-          `The shared OpenRouter key has $${input.key.remainingUsd.toFixed(2)} left${pendingUsd > 0 ? ` ($${pendingUsd.toFixed(4)} of it held by importer requests in flight)` : ""}; this request could use up to $${(input.amountInr / input.key.fxRate).toFixed(4)}, which would leave less than the $${input.settings.budget.keyReserveUsd.toFixed(2)} kept for student Ask AI (Import Settings).`,
+          `The shared OpenRouter key has $${input.key.remainingUsd.toFixed(2)} left${pendingUsd > 0 ? ` ($${pendingUsd.toFixed(4)} of it held by importer requests in flight)` : ""}; this request could use up to $${(input.amountInr / input.key.fxRate).toFixed(4)}, which would leave less than the $${budget.keyReserveUsd.toFixed(2)} kept for student Ask AI (Import Settings).`,
           "key"
         );
       }
@@ -352,6 +405,7 @@ async function replaceModel(input: AiCallInput, plan: ModelPlan, choice: TaskCho
  */
 export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> {
   if (!input.settings.aiEnabled) throw new ImporterAiUnavailable("Paid AI processing is switched off in Import Settings.");
+  if ((rateLimitStreak.get(input.jobId)?.n ?? 0) >= RATE_LIMIT_STOP) throw rateLimitStop(input.jobId);
   const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { config: true } });
   const plan = planOf(job?.config);
   if (!plan) throw new ImporterAiUnavailable("This job has no confirmed model plan. Nothing was sent.");
@@ -431,11 +485,12 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       const empty = !r.text.trim();
       await log({ input, requestId, attempt, model: r.model, requested, ok: !empty && r.finishReason !== "length", latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, generationId: r.generationId, fallbackUsed, errorCategory: empty ? "empty_response" : r.finishReason === "length" ? "truncated" : null, errorSummary: empty ? describeCategory("empty_response") : r.finishReason === "length" ? describeCategory("truncated") : null });
       await patchOpenRouterState({ lastSuccessAt: new Date().toISOString() });
+      rateLimitStreak.delete(input.jobId);
       if (overrunInr > 0) {
         throw new ImporterBudgetError(`A ${input.task} request cost ${formatInr(charged)}, more than its reserved maximum of ${formatInr(cost.worstInr)} (the provider billed more than the conservative bound). The charge is recorded in full and the job is paused — review the Cost Center before resuming.`, "overrun");
       }
-      if (empty) throw new ImporterAiFailure(describeCategory("empty_response"));
-      if (r.finishReason === "length") throw new ImporterAiFailure("The model's answer was cut off at the output limit.");
+      if (empty) throw new ImporterAiFailure(failureMessage("model_output", describeCategory("empty_response")), "model_output");
+      if (r.finishReason === "length") throw new ImporterAiFailure(failureMessage("model_output", "the model's answer was cut off at the output limit"), "model_output");
       return { text: r.text, model: r.model, costInr: charged, inputTokens: r.inputTokens, outputTokens: r.outputTokens, fallbackUsed };
     } catch (error) {
       if (error instanceof ImporterAiFailure || error instanceof ImporterBudgetError || error instanceof ImporterAiUnavailable) throw error;
@@ -445,6 +500,12 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       const charged = billedUnknown ? (await settle(input.jobId, requestKey, null, null)).charged : (await release(requestKey), 0);
       await log({ input, requestId, attempt, model: requested, requested, ok: false, latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: null, chargedInr: charged, costStatus: billedUnknown ? "unknown" : "none", generationId: e.generationId, errorCategory: e.category, errorSummary: e.message, fallbackUsed: false });
       await patchOpenRouterState({ lastError: { category: e.category, message: sanitize(e.message), at: new Date().toISOString() } });
+      if (e.category === "rate_limited") {
+        const n = (rateLimitStreak.get(input.jobId)?.n ?? 0) + 1;
+        rateLimitStreak.set(input.jobId, { n, model: requested, detail: sanitize(e.message).slice(0, 120) });
+        // The breaker trips on this answer: this request's page stays pending, like every page not yet read.
+        if (n >= RATE_LIMIT_STOP) throw rateLimitStop(input.jobId);
+      } else rateLimitStreak.delete(input.jobId);
       // No route can serve the model under the privacy / price constraints: choose again (never silently pricier).
       if (UNAVAILABLE_ERRORS.includes(e.category) && !billedUnknown && replacements === 0) {
         tried.push(requested);
@@ -457,7 +518,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       if (!TRANSIENT_OPENROUTER_ERRORS.includes(e.category)) break;
     }
   }
-  throw new ImporterAiFailure(`OpenRouter failed: ${describeCategory(lastError!.category)}${lastError!.message !== describeCategory(lastError!.category) ? ` (${sanitize(lastError!.message).slice(0, 160)})` : ""}`);
+  const kind = kindOfCategory(lastError!.category, lastError!.message);
+  throw new ImporterAiFailure(failureMessage(kind, `OpenRouter failed: ${describeCategory(lastError!.category)}${lastError!.message !== describeCategory(lastError!.category) ? ` (${sanitize(lastError!.message).slice(0, 160)})` : ""}`), kind);
 }
 
 /** Parses a model's JSON answer (tolerates a ```json fence; nothing else). */
@@ -467,10 +529,10 @@ export function parseModelJson(text: string): unknown {
   const body = fenced ? fenced[1] : t;
   const start = body.indexOf("{");
   const end = body.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new ImporterAiFailure("The model did not return JSON.");
+  if (start < 0 || end <= start) throw new ImporterAiFailure(failureMessage("model_output", "the model did not return JSON"), "model_output");
   try {
     return JSON.parse(body.slice(start, end + 1));
   } catch {
-    throw new ImporterAiFailure("The model returned malformed JSON.");
+    throw new ImporterAiFailure(failureMessage("model_output", "the model returned malformed JSON"), "model_output");
   }
 }

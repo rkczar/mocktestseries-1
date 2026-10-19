@@ -13,6 +13,7 @@ import { GEMINI_DIRECT_REASONS, suggestModels, type ImporterCatalog, type Import
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import { importerModelsAction, refreshRoutesAction, saveSettingsAction } from "../actions";
 import { SESSION_EXPIRED, failureKind as probeFailure } from "@/components/admin/ai-importer/call-importer";
+import { ModelAssistant } from "./model-assistant";
 
 const failureKind = () => probeFailure(SETTINGS_PATH);
 
@@ -21,6 +22,9 @@ type CostKey = "extract" | "verify" | "solve" | "classify" | "key";
 
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v < 0.01 ? `₹${v.toFixed(4)}` : `₹${v.toFixed(2)}`);
 const perM = (v: number | null) => (v === null ? "?" : `$${v < 0.1 ? v.toFixed(3) : v.toFixed(2)}`);
+/** OpenRouter publishes a price of exactly 0 (a known zero — never shown for an unknown price, which is "—"). */
+const zeroPrice = (p: { prompt: number; completion: number; image: number; request: number } | null | undefined) => !!p && p.prompt === 0 && p.completion === 0 && p.image === 0 && p.request === 0;
+const ZERO_NOTE = "published free price — free-price routes are often rate-limited";
 
 type RoutesMessage = { tone: "success" | "warning" | "error"; text: string; session?: boolean };
 
@@ -67,7 +71,7 @@ function slotProblem(options: ImporterModelOption[], id: string | null, vision: 
   return vision ? m.visionProblem : m.problem;
 }
 
-function ProviderStatus({ catalog, aiEnabled, problems }: { catalog: ImporterCatalog; aiEnabled: boolean; problems: string[] }) {
+function ProviderStatus({ catalog, aiEnabled, draftAiEnabled, problems }: { catalog: ImporterCatalog; aiEnabled: boolean; draftAiEnabled: boolean; problems: string[] }) {
   const p = catalog.provider;
   const provider =
     p.status === "NOT_CONFIGURED"
@@ -87,7 +91,13 @@ function ProviderStatus({ catalog, aiEnabled, problems }: { catalog: ImporterCat
       tone: "neutral",
       text: `Not used by the importer (${catalog.gemini.configured ? (catalog.gemini.enabled ? "configured for other AI features" : "configured, switched off") : "not configured"}): ${GEMINI_DIRECT_REASONS.join("; ")}. Gemini models can still be added under Importer models through OpenRouter (IDs starting with google/), with the same price, privacy and budget checks.`,
     },
-    { id: "paid", label: "Paid AI for the importer", tone: aiEnabled ? "warning" : "neutral", text: aiEnabled ? "ON — AI requests run after a job's estimate is confirmed, inside the limits below." : "OFF — no AI request is sent. Local parsing, review and import still work." },
+    // The SAVED switch (what the server enforces before every request), not the unsaved checkbox.
+    {
+      id: "paid",
+      label: "Paid AI for the importer",
+      tone: aiEnabled ? "warning" : "neutral",
+      text: `${aiEnabled ? "ON (saved) — AI requests run after a job's estimate is confirmed, inside the limits below." : "OFF (saved) — no AI request is sent. Local parsing, review and import still work."}${draftAiEnabled !== aiEnabled ? ` Unsaved change: it will be ${draftAiEnabled ? "ON" : "OFF"} only after you save.` : ""}`,
+    },
     ...(p.emergencyStop ? [{ id: "stop", label: "AI emergency stop", tone: "error" as const, text: "ON — every AI request is refused (Admin → AI → Budgets)." }] : []),
     {
       id: "catalog",
@@ -293,6 +303,11 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
                       {o.requestPrice ? ` · $${o.requestPrice}/request` : ""}
                       {rc && ok ? ` · max ${inr(rc.maxInr)} per request` : ""}
                     </div>
+                    <div className="text-xs text-[var(--color-muted-foreground)]" data-testid="model-option-caps">
+                      {o.vision ? "Reads page images (published input modality)" : "Text only — cannot read page images"}
+                      {o.params.structuredOutput ? " · publishes JSON output support" : " · no published JSON output support"} · quality Not tested
+                      {o.promptPerM === 0 && o.completionPerM === 0 && !o.imagePrice && !o.requestPrice && <span className="text-[var(--color-warning)]"> · published price ₹0 — free-price routes are often rate-limited</span>}
+                    </div>
                     {!ok && <div className="text-xs text-[var(--color-error)]">{why(o)}</div>}
                   </li>
                 );
@@ -457,7 +472,9 @@ function SelectionTable({ plan, aiEnabled }: { plan: ModelPlan; aiEnabled: boole
                     <span className="block text-xs text-[var(--color-muted-foreground)]" data-testid={`sel-${t}-reason`}>{c.reason}</span>
                   </td>
                   <td className="py-1.5 pr-2 text-xs">{c.price ? <>in {money(c.price.prompt)} · out {money(c.price.completion)}{c.vision && c.price.image ? ` · image ${money(c.price.image)}` : ""}{c.price.request ? ` · $${c.price.request}/request` : ""}</> : "—"}</td>
-                  <td className="py-1.5 pr-2 text-xs" data-testid={`sel-${t}-cost`}>{c.model ? <>about {inr(c.typicalInr)}<span className="block">max {inr(c.maxInr)}</span></> : "—"}</td>
+                  <td className="py-1.5 pr-2 text-xs" data-testid={`sel-${t}-cost`} data-price-state={!c.model ? "" : zeroPrice(c.price) ? "zero" : c.maxInr === null ? "unknown" : "published"}>
+                    {!c.model ? "—" : zeroPrice(c.price) ? <>₹0.00<span className="block text-[var(--color-warning)]">{ZERO_NOTE}</span></> : c.maxInr === null ? "Unknown — not priced" : <>about {inr(c.typicalInr)}<span className="block">max {inr(c.maxInr)}</span></>}
+                  </td>
                   <td className="py-1.5 pr-2 text-xs">{c.vision ? (c.model ? "Required — supported" : "Required") : "Not needed"}</td>
                   <td className="py-1.5 pr-2 text-xs [overflow-wrap:anywhere]" data-testid={`sel-${t}-privacy`}>
                     {!c.model ? "—" : c.privacy.zdrRequired ? <>ZDR routes{stale ? ` (as of ${routesAt(plan.routesFetchedAt)}, not rechecked)` : ""}: {c.routes.join(", ")}<span className="block text-[var(--color-muted-foreground)]">On OpenRouter&apos;s public ZDR list; ZDR is also required on every request.</span></> : <>ZDR not required{c.privacy.dataCollection === "deny" ? "; providers that store or train on prompts are excluded by OpenRouter per request" : ""}.</>}
@@ -479,7 +496,7 @@ function SelectionTable({ plan, aiEnabled }: { plan: ModelPlan; aiEnabled: boole
             <ul className="mt-1 flex flex-col gap-0.5 pl-4">
               {rows.map((r) => (
                 <li key={r.id} data-testid="sel-candidate" data-model-id={r.id} data-eligible={r.eligible ? "true" : "false"}>
-                  <code>{r.id}</code> — {r.eligible ? (stale ? <span className="text-[var(--color-warning)]">eligible on route data older than 6 h (unverified; checked again at job confirmation), up to {inr(r.maxInr)} per request</span> : <span className="text-[var(--color-success)]">eligible, up to {inr(r.maxInr)} per request</span>) : <span className="text-[var(--color-error)]">{r.reason}</span>}
+                  <code>{r.id}</code> — {r.eligible ? (stale ? <span className="text-[var(--color-warning)]">eligible on route data older than 6 h (unverified; checked again at job confirmation), up to {inr(r.maxInr)} per request</span> : <span className="text-[var(--color-success)]">eligible, up to {r.maxInr === 0 ? `₹0.00 per request (${ZERO_NOTE})` : `${inr(r.maxInr)} per request`}</span>) : <span className="text-[var(--color-error)]">{r.reason}</span>}
                 </li>
               ))}
             </ul>
@@ -542,6 +559,10 @@ const num = (v: string) => (v.trim() === "" ? NaN : Number(v));
 export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { initial: ImporterSettings; catalog: ImporterCatalog; canManage: boolean }) {
   const router = useRouter();
   const [s, setS] = useState<ImporterSettings>(initial);
+  // The last saved settings: the status row and the Model Assistant follow these, not the unsaved form.
+  const [saved, setSaved] = useState<ImporterSettings>(initial);
+  const comparable = (x: ImporterSettings) => JSON.stringify({ ...x, updatedAt: undefined });
+  const dirty = comparable(s) !== comparable(saved);
   const [catalog, setCatalog] = useState(initialCatalog);
   const [loading, startLoading] = useTransition();
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -580,11 +601,11 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           .filter((x): x is string => !!x)),
     ...(s.aiEnabled && !catalog.plan.tasks.extract.model ? [`Paid AI is on, but no page-reading model can be used: ${catalog.plan.tasks.extract.reason}`] : []),
   ];
-  const reload = () =>
+  const reload = (draft: ImporterSettings = s) =>
     startLoading(async () => {
       setLoadError(null);
       try {
-        const r = await importerModelsAction(s);
+        const r = await importerModelsAction(draft);
         if (r.ok) setCatalog(r.data);
         else setLoadError(r.error);
       } catch {
@@ -641,6 +662,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           }
           if (r.ok) {
             setS(r.data);
+            setSaved(r.data);
             setMsg({ ok: true, text: `Settings saved at ${new Date().toLocaleTimeString("en-IN")}.` });
             router.refresh();
           } else setMsg({ ok: false, text: r.error });
@@ -648,7 +670,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       }}
       data-testid="settings-form"
     >
-      <ProviderStatus catalog={catalog} aiEnabled={s.aiEnabled} problems={problems} />
+      <ProviderStatus catalog={catalog} aiEnabled={saved.aiEnabled} draftAiEnabled={s.aiEnabled} problems={problems} />
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <Button type="button" variant="outline" size="sm" onClick={() => reload()} disabled={loading || refreshing} data-testid="models-reload">
           {loading ? "Loading…" : "Reload status and selection"}
@@ -712,6 +734,18 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       </Card>
 
       <ImporterModelsCard options={options} value={s.importerModels} onChange={(v) => setS({ ...s, importerModels: v })} disabled={d} capInr={s.budget.maxRequestInr} zdrRequired={s.privacy.zdr} zdrModels={catalog.routes.zdrModels} />
+
+      <ModelAssistant
+        canManage={canManage}
+        dirty={dirty}
+        onApplied={(list) => {
+          // Only the list was saved on the server; the rest of the form is unchanged (it had no unsaved edits).
+          setS((cur) => ({ ...cur, importerModels: list }));
+          setSaved((cur) => ({ ...cur, importerModels: list }));
+          reload({ ...s, importerModels: list });
+          router.refresh();
+        }}
+      />
 
       <Card data-testid="selection-card">
         <CardHeader>

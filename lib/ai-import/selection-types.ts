@@ -70,3 +70,16 @@ export interface RouteStatus {
   zdrModels: string[] | null;
   models: { id: string; ok: boolean; routes: number; error: string | null }[];
 }
+
+/** Recent importer requests of one model (lib/ai-import/health.ts; measured, not a quality rating). */
+export interface ModelHealth {
+  requests: number;
+  ok: number;
+  rateLimited: number;
+  /** Rate-limited answers in a row, counted from the newest request. */
+  consecutiveRateLimited: number;
+  /** Internal while counting: still inside the newest rate-limited run. */
+  streakOpen: boolean;
+  lastRateLimitedAt: string | null;
+  lastOkAt: string | null;
+}

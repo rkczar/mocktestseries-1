@@ -6,7 +6,8 @@ import { IMAGE_TOKENS, PRICE_MARGIN, estimateInputTokens, inputImagePriceUsd, mo
 import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, KEY_SYSTEM } from "@/lib/ai-import/prompts";
 import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings, type SelectionTask } from "@/lib/ai-import/config";
 import { candidateModels, freshRouteSnapshot, getRouteSnapshot, isStale, type Route, type RouteSnapshot } from "@/lib/ai-import/routes";
-import type { CandidateRow, ModelPlan, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
+import type { CandidateRow, ModelHealth, ModelPlan, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
+import { importerModelHealth, rateLimitAvoidance } from "@/lib/ai-import/health";
 
 /**
  * Automatic model selection for the AI Question Importer.
@@ -27,7 +28,9 @@ import type { CandidateRow, ModelPlan, PlanPrice, TaskChoice } from "@/lib/ai-im
  *
  * The cheapest eligible model by that maximum wins (then by typical cost, then
  * by id); independent verification must use a different model than page
- * reading. Nothing is guessed: a model without readable routes or prices is
+ * reading. Automatic mode also skips a model whose provider rate-limited its
+ * most recent importer requests (lib/ai-import/health.ts) — measured history,
+ * never a guess from the model's name. Nothing is guessed: a model without readable routes or prices is
  * ineligible with the reason shown. Manual mode evaluates the administrator's
  * chosen models with the same checks.
  */
@@ -115,7 +118,7 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
 const order = (a: CandidateRow, b: CandidateRow) => Number(b.eligible) - Number(a.eligible) || (a.maxInr ?? Infinity) - (b.maxInr ?? Infinity) || (a.typicalInr ?? Infinity) - (b.typicalInr ?? Infinity) || a.id.localeCompare(b.id);
 
 /** Chooses one model per task (pure). `exclude` = models that failed at run time for that task. */
-export function choose(models: AiModel[], ctx: { snapshot: RouteSnapshot | null; settings: ImporterSettings; fxRate: number | null }, exclude: Partial<Record<SelectionTask, string[]>> = {}): Record<SelectionTask, TaskChoice> {
+export function choose(models: AiModel[], ctx: { snapshot: RouteSnapshot | null; settings: ImporterSettings; fxRate: number | null; health?: Record<string, ModelHealth>; now?: number }, exclude: Partial<Record<SelectionTask, string[]>> = {}): Record<SelectionTask, TaskChoice> {
   const byId = new Map(models.map((m) => [m.id, m]));
   const s = ctx.settings;
   const privacy = { zdrRequired: s.privacy.zdr, dataCollection: s.privacy.dataCollection, zdrVerified: false };
@@ -128,6 +131,13 @@ export function choose(models: AiModel[], ctx: { snapshot: RouteSnapshot | null;
     for (const id of exclude[task] ?? []) {
       const e = evals.get(id);
       if (e) evals.set(id, { ...e, row: { ...e.row, eligible: false, reason: "unavailable when the job ran" } });
+    }
+    // Recently rate-limited by its provider: automatic selection skips it (the manual override may still choose it).
+    if (s.selection.mode === "auto") {
+      for (const [id, e] of evals) {
+        const avoid = e.row.eligible ? rateLimitAvoidance(ctx.health?.[id], ctx.now) : null;
+        if (avoid) evals.set(id, { ...e, row: { ...e.row, eligible: false, reason: avoid } });
+      }
     }
     // Independent verification never reuses the page-reading model.
     const reader = out.extract?.model;
@@ -146,7 +156,8 @@ export function choose(models: AiModel[], ctx: { snapshot: RouteSnapshot | null;
       else if (!row?.eligible) reason = `Manual choice ${want} cannot be used: ${row?.reason ?? "not evaluated"}.`;
       else {
         pick = row;
-        reason = `Manual override by an administrator: ${want}, up to ${formatInr(row.maxInr)} per request.`;
+        const avoid = rateLimitAvoidance(ctx.health?.[want], ctx.now);
+        reason = `Manual override by an administrator: ${want}, up to ${formatInr(row.maxInr)} per request.${avoid ? ` Warning: ${avoid.replace(/, so automatic selection skips it.*$/, "")}.` : ""}`;
       }
     } else if (!eligible.length) {
       reason = rows.length ? `No approved model is suitable and affordable for ${label}. ${rows.slice(0, 4).map((r) => `${r.id}: ${r.reason}`).join("; ")}.` : s.importerModels.length ? `None of the importer's approved models can be used (disabled, no longer listed, or not a text model).` : `No model is approved for the AI Question Importer yet (Import Settings → Importer models).`;
@@ -212,7 +223,8 @@ export async function computeModelPlan(settings: ImporterSettings, opts: { refre
   const models = await candidateModels(settings.importerModels);
   // A stale snapshot is never used to choose a model for a job.
   const usable = opts.refresh && stale ? null : snapshot;
-  const tasks = choose(models, { snapshot: usable, settings, fxRate: fx.rate }, exclude);
+  const health = await importerModelHealth(models.map((m) => m.id));
+  const tasks = choose(models, { snapshot: usable, settings, fxRate: fx.rate, health }, exclude);
   return {
     computedAt: new Date().toISOString(),
     mode: settings.selection.mode,

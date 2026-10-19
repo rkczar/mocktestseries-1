@@ -6,7 +6,8 @@ import { prisma } from "@/lib/prisma";
 import { runTool } from "@/lib/ai-import/tools";
 import { readDocx } from "@/lib/ai-import/docx";
 import { vaultPath } from "@/lib/ai-import/vault";
-import { importerAiCall, parseModelJson, ImporterAiUnavailable } from "@/lib/ai-import/ai";
+import { importerAiCall, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
+import { failureMessage } from "@/lib/ai-import/failure";
 import { KEY_SYSTEM, keySchema } from "@/lib/ai-import/prompts";
 import { visionImage } from "@/lib/ai-import/figures";
 import { ensureRender, saveKeyEntries, type StepContext } from "@/lib/ai-import/process";
@@ -93,7 +94,7 @@ async function aiKeyPage(ctx: StepContext, file: AiImportFile, page: number): Pr
     needsVision: true,
   });
   const parsed = keySchema.safeParse(parseModelJson(r.text));
-  if (!parsed.success) throw new Error("The answer-key reading did not match the expected format.");
+  if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", "the answer-key reading did not match the expected format"), "model_output");
   return parsed.data.entries.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: (e.section ?? "").trim(), raw: e.answer.replace(/[()\s]/g, "") }));
 }
 
@@ -136,8 +137,11 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     } catch (e) {
       // Budget / configuration stops are the job's business; anything else fails this key file only.
       if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) throw e;
-      await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: `The answer key could not be read: ${e instanceof Error ? e.message.slice(0, 200) : "error"}` } });
-      await logEvent(ctx.job.id, "KEY_FAILED", `${file.originalName}: the answer key could not be read`, { fileId: file.id });
+      // The required reading failed: the file is NOT marked processed, so Retry reads it again (its entries
+      // are replaced, never added twice). The message starts with the failure kind (lib/ai-import/failure.ts).
+      const why = e instanceof ImporterAiFailure ? e.message.slice(0, 260) : `The answer key could not be read: ${e instanceof Error ? e.message.slice(0, 200) : "error"}`;
+      await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.ANALYZED, errorMessage: `${why} The answer key was not read — use Retry to read it again.`.slice(0, 500) } });
+      await logEvent(ctx.job.id, "KEY_FAILED", `${file.originalName}: the answer key could not be read — ${why.slice(0, 200)}`, { fileId: file.id, kind: e instanceof ImporterAiFailure ? e.kind : null });
       continue;
     }
     await prisma.aiImportKeyEntry.deleteMany({ where: { keyFileId: file.id } });

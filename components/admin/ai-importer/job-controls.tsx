@@ -138,8 +138,8 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
           </Button>
         )}
         {a.retry && (
-          <Button size={size} disabled={pending} onClick={() => act(() => retryJobAction(job.id), "Retrying — it continues from the last finished step.")} data-testid="job-retry">
-            Retry
+          <Button size={size} disabled={pending} onClick={() => act(() => retryJobAction(job.id), job.status === "NEEDS_REVIEW" ? "Retrying the failed pages and answer key only — finished pages are not read or charged again." : "Retrying — it continues from the last finished step.")} data-testid="job-retry">
+            {job.status === "NEEDS_REVIEW" ? "Retry failed pages" : "Retry"}
           </Button>
         )}
         {a.cancel && (

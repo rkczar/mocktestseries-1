@@ -384,9 +384,14 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
               </div>
               <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="op-cost">
                 <div className="text-xs text-[var(--color-muted-foreground)]">Estimated cost</div>
-                <div className="text-base font-semibold" data-testid="op-cost-estimate">
-                  {inr(v.estimatedCostInr)}
+                <div className="text-base font-semibold" data-testid="op-cost-estimate" data-cost-basis={v.costBasis}>
+                  {v.costBasis === "unknown" ? "Unknown — not priced" : inr(v.estimatedCostInr)}
                 </div>
+                {v.costBasis === "zero_published" && (
+                  <div className="text-xs text-[var(--color-warning)]" data-testid="op-cost-zero">
+                    Published free price (₹0) — a known zero, but free-price routes are often rate-limited.
+                  </div>
+                )}
                 <div className="text-xs">
                   Maximum possible: <strong data-testid="op-cost-max">{inr(v.maxCostInr)}</strong> · remaining pilot budget <strong data-testid="op-pilot-remaining">{inr(pilot.remainingInr)}</strong> of {inr(pilot.totalCapInr)}
                 </div>

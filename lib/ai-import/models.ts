@@ -56,6 +56,8 @@ function toOption(m: AiModel, fxRate: number | null, importerModels: readonly st
     requestPrice: m.requestPrice,
     context: m.contextLength,
     synced: m.lastSyncedAt.toISOString().slice(0, 10),
+    vendor: m.vendor,
+    params: { reasoning: m.supportedParameters.includes("reasoning"), structuredOutput: m.supportedParameters.includes("response_format") || m.supportedParameters.includes("structured_outputs") },
     costs: textProblem === null && m.promptPrice !== null && m.completionPrice !== null
       ? {
           extract: vision ? requestCost(m, "extract", fxRate) : null,

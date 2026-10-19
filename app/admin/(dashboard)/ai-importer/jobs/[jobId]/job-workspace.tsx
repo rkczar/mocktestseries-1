@@ -606,7 +606,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                         {l.inputTokens.toLocaleString("en-IN")} / {l.outputTokens.toLocaleString("en-IN")}
                       </td>
                       <td className="py-1 pr-2">{l.pricePerM ? `${l.pricePerM.prompt.toFixed(3)} · ${l.pricePerM.completion.toFixed(3)}` : l.calls ? <span className="text-[var(--color-warning)]">{l.problem}</span> : "—"}</td>
-                      <td className="py-1 pr-2">{l.calls ? inr(l.inr) : "—"}</td>
+                      <td className="py-1 pr-2" data-testid="estimate-line-cost">{!l.calls ? "—" : l.inr === null ? <span className="text-[var(--color-warning)]">Unknown — not priced</span> : l.inr === 0 && l.pricePerM && l.pricePerM.prompt === 0 && l.pricePerM.completion === 0 ? <>₹0.00<span className="block text-xs text-[var(--color-warning)]">published free price — may be rate-limited</span></> : inr(l.inr)}</td>
                       <td className="py-1 pr-2">{l.maxCalls ? (l.maxInr === undefined ? "—" : `${inr(l.maxInr)} (${l.maxCalls} call${l.maxCalls === 1 ? "" : "s"})`) : "—"}</td>
                     </tr>
                   ))}

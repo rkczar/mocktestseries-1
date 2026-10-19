@@ -2,7 +2,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { mkdir, open, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPaperType, Prisma } from "@prisma/client";
+import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPageStatus, AiImportPaperType, Prisma, type AiImportJob } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { CHUNK_BYTES, PILOT_LIMITS, WORKER_STATUSES, fileRemovalBlockedReason } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
@@ -370,7 +370,8 @@ export async function retryJob(jobId: string, actorId: string) {
     if (job.status === AiImportJobStatus.PAUSED_BUDGET && job.budgetInr <= job.spentInr) throw new ImportJobError("This import used its whole budget. It cannot continue within the pilot limits — review its questions or delete it.");
     return resumeJob(jobId, actorId, null);
   }
-  if (job.status !== AiImportJobStatus.CANCELLED) throw new ImportJobError("Only a failed, paused or cancelled import can be retried.");
+  if (job.status === AiImportJobStatus.NEEDS_REVIEW) return retryFailedParts(job, actorId);
+  if (job.status !== AiImportJobStatus.CANCELLED) throw new ImportJobError("Only a failed, paused or cancelled import, or a finished one with failed pages, can be retried.");
   if (job.leaseUntil && job.leaseUntil > new Date()) throw new ImportJobError("The worker is still stopping (it finishes its current step first). Try again in a few seconds.", 409);
   const toQueue = !!job.confirmedAt;
   const r = await prisma.aiImportJob.updateMany({
@@ -383,6 +384,33 @@ export async function retryJob(jobId: string, actorId: string) {
   await logEvent(jobId, "RETRIED", toQueue ? "Retried after cancellation: processing continues from the last finished page (finished pages are not read or charged again)." : "Retried after cancellation: the files are analyzed again.", undefined, actorId);
   if (toQueue) kickWorker();
   else await requestAnalysis(jobId, actorId);
+}
+
+/**
+ * Recovery of a finished ("Needs review") job whose page or answer-key reading failed — an explicit
+ * administrator action, never automatic. Only the FAILED pages go back to pending and only answer-key
+ * files whose reading failed are read again; finished pages are never sent or charged again, questions
+ * are matched to their stored rows (no duplicates), and page errors, events and cost records are kept.
+ * Paid AI must be on now (with it off the pages could not be read, so nothing is started).
+ */
+async function retryFailedParts(job: AiImportJob, actorId: string) {
+  if (!job.confirmedAt) throw new ImportJobError("This import was never confirmed for processing, so there is nothing to retry.");
+  if (job.leaseUntil && job.leaseUntil > new Date()) throw new ImportJobError("The worker is still finishing this import. Try again in a few seconds.", 409);
+  const [failedPages, failedKeys] = await Promise.all([
+    prisma.aiImportPage.count({ where: { jobId: job.id, status: AiImportPageStatus.FAILED } }),
+    prisma.aiImportFile.count({ where: { jobId: job.id, role: AiImportFileRole.ANSWER_KEY, status: AiImportFileStatus.ANALYZED, errorMessage: { not: null } } }),
+  ]);
+  if (!failedPages && !failedKeys) throw new ImportJobError("Nothing failed in this import, so there is nothing to retry — review its questions instead.");
+  if (!(await getImporterSettings()).aiEnabled) throw new ImportJobError("Paid AI is switched off in Import Settings, so the failed pages cannot be read. Nothing was changed. Switch Paid AI on (and save) first, then retry.");
+  const r = await prisma.aiImportJob.updateMany({
+    where: { id: job.id, status: AiImportJobStatus.NEEDS_REVIEW, OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }] },
+    data: { status: AiImportJobStatus.QUEUED, errorMessage: null, pauseReason: null, finishedAt: null, leaseOwner: null, leaseUntil: null },
+  });
+  if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
+  // The previous error stays on the page until it is read again (it is replaced on success or on a new failure).
+  await prisma.aiImportPage.updateMany({ where: { jobId: job.id, status: AiImportPageStatus.FAILED }, data: { status: AiImportPageStatus.PENDING } });
+  await logEvent(job.id, "RETRY_FAILED", `Retry of the failed parts: ${failedPages} page(s)${failedKeys ? ` and ${failedKeys} answer-key file(s)` : ""} are read again. Finished pages are not read or charged again.`, { failedPages, failedKeys }, actorId);
+  kickWorker();
 }
 
 /**

@@ -157,7 +157,7 @@ async function main() {
   const opt = (id: string, o: Partial<ImporterModelOption> & { max?: number | null }): ImporterModelOption => {
     const cost = o.max === undefined ? 0.05 : o.max;
     const rc = cost === null ? null : { inputTokens: 1, maxOutputTokens: 1, maxUsd: 0, maxInr: cost, typicalUsd: 0, typicalInr: cost / 2 };
-    return { id, name: id, vision: true, approved: false, globallyApproved: false, problem: null, visionProblem: null, promptPerM: 0.1, completionPerM: 0.4, imagePrice: 0, requestPrice: 0, context: 100000, synced: "2026-10-18", costs: rc ? { extract: rc, verify: rc, solve: rc, classify: rc, key: rc } : { extract: null, verify: null, solve: { inputTokens: 1, maxOutputTokens: 1, maxUsd: 0, maxInr: 0, typicalUsd: 0, typicalInr: 0 }, classify: { inputTokens: 1, maxOutputTokens: 1, maxUsd: 0, maxInr: 0, typicalUsd: 0, typicalInr: 0 }, key: null }, ...o };
+    return { id, name: id, vision: true, approved: false, globallyApproved: false, problem: null, visionProblem: null, promptPerM: 0.1, completionPerM: 0.4, imagePrice: 0, requestPrice: 0, context: 100000, synced: "2026-10-18", vendor: id.split("/")[0], params: { reasoning: false, structuredOutput: true }, costs: rc ? { extract: rc, verify: rc, solve: rc, classify: rc, key: rc } : { extract: null, verify: null, solve: { inputTokens: 1, maxOutputTokens: 1, maxUsd: 0, maxInr: 0, typicalUsd: 0, typicalInr: 0 }, classify: { inputTokens: 1, maxOutputTokens: 1, maxUsd: 0, maxInr: 0, typicalUsd: 0, typicalInr: 0 }, key: null }, ...o };
   };
   const options = [
     opt("google/gemini-cheap", { max: 0.02 }),

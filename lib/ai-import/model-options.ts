@@ -37,6 +37,10 @@ export interface ImporterModelOption {
   requestPrice: number | null;
   context: number | null;
   synced: string;
+  /** Catalog vendor (OpenRouter's own field). */
+  vendor: string;
+  /** Published request parameters (OpenRouter `supported_parameters`): API facts, not quality. */
+  params: { reasoning: boolean; structuredOutput: boolean };
   costs: { extract: RequestCost | null; verify: RequestCost | null; solve: RequestCost; classify: RequestCost; key: RequestCost | null } | null;
 }
 

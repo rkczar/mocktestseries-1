@@ -9,7 +9,8 @@ import { readDocx, IMG_TOKEN } from "@/lib/ai-import/docx";
 import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
 import { blockToQuestion, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
 import { cropFromRender, iou, storeOriginalFigure, visionImage, FigureError } from "@/lib/ai-import/figures";
-import { importerAiCall, parseModelJson, ImporterAiUnavailable } from "@/lib/ai-import/ai";
+import { importerAiCall, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
+import { failureMessage } from "@/lib/ai-import/failure";
 import { EXTRACT_SYSTEM, extractUserText, pageSchema, toExtracted } from "@/lib/ai-import/prompts";
 import { readVault, renderKey, putIntermediate, vaultPath, workDir, exists as vaultExists } from "@/lib/ai-import/vault";
 import { logEvent } from "@/lib/ai-import/jobs";
@@ -259,7 +260,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       needsVision: true,
     });
     const parsed = pageSchema.safeParse(parseModelJson(r.text));
-    if (!parsed.success) throw new Error(`The model's answer did not match the expected format (${parsed.error.issues[0]?.path.join(/* turbopackIgnore: true */ ".") ?? "?"}).`);
+    if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", `the model's answer did not match the expected format (${parsed.error.issues[0]?.path.join(/* turbopackIgnore: true */ ".") ?? "?"})`), "model_output");
     return { out: parsed.data, model: r.model, cost: r.costInr ?? 0 };
   };
   const primary = await call([ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks], "extract");
@@ -290,7 +291,11 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       second = toExtracted(v.out, page.pageNumber, v.model);
       assignSections(second, state.startState);
     } catch (e) {
-      if (e instanceof ImporterAiUnavailable) throw e;
+      // The page's first read is already paid for: a stop that only says "send nothing more" (rate-limit
+      // breaker, Paid AI switched off, job paused / cancelled) saves it first, like a budget stop; other
+      // configuration stops end the page.
+      if (e instanceof ImporterRateLimited || e instanceof ImporterAiSwitchedOff || e instanceof ImporterJobStopped) budgetStop = e;
+      else if (e instanceof ImporterAiUnavailable) throw e;
       if (e instanceof Error && e.name === "ImporterBudgetError") budgetStop = e;
       // A failed second read never blocks the page, but its questions are not treated as checked.
       second = null;

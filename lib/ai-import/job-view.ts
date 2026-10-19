@@ -38,6 +38,8 @@ export interface JobCard {
   updatedAt: string;
   files: { name: string; role: string }[];
   pages: { total: number; done: number; skipped: number; failed: number; pending: number };
+  /** Answer-key files whose required reading failed (they are read again by Retry failed pages). */
+  failedKeys: number;
   counts: JobCounts;
   spentInr: number;
   budgetInr: number;
@@ -57,7 +59,12 @@ export function isStalled(j: Pick<AiImportJob, "status" | "leaseUntil" | "update
   return now - since > STALL_AFTER_MS;
 }
 
-function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCard["pages"]): string {
+/** A finished job whose page or answer-key reading failed: Retry reads only those again (lib/ai-import/jobs.ts retryJob). */
+export function canRetryFailed(j: Pick<AiImportJob, "status" | "confirmedAt">, pages: { failed: number }, failedKeys: number): boolean {
+  return j.status === "NEEDS_REVIEW" && !!j.confirmedAt && (pages.failed > 0 || failedKeys > 0);
+}
+
+function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCard["pages"], failedKeys: number): string {
   if (stalled) return "The background worker is not running this import. Click Start again — it continues from the last finished step.";
   switch (j.status) {
     case "DRAFT":
@@ -78,6 +85,7 @@ function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCa
       return j.leaseUntil && j.leaseUntil.getTime() > Date.now() ? "Cancelled — the worker is stopping after its current step. Retry and Delete become available in a few seconds." : "Cancelled. Click Retry to continue it, or delete it to remove its files.";
     case "NEEDS_REVIEW":
       if (c.extracted === 0) return j.errorMessage ?? "No questions could be read from this file.";
+      if (canRetryFailed(j, pages, failedKeys)) return `${j.errorMessage ?? `${pages.failed} page(s) failed.`} The ${c.extracted} question(s) already read are kept.`;
       if (c.ready > 0) return `${c.ready} question(s) are ready. Click Import ready questions to add them to the Question Bank as Draft.`;
       if (c.noSubject > 0) return `${c.noSubject} question(s) have no subject (the file has no subject headings and AI classification is off). Open Review questions and set the subject — or delete this import and upload again as a Single-subject paper (Advanced options).`;
       return `${c.needsReview + c.notImportable + c.duplicates} question(s) need attention before they can be imported — open Review questions.`;
@@ -123,7 +131,7 @@ export async function jobCards(where: { ids?: string[]; take?: number }, canMana
     where: where.ids ? { id: { in: where.ids } } : undefined,
     orderBy: { updatedAt: "desc" },
     take: where.take ?? 100,
-    include: { files: { select: { originalName: true, role: true, status: true }, orderBy: { createdAt: "asc" } } },
+    include: { files: { select: { originalName: true, role: true, status: true, errorMessage: true }, orderBy: { createdAt: "asc" } } },
   });
   if (!jobs.length) return [];
   const ids = jobs.map((j) => j.id);
@@ -138,6 +146,7 @@ export async function jobCards(where: { ids?: string[]; take?: number }, canMana
     const c = counts.get(j.id)!;
     const pc = (s: string) => pages.find((p) => p.jobId === j.id && p.status === s)?._count._all ?? 0;
     const pg = { total: pages.filter((p) => p.jobId === j.id).reduce((a, p) => a + p._count._all, 0), done: pc("DONE"), skipped: pc("SKIPPED"), failed: pc("FAILED"), pending: pc("PENDING") };
+    const failedKeys = j.files.filter((f) => f.role === "ANSWER_KEY" && f.status === "ANALYZED" && !!f.errorMessage).length;
     const stalled = isStalled(j, now);
     const stage = ((stages.find((s) => s.jobId === j.id)?.data ?? null) as { stage?: string } | null)?.stage ?? null;
     const plain = plainJobStatus({ status: j.status, stage, extracted: c.extracted, eligibleImport: c.ready, imported: c.imported, needsReview: c.needsReview, skippedPages: pg.skipped, stalled });
@@ -154,15 +163,16 @@ export async function jobCards(where: { ids?: string[]; take?: number }, canMana
       updatedAt: formatIst(j.updatedAt),
       files: j.files.filter((f) => f.status !== "REJECTED").map((f) => ({ name: f.originalName, role: f.role })),
       pages: pg,
+      failedKeys,
       counts: c,
       spentInr: j.spentInr,
       budgetInr: j.budgetInr,
       maxCostInr: estimate?.maxInr ?? null,
       message: j.status === "PAUSED" || j.status === "PAUSED_BUDGET" ? j.pauseReason : j.errorMessage,
-      nextAction: nextAction(j, c, stalled, pg),
+      nextAction: nextAction(j, c, stalled, pg, failedKeys),
       actions: {
         cancel: CANCELLABLE.includes(j.status),
-        retry: !leased && (j.status === "FAILED" || j.status === "PAUSED" || j.status === "CANCELLED" || (j.status === "PAUSED_BUDGET" && j.budgetInr > j.spentInr)),
+        retry: !leased && (j.status === "FAILED" || j.status === "PAUSED" || j.status === "CANCELLED" || (j.status === "PAUSED_BUDGET" && j.budgetInr > j.spentInr) || canRetryFailed(j, pg, failedKeys)),
         delete: canManage && j.status !== "IMPORTING" && !leased,
         recover: stalled,
       },

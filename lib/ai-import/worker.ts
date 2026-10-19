@@ -10,7 +10,8 @@ import { runKeyFiles } from "@/lib/ai-import/keys";
 import { runPostProcessing } from "@/lib/ai-import/post";
 import { runImport, type ImportPlan } from "@/lib/ai-import/adapter";
 import { logEvent } from "@/lib/ai-import/jobs";
-import { ImporterAiUnavailable, ImporterBudgetError } from "@/lib/ai-import/ai";
+import { ImporterAiUnavailable, ImporterBudgetError, resetRateLimitStreak } from "@/lib/ai-import/ai";
+import { summarizeFailures } from "@/lib/ai-import/failure";
 import { reconcileJob } from "@/lib/ai-import/summary";
 import { removeVaultDir } from "@/lib/ai-import/vault";
 import { autoCleanup } from "@/lib/ai-import/storage";
@@ -99,6 +100,8 @@ async function processJob(job: AiImportJob): Promise<void> {
     await logEvent(job.id, "PROCESSING", "Processing started");
   }
   const ctx = makeContext({ ...job, status: AiImportJobStatus.PROCESSING }, settings, { exam: exam?.name ?? "Exam", subject: subject?.name ?? null });
+  // The rate-limit circuit breaker counts per run: a resumed or retried job starts again at zero.
+  resetRateLimitStreak(job.id);
   try {
     await stage(job.id, "PAGES");
     await runLocalPasses(ctx);
@@ -113,15 +116,20 @@ async function processJob(job: AiImportJob): Promise<void> {
     await stage(job.id, "VALIDATE");
     await runPostProcessing(ctx);
     if (!(await ctx.stillRunning())) return;
-    const [failedPages, skippedPages, questions] = await Promise.all([
-      prisma.aiImportPage.count({ where: { jobId: job.id, status: AiImportPageStatus.FAILED } }),
+    const [failed, skippedPages, questions, failedKeys] = await Promise.all([
+      prisma.aiImportPage.findMany({ where: { jobId: job.id, status: AiImportPageStatus.FAILED }, select: { errorMessage: true } }),
       prisma.aiImportPage.count({ where: { jobId: job.id, status: AiImportPageStatus.SKIPPED, kind: "SCANNED" } }),
       prisma.aiImportQuestion.count({ where: { jobId: job.id } }),
+      prisma.aiImportFile.count({ where: { jobId: job.id, role: "ANSWER_KEY", status: "ANALYZED", errorMessage: { not: null } } }),
     ]);
+    const failedPages = failed.length;
+    const causes = summarizeFailures(failed.map((p) => p.errorMessage));
     // A job that produced nothing says why, and what to do next (never a silent "ready to import").
     const why = failedPages
-      ? `${failedPages} page(s) failed — use Retry to read them once more.`
-      : questions === 0 && skippedPages
+      ? `${failedPages} page(s) failed (${causes.text})${questions === 0 ? ", so no question was extracted" : ""}${failedKeys ? `; ${failedKeys} answer-key file(s) could not be read` : ""} — use Retry failed pages to read only those again (finished pages are not read or charged again).`
+      : failedKeys
+        ? `${failedKeys} answer-key file(s) could not be read — use Retry failed pages to read the key again.`
+        : questions === 0 && skippedPages
         ? `No questions could be read: ${skippedPages} scanned page(s) have no text layer and need AI vision, which is switched off. Upload a digital PDF or Word file of the paper, or ask the owner to approve paid AI for the importer.`
         : questions === 0
           ? "No numbered questions were recognized in this file. Check that it is a question paper (numbered questions with options A–D)."

@@ -26,6 +26,8 @@ import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-impor
 import { importerModelCatalog, importerSettingsProblems } from "@/lib/ai-import/models";
 import { refreshRoutes } from "@/lib/ai-import/routes";
 import type { ImporterCatalog } from "@/lib/ai-import/model-options";
+import { AssistantApplyError, applyRecommendedModels, modelAssistant, testImporterModels } from "@/lib/ai-import/assistant";
+import type { ApplyResult, AssistantResult, ModelTestReport } from "@/lib/ai-import/assistant-types";
 import { CLEANUP_CATEGORIES, executeCleanup, findCandidates, findDuplicates, scanStorage, type CleanupCategory, type CleanupItem, type CleanupResult, type StorageReport } from "@/lib/ai-import/storage";
 import type { ImportMode } from "@/lib/ai-import/adapter";
 
@@ -373,6 +375,38 @@ export async function refreshRoutesAction(draft?: ImporterSettings): Promise<Imp
       return importerModelCatalog(settings);
     },
     []
+  );
+}
+
+/**
+ * Model Assistant: recommendations per purpose for the SAVED settings. Deterministic and catalog-based —
+ * no AI request and no network call (AI reasoning for recommendations is not approved).
+ */
+export async function findBestModelsAction(): Promise<ImporterResult<AssistantResult>> {
+  return run(await requireView(), async () => modelAssistant(await getImporterSettings()), []);
+}
+
+/** Model Assistant: configuration checks of the importer's listed models (no AI request, no network call). */
+export async function testModelsAction(): Promise<ImporterResult<ModelTestReport>> {
+  return run(await requireView(), async () => testImporterModels(await getImporterSettings()), []);
+}
+
+/**
+ * Model Assistant: adds the confirmed recommended models to the importer's OWN list (never a global
+ * approval), then re-reads the provider routes and re-validates route, price, privacy and budget.
+ */
+export async function applyRecommendedModelsAction(add: string[], expectedList: string[]): Promise<ImporterResult<ApplyResult>> {
+  return run(
+    await requireManage(),
+    async (actorId) => {
+      try {
+        return await applyRecommendedModels({ settings: await getImporterSettings(), add: Array.isArray(add) ? add.filter((x) => typeof x === "string").slice(0, 50) : [], expectedList: Array.isArray(expectedList) ? expectedList.filter((x) => typeof x === "string") : [], actorId });
+      } catch (error) {
+        if (error instanceof AssistantApplyError) throw new ImportJobError(error.message);
+        throw error;
+      }
+    },
+    ["/admin/ai-importer/settings"]
   );
 }
 
