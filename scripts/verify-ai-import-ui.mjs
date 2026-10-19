@@ -509,7 +509,13 @@ await admin.reload();
 const scRow = admin.locator(`[data-testid=job-row][data-job-id="${scJob}"]`);
 check("stalled job is labelled and offers Start again", /Stalled/.test(await scRow.locator("[data-testid=job-label]").textContent()) && (await scRow.locator("[data-testid=job-recover]").count()) === 1);
 await scRow.locator("[data-testid=job-recover]").click();
-check("Start again answers with what happened", await until(async () => /started again/.test((await scRow.locator("[data-testid=job-controls-message]").textContent().catch(() => "")) ?? ""), 15000));
+// The scratch worker loop polls every few seconds and may pick the "stalled" job up between the reload
+// and the click: Start again then truthfully answers that a worker is processing it (nothing changed).
+const recoverMsg = async () => (await scRow.locator("[data-testid=job-controls-message]").textContent().catch(() => "")) ?? "";
+await until(async () => /started again|A worker is processing this import/.test(await recoverMsg()), 15000);
+const recoverText = await recoverMsg();
+const restartEvents = (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='WORKER_RESTARTED'`, [scJob])).rows[0].n;
+check("Start again answers with what happened (restarted → WORKER_RESTARTED logged; already picked up by the worker → nothing changed)", (/started again/.test(recoverText) && restartEvents === 1) || (/A worker is processing this import/.test(recoverText) && /Nothing was changed/.test(recoverText) && restartEvents === 0), { recoverText, restartEvents });
 await db.query(`update "AiImportJob" set status='COMPLETED_WITH_ISSUES' where id=$1 and status=$2`, [scJob, scStatusBefore]);
 // The old blanket lock message is gone; the details page explains how to remove files.
 await admin.goto(`${BASE}/admin/ai-importer/jobs/${opJob}`);

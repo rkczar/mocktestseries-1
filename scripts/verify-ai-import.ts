@@ -891,10 +891,29 @@ async function sectionT(actor: string, examId: string) {
   const results = await Promise.allSettled(Array.from({ length: 12 }, (_, i) => importerAiCall({ jobId: i % 2 ? ja : jb, task: "classify", models: ["mocktext/classifier"], system: "You classify exam questions into an EXISTING syllabus.", content: [{ type: "text", text: `SUBJECT s = Anatomy\n  TOPIC t = Lower Limb\n[q${i}] femur` }], maxOutputTokens: 2500, settings: cfg5, needsVision: false })));
   await mockConfig({ chatDelayMs: 0 });
   const okN = results.filter((r) => r.status === "fulfilled").length;
-  const refused = results.filter((r) => r.status === "rejected" && /all-time AI budget/.test(String((r.reason as Error).message))).length;
+  // The per-job cap equals the all-time cap here, and the job check runs first: when the requests that got
+  // in all belong to one job (lock order), that job's next request is refused by its JOB cap — an equally
+  // correct refusal. Every refusal must be one of these two budget caps.
+  const scopeOf = (r: PromiseSettledResult<unknown>) => (r.status === "rejected" ? ((r.reason as { scope?: string }).scope ?? `not a budget refusal: ${String((r.reason as Error).message).slice(0, 120)}`) : null);
+  const refused = results.filter((r) => scopeOf(r) === "total" || scopeOf(r) === "job").length;
   const after5 = await used();
-  check("12 concurrent requests on 2 jobs: at most what the all-time cap allows ran (worst-case reservations, one lock)", okN >= 1 && okN <= 3 && okN + refused === 12 && (await mockStats()).chat - chats5 === okN, { okN, refused, chats: (await mockStats()).chat - chats5, other: results.filter((r) => r.status === "rejected" && !/all-time AI budget/.test(String((r.reason as Error).message))).map((r) => String(((r as PromiseRejectedResult).reason as Error).message).slice(0, 160)) });
+  check("12 concurrent requests on 2 jobs: at most what the all-time cap allows ran (worst-case reservations, one lock); every other request refused by the all-time or the equal per-job cap", okN >= 1 && okN <= 3 && okN + refused === 12 && (await mockStats()).chat - chats5 === okN, { okN, refused, chats: (await mockStats()).chat - chats5, scopes: results.map(scopeOf).filter(Boolean) });
   check("…total importer spend stays within the all-time cap", after5 <= capTotal + 1e-9, { after5, capTotal, before5 });
+  // The same caps in a fixed order (no timing): 3 requests of job A in flight, then one more of A and one of B.
+  const capOrdered = (await used()) + worstOne * 3.5;
+  await saveImporterSettings({ ...cfg5, budget: { ...cfg5.budget, totalInr: capOrdered, maxJobInr: Math.min(8, capOrdered), maxRequestInr: Math.min(1, capOrdered) } }, actor);
+  await mockConfig({ chatDelayMs: 4000 });
+  const inflightO: Promise<unknown>[] = [];
+  for (let i = 0; i < 3; i++) {
+    const n0 = await prisma.aiBudgetReservation.count({ where: { status: "RESERVED", feature: { startsWith: "qimport_" } } });
+    inflightO.push(callFor(ja).catch((e) => e));
+    for (let w = 0; w < 300 && (await prisma.aiBudgetReservation.count({ where: { status: "RESERVED", feature: { startsWith: "qimport_" } } })) === n0; w++) await new Promise((r) => setTimeout(r, 20));
+  }
+  const scopeNow = (p: Promise<unknown>) => p.then(() => "sent", (e) => (e as { scope?: string }).scope ?? "other");
+  const [fourthA, fifthB] = [await scopeNow(callFor(ja)), await scopeNow(callFor(jb))];
+  await Promise.all(inflightO);
+  await mockConfig({ chatDelayMs: 0 });
+  check("fixed order: with 3 of job A's requests in flight, A's next request is refused by the job cap and B's by the all-time cap (nothing sent)", fourthA === "job" && fifthB === "total", { fourthA, fifthB });
   // A new IST month does not refresh an all-time (pilot) budget: spend up to the cap, then move every
   // reservation into an earlier month (the monthly budget is free again, the all-time one is not).
   await saveImporterSettings({ ...(await getImporterSettings()), budget: { ...cfg5.budget, totalInr: (await used()) + worstOne * 0.5 } }, actor);
