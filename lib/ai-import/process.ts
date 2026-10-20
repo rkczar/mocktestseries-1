@@ -8,7 +8,9 @@ import { pageLayout, renderPage, type PageLayout } from "@/lib/ai-import/pdf";
 import { readDocx, IMG_TOKEN } from "@/lib/ai-import/docx";
 import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
 import { blockToQuestion, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
-import { cropFromRender, iou, storeOriginalFigure, visionImage, FigureError } from "@/lib/ai-import/figures";
+import { cropFromRender, cropFromScan, iou, storeOriginalFigure, visionImage, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
+import { checkFigureMapping, overlappingRegions } from "@/lib/ai-import/figure-map";
+import { formulaDiff } from "@/lib/ai-import/fidelity";
 import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
 import { EXTRACT_SYSTEM, extractUserText, pageSchema, toExtracted, type PageOutput } from "@/lib/ai-import/prompts";
@@ -55,6 +57,12 @@ type PageState = {
   verified?: { model: string; at: string; extra: string[] };
   /** The page's paid first read, kept until the page is finished: a stop during the second read never pays for it again. */
   primaryCache?: { model: string; out: PageOutput; at: string };
+  /**
+   * Text at the top of this page that continues a question of the previous page, read before that page was
+   * finished (pages are read in parallel). Joined once the previous page is done; `savedAs` = the question it
+   * was saved as meanwhile (so it is visible), removed again when the join succeeds.
+   */
+  pendingJoins?: { q: ExtractedQuestion; savedAs?: string | null }[];
 };
 
 /** Parses a page answer into the page schema (an unusable answer throws "model_output", which may switch the model once). */
@@ -70,7 +78,39 @@ export function aiUsable(s: ImporterSettings): boolean {
 
 // ---- Persisting questions + figures -----------------------------------------------------------------
 
-type FigureBytes = (f: ExtractedQuestion["figures"][number]) => Promise<{ bytes: Buffer; ext: string; source: string } | null>;
+/** Where a crop was cut: the original embedded scan or the page render, and its pixel rectangle there. */
+type CropProvenance = { from: "scan" | "render"; width: number; height: number };
+type FigureBytes = (f: ExtractedQuestion["figures"][number]) => Promise<{ bytes: Buffer; ext: string; source: string; crop?: CropProvenance } | null>;
+
+/**
+ * Figure bytes for one page: exact embedded image when the box matches one, otherwise a crop of the box
+ * from the ORIGINAL full-page scan (scanned PDF, at the scan's own resolution) or from the page render.
+ * The original page and render are never modified.
+ */
+function pageFigureBytes(render: Buffer, renderWidth: number, layout: PageLayout | null): FigureBytes {
+  const scan = layout?.images.find((img) => img.box.w * img.box.h >= 0.85) ?? null;
+  return async (f) => {
+    if (!f.box) return null;
+    if (layout) {
+      const hit = layout.images.map((img, i) => ({ i, score: iou(img.box, f.box!), area: img.box.w * img.box.h })).filter((x) => x.area < 0.6).sort((a, b) => b.score - a.score)[0];
+      if (hit && hit.score >= 0.6) return { bytes: layout.images[hit.i].bytes, ext: layout.images[hit.i].ext, source: "EMBEDDED" };
+    }
+    const fromScan = scan && layout ? await cropFromScan(scan, layout, f.box, renderWidth) : null;
+    const crop = fromScan ?? (await cropFromRender(render, f.box));
+    if (!crop) return null;
+    const why: string[] = [];
+    if (crop.clipped) {
+      f.confidence = Math.min(f.confidence, 0.6);
+      why.push("The figure touches the page edge — part of it may be cut off.");
+    }
+    if (Math.min(crop.width, crop.height) < MIN_CROP_SIDE) {
+      f.confidence = Math.min(f.confidence, 0.5);
+      why.push(`The crop is only ${crop.width}×${crop.height} px — check that the whole figure is legible.`);
+    }
+    if (why.length) f.mappingReason = [f.mappingReason, ...why].filter(Boolean).join(" ");
+    return { bytes: crop.bytes, ext: "png", source: "CROP", crop: { from: fromScan ? "scan" : "render", width: crop.width, height: crop.height } };
+  };
+}
 
 /** Stores the original bytes of each extracted figure in the vault (never modified) and describes it. */
 async function storeFigures(q: ExtractedQuestion, figureBytes: FigureBytes, pageNumber: number): Promise<FigureSnapshot[]> {
@@ -78,24 +118,28 @@ async function storeFigures(q: ExtractedQuestion, figureBytes: FigureBytes, page
   for (const f of q.figures) {
     let stored: Awaited<ReturnType<typeof storeOriginalFigure>> | null = null;
     let source = "CROP";
-    let mapping = f.confidence >= 0.8 ? "OK" : "UNCERTAIN";
     let note = f.description ?? null;
+    let crop: CropProvenance | null = null;
     try {
       const got = await figureBytes(f);
       if (got) {
         stored = await storeOriginalFigure(got.bytes, got.ext);
         source = got.source;
+        crop = got.crop ?? null;
       }
     } catch (e) {
       note = e instanceof FigureError ? e.message : "The figure could not be read.";
     }
+    // Decided after the crop: a crop cut at the page edge or too small lowers the confidence.
+    let mapping = f.confidence >= 0.8 ? "OK" : "UNCERTAIN";
     if (!stored) mapping = "MISSING";
     out.push({
       pageNumber,
       owner: f.owner,
       optionLabel: f.owner === "OPTION" ? (f.optionLabel ?? null) : null,
       sharedGroup: f.sharedGroup ?? null,
-      box: f.box ?? null,
+      // The page box plus the crop's provenance: pixel rectangle on the original it was cut from, and the mapping reason.
+      box: f.box ? { ...f.box, ...(crop ? { crop } : {}), ...(f.mappingReason ? { reason: f.mappingReason.slice(0, 400) } : {}) } : null,
       source: stored ? source : "MISSING",
       originalKey: stored?.key ?? "",
       originalSha256: stored?.sha256 ?? "",
@@ -124,6 +168,20 @@ export type RescanOutcome = "applied" | "pending" | "new" | "stored" | "skipped"
 async function saveQuestion(ctx: StepContext, file: AiImportFile, q: ExtractedQuestion, orderIndex: number, figureBytes: FigureBytes, pageNumber: number, rescan?: { model: string | null } | null): Promise<RescanOutcome> {
   const key = sourceKeyOf(q);
   const existing = await prisma.aiImportQuestion.findUnique({ where: { fileId_sourceKey: { fileId: file.id, sourceKey: key } }, include: { figures: true } });
+  // The same printed number read on a DIFFERENT page (a misread number, or a repeated one) never replaces the
+  // earlier question: it is kept as its own question under a page-qualified key, without a number, and flagged.
+  if (existing && !rescan && q.pages.length && !existing.pages.some((p) => q.pages.includes(p))) {
+    const shown = q.number ?? q.label;
+    const kept: ExtractedQuestion = {
+      ...q,
+      printedNumber: q.number ?? q.printedNumber ?? null,
+      number: null,
+      label: `${shown}@p${q.pages[0]}`,
+      confidence: Math.min(q.confidence, 0.5),
+      notes: [...(q.notes ?? []), `Q${shown} was already read on page ${existing.pages.join(", ")}; this question on page ${q.pages.join(", ")} is kept separately — check which number is right.`],
+    };
+    return saveQuestion(ctx, file, kept, orderIndex, figureBytes, pageNumber, rescan);
+  }
   if (existing && (existing.status === AiImportQuestionStatus.IMPORTED || existing.status === AiImportQuestionStatus.PUBLISHED)) {
     if (rescan) await recordVersion({ questionId: existing.id, jobId: ctx.job.id, kind: "RESCAN", status: "DISCARDED", data: q, model: rescan.model, note: "Already in the Question Bank — the re-scan result was kept for reference only (edit the saved question in the Question Bank)." });
     return "stored";
@@ -268,6 +326,155 @@ function assignSections(qs: ExtractedQuestion[], start: NumberingState | undefin
   }
 }
 
+/**
+ * Page-level structure checks of one read, before anything is saved: a printed number returned twice on the
+ * page keeps both questions (the later one without a number, flagged — never merged or overwritten), the
+ * figure ↔ question mapping is checked against the page geometry, and overlapping question areas (two
+ * questions merged / one split) are flagged.
+ */
+export function checkPageStructure(qs: ExtractedQuestion[], pageNumber: number): void {
+  const seen = new Map<string, number>();
+  for (const q of qs) {
+    if (q.continuedFromPreviousPage || q.number === null) continue;
+    const k = sourceKeyOf(q);
+    const n = (seen.get(k) ?? 0) + 1;
+    seen.set(k, n);
+    if (n === 1) continue;
+    q.printedNumber = q.number;
+    q.label = `${q.number}@p${pageNumber}#${n}`;
+    q.number = null;
+    q.confidence = Math.min(q.confidence, 0.5);
+    q.notes = [...(q.notes ?? []), `Q${q.printedNumber} was read twice on page ${pageNumber}; this second one is kept separately — check its number against the page.`];
+  }
+  checkFigureMapping(qs);
+  for (const pair of overlappingRegions(qs)) {
+    for (const q of qs) {
+      if (!pair.split("/").includes(`Q${q.number ?? q.label}`)) continue;
+      q.confidence = Math.min(q.confidence, 0.6);
+      q.notes = [...(q.notes ?? []), `The page areas of ${pair.replace("/", " and ")} overlap — the questions may be merged or split; check them against the page.`];
+    }
+  }
+}
+
+/**
+ * Joins the text at the top of a page to the question it continues on the previous page. Nothing is
+ * dropped: options are appended in printed order (never cut to four), the continuation's figures are cropped
+ * from THIS page and linked to the joined question, and text that cannot be placed is kept in the notes
+ * with the confidence lowered.
+ */
+export function mergeContinuation(pd: ExtractedQuestion, q: ExtractedQuestion, pageNumber: number): ExtractedQuestion {
+  const notes = [...(pd.notes ?? []), `Joined with its continuation on page ${pageNumber}.`];
+  let stem = pd.stem;
+  let options = pd.options;
+  let confidence = Math.min(pd.confidence, q.confidence);
+  const tail = q.stem.trim();
+  if (!pd.options.length) {
+    stem = `${pd.stem}\n${tail}`.trim();
+    options = q.options;
+  } else {
+    const have = new Set(pd.options.map((o) => o.printed.replace(/[()[\].\s]/g, "").toLowerCase()));
+    const added = q.options.filter((o) => !have.has(o.printed.replace(/[()[\].\s]/g, "").toLowerCase()));
+    if (added.length < q.options.length) {
+      notes.push(`Page ${pageNumber} repeats option label(s) already read on the previous page — check the options.`);
+      confidence = Math.min(confidence, 0.5);
+    }
+    options = [...pd.options, ...added].map((o, i) => ({ ...o, label: String.fromCharCode(65 + i) }));
+    if (tail) {
+      notes.push(`Text at the top of page ${pageNumber} could not be placed automatically: "${tail.slice(0, 300)}" — add it where it belongs.`);
+      confidence = Math.min(confidence, 0.4);
+    }
+  }
+  const figures = [...pd.figures, ...q.figures];
+  return {
+    ...pd,
+    stem,
+    options,
+    type: options.length >= 5 ? "FIVE_OPTIONS" : pd.type,
+    pages: [...new Set([...pd.pages, pageNumber])],
+    figures,
+    printedAnswer: [...new Set([...pd.printedAnswer, ...q.printedAnswer])],
+    listI: pd.listI || q.listI ? [...(pd.listI ?? []), ...(q.listI ?? [])] : null,
+    listII: pd.listII || q.listII ? [...(pd.listII ?? []), ...(q.listII ?? [])] : null,
+    unreadable: [...pd.unreadable, ...q.unreadable],
+    contentFormat: pd.contentFormat === "RICH_V1" || q.contentFormat === "RICH_V1" ? "RICH_V1" : "PLAIN",
+    confidence,
+    continuesOnNextPage: q.continuesOnNextPage ?? false,
+    notes,
+  };
+}
+
+const UNTOUCHED_STATUSES: AiImportQuestionStatus[] = [AiImportQuestionStatus.EXTRACTED, AiImportQuestionStatus.READY, AiImportQuestionStatus.NEEDS_CORRECTION, AiImportQuestionStatus.NOT_IMPORTABLE];
+
+/** Never corrected, reviewed, approved or stored by an administrator — still the extractor's own result. */
+function untouched(q: { editedData: unknown; approvedById: string | null; reviewedById: string | null; answerConfirmedById: string | null; questionId: string | null; status: AiImportQuestionStatus }): boolean {
+  return !q.editedData && !q.approvedById && !q.reviewedById && !q.answerConfirmedById && !q.questionId && UNTOUCHED_STATUSES.includes(q.status);
+}
+
+/** "joined" | "deferred" (previous page not finished yet) | the reason it cannot be joined. */
+async function joinContinuation(ctx: StepContext, file: AiImportFile, pageNumber: number, q: ExtractedQuestion, figureBytes: FigureBytes): Promise<string> {
+  if (pageNumber <= 1) return "it is on the first page";
+  const prevPage = await prisma.aiImportPage.findUnique({ where: { fileId_pageNumber: { fileId: file.id, pageNumber: pageNumber - 1 } }, select: { status: true } });
+  // Not read yet, or failed (a retry may still read it): joined later, never guessed now.
+  if (!prevPage || prevPage.status === AiImportPageStatus.PENDING || prevPage.status === AiImportPageStatus.FAILED) return "deferred";
+  if (prevPage.status !== AiImportPageStatus.DONE) return `page ${pageNumber - 1} was not read`;
+  const prev = await prisma.aiImportQuestion.findFirst({ where: { fileId: file.id, ...(q.number !== null ? { sourceNumber: q.number } : {}), pages: { has: pageNumber - 1 } }, orderBy: { orderIndex: "desc" } });
+  if (!prev) return q.number !== null ? `Q${q.number} is not on page ${pageNumber - 1}` : `no question on page ${pageNumber - 1}`;
+  if (prev.pages.includes(pageNumber)) return "joined";
+  if (!untouched(prev)) return `Q${prev.sourceLabel} was already corrected or reviewed`;
+  const merged = mergeContinuation(prev.data as unknown as ExtractedQuestion, q, pageNumber);
+  const figs = await storeFigures(q, figureBytes, pageNumber);
+  await prisma.$transaction([
+    prisma.aiImportQuestion.update({ where: { id: prev.id }, data: { data: merged as unknown as Prisma.InputJsonValue, pages: merged.pages, optionCount: merged.options.length, questionType: merged.type, contentFormat: merged.contentFormat, confidence: merged.confidence } }),
+    ...(figs.length ? [prisma.aiImportFigure.createMany({ data: figureRows(figs, { jobId: ctx.job.id, fileId: file.id, questionId: prev.id }) })] : []),
+  ]);
+  return "joined";
+}
+
+/**
+ * Continuations read before their previous page was finished (parallel reading): joined now, in page
+ * order. One that still cannot be joined is saved as its own flagged question so it is never lost; it is
+ * joined (and that question removed, if untouched) once the previous page is read on a retry.
+ */
+export async function joinPendingContinuations(ctx: StepContext): Promise<number> {
+  const pages = await prisma.aiImportPage.findMany({ where: { jobId: ctx.job.id, status: AiImportPageStatus.DONE }, orderBy: [{ fileId: "asc" }, { pageNumber: "asc" }], include: { file: true } });
+  let joined = 0;
+  for (const p of pages) {
+    const state = (p.rawOutput as PageState | null) ?? {};
+    if (!state.pendingJoins?.length) continue;
+    const render = await ensureRender(ctx.job, p.file, p.pageNumber, ctx.settings.limits.renderDpi);
+    const meta = await sharp(render).metadata();
+    let layout: PageLayout | null = null;
+    if ((p.file.detected as { kind?: string } | null)?.kind === "pdf") layout = await pageLayout(vaultPath(p.file.storageKey!), p.pageNumber, workDir(ctx.job.id)).catch(() => null);
+    const figureBytes = pageFigureBytes(render, meta.width ?? 0, layout);
+    const left: NonNullable<PageState["pendingJoins"]> = [];
+    for (const item of state.pendingJoins) {
+      const q: ExtractedQuestion = JSON.parse(JSON.stringify(item.q));
+      if (item.savedAs) {
+        // Saved separately meanwhile: once an administrator worked on it, it is theirs and is never joined automatically.
+        const saved = await prisma.aiImportQuestion.findUnique({ where: { id: item.savedAs } });
+        if (!saved || !untouched(saved)) continue;
+      }
+      const outcome = await joinContinuation(ctx, p.file, p.pageNumber, q, figureBytes);
+      if (outcome === "joined") {
+        joined++;
+        // The separately saved copy (untouched, checked above) is replaced by the joined question; its vault originals stay.
+        if (item.savedAs) await prisma.aiImportQuestion.delete({ where: { id: item.savedAs } });
+        continue;
+      }
+      if (!item.savedAs) {
+        // Not joinable now: kept visible as its own question (flagged), never dropped.
+        const shown = q.number ?? "?";
+        const frag: ExtractedQuestion = { ...q, printedNumber: q.number, number: null, label: `cont${shown}@p${p.pageNumber}`, confidence: Math.min(q.confidence, 0.4), notes: [...(q.notes ?? []), `This text continues a question from page ${p.pageNumber - 1}, but it could not be joined (${outcome === "deferred" ? `page ${p.pageNumber - 1} is not finished` : outcome}). Kept separately — retry the previous page or join it by hand.`] };
+        await saveQuestion(ctx, p.file, frag, await nextOrderIndex(p.fileId), figureBytes, p.pageNumber);
+        const row = await prisma.aiImportQuestion.findUnique({ where: { fileId_sourceKey: { fileId: p.fileId, sourceKey: sourceKeyOf(frag) } }, select: { id: true } });
+        left.push({ q: item.q, savedAs: row?.id ?? null });
+      } else left.push(item);
+    }
+    await prisma.aiImportPage.update({ where: { id: p.id }, data: { rawOutput: { ...state, pendingJoins: left.length ? left : undefined } as unknown as Prisma.InputJsonValue } });
+  }
+  return joined;
+}
+
 /** Compares two independent reads of the same question (deterministic), field by field. */
 export function readsAgree(a: ExtractedQuestion, b: ExtractedQuestion): { agree: boolean; detail: string; fields: string[] } {
   const norm = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[{}\s.,;:()[\]'"`]/g, "");
@@ -299,6 +506,15 @@ export function readsAgree(a: ExtractedQuestion, b: ExtractedQuestion): { agree:
         fields.push(`option ${o.label}`);
       }
     });
+  // Text similarity hides a changed sign, exponent, digit or symbol ("10^{-3}" vs "10^{3}"): compared exactly.
+  const parts: [string, string, string][] = [["question text", a.stem, b.stem], ...(a.options.length === b.options.length ? a.options.map((o, i): [string, string, string] => [`option ${o.label}`, o.text, b.options[i].text]) : [])];
+  for (const [field, x, y] of parts) {
+    const d = formulaDiff(x, y);
+    if (d) {
+      diffs.push(`numbers / symbols in ${field} differ (${d})`);
+      fields.push(`${field} numbers`);
+    }
+  }
   const pa = [...a.printedAnswer].sort().join();
   const pb = [...b.printedAnswer].sort().join();
   if (pa && pb && pa !== pb) {
@@ -364,6 +580,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   if (!cached) await prisma.aiImportPage.update({ where: { id: page.id }, data: { rawOutput: { ...state, primaryCache: { model: primary.model, out: primary.out, at: new Date().toISOString() } } as unknown as Prisma.InputJsonValue } });
   const qs = toExtracted(primary.out, page.pageNumber, primary.model);
   assignSections(qs, state.startState);
+  checkPageStructure(qs, page.pageNumber);
 
   // Layout of a text page: embedded images give exact original bytes for figures the model boxed.
   let layout: PageLayout | null = null;
@@ -412,15 +629,19 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   let order = await nextOrderIndex(file.id);
   const localOnPage = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id, pages: { has: page.pageNumber } }, select: { id: true, sourceKey: true, status: true, editedData: true, data: true } });
   const aiKeys = new Set<string>();
+  const figureBytes = pageFigureBytes(render, meta.width ?? 0, layout);
+  const pendingJoins: NonNullable<PageState["pendingJoins"]> = [];
   for (const q of qs) {
     if (q.continuedFromPreviousPage && !rescan) {
-      const prev = await prisma.aiImportQuestion.findFirst({ where: { fileId: file.id, ...(q.number !== null ? { sourceNumber: q.number } : {}), pages: { has: page.pageNumber - 1 } }, orderBy: { orderIndex: "desc" } });
-      if (prev && !prev.editedData && prev.status === AiImportQuestionStatus.EXTRACTED) {
-        const pd = prev.data as unknown as ExtractedQuestion;
-        const merged: ExtractedQuestion = { ...pd, stem: q.options.length && !pd.options.length ? `${pd.stem}\n${q.stem}`.trim() : pd.options.length ? pd.stem : `${pd.stem}\n${q.stem}`.trim(), options: pd.options.length >= 4 ? pd.options : [...pd.options, ...q.options].slice(0, 6), pages: [...new Set([...pd.pages, page.pageNumber])], figures: [...pd.figures, ...q.figures], confidence: Math.min(pd.confidence, q.confidence), notes: [...(pd.notes ?? []), "Joined with its continuation on the next page."] };
-        await prisma.aiImportQuestion.update({ where: { id: prev.id }, data: { data: merged as unknown as Prisma.InputJsonValue, pages: merged.pages, optionCount: merged.options.length, confidence: merged.confidence } });
+      const joined = await joinContinuation(ctx, file, page.pageNumber, q, figureBytes);
+      if (joined === "joined") continue;
+      if (joined === "deferred") {
+        // The previous page is still being read (pages run in parallel): joined after the stage.
+        pendingJoins.push({ q, savedAs: null });
         continue;
       }
+      q.confidence = Math.min(q.confidence, 0.4);
+      q.notes = [...(q.notes ?? []), `This text continues a question from page ${page.pageNumber - 1}, but that question could not be joined (${joined}) — check it against both pages.`];
     }
     if (!inScope(sourceKeyOf(q))) continue;
     if (second) {
@@ -434,17 +655,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     }
     const existingLocal = localOnPage.find((l) => l.sourceKey === sourceKeyOf(q));
     aiKeys.add(sourceKeyOf(q));
-    const outcome = await saveQuestion(ctx, file, q, existingLocal ? (await prisma.aiImportQuestion.findUnique({ where: { id: existingLocal.id }, select: { orderIndex: true } }))!.orderIndex : order++, async (f) => {
-      if (!f.box) return null;
-      if (layout) {
-        const hit = layout.images.map((img, i) => ({ i, score: iou(img.box, f.box!), area: img.box.w * img.box.h })).filter((x) => x.area < 0.6).sort((a, b) => b.score - a.score)[0];
-        if (hit && hit.score >= 0.6) return { bytes: layout.images[hit.i].bytes, ext: layout.images[hit.i].ext, source: "EMBEDDED" };
-      }
-      const crop = await cropFromRender(render, f.box);
-      if (!crop) return null;
-      if (crop.clipped) f.confidence = Math.min(f.confidence, 0.6);
-      return { bytes: crop.bytes, ext: "png", source: "CROP" };
-    }, page.pageNumber, rescan ? { model: primary.model } : null);
+    const outcome = await saveQuestion(ctx, file, q, existingLocal ? (await prisma.aiImportQuestion.findUnique({ where: { id: existingLocal.id }, select: { orderIndex: true } }))!.orderIndex : order++, figureBytes, page.pageNumber, rescan ? { model: primary.model } : null);
     if (rescan) outcomes.push({ key: sourceKeyOf(q), outcome });
   }
   // Local questions on this page the AI did not return are KEPT and flagged — never silently dropped.
@@ -463,12 +674,14 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   }
   // Questions the independent read found but the primary read did not: possible missing questions (never added silently).
   const extra = second ? second.filter((s) => !qs.some((q) => q.number === s.number && q.section === s.section)).map((s) => `${s.section ? `${s.section} ` : ""}Q${s.number ?? s.label}`) : [];
-  const { rescan: _done, primaryCache: _cache, ...rest } = state;
+  const { rescan: _done, primaryCache: _cache, pendingJoins: _joins, ...rest } = state;
   void _done;
   void _cache;
+  // A re-scan does not join continuations, so joins still waiting from the first read are kept.
+  if (rescan && _joins?.length) pendingJoins.push(..._joins);
   await prisma.aiImportPage.update({
     where: { id: page.id },
-    data: { status: AiImportPageStatus.DONE, model: primary.model, processedAt: new Date(), errorMessage: null, rawOutput: { ...rest, ai: primary.out, ...(second ? { secondRead: { model: secondModel, questions: second.length }, verified: { model: secondModel ?? "", at: new Date().toISOString(), extra } } : {}) } as unknown as Prisma.InputJsonValue },
+    data: { status: AiImportPageStatus.DONE, model: primary.model, processedAt: new Date(), errorMessage: null, rawOutput: { ...rest, ai: primary.out, ...(pendingJoins.length ? { pendingJoins } : {}), ...(second ? { secondRead: { model: secondModel, questions: second.length }, verified: { model: secondModel ?? "", at: new Date().toISOString(), extra } } : {}) } as unknown as Prisma.InputJsonValue },
   });
   if (extra.length) await logEvent(ctx.job.id, "VERIFY_EXTRA", `${file.originalName} page ${page.pageNumber}: the independent read found ${extra.join(", ")}, which the primary read did not — check for missing questions.`, { pageId: page.id, extra });
   if (rescan) {
@@ -691,6 +904,8 @@ export async function runAiPages(ctx: StepContext): Promise<{ skippedNoAi: numbe
     }
   });
   await Promise.all(workers);
+  // Continuations read before their previous page finished are joined now that every page has settled.
+  await joinPendingContinuations(ctx);
   if (stop) throw stop;
   return { skippedNoAi: 0 };
 }

@@ -12,6 +12,8 @@ export interface QualityQuestion {
   fileId: string;
   section: string;
   number: number | null;
+  /** Printed number of a question kept without a number because that number was already read elsewhere. */
+  printedNumber?: number | null;
   status: string;
   approved: boolean;
   stored: boolean;
@@ -97,6 +99,8 @@ export interface QualityReport {
   topicUncertain: number;
   pages: { total: number; completed: number; failed: number; retrying: number; pending: number; skipped: number; needsReview: number };
   missing: string[];
+  /** Printed numbers read on more than one question ("Q12 ×2") — reconciliation, never merged automatically. */
+  duplicateNumbers: string[];
   verifierExtras: string[];
   /** expected − counted (null when no expected count was confirmed). */
   countDifference: number | null;
@@ -131,6 +135,21 @@ export function missingNumbers(questions: Pick<QualityQuestion, "fileId" | "sect
     for (let n = 1; n <= upTo; n++) if (!g.nums.has(n)) out.push(label(g.section, n));
   }
   return out;
+}
+
+/** Printed numbers that occur on more than one live question of the same paper and section. */
+export function duplicateNumbers(questions: Pick<QualityQuestion, "fileId" | "section" | "number" | "printedNumber" | "status">[]): string[] {
+  const count = new Map<string, { section: string; n: number; times: number }>();
+  for (const q of questions) {
+    if (q.status === "REJECTED") continue;
+    const n = q.number ?? q.printedNumber ?? null;
+    if (n === null) continue;
+    const k = `${q.fileId}|${q.section}|${n}`;
+    const c = count.get(k) ?? { section: q.section, n, times: 0 };
+    c.times++;
+    count.set(k, c);
+  }
+  return [...count.values()].filter((c) => c.times > 1).map((c) => `${label(c.section, c.n)} ×${c.times}`);
 }
 
 export function qualityReport(input: QualityInput): QualityReport {
@@ -195,6 +214,7 @@ export function qualityReport(input: QualityInput): QualityReport {
     topicUncertain: by((q) => has(q, "TOPIC_UNCERTAIN") || has(q, "SUBJECT_UNKNOWN")),
     pages,
     missing,
+    duplicateNumbers: duplicateNumbers(qs),
     verifierExtras: input.verifierExtras,
     countDifference,
     ackValid,
@@ -219,6 +239,7 @@ export function qualityReport(input: QualityInput): QualityReport {
 
   const w = report.warnings;
   if (sequenceProblem && ackValid) w.push(`Count difference / missing numbers acknowledged: ${input.ack!.note}`);
+  if (report.duplicateNumbers.length) w.push(`Question number(s) read on more than one question: ${report.duplicateNumbers.slice(0, 10).join(", ")} — each copy is kept and flagged; set the right numbers or reject the extra copy.`);
   if (input.verifierExtras.length) w.push(`The independent read found question(s) the primary read did not: ${input.verifierExtras.slice(0, 10).join(", ")}.`);
   if (report.verifyDisagreed) w.push(`${report.verifyDisagreed} question(s) where the independent read disagreed or did not find the question.`);
   if (report.notImportable) w.push(`${report.notImportable} question(s) cannot be stored by the Question Bank (unsupported type).`);

@@ -30,6 +30,10 @@ export interface ExtractedFigure {
   confidence: number;
   /** Questions sharing this figure carry the same group key. */
   sharedGroup?: string | null;
+  /** Caption / reference printed with the figure ("Fig. 3"), as printed. */
+  caption?: string | null;
+  /** Why the figure is (or is not) trusted to belong to this question — deterministic, shown to the admin. */
+  mappingReason?: string | null;
 }
 
 export interface MatchEntry {
@@ -63,6 +67,10 @@ export interface ExtractedQuestion {
   hints?: { subject?: string | null; topic?: string | null; difficulty?: string | null; explanation?: string | null };
   continuesOnNextPage?: boolean;
   continuedFromPreviousPage?: boolean;
+  /** Page box (0..1) of the whole question (number, stem, options, figures) as the reader located it. */
+  region?: NBox | null;
+  /** Printed number kept when the number itself had to be cleared (the same number already exists on another page). */
+  printedNumber?: number | null;
   notes?: string[];
   /** Independent verification (Agent B): a different model read the same source page without seeing this result. */
   verification?: QuestionVerification | null;

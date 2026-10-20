@@ -45,7 +45,7 @@ export async function storeOriginalFigure(bytes: Buffer, ext: string): Promise<S
  * Crops a box (0..1, with a small margin so axis labels and captions are
  * kept) out of a page render, losslessly. Returns null for a degenerate box.
  */
-export async function cropFromRender(render: Buffer, box: NBox, margin = 0.012): Promise<{ bytes: Buffer; clipped: boolean } | null> {
+export async function cropFromRender(render: Buffer, box: NBox, margin = 0.012): Promise<{ bytes: Buffer; clipped: boolean; width: number; height: number } | null> {
   const meta = await sharp(render).metadata();
   const W = meta.width ?? 0;
   const H = meta.height ?? 0;
@@ -62,8 +62,46 @@ export async function cropFromRender(render: Buffer, box: NBox, margin = 0.012):
   // A box touching the page edge may have been cut short — reported, never silently trusted.
   const clipped = box.x <= 0.002 || box.y <= 0.002 || box.x + box.w >= 0.998 || box.y + box.h >= 0.998;
   const bytes = await sharp(render).extract({ left, top, width: Math.min(width, W - left), height: Math.min(height, H - top) }).png({ compressionLevel: 9 }).toBuffer();
-  return { bytes, clipped };
+  return { bytes, clipped, width: Math.min(width, W - left), height: Math.min(height, H - top) };
 }
+
+/**
+ * Crops a page box out of the page's ORIGINAL embedded scan (a scanned PDF page is one full-page image)
+ * at the scan's own resolution. Returns null when the scan does not cover the box, when its pixel aspect
+ * does not match its place on the page (rotated / skewed placement — the render is used instead), or when
+ * it is not sharper than the page render.
+ */
+export async function cropFromScan(scan: { bytes: Buffer; box: NBox }, page: { width: number; height: number }, box: NBox, renderWidth: number, margin = 0.012): Promise<{ bytes: Buffer; clipped: boolean; width: number; height: number } | null> {
+  let meta: Metadata;
+  try {
+    meta = await sharp(scan.bytes, { limitInputPixels: MAX_PIXELS }).metadata();
+  } catch {
+    return null;
+  }
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H || (meta.orientation ?? 1) !== 1) return null;
+  const placedAspect = (scan.box.w * page.width) / (scan.box.h * page.height);
+  if (!(placedAspect > 0) || Math.abs(W / H / placedAspect - 1) > 0.03) return null;
+  if (W <= renderWidth * scan.box.w * 1.05) return null;
+  const inScan = { x: (box.x - scan.box.x) / scan.box.w, y: (box.y - scan.box.y) / scan.box.h, w: box.w / scan.box.w, h: box.h / scan.box.h };
+  if (inScan.x < -0.01 || inScan.y < -0.01 || inScan.x + inScan.w > 1.01 || inScan.y + inScan.h > 1.01) return null;
+  const x0 = Math.max(0, inScan.x - margin);
+  const y0 = Math.max(0, inScan.y - margin);
+  const x1 = Math.min(1, inScan.x + inScan.w + margin);
+  const y1 = Math.min(1, inScan.y + inScan.h + margin);
+  const left = Math.floor(x0 * W);
+  const top = Math.floor(y0 * H);
+  const width = Math.min(Math.ceil((x1 - x0) * W), W - left);
+  const height = Math.min(Math.ceil((y1 - y0) * H), H - top);
+  if (width < 16 || height < 16) return null;
+  const clipped = box.x <= 0.002 || box.y <= 0.002 || box.x + box.w >= 0.998 || box.y + box.h >= 0.998;
+  const bytes = await sharp(scan.bytes, { limitInputPixels: MAX_PIXELS }).extract({ left, top, width, height }).png({ compressionLevel: 9 }).toBuffer();
+  return { bytes, clipped, width, height };
+}
+
+/** Smallest side (px) of a crop that is still legible on a phone; smaller crops are flagged, never upscaled. */
+export const MIN_CROP_SIDE = 48;
 
 export function iou(a: NBox, b: NBox): number {
   const x0 = Math.max(a.x, b.x);

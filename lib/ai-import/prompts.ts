@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ExtractedFigure, ExtractedQuestion, ExtractedType } from "@/lib/ai-import/types";
+import { boxScale, normalizeBox } from "@/lib/ai-import/figure-map";
 
 /**
  * Prompts and output schemas for the importer's AI tasks. The rules live in
@@ -18,23 +19,27 @@ ${GUARD}
 
 TRANSCRIPTION RULES:
 - Copy text EXACTLY as printed. Never paraphrase, translate, correct, complete or invent anything (no invented options, answers or words).
+- Every question number printed on this page appears exactly once in "questions", in printed order. Never merge two numbered questions into one, never split one question into two, and never replace a question's text with a general instruction, a heading or a placeholder.
+- Never change a digit, sign, decimal point, exponent, subscript, unit or symbol. If a character is unclear, transcribe what you see and name the doubt in "unreadable".
 - If text is unreadable, keep what is readable and describe the unreadable part in "unreadable". Lower "confidence".
 - Mathematics: use KaTeX inside $...$ (inline) or $$...$$ (display), e.g. $\\frac{1}{2}$, $x^{2}$, $\\sqrt{3}$, $v_{0}$. Chemistry: write \\ce{...} on its own, NOT inside $...$, e.g. \\ce{H2SO4}, \\ce{Na+}, \\ce{A <=> B}. Units: \\pu{9.8 m s^-2} (also outside $) or plain text. A literal dollar sign is \\$. Set "rich": true for a question that uses any of these. Keep plain text otherwise.
 - Keep ALL options exactly as printed, in printed order, with their printed labels ("(1)", "A.", "(a)"). Do NOT force four options: report 2, 3, 5 or none if that is what is printed.
 - type: SINGLE_CORRECT | MULTIPLE_CORRECT (instructions say more than one answer may be correct) | MATCH_THE_FOLLOWING | ASSERTION_REASON | NUMERICAL (answer is a number, no options) | SUBJECTIVE | OTHER.
+- Assertion–Reason: keep "Assertion (A): …" and "Reason (R): …" in the stem on separate lines. Questions with numbered statements ("Consider the following statements: 1. … 2. …"): keep every statement in the stem, one per line, with its printed number. A table printed as text: keep it in the stem as rows (cells separated by " | "), one row per line.
 - Match the Following: put the two lists in list_i / list_ii (key + text) and the coded combinations as options.
 - Shared passages/instructions that apply to several questions: repeat them in "passage" / "instructions" of EACH question they apply to.
 - A question that starts on this page but continues on the next page: set continues_on_next_page true. Text at the top of the page that continues a question from the previous page: output it as a question with its number if visible (else number null) and continued_from_previous_page true.
 - printed_answer: only if the paper itself prints the answer for this question (e.g. "Ans: B"); else [].
-- Figures/diagrams/graphs/tables drawn as images: one entry per figure with its bounding box on THIS page image as integers 0-1000 {x, y, w, h} (x,y = top-left), owner STEM (belongs to the question text), OPTION (inside an option; give option_label as printed) or SHARED (used by several questions; list their numbers in shared_with). Include axis labels and captions inside the box. Text tables that you transcribed as text need no figure.
+- region: the bounding box of the WHOLE question on this page (its number, stem, options and its own figures) as integers 0-1000 {x, y, w, h}.
+- Figures/diagrams/graphs/tables drawn as images: one entry per figure with its bounding box on THIS page image as integers 0-1000 {x, y, w, h} (x,y = top-left), tight around that ONE figure (never the whole page, never a neighbouring question), owner STEM (belongs to the question text), OPTION (inside an option; give option_label as printed) or SHARED (used by several questions; list their numbers in shared_with). Include axis labels and captions inside the box; copy a printed caption or reference ("Fig. 3") into caption. A question with two figures has two entries. Text tables that you transcribed as text need no figure.
 - If the page has an answer-key table, also return it in answer_key (number + answer exactly as printed).
 - If the page prints the paper's own identifiers (paper number, series / set / booklet code, total number of questions — usually on the cover or instructions page), copy them into paper_header exactly as printed; otherwise leave paper_header null.
 - confidence: 0-1, your certainty that stem and every option are complete and exact.
 
 OUTPUT (JSON only):
 {"questions":[{"number":12,"section":"","type":"SINGLE_CORRECT","instructions":null,"passage":null,"stem":"...","rich":false,
-"options":[{"label":"(1)","text":"..."}],"list_i":[],"list_ii":[],"printed_answer":[],
-"figures":[{"box":{"x":0,"y":0,"w":0,"h":0},"owner":"STEM","option_label":null,"shared_with":[],"description":"..."}],
+"options":[{"label":"(1)","text":"..."}],"list_i":[],"list_ii":[],"printed_answer":[],"region":{"x":0,"y":0,"w":0,"h":0},
+"figures":[{"box":{"x":0,"y":0,"w":0,"h":0},"owner":"STEM","option_label":null,"shared_with":[],"caption":null,"description":"..."}],
 "unreadable":[],"confidence":0.9,"continues_on_next_page":false,"continued_from_previous_page":false}],
 "answer_key":[{"number":1,"answer":"B"}],"paper_header":null,"page_notes":""}`;
 
@@ -59,6 +64,7 @@ const figureSchema = z.object({
   option_label: optText,
   shared_with: z.array(z.union([z.number(), z.string()])).nullable().optional().transform((v) => v ?? []),
   description: optText,
+  caption: optText,
 });
 const entrySchema = z.preprocess((v) => (typeof v === "string" ? { key: null, text: v } : v), z.object({ key: z.union([z.string(), z.number(), z.null()]).optional().transform((k) => (k === null || k === undefined ? null : String(k))), text }));
 const optionSchema = z.preprocess((v) => (typeof v === "string" || typeof v === "number" ? { label: null, text: String(v) } : v), z.object({ label: z.union([z.string(), z.number(), z.null()]).optional().transform((l) => (l === null || l === undefined || String(l).trim() === "" ? null : String(l))), text }));
@@ -90,6 +96,7 @@ export const pageSchema = z.object({
         list_ii: z.array(entrySchema).nullable().optional().transform((v) => v ?? []),
         printed_answer: strList.optional().transform((v) => v ?? []),
         figures: z.array(figureSchema).nullable().optional().transform((v) => v ?? []),
+        region: boxSchema.nullable().optional().catch(null),
         unreadable: strList.optional().transform((v) => v ?? []),
         confidence,
         continues_on_next_page: flag,
@@ -123,6 +130,8 @@ export function labelFromPrinted(value: string, printedOptions: string[]): strin
 
 /** Validated model output → ExtractedQuestion[] (boxes 0..1000 → 0..1). Never invents fields. */
 export function toExtracted(out: PageOutput, page: number, model: string): ExtractedQuestion[] {
+  // One coordinate scale per page (0–1000 as asked, or 0–1 fractions) — decided from every box the reader gave.
+  const scale = boxScale(out.questions.flatMap((q) => [...q.figures.map((f) => f.box), q.region]).filter((b): b is NonNullable<typeof b> => !!b));
   return out.questions.map((q, i) => {
     const num = q.number === null || q.number === undefined || q.number === "" ? null : Number.parseInt(String(q.number).replace(/\D+/g, ""), 10);
     // A label the model did not return is taken from the option's position (and the question flagged).
@@ -133,14 +142,17 @@ export function toExtracted(out: PageOutput, page: number, model: string): Extra
     if (q.options.length >= 5) type = "FIVE_OPTIONS";
     const figures: ExtractedFigure[] = q.figures.map((f) => {
       const owner = (["STEM", "OPTION", "SHARED"].includes(f.owner) ? f.owner : "UNASSIGNED") as ExtractedFigure["owner"];
-      const box = f.box ? { x: clamp01(f.box.x / 1000), y: clamp01(f.box.y / 1000), w: clamp01(f.box.w / 1000), h: clamp01(f.box.h / 1000) } : null;
+      // An unusable box is dropped (never stretched or guessed) and the figure stays unconfirmed with the reason.
+      const norm = f.box ? normalizeBox(f.box, scale) : { box: null, problem: null };
       const optionLabel = owner === "OPTION" && f.option_label ? labelFromPrinted(f.option_label, printed) : null;
       return {
         owner: owner === "OPTION" && !optionLabel ? "UNASSIGNED" : owner,
         optionLabel,
-        box,
+        box: norm.box,
         description: f.description ?? null,
-        confidence: owner === "OPTION" && !optionLabel ? 0.3 : 0.75,
+        caption: f.caption ?? null,
+        confidence: owner === "OPTION" && !optionLabel ? 0.3 : norm.problem ? 0.5 : 0.75,
+        mappingReason: norm.problem ? `The reader's figure position could not be used as given: ${norm.problem}.` : null,
         sharedGroup: owner === "SHARED" && f.shared_with.length ? `p${page}:${[...f.shared_with].map(String).sort().join(",")}` : null,
       };
     });
@@ -166,12 +178,11 @@ export function toExtracted(out: PageOutput, page: number, model: string): Extra
       model,
       continuesOnNextPage: q.continues_on_next_page === true,
       continuedFromPreviousPage: q.continued_from_previous_page === true,
+      region: q.region ? normalizeBox(q.region, scale).box : null,
       notes: labelsMissing ? ["The model did not return the printed option labels; the options are labelled by their position — check them against the page."] : [],
     } satisfies ExtractedQuestion;
   });
 }
-
-const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
 
 // ---- Answer keys --------------------------------------------------------------------------------
 

@@ -386,6 +386,9 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   AI_OPINION_DIFFERS: { label: "AI opinion differs from the key", blocking: false, publishBlocking: false },
   VERIFY_DISAGREES: { label: "Independent verification disagrees", blocking: false, publishBlocking: true },
   RESCAN_PENDING: { label: "Re-scan result waiting for your choice", blocking: true, publishBlocking: true },
+  ANSWER_TYPE_CONFLICT: { label: "Answer does not fit the question type", blocking: true, publishBlocking: true },
+  NUMBER_CONFLICT: { label: "Question number read twice", blocking: true, publishBlocking: true },
+  QUESTION_TEXT_SUSPECT: { label: "Question text incomplete or a placeholder", blocking: true, publishBlocking: true },
 };
 
 export function issueLabel(code: string): string {

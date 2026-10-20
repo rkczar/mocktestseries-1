@@ -11,6 +11,7 @@ import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, classifySchema, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
+import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem } from "@/lib/ai-import/fidelity";
 import type { StepContext } from "@/lib/ai-import/process";
 
 /**
@@ -142,6 +143,8 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     byPaper.set(paper, list);
   }
   const keyFor = new Map<string, { rows: KeyRow[]; method: string }>();
+  /** Papers whose key could not be matched by number safely (the reason is shown on each question). */
+  const unsafeKeyPapers = new Map<string, string>();
   for (const paper of papers) {
     const rows = byPaper.get(paper);
     if (!rows?.length) continue;
@@ -151,10 +154,37 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const keyHasSections = new Set(sectioned.map((r) => r.section)).size > 1;
     const direct = new Map<string, KeyRow[]>();
     for (const r of sectioned) direct.set(`${r.section}#${r.sourceNumber}`, [...(direct.get(`${r.section}#${r.sourceNumber}`) ?? []), r]);
-    if (paperSections.size > 1 && !keyHasSections && rows.length === qs.length) {
-      // Paper restarts numbering per section, key numbers continuously: map by position (counts match exactly).
-      const ordered = [...rows].sort((a, b) => a.sourceNumber - b.sourceNumber);
-      qs.forEach((q, i) => keyFor.set(q.id, { rows: [ordered[i]], method: "by position (paper sections restart numbering)" }));
+    if (paperSections.size > 1 && !keyHasSections) {
+      // Paper restarts numbering per section, key numbers continuously (1…N): each section's numbers are
+      // offset by the sizes of the sections before it — matched by number, never by position. Used only
+      // when the section sizes add up to the key exactly; otherwise nothing is matched and it is reported.
+      const order: { section: string; max: number }[] = [];
+      for (const q of qs) {
+        const e = effective(q);
+        if (e.number === null) continue;
+        const g = order.find((x) => x.section === e.section);
+        if (g) g.max = Math.max(g.max, e.number);
+        else order.push({ section: e.section, max: e.number });
+      }
+      const keyMax = Math.max(...rows.map((r) => r.sourceNumber));
+      const total = order.reduce((a, g) => a + g.max, 0);
+      if (total !== keyMax) unsafeKeyPapers.set(paper, `The answer key numbers its entries 1–${keyMax} continuously, but the paper restarts its numbering per section (${order.map((g) => `${g.section || "first"}: 1–${g.max}`).join(", ")} = ${total}). The key cannot be matched to these questions safely — check for missing questions or enter the answers by hand.`);
+      else {
+        const byNumber = new Map<number, KeyRow[]>();
+        for (const r of rows) byNumber.set(r.sourceNumber, [...(byNumber.get(r.sourceNumber) ?? []), r]);
+        let offset = 0;
+        const offsetOf = new Map<string, number>();
+        for (const g of order) {
+          offsetOf.set(g.section, offset);
+          offset += g.max;
+        }
+        for (const q of qs) {
+          const e = effective(q);
+          if (e.number === null || !offsetOf.has(e.section)) continue;
+          const hit = byNumber.get(offsetOf.get(e.section)! + e.number);
+          if (hit) keyFor.set(q.id, { rows: hit, method: `by number (key entry ${offsetOf.get(e.section)! + e.number} = ${e.section || "first section"} Q${e.number})` });
+        }
+      }
     } else {
       for (const q of qs) {
         const e = effective(q);
@@ -256,6 +286,10 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     await logEvent(job.id, "CLASSIFY_RESULT", `Subject / topic classification of ${toClassify.length} question(s) in ${tally.batches} request(s)${tally.models.size ? ` (${[...tally.models].join(", ")})` : ""}: ${tally.subjects} subject(s) and ${tally.topics} topic(s) assigned${tally.invalid ? `, ${tally.invalid} answer(s) named a question, subject or topic code that is not on the list (ignored)` : ""}${tally.failedBatches ? `, ${tally.failedBatches} request(s) failed (${tally.errors[0]})` : ""}. Questions without a subject stay in Needs correction.`, { questions: toClassify.length, ...tally, models: [...tally.models], errors: tally.errors.slice(0, 5) });
   }
 
+  // Text layers of digital pages the vision model read (layout unclear): its digits are exact, so a number in
+  // the extraction that is not on the page was changed or invented.
+  const textLayers = new Map((await prisma.aiImportPage.findMany({ where: { jobId: job.id, kind: "TEXT_UNRELIABLE" }, select: { fileId: true, pageNumber: true, textLayer: true } })).map((p) => [`${p.fileId}:${p.pageNumber}`, p.textLayer]));
+
   // ---- Per question ----
   const numbersByFile = new Map<string, number[]>();
   for (const q of questions) {
@@ -273,6 +307,8 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const checks: Check[] = [];
     const issues = new Map<string, string>();
     const add = (code: string, detail: string) => issues.set(code, detail);
+    /** Several findings of the same kind are kept together (never the last one only). */
+    const addMore = (code: string, detail: string) => issues.set(code, issues.has(code) ? `${issues.get(code)} · ${detail}`.slice(0, 600) : detail);
     const optionLabels = e.options.map((o) => o.label);
     const printedLabels = e.options.map((o) => o.printed || o.label);
 
@@ -293,12 +329,24 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (rescanWaiting.has(q.id)) add("RESCAN_PENDING", "A re-scan result is waiting: compare it with the current question and choose what to keep.");
     const nums = numbersByFile.get(q.fileId) ?? [];
     if (e.number !== null && e.number > 1 && !nums.includes(e.number - 1) && !(e.section && e.number === 1)) add("NUMBERING_GAP", `Q${e.number - 1} was not found before this question.`);
+    // Question / option segmentation: a number read twice, an unjoined continuation, a placeholder text,
+    // options that look merged with the next question or missing / repeated.
+    if (e.number === null && e.printedNumber !== null && e.printedNumber !== undefined) add("NUMBER_CONFLICT", `Printed as Q${e.printedNumber}, but that number was already read elsewhere in this paper — set the right number (or reject the copy).`);
+    if (/^cont/.test(e.label) && !q.editedData) add("QUESTION_TEXT_SUSPECT", "This is text that continues a question from the previous page and could not be joined to it — join it by hand (edit the question it belongs to) and reject this part.");
+    const placeholder = placeholderStem(e.stem, e.instructions, q.figures.length > 0);
+    if (placeholder && e.stem.trim()) add("QUESTION_TEXT_SUSPECT", placeholder);
+    const optProblems = optionProblems(e.options, e.number);
+    if (optProblems.length) addMore("EXTRACTION_UNCERTAIN", optProblems.join(" "));
+    checks.push({ stage: 1, name: "Question segmentation", passed: !optProblems.length && !placeholder && !issues.has("NUMBER_CONFLICT") && !issues.has("QUESTION_TEXT_SUSPECT"), severity: issues.has("NUMBER_CONFLICT") || issues.has("QUESTION_TEXT_SUSPECT") ? "ERROR" : optProblems.length ? "WARNING" : "INFO", method: "DETERMINISTIC", detail: [issues.get("NUMBER_CONFLICT"), issues.get("QUESTION_TEXT_SUSPECT"), ...optProblems].filter(Boolean).join(" ") || `Question number, text and ${e.options.length} option(s) are consistent.` });
     // Figures
     const figs = q.figures;
     const missingFig = figs.filter((f) => f.mappingStatus === "MISSING");
     const uncertainFig = figs.filter((f) => f.mappingStatus === "UNCERTAIN" && !f.confirmedById);
     if (missingFig.length) add("IMAGE_MISSING", `${missingFig.length} figure(s) could not be extracted.`);
-    if (uncertainFig.length) add("IMAGE_MAPPING_UNCERTAIN", `${uncertainFig.length} figure(s) need their question/option confirmed.`);
+    if (uncertainFig.length) {
+      const reasons = [...new Set(uncertainFig.map((f) => (f.box as { reason?: string } | null)?.reason).filter((r): r is string => !!r))];
+      add("IMAGE_MAPPING_UNCERTAIN", `${uncertainFig.length} figure(s) need their question/option confirmed.${reasons.length ? ` ${reasons.join(" ")}` : ""}`.slice(0, 600));
+    }
     const mentionsFigure = MENTIONS_FIGURE.test(e.stem);
     if (mentionsFigure && figs.length === 0) add("IMAGE_MISSING", "The question refers to a figure, but no figure was found.");
     for (const o of e.options) if (!o.text.trim() && !figs.some((f) => f.owner === "OPTION" && f.optionLabel === o.label && f.mappingStatus !== "MISSING")) add("OPTIONS_INCOMPLETE", `Option ${o.label} has neither text nor an image.`);
@@ -319,6 +367,18 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const richText = [e.stem, ...e.options.map((o) => o.text), ...(e.listI ?? []).map((x) => x.text), ...(e.listII ?? []).map((x) => x.text)];
     const formulaWarnings = e.contentFormat === "RICH_V1" ? richText.flatMap((t, i) => lintRichSource(t, i === 0 ? "Question" : `Part ${i}`).warnings) : richText.some((t) => looksRich(t)) ? ["Formula markup in a plain question would show literally."] : [];
     if (formulaWarnings.length) add("FORMULA_ISSUE", formulaWarnings[0].slice(0, 300));
+    // Digits, signs and exponents compared with the source (never corrected automatically).
+    if (!q.editedData) {
+      if (e.contentFormat !== "RICH_V1") {
+        const flat = richText.map((t) => lostSuperscript(t)).find(Boolean);
+        if (flat) addMore("FORMULA_ISSUE", `"${flat}" looks like a power of ten that lost its superscript — write it as a formula (e.g. $3 \\times 10^{8}$) if that is what is printed.`);
+      }
+      if (e.method === "AI_VISION") {
+        const missingNums = e.pages.flatMap((pg) => numbersMissingFromSource(richText, textLayers.get(`${q.fileId}:${pg}`) ?? null));
+        if (missingNums.length && e.pages.every((pg) => textLayers.has(`${q.fileId}:${pg}`))) addMore("FORMULA_ISSUE", `Number(s) ${[...new Set(missingNums)].slice(0, 6).join(", ")} in the extracted text do not appear on the source page — check digits, signs and exponents against the page.`);
+      }
+      if (ver?.fields.some((f) => f.endsWith(" numbers"))) addMore("FORMULA_ISSUE", `The independent read has different numbers / symbols (${ver.detail.slice(0, 200)}).`);
+    }
     checks.push({ stage: 2, name: "Structure", passed: IMPORTABLE.has(type) && e.options.length === 4 && !formulaWarnings.length, severity: IMPORTABLE.has(type) && e.options.length === 4 ? (formulaWarnings.length ? "WARNING" : "INFO") : "ERROR", method: "DETERMINISTIC", detail: `${type.replace(/_/g, " ").toLowerCase()}, ${e.options.length} options, ${e.contentFormat === "RICH_V1" ? "with formulas" : "plain text"}${formulaWarnings.length ? ` — ${formulaWarnings[0].slice(0, 160)}` : ""}` });
 
     // Subject / topic (existing ids only)
@@ -379,7 +439,8 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "ERROR", method: "DETERMINISTIC", detail: `${wrongKey} Its value for this number ("${officialRaw}") is not used.` });
     }
     if (key) {
-      const distinct = [...new Set(key.rows.map((r) => r.rawValue.toUpperCase()))];
+      // Kept as printed; compared without brackets / spaces ("(1)" and "1" are the same answer).
+      const distinct = [...new Set(key.rows.map((r) => r.rawValue.toUpperCase().replace(/[()\s]/g, "")))];
       officialRaw = key.rows.map((r) => r.rawValue).join(" / ");
       officialPage = key.rows[0].page;
       await prisma.aiImportKeyEntry.updateMany({ where: { id: { in: key.rows.map((r) => r.id) } }, data: { matchedQuestionId: q.id, status: key.rows.length > 1 ? "DUPLICATE" : "OK" } });
@@ -391,16 +452,20 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         add("POSSIBLE_WITHDRAWN", `The official key marks this question "${distinct[0]}" (dropped / bonus).`);
         await prisma.aiImportKeyEntry.updateMany({ where: { id: { in: key.rows.map((r) => r.id) } }, data: { status: "WITHDRAWN" } });
       } else {
-        const labels = distinct[0].split(/[,&/]/).map((v) => labelFromPrinted(v, printedLabels));
-        if (labels.some((l) => !l || !optionLabels.includes(l))) {
-          answerStatus = AiImportAnswerStatus.KEY_MISMATCH;
-          add("ANSWER_MISMATCH", `The key value "${distinct[0]}" is not one of this question's options.`);
+        const parsedKey = parseKeyAnswer(key.rows[0].rawValue, printedLabels);
+        if (!parsedKey.labels || parsedKey.labels.some((l) => !optionLabels.includes(l))) {
+          answerStatus = /\bor\b/i.test(key.rows[0].rawValue) ? AiImportAnswerStatus.AMBIGUOUS_MAPPING : AiImportAnswerStatus.KEY_MISMATCH;
+          add(answerStatus === AiImportAnswerStatus.AMBIGUOUS_MAPPING ? "ANSWER_AMBIGUOUS" : "ANSWER_MISMATCH", parsedKey.problem ?? `The key value "${distinct[0]}" is not one of this question's options.`);
         } else {
-          official = [...new Set(labels as string[])];
+          official = parsedKey.labels;
           answerStatus = AiImportAnswerStatus.OFFICIAL_MATCHED;
           if (official.length > 1 && type !== "MULTIPLE_CORRECT") {
             answerStatus = AiImportAnswerStatus.AMBIGUOUS_MAPPING;
             add("ANSWER_AMBIGUOUS", `The key gives several answers (${official.join(", ")}) for a single-correct question.`);
+          } else if (official.length === 1 && type === "MULTIPLE_CORRECT") {
+            // Never silently stored as a multiple-correct answer, never changed: the type or the key needs a decision.
+            answerStatus = AiImportAnswerStatus.AMBIGUOUS_MAPPING;
+            add("ANSWER_TYPE_CONFLICT", `The official key gives one answer (${official[0]}) but the question is marked multiple-correct — check the question type, or confirm the answer by hand. The official key is kept as printed.`);
           } else if (e.printedAnswer.length && !sameSet(e.printedAnswer, official)) {
             answerStatus = AiImportAnswerStatus.KEY_MISMATCH;
             add("ANSWER_MISMATCH", `The paper prints ${e.printedAnswer.join(", ")} but the official key says ${official.join(", ")}.`);
@@ -410,7 +475,12 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       checks.push({ stage: 3, name: "Official answer key", passed: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED, severity: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED ? "INFO" : "ERROR", method: "DETERMINISTIC", detail: `Key "${officialRaw}"${officialPage ? ` (key page ${officialPage})` : ""}, matched ${key.method}.` });
       if (!q.answerConfirmedById && answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED) finalAnswer = official;
     } else if (!wrongKey) {
-      checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: anyKey ? "The answer key has no entry for this question." : "No answer key uploaded for this paper." });
+      const unsafe = unsafeKeyPapers.get(q.fileId);
+      if (unsafe) {
+        answerStatus = AiImportAnswerStatus.AMBIGUOUS_MAPPING;
+        add("ANSWER_AMBIGUOUS", unsafe);
+      }
+      checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: unsafe ?? (anyKey ? "The answer key has no entry for this question." : "No answer key uploaded for this paper.") });
       const printed = e.printedAnswer;
       const aiAgrees = q.aiAnswer.length > 0 && (q.aiAnswerConfidence ?? 0) >= 0.7;
       if (printed.length) {
@@ -427,7 +497,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (q.aiAnswer.length) checks.push({ stage: 3, name: "Independent AI opinion", passed: !official.length || sameSet(q.aiAnswer, official), severity: official.length && !sameSet(q.aiAnswer, official) ? "WARNING" : "INFO", method: "AI", model: q.aiAnswerModel, detail: `AI suggests ${q.aiAnswer.join(", ")} (confidence ${Math.round((q.aiAnswerConfidence ?? 0) * 100)}%) — an opinion, never an official answer.` });
     const typeOk = (labels: string[]) => (type === "MULTIPLE_CORRECT" ? labels.length >= 2 : labels.length === 1);
     if (!finalAnswer.length || !typeOk(finalAnswer)) {
-      if (!issues.has("ANSWER_AMBIGUOUS") && !issues.has("ANSWER_MISMATCH") && !issues.has("POSSIBLE_WITHDRAWN") && !issues.has("ANSWER_KEY_PAPER_MISMATCH")) add("ANSWER_MISSING", finalAnswer.length ? `The answer (${finalAnswer.join(", ")}) does not fit a ${type.replace(/_/g, " ").toLowerCase()} question.` : "No usable answer (no key entry, nothing printed in the paper).");
+      if (!issues.has("ANSWER_AMBIGUOUS") && !issues.has("ANSWER_MISMATCH") && !issues.has("POSSIBLE_WITHDRAWN") && !issues.has("ANSWER_KEY_PAPER_MISMATCH") && !issues.has("ANSWER_TYPE_CONFLICT")) add("ANSWER_MISSING", finalAnswer.length ? `The answer (${finalAnswer.join(", ")}) does not fit a ${type.replace(/_/g, " ").toLowerCase()} question.` : "No usable answer (no key entry, nothing printed in the paper).");
       if (finalAnswer.length && !typeOk(finalAnswer)) finalAnswer = [];
     }
 
@@ -463,7 +533,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     // "needs a human look" flags (never structural ones), an admin-chosen
     // answer settles the answer flags.
     if (q.reviewedById) for (const c of REVIEWABLE) issues.delete(c);
-    if (q.answerConfirmedById && finalAnswer.length && typeOk(finalAnswer)) for (const c of ["ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "POSSIBLE_WITHDRAWN", "ANSWER_UNVERIFIED", "ANSWER_MISSING", "ANSWER_KEY_PAPER_MISMATCH"]) issues.delete(c);
+    if (q.answerConfirmedById && finalAnswer.length && typeOk(finalAnswer)) for (const c of ["ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "POSSIBLE_WITHDRAWN", "ANSWER_UNVERIFIED", "ANSWER_MISSING", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT"]) issues.delete(c);
     if (q.allowDuplicate) {
       issues.delete("DUPLICATE_EXISTING");
       issues.delete("DUPLICATE_NEAR");

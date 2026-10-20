@@ -17,6 +17,7 @@ import {
   editQuestion,
   markFigureUncertain,
   markImageMissing,
+  cropFigureFromPage,
   reclassifyQuestions,
   rescanQuestions,
   unapproveQuestions,
@@ -379,6 +380,24 @@ export async function markFigureUncertainAction(figureId: string, note: string):
     const f = await prisma.aiImportFigure.findUnique({ where: { id: figureId }, select: { questionId: true, jobId: true } });
     await markFigureUncertain(figureId, actorId, typeof note === "string" ? note : "");
     if (f?.questionId) await revalidateQuestions(f.jobId, [f.questionId]);
+    return null;
+  });
+}
+
+export async function cropFigureAction(input: { questionId: string; pageNumber: number; box: { x: number; y: number; w: number; h: number }; owner: "STEM" | "OPTION"; optionLabel: string | null; replaceFigureId: string | null }): Promise<ImporterResult<null>> {
+  return run(await requireUse(), async (actorId) => {
+    const box = input?.box ?? { x: NaN, y: NaN, w: NaN, h: NaN };
+    await cropFigureFromPage({
+      questionId: String(input?.questionId ?? ""),
+      actorId,
+      pageNumber: Math.trunc(Number(input?.pageNumber)),
+      box: { x: Number(box.x), y: Number(box.y), w: Number(box.w), h: Number(box.h) },
+      owner: input?.owner === "OPTION" ? "OPTION" : "STEM",
+      optionLabel: typeof input?.optionLabel === "string" ? input.optionLabel.toUpperCase() : null,
+      replaceFigureId: typeof input?.replaceFigureId === "string" && input.replaceFigureId ? input.replaceFigureId : null,
+    });
+    const jobId = await jobOf([String(input.questionId)]);
+    if (jobId) await revalidateQuestions(jobId, [String(input.questionId)]);
     return null;
   });
 }

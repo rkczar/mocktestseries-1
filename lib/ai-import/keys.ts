@@ -129,7 +129,7 @@ async function aiKeyPage(ctx: StepContext, file: AiImportFile, page: number): Pr
       return parsed.data;
     }
   );
-  return { pairs: value.entries.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: (e.section ?? "").trim(), raw: e.answer.replace(/[()\s]/g, ""), page })), header: headerOf(value.header) };
+  return { pairs: value.entries.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: (e.section ?? "").trim(), raw: e.answer.trim().replace(/\s+/g, " "), page })), header: headerOf(value.header) };
 }
 
 /** Reads every unprocessed answer-key file of the job into AiImportKeyEntry rows. */

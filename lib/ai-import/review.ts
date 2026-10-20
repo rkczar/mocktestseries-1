@@ -5,7 +5,9 @@ import { logEvent, ImportJobError } from "@/lib/ai-import/jobs";
 import { importBlocker, type ImportMode, type ImportPlan } from "@/lib/ai-import/adapter";
 import { REVIEWABLE } from "@/lib/ai-import/post";
 import { compareVersions, figureRows, mergeChoice, recordVersion, snapshotFigures, RESCAN_FIELDS, type FigureSnapshot, type RescanField } from "@/lib/ai-import/versions";
-import { storeOriginalFigure, FigureError } from "@/lib/ai-import/figures";
+import { cropFromRender, storeOriginalFigure, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
+import { normalizeBox } from "@/lib/ai-import/figure-map";
+import { ensureRender } from "@/lib/ai-import/process";
 import { exists as vaultExists } from "@/lib/ai-import/vault";
 import type { RescanRequest } from "@/lib/ai-import/process";
 import type { SequenceAck } from "@/lib/ai-import/quality";
@@ -372,6 +374,72 @@ export async function attachUploadedFigure(input: { questionId: string; actorId:
   });
   await adminCheck(q.id, "Image uploaded", `${old ? "Replacement" : "New"} image (${stored.width}×${stored.height}) on ${input.owner === "OPTION" ? `option ${input.optionLabel}` : "the question text"}.`);
   await logEvent(q.jobId, "FIGURE_UPLOADED", `Q${q.sourceLabel}: ${old ? "figure replaced by an uploaded image" : "image uploaded"} (${stored.width}×${stored.height})`, { questionId: q.id, replaced: old?.id ?? null }, input.actorId);
+}
+
+/**
+ * An administrator's crop of the ORIGINAL page: a corrected box for an extracted figure (the earlier crop is
+ * detached and kept, with its vault original) or another figure for the same question / option. The page
+ * render is re-created from the original upload when needed and is never modified. The new crop is placed
+ * and confirmed by the administrator.
+ */
+export async function cropFigureFromPage(input: { questionId: string; actorId: string; pageNumber: number; box: { x: number; y: number; w: number; h: number }; owner: "STEM" | "OPTION"; optionLabel: string | null; replaceFigureId: string | null }) {
+  const q = await editable(input.questionId);
+  if (input.owner === "OPTION" && !/^[A-E]$/.test(input.optionLabel ?? "")) throw new ImportJobError("Choose the option this image belongs to.");
+  const norm = normalizeBox(input.box, 1);
+  if (!norm.box) throw new ImportJobError(`The crop cannot be used: ${norm.problem}.`);
+  const old = input.replaceFigureId ? await prisma.aiImportFigure.findUnique({ where: { id: input.replaceFigureId } }) : null;
+  if (input.replaceFigureId && (!old || old.questionId !== q.id)) throw new ImportJobError("The image to replace does not belong to this question.", 404);
+  const file = await prisma.aiImportFile.findUnique({ where: { id: q.fileId } });
+  const kind = (file?.detected as { kind?: string } | null)?.kind;
+  if (!file?.storageKey || file.status === "PURGED") throw new ImportJobError("The original file is no longer stored, so a new crop cannot be cut. Upload the image instead.");
+  if (kind !== "pdf" && kind !== "png" && kind !== "jpeg") throw new ImportJobError("This document has no page images to crop from. Upload the image instead.");
+  const page = await prisma.aiImportPage.findUnique({ where: { fileId_pageNumber: { fileId: file.id, pageNumber: input.pageNumber } } });
+  if (!page) throw new ImportJobError("That page is not part of this paper.", 404);
+  const settings = await getImporterSettings();
+  const render = await ensureRender({ id: q.jobId }, file, input.pageNumber, settings.limits.renderDpi);
+  const crop = await cropFromRender(render, norm.box, 0);
+  if (!crop) throw new ImportJobError("The crop is too small. Draw a larger box around the figure.");
+  if (Math.min(crop.width, crop.height) < MIN_CROP_SIDE) throw new ImportJobError(`The crop is only ${crop.width}×${crop.height} px. Draw a larger box around the whole figure.`);
+  let stored;
+  try {
+    stored = await storeOriginalFigure(crop.bytes, "png");
+  } catch (e) {
+    throw new ImportJobError(e instanceof FigureError ? e.message : "The crop could not be stored.");
+  }
+  const where = input.owner === "OPTION" ? `option ${input.optionLabel}` : "the question text";
+  await figureHistory(q.id, q.jobId, input.actorId, old ? `Figure re-cropped from page ${input.pageNumber}` : `Crop added from page ${input.pageNumber}`);
+  await prisma.$transaction(async (tx) => {
+    if (old) {
+      if (old.source === "MISSING" || !old.originalKey) await tx.aiImportFigure.delete({ where: { id: old.id } });
+      else await tx.aiImportFigure.update({ where: { id: old.id }, data: { questionId: null, owner: "UNASSIGNED", optionLabel: null, mappingStatus: "REPLACED", confirmedById: input.actorId } });
+    }
+    await tx.aiImportFigure.create({
+      data: {
+        jobId: q.jobId,
+        fileId: q.fileId,
+        pageNumber: input.pageNumber,
+        questionId: q.id,
+        owner: input.owner,
+        optionLabel: input.owner === "OPTION" ? input.optionLabel : null,
+        sharedGroup: old?.sharedGroup ?? null,
+        box: { ...norm.box, crop: { from: "render", width: crop.width, height: crop.height }, reason: `Cropped from page ${input.pageNumber} by an administrator.` },
+        source: "CROP",
+        originalKey: stored.key,
+        originalSha256: stored.sha256,
+        originalMime: stored.mime,
+        width: stored.width,
+        height: stored.height,
+        bytes: stored.bytes,
+        description: old?.description && old.source !== "MISSING" ? old.description : null,
+        confidence: 1,
+        mappingStatus: "OK",
+        confirmedById: input.actorId,
+      },
+    });
+    await tx.aiImportQuestion.update({ where: { id: q.id }, data: { ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED } });
+  });
+  await adminCheck(q.id, old ? "Figure re-cropped" : "Crop added", `${old ? "Corrected" : "New"} crop (${stored.width}×${stored.height}) from page ${input.pageNumber} on ${where}; the earlier image stays in the vault.`);
+  await logEvent(q.jobId, old ? "FIGURE_RECROPPED" : "FIGURE_CROP_ADDED", `Q${q.sourceLabel}: ${old ? "figure re-cropped" : "crop added"} from page ${input.pageNumber} (${stored.width}×${stored.height}) on ${where}`, { questionId: q.id, replaced: old?.id ?? null, box: norm.box }, input.actorId);
 }
 
 export async function allowDuplicate(id: string, actorId: string, allow: boolean) {

@@ -106,6 +106,7 @@ export async function jobQuality(jobId: string): Promise<QualityReport | null> {
         fileId: q.fileId,
         section: e.section ?? "",
         number: e.number ?? null,
+        printedNumber: e.printedNumber ?? null,
         status: q.status,
         approved: !!q.approvedById,
         stored: !!q.questionId && (q.status === AiImportQuestionStatus.IMPORTED || q.status === AiImportQuestionStatus.PUBLISHED),

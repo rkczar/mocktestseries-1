@@ -32,6 +32,12 @@ export const dynamic = "force-dynamic";
  * laid out like the test player (stem figures above the options, option
  * figures inside their option).
  */
+/** The page box of a figure (its stored JSON also carries the crop provenance and the mapping reason). */
+function figureBox(v: unknown): { x: number; y: number; w: number; h: number } | null {
+  const b = v as { x?: unknown; y?: unknown; w?: unknown; h?: unknown } | null;
+  return b && [b.x, b.y, b.w, b.h].every((n) => typeof n === "number") ? { x: b.x as number, y: b.y as number, w: b.w as number, h: b.h as number } : null;
+}
+
 export default async function ImportQuestionPage({ params }: { params: Promise<{ id: string }> }) {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="Review Question" />;
   const { id } = await params;
@@ -273,7 +279,8 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             duplicate: q.duplicateKind,
             approved: !!q.approvedById,
             approvedBy: q.approvedById ? actors.get(q.approvedById) ?? "an administrator" : null,
-            figures: q.figures.map((f) => ({ id: f.id, owner: f.owner, optionLabel: f.optionLabel, mappingStatus: f.mappingStatus, source: f.source, confirmed: !!f.confirmedById, page: f.pageNumber, pageId: hasPageImages ? pageIdOf.get(f.pageNumber) ?? null : null, width: f.width, height: f.height, description: f.description, box: (f.box as { x: number; y: number; w: number; h: number } | null) ?? null })),
+            figures: q.figures.map((f) => ({ id: f.id, owner: f.owner, optionLabel: f.optionLabel, mappingStatus: f.mappingStatus, source: f.source, confirmed: !!f.confirmedById, page: f.pageNumber, pageId: hasPageImages ? pageIdOf.get(f.pageNumber) ?? null : null, width: f.width, height: f.height, description: f.description, box: figureBox(f.box), reason: (f.box as { reason?: string } | null)?.reason ?? null, confidence: f.confidence })),
+            pageImages: hasPageImages ? (e.pages?.length ? e.pages : q.pages).filter((n) => pageIdOf.has(n)).map((n) => ({ page: n, pageId: pageIdOf.get(n)! })) : [],
             rescanAllowed: { ok: !rescanBlocked, reason: rescanBlocked },
           }}
           taxonomy={taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((st) => ({ id: st.id, name: st.name })) })) }))}

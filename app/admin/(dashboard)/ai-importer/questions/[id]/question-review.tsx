@@ -16,6 +16,7 @@ import {
   approveQuestionsAction,
   discardRescanAction,
   editQuestionAction,
+  cropFigureAction,
   markFigureUncertainAction,
   markImageMissingAction,
   reclassifyQuestionsAction,
@@ -29,6 +30,7 @@ import {
   unapproveQuestionsAction,
 } from "../../actions";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
+import { CropEditor } from "@/components/admin/ai-importer/crop-editor";
 
 export interface ReviewFigure {
   id: string;
@@ -43,6 +45,9 @@ export interface ReviewFigure {
   height: number;
   description: string | null;
   box: { x: number; y: number; w: number; h: number } | null;
+  /** Why the placement is (not) trusted — from the deterministic mapping check or the administrator. */
+  reason: string | null;
+  confidence: number | null;
 }
 
 export interface ReviewQ {
@@ -66,6 +71,8 @@ export interface ReviewQ {
   approved: boolean;
   approvedBy: string | null;
   figures: ReviewFigure[];
+  /** Pages of this question that have a page image to crop from. */
+  pageImages: { page: number; pageId: string }[];
   rescanAllowed: { ok: boolean; reason: string | null };
 }
 
@@ -97,9 +104,10 @@ function figureTitle(f: ReviewFigure): string {
 }
 
 /** One figure: complete image with zoom, its facts, and the correction tools. */
-function FigureRow({ f, busy, act, onUpload }: { f: ReviewFigure; busy: boolean; act: (fn: () => Promise<ActionResult>, ok: string) => void; onUpload: (file: File, owner: "STEM" | "OPTION", label: string | null, replace: string | null) => void }) {
+function FigureRow({ f, questionId, busy, act, onUpload }: { f: ReviewFigure; questionId: string; busy: boolean; act: (fn: () => Promise<ActionResult>, ok: string) => void; onUpload: (file: File, owner: "STEM" | "OPTION", label: string | null, replace: string | null) => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [showPage, setShowPage] = useState(false);
+  const [editing, setEditing] = useState(false);
   const missing = f.mappingStatus === "MISSING";
   return (
     <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-2" data-testid="rv-figure" data-figure-id={f.id} data-status={f.mappingStatus}>
@@ -109,8 +117,15 @@ function FigureRow({ f, busy, act, onUpload }: { f: ReviewFigure; busy: boolean;
         <span className="text-[var(--color-muted-foreground)]">
           page {f.page || "—"} · {f.source === "ADMIN_UPLOAD" ? "uploaded" : f.source.toLowerCase()}
           {!missing && f.width ? ` · ${f.width}×${f.height}px original` : ""}
+          {f.box ? ` · box ${Math.round(f.box.x * 100)}%,${Math.round(f.box.y * 100)}% ${Math.round(f.box.w * 100)}×${Math.round(f.box.h * 100)}%` : ""}
+          {f.confidence !== null && !f.confirmed ? ` · mapping ${Math.round(f.confidence * 100)}%` : ""}
         </span>
       </div>
+      {f.reason && !f.confirmed && (
+        <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="rv-figure-reason">
+          {f.reason}
+        </p>
+      )}
       {missing ? (
         <p className="text-xs text-[var(--color-error)]">{f.description ?? "This image could not be extracted."}</p>
       ) : (
@@ -161,6 +176,11 @@ function FigureRow({ f, busy, act, onUpload }: { f: ReviewFigure; busy: boolean;
             Mark uncertain
           </Button>
         )}
+        {f.pageId && (
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditing((v) => !v)} data-testid="rv-figure-recrop">
+            {missing ? "Crop it from the page" : "Adjust crop"}
+          </Button>
+        )}
         <Button size="sm" variant="outline" disabled={busy} onClick={() => fileRef.current?.click()} data-testid="rv-figure-replace">
           {missing ? "Upload the image" : "Replace image"}
         </Button>
@@ -177,6 +197,20 @@ function FigureRow({ f, busy, act, onUpload }: { f: ReviewFigure; busy: boolean;
           data-testid="rv-figure-replace-input"
         />
       </div>
+      {editing && f.pageId && (
+        <CropEditor
+          pageUrl={`/api/admin/ai-importer/pages/${f.pageId}/image`}
+          pageNumber={f.page}
+          initial={f.box}
+          busy={busy}
+          saveLabel="Save crop"
+          onCancel={() => setEditing(false)}
+          onSave={(box) => {
+            setEditing(false);
+            act(() => cropFigureAction({ questionId, pageNumber: f.page, box, owner: f.owner === "OPTION" ? "OPTION" : "STEM", optionLabel: f.optionLabel, replaceFigureId: f.id }), "New crop saved and confirmed — the earlier image is kept in the vault.");
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -211,6 +245,7 @@ export function QuestionReview({
   const [subTopicId, setSubTopicId] = useState(q.subTopicId ?? "");
   const [take, setTake] = useState<Set<string>>(new Set());
   const [addImg, setAddImg] = useState({ owner: "STEM", label: "A" });
+  const [addCrop, setAddCrop] = useState<number | null>(null);
   const addRef = useRef<HTMLInputElement>(null);
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
 
@@ -500,7 +535,7 @@ export function QuestionReview({
           <CardContent className="flex flex-col gap-3">
             {q.figures.length === 0 && <p className="text-sm text-[var(--color-muted-foreground)]">No images.</p>}
             {q.figures.map((f) => (
-              <FigureRow key={f.id} f={f} busy={pending} act={act} onUpload={upload} />
+              <FigureRow key={f.id} f={f} questionId={q.id} busy={pending} act={act} onUpload={upload} />
             ))}
             <div className="flex flex-wrap items-end gap-2 border-t border-[var(--color-border)] pt-3 text-sm" data-testid="rv-add-image">
               <SelectNative aria-label="Image belongs to" value={addImg.owner === "STEM" ? "STEM" : `OPT:${addImg.label}`} onChange={(e) => setAddImg(e.target.value === "STEM" ? { owner: "STEM", label: "A" } : { owner: "OPTION", label: e.target.value.slice(4) })}>
@@ -514,6 +549,11 @@ export function QuestionReview({
               <Button size="sm" variant="outline" disabled={pending} onClick={() => addRef.current?.click()} data-testid="rv-add-image-button">
                 Add an image
               </Button>
+              {q.pageImages.length > 0 && (
+                <Button size="sm" variant="outline" disabled={pending} onClick={() => setAddCrop((v) => (v === null ? q.pageImages[0].page : null))} data-testid="rv-add-crop">
+                  Crop another figure from the page
+                </Button>
+              )}
               <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => markImageMissingAction(q.id, addImg.owner === "OPTION" ? "OPTION" : "STEM", addImg.owner === "OPTION" ? addImg.label : null, prompt("Describe the missing image (optional):") ?? ""), "Marked missing — upload the image or re-scan the page.")} data-testid="rv-mark-missing">
                 Mark an image missing
               </Button>
@@ -530,6 +570,33 @@ export function QuestionReview({
                 data-testid="rv-add-image-input"
               />
             </div>
+            {addCrop !== null && (
+              <div className="flex flex-col gap-2" data-testid="rv-add-crop-panel">
+                {q.pageImages.length > 1 && (
+                  <SelectNative aria-label="Page to crop from" value={String(addCrop)} onChange={(e) => setAddCrop(Number(e.target.value))}>
+                    {q.pageImages.map((p) => (
+                      <option key={p.page} value={p.page}>
+                        Page {p.page}
+                      </option>
+                    ))}
+                  </SelectNative>
+                )}
+                <CropEditor
+                  key={addCrop}
+                  pageUrl={`/api/admin/ai-importer/pages/${q.pageImages.find((p) => p.page === addCrop)?.pageId ?? q.pageImages[0].pageId}/image`}
+                  pageNumber={addCrop}
+                  initial={null}
+                  busy={pending}
+                  saveLabel={`Add crop to ${addImg.owner === "OPTION" ? `option ${addImg.label}` : "the question text"}`}
+                  onCancel={() => setAddCrop(null)}
+                  onSave={(box) => {
+                    const page = addCrop;
+                    setAddCrop(null);
+                    act(() => cropFigureAction({ questionId: q.id, pageNumber: page, box, owner: addImg.owner === "OPTION" ? "OPTION" : "STEM", optionLabel: addImg.owner === "OPTION" ? addImg.label : null, replaceFigureId: null }), "Crop added and confirmed.");
+                  }}
+                />
+              </div>
+            )}
           </CardContent>
         </Card>
 
