@@ -176,6 +176,8 @@ check("job page button reads Confirm Cost & Start Processing", (await admin.loca
 await admin.click("[data-testid=confirm-start]");
 const st1 = await waitStatus(admin, /Review & approval/, 180000);
 check("processing finished → Review & approval (nothing stored yet)", /Review & approval/.test(st1) && (await db.query(`select count(*)::int n from "AiImportQuestion" where "jobId"=$1 and "questionId" is not null`, [jobId])).rows[0].n === 0, st1);
+const progressText = (await admin.locator("[data-testid=progress-card]").textContent()) ?? "";
+check("after processing the job page still shows the four cost figures (actual spend from the usage records, not the held maximum)", (await admin.locator("[data-testid=progress-card] [data-testid=cost-job-actual-value]").count()) === 1 && (await admin.locator("[data-testid=progress-card] [data-testid=cost-month-actual-value]").count()) === 1 && /Estimated maximum/.test(progressText) && !/AI spend so far/.test(progressText), progressText.slice(0, 300));
 check("job page shows the paper mapping and the quality summary", (await admin.locator("[data-testid=paper-mapping]").getAttribute("data-paper-id")) === F.paperId && (await admin.locator("[data-testid=quality-panel]").count()) === 1);
 check("job page shows the models chosen at confirmation, with the reason", (await admin.locator("[data-testid=plan-extract]").getAttribute("data-model")) === "mockvision/reader" && /Cheapest suitable/.test((await admin.locator("[data-testid=plan-extract]").textContent()) ?? ""));
 const blockedNote = (await admin.locator("[data-testid=files-remove-blocked]").textContent().catch(() => "")) ?? "";
@@ -459,6 +461,7 @@ check("confirmation summary before Start: exam, paper, year, code", /Exam:/.test
 check("one primary action, disabled until the summary is confirmed", (await admin.locator("[data-testid=process-import]").count()) === 1 && (await admin.locator("[data-testid=process-import]").isDisabled()));
 await startImport(admin, { expected: "10" });
 check("re-upload of an already imported paper: quality summary shown on the same page", (await waitFor(admin, "[data-testid=quality-panel]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
+check("finished import on the one-page importer shows its final cost: job and month actual spend", (await admin.locator("[data-testid=op-final-cost] [data-testid=cost-job-actual-value]").count()) === 1 && (await admin.locator("[data-testid=op-final-cost] [data-testid=cost-month-actual-value]").count()) === 1);
 const val = async (t) => Number(await admin.locator(`[data-testid=${t}]`).getAttribute("data-value"));
 check("…nothing stored by processing; duplicates found; counts from the backend", (await val("q-stored")) === 0 && (await val("q-duplicates")) >= 5 && (await val("q-extracted")) === 10 && (await val("q-expected")) === 10, { st: await val("q-stored"), dup: await val("q-duplicates") });
 check("…and the next step is explained", /Next:/.test(await admin.locator("[data-testid=op-next-action]").textContent()) && (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type in ('IMPORT_REQUESTED','IMPORT_SKIPPED')`, [opJob])).rows[0].n === 0);

@@ -42,7 +42,6 @@ export interface CurrentJob {
 
 const BUSY = ["DRAFT", "ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"];
 const ACCEPT = ".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.csv";
-const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `₹${v.toFixed(2)}`);
 
 /** Uploads one file in chunks through the importer's upload API; resolves with the server's verdict. */
 async function uploadFile(jobId: string, file: File, role: "PAPER" | "ANSWER_KEY", onPct: (pct: number) => void): Promise<{ ok: true; note: string } | { ok: false; error: string }> {
@@ -568,13 +567,20 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
                   <div>Expected: <strong>{current.mapping.expectedQuestions ?? "—"}</strong></div>
                   <div>Extracted: <strong>{c.extracted}</strong></div>
                   <div>Verified: <strong>{current.quality?.verified ?? 0}</strong></div>
-                  <div>AI spend: <strong>{inr(j.spentInr)}</strong>{j.maxCostInr !== null ? ` (max ${inr(j.maxCostInr)})` : ""}</div>
                 </dl>
               </>
             )}
+            <div data-testid="op-live-cost">
+              <CostSummary estimateInr={v?.estimatedCostInr ?? null} maxInr={j.maxCostInr} priced={j.maxCostInr !== null} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} />
+            </div>
           </div>
         )}
 
+        {finished && (
+          <div data-testid="op-final-cost">
+            <CostSummary estimateInr={v?.estimatedCostInr ?? null} maxInr={j.maxCostInr} priced={j.maxCostInr !== null} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} />
+          </div>
+        )}
         {finished && current.quality && <QualityPanel jobId={j.id} report={current.quality} canUse={canUse} jobStatus={j.status} files={current.files} runIds={j.runIds} />}
         {finished && canUse && !j.counts.imported && <ChangePaper jobId={j.id} papers={current.papers} current={current.mapping.paper?.id ?? null} />}
 

@@ -120,7 +120,8 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
       ? `After you confirm, the import is queued again with these models: only the ${unreadPages} failed or pending page(s)${failedKeys.length ? ` and ${failedKeys.length} answer-key file(s)` : ""} are read. Finished pages are not read or charged again.`
       : "Paid AI is OFF: the new models are saved on the import and it stays paused. Nothing is sent until Paid AI is switched on and the import is resumed.",
     blocking,
-    proposalKey: hash({ tasks: tasks.map((t) => [t.task, t.proposed]), updatedAt: job.updatedAt.toISOString(), todo: unreadPages, keys: failedKeys.length }),
+    // The shown cost is part of what is confirmed: a price change after the preview needs a fresh confirmation.
+    proposalKey: hash({ tasks: tasks.map((t) => [t.task, t.proposed]), updatedAt: job.updatedAt.toISOString(), todo: unreadPages, keys: failedKeys.length, maxPaise: est?.maxInr == null ? null : Math.round(est.maxInr * 100) }),
   };
   return { preview, plan, updatedAt: job.updatedAt };
 }
@@ -132,7 +133,7 @@ export async function reconfigurePreview(jobId: string): Promise<ReconfigurePrev
 export async function reconfigureJob(input: { jobId: string; proposalKey: string; actorId: string }): Promise<ReconfigureResult> {
   const { preview, plan, updatedAt } = await build(input.jobId);
   if (preview.blocking.length) throw new ReconfigureError(preview.blocking.join(" "));
-  if (preview.proposalKey !== input.proposalKey) throw new ReconfigureError("The import or the available models changed since the preview. Nothing was changed — open the preview again.");
+  if (preview.proposalKey !== input.proposalKey) throw new ReconfigureError("The import, the available models or their cost changed since the preview. Nothing was changed — open the preview again and confirm the new cost.");
   const queue = preview.paidAiOn;
   const from = Object.fromEntries(preview.tasks.map((t) => [t.task, t.current]));
   const to = Object.fromEntries(preview.tasks.map((t) => [t.task, t.proposed]));

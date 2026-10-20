@@ -200,7 +200,7 @@ export default async function CostsPage() {
           <table className="w-full min-w-[900px] text-left text-sm" data-testid="cost-jobs">
             <thead className="text-xs text-[var(--color-muted-foreground)]">
               <tr>
-                {["Import", "Job estimate", "Actual", "Unknown cost", "Confirmed maximum", "Requests", "Per AI page", "Per question"].map((h) => (
+                {["Import", "Job estimate", "Actual", "Unknown cost", "Estimated maximum", "Requests", "Per AI page", "Per question"].map((h) => (
                   <th key={h} className="py-1 pr-2 font-medium">
                     {h}
                   </th>
@@ -226,7 +226,7 @@ export default async function CostsPage() {
                     <td className="py-1.5 pr-2">{inr(j.jobEstimateInr)}</td>
                     <td className="py-1.5 pr-2" data-testid="cost-job-actual">{j.actualRequests ? inr(j.actualInr) : j.unknownRequests ? "unknown" : j.inflightRequests ? "pending" : "—"}</td>
                     <td className="py-1.5 pr-2">{j.unknownRequests ? `${j.unknownRequests} (up to ${inr(j.heldInr)} held)` : "—"}</td>
-                    <td className="py-1.5 pr-2">{inr(j.budgetInr)}</td>
+                    <td className="py-1.5 pr-2">{inr(j.jobMaxInr)}</td>
                     <td className="py-1.5 pr-2">{j.requests}</td>
                     <td className="py-1.5 pr-2">{aiPages && costComplete ? inr(j.actualInr / aiPages) : "—"}</td>
                     <td className="py-1.5 pr-2">{j.questions && costComplete ? inr(j.actualInr / j.questions) : "—"}</td>

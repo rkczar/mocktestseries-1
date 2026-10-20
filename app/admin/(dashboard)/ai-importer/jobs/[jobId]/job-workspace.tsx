@@ -39,6 +39,8 @@ export interface JobView {
   spend: SpendSummary;
   spentInr: number;
   estCostInr: number | null;
+  /** The stored estimate's conservative maximum (null when not priced). */
+  maxCostInr: number | null;
   pauseReason: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -702,11 +704,11 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             <CardDescription>
               Pages {s.pages.done}/{s.pages.total} done{s.pages.pending ? ` · ${s.pages.pending} pending` : ""}
               {s.pages.failed ? ` · ${s.pages.failed} failed` : ""}
-              {s.pages.skipped ? ` · ${s.pages.skipped} need AI (switched off)` : ""} · AI spend so far {inr(job.spentInr)}
-              {job.estCostInr !== null ? ` (estimated ${inr(job.estCostInr)}, estimated maximum ${inr(job.budgetInr)} confirmed)` : ""}
+              {s.pages.skipped ? ` · ${s.pages.skipped} need AI (switched off)` : ""}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            <CostSummary estimateInr={job.estCostInr} maxInr={job.maxCostInr} priced={job.estCostInr !== null && job.maxCostInr !== null} job={job.spend.job} month={job.spend.month} istMonth={job.spend.istMonth} />
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6" data-testid="batch-summary">
               <Stat label="Questions extracted" value={s.extracted} />
               <Stat label="Eligible for import" value={s.eligibleImport} />

@@ -2286,6 +2286,13 @@ async function sectionY(actor: string, examId: string) {
     const rp = await reconfigurePreview(j5);
     check("Y5 preview: current → proposed models, finished pages kept, only failed/pending pages to read, cost known, no AI request", rp.tasks.find((t) => t.task === "extract")!.current === "mockvision/reader" && rp.tasks.find((t) => t.task === "extract")!.proposed === NEW && rp.donePages === before5.done && rp.retryPages === before5.pending + before5.failed && rp.maxInr !== null && rp.blocking.length === 0 && (await yStats()).chat === st5.chat && rp.aiRequestsSent === 0, { rp: { ...rp, tasks: undefined }, before5 });
     await expectError("Y5 confirmation with a different preview → refused", () => reconfigureJob({ jobId: j5, proposalKey: "other", actorId: actor }), /changed since the preview/);
+    // The shown cost is part of the confirmation: a price rise after the preview is refused until confirmed again.
+    const price5 = await prisma.aiModel.findUniqueOrThrow({ where: { id: NEW }, select: { promptPrice: true, completionPrice: true } });
+    await prisma.aiModel.update({ where: { id: NEW }, data: { promptPrice: (price5.promptPrice ?? 0) * 1.5 + 1e-9, completionPrice: (price5.completionPrice ?? 0) * 1.5 + 1e-9 } });
+    const rpUp = await reconfigurePreview(j5);
+    await expectError("Y5 price rise after the preview → confirmation refused (cost changed), nothing changed", () => reconfigureJob({ jobId: j5, proposalKey: rp.proposalKey, actorId: actor }), /cost changed since the preview/);
+    check("Y5 …the new preview shows the higher maximum for a fresh confirmation", rpUp.maxInr !== null && rp.maxInr !== null && rpUp.maxInr > rp.maxInr && rpUp.proposalKey !== rp.proposalKey && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).status === "PAUSED", { before: rp.maxInr, after: rpUp.maxInr });
+    await prisma.aiModel.update({ where: { id: NEW }, data: price5 });
     const spent5 = job5.spentInr;
     await prisma.aiImportJob.update({ where: { id: j5 }, data: { spentInr: 12 } });
     const rpb = await reconfigurePreview(j5);

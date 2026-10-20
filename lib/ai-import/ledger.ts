@@ -61,7 +61,7 @@ export interface ImporterLedger {
     geminiDirectCalls: 0;
   };
   history: { day: string; requests: number; reservedMaxInr: number; actualInr: number; actualRequests: number; unknownRequests: number; heldInr: number; inflightRequests: number }[];
-  jobs: { jobId: string; title: string | null; deleted: boolean; jobEstimateInr: number | null; budgetInr: number | null; requests: number; actualInr: number; actualRequests: number; unknownRequests: number; heldInr: number; inflightRequests: number; inflightInr: number; committedInr: number; questions: number | null }[];
+  jobs: { jobId: string; title: string | null; deleted: boolean; jobEstimateInr: number | null; jobMaxInr: number | null; requests: number; actualInr: number; actualRequests: number; unknownRequests: number; heldInr: number; inflightRequests: number; inflightInr: number; committedInr: number; questions: number | null }[];
 }
 
 type PeriodRow = { status: string; known: boolean; n: number; reserved: number; settled: number };
@@ -171,13 +171,13 @@ export async function importerLedger(settings: ImporterSettings, now = new Date(
 
   const byJob = new Map<string, PeriodRow[]>();
   for (const r of jobRows) byJob.set(r.job, [...(byJob.get(r.job) ?? []), r]);
-  const live = await prisma.aiImportJob.findMany({ where: { id: { in: [...byJob.keys()] } }, select: { id: true, title: true, estCostInr: true, budgetInr: true, _count: { select: { questions: true } } } });
+  const live = await prisma.aiImportJob.findMany({ where: { id: { in: [...byJob.keys()] } }, select: { id: true, title: true, estCostInr: true, estimate: true, _count: { select: { questions: true } } } });
   const liveById = new Map(live.map((j) => [j.id, j]));
   const jobs = [...byJob.entries()]
     .map(([jobId, rows]) => {
       const p = toPeriod(rows);
       const j = liveById.get(jobId);
-      return { jobId, title: j?.title ?? null, deleted: !j, jobEstimateInr: j?.estCostInr ?? null, budgetInr: j?.budgetInr ?? null, requests: p.requests, actualInr: p.actualInr, actualRequests: p.actualRequests, unknownRequests: p.unknownRequests, heldInr: p.unknownHeldInr, inflightRequests: p.inflightRequests, inflightInr: p.inflightInr, committedInr: p.committedInr, questions: j ? j._count.questions : null };
+      return { jobId, title: j?.title ?? null, deleted: !j, jobEstimateInr: j?.estCostInr ?? null, jobMaxInr: (j?.estimate as { maxInr?: number | null } | null)?.maxInr ?? null, requests: p.requests, actualInr: p.actualInr, actualRequests: p.actualRequests, unknownRequests: p.unknownRequests, heldInr: p.unknownHeldInr, inflightRequests: p.inflightRequests, inflightInr: p.inflightInr, committedInr: p.committedInr, questions: j ? j._count.questions : null };
     })
     .filter((j) => j.requests > 0)
     .sort((a, b) => b.committedInr - a.committedInr);

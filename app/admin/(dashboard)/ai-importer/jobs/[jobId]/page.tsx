@@ -60,6 +60,7 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     spend,
     spentInr: job.spentInr,
     estCostInr: job.estCostInr,
+    maxCostInr: card?.maxCostInr ?? null,
     pauseReason: job.pauseReason,
     errorMessage: job.errorMessage,
     createdAt: formatIst(job.createdAt),
