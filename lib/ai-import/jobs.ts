@@ -395,9 +395,12 @@ export async function resumeJob(jobId: string, actorId: string, newBudgetInr?: n
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status !== AiImportJobStatus.PAUSED && job.status !== AiImportJobStatus.PAUSED_BUDGET && job.status !== AiImportJobStatus.FAILED) throw new ImportJobError("Only a paused or failed import can be resumed.");
-  const budget = newBudgetInr !== null && newBudgetInr !== undefined && Number.isFinite(newBudgetInr) ? Math.max(newBudgetInr, 0) : job.budgetInr;
+  // A budget that is not a number (or is negative) is refused, never replaced by ₹0 or silently ignored.
+  if (newBudgetInr !== null && newBudgetInr !== undefined && (!Number.isFinite(newBudgetInr) || newBudgetInr < 0)) throw new ImportJobError("Enter a valid job budget. Nothing was changed.");
+  const budget = newBudgetInr ?? job.budgetInr;
   if (budget !== job.budgetInr) assertWithinJobCeiling(budget, (await getImporterSettings()).budget.maxJobInr);
   if (job.status === AiImportJobStatus.PAUSED_BUDGET && budget <= job.spentInr) throw new ImportJobError("Raise the job budget above what was already spent to continue.");
+  if (budget !== job.budgetInr && budget <= job.spentInr) throw new ImportJobError(`The job budget must be above what this import has already spent (₹${job.spentInr.toFixed(2)}). Nothing was changed.`);
   await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, budgetInr: budget, leaseOwner: null, leaseUntil: null } });
   // Failed pages get one more attempt on resume (never automatically in a loop).
   await prisma.aiImportPage.updateMany({ where: { jobId, status: "FAILED" }, data: { status: "PENDING", errorMessage: null } });

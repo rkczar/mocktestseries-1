@@ -19,6 +19,7 @@ import { JobControls, type JobControlState } from "@/components/admin/ai-importe
 import { JobContextFields, type ExamOption } from "../../new-import-form";
 import { analyzeJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resetJobAction, resumeJobAction } from "../../actions";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
+import { confirmBudgetCheck, resumeBudgetCheck, type BudgetCheck, type BudgetLimits } from "@/lib/ai-import/budget-check";
 
 export interface JobView {
   id: string;
@@ -34,6 +35,8 @@ export interface JobView {
   budgetInr: number;
   /** Hard limit per job (Import Settings): confirm and resume refuse a larger budget. */
   maxJobInr: number;
+  /** Every budget limit that applies at confirm / resume, and what is left of the importer's budgets. */
+  budgetLimits: BudgetLimits;
   spentInr: number;
   estCostInr: number | null;
   pauseReason: string | null;
@@ -316,6 +319,59 @@ function ResetCard({ jobId, reset, canManage, onDone }: { jobId: string; reset: 
   );
 }
 
+/** Every figure the job budget is checked against, each named separately. */
+function BudgetLimitsPanel({ limits: l, estimate }: { limits: BudgetLimits; estimate: JobAnalysis["estimate"] | null }) {
+  const rows: [string, string, string][] = [
+    ["Current estimated cost", estimate ? inr(estimate.totalInr) : "₹0.00 (no paid AI)", "limit-estimate"],
+    ["Conservative maximum cost", estimate ? inr(estimate.maxInr) : "₹0.00 (no paid AI)", "limit-max"],
+    ["Hard limit per job", `${inr(l.maxJobInr)} (Import Settings)`, "limit-job"],
+    ["Limit per AI request", `${inr(l.maxRequestInr)} (models above it are never chosen)`, "limit-request"],
+    ["All-time importer budget left", `${inr(Math.max(0, l.allTimeLeftInr))} of ${inr(l.totalCapInr)}`, "limit-alltime"],
+    ["This month's importer budget left", `${inr(Math.max(0, l.monthLeftInr))} of ${inr(l.monthCapInr)}`, "limit-month"],
+  ];
+  return (
+    <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2" data-testid="confirm-limits">
+      {rows.map(([k, v, id]) => (
+        <div key={id} data-testid={id}>
+          <dt className="inline text-[var(--color-muted-foreground)]">{k}: </dt>
+          <dd className="inline font-medium">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Why the entered budget would be refused (every reason), or the range that would be accepted. */
+function BudgetFeedback({ check, id, testId }: { check: BudgetCheck; id: string; testId: string }) {
+  if (check.problems.length === 0)
+    return (
+      <p id={id} className="text-xs text-[var(--color-success)]" data-testid={`${testId}-budget-ok`}>
+        This budget is within every limit. The server checks it again, with fresh prices, when you click.
+      </p>
+    );
+  return (
+    <div id={id} className="flex flex-col gap-1 text-xs text-[var(--color-error)]" data-testid={`${testId}-budget-problems`}>
+      <p className="font-medium">Cannot start with this budget:</p>
+      <ul className="list-disc pl-4">
+        {check.problems.map((p) => (
+          <li key={p} data-testid={`${testId}-budget-problem`}>
+            {p}
+          </li>
+        ))}
+      </ul>
+      {check.impossible ? (
+        <p className="text-[var(--color-foreground)]" data-testid={`${testId}-budget-impossible`}>
+          Changing the budget cannot fix this. Process fewer pages (for example a 2-page sample file), or ask a Master Admin to review the limits in Import Settings.
+        </p>
+      ) : check.range ? (
+        <p className="text-[var(--color-foreground)]" data-testid={`${testId}-budget-range`}>
+          Accepted: {check.range.minInr > 0 ? `at least ${inr(check.range.minInr)} and ` : ""}at most {inr(check.range.maxInr)}.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: "warn" | "ok" | "err" }) {
   return (
     <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
@@ -331,6 +387,8 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [budget, setBudget] = useState(String(job.budgetInr));
+  // A refusal of Confirm / Resume is shown next to that button (the page-level message is far above it).
+  const [inlineError, setInlineError] = useState<{ at: "confirm" | "resume"; text: string } | null>(null);
   const [ctx, setCtx] = useState({ examId: job.examId, paperType: job.paperType, subjectId: job.subjectId ?? "", year: job.year ? String(job.year) : "", paperCode: job.paperCode ?? "", previousYearPaperId: job.previousYearPaperId ?? "" });
   const [removing, setRemoving] = useState<JobFile | null>(null);
   const busy = BUSY.includes(job.status);
@@ -341,13 +399,16 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
     return () => clearInterval(t);
   }, [busy, router]);
 
-  const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok?: string) =>
+  const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok?: string, at?: "confirm" | "resume") =>
     start(async () => {
       setError(null);
       setNotice(null);
+      setInlineError(null);
       const r = await callImporter(fn);
-      if (!r.ok) setError(r.error ?? "Failed");
-      else {
+      if (!r.ok) {
+        if (at) setInlineError({ at, text: r.error ?? "Failed" });
+        else setError(r.error ?? "Failed");
+      } else {
         if (ok) setNotice(ok);
         router.refresh();
       }
@@ -355,6 +416,9 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
 
   const s = job.summary;
   const a = job.analysis;
+  // Recomputed on every keystroke: the same rules the server applies at confirm / resume.
+  const confirmCheck = confirmBudgetCheck({ raw: budget, aiEnabled: job.aiEnabled, estimate: a?.estimate ?? null, limits: job.budgetLimits });
+  const resumeCheck = resumeBudgetCheck({ raw: budget, currentInr: job.budgetInr, spentInr: job.spentInr, maxJobInr: job.maxJobInr, budgetPaused: job.status === "PAUSED_BUDGET" });
   const editable = job.status === "DRAFT" || job.status === "AWAITING_CONFIRMATION";
   const canImport = ["NEEDS_REVIEW", "COMPLETED_WITH_ISSUES", "COMPLETED"].includes(job.status);
   const removalBlocked = fileRemovalBlockedReason(job.status);
@@ -645,14 +709,24 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
               <Label htmlFor="ai-confirm-budget">Job budget (₹)</Label>
               <Input id="ai-confirm-budget" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^\d.]/g, ""))} data-testid="confirm-budget" />
               <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="confirm-budget-limit">Hard limit per job: ₹{job.maxJobInr} (Import Settings).</p>
-              {Number(budget) > job.maxJobInr && <p className="text-xs text-[var(--color-error)]">Above the hard limit per job — confirming will be refused.</p>}
-              {a?.estimate.totalInr !== null && a?.estimate.totalInr !== undefined && Number(budget) < a.estimate.totalInr && <p className="text-xs text-[var(--color-warning)]">The budget is below the estimate, so confirming will be refused while paid AI is on. Reduce the files or raise the budget deliberately.</p>}
-              {job.aiEnabled && typeof a?.estimate.maxInr === "number" && Number(budget) < a.estimate.maxInr && <p className="text-xs text-[var(--color-warning)]" data-testid="confirm-below-max">The budget is below the conservative maximum ({inr(a.estimate.maxInr)}), so confirming will be refused. Process fewer pages or raise the budget within the hard limit.</p>}
             </div>
-            <div className="flex gap-2">
-              <Button disabled={pending} onClick={() => act(() => confirmJobAction(job.id, { title: job.title, ...ctx, year: ctx.year || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, paperCode: ctx.paperCode || null, budgetInr: Number(budget) }), "Processing queued.")} data-testid="confirm-start">
+            <BudgetLimitsPanel limits={job.budgetLimits} estimate={job.aiEnabled ? (a?.estimate ?? null) : null} />
+            <BudgetFeedback check={confirmCheck} id="confirm-budget-problems" testId="confirm" />
+            <div className="flex flex-col gap-2">
+              <Button
+                className="w-fit"
+                disabled={pending || confirmCheck.problems.length > 0}
+                aria-describedby="confirm-budget-problems"
+                onClick={() => act(() => confirmJobAction(job.id, { title: job.title, ...ctx, year: ctx.year || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, paperCode: ctx.paperCode || null, budgetInr: confirmCheck.value! }), "Processing queued.", "confirm")}
+                data-testid="confirm-start"
+              >
                 {job.aiEnabled ? "Confirm and start processing" : "Confirm and start (local reading only)"}
               </Button>
+              {inlineError?.at === "confirm" && (
+                <p className="text-sm text-[var(--color-error)]" role="alert" data-testid="confirm-error">
+                  {inlineError.text}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -730,12 +804,23 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                   </Button>
                 )}
                 {(job.status === "PAUSED" || job.status === "PAUSED_BUDGET" || job.status === "FAILED") && (
-                  <>
-                    <Input className="w-32" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^\d.]/g, ""))} aria-label={`Job budget (hard limit ₹${job.maxJobInr})`} title={`Hard limit per job: ₹${job.maxJobInr}`} data-testid="resume-budget" />
-                    <Button disabled={pending} onClick={() => act(() => resumeJobAction(job.id, Number(budget)), "Resumed.")} data-testid="resume">
-                      Resume{job.status === "PAUSED_BUDGET" ? " with this budget" : ""}
-                    </Button>
-                  </>
+                  <div className="flex w-full flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Input className="w-32" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^\d.]/g, ""))} aria-label={`Job budget (hard limit ₹${job.maxJobInr})`} aria-describedby="resume-budget-problems" title={`Hard limit per job: ₹${job.maxJobInr}`} data-testid="resume-budget" />
+                      <Button disabled={pending || resumeCheck.problems.length > 0} onClick={() => act(() => resumeJobAction(job.id, resumeCheck.value), "Resumed.", "resume")} data-testid="resume">
+                        Resume{job.status === "PAUSED_BUDGET" ? " with this budget" : ""}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="resume-budget-limit">
+                      Spent so far {inr(job.spentInr)} · hard limit per job {inr(job.maxJobInr)} · all-time budget left {inr(Math.max(0, job.budgetLimits.allTimeLeftInr))} · this month {inr(Math.max(0, job.budgetLimits.monthLeftInr))}. Every AI request is still checked against these limits before it is sent.
+                    </p>
+                    <BudgetFeedback check={resumeCheck} id="resume-budget-problems" testId="resume" />
+                    {inlineError?.at === "resume" && (
+                      <p className="text-sm text-[var(--color-error)]" role="alert" data-testid="resume-error">
+                        {inlineError.text}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}

@@ -9,7 +9,7 @@ import { getImporterSettings } from "@/lib/ai-import/settings";
 import { jobSummary } from "@/lib/ai-import/summary";
 import { resetEligibility } from "@/lib/ai-import/jobs";
 import { planOf } from "@/lib/ai-import/select";
-import { jobCards, jobMapping } from "@/lib/ai-import/job-view";
+import { jobCards, jobMapping, remainingPilotBudget } from "@/lib/ai-import/job-view";
 import { jobQuality } from "@/lib/ai-import/summary";
 import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
@@ -42,7 +42,7 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     prisma.aiImportKeyEntry.groupBy({ by: ["keyFileId"], where: { jobId: job.id }, _count: { _all: true } }),
   ]);
   const examOptions: ExamOption[] = await Promise.all(exams.map(async (e) => ({ ...e, subjects: await getExamSubjects(prisma, e.id), papers: papers.filter((p) => p.examId === e.id) })));
-  const [[card], mapping, quality] = await Promise.all([jobCards({ ids: [job.id] }, canManage), jobMapping(job.id), jobQuality(job.id)]);
+  const [[card], mapping, quality, pilot] = await Promise.all([jobCards({ ids: [job.id] }, canManage), jobMapping(job.id), jobQuality(job.id), remainingPilotBudget(settings)]);
   const runs = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, bulkImportRunId: { not: null } }, distinct: ["bulkImportRunId"], select: { bulkImportRunId: true } });
   const view: JobView = {
     id: job.id,
@@ -57,6 +57,14 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     previousYearPaperId: job.previousYearPaperId,
     budgetInr: job.budgetInr,
     maxJobInr: settings.budget.maxJobInr,
+    budgetLimits: {
+      maxJobInr: settings.budget.maxJobInr,
+      maxRequestInr: settings.budget.maxRequestInr,
+      totalCapInr: pilot.totalCapInr,
+      monthCapInr: pilot.monthCapInr,
+      allTimeLeftInr: pilot.totalCapInr - pilot.allUsedInr,
+      monthLeftInr: pilot.monthCapInr - pilot.monthUsedInr,
+    },
     spentInr: job.spentInr,
     estCostInr: job.estCostInr,
     pauseReason: job.pauseReason,
