@@ -59,6 +59,7 @@ export default async function AiImporterPage({ searchParams }: { searchParams: P
         stage: stage?.message ?? null,
         verifyAvailable: !!estimate?.plan?.tasks.verify.model,
         spend,
+        costLines: settings.aiEnabled ? (estimate?.lines ?? []).filter((l) => l.calls > 0 && l.model !== null).map((l) => ({ label: l.label, calls: l.calls, inr: l.inr, maxInr: l.maxInr })) : [],
         verdict: analysis
           ? analyzerVerdict({
               analysis,

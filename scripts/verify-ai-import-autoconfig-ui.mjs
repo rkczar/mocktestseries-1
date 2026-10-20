@@ -112,7 +112,7 @@ try {
   const proposedModel = await page.locator("[data-testid=autoconfig-task][data-task=scanned]").getAttribute("data-model");
   await page.locator("[data-testid=autoconfig-apply]").click();
   const done = page.locator("[data-testid=autoconfig-applied]");
-  check("saved message shown", !!(await until(() => done.isVisible())) && /Paid AI and budgets are unchanged/.test(await done.textContent()));
+  check("saved message shown", !!(await until(() => done.isVisible())) && /Paid AI and the cost limits are unchanged/.test(await done.textContent()));
   const s = await saved();
   check("the saved settings pin the previewed models (manual) and keep Paid AI OFF and the budgets", s.selection.mode === "manual" && s.models.extract === proposedModel && s.aiEnabled === false && s.budget.maxRequestInr === 1 && s.budget.maxJobInr === 8 && s.budget.totalInr === 10 && s.budget.allowPricierFallback === false, { sel: s.selection, m: s.models, ai: s.aiEnabled });
   check("audited", (await db.query(`select count(*)::int n from "AuditLog" where action='AI_IMPORTER_AUTOCONFIG_APPLIED'`)).rows[0].n >= 1);

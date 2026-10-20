@@ -129,7 +129,7 @@ export function analyzerVerdict(input: {
       strategy = "BLOCKED";
       blocker = {
         reason: `This file is scanned: ${t.scannedPages} page${t.scannedPages === 1 ? " has" : "s have"} no text layer. Reading it needs AI vision (OCR), and paid AI is switched off for the importer.`,
-        nextAction: "Upload a digital PDF or Word copy of the paper — or ask the owner to approve the paid AI pilot (Importer Settings → AI switch, models and privacy check). Nothing has been charged.",
+        nextAction: "Upload a digital PDF or Word copy of the paper — or ask the owner to switch on Paid AI (Importer Settings → AI switch, models and privacy check). Nothing has been charged.",
       };
     }
   } else if (!extract?.model) {

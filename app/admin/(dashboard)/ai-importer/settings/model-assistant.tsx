@@ -93,7 +93,7 @@ export function ModelAssistant({ canManage, dirty, onApplied }: { canManage: boo
       <CardHeader>
         <CardTitle>Model Assistant</CardTitle>
         <CardDescription>
-          Finds suitable importer models per purpose from the synced catalog (published image input and prices), the stored provider routes, your privacy and budget settings and the importer&apos;s own recent requests. It never judges a model by its name, and every model&apos;s quality is <strong>Not tested</strong> until a real benchmark is run. Nothing changes until you apply and confirm, and only the importer&apos;s own model list changes — never student Ask AI, Instagram or the approvals in AI → Models.
+          Finds suitable importer models per purpose from the synced catalog (published image input and prices), the stored provider routes, your privacy settings, the per-request limit and the importer&apos;s own recent requests. It never judges a model by its name, and every model&apos;s quality is <strong>Not tested</strong> until a real benchmark is run. Nothing changes until you apply and confirm, and only the importer&apos;s own model list changes — never student Ask AI, Instagram or the approvals in AI → Models.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
@@ -152,8 +152,8 @@ export function ModelAssistant({ canManage, dirty, onApplied }: { canManage: boo
               <li data-testid="assistant-preview-add">Add: {result.toAdd.map((id) => <code key={id} className="mr-2">{id}</code>)}</li>
               <li>Keep: {result.currentList.length ? result.currentList.join(", ") : "nothing (the list is empty)"}</li>
               {result.notRecommended.length > 0 && <li>Already listed but not recommended now (kept — remove by hand if wanted): {result.notRecommended.join(", ")}</li>}
-              <li>Not changed: Paid AI, budgets, privacy, selection mode, student Ask AI, Instagram and AI → Models approvals.</li>
-              <li>After saving, the provider routes of the list are read again (free metadata requests, no AI request) and route, price, privacy and budget are re-checked per task.</li>
+              <li>Not changed: Paid AI, the cost limits, privacy, selection mode, student Ask AI, Instagram and AI → Models approvals.</li>
+              <li>After saving, the provider routes of the list are read again (free metadata requests, no AI request) and route, price, privacy and the per-request limit are re-checked per task.</li>
             </ul>
             <div className="flex flex-wrap gap-2">
               <Button type="button" size="sm" onClick={apply} disabled={pending} data-testid="assistant-confirm">

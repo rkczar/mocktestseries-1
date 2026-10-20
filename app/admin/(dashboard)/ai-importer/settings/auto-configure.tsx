@@ -167,7 +167,7 @@ export function AutoConfigure({ canManage, dirty, onApplied }: { canManage: bool
                 {changed.length} setting(s) change. Not changed: {preview.untouched.join(", ")}.
               </p>
             </section>
-            <p className="text-xs">Before saving, the server reads the provider routes and prices again and re-checks privacy and every budget limit; if anything differs from this preview, nothing is saved.</p>
+            <p className="text-xs">Before saving, the server reads the provider routes and prices again and re-checks privacy and the per-request limit; if anything differs from this preview, nothing is saved.</p>
             <div className="flex flex-wrap gap-2">
               <Button type="button" onClick={apply} disabled={pending || preview.blocking.length > 0} data-testid="autoconfig-apply">
                 {pending ? "Checking and saving…" : "Apply Configuration"}
@@ -181,7 +181,7 @@ export function AutoConfigure({ canManage, dirty, onApplied }: { canManage: bool
 
         {applied && (
           <div className="flex flex-col gap-1 rounded-[var(--radius-card)] border border-[var(--color-success)] p-3 text-xs" role="status" data-testid="autoconfig-applied">
-            <p className="font-semibold text-[var(--color-success)]">Configuration saved and recorded in the audit log. Paid AI and budgets are unchanged.</p>
+            <p className="font-semibold text-[var(--color-success)]">Configuration saved and recorded in the audit log. Paid AI and the cost limits are unchanged.</p>
             <ul className="list-disc pl-5">
               {applied.tasks.map((t) => (
                 <li key={t.task} data-task={t.task} data-model={t.model ?? ""}>

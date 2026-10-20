@@ -13,11 +13,19 @@ function actual(p: LedgerPeriod | null): { value: string; detail: string | null 
   return { value: inr(p.actualInr), detail: extra.length ? `plus ${extra.join(" · ")}` : null };
 }
 
+/** One priced step of the estimate (page reading, second read, classification, answer key). */
+export interface CostBreakdownLine {
+  label: string;
+  calls: number;
+  inr: number | null;
+  maxInr: number | null;
+}
+
 /**
  * The importer's cost figures for one job: its estimate and estimated maximum (before processing), its actual
  * spend, and this month's actual importer spend (AI Question Importer only — no Ask AI, Instagram or other features).
  */
-export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced = true }: { estimateInr: number | null; maxInr: number | null; job: LedgerPeriod | null; month: LedgerPeriod; istMonth: string; priced?: boolean }) {
+export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced = true, breakdown }: { estimateInr: number | null; maxInr: number | null; job: LedgerPeriod | null; month: LedgerPeriod; istMonth: string; priced?: boolean; breakdown?: CostBreakdownLine[] }) {
   const [y, m] = istMonth.split("-");
   const j = actual(job);
   const mo = actual(month);
@@ -40,6 +48,21 @@ export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced 
           </div>
         ))}
       </dl>
+      {breakdown && breakdown.length > 0 && (
+        <ul className="flex flex-col gap-0.5 text-xs" data-testid="cost-breakdown">
+          {breakdown.map((l) => (
+            <li key={l.label} className="flex flex-wrap justify-between gap-x-3" data-testid="cost-breakdown-line">
+              <span>
+                {l.label} · {l.calls} AI request{l.calls === 1 ? "" : "s"}
+              </span>
+              <span>
+                {l.inr === null ? "Unknown — not priced" : inr(l.inr)}
+                {l.maxInr !== null && <span className="text-[var(--color-muted-foreground)]"> (max {inr(l.maxInr)})</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="cost-note">
         Estimates use current provider prices (refreshed again when you confirm); the final cost may differ. Actual spend is what OpenRouter reported for the AI Question Importer only.
       </p>

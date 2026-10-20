@@ -174,6 +174,9 @@ async function main() {
     const html3 = render({ estimateInr: 1, maxInr: 2, job: s3.job, month, istMonth: "2026-10" });
     check("unreported cost → 'Unknown', never ₹0.00", /This job's actual spend Unknown/.test(html3) && /1 request with unknown cost \(up to ₹0\.60\)/.test(html3), html3);
     const html4 = render({ estimateInr: null, maxInr: null, job: null, month: toPeriod([]), istMonth: "2026-10", priced: false });
+    const html5 = render({ estimateInr: 3.1, maxInr: 7.4, job: null, month, istMonth: "2026-10", breakdown: [{ label: "Page reading", calls: 12, inr: 2.6, maxInr: 6.2 }, { label: "Classification", calls: 1, inr: 0.5, maxInr: null }, { label: "Answer key", calls: 1, inr: null, maxInr: null }] });
+    check("cost breakdown per step: requests, estimate and maximum; an unpriced step says so", /Page reading · 12 AI requests ₹2\.60 \(max ₹6\.20\)/.test(html5) && /Classification · 1 AI request ₹0\.50/.test(html5) && /Answer key · 1 AI request Unknown — not priced/.test(html5), html5);
+    check("no breakdown passed → none shown", !/AI request/.test(html1));
     check("unpriced estimate → 'Unknown — not priced'; no AI request yet → ₹0.00 with that reason", /Estimated cost Unknown — not priced/.test(html4) && /Estimated maximum Unknown — not priced/.test(html4) && /₹0\.00 no AI request yet/.test(html4), html4);
 
     // ------------------------------------------------------------------ C

@@ -23,7 +23,7 @@ export default async function ImportSettingsPage() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Import Settings</h1>
         <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">
-          Paid AI, models, privacy and budgets of the AI Question Importer. The importer has its own budgets, separate from student Ask AI; every limit here is enforced by the server before each AI request.
+          Paid AI, models, privacy and limits of the AI Question Importer. There is no job budget to set: each job&apos;s estimated cost is shown and confirmed before processing. The per-request limit and the amount kept for student Ask AI are enforced by the server before each AI request.
         </p>
       </div>
       {!canManage && (

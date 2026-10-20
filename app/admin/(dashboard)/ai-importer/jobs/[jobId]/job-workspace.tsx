@@ -356,6 +356,8 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
       if (!r.ok) {
         if (at) setInlineError({ at, text: r.error ?? "Failed" });
         else setError(r.error ?? "Failed");
+        // A refused cost confirmation stored the freshly priced estimate: show the new price before any new click.
+        if (at === "confirm") router.refresh();
       } else {
         if (ok) setNotice(ok);
         router.refresh();

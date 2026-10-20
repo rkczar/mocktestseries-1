@@ -20,7 +20,7 @@ import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
 import type { JobMapping } from "@/lib/ai-import/job-view";
 import type { QualityReport } from "@/lib/ai-import/quality";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
-import { CostSummary } from "@/components/admin/ai-importer/cost-summary";
+import { CostSummary, type CostBreakdownLine } from "@/components/admin/ai-importer/cost-summary";
 import type { SpendSummary } from "@/lib/ai-import/ledger";
 
 export interface CurrentJob {
@@ -38,6 +38,8 @@ export interface CurrentJob {
   verifyAvailable: boolean;
   /** Actual spend of this job and of the importer this IST month (AI Question Importer only). */
   spend: SpendSummary;
+  /** The estimate per priced step (paid AI on), shown under the cost at confirmation. */
+  costLines: CostBreakdownLine[];
 }
 
 const BUSY = ["DRAFT", "ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"];
@@ -403,6 +405,9 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
       if (!r.ok) {
         setMsg({ text: r.error, error: true });
         setClicked(false);
+        // A refused confirmation (for example a new price) stored the fresh estimate: show it and ask again.
+        setConfirmed(false);
+        router.refresh();
       } else router.refresh();
     });
   };
@@ -468,7 +473,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
               </div>
             </div>
             <div className="flex flex-col gap-2" data-testid="op-cost" data-cost-basis={v.costBasis}>
-              <CostSummary estimateInr={v.estimatedCostInr} maxInr={v.maxCostInr} priced={v.costBasis !== "unknown"} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} />
+              <CostSummary estimateInr={v.estimatedCostInr} maxInr={v.maxCostInr} priced={v.costBasis !== "unknown"} breakdown={current.costLines} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} />
               {v.costBasis === "zero_published" && (
                 <div className="text-xs text-[var(--color-warning)]" data-testid="op-cost-zero">
                   Published free price (₹0) — a known zero, but free-price routes are often rate-limited.
@@ -526,7 +531,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
                       <Label htmlFor="op-verify-mode">Independent verification</Label>
                       <SelectNative id="op-verify-mode" value={verifyMode} onChange={(e) => setVerifyMode(e.target.value === "all" ? "all" : "risk")} data-testid="op-verify-mode">
                         <option value="risk">Scanned and low-confidence pages (default)</option>
-                        <option value="all">Every page (higher cost — re-checked against the budget)</option>
+                        <option value="all">Every page (higher cost — included in the price you confirm)</option>
                       </SelectNative>
                       <span className="text-xs text-[var(--color-muted-foreground)]">A second, different model reads the original page without seeing the first result. Agreement is evidence, not proof.</span>
                     </div>

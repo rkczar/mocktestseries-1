@@ -330,7 +330,7 @@ async function build(saved: ImporterSettings): Promise<Built> {
     baselineKey: "",
     proposalKey: hash(proposed),
     blocking,
-    untouched: ["Paid AI switch", "every budget limit and the spending so far", "privacy settings", "student Ask AI", "Instagram AI", "AI → Models approvals", "payments and Premium", "existing import jobs (each keeps its confirmed models)"],
+    untouched: ["Paid AI switch", "the per-request limit, the Ask AI reserve and the spending so far", "privacy settings", "student Ask AI", "Instagram AI", "AI → Models approvals", "payments and Premium", "existing import jobs (each keeps its confirmed models)"],
   };
   return { preview, snapshot: keep(fresh) };
 }
