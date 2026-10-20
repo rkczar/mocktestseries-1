@@ -47,14 +47,10 @@ export interface AnalyzerVerdict {
   warnings: string[];
 }
 
-const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `₹${v.toFixed(2)}`);
-
 export function analyzerVerdict(input: {
   analysis: JobAnalysis;
   estimate: CostEstimate | null;
   aiEnabled: boolean;
-  remainingBudgetInr: number;
-  jobBudgetInr: number;
   limits: { maxPagesPerFile: number; maxFileMb: number };
   /** FULL_PAPER / MIXED: subjects come from section headings (or the AI classifier); SINGLE_SUBJECT: the chosen subject. */
   paperType?: string;
@@ -157,8 +153,6 @@ export function analyzerVerdict(input: {
   const maxCostInr = usesAi ? (est?.maxInr ?? null) : 0;
   if (usesAi && blocker === null) {
     if (maxCostInr === null) blocker = { reason: "The maximum possible AI cost cannot be calculated (a price or the exchange rate is missing), so paid processing will not start.", nextAction: "Refresh the model routes in Importer Settings, then analyze again." };
-    else if (maxCostInr > input.jobBudgetInr) blocker = { reason: `The maximum possible cost (${inr(maxCostInr)}) is above this job's budget (${inr(input.jobBudgetInr)}).`, nextAction: "Process fewer pages (for example a 2-page sample file) — the pilot limits cannot be raised here." };
-    else if (maxCostInr > input.remainingBudgetInr) blocker = { reason: `The maximum possible cost (${inr(maxCostInr)}) is above the remaining pilot budget (${inr(input.remainingBudgetInr)}).`, nextAction: "Process a smaller file. The all-time pilot budget does not reset." };
     if (blocker) strategy = "BLOCKED";
   }
 

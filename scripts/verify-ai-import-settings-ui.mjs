@@ -115,7 +115,7 @@ check("unsaved change (ZDR off) previewed: the cheaper non-ZDR model would be ch
 await page.locator("[data-testid=privacy-zdr]").check();
 await page.locator("[data-testid=models-reload]").click();
 await until(async () => (await selModel("extract")) === "mockvision/reader");
-check("pilot ceilings shown next to the budget fields", /Pilot ceiling ₹10/.test(await page.locator("body").textContent()) && /Pilot ceiling ₹1\./.test(await page.locator("body").textContent()));
+check("per-request ceiling shown; no job / monthly / all-time cap", /Ceiling fixed in code: ₹1\./.test(await page.locator("body").textContent()) && /no importer job, monthly or all-time spending cap/.test(await page.locator("body").textContent()));
 await page.locator("[data-testid=settings-save]").click();
 await page.locator("[data-testid=settings-msg]").waitFor();
 const va = await saved();
@@ -188,11 +188,8 @@ await pick("extract", "mockvision/pricey");
 check("a model above the per-request limit is flagged as refused", (await page.locator("[data-testid=cost-over-cap]").count()) >= 1 && /would be refused/.test(await page.locator("[data-testid=m-extract-cost]").textContent()));
 await pick("extract", "mockvision/reader");
 
-section("E. Save, persistence after refresh, pilot limits");
-await page.locator("[data-testid=b-total]").fill("10");
-await page.locator("[data-testid=b-month]").fill("10");
-await page.locator("[data-testid=b-maxjob]").fill("8");
-await page.locator("[data-testid=b-job]").fill("8");
+section("E. Save, persistence after refresh, limits");
+check("no job / monthly / all-time budget fields any more", (await page.locator("[data-testid=b-total], [data-testid=b-month], [data-testid=b-maxjob], [data-testid=b-job]").count()) === 0);
 await page.locator("[data-testid=b-req]").fill("1");
 await page.locator("[data-testid=b-key]").fill("5");
 await page.locator("[data-testid=privacy-zdr]").check();
@@ -201,9 +198,9 @@ await page.locator("[data-testid=settings-msg]").waitFor();
 const msg = (await page.locator("[data-testid=settings-msg]").textContent()) ?? "";
 check("save confirmation shown", /Settings saved at/.test(msg), msg);
 const v = await saved();
-check("persisted: manual override + models + pilot limits + ZDR; paid AI still OFF", v?.selection?.mode === "manual" && v?.models?.extract === "mockvision/reader" && v?.models?.verify === "mockvision/checker" && v?.budget?.totalInr === 10 && v?.budget?.monthlyInr === 10 && v?.budget?.maxJobInr === 8 && v?.budget?.maxRequestInr === 1 && v?.budget?.keyReserveUsd === 5 && v?.privacy?.zdr === true && v?.aiEnabled === false && v?.budget?.retryTransient === false && (v?.models?.extractFallbacks ?? []).length === 0, v);
+check("persisted: manual override + models + pilot limits + ZDR; paid AI still OFF", v?.selection?.mode === "manual" && v?.models?.extract === "mockvision/reader" && v?.models?.verify === "mockvision/checker" && v?.budget?.maxRequestInr === 1 && v?.budget?.keyReserveUsd === 5 && v?.privacy?.zdr === true && v?.aiEnabled === false && v?.budget?.retryTransient === false && (v?.models?.extractFallbacks ?? []).length === 0, v);
 await page.reload();
-check("after refresh: selections shown again", /mockvision\/reader/.test(await page.locator("[data-testid=m-extract-current]").textContent()) && /mockvision\/checker/.test(await page.locator("[data-testid=m-verify-current]").textContent()) && (await page.locator("[data-testid=b-total]").inputValue()) === "10" && (await page.locator("[data-testid=b-maxjob]").inputValue()) === "8");
+check("after refresh: selections shown again", /mockvision\/reader/.test(await page.locator("[data-testid=m-extract-current]").textContent()) && /mockvision\/checker/.test(await page.locator("[data-testid=m-verify-current]").textContent()) && (await page.locator("[data-testid=b-req]").inputValue()) === "1" && (await page.locator("[data-testid=b-key]").inputValue()) === "5");
 check("with the ₹1 request cap the reader's maximum fits (not flagged)", (await page.locator("[data-testid=cost-over-cap]").count()) === 0);
 check("manual override evaluated with the same checks: shown in the selection table with the reason", /Manual override by an administrator/.test(await page.locator("[data-testid=sel-extract-reason]").textContent()));
 
@@ -223,7 +220,7 @@ for (const [label, patch, re] of [
 }
 check("…the saved settings did not change", JSON.stringify(await saved()) === before);
 const t2 = await call({ ...v, budget: { ...v.budget, maxRequestInr: 1, maxJobInr: 0.5 } });
-check("raw save with request cap above the hard job limit: refused", /cannot be above the hard limit per job/.test(t2), t2.slice(-200));
+check("raw save with stored job figures below the request cap: accepted (no job cap to cross-check)", /"ok":true/.test(t2) && !/hard limit per job/.test(t2), t2.slice(-200));
 const t3 = await call({ ...v, budget: { ...v.budget, monthlyInr: 1500, totalInr: 1000, maxJobInr: 200, defaultJobCapInr: 200, maxRequestInr: 50, keyReserveUsd: 0 } });
 const v3 = await saved();
 check("raw save above the pilot ceilings: stored clamped (₹10 / ₹10 / ₹8 / ₹1 / $5)", /"ok":true/.test(t3) && v3.budget.monthlyInr === 10 && v3.budget.totalInr === 10 && v3.budget.maxJobInr === 8 && v3.budget.maxRequestInr === 1 && v3.budget.keyReserveUsd === 5, v3.budget);

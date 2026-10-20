@@ -18,6 +18,8 @@ import { prisma } from "@/lib/prisma";
 import { CHUNK_BYTES } from "@/lib/ai-import/config";
 import { addFile, cancelJob, completeFile, confirmJob, createJob, putChunk, requestAnalysis } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
+/** The estimated maximum these checks confirm: any (cost confirmation itself is covered by scripts/verify-ai-import-cost.ts). */
+const CONFIRM_ANY = 1_000_000;
 
 if (/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run against what looks like the production database.");
@@ -65,7 +67,7 @@ async function setup(fx: string) {
   await upload(ready, "key-digital.pdf", AiImportFileRole.ANSWER_KEY);
   await analyze(ready);
   const r = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: ready } });
-  await confirmJob({ jobId: ready, actorId: actor, examId: r.examId, paperType: r.paperType, subjectId: null, year: 2026, paperCode: null, previousYearPaperId: null, budgetInr: 0 });
+  await confirmJob({ jobId: ready, actorId: actor, examId: r.examId, paperType: r.paperType, subjectId: null, year: 2026, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   await runWorker(300_000);
 
   // Frozen mid-processing, after the last worker run (the scratch server never starts one: AI_IMPORT_DISABLE_KICK=1).
@@ -75,7 +77,7 @@ async function setup(fx: string) {
   await upload(zero, "scanned.pdf");
   await analyze(zero);
   const z = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: zero } });
-  await confirmJob({ jobId: zero, actorId: actor, examId: z.examId, paperType: z.paperType, subjectId: null, year: 2026, paperCode: null, previousYearPaperId: null, budgetInr: 0 });
+  await confirmJob({ jobId: zero, actorId: actor, examId: z.examId, paperType: z.paperType, subjectId: null, year: 2026, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   await runWorker(300_000);
 
   const cancelled = await job("SYNTHETIC cancelled");

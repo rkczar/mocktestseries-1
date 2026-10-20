@@ -112,9 +112,7 @@ async function main() {
     check("all time includes the deleted job's older spend (₹0.05)", near(d(L.periods.all.actualInr, baseline.periods.all.actualInr), 0.3));
     check("this month excludes the 40-day-old request", near(d(L.periods.month.actualInr, baseline.periods.month.actualInr), 0.25));
     check("another feature's ₹4 is not in any importer total", near(d(L.periods.all.committedInr, baseline.periods.all.committedInr), 0.25 + 0.6 + 0.7 + 0.05 + 0.3 + 0.6));
-    check("budget remaining = all-time limit − committed", near(L.remaining.totalInr, Math.max(0, L.limits.totalInr - L.periods.all.committedInr)), L.remaining);
-    check("monthly remaining never exceeds what is left of the all-time limit", L.remaining.monthInr <= L.remaining.totalInr + 1e-9);
-    check("limits are the pilot ceilings (₹10 / ₹10 / ₹8 / ₹1)", L.limits.totalInr === 10 && L.limits.monthlyInr === 10 && L.limits.maxJobInr === 8 && L.limits.maxRequestInr === 1, L.limits);
+    check("no job / monthly / all-time caps are reported, only the per-request limit (₹1)", JSON.stringify(L.limits) === JSON.stringify({ maxRequestInr: 1 }) && !("remaining" in L), L.limits);
 
     const job = L.jobs.find((j) => j.jobId === liveJob.id);
     check("per job: actual, unknown held, in flight and job estimate kept apart", !!job && near(job.actualInr, 0.25) && job.unknownRequests === 1 && near(job.heldInr, 0.6) && near(job.inflightInr, 0.7) && near(job.jobEstimateInr ?? NaN, 0.9) && job.requests === 3, job);

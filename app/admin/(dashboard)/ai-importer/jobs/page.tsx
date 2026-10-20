@@ -38,7 +38,7 @@ export default async function AiImportJobsPage() {
         <CardContent>
           <ul className="flex flex-col divide-y divide-[var(--color-border)]" data-testid="jobs-list">
             {jobs.map((j) => {
-              const remaining = j.maxCostInr === null ? null : Math.max(0, Math.min(j.maxCostInr, j.budgetInr) - j.spentInr);
+              const remaining = j.maxCostInr === null ? null : Math.max(0, j.maxCostInr - j.spentInr);
               return (
                 <li key={j.id} className="flex flex-col gap-2 py-3" data-testid="job-row" data-job-id={j.id} data-status={j.status}>
                   <div className="flex flex-wrap items-start justify-between gap-2">

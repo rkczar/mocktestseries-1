@@ -16,6 +16,8 @@ import { saveImporterSettings } from "@/lib/ai-import/settings";
 import { refreshRoutes } from "@/lib/ai-import/routes";
 import { addFile, completeFile, confirmJob, createJob, pauseJob, putChunk, requestAnalysis } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
+/** The estimated maximum these checks confirm: any (cost confirmation itself is covered by scripts/verify-ai-import-cost.ts). */
+const CONFIRM_ANY = 1_000_000;
 
 if (/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run against what looks like the production database.");
@@ -37,7 +39,7 @@ async function setup(fx: string) {
   await requestAnalysis(jobId, actor);
   await runWorker(120_000);
   const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
-  await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: null, year: 2026, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: null, year: 2026, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   // Paused before any worker run (the scratch server never starts one: AI_IMPORT_DISABLE_KICK=1).
   await pauseJob(jobId, actor);
   console.log(JSON.stringify({ jobId, status: (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } })).status, start: START }));

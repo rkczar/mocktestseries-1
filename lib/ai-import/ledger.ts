@@ -8,11 +8,11 @@ import { PILOT_LIMITS, type ImporterSettings } from "@/lib/ai-import/config";
  * used for what it is authoritative for, so nothing is counted twice:
  *
  *  - AiBudgetReservation (feature "qimport_*"; one row per request attempt, unique request key):
- *    money. The same rows the budget guard (lib/ai-import/ai.ts reserve) enforces against, so the
- *    dashboard's "used" equals what the limits see. They survive job deletion.
+ *    money. The same rows the request guard (lib/ai-import/ai.ts reserve) writes, one per attempt.
+ *    They survive job deletion.
  *      RESERVED            in flight: the maximum is held
  *      SETTLED + costKnown actual cost reported by OpenRouter
- *      SETTLED + !costKnown cost unknown: the reserved maximum is kept as held (never shown as actual)
+ *      SETTLED + !costKnown cost unknown: the reserved maximum is kept as held (never shown as actual or ₹0)
  *      RELEASED            refused or failed before any charge: nothing counted
  *  - AiGatewayCall (feature "qimport_*"): typical estimate, provider, model, outcome, attempt and
  *    fallback per call, for usage counts. Never added to the money totals.
@@ -48,8 +48,8 @@ export interface ImporterLedger {
    * todayInr sums exactly the todayCalls calls (today's IST day, with an estimate); todayUnestimated are today's calls without one.
    */
   estimates: { todayInr: number | null; todayCalls: number; todayUnestimated: number; allInr: number | null; comparedEstimateInr: number | null; comparedActualInr: number | null; comparedRequests: number };
-  limits: { totalInr: number; monthlyInr: number; maxJobInr: number; maxRequestInr: number };
-  remaining: { totalInr: number; monthInr: number };
+  /** The importer has no job / monthly / all-time caps; only the per-request worst case is limited. */
+  limits: { maxRequestInr: number };
   usage: {
     calls: number;
     ok: number;
@@ -182,12 +182,7 @@ export async function importerLedger(settings: ImporterSettings, now = new Date(
     .filter((j) => j.requests > 0)
     .sort((a, b) => b.committedInr - a.committedInr);
 
-  const limits = {
-    totalInr: Math.min(settings.budget.totalInr ?? PILOT_LIMITS.totalInr, PILOT_LIMITS.totalInr),
-    monthlyInr: Math.min(settings.budget.monthlyInr, PILOT_LIMITS.monthlyInr),
-    maxJobInr: Math.min(settings.budget.maxJobInr, PILOT_LIMITS.maxJobInr),
-    maxRequestInr: Math.min(settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr),
-  };
+  const limits = { maxRequestInr: Math.min(settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr) };
   const c = calls[0] ?? { calls: 0, ok: 0, retries: 0, fallbacks: 0 };
   const e = est[0];
   return {
@@ -196,12 +191,42 @@ export async function importerLedger(settings: ImporterSettings, now = new Date(
     periods,
     estimates: { todayInr: e?.today ?? null, todayCalls: e?.today_calls ?? 0, todayUnestimated: e?.today_unestimated ?? 0, allInr: e?.total ?? null, comparedEstimateInr: e?.known_est ?? null, comparedActualInr: e?.known_actual ?? null, comparedRequests: e?.compared ?? 0 },
     limits,
-    // The budget guard also checks the monthly cap against this month's rows and the all-time cap against every row.
-    remaining: { totalInr: Math.max(0, limits.totalInr - periods.all.committedInr), monthInr: Math.max(0, Math.min(limits.monthlyInr - periods.month.committedInr, limits.totalInr - periods.all.committedInr)) },
     usage: { calls: c.calls, ok: c.ok, failed: c.calls - c.ok, retries: c.retries, fallbacks: c.fallbacks, byProvider: [...families.values()].sort((a, b) => b.calls - a.calls), geminiDirectCalls: 0 },
     history: historyOut,
     jobs,
   };
+}
+
+export interface SpendSummary {
+  istMonth: string;
+  /** This IST month's importer requests: actual (provider-reported), unknown (worst case held) and in flight. */
+  month: LedgerPeriod;
+  /** The same for one job (null when no job was asked for). */
+  job: LedgerPeriod | null;
+}
+
+/**
+ * Actual importer spend for the job page and the one-page importer, from the same reservation rows as the
+ * AI Cost Center (one row per attempt, so a retry is its own row and a refused / failed-before-charge request
+ * is RELEASED and not counted). Estimates are never added in.
+ */
+export async function importerSpendSummary(jobId: string | null, now = new Date()): Promise<SpendSummary> {
+  const { istMonth } = istDayMonth(now);
+  const [monthRows, jobRows] = await Promise.all([
+    prisma.$queryRaw<PeriodRow[]>`
+      SELECT "status"::text AS status, "costKnown" AS known, COUNT(*)::int AS n,
+             COALESCE(SUM("reservedInr"), 0)::float8 AS reserved, COALESCE(SUM("settledInr"), 0)::float8 AS settled
+      FROM "AiBudgetReservation" WHERE left("feature", 8) = 'qimport_' AND "istMonth" = ${istMonth}
+      GROUP BY 1, 2`,
+    jobId
+      ? prisma.$queryRaw<PeriodRow[]>`
+          SELECT "status"::text AS status, "costKnown" AS known, COUNT(*)::int AS n,
+                 COALESCE(SUM("reservedInr"), 0)::float8 AS reserved, COALESCE(SUM("settledInr"), 0)::float8 AS settled
+          FROM "AiBudgetReservation" WHERE left("feature", 8) = 'qimport_' AND "requestKey" LIKE ${`qi:${jobId}:%`}
+          GROUP BY 1, 2`
+      : Promise.resolve(null),
+  ]);
+  return { istMonth, month: toPeriod(monthRows), job: jobRows ? toPeriod(jobRows) : null };
 }
 
 /** Start of an IST calendar day ("2026-10-18") as a Date. */

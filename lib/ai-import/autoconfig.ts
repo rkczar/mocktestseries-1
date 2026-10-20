@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { AiModel, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formatInr } from "@/lib/ai-engine/config";
-import { IMPORTER_SETTING_KEY, MAX_IMPORTER_MODELS, PILOT_LIMITS, SELECTION_TASKS, SELECTION_TASK_LABELS, normalizeImporterSettings, type ImporterSettings, type SelectionTask } from "@/lib/ai-import/config";
+import { IMPORTER_SETTING_KEY, MAX_IMPORTER_MODELS, SELECTION_TASKS, SELECTION_TASK_LABELS, normalizeImporterSettings, type ImporterSettings, type SelectionTask } from "@/lib/ai-import/config";
 import { loadCtx, publishedZero, recommend, type Ctx } from "@/lib/ai-import/assistant";
 import type { AssistantPurpose } from "@/lib/ai-import/assistant-types";
 import { readRoutes, storeRouteSnapshot, type RouteSnapshot } from "@/lib/ai-import/routes";
@@ -273,23 +273,17 @@ async function build(saved: ImporterSettings): Promise<Built> {
   // 8. Job cost for a reference job, with the proposed models and the unchanged limits.
   const facts = referenceFacts();
   const est = await estimateJobCost({ paperFacts: facts.paper, keyFacts: facts.key, settings: { ...proposed, aiEnabled: true }, plan });
-  const jobCap = Math.min(proposed.budget.maxJobInr, PILOT_LIMITS.maxJobInr);
   const attempts = proposed.budget.retryTransient ? 2 : 1;
   const perPage = tasks.extract.model && tasks.extract.maxInr !== null ? attempts * (tasks.extract.maxInr + (tasks.verify.model ? tasks.verify.maxInr ?? NaN : 0) + (tasks.classify.model ? (tasks.classify.maxInr ?? NaN) / 4 : 0)) : NaN;
-  const keyMax = tasks.key.model ? (tasks.key.maxInr ?? NaN) * attempts : 0;
-  const maxPages = Number.isFinite(perPage) && perPage > 0 && Number.isFinite(keyMax) ? Math.max(0, Math.floor((jobCap - keyMax) / perPage)) : null;
   const jobCost: AutoJobCost = {
     reference: `${REF_PAGES} scanned pages (about ${REF_PAGES * 5} questions) and ${REF_KEY_PAGES} scanned answer-key page`,
     estimateInr: est.totalInr,
     maxInr: est.maxInr,
-    jobCapInr: jobCap,
-    fitsJobCap: est.maxInr === null ? null : est.maxInr <= jobCap,
-    maxScannedPagesPerJob: maxPages,
+    maxPerPageInr: Number.isFinite(perPage) ? perPage : null,
     notes: [
       ...est.notes.filter((n) => !/Paid AI processing is OFF/.test(n)),
       ...(perPage === 0 ? ["The page-reading model has a published price of ₹0: a job is limited by provider rate limits, not by cost."] : []),
-      ...(est.maxInr !== null && est.maxInr > jobCap ? [`The conservative maximum is above the ₹${jobCap} per-job limit: such a job would be refused at confirmation — import fewer pages per job.`] : []),
-      "Estimates only; the server reserves each request's maximum before it is sent and every budget limit applies.",
+      "Estimates only; the final cost may differ. Each job's cost is shown and confirmed before processing, and the server reserves each request's maximum before it is sent.",
     ],
   };
 
@@ -313,7 +307,7 @@ async function build(saved: ImporterSettings): Promise<Built> {
     change("verification.secondReadBelow", "Second read below confidence", String(saved.verification.secondReadBelow), String(proposed.verification.secondReadBelow), "Unchanged."),
     change("budget.retryTransient", "Retry after a transient provider error", yes(saved.budget.retryTransient), yes(proposed.budget.retryTransient), "Unchanged. Failed pages are recovered with Retry failed pages (an explicit action); the rate-limit circuit breaker stays on."),
     change("aiEnabled", "Paid AI", yes(saved.aiEnabled), yes(proposed.aiEnabled), "Never changed here: Paid AI is switched separately by an administrator."),
-    change("budget", "Budgets", `₹${saved.budget.maxRequestInr}/request, ₹${saved.budget.maxJobInr}/job, ₹${saved.budget.totalInr} all-time, ₹${saved.budget.monthlyInr}/month, $${saved.budget.keyReserveUsd} Ask AI reserve`, "unchanged", "Never raised (or reset) automatically; spending so far still counts."),
+    change("budget", "Budgets", `₹${saved.budget.maxRequestInr}/request, $${saved.budget.keyReserveUsd} Ask AI reserve`, "unchanged", "Never raised automatically."),
     change("privacy", "Privacy", `ZDR ${saved.privacy.zdr ? "required" : "not required"}, data collection ${saved.privacy.dataCollection}`, "unchanged", "Never changed automatically; every chosen model meets it."),
   ];
 

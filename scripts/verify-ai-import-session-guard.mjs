@@ -91,10 +91,11 @@ section("C. AI Cost Center");
 await login();
 await page.goto(`${BASE}/admin/ai-importer/costs`);
 const summary = await text("[data-testid=cost-summary]");
-check("summary: estimated today, actual today, total actual, budget remaining", ["Estimated cost today", "Actual spend today", "Total actual importer spend", "Budget remaining"].every((s) => summary.includes(s)), summary.slice(0, 300));
+check("summary: estimated today, actual today, total actual, actual this month (no budget remaining)", ["Estimated cost today", "Actual spend today", "Total actual importer spend", "Actual importer spend this month"].every((s) => summary.includes(s)) && !/Budget remaining/.test(summary), summary.slice(0, 300));
 check("no NaN / undefined anywhere", !/NaN|undefined/.test(await page.locator("main").innerText()));
 check("direct Gemini API shown with 0 calls (not used by the importer)", /Gemini \(direct API\): 0 calls — not used by the importer/.test(await text("[data-testid=cost-gemini-direct]")));
-check("limits shown: ₹10 all-time, ₹10 monthly, ₹8 per job, ₹1 per request; paid AI state shown", /of ₹10\.00[\s\S]*of ₹10\.00[\s\S]*₹8\.00[\s\S]*₹1\.00/.test(await text("[data-testid=cost-limits]")) && /^(On|Off)$/.test(await text("[data-testid=cost-paid]")));
+const limitsText = await text("[data-testid=cost-limits]");
+check("limits shown: ₹1 per request and the Ask AI reserve, no job / monthly / all-time cap; paid AI state shown", /₹1\.00/.test(limitsText) && /Ask AI/.test(limitsText) && !/All-time limit|Monthly limit|Per job/.test(limitsText) && /^(On|Off)$/.test(await text("[data-testid=cost-paid]")), limitsText);
 
 // Unreported / in-flight costs are never shown as ₹0.00 actual spend (synthetic ledger rows, removed below).
 const istNow = new Date(Date.now() + 5.5 * 3_600_000).toISOString();

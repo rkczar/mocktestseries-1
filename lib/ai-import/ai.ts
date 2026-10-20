@@ -201,7 +201,7 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
       const staleJob = /^qi:([a-z0-9]+):/.exec(r.requestKey)?.[1];
       if (staleJob) await tx.aiImportJob.updateMany({ where: { id: staleJob }, data: { spentInr: { increment: r.reservedInr } } });
     }
-    const job = await tx.aiImportJob.findUnique({ where: { id: input.jobId }, select: { budgetInr: true, spentInr: true, status: true } });
+    const job = await tx.aiImportJob.findUnique({ where: { id: input.jobId }, select: { status: true } });
     if (!job) throw new ImporterJobStopped("The import job no longer exists.");
     // Cancelled, paused or deleted meanwhile: no new request is ever reserved (or sent) for it.
     if (job.status !== "PROCESSING") throw new ImporterJobStopped(`The import is ${job.status.toLowerCase().replace(/_/g, " ")}, so no AI request was sent.`);
@@ -210,36 +210,14 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
     const row = await tx.setting.findUnique({ where: { key: IMPORTER_SETTING_KEY } });
     const current = normalizeImporterSettings(row?.value ?? {});
     if (!current.aiEnabled) throw new ImporterAiSwitchedOff(`${failureMessage("paid_ai_off", "it was switched off in Import Settings after this job started, so no further AI request was sent")} Pages not yet read stay pending. ${FAILURE_ADVICE.paid_ai_off}`);
+    // There are no importer job / monthly / all-time spending caps (owner decision 2026-10-20): the administrator
+    // confirms each job's cost. What remains is the per-request worst case and the shared key's Ask AI reserve.
     const budget = {
-      maxJobInr: Math.min(input.settings.budget.maxJobInr, current.budget.maxJobInr),
-      monthlyInr: Math.min(input.settings.budget.monthlyInr, current.budget.monthlyInr),
-      totalInr: Math.min(input.settings.budget.totalInr ?? PILOT_LIMITS.totalInr, current.budget.totalInr ?? PILOT_LIMITS.totalInr),
       maxRequestInr: Math.min(input.settings.budget.maxRequestInr, current.budget.maxRequestInr),
       keyReserveUsd: Math.max(input.settings.budget.keyReserveUsd, current.budget.keyReserveUsd),
     };
     const requestCap = Math.min(budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
     if (input.amountInr > requestCap) throw new ImporterBudgetError(`One request could cost up to ${formatInr(input.amountInr)}, above the per-request limit of ${formatInr(requestCap)}.`, "request");
-    const inflight = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "requestKey" LIKE $1 AND "status" = 'RESERVED'`, `qi:${input.jobId}:%`);
-    const jobUsed = job.spentInr + (inflight[0]?.v ?? 0);
-    // The hard per-job ceiling applies even to a job whose own budget was set before the ceiling was lowered.
-    const jobCap = Math.min(job.budgetInr, budget.maxJobInr, PILOT_LIMITS.maxJobInr);
-    if (jobUsed + input.amountInr > jobCap) {
-      const capped = jobCap < job.budgetInr;
-      throw new ImporterBudgetError(`The job budget is reached (${formatInr(jobUsed)} of ${formatInr(jobCap)} used; the next request may cost up to ${formatInr(input.amountInr)}).${capped ? " The hard limit per job in Import Settings applies." : " Raise the job budget to continue."}`, "job");
-    }
-    const month = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "istMonth" = $1 AND "status" <> 'RELEASED' AND left("feature", 8) = 'qimport_'`, istMonth);
-    const monthUsed = month[0]?.v ?? 0;
-    const monthCap = Math.min(budget.monthlyInr, PILOT_LIMITS.monthlyInr);
-    if (monthUsed + input.amountInr > monthCap) {
-      throw new ImporterBudgetError(`The importer's monthly AI budget is reached (${formatInr(monthUsed)} of ${formatInr(monthCap)}; the next request may cost up to ${formatInr(input.amountInr)}).`, "month");
-    }
-    // All-time cap: every importer request ever made (never resets with the month).
-    const all = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "status" <> 'RELEASED' AND left("feature", 8) = 'qimport_'`);
-    const allUsed = all[0]?.v ?? 0;
-    const totalCap = Math.min(budget.totalInr, PILOT_LIMITS.totalInr);
-    if (allUsed + input.amountInr > totalCap) {
-      throw new ImporterBudgetError(`The importer's all-time AI budget is reached (${formatInr(allUsed)} of ${formatInr(totalCap)}; it does not reset monthly; the next request may cost up to ${formatInr(input.amountInr)}).`, "total");
-    }
     // The key's limit is shared with student Ask AI. Requests of other importer jobs still in flight are not
     // yet in the key's usage, so they are subtracted too (they hold this same lock while reserving).
     if (input.key.remainingUsd !== null) {

@@ -20,6 +20,8 @@ import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
 import type { JobMapping } from "@/lib/ai-import/job-view";
 import type { QualityReport } from "@/lib/ai-import/quality";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
+import { CostSummary } from "@/components/admin/ai-importer/cost-summary";
+import type { SpendSummary } from "@/lib/ai-import/ledger";
 
 export interface CurrentJob {
   card: JobCard;
@@ -34,6 +36,8 @@ export interface CurrentJob {
   files: { id: string; name: string; pageCount: number | null }[];
   stage: string | null;
   verifyAvailable: boolean;
+  /** Actual spend of this job and of the importer this IST month (AI Question Importer only). */
+  spend: SpendSummary;
 }
 
 const BUSY = ["DRAFT", "ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"];
@@ -82,7 +86,7 @@ function Fact({ f }: { f: AnalyzerVerdict["facts"][number] }) {
 const paperLabel = (p: ExamOption["papers"][number]) => `${p.year} — ${p.title}${p.paperCode ? ` (${p.paperCode})` : ""}`;
 
 /** Upload area: 1 exam → 2 Previous Year Paper → 3 question paper (+ 4 answer key, expected count). */
-function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: { exams: ExamOption[]; defaultExamId: string; defaultBudget: number; limits: { maxFileMb: number; maxPagesPerFile: number }; aiEnabled: boolean }) {
+function UploadCard({ exams, defaultExamId, limits, aiEnabled }: { exams: ExamOption[]; defaultExamId: string; limits: { maxFileMb: number; maxPagesPerFile: number }; aiEnabled: boolean }) {
   const router = useRouter();
   const [ctx, setCtx] = useState({ examId: defaultExamId, paperType: "FULL_PAPER", subjectId: "", year: "", paperCode: "", previousYearPaperId: "" });
   const [expected, setExpected] = useState("");
@@ -118,7 +122,7 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
       // One key per chosen file: a double click or a retried request returns the same job.
       const clientKey = `up_${file.size}_${file.lastModified}_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
       setProgress("Creating the import…");
-      const created = await callImporter(() => createJobAction({ title: file.name.replace(/\.[^.]+$/, "").slice(0, 160) || "Untitled import", ...ctx, year: pyq ? null : ctx.year || null, paperCode: pyq ? null : ctx.paperCode || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, budgetInr: defaultBudget, clientKey, expectedQuestions: expected || null }));
+      const created = await callImporter(() => createJobAction({ title: file.name.replace(/\.[^.]+$/, "").slice(0, 160) || "Untitled import", ...ctx, year: pyq ? null : ctx.year || null, paperCode: pyq ? null : ctx.paperCode || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, clientKey, expectedQuestions: expected || null }));
       if (!created.ok) throw new Error(created.error);
       const jobId = created.data.jobId;
       const up = await uploadFile(jobId, file, "PAPER", (p) => setProgress(`Uploading ${file.name}… ${p}%`));
@@ -143,7 +147,7 @@ function UploadCard({ exams, defaultExamId, defaultBudget, limits, aiEnabled }: 
       <CardHeader>
         <CardTitle>New import</CardTitle>
         <CardDescription>
-          PDF, Word (DOCX), JPG, PNG, XLSX or CSV · up to {limits.maxFileMb} MB and {limits.maxPagesPerFile} pages per file. The file is analyzed automatically on this server (free); nothing is charged before you confirm and click Start Import.
+          PDF, Word (DOCX), JPG, PNG, XLSX or CSV · up to {limits.maxFileMb} MB and {limits.maxPagesPerFile} pages per file. The file is analyzed automatically on this server (free); nothing is charged before you confirm the estimated cost.
           {!aiEnabled && " Paid AI is off: digital PDFs and Word files work fully; scanned pages cannot be read."}
         </CardDescription>
       </CardHeader>
@@ -372,7 +376,7 @@ function ModelOverride({ jobId, importerModels, canManage, selection, value, onC
   );
 }
 
-function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels, selection, pilot }: { current: CurrentJob; canUse: boolean; canManage: boolean; aiEnabled: boolean; importerModels: string[]; selection: { mode: "auto" | "manual"; model: string | null }; pilot: { remainingInr: number; totalCapInr: number } }) {
+function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels, selection }: { current: CurrentJob; canUse: boolean; canManage: boolean; aiEnabled: boolean; importerModels: string[]; selection: { mode: "auto" | "manual"; model: string | null } }) {
   const router = useRouter();
   const { card: j, verdict: v } = current;
   const [pending, start] = useTransition();
@@ -395,7 +399,8 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
     setClicked(true);
     start(async () => {
       setMsg(null);
-      const r = await callImporter(() => processAndImportAction(j.id, { modelOverride: override || null, expectedQuestions: expected, verifyMode }));
+      // The cost the administrator is looking at: the server refreshes prices and refuses if the maximum went up.
+      const r = await callImporter(() => processAndImportAction(j.id, { modelOverride: override || null, expectedQuestions: expected, verifyMode, confirmedMaxInr: v?.maxCostInr ?? null }));
       if (!r.ok) {
         setMsg({ text: r.error, error: true });
         setClicked(false);
@@ -443,7 +448,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
                 <Fact key={f.label} f={f} />
               ))}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div>
               <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="selected-model" data-model={v.model.name} data-local={v.model.local ? "true" : "false"}>
                 <div className="text-xs text-[var(--color-muted-foreground)]">Selected model {override ? "(override for this import)" : selection.mode === "manual" ? "(saved manual choice)" : "· Automatic — Cheapest Suitable Model"}</div>
                 <div className="text-base font-semibold [overflow-wrap:anywhere]">{override || v.model.name}</div>
@@ -462,21 +467,15 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
                   </ul>
                 )}
               </div>
-              <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="op-cost">
-                <div className="text-xs text-[var(--color-muted-foreground)]">Estimated cost</div>
-                <div className="text-base font-semibold" data-testid="op-cost-estimate" data-cost-basis={v.costBasis}>
-                  {v.costBasis === "unknown" ? "Unknown — not priced" : inr(v.estimatedCostInr)}
+            </div>
+            <div className="flex flex-col gap-2" data-testid="op-cost" data-cost-basis={v.costBasis}>
+              <CostSummary estimateInr={v.estimatedCostInr} maxInr={v.maxCostInr} priced={v.costBasis !== "unknown"} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} />
+              {v.costBasis === "zero_published" && (
+                <div className="text-xs text-[var(--color-warning)]" data-testid="op-cost-zero">
+                  Published free price (₹0) — a known zero, but free-price routes are often rate-limited.
                 </div>
-                {v.costBasis === "zero_published" && (
-                  <div className="text-xs text-[var(--color-warning)]" data-testid="op-cost-zero">
-                    Published free price (₹0) — a known zero, but free-price routes are often rate-limited.
-                  </div>
-                )}
-                <div className="text-xs">
-                  Maximum possible: <strong data-testid="op-cost-max">{inr(v.maxCostInr)}</strong> · remaining pilot budget <strong data-testid="op-pilot-remaining">{inr(pilot.remainingInr)}</strong> of {inr(pilot.totalCapInr)}
-                </div>
-                <div className="mt-1 text-xs text-[var(--color-muted-foreground)]">{v.strategyLabel}.</div>
-              </div>
+              )}
+              <div className="text-xs text-[var(--color-muted-foreground)]">{v.strategyLabel}.</div>
             </div>
             {v.warnings.length > 0 && (
               <ul className="flex flex-col gap-1 text-xs text-[var(--color-warning)]" data-testid="analyzer-warnings">
@@ -536,11 +535,11 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
                 </div>
                 <label className="flex items-start gap-2 text-sm">
                   <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} data-testid="op-confirm-check" />
-                  <span>The exam, Previous Year Paper and expected question count above are correct.</span>
+                  <span>The exam, Previous Year Paper and expected question count above are correct, and I accept the estimated cost shown.</span>
                 </label>
                 <div className="flex flex-col gap-1">
                   <Button size="lg" className="w-full sm:w-auto sm:self-start" disabled={!v.canProcess || pending || clicked || !confirmed || !/^\d{1,4}$/.test(expected) || current.mapping.paperMissing} onClick={processNow} data-testid="process-import">
-                    {pending || clicked ? "Starting…" : "Start Import"}
+                    {pending || clicked ? "Starting…" : "Confirm Cost & Start Processing"}
                   </Button>
                   <p className="text-xs text-[var(--color-muted-foreground)]">Questions are extracted and checked. Nothing enters the Question Bank until you review and approve it; approved questions are added as Draft and are never published automatically.</p>
                 </div>
@@ -624,12 +623,10 @@ export function OnePageImporter(props: {
   canManage: boolean;
   exams: ExamOption[];
   defaultExamId: string;
-  defaultBudget: number;
   limits: { maxFileMb: number; maxPagesPerFile: number };
   aiEnabled: boolean;
   selection: { mode: "auto" | "manual"; model: string | null };
   importerModels: string[];
-  pilot: { remainingInr: number; totalCapInr: number };
   current: CurrentJob | null;
   missingJob: boolean;
   recent: JobCard[];
@@ -647,9 +644,9 @@ export function OnePageImporter(props: {
         </p>
       )}
       {current ? (
-        <CurrentJobPanel current={current} canUse={props.canUse} canManage={props.canManage} aiEnabled={props.aiEnabled} importerModels={props.importerModels} selection={props.selection} pilot={props.pilot} />
+        <CurrentJobPanel current={current} canUse={props.canUse} canManage={props.canManage} aiEnabled={props.aiEnabled} importerModels={props.importerModels} selection={props.selection} />
       ) : props.canUse ? (
-        <UploadCard exams={props.exams} defaultExamId={props.defaultExamId} defaultBudget={props.defaultBudget} limits={props.limits} aiEnabled={props.aiEnabled} />
+        <UploadCard exams={props.exams} defaultExamId={props.defaultExamId} limits={props.limits} aiEnabled={props.aiEnabled} />
       ) : (
         <Card>
           <CardContent className="py-4 text-sm text-[var(--color-muted-foreground)]">You can view imports but not start one (Master Admin only).</CardContent>

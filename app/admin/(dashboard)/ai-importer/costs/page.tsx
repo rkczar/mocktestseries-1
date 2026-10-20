@@ -50,10 +50,10 @@ function Stat({ label, value, sub, id }: { label: string; value: string; sub?: s
 }
 
 /**
- * Admin → AI Question Importer → AI Cost Center: the importer's own spend and budgets (separate from
+ * Admin → AI Question Importer → AI Cost Center: the importer's own spend and limits (separate from
  * student Ask AI and every other AI feature), from the importer's ledger (lib/ai-import/ledger.ts).
  * Estimates and actual costs are always shown apart; a cost OpenRouter did not report is "unknown",
- * never zero, and its reserved maximum is held against the budget.
+ * never zero, and its reserved maximum is shown as held.
  */
 export default async function CostsPage() {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="AI Cost Center" />;
@@ -78,7 +78,7 @@ export default async function CostsPage() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">AI Cost Center</h1>
         <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">
-          The AI Question Importer only — student Ask AI, Instagram and the other AI features are not included. <strong>Actual</strong> is what OpenRouter reported per request. <strong>Estimates</strong> are calculated before a request and are never counted as spend. When OpenRouter does not report a cost (for example after a timeout) it is shown as unknown and the request&apos;s maximum stays held against the budget. Local parsing costs nothing.
+          The AI Question Importer only — student Ask AI, Instagram and the other AI features are not included. <strong>Actual</strong> is what OpenRouter reported per request. <strong>Estimates</strong> are calculated before a request and are never counted as spend. When OpenRouter does not report a cost (for example after a timeout) it is shown as unknown and the request&apos;s maximum is shown as held. Local parsing costs nothing.
         </p>
       </div>
 
@@ -86,27 +86,23 @@ export default async function CostsPage() {
         <Stat id="cost-est-today" label={`Estimated cost today (${ledger.istDay}, IST)`} value={est.todayCalls ? inr(est.todayInr) : est.todayUnestimated ? "No estimate" : "No requests"} sub={`Typical estimate of ${est.todayCalls} call(s) today${est.todayUnestimated ? `; ${est.todayUnestimated} more call(s) had no estimate and are not included` : ""} — an estimate, not spend. The maximum reserved for today's requests was ${inr(today.reservedMaxInr)}.`} />
         <Stat id="cost-actual-today" label="Actual spend today" value={periodActual(today)} sub={today.inflightRequests && today.actualRequests + today.unknownRequests ? `${today.inflightRequests} more in flight (up to ${inr(today.inflightInr)} held)` : undefined} />
         <Stat id="cost-actual-total" label="Total actual importer spend (all time)" value={periodActual(all)} sub={`${all.actualRequests} request(s) with a reported cost`} />
-        <Stat id="cost-remaining" label="Budget remaining" value={`${inr(ledger.remaining.totalInr)} of ${inr(ledger.limits.totalInr)} (all time)`} sub={`This month (${ledger.istMonth}): ${inr(month.committedInr)} used; ${inr(ledger.remaining.monthInr)} can still be used — the monthly limit never exceeds what is left of the all-time limit.`} />
+        <Stat id="cost-actual-month" label={`Actual importer spend this month (${ledger.istMonth})`} value={periodActual(month)} sub={month.inflightRequests ? `${month.inflightRequests} more in flight (up to ${inr(month.inflightInr)} held)` : `${month.actualRequests} request(s) with a reported cost`} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Budgets and limits</CardTitle>
-            <CardDescription>Checked by the server immediately before every AI request; used = actual + unknown (held) + in flight.</CardDescription>
+            <CardTitle>Limits</CardTitle>
+            <CardDescription>There is no importer job, monthly or all-time cap: each job&apos;s cost is shown and confirmed before processing. These are checked by the server immediately before every AI request.</CardDescription>
           </CardHeader>
           <CardContent>
             <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm" data-testid="cost-limits">
               <dt>Paid AI for the importer</dt>
               <dd className="font-medium" data-testid="cost-paid">{settings.aiEnabled ? "On" : "Off"}</dd>
-              <dt>All-time limit</dt>
-              <dd>{inr(all.committedInr)} used of {inr(ledger.limits.totalInr)}</dd>
-              <dt>Monthly limit ({ledger.istMonth})</dt>
-              <dd>{inr(month.committedInr)} used of {inr(ledger.limits.monthlyInr)}</dd>
-              <dt>Per job (hard limit)</dt>
-              <dd>{inr(ledger.limits.maxJobInr)}</dd>
               <dt>Per request (maximum)</dt>
               <dd>{inr(ledger.limits.maxRequestInr)}</dd>
+              <dt>Kept on the shared OpenRouter key for student Ask AI</dt>
+              <dd>${settings.budget.keyReserveUsd.toFixed(2)}</dd>
               <dt>Automatic retries</dt>
               <dd>{settings.budget.retryTransient ? "On" : "Off"}</dd>
               <dt>Pricier fallback model</dt>
@@ -204,7 +200,7 @@ export default async function CostsPage() {
           <table className="w-full min-w-[900px] text-left text-sm" data-testid="cost-jobs">
             <thead className="text-xs text-[var(--color-muted-foreground)]">
               <tr>
-                {["Import", "Job estimate", "Actual", "Unknown cost", "Budget", "Requests", "Per AI page", "Per question"].map((h) => (
+                {["Import", "Job estimate", "Actual", "Unknown cost", "Confirmed maximum", "Requests", "Per AI page", "Per question"].map((h) => (
                   <th key={h} className="py-1 pr-2 font-medium">
                     {h}
                   </th>

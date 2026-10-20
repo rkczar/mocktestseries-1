@@ -69,11 +69,8 @@ export interface AutoJobCost {
   reference: string;
   estimateInr: number | null;
   maxInr: number | null;
-  /** Hard per-job limit (unchanged). */
-  jobCapInr: number;
-  fitsJobCap: boolean | null;
-  /** Scanned pages one job can read within the per-job limit at the conservative maximum (null = unknown). */
-  maxScannedPagesPerJob: number | null;
+  /** Conservative maximum per scanned page (reading, second read and classification share; null = unknown). */
+  maxPerPageInr: number | null;
   notes: string[];
 }
 
@@ -138,10 +135,7 @@ export interface ReconfigurePreview {
   failedKeyFiles: number;
   estimateInr: number | null;
   maxInr: number | null;
-  /** What the job may still spend: its own budget (capped by the hard per-job limit) minus what it spent. */
-  jobLeftInr: number;
-  totalLeftInr: number;
-  monthLeftInr: number;
+  /** What the job has spent so far (actual + unknown held). */
   spentInr: number;
   routesFetchedAt: string | null;
   /** What happens after confirmation. */

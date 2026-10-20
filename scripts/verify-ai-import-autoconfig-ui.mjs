@@ -134,7 +134,7 @@ try {
   check("the paused import offers “Reconfigure Models for This Job”", await until(() => rb.isVisible()));
   await rb.click();
   const rpv = jp.locator("[data-testid=reconfigure-preview]");
-  check("the dialog shows current → proposed models and the remaining cost, 0 AI requests", !!(await until(() => rpv.isVisible())) && (await jp.locator("[data-testid=reconfigure-task]").count()) === 4 && /conservative maximum/.test(await jp.locator("[data-testid=reconfigure-cost]").textContent()) && (await rpv.getAttribute("data-ai-requests")) === "0");
+  check("the dialog shows current → proposed models and the remaining cost, 0 AI requests", !!(await until(() => rpv.isVisible())) && (await jp.locator("[data-testid=reconfigure-task]").count()) === 4 && /estimated maximum/.test(await jp.locator("[data-testid=reconfigure-cost]").textContent()) && (await rpv.getAttribute("data-ai-requests")) === "0");
   check("the proposed page-reading model is the newly configured one", (await jp.locator("[data-testid=reconfigure-task][data-task=extract]").getAttribute("data-proposed")) === proposedModel);
   await jp.locator("[data-testid=reconfigure-cancel]").click();
   check("Cancel changes nothing", JSON.stringify(await job()) === JSON.stringify(before));

@@ -54,6 +54,8 @@ import { syncCatalog } from "@/lib/ai-engine/catalog";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import { taxonomyNameKey } from "@/lib/exam-taxonomy";
+/** The estimated maximum these checks confirm: any (cost confirmation itself is covered by scripts/verify-ai-import-cost.ts). */
+const CONFIRM_ANY = 1_000_000;
 
 if (/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run against what looks like the production database.");
@@ -184,8 +186,8 @@ async function main() {
   const changes = await prisma.aiImportEvent.findMany({ where: { jobId: j1, type: "PAPER_CHANGED" }, orderBy: { createdAt: "asc" } });
   check("paper selected again; both changes logged with from/to", row.previousYearPaperId === paper24.id && row.year === 2024 && changes.length === 2 && (changes[1].data as { to: { previousYearPaperId: string } }).to.previousYearPaperId === paper24.id, changes.map((c) => c.data));
   check("a paper change is audited", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_PAPER_CHANGED", entityId: j1 } })) === 2);
-  await expectError("the one-page flow refuses to start without a confirmed count", () => confirmJob({ jobId: j1, actorId: actor, examId: exam.id, paperType: row.paperType, subjectId: anatomy.id, year: row.year, paperCode: row.paperCode, previousYearPaperId: row.previousYearPaperId, budgetInr: 8, expectedQuestions: null, requireExpected: true }), /expected number of questions/);
-  await confirmJob({ jobId: j1, actorId: actor, examId: exam.id, paperType: row.paperType, subjectId: anatomy.id, year: row.year, paperCode: row.paperCode, previousYearPaperId: row.previousYearPaperId, budgetInr: 8, expectedQuestions: 10, requireExpected: true });
+  await expectError("the one-page flow refuses to start without a confirmed count", () => confirmJob({ jobId: j1, actorId: actor, examId: exam.id, paperType: row.paperType, subjectId: anatomy.id, year: row.year, paperCode: row.paperCode, previousYearPaperId: row.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY, expectedQuestions: null, requireExpected: true }), /expected number of questions/);
+  await confirmJob({ jobId: j1, actorId: actor, examId: exam.id, paperType: row.paperType, subjectId: anatomy.id, year: row.year, paperCode: row.paperCode, previousYearPaperId: row.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY, expectedQuestions: 10, requireExpected: true });
   await runWorker(300_000);
   row = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j1 } });
   check("the paper stays selected through processing", row.status === "NEEDS_REVIEW" && row.previousYearPaperId === paper24.id && row.year === 2024, { s: row.status, p: row.previousYearPaperId });
@@ -322,9 +324,9 @@ async function main() {
   const estAll = await estimateJobCost({ paperFacts: facts, keyFacts: [], settings: settingsNow, plan: planNow, verifyMode: "all" });
   check("verify-every-page is priced in the estimate (never hidden)", estAll.lines.some((l) => /every page/.test(l.label)) && (estAll.maxInr ?? 0) >= (estRisk.maxInr ?? 0), { all: estAll.maxInr, risk: estRisk.maxInr });
   const j2row = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j2 } });
-  await expectError("a budget below the estimate refuses to start (no silent increase)", () => confirmJob({ jobId: j2, actorId: actor, examId: exam.id, paperType: j2row.paperType, subjectId: anatomy.id, year: j2row.year, paperCode: j2row.paperCode, previousYearPaperId: j2row.previousYearPaperId, budgetInr: 0.0001, expectedQuestions: 3, requireExpected: true, verifyMode: "all" }), /Nothing was started/);
-  check("the job budget was not raised by the refusal", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j2 } })).budgetInr === 8);
-  await confirmJob({ jobId: j2, actorId: actor, examId: exam.id, paperType: j2row.paperType, subjectId: anatomy.id, year: j2row.year, paperCode: j2row.paperCode, previousYearPaperId: j2row.previousYearPaperId, budgetInr: 8, expectedQuestions: 3, requireExpected: true, verifyMode: "all" });
+  await expectError("confirming less than the verify-every-page maximum refuses to start (the cost changed)", () => confirmJob({ jobId: j2, actorId: actor, examId: exam.id, paperType: j2row.paperType, subjectId: anatomy.id, year: j2row.year, paperCode: j2row.paperCode, previousYearPaperId: j2row.previousYearPaperId, confirmedMaxInr: (estAll.maxInr ?? 0) - 0.05, expectedQuestions: 3, requireExpected: true, verifyMode: "all" }), /The cost changed since it was shown/);
+  check("…nothing started by the refusal", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j2 } })).status === "AWAITING_CONFIRMATION");
+  await confirmJob({ jobId: j2, actorId: actor, examId: exam.id, paperType: j2row.paperType, subjectId: anatomy.id, year: j2row.year, paperCode: j2row.paperCode, previousYearPaperId: j2row.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY, expectedQuestions: 3, requireExpected: true, verifyMode: "all" });
   await runWorker(300_000);
   let j2now = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j2 } });
   check("AI job processed with verification of every page", j2now.status === "NEEDS_REVIEW" && (j2now.config as { verifyMode?: string }).verifyMode === "all", { s: j2now.status, e: j2now.errorMessage });

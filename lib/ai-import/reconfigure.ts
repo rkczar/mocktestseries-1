@@ -3,12 +3,11 @@ import { createHash } from "node:crypto";
 import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPageStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formatInr } from "@/lib/ai-engine/config";
-import { PILOT_LIMITS, SELECTION_TASKS, SELECTION_TASK_LABELS } from "@/lib/ai-import/config";
+import { SELECTION_TASKS, SELECTION_TASK_LABELS } from "@/lib/ai-import/config";
 import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { readRoutes } from "@/lib/ai-import/routes";
 import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
-import { importerSpend } from "@/lib/ai-import/ai";
 import { kickWorker } from "@/lib/ai-import/kick";
 import type { FileFacts, JobAnalysis } from "@/lib/ai-import/analyze";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
@@ -20,9 +19,9 @@ import type { ReconfigurePreview, ReconfigureResult } from "@/lib/ai-import/auto
  * selection, privacy, per-request limit) on provider routes read from OpenRouter now (free metadata,
  * no AI request). The preview prices only the work still to do: finished pages are kept and never read
  * or charged again, only failed and pending pages (and answer keys whose reading failed) are read. It is
- * refused when a worker holds the job, when no page-reading model is suitable, or when the conservative
- * maximum does not fit what the job, the month and the all-time pilot budget still allow — budgets are
- * never raised. Spending, cost records, pages, questions and events are kept; the change is an event and
+ * refused when a worker holds the job, when no page-reading model is suitable, or when the cost of the remaining
+ * work cannot be priced. The administrator confirms the shown cost (there are no importer job / monthly /
+ * all-time caps). Spending, cost records, pages, questions and events are kept; the change is an event and
  * an audit entry. With Paid AI off the new models are saved and the job stays paused.
  *
  * Eligibility is the selection engine's own (select.ts evaluateModel / choose), judged with the settings the
@@ -93,28 +92,12 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
   const keyFacts = notStarted ? allFacts(AiImportFileRole.ANSWER_KEY) : failedKeys.map((f) => ({ ...paperFacts[0], kind: "PDF", pages: f.pageCount ?? 1, scannedPages: f.pageCount ?? 1, documentType: "ANSWER_KEY" as const, pagesDetail: [] }) as FileFacts);
   const est = plan ? await estimateJobCost({ paperFacts, keyFacts, settings: { ...settings, aiEnabled: true }, plan }) : null;
 
-  const spend = await importerSpend();
-  const jobCap = Math.min(job.budgetInr, settings.budget.maxJobInr, PILOT_LIMITS.maxJobInr);
-  const jobLeft = Math.max(0, jobCap - job.spentInr);
-  const totalLeft = Math.max(0, Math.min(settings.budget.totalInr, PILOT_LIMITS.totalInr) - spend.allUsed);
-  const monthLeft = Math.max(0, Math.min(settings.budget.monthlyInr, PILOT_LIMITS.monthlyInr) - spend.monthUsed);
   if (!unreadPages && !failedKeys.length) blocking.push("Nothing is left to read in this import (no failed or pending page), so there is nothing to reconfigure.");
   const GUIDE = "Add an image-capable model with a verified route and a known price within the per-request limit to the importer's list (Import Settings → AI Auto-Configure shows what qualifies), then reconfigure again. Limits are never raised automatically.";
   if (plan && !plan.tasks.extract.model && unreadPages) blocking.push(`No page-reading model is suitable now: ${plan.tasks.extract.reason} Nothing was changed. ${GUIDE}`);
   if (plan && failedKeys.length && !plan.tasks.key.model) blocking.push(`No answer-key model is suitable now: ${plan.tasks.key.reason} Nothing was changed.`);
   if (est && !blocking.length) {
     if (est.maxInr === null) blocking.push(`The cost of the remaining work cannot be established (${est.notes[0] ?? "missing price"}). Nothing was changed.`);
-    else {
-      const room = Math.min(jobLeft, totalLeft, monthLeft);
-      if (est.maxInr > room) {
-        const which = room === jobLeft ? `this job's budget (${formatInr(jobLeft)} left of ${formatInr(jobCap)})` : room === totalLeft ? `the all-time importer budget (${formatInr(totalLeft)} left)` : `this month's importer budget (${formatInr(monthLeft)} left)`;
-        const perPage = unreadPages ? est.maxInr / unreadPages : null;
-        const fit = perPage ? Math.floor(room / perPage) : 0;
-        blocking.push(
-          `No suitable model fits the existing budget: the conservative maximum for the remaining ${unreadPages} page(s) is ${formatInr(est.maxInr)}, above ${which}. Budgets are never raised automatically. Nothing was changed.${perPage ? ` At about ${formatInr(perPage)} per page (page reading${plan?.tasks.verify.model ? ", second read" : ""} and classification at their maximum), ${fit} page(s) fit. Options (an administrator's decision): import the paper in smaller parts${plan?.tasks.verify.model ? ", or choose a cheaper or no verification model in Import Settings (fewer independent checks)" : ""}.` : ""}`
-        );
-      }
-    }
   }
   const tasks = SELECTION_TASKS.map((t) => ({ task: t, label: SELECTION_TASK_LABELS[t], current: confirmed?.tasks[t]?.model ?? null, proposed: plan?.tasks[t].model ?? null, maxInr: plan?.tasks[t].maxInr ?? null, reason: plan?.tasks[t].reason ?? "Not computed.", substituted: plan?.tasks[t].substituted ?? null, quality: "not_tested" as const }));
   const paidAiOn = current.aiEnabled;
@@ -131,9 +114,6 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
     failedKeyFiles: failedKeys.length,
     estimateInr: est?.totalInr ?? null,
     maxInr: est?.maxInr ?? null,
-    jobLeftInr: jobLeft,
-    totalLeftInr: totalLeft,
-    monthLeftInr: monthLeft,
     spentInr: job.spentInr,
     routesFetchedAt: snapshot?.fetchedAt ?? null,
     next: paidAiOn

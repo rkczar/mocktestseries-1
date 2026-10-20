@@ -74,7 +74,7 @@ function DeleteJobDialog({ job, onClose, onDeleted }: { job: JobControlState; on
               <li>Removed: {preview.pages} page record(s) and their renders, {preview.questions} extracted question(s) in the importer, {preview.figures.deleted} extracted image(s){preview.figures.keptShared ? ` (${preview.figures.keptShared} kept, used by another import)` : ""}.</li>
               <li>
                 Kept: {preview.importedQuestions ? `${preview.importedQuestions} question(s) already in the Question Bank with their images` : "the Question Bank (nothing from this import is in it)"}
-                {preview.bulkImportRuns.length ? `, ${preview.bulkImportRuns.length} Bulk Import history run(s) (rollback stays available there)` : ""}, and the AI cost record (₹{preview.spentInr.toFixed(2)} spent still counts against the pilot budget).
+                {preview.bulkImportRuns.length ? `, ${preview.bulkImportRuns.length} Bulk Import history run(s) (rollback stays available there)` : ""}, and the AI cost record (₹{preview.spentInr.toFixed(2)} spent stays in the AI Cost Center).
               </li>
               <li>The deletion is recorded in the audit log.</li>
             </ul>
@@ -137,7 +137,7 @@ function ReconfigureDialog({ job, onClose, onDone }: { job: JobControlState; onC
       <DialogContent data-testid="reconfigure-dialog">
         <DialogHeader>
           <DialogTitle>Reconfigure models for this import?</DialogTitle>
-          <DialogDescription>The models are chosen again from the current Import Settings on provider routes read now. No AI request is sent for this preview, and no budget is raised.</DialogDescription>
+          <DialogDescription>The models are chosen again from the current Import Settings on provider routes read now. No AI request is sent for this preview.</DialogDescription>
         </DialogHeader>
         {!preview && !error && <p className="text-sm text-[var(--color-muted-foreground)]">Reading provider routes and prices…</p>}
         {preview && (
@@ -160,7 +160,7 @@ function ReconfigureDialog({ job, onClose, onDone }: { job: JobControlState; onC
                 Kept: {preview.donePages} finished page(s). Read: {preview.retryPages} failed or pending page(s){preview.failedKeyFiles ? ` and ${preview.failedKeyFiles} answer-key file(s)` : ""}.
               </li>
               <li data-testid="reconfigure-cost">
-                Remaining work: estimate {preview.estimateInr === null ? "unknown" : formatInr(preview.estimateInr)}, conservative maximum {preview.maxInr === null ? "unknown" : formatInr(preview.maxInr)}. Left: {formatInr(preview.jobLeftInr)} of this job (spent {formatInr(preview.spentInr)}), {formatInr(preview.monthLeftInr)} this month, {formatInr(preview.totalLeftInr)} all-time.
+                Remaining work: estimate {preview.estimateInr === null ? "unknown" : formatInr(preview.estimateInr)}, estimated maximum {preview.maxInr === null ? "unknown" : formatInr(preview.maxInr)} (estimates — the final cost may differ). Spent so far on this job: {formatInr(preview.spentInr)}. Confirming accepts this cost.
               </li>
               <li>{preview.next}</li>
             </ul>

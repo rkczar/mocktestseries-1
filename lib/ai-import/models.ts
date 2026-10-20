@@ -149,15 +149,8 @@ export async function importerSettingsProblems(raw: unknown, next: ImporterSetti
       else if (r.isImageModel || !r.outputModalities.includes("text")) problems.push(`Importer models: ${id} does not return text (image-generation models cannot read papers).`);
     }
   }
-  const budgetProblems = () => {
-    if (next.budget.maxRequestInr > next.budget.maxJobInr) problems.push(`The maximum per AI request (₹${next.budget.maxRequestInr}) cannot be above the hard limit per job (₹${next.budget.maxJobInr}).`);
-    if (next.budget.maxJobInr > next.budget.totalInr) problems.push(`The hard limit per job (₹${next.budget.maxJobInr}) cannot be above the all-time importer budget (₹${next.budget.totalInr}).`);
-  };
   // Automatic selection: manual model fields are kept for a later override but not used, so not checked.
-  if (next.selection.mode === "auto") {
-    budgetProblems();
-    return problems;
-  }
+  if (next.selection.mode === "auto") return problems;
   const sent = ((raw ?? {}) as { models?: Record<string, unknown> }).models ?? {};
   const ids = [...SLOTS.map((s) => next.models[s.key]), ...next.models.extractFallbacks].filter((x): x is string => !!x);
   const rows = new Map((await prisma.aiModel.findMany({ where: { id: { in: ids } } })).map((r) => [r.id, r]));
@@ -184,6 +177,5 @@ export async function importerSettingsProblems(raw: unknown, next: ImporterSetti
       problems.push(`Fallback extraction model: ${id} costs more than the extraction model, so it would never be used. Choose a model priced at or below the extraction model, or none.`);
     }
   }
-  budgetProblems();
   return problems;
 }

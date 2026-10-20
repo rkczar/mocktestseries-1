@@ -86,7 +86,7 @@ async function startOnMainPage(page, file, { name, examId, pyqId, year, key, exp
   await Promise.all([page.waitForURL(/\/admin\/ai-importer\?job=[a-z0-9]+$/, { timeout: 90000 }), page.locator("[data-testid=op-upload-input]").setInputFiles(input)]);
   return new URL(page.url()).searchParams.get("job");
 }
-/** Confirm summary → Start Import (expected count required, explicit confirmation). */
+/** Confirm summary → Confirm Cost & Start Processing (expected count required, explicit confirmation). */
 async function startImport(page, { expected, dbl = false } = {}) {
   const exp = page.locator("[data-testid=op-confirm-expected]");
   if (expected || !(await exp.inputValue())) await exp.fill(expected ?? "10");
@@ -171,7 +171,8 @@ await admin.locator("[data-testid=analysis-report]").waitFor();
 const reportText = await admin.locator("[data-testid=analysis-report]").textContent();
 check("analysis report separates Detected and Estimated values", /Detected · pages/.test(reportText) && /Estimated · questions/.test(reportText));
 check("estimate table with the automatically chosen model, price, total and conservative maximum", (await admin.locator("[data-testid=estimate-total]").count()) === 1 && /mockvision\/reader/.test(await admin.locator("[data-testid=estimate]").textContent()) && /₹[\d.]+/.test((await admin.locator("[data-testid=estimate-max]").textContent()) ?? "") && /Models: automatic/.test(await admin.locator("[data-testid=estimate]").textContent()));
-await admin.fill("[data-testid=confirm-budget]", "8");
+check("job page: no budget field; cost panel with estimate, estimated maximum, job and month actual spend", (await admin.locator("[data-testid=confirm-budget]").count()) === 0 && (await admin.locator("[data-testid=confirm-card] [data-testid=cost-estimate-value]").count()) === 1 && (await admin.locator("[data-testid=confirm-card] [data-testid=cost-max-value]").count()) === 1 && (await admin.locator("[data-testid=confirm-card] [data-testid=cost-job-actual-value]").count()) === 1 && (await admin.locator("[data-testid=confirm-card] [data-testid=cost-month-actual-value]").count()) === 1);
+check("job page button reads Confirm Cost & Start Processing", (await admin.locator("[data-testid=confirm-start]").textContent()) === "Confirm Cost & Start Processing");
 await admin.click("[data-testid=confirm-start]");
 const st1 = await waitStatus(admin, /Review & approval/, 180000);
 check("processing finished → Review & approval (nothing stored yet)", /Review & approval/.test(st1) && (await db.query(`select count(*)::int n from "AiImportQuestion" where "jobId"=$1 and "questionId" is not null`, [jobId])).rows[0].n === 0, st1);
@@ -451,7 +452,8 @@ check("analyzer: detected facts labelled (pages, digital, answer key)", facts.so
 check("analyzer says the analysis was local and free", /no AI request was made/.test(await admin.locator("[data-testid=analyzer-mode]").textContent()));
 const selModel = admin.locator("[data-testid=selected-model]");
 check("selected model + why shown without opening Settings (digital → local reader)", (await selModel.getAttribute("data-local")) === "true" && /Why this model\?/.test(await selModel.textContent()) && /Automatic — Cheapest Suitable Model/.test(await selModel.textContent()));
-check("estimated cost, maximum and remaining pilot budget shown", /₹[\d.]+/.test(await admin.locator("[data-testid=op-cost-estimate]").textContent()) && /₹[\d.]+/.test(await admin.locator("[data-testid=op-cost-max]").textContent()) && /₹[\d.]+/.test(await admin.locator("[data-testid=op-pilot-remaining]").textContent()));
+check("estimated cost, estimated maximum, job and month actual spend shown; no pilot budget", /₹[\d.]+/.test(await admin.locator("[data-testid=op-cost] [data-testid=cost-estimate-value]").textContent()) && /₹[\d.]+/.test(await admin.locator("[data-testid=op-cost] [data-testid=cost-max-value]").textContent()) && /₹[\d.]+|Unknown/.test(await admin.locator("[data-testid=op-cost] [data-testid=cost-month-actual-value]").textContent()) && (await admin.locator("[data-testid=op-pilot-remaining]").count()) === 0 && /final cost may differ/.test(await admin.locator("[data-testid=op-cost]").textContent()));
+check("one-page button reads Confirm Cost & Start Processing", /^Confirm Cost & Start Processing$/.test((await admin.locator("[data-testid=process-import]").textContent()) ?? ""));
 const confirmText = await admin.locator("[data-testid=op-confirm-summary]").textContent();
 check("confirmation summary before Start: exam, paper, year, code", /Exam:/.test(confirmText) && /Previous Year Paper:/.test(confirmText) && /Year:/.test(confirmText) && /Paper set \/ code:/.test(confirmText), confirmText);
 check("one primary action, disabled until the summary is confirmed", (await admin.locator("[data-testid=process-import]").count()) === 1 && (await admin.locator("[data-testid=process-import]").isDisabled()));

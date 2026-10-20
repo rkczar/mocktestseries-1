@@ -130,9 +130,8 @@ export function AutoConfigure({ canManage, dirty, onApplied }: { canManage: bool
             <section className="flex flex-col gap-1" data-testid="autoconfig-cost">
               <h3 className="font-semibold">Cost</h3>
               <p className="text-xs">
-                For a reference job of {preview.jobCost.reference}: estimate <strong data-testid="autoconfig-est">{inr(preview.jobCost.estimateInr)}</strong>, conservative maximum <strong data-testid="autoconfig-max">{inr(preview.jobCost.maxInr)}</strong> (hard limit per job ₹{preview.jobCost.jobCapInr}
-                {preview.jobCost.fitsJobCap === false ? " — above it" : ""}).
-                {preview.jobCost.maxScannedPagesPerJob !== null ? ` At the conservative maximum one job can read about ${preview.jobCost.maxScannedPagesPerJob} scanned pages within the per-job limit.` : ""}
+                For a reference job of {preview.jobCost.reference}: estimate <strong data-testid="autoconfig-est">{inr(preview.jobCost.estimateInr)}</strong>, estimated maximum <strong data-testid="autoconfig-max">{inr(preview.jobCost.maxInr)}</strong>.
+                {preview.jobCost.maxPerPageInr !== null ? ` About ${inr(preview.jobCost.maxPerPageInr)} per scanned page at the conservative maximum.` : ""}
               </p>
               <ul className="list-disc pl-5 text-xs text-[var(--color-muted-foreground)]">
                 {preview.jobCost.notes.map((n) => (

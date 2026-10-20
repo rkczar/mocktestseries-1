@@ -47,9 +47,9 @@ export const SELECTION_TASK_LABELS: Record<SelectionTask, string> = {
 };
 
 /**
- * HARD pilot ceilings, enforced in code: Import Settings can lower these but never raise them, and an
- * older saved document above them is clamped when it is read. Raising them needs a code change + deploy.
- * The all-time cap never resets, so a new month cannot grant another ₹10 during the pilot.
+ * Ceilings fixed in code. Only maxRequestInr (one request's worst case) and minKeyReserveUsd (kept on the shared
+ * key for student Ask AI) are enforced. totalInr / monthlyInr / maxJobInr are no longer enforced (owner decision
+ * 2026-10-20: the administrator confirms each job's cost instead); they only bound the stored settings fields.
  */
 export const PILOT_LIMITS = { totalInr: 10, monthlyInr: 10, maxJobInr: 8, maxRequestInr: 1, minKeyReserveUsd: 5 } as const;
 
@@ -76,19 +76,13 @@ export interface ImporterSettings {
     zdr: boolean;
   };
   budget: {
-    /** Importer-only monthly budget (IST month) — separate from the platform/student AI budget. */
+    /** NOT ENFORCED since 2026-10-20 (kept so stored settings stay readable): there is no monthly cap. */
     monthlyInr: number;
-    /** Default per-job cap offered on New Import. */
+    /** NOT ENFORCED since 2026-10-20: jobs have no budget field; the confirmed maximum is recorded instead. */
     defaultJobCapInr: number;
-    /**
-     * HARD ceiling for any one job's budget: confirm and resume refuse a larger job budget, and every
-     * request is reserved against min(job budget, this ceiling) — so an old job cannot spend past it either.
-     */
+    /** NOT ENFORCED since 2026-10-20: there is no per-job cap. */
     maxJobInr: number;
-    /**
-     * HARD all-time cap for importer AI spend (every month together). Unlike monthlyInr it never
-     * resets, so a pilot cannot gain a fresh budget when the month changes. At most PILOT_LIMITS.totalInr.
-     */
+    /** NOT ENFORCED since 2026-10-20: there is no all-time cap. */
     totalInr: number;
     /** Hard ceiling for one AI request (INR). */
     maxRequestInr: number;
@@ -267,7 +261,7 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
   PROCESSING: "Processing",
   NEEDS_REVIEW: "Review & approval",
   PAUSED: "Paused",
-  PAUSED_BUDGET: "Paused — budget limit",
+  PAUSED_BUDGET: "Paused — cost or credit limit",
   IMPORTING: "Adding to the Question Bank",
   COMPLETED: "Completed",
   COMPLETED_WITH_ISSUES: "Completed with Warnings",

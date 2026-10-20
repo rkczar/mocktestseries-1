@@ -4,7 +4,7 @@ import { mkdir, open, readdir, rename, stat, unlink, writeFile } from "node:fs/p
 import path from "node:path";
 import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPageStatus, AiImportPaperType, Prisma, type AiImportJob } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { CHUNK_BYTES, PILOT_LIMITS, WORKER_STATUSES, fileRemovalBlockedReason } from "@/lib/ai-import/config";
+import { CHUNK_BYTES, WORKER_STATUSES, fileRemovalBlockedReason } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { checkFilename, detectFile } from "@/lib/ai-import/detect";
 import { pdfInfo } from "@/lib/ai-import/pdf";
@@ -12,7 +12,7 @@ import { adoptFile, tmpDir, removeVaultDir, vaultPath } from "@/lib/ai-import/va
 import { kickWorker } from "@/lib/ai-import/kick";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
 import { computeModelPlan } from "@/lib/ai-import/select";
-import { BUDGET_LOCK_KEY, importerSpend } from "@/lib/ai-import/ai";
+import { BUDGET_LOCK_KEY } from "@/lib/ai-import/ai";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { VerifyMode } from "@/lib/ai-import/config";
 
@@ -74,7 +74,7 @@ export async function validateContext(c: JobContextInput): Promise<JobContextInp
   return { ...c, paperCode: code };
 }
 
-export async function createJob(raw: JobContextInput & { actorId: string; title: string; budgetInr: number; clientKey?: string | null; expectedQuestions?: number | null }): Promise<string> {
+export async function createJob(raw: JobContextInput & { actorId: string; title: string; budgetInr?: number; clientKey?: string | null; expectedQuestions?: number | null }): Promise<string> {
   const input = { ...raw, ...(await validateContext(raw)) };
   const expected = expectedCount(raw.expectedQuestions);
   // A repeated submission (double click, retried request) with the same client key returns the job it created.
@@ -83,10 +83,7 @@ export async function createJob(raw: JobContextInput & { actorId: string; title:
     const twin = await prisma.aiImportJob.findFirst({ where: { createdById: input.actorId, createdAt: { gt: new Date(Date.now() - 24 * 3_600_000) }, config: { path: ["clientKey"], equals: clientKey } }, select: { id: true } });
     if (twin) return twin.id;
   }
-  const settings = await getImporterSettings();
   const title = input.title.trim().slice(0, 160) || "Untitled import";
-  const budget = Number.isFinite(input.budgetInr) && input.budgetInr >= 0 ? input.budgetInr : settings.budget.defaultJobCapInr;
-  assertWithinJobCeiling(budget, settings.budget.maxJobInr);
   const job = await prisma.aiImportJob.create({
     data: {
       title,
@@ -98,12 +95,13 @@ export async function createJob(raw: JobContextInput & { actorId: string; title:
       previousYearPaperId: input.previousYearPaperId,
       expectedQuestions: expected,
       createdById: input.actorId,
-      budgetInr: budget,
+      // Records the maximum cost the administrator confirms (set at confirmation); it is not a spending cap.
+      budgetInr: 0,
       status: AiImportJobStatus.DRAFT,
       ...(clientKey ? { config: { clientKey } } : {}),
     },
   });
-  await logEvent(job.id, "CREATED", `Import "${title}" created`, { examId: input.examId, previousYearPaperId: input.previousYearPaperId, year: input.year, paperCode: input.paperCode, expectedQuestions: expected, paperType: input.paperType, budgetInr: budget }, input.actorId);
+  await logEvent(job.id, "CREATED", `Import "${title}" created`, { examId: input.examId, previousYearPaperId: input.previousYearPaperId, year: input.year, paperCode: input.paperCode, expectedQuestions: expected, paperType: input.paperType }, input.actorId);
   await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_JOB_CREATED", entityType: "AiImportJob", entityId: job.id, metadata: { title, examId: input.examId, previousYearPaperId: input.previousYearPaperId } } });
   return job.id;
 }
@@ -263,7 +261,7 @@ export interface ConfirmOptions {
   requireExpected?: boolean;
 }
 
-export async function confirmJob(raw: JobContextInput & { jobId: string; actorId: string; budgetInr: number } & ConfirmOptions) {
+export async function confirmJob(raw: JobContextInput & { jobId: string; actorId: string; confirmedMaxInr: number | null } & ConfirmOptions) {
   const job = await prisma.aiImportJob.findUnique({ where: { id: raw.jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status !== AiImportJobStatus.AWAITING_CONFIRMATION) throw new ImportJobError("Only an analyzed import can be confirmed.");
@@ -272,12 +270,10 @@ export async function confirmJob(raw: JobContextInput & { jobId: string; actorId
   if (raw.requireExpected && !expected) throw new ImportJobError("Confirm the expected number of questions in this paper before starting. Nothing was started.");
   const verifyMode: VerifyMode = raw.verifyMode === "all" ? "all" : "risk";
   const paperChanged = job.previousYearPaperId !== input.previousYearPaperId || job.examId !== input.examId;
-  if (!Number.isFinite(input.budgetInr) || input.budgetInr < 0) throw new ImportJobError("Enter a valid job budget.");
   const saved = await getImporterSettings();
   if (input.modelOverride && !saved.importerModels.includes(input.modelOverride)) throw new ImportJobError("That model is not on the importer's own model list. Nothing was started.");
   // A per-job override goes through exactly the same suitability, privacy and price checks (manual mode).
   const settings: typeof saved = input.modelOverride ? { ...saved, selection: { mode: "manual" }, models: { ...saved.models, extract: input.modelOverride, extractFallbacks: [], key: input.modelOverride } } : saved;
-  assertWithinJobCeiling(input.budgetInr, settings.budget.maxJobInr);
   // Choose the models now, from fresh OpenRouter prices and privacy routes, and re-price with them.
   // The plan is frozen on the job: the worker never picks a different (or pricier) model by itself.
   const plan = await computeModelPlan(settings, { refresh: settings.aiEnabled });
@@ -294,18 +290,19 @@ export async function confirmJob(raw: JobContextInput & { jobId: string; actorId
   const willCallAi = settings.aiEnabled && estimate.lines.some((l) => l.calls > 0 && l.model !== null && l.problem === null);
   if (willCallAi) {
     if (estimate.totalInr === null || estimate.maxInr === null) throw new ImportJobError(`The AI cost cannot be established (${estimate.notes[0] ?? "missing model price or exchange rate"}). Nothing was started.`);
-    if (estimate.totalInr > input.budgetInr) {
-      throw new ImportJobError(`The estimated AI cost (₹${estimate.totalInr.toFixed(2)}) is above the job budget (₹${input.budgetInr.toFixed(2)}). Nothing was started — reduce the sample or raise the budget deliberately.`);
+    // The administrator confirms the displayed cost. Prices were just refreshed: if the conservative maximum is now
+    // higher than what was confirmed, nothing starts and the new estimate is shown for a fresh confirmation.
+    // There is no importer job / monthly / all-time cap any more (owner decision 2026-10-20).
+    const confirmedMax = typeof input.confirmedMaxInr === "number" && Number.isFinite(input.confirmedMaxInr) ? input.confirmedMaxInr : null;
+    if (confirmedMax === null || estimate.maxInr > confirmedMax + 0.005) {
+      const fresh = { estCostInr: estimate.totalInr, estCostUsd: estimate.totalUsd, estimate: estimate as unknown as Prisma.InputJsonValue, ...(analysis ? { analysis: { ...analysis, estimate } as unknown as Prisma.InputJsonValue } : {}) };
+      await prisma.aiImportJob.updateMany({ where: { id: job.id, status: AiImportJobStatus.AWAITING_CONFIRMATION, updatedAt: job.updatedAt }, data: fresh });
+      throw new ImportJobError(
+        confirmedMax === null
+          ? `Confirm the cost first: estimated ₹${estimate.totalInr.toFixed(2)}, estimated maximum ₹${estimate.maxInr.toFixed(2)}. Nothing was started.`
+          : `The cost changed since it was shown (prices were refreshed): estimated ₹${estimate.totalInr.toFixed(2)}, estimated maximum now ₹${estimate.maxInr.toFixed(2)} (you confirmed ₹${confirmedMax.toFixed(2)}). Nothing was started — review the new cost and confirm again.`
+      );
     }
-    // The conservative maximum (every request at its reserved worst case) must fit every limit, not just the estimate.
-    if (estimate.maxInr > input.budgetInr) {
-      throw new ImportJobError(`The conservative maximum AI cost (₹${estimate.maxInr.toFixed(2)}: every request at its reserved worst case) is above the job budget (₹${input.budgetInr.toFixed(2)}). Nothing was started — process fewer pages (for example a 2-page sample) or raise the job budget within the hard limit.`);
-    }
-    const spend = await importerSpend();
-    const totalLeft = Math.min(settings.budget.totalInr, PILOT_LIMITS.totalInr) - spend.allUsed;
-    const monthLeft = Math.min(settings.budget.monthlyInr, PILOT_LIMITS.monthlyInr) - spend.monthUsed;
-    if (estimate.maxInr > totalLeft) throw new ImportJobError(`The conservative maximum AI cost (₹${estimate.maxInr.toFixed(2)}) is above what is left of the importer's all-time budget (₹${Math.max(0, totalLeft).toFixed(2)} of ₹${Math.min(settings.budget.totalInr, PILOT_LIMITS.totalInr).toFixed(2)}). Nothing was started.`);
-    if (estimate.maxInr > monthLeft) throw new ImportJobError(`The conservative maximum AI cost (₹${estimate.maxInr.toFixed(2)}) is above what is left of this month's importer budget (₹${Math.max(0, monthLeft).toFixed(2)}). Nothing was started.`);
   }
   // Conditional on the job being unchanged since it was read: a file removed meanwhile
   // clears the analysis, and its stale estimate must never be confirmed.
@@ -322,7 +319,7 @@ export async function confirmJob(raw: JobContextInput & { jobId: string; actorId
       paperCode: input.paperCode,
       previousYearPaperId: input.previousYearPaperId,
       expectedQuestions: expected,
-      budgetInr: input.budgetInr,
+      budgetInr: willCallAi ? (estimate.maxInr ?? 0) : 0,
       status: AiImportJobStatus.QUEUED,
       confirmedAt: new Date(),
       confirmedById: input.actorId,
@@ -332,7 +329,7 @@ export async function confirmJob(raw: JobContextInput & { jobId: string; actorId
   if (!confirmed.count) throw new ImportJobError("The files or analysis of this import changed while you were confirming. Nothing was started — review the page and confirm again.", 409);
   if (paperChanged) await logEvent(job.id, "PAPER_CHANGED", "Exam / Previous Year Paper changed at confirmation", { from: { examId: job.examId, previousYearPaperId: job.previousYearPaperId }, to: { examId: input.examId, previousYearPaperId: input.previousYearPaperId, year: input.year } }, input.actorId);
   const chosen = Object.values(plan.tasks).map((t) => `${t.task}: ${t.model ?? "none"}`).join(", ");
-  await logEvent(job.id, "CONFIRMED", `Processing confirmed with a job budget of ₹${input.budgetInr.toFixed(2)}${settings.aiEnabled ? ` — models (${plan.mode}): ${chosen}; estimate ₹${(estimate.totalInr ?? 0).toFixed(2)}, maximum ₹${(estimate.maxInr ?? 0).toFixed(2)}` : " — paid AI is off"}`, { paperType: input.paperType, previousYearPaperId: input.previousYearPaperId, year: input.year, expectedQuestions: expected, verifyMode, budgetInr: input.budgetInr, aiEnabled: settings.aiEnabled, selection: plan.mode, models: Object.fromEntries(Object.values(plan.tasks).map((t) => [t.task, t.model])), maxInr: estimate.maxInr }, input.actorId);
+  await logEvent(job.id, "CONFIRMED", `${willCallAi ? `Cost confirmed: estimated ₹${(estimate.totalInr ?? 0).toFixed(2)}, estimated maximum ₹${(estimate.maxInr ?? 0).toFixed(2)} — models (${plan.mode}): ${chosen}` : settings.aiEnabled ? "Processing confirmed — no paid AI request is needed" : "Processing confirmed — paid AI is off"}`, { paperType: input.paperType, previousYearPaperId: input.previousYearPaperId, year: input.year, expectedQuestions: expected, verifyMode, confirmedMaxInr: willCallAi ? estimate.maxInr : 0, aiEnabled: settings.aiEnabled, selection: plan.mode, models: Object.fromEntries(Object.values(plan.tasks).map((t) => [t.task, t.model])), maxInr: estimate.maxInr }, input.actorId);
   kickWorker();
 }
 
@@ -377,34 +374,21 @@ export function expectedCount(v: unknown): number | null {
   return n;
 }
 
-/** The per-job budget can never be set above the hard ceiling in Import Settings (confirm and resume). */
-function assertWithinJobCeiling(budgetInr: number, maxJobInr: number) {
-  if (budgetInr > maxJobInr) {
-    throw new ImportJobError(`The job budget (₹${budgetInr.toFixed(2)}) is above the hard limit per job (₹${maxJobInr.toFixed(2)}, Import Settings). Nothing was changed.`);
-  }
-}
-
 export async function pauseJob(jobId: string, actorId: string) {
   const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: { in: [AiImportJobStatus.QUEUED, AiImportJobStatus.PROCESSING] } }, data: { status: AiImportJobStatus.PAUSED, pauseReason: "Paused by an administrator" } });
   if (!r.count) throw new ImportJobError("Only a queued or processing import can be paused.");
   await logEvent(jobId, "PAUSED", "Paused by an administrator", undefined, actorId);
 }
 
-/** Resume after a manual or budget pause (optionally with a raised job budget). */
-export async function resumeJob(jobId: string, actorId: string, newBudgetInr?: number | null) {
+/** Resume after a manual pause, a provider/key pause or a failure (finished pages are never read or paid for again). */
+export async function resumeJob(jobId: string, actorId: string) {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status !== AiImportJobStatus.PAUSED && job.status !== AiImportJobStatus.PAUSED_BUDGET && job.status !== AiImportJobStatus.FAILED) throw new ImportJobError("Only a paused or failed import can be resumed.");
-  // A budget that is not a number (or is negative) is refused, never replaced by ₹0 or silently ignored.
-  if (newBudgetInr !== null && newBudgetInr !== undefined && (!Number.isFinite(newBudgetInr) || newBudgetInr < 0)) throw new ImportJobError("Enter a valid job budget. Nothing was changed.");
-  const budget = newBudgetInr ?? job.budgetInr;
-  if (budget !== job.budgetInr) assertWithinJobCeiling(budget, (await getImporterSettings()).budget.maxJobInr);
-  if (job.status === AiImportJobStatus.PAUSED_BUDGET && budget <= job.spentInr) throw new ImportJobError("Raise the job budget above what was already spent to continue.");
-  if (budget !== job.budgetInr && budget <= job.spentInr) throw new ImportJobError(`The job budget must be above what this import has already spent (₹${job.spentInr.toFixed(2)}). Nothing was changed.`);
-  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, budgetInr: budget, leaseOwner: null, leaseUntil: null } });
+  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, leaseOwner: null, leaseUntil: null } });
   // Failed pages get one more attempt on resume (never automatically in a loop).
   await prisma.aiImportPage.updateMany({ where: { jobId, status: "FAILED" }, data: { status: "PENDING", errorMessage: null } });
-  await logEvent(jobId, "RESUMED", `Resumed${budget !== job.budgetInr ? ` with the job budget raised to ₹${budget.toFixed(2)}` : ""}`, { budgetInr: budget }, actorId);
+  await logEvent(jobId, "RESUMED", "Resumed", undefined, actorId);
   kickWorker();
 }
 
@@ -437,8 +421,7 @@ export async function retryJob(jobId: string, actorId: string) {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status === AiImportJobStatus.PAUSED || job.status === AiImportJobStatus.PAUSED_BUDGET || job.status === AiImportJobStatus.FAILED) {
-    if (job.status === AiImportJobStatus.PAUSED_BUDGET && job.budgetInr <= job.spentInr) throw new ImportJobError("This import used its whole budget. It cannot continue within the pilot limits — review its questions or delete it.");
-    return resumeJob(jobId, actorId, null);
+    return resumeJob(jobId, actorId);
   }
   if (job.status === AiImportJobStatus.NEEDS_REVIEW) return retryFailedParts(job, actorId);
   if (job.status !== AiImportJobStatus.CANCELLED) throw new ImportJobError("Only a failed, paused or cancelled import, or a finished one with failed pages, can be retried.");
@@ -567,8 +550,8 @@ export interface DeletedJob {
 /**
  * Deletes an import job with its uploaded originals, page renders, work files and extracted figures.
  * Never touched: questions already in the Question Bank and their media (the Bulk Import copied them
- * into the media library), Bulk Import history, AI cost records and budget reservations (they keep
- * counting against the pilot limits), and any stored file or figure another import still uses.
+ * into the media library), Bulk Import history, AI cost records and budget reservations (they stay in
+ * the AI Cost Center), and any stored file or figure another import still uses.
  * One transaction holds the vault-files lock and the job row lock; stored bytes are moved aside inside
  * it (restored if it fails) and unlinked after commit. Repeating the call is harmless.
  */

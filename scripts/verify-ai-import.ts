@@ -11,8 +11,8 @@
  * Needs the RUHSMO exam with its taxonomy (scripts/ai-import-synthetic-taxonomy.ts
  * seeds a synthetic one). Everything it creates is removed at the end.
  *
- * The importer's pilot ceilings (₹10 all-time, ₹8 per job, ₹1 per request) are
- * enforced in code, so sections that need a fresh all-time budget call
+ * The importer has no job / monthly / all-time caps (the administrator confirms each job's cost); the ₹1
+ * per-request limit and the $5 Ask AI reserve are enforced in code. Sections that want a clean ledger call
  * freshPilotBudget(), which removes this suite's own importer reservations.
  */
 import "dotenv/config";
@@ -37,6 +37,8 @@ import { testOpenRouterConnection } from "@/lib/ai-engine/manage";
 import { syncCatalog } from "@/lib/ai-engine/catalog";
 import { budgetUsage } from "@/lib/ai-engine/budget";
 import { mediaRootDir, mediaStorage } from "@/lib/media-storage";
+/** The estimated maximum these checks confirm: any (cost confirmation itself is covered by scripts/verify-ai-import-cost.ts). */
+const CONFIRM_ANY = 1_000_000;
 
 if (/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
   console.error("Refusing to run against what looks like the production database.");
@@ -98,11 +100,11 @@ async function newJob(actor: string, examId: string, title: string, extra: Parti
   return id;
 }
 
-async function analyzeAndConfirm(actor: string, jobId: string, budgetInr = 8) {
+async function analyzeAndConfirm(actor: string, jobId: string) {
   await requestAnalysis(jobId, actor);
   await runWorker(120_000);
   const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
-  await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, budgetInr });
+  await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY });
   await runWorker(300_000);
   return prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
 }
@@ -217,7 +219,7 @@ async function main() {
   check("analysis waits for confirmation", jc.status === "AWAITING_CONFIRMATION", jc.status);
   check("detected pages / questions / images", analysis.totals.pages === 2 && analysis.totals.localQuestions === 10 && analysis.totals.embeddedImages === 5, analysis.totals);
   check("estimate notes that paid AI is off", analysis.estimate.notes.some((x) => /OFF/.test(x)), analysis.estimate.notes);
-  await confirmJob({ jobId: jobC, actorId: actor, examId: exam.id, paperType: AiImportPaperType.SINGLE_SUBJECT, subjectId: anatomy.id, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 0 });
+  await confirmJob({ jobId: jobC, actorId: actor, examId: exam.id, paperType: AiImportPaperType.SINGLE_SUBJECT, subjectId: anatomy.id, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   await runWorker(120_000);
   jc = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobC } });
   check("processed without AI → ready for import", jc.status === "NEEDS_REVIEW", { s: jc.status, e: jc.errorMessage });
@@ -391,7 +393,7 @@ async function main() {
   const est = (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobK } })).estimate as { totalInr: number | null; pagesNeedingAi: number; lines: { model: string | null }[] };
   check("estimate before paid processing (pages needing AI, models, total)", est.pagesNeedingAi >= 2 && est.totalInr !== null && est.totalInr > 0 && est.lines.some((l) => l.model === "mockvision/reader"), est);
   check("no paid call during analysis", (await mockStats()).chat === 0);
-  const jk = await analyzeAndConfirmExisting(actor, jobK, 8);
+  const jk = await analyzeAndConfirmExisting(actor, jobK);
   check("AI job processed", jk.status === "NEEDS_REVIEW", { s: jk.status, e: jk.errorMessage, p: jk.pauseReason });
   const ms = await mockStats();
   check("every request asked for no-data-collection providers", ms.privacy.length > 0 && ms.privacy.every((p) => p === "deny"), ms.privacy);
@@ -444,7 +446,7 @@ async function main() {
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/fail", extractFallbacks: ["mockvision/reader"], verify: null } }), actor);
   const jobL = await newJob(actor, exam.id, "FX fallback");
   await upload(actor, jobL, "photo.png");
-  const jl = await analyzeAndConfirm(actor, jobL, 8);
+  const jl = await analyzeAndConfirm(actor, jobL);
   const lc = await prisma.aiImportAiCall.findMany({ where: { jobId: jobL, task: "extract" } });
   check("fallback model answered and was recorded", jl.status === "NEEDS_REVIEW" && lc.some((c) => c.ok && c.fallbackUsed && c.model === "mockvision/reader"), lc.map((c) => [c.model, c.ok, c.fallbackUsed]));
   check("photo question extracted", (await prisma.aiImportQuestion.count({ where: { jobId: jobL } })) === 1);
@@ -453,20 +455,20 @@ async function main() {
   const pricyBefore = (await mockStats()).byModel["mockvision/pricey"] ?? 0;
   const jobL2 = await newJob(actor, exam.id, "FX pricier fallback");
   await upload(actor, jobL2, "photo.png");
-  await analyzeAndConfirm(actor, jobL2, 8);
+  await analyzeAndConfirm(actor, jobL2);
   const l2 = await prisma.aiImportAiCall.findMany({ where: { jobId: jobL2 } });
   check("a fallback priced above the preferred model is never used", ((await mockStats()).byModel["mockvision/pricey"] ?? 0) === pricyBefore && l2.every((c) => c.model === "mockvision/fail" && !c.ok), l2.map((c) => [c.model, c.ok]));
   check("failed request not retried (one attempt, nothing charged)", l2.length === 1 && l2[0].attempt === 1 && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobL2 } })).spentInr === 0, l2.map((c) => [c.attempt, c.costInr]));
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/fail", extractFallbacks: [] }, budget: { ...s.budget, retryTransient: true } }), actor);
   const jobL3 = await newJob(actor, exam.id, "FX retry enabled");
   await upload(actor, jobL3, "photo.png");
-  await analyzeAndConfirm(actor, jobL3, 8);
+  await analyzeAndConfirm(actor, jobL3);
   const l3 = await prisma.aiImportAiCall.findMany({ where: { jobId: jobL3 }, orderBy: { attempt: "asc" } });
   check("retry switched on: exactly one retry after a transient error", l3.map((c) => c.attempt).join() === "1,2", l3.map((c) => [c.attempt, c.errorSummary]));
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/reader" }, budget: { ...s.budget, retryTransient: false } }), actor);
 
   // ------------------------------------------------------------------ M
-  section("M. Budget limits pause safely and resume");
+  section("M. Cost confirmation; per-request and key-reserve limits still apply");
   await freshPilotBudget();
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/pricey", extractFallbacks: [] } }), actor);
   const chatsBefore = (await mockStats()).chat;
@@ -475,65 +477,59 @@ async function main() {
   await requestAnalysis(jobM, actor);
   await runWorker(60_000);
   const jm = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM } });
-  await expectError("a model whose request could exceed the ₹1 per-request limit is never used: confirm refuses with the reason", () => confirmJob({ jobId: jobM, actorId: actor, examId: jm.examId, paperType: jm.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }), /mockvision\/pricey cannot be used: one request could cost up to .*above the per-request limit.*Nothing was started/);
+  await expectError("a model whose request could exceed the ₹1 per-request limit is never used: confirm refuses with the reason", () => confirmJob({ jobId: jobM, actorId: actor, examId: jm.examId, paperType: jm.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY}), /mockvision\/pricey cannot be used: one request could cost up to .*above the per-request limit.*Nothing was started/);
   check("…no AI call, nothing spent, job still awaiting confirmation", (await mockStats()).chat === chatsBefore && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM } })).status === "AWAITING_CONFIRMATION");
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/reader" } }), actor);
-  // Confirmation re-prices the job: an estimate above the budget starts nothing (the budget is never raised automatically).
-  const jobM0 = await newJob(actor, exam.id, "FX estimate above budget");
+  // Confirmation re-prices the job: nothing starts until the administrator confirms the displayed maximum.
+  const jobM0 = await newJob(actor, exam.id, "FX cost confirmation");
   await upload(actor, jobM0, "scanned.pdf");
   await requestAnalysis(jobM0, actor);
   await runWorker(120_000);
   const jm0 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM0 } });
   const chatsM0 = (await mockStats()).chat;
-  await expectError("confirm refuses when the estimate exceeds the job budget", () => confirmJob({ jobId: jobM0, actorId: actor, examId: jm0.examId, paperType: jm0.paperType, subjectId: jm0.subjectId, year: jm0.year, paperCode: jm0.paperCode, previousYearPaperId: jm0.previousYearPaperId, budgetInr: (jm0.estCostInr ?? 1) / 2 }), /above the job budget/);
-  const jm0b = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM0 } });
-  check("…job stays awaiting confirmation, budget unchanged, no AI call", jm0b.status === "AWAITING_CONFIRMATION" && jm0b.budgetInr === jm0.budgetInr && (await mockStats()).chat === chatsM0, { s: jm0b.status, b: jm0b.budgetInr });
-  // The conservative MAXIMUM must fit too: a budget that covers the estimate but not the maximum starts nothing.
+  const ctxM0 = { jobId: jobM0, actorId: actor, examId: jm0.examId, paperType: jm0.paperType, subjectId: jm0.subjectId, year: jm0.year, paperCode: jm0.paperCode, previousYearPaperId: jm0.previousYearPaperId };
   const maxM0 = (jm0.estimate as { maxInr: number | null }).maxInr;
   check("estimate carries a conservative maximum above the typical estimate", maxM0 !== null && maxM0 > (jm0.estCostInr ?? Infinity), { max: maxM0, est: jm0.estCostInr });
-  await expectError("confirm refuses a budget between the estimate and the conservative maximum", () => confirmJob({ jobId: jobM0, actorId: actor, examId: jm0.examId, paperType: jm0.paperType, subjectId: jm0.subjectId, year: jm0.year, paperCode: jm0.paperCode, previousYearPaperId: jm0.previousYearPaperId, budgetInr: ((jm0.estCostInr ?? 0) + (maxM0 ?? 0)) / 2 }), /conservative maximum AI cost .* is above the job budget/);
-  check("…still nothing sent", (await mockStats()).chat === chatsM0);
-  // Runtime job cap: confirmed at the maximum, then earlier spend leaves less than one request → paused before the call.
-  const jobM2 = await newJob(actor, exam.id, "FX job cap");
+  await expectError("confirm without a confirmed cost starts nothing", () => confirmJob({ ...ctxM0, confirmedMaxInr: null }), /Confirm the cost first: estimated .*estimated maximum/);
+  await expectError("confirm below the freshly priced maximum starts nothing (cost changed)", () => confirmJob({ ...ctxM0, confirmedMaxInr: (maxM0 ?? 0) - 0.05 }), /The cost changed since it was shown/);
+  const jm0b = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM0 } });
+  check("…job stays awaiting confirmation, no AI call", jm0b.status === "AWAITING_CONFIRMATION" && (await mockStats()).chat === chatsM0, { s: jm0b.status });
+  await confirmJob({ ...ctxM0, confirmedMaxInr: maxM0 });
+  const jm0c = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM0 } });
+  check("confirming the displayed maximum queues the job and records the confirmed maximum", jm0c.status === "QUEUED" && Math.abs(jm0c.budgetInr - (maxM0 ?? -1)) < 0.001, { s: jm0c.status, b: jm0c.budgetInr });
+  const evM0 = await prisma.aiImportEvent.findFirst({ where: { jobId: jobM0, type: "CONFIRMED" }, orderBy: { createdAt: "desc" } });
+  check("…CONFIRMED event names the confirmed estimate and maximum", /Cost confirmed: estimated ₹.*estimated maximum ₹/.test(evM0?.message ?? ""), evM0?.message);
+  await runWorker(120_000);
+  // No job cap: a job whose spend already passed its confirmed maximum (and the former ₹8 cap) keeps processing.
+  const jobM2 = await newJob(actor, exam.id, "FX past the old job cap");
   await upload(actor, jobM2, "scanned.pdf");
   await requestAnalysis(jobM2, actor);
   await runWorker(120_000);
   const jm2a = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } });
-  const maxM2 = (jm2a.estimate as { maxInr: number }).maxInr;
-  await confirmJob({ jobId: jobM2, actorId: actor, examId: jm2a.examId, paperType: jm2a.paperType, subjectId: jm2a.subjectId, year: jm2a.year, paperCode: jm2a.paperCode, previousYearPaperId: jm2a.previousYearPaperId, budgetInr: Math.ceil(maxM2 * 100) / 100 });
-  await prisma.aiImportJob.update({ where: { id: jobM2 }, data: { spentInr: Math.ceil(maxM2 * 100) / 100 - 0.01 } });
+  await confirmJob({ jobId: jobM2, actorId: actor, examId: jm2a.examId, paperType: jm2a.paperType, subjectId: jm2a.subjectId, year: jm2a.year, paperCode: jm2a.paperCode, previousYearPaperId: jm2a.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY });
+  await prisma.aiImportJob.update({ where: { id: jobM2 }, data: { spentInr: 8.5 } });
   const chatsM2 = (await mockStats()).chat;
   await runWorker(300_000);
-  let jm2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } });
-  check("job cap reached → Paused — budget limit before any call, pages kept pending", jm2.status === "PAUSED_BUDGET" && /job budget is reached/.test(jm2.pauseReason ?? "") && (await mockStats()).chat === chatsM2 && (await prisma.aiImportPage.count({ where: { jobId: jobM2, status: "PENDING" } })) >= 1, { s: jm2.status, r: jm2.pauseReason });
-  check("…and nothing above the cap was charged", jm2.spentInr <= jm2.budgetInr, { spent: jm2.spentInr, cap: jm2.budgetInr });
-  await expectError("resume refuses a budget not above what was spent", () => resumeJob(jobM2, actor, 0), /Raise the job budget/);
-  await prisma.aiImportJob.update({ where: { id: jobM2 }, data: { spentInr: 0 } });
-  await resumeJob(jobM2, actor, 8);
-  await runWorker(120_000);
-  jm2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } });
-  check("resumed with a higher budget → completes", jm2.status === "NEEDS_REVIEW", jm2.status);
-  // Monthly budget: refused at confirmation when it cannot hold the maximum; a mid-run cut pauses the job.
-  await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 0 } }), actor);
-  const jobM3 = await newJob(actor, exam.id, "FX monthly budget");
+  const jm2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } });
+  check("spend above the confirmed maximum and the former ₹8 job cap → not paused, completes", jm2.status === "NEEDS_REVIEW" && (await mockStats()).chat > chatsM2, { s: jm2.status, r: jm2.pauseReason });
+  // Monthly / all-time fields in stored settings are no longer enforced (even at ₹0).
+  await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 0, totalInr: 0, maxJobInr: 0 } }), actor);
+  const jobM3 = await newJob(actor, exam.id, "FX no monthly cap");
   await upload(actor, jobM3, "photo.png");
   await requestAnalysis(jobM3, actor);
   await runWorker(60_000);
   const jm3a = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM3 } });
-  await expectError("monthly budget below the conservative maximum → confirm refused", () => confirmJob({ jobId: jobM3, actorId: actor, examId: jm3a.examId, paperType: jm3a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }), /this month's importer budget/);
-  await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 10 } }), actor);
-  await confirmJob({ jobId: jobM3, actorId: actor, examId: jm3a.examId, paperType: jm3a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
-  await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 0 } }), actor);
+  await confirmJob({ jobId: jobM3, actorId: actor, examId: jm3a.examId, paperType: jm3a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY });
   await runWorker(60_000);
   const jm3 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM3 } });
-  check("importer monthly budget lowered mid-run → paused before the call", jm3.status === "PAUSED_BUDGET" && /monthly/i.test(jm3.pauseReason ?? ""), jm3.pauseReason);
-  await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 10 } }), actor);
+  check("stored monthly / all-time / job figures of ₹0 → confirm accepted and the job completes", jm3.status === "NEEDS_REVIEW" && jm3.spentInr > 0, { s: jm3.status, r: jm3.pauseReason });
+  await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 10, totalInr: 10, maxJobInr: 8 } }), actor);
   // The mock key has $9 left: a $9 reserve for student Ask AI leaves no room for any importer request.
   await setSettings((s) => ({ ...s, budget: { ...s.budget, keyReserveUsd: 9 } }), actor);
   const chatsM4 = (await mockStats()).chat;
   const jobM4 = await newJob(actor, exam.id, "FX shared key reserve");
   await upload(actor, jobM4, "photo.png");
-  const jm4 = await analyzeAndConfirm(actor, jobM4, 8);
+  const jm4 = await analyzeAndConfirm(actor, jobM4);
   check("shared key reserve for Ask AI → paused before any call", jm4.status === "PAUSED_BUDGET" && /shared OpenRouter key/.test(jm4.pauseReason ?? "") && (await mockStats()).chat === chatsM4 && jm4.spentInr === 0, { s: jm4.status, r: jm4.pauseReason });
   await setSettings((s) => ({ ...s, budget: { ...s.budget, keyReserveUsd: 5 } }), actor);
 
@@ -549,7 +545,7 @@ async function main() {
   await requestAnalysis(jobN, actor);
   await runWorker(60_000);
   const jn0 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobN } });
-  await confirmJob({ jobId: jobN, actorId: actor, examId: exam.id, paperType: jn0.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId: jobN, actorId: actor, examId: exam.id, paperType: jn0.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   // Simulate a crash: process the first AI page only, then leave the job PROCESSING with an expired lease.
   const { runLocalPasses } = await import("@/lib/ai-import/process");
   const jn = await prisma.aiImportJob.update({ where: { id: jobN }, data: { status: "PROCESSING", leaseOwner: "crashed-worker", leaseUntil: new Date(Date.now() - 1000) } });
@@ -575,7 +571,7 @@ async function main() {
   await requestAnalysis(jobK2, actor);
   await runWorker(60_000);
   const jk2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobK2 } });
-  await confirmJob({ jobId: jobK2, actorId: actor, examId: exam.id, paperType: jk2.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId: jobK2, actorId: actor, examId: exam.id, paperType: jk2.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   const { spawn } = await import("node:child_process");
   const child = spawn(path.join(process.cwd(), "node_modules/.bin/tsx"), ["scripts/ai-import-worker.ts"], { env: process.env, stdio: "ignore" });
   await new Promise((r) => setTimeout(r, 4500));
@@ -601,7 +597,7 @@ async function main() {
   const dx = await upload(actor, jobO, "paper.docx");
   await upload(actor, jobO, "sheet.xlsx");
   await upload(actor, jobO, "key.csv", AiImportFileRole.ANSWER_KEY, dx.fileId);
-  const jo = await analyzeAndConfirm(actor, jobO, 0);
+  const jo = await analyzeAndConfirm(actor, jobO);
   check("docx/sheet job processed without AI", jo.status === "NEEDS_REVIEW", { s: jo.status, e: jo.errorMessage });
   const d1 = await prisma.aiImportQuestion.findFirstOrThrow({ where: { fileId: dx.fileId, sourceLabel: "1" }, include: { figures: true } });
   check("DOCX auto-numbering read (Q1–Q3)", (await prisma.aiImportQuestion.count({ where: { fileId: dx.fileId } })) === 3);
@@ -687,7 +683,7 @@ async function main() {
   const evK = await prisma.aiImportEvent.findFirst({ where: { jobId: jobR, type: "FILE_REMOVED" }, orderBy: { createdAt: "desc" } });
   check("activity log records the removal with filename and time", !!evK && evK.message.includes("rm-key-wrong.csv") && evK.message.includes("answer key") && evK.actorId === actor && !!evK.createdAt);
   check("audit log row written", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_FILE_REMOVED", entityId: jobR } })) === 1);
-  await expectError("stale analysis cannot be confirmed after a removal", () => confirmJob({ jobId: jobR, actorId: actor, examId: jr.examId, paperType: jr.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }), /Only an analyzed import/);
+  await expectError("stale analysis cannot be confirmed after a removal", () => confirmJob({ jobId: jobR, actorId: actor, examId: jr.examId, paperType: jr.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY}), /Only an analyzed import/);
   await expectError("removing the same file twice is refused", () => removeFile({ jobId: jobR, fileId: kWrong.fileId, actorId: actor }), /not part of this import/);
   const kRight = await upload(actor, jobR, "rm-key-right.csv", AiImportFileRole.ANSWER_KEY);
   check("replacement answer key uploaded", kRight.ok, kRight);
@@ -768,7 +764,7 @@ async function main() {
   // Confirm racing a removal: never a queued job built on the removed file.
   jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
   const [cr, rr] = await Promise.allSettled([
-    confirmJob({ jobId: jobR, actorId: actor, examId: jr.examId, paperType: jr.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }),
+    confirmJob({ jobId: jobR, actorId: actor, examId: jr.examId, paperType: jr.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY}),
     removeFile({ jobId: jobR, fileId: kRight.fileId, actorId: actor }),
   ]);
   jr = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobR } });
@@ -865,17 +861,20 @@ async function sectionT(actor: string, examId: string) {
   check("a raw database value above the ceilings is still clamped server-side", raw1.budget.monthlyInr === 10 && raw1.budget.totalInr === 10 && raw1.budget.maxJobInr === 8 && raw1.budget.maxRequestInr === 1 && raw1.budget.keyReserveUsd === 5, raw1.budget);
   await setSettings(pilot, actor);
 
-  // T2 — the hard per-job limit at create / confirm / resume.
-  await expectError("create: a job budget above the hard job limit is refused", () => newJob(actor, examId, "FX over job limit", { budgetInr: 9 }), /hard limit per job/);
-  const jobT = await newJob(actor, examId, "FX pilot limits", { budgetInr: 8 });
+  // T2 — no per-job cap (owner decision 2026-10-20): a job budget is never asked for or enforced.
+  const jobOver = await newJob(actor, examId, "FX above the former job limit", { budgetInr: 9 });
+  check("create: a budget above the former ₹8 job limit is not refused (and not stored as a cap)", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobOver } })).budgetInr === 0);
+  await prisma.aiImportJob.delete({ where: { id: jobOver } });
+  const jobT = await newJob(actor, examId, "FX cost confirmation T");
   await upload(actor, jobT, "photo.png");
   await requestAnalysis(jobT, actor);
   await runWorker(60_000);
   const jt0 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT } });
   const chatsT = (await mockStats()).chat;
-  await expectError("confirm: ₹8.01 above the ₹8 hard job limit is refused", () => confirmJob({ jobId: jobT, actorId: actor, examId, paperType: jt0.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8.01 }), /hard limit per job/);
+  const maxT = (jt0.estimate as { maxInr: number }).maxInr;
+  await confirmJob({ jobId: jobT, actorId: actor, examId, paperType: jt0.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: maxT });
   const jt1 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT } });
-  check("…job stays awaiting confirmation, budget unchanged, no AI call", jt1.status === "AWAITING_CONFIRMATION" && jt1.budgetInr === 8 && (await mockStats()).chat === chatsT, { s: jt1.status, b: jt1.budgetInr });
+  check("confirm with the displayed maximum: queued, confirmed maximum recorded, no AI call yet", jt1.status === "QUEUED" && Math.abs(jt1.budgetInr - maxT) < 0.001 && (await mockStats()).chat === chatsT, { s: jt1.status, b: jt1.budgetInr, maxT });
 
   // T3 — per-request cap ₹1 at run time: a request larger than the planned profile is refused before it is sent.
   const ja = await newJob(actor, examId, "FX concurrent A", { budgetInr: 5 });
@@ -885,82 +884,54 @@ async function sectionT(actor: string, examId: string) {
   const chats3 = (await mockStats()).chat;
   await expectError("per-request cap ₹1: an oversized request is refused before any call", () => importerAiCall({ jobId: ja, task: "classify", models: [], system: "You classify exam questions into an EXISTING syllabus.", content: [{ type: "text", text: "x".repeat(3_000_000) }], maxOutputTokens: 2500, settings: normalizeImporterSettings(raw1), needsVision: false }), /above the per-request limit of ₹1/);
   check("…nothing sent, nothing reserved", (await mockStats()).chat === chats3 && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${ja}:` } } })) === 0);
-  await expectError("resume: raising the job budget above the hard job limit is refused", async () => {
-    await prisma.aiImportJob.update({ where: { id: jobT }, data: { status: "PAUSED" } });
-    await resumeJob(jobT, actor, 50);
-  }, /hard limit per job/);
-  check("…job still paused with its ₹8 budget", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT } })).budgetInr === 8);
-  await prisma.aiImportJob.update({ where: { id: jobT }, data: { status: "AWAITING_CONFIRMATION" } });
+  // Resume after a provider / key pause, whatever the job already spent (no "raise the budget" step).
+  await prisma.aiImportJob.update({ where: { id: jobT }, data: { status: "PAUSED_BUDGET", pauseReason: "The provider refused the request (credit).", spentInr: 12 } });
+  await resumeJob(jobT, actor);
+  const jt2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT } });
+  check("resume: a job paused after ₹12 spent (above every former cap) is queued again, spend kept", jt2.status === "QUEUED" && jt2.spentInr === 12 && jt2.pauseReason === null, { s: jt2.status, spent: jt2.spentInr });
+  await prisma.aiImportJob.update({ where: { id: jobT }, data: { status: "CANCELLED", spentInr: 0 } });
 
-  // T4 — the hard job limit lowered after a job was confirmed: the request is reserved against the LOWER limit.
-  const jobT4 = await newJob(actor, examId, "FX lowered job limit", { budgetInr: 8 });
+  // T4 — stored job-limit figures lowered after confirmation are not enforced: the job runs.
+  const jobT4 = await newJob(actor, examId, "FX lowered job limit");
   await upload(actor, jobT4, "photo.png");
   await requestAnalysis(jobT4, actor);
   await runWorker(60_000);
   const t4a = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT4 } });
-  await confirmJob({ jobId: jobT4, actorId: actor, examId, paperType: t4a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId: jobT4, actorId: actor, examId, paperType: t4a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY });
   const s4 = await getImporterSettings();
-  await saveImporterSettings({ ...s4, budget: { ...s4.budget, maxJobInr: 0.05, defaultJobCapInr: 0.05 } }, actor);
+  await saveImporterSettings({ ...s4, budget: { ...s4.budget, maxJobInr: 0.05, defaultJobCapInr: 0.05, totalInr: 0.05, monthlyInr: 0.05 } }, actor);
   const chats4 = (await mockStats()).chat;
   await runWorker(60_000);
   const t4 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT4 } });
-  check("₹8 job after the hard limit was lowered to ₹0.05: paused before any call", t4.status === "PAUSED_BUDGET" && /hard limit per job/.test(t4.pauseReason ?? "") && (await mockStats()).chat === chats4, { s: t4.status, r: t4.pauseReason });
+  check("stored job / monthly / all-time figures lowered to ₹0.05 after confirmation: the job is not paused and completes", t4.status === "NEEDS_REVIEW" && (await mockStats()).chat > chats4, { s: t4.status, r: t4.pauseReason });
   await setSettings(pilot, actor);
 
-  // T5 — concurrent requests on two jobs can never overspend the job, monthly or all-time caps (one lock).
+  // T5 — concurrent requests on two jobs: no cap refuses them, and each attempt is counted exactly once.
   const used = async () => (await prisma.aiBudgetReservation.findMany({ where: { feature: { startsWith: "qimport_" }, status: { not: "RELEASED" } } })).reduce((a, r) => a + (r.settledInr ?? r.reservedInr), 0);
   // Like the worker, every request uses the CURRENT saved settings.
   const callFor = async (jobId: string) => importerAiCall({ jobId, task: "classify", models: ["mocktext/classifier"], system: "You classify exam questions into an EXISTING syllabus.", content: [{ type: "text", text: "SUBJECT s = Anatomy\n  TOPIC t = Lower Limb\n[q1] femur" }], maxOutputTokens: 2500, settings: normalizeImporterSettings(await getImporterSettings()), needsVision: false });
-  const before5 = await used();
   const one = await callFor(ja);
   const worstOne = (await prisma.aiBudgetReservation.findFirstOrThrow({ where: { requestKey: { startsWith: `qi:${ja}:` } } })).reservedInr;
   check("a single classify request reserved its worst case and settled to the reported cost", worstOne > 0 && one.costInr !== null && one.costInr < worstOne, { worstOne, cost: one.costInr });
-  const capTotal = (await used()) + worstOne * 3.5;
-  const s5 = await getImporterSettings();
-  await saveImporterSettings({ ...s5, budget: { ...s5.budget, totalInr: capTotal, maxJobInr: Math.min(8, capTotal), maxRequestInr: Math.min(1, capTotal) } }, actor);
   const cfg5 = normalizeImporterSettings(await getImporterSettings());
-  check("all-time cap set below the ₹10 ceiling for the race", cfg5.budget.totalInr === capTotal && capTotal < 10, cfg5.budget.totalInr);
+  const before5 = await used();
+  const settledBefore5 = await prisma.aiBudgetReservation.count({ where: { feature: { startsWith: "qimport_" }, status: "SETTLED" } });
   const chats5 = (await mockStats()).chat;
-  // Every answer takes 1.5 s, so all 12 requests are in flight together and compete for the same budget.
   await mockConfig({ chatDelayMs: 1500 });
   const results = await Promise.allSettled(Array.from({ length: 12 }, (_, i) => importerAiCall({ jobId: i % 2 ? ja : jb, task: "classify", models: ["mocktext/classifier"], system: "You classify exam questions into an EXISTING syllabus.", content: [{ type: "text", text: `SUBJECT s = Anatomy\n  TOPIC t = Lower Limb\n[q${i}] femur` }], maxOutputTokens: 2500, settings: cfg5, needsVision: false })));
   await mockConfig({ chatDelayMs: 0 });
   const okN = results.filter((r) => r.status === "fulfilled").length;
-  // The per-job cap equals the all-time cap here, and the job check runs first: when the requests that got
-  // in all belong to one job (lock order), that job's next request is refused by its JOB cap — an equally
-  // correct refusal. Every refusal must be one of these two budget caps.
-  const scopeOf = (r: PromiseSettledResult<unknown>) => (r.status === "rejected" ? ((r.reason as { scope?: string }).scope ?? `not a budget refusal: ${String((r.reason as Error).message).slice(0, 120)}`) : null);
-  const refused = results.filter((r) => scopeOf(r) === "total" || scopeOf(r) === "job").length;
+  const costs5 = results.reduce((a, r) => a + (r.status === "fulfilled" ? ((r.value as { costInr: number | null }).costInr ?? 0) : 0), 0);
   const after5 = await used();
-  check("12 concurrent requests on 2 jobs: at most what the all-time cap allows ran (worst-case reservations, one lock); every other request refused by the all-time or the equal per-job cap", okN >= 1 && okN <= 3 && okN + refused === 12 && (await mockStats()).chat - chats5 === okN, { okN, refused, chats: (await mockStats()).chat - chats5, scopes: results.map(scopeOf).filter(Boolean) });
-  check("…total importer spend stays within the all-time cap", after5 <= capTotal + 1e-9, { after5, capTotal, before5 });
-  // The same caps in a fixed order (no timing): 3 requests of job A in flight, then one more of A and one of B.
-  const capOrdered = (await used()) + worstOne * 3.5;
-  await saveImporterSettings({ ...cfg5, budget: { ...cfg5.budget, totalInr: capOrdered, maxJobInr: Math.min(8, capOrdered), maxRequestInr: Math.min(1, capOrdered) } }, actor);
-  await mockConfig({ chatDelayMs: 4000 });
-  const inflightO: Promise<unknown>[] = [];
-  for (let i = 0; i < 3; i++) {
-    const n0 = await prisma.aiBudgetReservation.count({ where: { status: "RESERVED", feature: { startsWith: "qimport_" } } });
-    inflightO.push(callFor(ja).catch((e) => e));
-    for (let w = 0; w < 300 && (await prisma.aiBudgetReservation.count({ where: { status: "RESERVED", feature: { startsWith: "qimport_" } } })) === n0; w++) await new Promise((r) => setTimeout(r, 20));
-  }
-  const scopeNow = (p: Promise<unknown>) => p.then(() => "sent", (e) => (e as { scope?: string }).scope ?? "other");
-  const [fourthA, fifthB] = [await scopeNow(callFor(ja)), await scopeNow(callFor(jb))];
-  await Promise.all(inflightO);
-  await mockConfig({ chatDelayMs: 0 });
-  check("fixed order: with 3 of job A's requests in flight, A's next request is refused by the job cap and B's by the all-time cap (nothing sent)", fourthA === "job" && fifthB === "total", { fourthA, fifthB });
-  // A new IST month does not refresh an all-time (pilot) budget: spend up to the cap, then move every
-  // reservation into an earlier month (the monthly budget is free again, the all-time one is not).
-  await saveImporterSettings({ ...(await getImporterSettings()), budget: { ...cfg5.budget, totalInr: (await used()) + worstOne * 0.5 } }, actor);
-  await expectError("all-time cap reached → refused", () => callFor(ja), /all-time AI budget/);
-  await prisma.aiBudgetReservation.updateMany({ where: { feature: { startsWith: "qimport_" } }, data: { istMonth: "2000-01" } });
-  await expectError("monthly reset: the all-time cap still refuses (no fresh budget in a new month)", () => callFor(ja), /all-time AI budget/);
-  const monthNow = await prisma.aiBudgetReservation.count({ where: { feature: { startsWith: "qimport_" }, istMonth: { not: "2000-01" } } });
-  check("…and this month's importer spend really is zero (so only the all-time cap refused)", monthNow === 0, monthNow);
-  // Even with the all-time setting raised to its ceiling, total spend over ₹10 is refused.
-  await prisma.aiBudgetReservation.create({ data: { requestKey: `qi:${jb}:history:1`, feature: "qimport_extract", reservedInr: 9.99, settledInr: 9.99, status: "SETTLED", istDay: "2000-01-01", istMonth: "2000-01" } });
-  await setSettings(pilot, actor);
-  await expectError("₹9.99 spent in an earlier month: the next request is refused by the ₹10 all-time ceiling", () => callFor(ja), /all-time AI budget is reached \(.* of ₹10\.00/);
+  const settledAfter5 = await prisma.aiBudgetReservation.count({ where: { feature: { startsWith: "qimport_" }, status: "SETTLED" } });
+  check("12 concurrent requests on 2 jobs: all sent (no job / monthly / all-time cap)", okN === 12 && (await mockStats()).chat - chats5 === 12, { okN, rejected: results.filter((r) => r.status === "rejected").map((r) => String((r as PromiseRejectedResult).reason?.message).slice(0, 120)) });
+  check("…exactly one settled usage record per request, spend = the reported costs (nothing double-counted)", settledAfter5 - settledBefore5 === 12 && Math.abs(after5 - before5 - costs5) < 1e-6, { rows: settledAfter5 - settledBefore5, delta: after5 - before5, costs5 });
+  // Spend from earlier months and above the former ₹10 caps never refuses a request.
+  await prisma.aiBudgetReservation.create({ data: { requestKey: `qi:${jb}:history:1`, feature: "qimport_extract", reservedInr: 9.99, settledInr: 9.99, status: "SETTLED", costKnown: true, istDay: "2000-01-01", istMonth: "2000-01" } });
+  const nowMonth = (await prisma.aiBudgetReservation.findFirstOrThrow({ where: { requestKey: { startsWith: `qi:${ja}:` } }, orderBy: { createdAt: "desc" } })).istMonth;
+  await prisma.aiBudgetReservation.create({ data: { requestKey: `qi:${jb}:history:2`, feature: "qimport_extract", reservedInr: 11, settledInr: 11, status: "SETTLED", costKnown: true, istDay: `${nowMonth}-01`, istMonth: nowMonth } });
+  const after10 = await callFor(ja).then(() => true, (e) => (e as Error).message);
+  check("₹9.99 in an earlier month + ₹11 this month (above the former ₹10 all-time and monthly caps): the next request is still sent", after10 === true, after10);
   await freshPilotBudget();
 
   // T6 — Student Ask AI reserve on the shared key.
@@ -1000,7 +971,7 @@ async function sectionT(actor: string, examId: string) {
   await requestAnalysis(jobT7, actor);
   await runWorker(60_000);
   await mockConfig({ costMultiplier: 30 });
-  const t7 = await analyzeAndConfirmExisting(actor, jobT7, 8);
+  const t7 = await analyzeAndConfirmExisting(actor, jobT7);
   await mockConfig({ costMultiplier: 1 });
   check("worker: overrun → Paused — budget limit with the reason", t7.status === "PAUSED_BUDGET" && /more than its reserved maximum/.test(t7.pauseReason ?? ""), { s: t7.status, r: t7.pauseReason });
   await freshPilotBudget();
@@ -1029,7 +1000,7 @@ async function sectionT(actor: string, examId: string) {
   await requestAnalysis(jobT9, actor);
   await runWorker(60_000);
   const t9a = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT9 } });
-  await confirmJob({ jobId: jobT9, actorId: actor, examId, paperType: t9a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId: jobT9, actorId: actor, examId, paperType: t9a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   const plan9 = (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT9 } })).config as { modelPlan: { tasks: { extract: { maxInr: number }; verify: { maxInr: number } } } };
   // Lower the per-request limit between the reader's and the checker's maximum: extraction runs, the second read is refused.
   const cap9 = plan9.modelPlan.tasks.extract.maxInr + 0.01;
@@ -1051,7 +1022,7 @@ async function sectionT(actor: string, examId: string) {
   await upload(actor, jobT10, "photo.png");
   await requestAnalysis(jobT10, actor);
   await runWorker(60_000);
-  await analyzeAndConfirmExisting(actor, jobT10, 8);
+  await analyzeAndConfirmExisting(actor, jobT10);
   const r10 = await prisma.aiBudgetReservation.findMany({ where: { requestKey: { startsWith: `qi:${jobT10}:` } } });
   check("retry: each attempt made its own reservation under the same limits", r10.length === 2 && r10.every((r) => r.status === "RELEASED"), r10.map((r) => [r.requestKey.split(":").pop(), r.status]));
   await setSettings((s) => ({ ...s, aiEnabled: false, models: { ...s.models, extract: "mockvision/reader" }, budget: { ...s.budget, retryTransient: false } }), actor);
@@ -1081,8 +1052,7 @@ async function sectionT(actor: string, examId: string) {
   check("fallback priced above the extraction model → refused", (await probs({ extract: "mockvision/reader", extractFallbacks: ["mockvision/pricey"] })).some((p) => /costs more than the extraction model/.test(p)));
   check("unreadable image price as extraction model → refused", (await probs({ extract: "mockvision/badimg" })).some((p) => /per-image input price/.test(p)));
   check("automatic selection: manual model fields are not checked (they are not used)", (await importerSettingsProblems({ ...base11, selection: { mode: "auto" }, models: { ...base11.models, extract: "mocktext/classifier" } }, normalizeImporterSettings({ ...base11, selection: { mode: "auto" }, models: { ...base11.models, extract: "mocktext/classifier" } }))).length === 0);
-  check("per-request cap above the hard job limit → refused", (await probs({}, { maxRequestInr: 1, maxJobInr: 0.5 })).some((p) => /cannot be above the hard limit per job/.test(p)));
-  check("hard job limit above the all-time budget → refused", (await probs({}, { maxJobInr: 8, totalInr: 5 })).some((p) => /cannot be above the all-time/.test(p)));
+  check("former job / all-time figures are no longer cross-validated (not enforced)", !(await probs({}, { maxRequestInr: 1, maxJobInr: 0.5, totalInr: 0.2 })).some((p) => /hard limit per job|all-time/.test(p)));
 
   // T12 — catalog/status payload for the settings page.
   const cat = await importerModelCatalog();
@@ -1194,7 +1164,7 @@ async function sectionU(actor: string, examId: string) {
   // Make the stored snapshot stale so confirmation reads the routes again (and fails again).
   await prisma.setting.update({ where: { key: "ai.importer.routes" }, data: { value: { ...((await getRouteSnapshot()) as object), fetchedAt: new Date(Date.now() - 7 * 3_600_000).toISOString() } as never } });
   const readsU6 = (await mockStats()).routeReads;
-  await expectError("confirm with unreadable route metadata → refused, nothing started", () => confirmJob({ jobId: jobU6, actorId: actor, examId, paperType: u6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }), /Page reading.*provider routes could not be read.*Nothing was started/);
+  await expectError("confirm with unreadable route metadata → refused, nothing started", () => confirmJob({ jobId: jobU6, actorId: actor, examId, paperType: u6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY}), /Page reading.*provider routes could not be read.*Nothing was started/);
   check("…stale route data was read again at confirmation; no AI call", (await mockStats()).routeReads > readsU6 && (await mockStats()).chat === chatsU6);
   await mockConfig({ endpointsStatus: null, zdrStatus: 503 });
   await refreshRoutesNow();
@@ -1219,7 +1189,7 @@ async function sectionU(actor: string, examId: string) {
   const lost = await computeModelPlan(await cfg(), { refresh: true });
   check("confirmation path: stale data that can no longer be verified (ZDR list unreadable) → no model; old 'eligible' never reused", lost.tasks.extract.model === null && /Zero-Data-Retention route list could not be read/.test(lost.tasks.extract.reason), lost.tasks.extract.reason);
   await ageRoutes();
-  await expectError("confirm with stale routes that fail the recheck → refused, nothing started", () => confirmJob({ jobId: jobU6, actorId: actor, examId, paperType: u6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }), /Zero-Data-Retention route list could not be read[\s\S]*Nothing was started/);
+  await expectError("confirm with stale routes that fail the recheck → refused, nothing started", () => confirmJob({ jobId: jobU6, actorId: actor, examId, paperType: u6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY}), /Zero-Data-Retention route list could not be read[\s\S]*Nothing was started/);
   check("…no AI request was made by any recheck", (await mockStats()).chat === chatsB);
   await mockConfig({ zdrStatus: null });
   await refreshRoutesNow();
@@ -1228,7 +1198,7 @@ async function sectionU(actor: string, examId: string) {
   await setSettings((s) => ({ ...s, budget: { ...s.budget, maxRequestInr: 0.1 } }), actor);
   const poor = await computeModelPlan(await cfg(), { refresh: false });
   check("per-request limit ₹0.10 → no vision model affordable; the reason lists each model's maximum", poor.tasks.extract.model === null && /No approved model is suitable and affordable/.test(poor.tasks.extract.reason) && /above the per-request limit of ₹0\.10/.test(poor.tasks.extract.reason), poor.tasks.extract.reason);
-  await expectError("…confirm refused with that reason", () => confirmJob({ jobId: jobU6, actorId: actor, examId, paperType: u6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 }), /No approved model is suitable and affordable/);
+  await expectError("…confirm refused with that reason", () => confirmJob({ jobId: jobU6, actorId: actor, examId, paperType: u6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY}), /No approved model is suitable and affordable/);
   await setSettings(auto, actor);
 
   // U8 — automatic selection drives a real job (digital + scanned paper + scanned key), frozen at confirmation.
@@ -1242,7 +1212,7 @@ async function sectionU(actor: string, examId: string) {
   const u8a = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobU8 } });
   const u8est = u8a.estimate as { totalInr: number; maxInr: number; plan: { tasks: { extract: { model: string } } } };
   check("analysis estimate shows the automatic plan, typical and maximum cost", u8est.plan.tasks.extract.model === "mockvision/reader" && u8est.maxInr > u8est.totalInr && u8est.totalInr > 0, { est: u8est.totalInr, max: u8est.maxInr });
-  await confirmJob({ jobId: jobU8, actorId: actor, examId, paperType: u8a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId: jobU8, actorId: actor, examId, paperType: u8a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   const u8c = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobU8 } });
   const frozen = (u8c.config as { modelPlan: { tasks: Record<string, { model: string | null }> } }).modelPlan;
   check("confirmation froze the plan on the job (extract reader, verify mid, key reader)", frozen.tasks.extract.model === "mockvision/reader" && frozen.tasks.verify.model === "mockvision/mid" && frozen.tasks.key.model === "mockvision/reader", frozen.tasks);
@@ -1255,7 +1225,7 @@ async function sectionU(actor: string, examId: string) {
   check("job processed with the frozen automatic plan (checker never used)", u8.status === "NEEDS_REVIEW" && (ms8.byModel["mockvision/reader"] ?? 0) >= 2 && (ms8.byModel["mockvision/mid"] ?? 0) >= 1 && !ms8.byModel["mockvision/checker"], { s: u8.status, by: ms8.byModel, e: u8.errorMessage });
   const u8calls = await prisma.aiImportAiCall.findMany({ where: { jobId: jobU8 } });
   check("every call recorded with the selected model ID and actual cost", u8calls.length > 0 && u8calls.every((c) => ["mockvision/reader", "mockvision/mid"].includes(c.model) && c.costStatus === "actual"), u8calls.map((c) => [c.task, c.model, c.costStatus]));
-  check("actual spend within the job budget and the confirmed maximum", u8.spentInr > 0 && u8.spentInr <= u8est.maxInr && u8.spentInr <= 8, { spent: u8.spentInr, max: u8est.maxInr });
+  check("actual spend within the confirmed maximum", u8.spentInr > 0 && u8.spentInr <= u8est.maxInr, { spent: u8.spentInr, max: u8est.maxInr });
   check("privacy: every request required ZDR, no data collection, all parameters honoured", ms8.zdr.every(Boolean) && ms8.privacy.every((p) => p === "deny") && ms8.requireParams.every(Boolean) && ms8.zdr.length === ms8.chat);
   const u8q = await prisma.aiImportQuestion.findMany({ where: { jobId: jobU8 } });
   check("scanned paper read and the scanned key matched (auto models)", u8q.length >= 3 && u8q.some((x) => x.answerStatus === "OFFICIAL_MATCHED"), u8q.map((x) => [x.sourceLabel, x.answerStatus]));
@@ -1269,7 +1239,7 @@ async function sectionU(actor: string, examId: string) {
     await requestAnalysis(id, actor);
     await runWorker(60_000);
     const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id } });
-    await confirmJob({ jobId: id, actorId: actor, examId, paperType: j.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+    await confirmJob({ jobId: id, actorId: actor, examId, paperType: j.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
     return id;
   };
   const jobU9 = await runJob("FX unavailable model");
@@ -1281,7 +1251,7 @@ async function sectionU(actor: string, examId: string) {
   check("…the unavailable attempt cost nothing (released)", u9.spentInr === 0 && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${jobU9}:` }, status: { not: "RELEASED" } } })) === 0);
   // The administrator allows a pricier fallback: resumed, the replacement is used, recorded and shown.
   await setSettings((s) => ({ ...s, budget: { ...s.budget, allowPricierFallback: true } }), actor);
-  await resumeJob(jobU9, actor, null);
+  await resumeJob(jobU9, actor);
   await runWorker(120_000);
   u9 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobU9 } });
   const ev9 = await prisma.aiImportEvent.findFirst({ where: { jobId: jobU9, type: "MODEL_REPLACED" } });
@@ -1316,14 +1286,12 @@ async function sectionU(actor: string, examId: string) {
   await mockConfig({ zdrRemoved: [] });
   await refreshRoutesNow();
 
-  // U10 — concurrent jobs share the all-time cap: two worker loops at once never overspend it.
+  // U10 — two worker processes at once: no shared cap stops them, and every request is counted once.
   await freshPilotBudget();
   const c1 = await runJob("FX concurrent job 1");
   const c2 = await runJob("FX concurrent job 2");
-  const per = (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: c1 } })).estimate as { maxInr: number };
   const sC = await getImporterSettings();
-  const capC = per.maxInr * 1.2;
-  await saveImporterSettings({ ...sC, budget: { ...sC.budget, totalInr: capC } }, actor);
+  await saveImporterSettings({ ...sC, budget: { ...sC.budget, totalInr: 0.01, monthlyInr: 0.01 } }, actor);
   // Two worker PROCESSES at once (production runs one under flock; leases + the budget lock must hold even without it).
   await mockConfig({ chatDelayMs: 800 });
   const { spawn: spawnU } = await import("node:child_process");
@@ -1333,8 +1301,10 @@ async function sectionU(actor: string, examId: string) {
   const usedC = (await prisma.aiBudgetReservation.findMany({ where: { feature: { startsWith: "qimport_" }, status: { not: "RELEASED" } } })).reduce((a, r) => a + (r.settledInr ?? r.reservedInr), 0);
   const jc1 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: c1 } });
   const jc2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: c2 } });
-  check("two jobs, two workers, an all-time cap smaller than both maxima: spend stays within the cap", usedC <= capC + 1e-9, { usedC, capC });
-  check("…at least one job finished; any stopped job says the all-time budget was reached", [jc1, jc2].some((j) => j.status === "NEEDS_REVIEW") && [jc1, jc2].every((j) => j.status === "NEEDS_REVIEW" || (j.status === "PAUSED_BUDGET" && /all-time/.test(j.pauseReason ?? ""))), [jc1.status, jc1.pauseReason, jc1.errorMessage, jc2.status, jc2.pauseReason, jc2.errorMessage]);
+  const callsC = await prisma.aiImportAiCall.count({ where: { jobId: { in: [c1, c2] }, costStatus: "actual" } });
+  const rowsC = await prisma.aiBudgetReservation.count({ where: { feature: { startsWith: "qimport_" }, status: "SETTLED", costKnown: true } });
+  check("two jobs, two workers, stored all-time / monthly figures of ₹0.01: both jobs finish (no cap)", jc1.status === "NEEDS_REVIEW" && jc2.status === "NEEDS_REVIEW", [jc1.status, jc1.pauseReason, jc2.status, jc2.pauseReason]);
+  check("…one settled usage record per priced AI call; job spend sums match the ledger (no double count)", callsC === rowsC && Math.abs(jc1.spentInr + jc2.spentInr - usedC) < 1e-6, { callsC, rowsC, spent: jc1.spentInr + jc2.spentInr, usedC });
   await setSettings(auto, actor);
   await freshPilotBudget();
 
@@ -1342,7 +1312,7 @@ async function sectionU(actor: string, examId: string) {
   await setSettings((s) => ({ ...s, aiEnabled: false }), actor);
   const jobR = await newJob(actor, examId, "FX reset zero job");
   const wrong = await upload(actor, jobR, "photo.png");
-  const r0 = await analyzeAndConfirm(actor, jobR, 8);
+  const r0 = await analyzeAndConfirm(actor, jobR);
   check("AI off: processed, zero questions, ₹0 → needs review", r0.status === "NEEDS_REVIEW" && r0.spentInr === 0 && (await prisma.aiImportQuestion.count({ where: { jobId: jobR } })) === 0, r0.status);
   await expectError("before reset: removing a processed file is refused", () => removeFile({ jobId: jobR, fileId: wrong.fileId, actorId: actor }), /import is running|use Delete import/);
   const el = await resetEligibility(jobR);
@@ -1375,7 +1345,7 @@ async function sectionU(actor: string, examId: string) {
   await refuse("refused: ₹0 but an AI request was reserved (conservative)", zeroSpendFailedCall.id, /₹0 AI expenditure.*budget reservation/);
   const jobR3 = await newJob(actor, examId, "FX reset refused states");
   await upload(actor, jobR3, "photo.png");
-  await analyzeAndConfirm(actor, jobR3, 8);
+  await analyzeAndConfirm(actor, jobR3);
   await prisma.aiImportJob.update({ where: { id: jobR3 }, data: { leaseOwner: "other-worker", leaseUntil: new Date(Date.now() + 60_000) } });
   await refuse("refused: a worker holds the job", jobR3, /No worker is running the job: A worker holds/);
   await prisma.aiImportJob.update({ where: { id: jobR3 }, data: { leaseOwner: null, leaseUntil: null, status: "PROCESSING" } });
@@ -1456,7 +1426,7 @@ async function sectionV(actor: string, examId: string) {
   // V4 — a full job on importer-only models: no global approval needed or changed.
   const jobV = await newJob(actor, examId, "FX importer-only models");
   await upload(actor, jobV, "photo.png");
-  const jv = await analyzeAndConfirm(actor, jobV, 8);
+  const jv = await analyzeAndConfirm(actor, jobV);
   const callsV = await prisma.aiImportAiCall.findMany({ where: { jobId: jobV } });
   check("job processed with importer-only models (reader), global approvals unchanged", jv.status === "NEEDS_REVIEW" && callsV.some((c) => c.model === "mockvision/reader" && c.ok) && (await globalFlags()) === flags0, { s: jv.status, calls: callsV.map((c) => c.model) });
 
@@ -1471,7 +1441,7 @@ async function sectionV(actor: string, examId: string) {
   await requestAnalysis(jobV6, actor);
   await runWorker(60_000);
   const v6a = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobV6 } });
-  await confirmJob({ jobId: jobV6, actorId: actor, examId, paperType: v6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId: jobV6, actorId: actor, examId, paperType: v6a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   await setSettings((s) => ({ ...s, importerModels: ["mockvision/mid", "mocktext/classifier"] }), actor);
   await prisma.aiModel.update({ where: { id: "mockvision/reader" }, data: { approved: true } }); // globally approved now — must not matter
   const chatsV6 = (await mockStats()).byModel["mockvision/reader"] ?? 0;
@@ -1560,7 +1530,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   await runWorker(60_000);
   let job = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j1 } });
   const verdictOf = (j: typeof job, opts: Partial<{ aiEnabled: boolean; remaining: number }> = {}) =>
-    analyzerVerdict({ analysis: j.analysis as never, estimate: j.estimate as never, aiEnabled: opts.aiEnabled ?? false, remainingBudgetInr: opts.remaining ?? 10, jobBudgetInr: Math.min(j.budgetInr, settings.budget.maxJobInr), limits, paperType: j.paperType });
+    analyzerVerdict({ analysis: j.analysis as never, estimate: j.estimate as never, aiEnabled: opts.aiEnabled ?? false, limits, paperType: j.paperType });
   const v1 = verdictOf(job);
   check("analysis done → awaiting the one click", job.status === "AWAITING_CONFIRMATION", job.status);
   check("verdict: digital PDF read locally, ₹0, can process", v1.strategy === "LOCAL" && v1.model.local && v1.maxCostInr === 0 && v1.canProcess, { s: v1.strategy, m: v1.model, max: v1.maxCostInr });
@@ -1571,10 +1541,10 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   check("no AI call during upload or analysis", (await mockStats()).chat === 0);
 
   // W3 — Process & Import: confirm with automatic Draft import, one worker run, real Bulk Import.
-  await expectError("a model that is not on the importer's own list is refused", () => confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" }, modelOverride: "mockvision/not-listed" }), /not on the importer's own model list/);
+  await expectError("a model that is not on the importer's own list is refused", () => confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY, autoImport: { mode: "DRAFT" }, modelOverride: "mockvision/not-listed" }), /not on the importer's own model list/);
   const qBefore = await prisma.question.count();
-  await confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
-  await expectError("a second click cannot confirm again", () => confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } }), /Only an analyzed import/);
+  await confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY, autoImport: { mode: "DRAFT" } });
+  await expectError("a second click cannot confirm again", () => confirmJob({ jobId: j1, actorId: actor, examId, paperType: job.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY, autoImport: { mode: "DRAFT" } }), /Only an analyzed import/);
   await runWorker(300_000);
   job = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j1 } });
   const imp = await prisma.aiImportQuestion.findMany({ where: { jobId: j1, questionId: { not: null } } });
@@ -1623,7 +1593,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   const vF = verdictOf(await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jF } }));
   check("verdict warns that subjects come from headings when AI is off", vF.warnings.some((w) => /section headings/.test(w)), vF.warnings);
   const jFrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jF } });
-  await confirmJob({ jobId: jF, actorId: actor, examId, paperType: jFrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
+  await confirmJob({ jobId: jF, actorId: actor, examId, paperType: jFrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY, autoImport: { mode: "DRAFT" } });
   await runWorker(300_000);
   [card] = await jobCards({ ids: [jF] }, true);
   check("no subject → nothing imported, label Needs review, next action names the fix", card.counts.imported === 0 && card.counts.noSubject > 0 && card.label === "Needs Correction" && /Single-subject/.test(card.nextAction), { label: card.label, c: card.counts, next: card.nextAction });
@@ -1637,7 +1607,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   const vS = verdictOf(jSrow);
   check("verdict: scanned + AI off → blocked, reason + next action, nothing charged", vS.strategy === "BLOCKED" && !vS.canProcess && /scanned/i.test(vS.blocker?.reason ?? "") && /digital PDF/.test(vS.blocker?.nextAction ?? ""), vS.blocker);
   check("verdict: OCR need detected, question count not invented", /Yes/.test(vS.facts.find((f) => f.label === "OCR / vision needed")?.value ?? "") && vS.facts.find((f) => f.label === "Questions")?.kind === "unavailable", vS.facts);
-  await confirmJob({ jobId: jS, actorId: actor, examId, paperType: jSrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
+  await confirmJob({ jobId: jS, actorId: actor, examId, paperType: jSrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY, autoImport: { mode: "DRAFT" } });
   await runWorker(300_000);
   jSrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jS } });
   [card] = await jobCards({ ids: [jS] }, true);
@@ -1646,13 +1616,12 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
 
   // W6 — pure verdict: model choice and budgets (scanned paper, AI on).
   const fakePlan = (model: string | null, maxInr: number | null) => ({ ...(jSrow.estimate as object), maxInr, totalInr: maxInr === null ? null : maxInr / 2, plan: { mode: "auto", tasks: { extract: { model, routes: model ? ["vertex/zdr"] : [], reason: model ? "Cheapest suitable vision model" : "No importer model can read images", maxInr: 0.4 }, verify: { model: null, reason: "-" }, key: { model, reason: "-" }, classify: { model, reason: "-" } } } });
-  const vAi = (est: object, remaining = 10) => analyzerVerdict({ analysis: jSrow.analysis as never, estimate: est as never, aiEnabled: true, remainingBudgetInr: remaining, jobBudgetInr: 8, limits, paperType: "FULL_PAPER" });
+  const vAi = (est: object) => analyzerVerdict({ analysis: jSrow.analysis as never, estimate: est as never, aiEnabled: true, limits, paperType: "FULL_PAPER" });
   const okV = vAi(fakePlan("mockvision/cheap", 2));
   check("AI on: scanned pages use the planned vision model, shown with route and reason", okV.strategy === "AI" && okV.canProcess && okV.model.name === "mockvision/cheap" && okV.model.route === "vertex/zdr" && /Cheapest/.test(okV.model.reason) && okV.maxCostInr === 2, okV.model);
-  check("over the job budget → blocked (never silently processed)", !vAi(fakePlan("mockvision/cheap", 9)).canProcess);
-  const noYear = analyzerVerdict({ analysis: jSrow.analysis as never, estimate: fakePlan("mockvision/cheap", 2) as never, aiEnabled: true, remainingBudgetInr: 10, jobBudgetInr: 8, limits, paperType: "FULL_PAPER", yearMissing: true });
+  check("maximum above the former ₹8 job limit → not blocked (the cost is confirmed instead)", vAi(fakePlan("mockvision/cheap", 9)).canProcess && vAi(fakePlan("mockvision/cheap", 9)).maxCostInr === 9);
+  const noYear = analyzerVerdict({ analysis: jSrow.analysis as never, estimate: fakePlan("mockvision/cheap", 2) as never, aiEnabled: true, limits, paperType: "FULL_PAPER", yearMissing: true });
   check("no paper year and no exam year → blocked before processing (the Bulk Import would refuse every question)", !noYear.canProcess && /no paper year/.test(noYear.blocker?.reason ?? ""), noYear.blocker);
-  check("over the remaining pilot budget → blocked", !vAi(fakePlan("mockvision/cheap", 3), 2).canProcess);
   check("maximum cost unknown → blocked", !vAi(fakePlan("mockvision/cheap", null)).canProcess);
   check("no eligible model → blocked with the reason, no fallback invented", (() => { const b = vAi(fakePlan(null, 2)); return !b.canProcess && b.model.name === "No suitable model" && /No importer model/.test(b.blocker?.reason ?? ""); })());
 
@@ -1662,7 +1631,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   await requestAnalysis(jC, actor);
   await runWorker(60_000);
   let jCrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jC } });
-  await confirmJob({ jobId: jC, actorId: actor, examId, paperType: jCrow.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8, autoImport: { mode: "DRAFT" } });
+  await confirmJob({ jobId: jC, actorId: actor, examId, paperType: jCrow.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY, autoImport: { mode: "DRAFT" } });
   await cancelJob(jC, actor);
   await runWorker(60_000);
   jCrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jC } });
@@ -1684,7 +1653,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   await requestAnalysis(jK, actor);
   await runWorker(60_000);
   const jKrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jK } });
-  await confirmJob({ jobId: jK, actorId: actor, examId, paperType: jKrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId: jK, actorId: actor, examId, paperType: jKrow.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   await prisma.aiImportJob.update({ where: { id: jK }, data: { status: "PROCESSING" } });
   const call = async () => importerAiCall({ jobId: jK, task: "classify", models: [], system: "Classify.", content: [{ type: "text", text: "Which nerve supplies the deltoid?" }], maxOutputTokens: 200, settings: await getImporterSettings(), needsVision: false });
   const c0 = (await mockStats()).chat;
@@ -1727,7 +1696,7 @@ async function sectionW(actor: string, examId: string, subjectId: string) {
   await requestAnalysis(jR, actor);
   await runWorker(60_000);
   const jRrow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jR } });
-  await confirmJob({ jobId: jR, actorId: actor, examId, paperType: jRrow.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
+  await confirmJob({ jobId: jR, actorId: actor, examId, paperType: jRrow.paperType, subjectId, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY});
   await prisma.aiImportJob.update({ where: { id: jR }, data: { status: "PROCESSING", leaseOwner: "live-worker", leaseUntil: new Date(Date.now() + 120_000), heartbeatAt: new Date() } });
   const live = await recoverJob(jR, actor);
   const liveRow = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jR } });
@@ -1827,7 +1796,7 @@ async function sectionX(actor: string, examId: string) {
   };
   const confirm = async (jobId: string) => {
     const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
-    await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, budgetInr: 8 });
+    await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY});
   };
   const analyzed = async (title: string, file: string, key?: string) => {
     const id = await newJob(actor, examId, title);
@@ -2021,7 +1990,7 @@ async function sectionX(actor: string, examId: string) {
     const verdictOf = async (jobId: string, patch?: (e: Record<string, unknown>) => Record<string, unknown>) => {
       const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
       const est = j.estimate as Record<string, unknown>;
-      return analyzerVerdict({ analysis: j.analysis as never, estimate: (patch ? patch(est) : est) as never, aiEnabled: true, remainingBudgetInr: 10, jobBudgetInr: 8, limits: { maxPagesPerFile: 300, maxFileMb: 100 } });
+      return analyzerVerdict({ analysis: j.analysis as never, estimate: (patch ? patch(est) : est) as never, aiEnabled: true, limits: { maxPagesPerFile: 300, maxFileMb: 100 } });
     };
     const v1 = await verdictOf(j1);
     check("X8 a job on published-₹0 models: cost basis “zero_published” (₹0.00 is a known zero) and a rate-limit warning", v1.costBasis === "zero_published" && v1.estimatedCostInr === 0 && v1.warnings.some((w) => /published price of ₹0/.test(w) && /rate-limited/.test(w)), { b: v1.costBasis, e: v1.estimatedCostInr });
@@ -2135,9 +2104,9 @@ async function sectionY(actor: string, examId: string) {
     await runWorker(120_000);
     return id;
   };
-  const confirm = async (jobId: string, budgetInr = 8) => {
+  const confirm = async (jobId: string) => {
     const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
-    await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, budgetInr });
+    await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY });
   };
   const VISION_ROWS = ["scanned", "digital", "mathematics", "chemistry", "diagrams"];
   const FREE_RL = "y-rl-";
@@ -2203,7 +2172,7 @@ async function sectionY(actor: string, examId: string) {
     check("Y1 OCR resolution raised to 150 DPI (images stay capped, cost unchanged); concurrency not increased", pr.limits.renderDpi === 150 && pr.limits.concurrency <= 2);
     const ch = (k: string) => p1.changes.find((c) => c.key === k)!;
     check("Y1 current-versus-proposed table: models and DPI changed; Paid AI, budgets, privacy unchanged", ch("models.extract").changed && ch("limits.renderDpi").changed && !ch("aiEnabled").changed && ch("budget").proposed === "unchanged" && ch("privacy").proposed === "unchanged");
-    check("Y1 job cost: estimate and conservative maximum known, compared with the ₹8 job limit", p1.jobCost.estimateInr !== null && p1.jobCost.maxInr !== null && p1.jobCost.jobCapInr === 8 && typeof p1.jobCost.fitsJobCap === "boolean" && (p1.jobCost.maxScannedPagesPerJob ?? -1) >= 0, p1.jobCost);
+    check("Y1 job cost: estimate, estimated maximum and the maximum per scanned page known (no job cap any more)", p1.jobCost.estimateInr !== null && p1.jobCost.maxInr !== null && (p1.jobCost.maxPerPageInr ?? -1) >= 0 && !("jobCapInr" in p1.jobCost), p1.jobCost);
     check("Y1 Paid AI status stated (OFF; not switched on)", p1.paidAiOn === false && /does not switch it on/.test(p1.paidAiText));
     await expectError("Y1 safety guard: a proposal that raises a budget is refused", async () => assertSafeProposal(s1, { ...pr, budget: { ...pr.budget, maxJobInr: 9 } }), /a budget would change/);
     await expectError("Y1 safety guard: a proposal that switches Paid AI on is refused", async () => assertSafeProposal(s1, { ...pr, aiEnabled: true }), /Paid AI would change/);
@@ -2318,11 +2287,9 @@ async function sectionY(actor: string, examId: string) {
     check("Y5 preview: current → proposed models, finished pages kept, only failed/pending pages to read, cost known, no AI request", rp.tasks.find((t) => t.task === "extract")!.current === "mockvision/reader" && rp.tasks.find((t) => t.task === "extract")!.proposed === NEW && rp.donePages === before5.done && rp.retryPages === before5.pending + before5.failed && rp.maxInr !== null && rp.blocking.length === 0 && (await yStats()).chat === st5.chat && rp.aiRequestsSent === 0, { rp: { ...rp, tasks: undefined }, before5 });
     await expectError("Y5 confirmation with a different preview → refused", () => reconfigureJob({ jobId: j5, proposalKey: "other", actorId: actor }), /changed since the preview/);
     const spent5 = job5.spentInr;
-    await prisma.aiImportJob.update({ where: { id: j5 }, data: { spentInr: 7.9999 } });
+    await prisma.aiImportJob.update({ where: { id: j5 }, data: { spentInr: 12 } });
     const rpb = await reconfigurePreview(j5);
-    check("Y5 no model fits what the job may still spend → stops safely (budget never raised)", rpb.blocking.some((b) => /No suitable model fits the existing budget/.test(b)));
-    await expectError("Y5 …and confirming is refused", () => reconfigureJob({ jobId: j5, proposalKey: rpb.proposalKey, actorId: actor }), /fits the existing budget/);
-    check("Y5 …the job is unchanged (paused, same models, same budget)", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).status === "PAUSED" && planOf((await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).config)?.tasks.extract.model === "mockvision/reader" && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: j5 } })).budgetInr === job5.budgetInr);
+    check("Y5 spend above every former cap (₹12): the preview is not blocked by a budget; the cost is shown for confirmation", !rpb.blocking.some((b) => /budget/i.test(b)) && rpb.maxInr !== null && rpb.spentInr >= 12, { blocking: rpb.blocking, max: rpb.maxInr, spent: rpb.spentInr });
     await prisma.aiImportJob.update({ where: { id: j5 }, data: { spentInr: spent5 } });
     const rp2 = await reconfigurePreview(j5);
     const res5 = await reconfigureJob({ jobId: j5, proposalKey: rp2.proposalKey, actorId: actor });
@@ -2417,9 +2384,9 @@ async function sectionZ(actor: string, examId: string) {
     await runWorker(120_000);
     return id;
   };
-  const confirm = async (jobId: string, budgetInr = 8) => {
+  const confirm = async (jobId: string) => {
     const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
-    await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, budgetInr });
+    await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY });
   };
   const job = (id: string) => prisma.aiImportJob.findUniqueOrThrow({ where: { id } });
   const clearHistory = () => prisma.aiGatewayCall.deleteMany({ where: { model: { startsWith: "mock" } } });
@@ -2652,9 +2619,9 @@ async function sectionZ(actor: string, examId: string) {
   }
 }
 
-async function analyzeAndConfirmExisting(actor: string, jobId: string, budgetInr: number) {
+async function analyzeAndConfirmExisting(actor: string, jobId: string) {
   const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
-  await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, budgetInr });
+  await confirmJob({ jobId, actorId: actor, examId: j.examId, paperType: j.paperType, subjectId: j.subjectId, year: j.year, paperCode: j.paperCode, previousYearPaperId: j.previousYearPaperId, confirmedMaxInr: CONFIRM_ANY });
   await runWorker(300_000);
   return prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
 }

@@ -4,7 +4,8 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getExamSubjects } from "@/lib/exam-taxonomy";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { jobCards, jobMapping, remainingPilotBudget } from "@/lib/ai-import/job-view";
+import { jobCards, jobMapping } from "@/lib/ai-import/job-view";
+import { importerSpendSummary } from "@/lib/ai-import/ledger";
 import { jobQuality } from "@/lib/ai-import/summary";
 import { analyzerVerdict } from "@/lib/ai-import/verdict";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
@@ -36,15 +37,14 @@ export default async function AiImporterPage({ searchParams }: { searchParams: P
   ]);
   const options: ExamOption[] = await Promise.all(exams.map(async (e) => ({ ...e, subjects: await getExamSubjects(prisma, e.id), papers: papers.filter((p) => p.examId === e.id) })));
   const defaultExamId = (lastJob && exams.some((e) => e.id === lastJob.examId) ? lastJob.examId : null) ?? exams.find((e) => e.isActive)?.id ?? "";
-  const pilot = await remainingPilotBudget(settings);
 
   let current: CurrentJob | null = null;
   const jobId = typeof jobParam === "string" && /^[a-z0-9]{10,40}$/.test(jobParam) ? jobParam : null;
   if (jobId) {
     const [card] = await jobCards({ ids: [jobId] }, canManage);
-    const job = card ? await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { analysis: true, estimate: true, budgetInr: true, examId: true, paperType: true, year: true, previousYearPaperId: true, files: { where: { role: "PAPER", status: { not: "REJECTED" } }, select: { id: true, originalName: true, pageCount: true }, orderBy: { createdAt: "asc" } } } }) : null;
-    const [mapping, quality, stage] = job ? await Promise.all([jobMapping(jobId), jobQuality(jobId), prisma.aiImportEvent.findFirst({ where: { jobId, type: "STAGE" }, orderBy: { createdAt: "desc" }, select: { message: true } })]) : [null, null, null];
-    if (card && job && mapping) {
+    const job = card ? await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { analysis: true, estimate: true, examId: true, paperType: true, year: true, previousYearPaperId: true, files: { where: { role: "PAPER", status: { not: "REJECTED" } }, select: { id: true, originalName: true, pageCount: true }, orderBy: { createdAt: "asc" } } } }) : null;
+    const [mapping, quality, stage, spend] = job ? await Promise.all([jobMapping(jobId), jobQuality(jobId), prisma.aiImportEvent.findFirst({ where: { jobId, type: "STAGE" }, orderBy: { createdAt: "desc" }, select: { message: true } }), importerSpendSummary(jobId)]) : [null, null, null, null];
+    if (card && job && mapping && spend) {
       const analysis = job.analysis as unknown as JobAnalysis | null;
       const yearMissing = !job.year && !job.previousYearPaperId && !exams.find((e) => e.id === job.examId)?.year;
       const estimate = (job.estimate as unknown as CostEstimate | null) ?? analysis?.estimate ?? null;
@@ -58,13 +58,12 @@ export default async function AiImporterPage({ searchParams }: { searchParams: P
         files: job.files.map((f) => ({ id: f.id, name: f.originalName, pageCount: f.pageCount })),
         stage: stage?.message ?? null,
         verifyAvailable: !!estimate?.plan?.tasks.verify.model,
+        spend,
         verdict: analysis
           ? analyzerVerdict({
               analysis,
               estimate: (job.estimate as unknown as CostEstimate | null) ?? null,
               aiEnabled: settings.aiEnabled,
-              remainingBudgetInr: pilot.remainingInr,
-              jobBudgetInr: Math.min(job.budgetInr, settings.budget.maxJobInr),
               limits: settings.limits,
               paperType: job.paperType,
               yearMissing,
@@ -81,12 +80,10 @@ export default async function AiImporterPage({ searchParams }: { searchParams: P
       canManage={canManage}
       exams={options}
       defaultExamId={defaultExamId}
-      defaultBudget={settings.budget.defaultJobCapInr}
       limits={{ maxFileMb: settings.limits.maxFileMb, maxPagesPerFile: settings.limits.maxPagesPerFile }}
       aiEnabled={settings.aiEnabled}
       selection={{ mode: settings.selection.mode, model: settings.selection.mode === "manual" ? settings.models.extract : null }}
       importerModels={settings.importerModels}
-      pilot={pilot}
       current={current}
       missingJob={!!jobParam && !current}
       recent={recent}

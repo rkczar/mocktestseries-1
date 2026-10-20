@@ -726,7 +726,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       <Card>
         <CardHeader>
           <CardTitle>Paid AI processing</CardTitle>
-          <CardDescription>Off: only local parsing (digital PDFs, DOCX, spreadsheets) runs and scanned pages are flagged. On: AI calls run only after a job&apos;s estimate is confirmed, inside the budgets below.</CardDescription>
+          <CardDescription>Off: only local parsing (digital PDFs, DOCX, spreadsheets) runs and scanned pages are flagged. On: AI calls run only after a job&apos;s estimated cost is confirmed, within the limits below.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <label className="flex items-center gap-2 text-sm">
@@ -781,7 +781,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           </div>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={s.budget.allowPricierFallback} onChange={(e) => set("budget", { allowPricierFallback: e.target.checked })} disabled={d} data-testid="b-pricier" />
-            <span>Allow a MORE EXPENSIVE model to take over when a job&apos;s selected model becomes unavailable (still inside every budget). Off: the job stops and says why. A cheaper or equally priced replacement is always allowed and recorded.</span>
+            <span>Allow a MORE EXPENSIVE model to take over when a job&apos;s selected model becomes unavailable (still within every limit). Off: the job stops and says why. A cheaper or equally priced replacement is always allowed and recorded.</span>
           </label>
           <SelectionTable plan={catalog.plan} aiEnabled={s.aiEnabled} />
         </CardContent>
@@ -842,19 +842,15 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
 
       <Card>
         <CardHeader>
-          <CardTitle>Budgets and limits</CardTitle>
-          <CardDescription>Hard limits, checked by the server inside one lock before every AI request (parallel pages and other jobs included). A job pauses instead of exceeding any of them; retries and verification calls count against the same limits. During the pilot the server never allows more than the ceilings fixed in code (shown under each field), whatever is entered here.</CardDescription>
+          <CardTitle>Limits</CardTitle>
+          <CardDescription>There is no importer job, monthly or all-time spending cap: each job&apos;s estimated cost is shown and confirmed before processing, and actual spend is in the AI Cost Center. The limits below are checked by the server inside one lock before every AI request (parallel pages and other jobs included).</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-3">
-          {field("b-total", "All-time importer budget (₹)", s.budget.totalInr, (n) => set("budget", { totalInr: n }), `Never resets, so a new month adds nothing. Pilot ceiling ₹${catalog.pilot.totalInr}.`)}
-          {field("b-month", "Monthly importer budget (₹)", s.budget.monthlyInr, (n) => set("budget", { monthlyInr: n }), `Resets each IST month (the all-time budget still applies). Pilot ceiling ₹${catalog.pilot.monthlyInr}.`)}
-          {field("b-maxjob", "Hard limit per job (₹)", s.budget.maxJobInr, (n) => set("budget", { maxJobInr: n }), `No job budget can be set above this at confirm or resume. Pilot ceiling ₹${catalog.pilot.maxJobInr}.`)}
-          {field("b-job", "Default job budget (₹)", s.budget.defaultJobCapInr, (n) => set("budget", { defaultJobCapInr: n }), "Offered on New Import; never above the hard limit.")}
-          {field("b-req", "Maximum per AI request (₹)", s.budget.maxRequestInr, (n) => set("budget", { maxRequestInr: n }), `A request whose conservative maximum is higher is refused. Pilot ceiling ₹${catalog.pilot.maxRequestInr}.`)}
+          {field("b-req", "Maximum per AI request (₹)", s.budget.maxRequestInr, (n) => set("budget", { maxRequestInr: n }), `A request whose conservative maximum is higher is refused. Ceiling fixed in code: ₹${catalog.pilot.maxRequestInr}.`)}
           {field("b-key", "Keep on the shared OpenRouter key for Ask AI ($)", s.budget.keyReserveUsd, (n) => set("budget", { keyReserveUsd: n }), `An importer request is refused if it could leave less than this on the key. At least $${catalog.pilot.minKeyReserveUsd}.`)}
           <label className="flex items-center gap-2 self-end text-sm sm:col-span-3">
             <input type="checkbox" checked={s.budget.retryTransient} onChange={(e) => set("budget", { retryTransient: e.target.checked })} disabled={d} data-testid="b-retry" />
-            Retry a request once after a temporary provider error (counts against the same budgets)
+            Retry a request once after a temporary provider error (each attempt is reserved and recorded on its own)
           </label>
           {field("l-file", "Maximum file size (MB)", s.limits.maxFileMb, (n) => set("limits", { maxFileMb: n }))}
           {field("l-pages", "Maximum pages per file", s.limits.maxPagesPerFile, (n) => set("limits", { maxPagesPerFile: n }))}

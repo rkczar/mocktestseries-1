@@ -2,8 +2,7 @@ import "server-only";
 import { AiImportQuestionStatus, type AiImportJob } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formatIst } from "@/lib/ist-time";
-import { PILOT_LIMITS, STALL_AFTER_MS, WORKER_STATUSES, plainJobStatus, type ImporterSettings, type PlainTone } from "@/lib/ai-import/config";
-import { importerSpend } from "@/lib/ai-import/ai";
+import { STALL_AFTER_MS, WORKER_STATUSES, plainJobStatus, type PlainTone } from "@/lib/ai-import/config";
 
 /**
  * Plain, truthful view of import jobs for the one-page importer and the
@@ -77,7 +76,7 @@ function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCa
     case "IMPORTING":
       return "Working — this page updates by itself. You can leave it and come back.";
     case "AWAITING_CONFIRMATION":
-      return "Check the exam, the Previous Year Paper and the expected number of questions, then click Start Import.";
+      return "Check the exam, the Previous Year Paper, the expected number of questions and the estimated cost, then click Confirm Cost & Start Processing.";
     case "PAUSED":
     case "PAUSED_BUDGET":
       return j.pauseReason ? `${j.pauseReason} Then click Retry.` : "Click Retry to continue from the last finished page.";
@@ -177,7 +176,7 @@ export async function jobCards(where: { ids?: string[]; take?: number }, canMana
       nextAction: nextAction(j, c, stalled, pg, failedKeys),
       actions: {
         cancel: CANCELLABLE.includes(j.status),
-        retry: !leased && (j.status === "FAILED" || j.status === "PAUSED" || j.status === "CANCELLED" || (j.status === "PAUSED_BUDGET" && j.budgetInr > j.spentInr) || canRetryFailed(j, pg, failedKeys)),
+        retry: !leased && (j.status === "FAILED" || j.status === "PAUSED" || j.status === "CANCELLED" || j.status === "PAUSED_BUDGET" || canRetryFailed(j, pg, failedKeys)),
         delete: canManage && j.status !== "IMPORTING" && !leased,
         recover: stalled,
         // Paused after confirmation, no worker holding it (lib/ai-import/reconfigure.ts re-checks everything).
@@ -186,14 +185,6 @@ export async function jobCards(where: { ids?: string[]; take?: number }, canMana
       runIds: [...new Set(runs.filter((r) => r.jobId === j.id).map((r) => r.bulkImportRunId!))],
     };
   });
-}
-
-/** What is left of the pilot budget (₹): the smaller of the all-time and this month's remainder. */
-export async function remainingPilotBudget(settings: ImporterSettings): Promise<{ remainingInr: number; totalCapInr: number; monthCapInr: number; allUsedInr: number; monthUsedInr: number }> {
-  const spend = await importerSpend();
-  const totalCapInr = Math.min(settings.budget.totalInr, PILOT_LIMITS.totalInr);
-  const monthCapInr = Math.min(settings.budget.monthlyInr, PILOT_LIMITS.monthlyInr);
-  return { remainingInr: Math.max(0, Math.min(totalCapInr - spend.allUsed, monthCapInr - spend.monthUsed)), totalCapInr, monthCapInr, allUsedInr: spend.allUsed, monthUsedInr: spend.monthUsed };
 }
 
 /** Exam ↔ Previous Year Paper mapping of a job, shown on every importer screen (from the stored records). */

@@ -90,9 +90,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
                 ? "Paid AI is switched off in Import Settings, so pages cannot be read again. Correct the question by hand."
                 : !planOf(q.job.config)?.tasks.extract.model
                   ? "This import's model plan has no page-reading model (use Reconfigure Models on the job)."
-                  : q.job.spentInr >= q.job.budgetInr
-                    ? "This import has used its whole budget."
-                    : null;
+                  : null;
   const pageIdOf = new Map(pages.map((p) => [p.pageNumber, p.id]));
   const verification = (q.data as unknown as ExtractedQuestion).verification ?? null;
   const fmt = e.contentFormat;

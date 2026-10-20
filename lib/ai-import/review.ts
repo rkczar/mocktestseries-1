@@ -404,7 +404,6 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
   const settings = await getImporterSettings();
   if (!settings.aiEnabled) throw new ImportJobError("Re-scanning reads the original page again with AI, and paid AI is switched off in Import Settings. Nothing was changed — correct the question by hand, or switch paid AI on first.");
   if (!planOf(job.config)?.tasks.extract.model) throw new ImportJobError("This import's confirmed model plan has no page-reading model, so its pages cannot be read again. Nothing was changed — use Reconfigure Models, or correct the question by hand.");
-  if (job.spentInr >= job.budgetInr) throw new ImportJobError(`This import has used its whole budget (₹${job.spentInr.toFixed(2)} of ₹${job.budgetInr.toFixed(2)}), so a re-scan cannot be paid for. Nothing was changed.`);
   const open = qs.filter((q) => !LOCKED.includes(q.status));
   if (!open.length) throw new ImportJobError("These questions are already in the Question Bank — edit them there.");
   const files = await prisma.aiImportFile.findMany({ where: { id: { in: [...new Set(open.map((q) => q.fileId))] } } });
