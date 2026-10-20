@@ -9,9 +9,9 @@ import { readDocx, IMG_TOKEN } from "@/lib/ai-import/docx";
 import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
 import { blockToQuestion, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
 import { cropFromRender, iou, storeOriginalFigure, visionImage, FigureError } from "@/lib/ai-import/figures";
-import { importerAiCall, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
+import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
-import { EXTRACT_SYSTEM, extractUserText, pageSchema, toExtracted } from "@/lib/ai-import/prompts";
+import { EXTRACT_SYSTEM, extractUserText, pageSchema, toExtracted, type PageOutput } from "@/lib/ai-import/prompts";
 import { readVault, renderKey, putIntermediate, vaultPath, workDir, exists as vaultExists } from "@/lib/ai-import/vault";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { sourceKeyOf, type ExtractedQuestion } from "@/lib/ai-import/types";
@@ -46,7 +46,23 @@ export interface RescanRequest {
   requestedAt: string;
 }
 
-type PageState = { startState?: NumberingState; local?: { reliable: boolean; reasons: string[] }; ai?: unknown; secondRead?: unknown; rescan?: RescanRequest; verified?: { model: string; at: string; extra: string[] } };
+type PageState = {
+  startState?: NumberingState;
+  local?: { reliable: boolean; reasons: string[] };
+  ai?: unknown;
+  secondRead?: unknown;
+  rescan?: RescanRequest;
+  verified?: { model: string; at: string; extra: string[] };
+  /** The page's paid first read, kept until the page is finished: a stop during the second read never pays for it again. */
+  primaryCache?: { model: string; out: PageOutput; at: string };
+};
+
+/** Parses a page answer into the page schema (an unusable answer throws "model_output", which may switch the model once). */
+function parsePage(text: string, what = "the model's answer"): PageOutput {
+  const parsed = pageSchema.safeParse(parseModelJson(text));
+  if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", `${what} did not match the expected format (${parsed.error.issues[0]?.path.join(/* turbopackIgnore: true */ ".") ?? "?"})`), "model_output");
+  return parsed.data;
+}
 
 export function aiUsable(s: ImporterSettings): boolean {
   return s.aiEnabled && !!s.models.extract;
@@ -323,25 +339,29 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   const image = await visionImage(render);
   const userText = extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: total, textLayer: page.textLayer });
   const call = async (models: string[], task: "extract" | "verify") => {
-    const r = await importerAiCall({
-      jobId: ctx.job.id,
-      task,
-      models,
-      system: EXTRACT_SYSTEM,
-      content: [
-        { type: "text", text: userText },
-        { type: "image_url", image_url: { url: image, detail: "high" } },
-      ],
-      maxOutputTokens: 8000,
-      settings: ctx.settings,
-      pageId: page.id,
-      needsVision: true,
-    });
-    const parsed = pageSchema.safeParse(parseModelJson(r.text));
-    if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", `the model's answer did not match the expected format (${parsed.error.issues[0]?.path.join(/* turbopackIgnore: true */ ".") ?? "?"})`), "model_output");
-    return { out: parsed.data, model: r.model, cost: r.costInr ?? 0 };
+    const { value, result: r } = await importerAiCallChecked(
+      {
+        jobId: ctx.job.id,
+        task,
+        models,
+        system: EXTRACT_SYSTEM,
+        content: [
+          { type: "text", text: userText },
+          { type: "image_url", image_url: { url: image, detail: "high" } },
+        ],
+        maxOutputTokens: 8000,
+        settings: ctx.settings,
+        pageId: page.id,
+        needsVision: true,
+      },
+      (text) => parsePage(text)
+    );
+    return { out: value, model: r.model, cost: r.costInr ?? 0 };
   };
-  const primary = await call([ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks], "extract");
+  // A first read already paid for in an earlier run (the run stopped during the second read) is reused, never bought again.
+  const cached = !state.rescan && state.primaryCache ? state.primaryCache : null;
+  const primary = cached ? { out: cached.out, model: cached.model, cost: 0 } : await call([ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks], "extract");
+  if (!cached) await prisma.aiImportPage.update({ where: { id: page.id }, data: { rawOutput: { ...state, primaryCache: { model: primary.model, out: primary.out, at: new Date().toISOString() } } as unknown as Prisma.InputJsonValue } });
   const qs = toExtracted(primary.out, page.pageNumber, primary.model);
   assignSections(qs, state.startState);
 
@@ -443,8 +463,9 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   }
   // Questions the independent read found but the primary read did not: possible missing questions (never added silently).
   const extra = second ? second.filter((s) => !qs.some((q) => q.number === s.number && q.section === s.section)).map((s) => `${s.section ? `${s.section} ` : ""}Q${s.number ?? s.label}`) : [];
-  const { rescan: _done, ...rest } = state;
+  const { rescan: _done, primaryCache: _cache, ...rest } = state;
   void _done;
+  void _cache;
   await prisma.aiImportPage.update({
     where: { id: page.id },
     data: { status: AiImportPageStatus.DONE, model: primary.model, processedAt: new Date(), errorMessage: null, rawOutput: { ...rest, ai: primary.out, ...(second ? { secondRead: { model: secondModel, questions: second.length }, verified: { model: secondModel ?? "", at: new Date().toISOString(), extra } } : {}) } as unknown as Prisma.InputJsonValue },
@@ -471,23 +492,24 @@ async function verifyLocalPage(ctx: StepContext, file: AiImportFile, pageId: str
   const state = (page.rawOutput as PageState | null) ?? {};
   const render = await ensureRender(ctx.job, file, page.pageNumber, ctx.settings.limits.renderDpi);
   const image = await visionImage(render);
-  const r = await importerAiCall({
-    jobId: ctx.job.id,
-    task: "verify",
-    models: [model],
-    system: EXTRACT_SYSTEM,
-    content: [
-      { type: "text", text: extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: file.pageCount ?? 1, textLayer: page.textLayer }) },
-      { type: "image_url", image_url: { url: image, detail: "high" } },
-    ],
-    maxOutputTokens: 8000,
-    settings: ctx.settings,
-    pageId: page.id,
-    needsVision: true,
-  });
-  const parsed = pageSchema.safeParse(parseModelJson(r.text));
-  if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", "the verification model's answer did not match the expected format"), "model_output");
-  const second = toExtracted(parsed.data, page.pageNumber, r.model);
+  const { value: out, result: r } = await importerAiCallChecked(
+    {
+      jobId: ctx.job.id,
+      task: "verify",
+      models: [model],
+      system: EXTRACT_SYSTEM,
+      content: [
+        { type: "text", text: extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: file.pageCount ?? 1, textLayer: page.textLayer }) },
+        { type: "image_url", image_url: { url: image, detail: "high" } },
+      ],
+      maxOutputTokens: 8000,
+      settings: ctx.settings,
+      pageId: page.id,
+      needsVision: true,
+    },
+    (text) => parsePage(text, "the verification model's answer")
+  );
+  const second = toExtracted(out, page.pageNumber, r.model);
   assignSections(second, state.startState);
   const stored = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id, pages: { has: page.pageNumber } }, select: { id: true, data: true, pages: true } });
   const mine = stored.filter((q) => q.pages[0] === page.pageNumber);
@@ -612,11 +634,11 @@ async function imagePass(ctx: StepContext, file: AiImportFile): Promise<void> {
 
 // ---- Answer-key entries (shared with lib/ai-import/keys.ts) ------------------------------------------
 
-export async function saveKeyEntries(ctx: { job: { id: string } }, keyFileId: string, paperFileId: string | null, page: number | null, entries: { number: number; section: string; raw: string }[]): Promise<void> {
+export async function saveKeyEntries(ctx: { job: { id: string } }, keyFileId: string, paperFileId: string | null, page: number | null, entries: { number: number; section: string; raw: string; page?: number | null }[]): Promise<void> {
   const valid = entries.filter((e) => Number.isFinite(e.number) && e.number > 0 && e.number < 1000);
   if (!valid.length) return;
   await prisma.aiImportKeyEntry.createMany({
-    data: valid.map((e) => ({ jobId: ctx.job.id, keyFileId, paperFileId, sourceNumber: e.number, section: e.section, rawValue: e.raw.slice(0, 40), labels: [], page })),
+    data: valid.map((e) => ({ jobId: ctx.job.id, keyFileId, paperFileId, sourceNumber: e.number, section: e.section, rawValue: e.raw.slice(0, 40), labels: [], page: e.page ?? page })),
   });
 }
 

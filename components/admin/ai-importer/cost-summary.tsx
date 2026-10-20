@@ -25,13 +25,15 @@ export interface CostBreakdownLine {
  * The importer's cost figures for one job: its estimate and estimated maximum (before processing), its actual
  * spend, and this month's actual importer spend (AI Question Importer only — no Ask AI, Instagram or other features).
  */
-export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced = true, breakdown }: { estimateInr: number | null; maxInr: number | null; job: LedgerPeriod | null; month: LedgerPeriod; istMonth: string; priced?: boolean; breakdown?: CostBreakdownLine[] }) {
+export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced = true, breakdown, confirmedMaxInr }: { estimateInr: number | null; maxInr: number | null; job: LedgerPeriod | null; month: LedgerPeriod; istMonth: string; priced?: boolean; breakdown?: CostBreakdownLine[]; confirmedMaxInr?: number | null }) {
   const [y, m] = istMonth.split("-");
   const j = actual(job);
   const mo = actual(month);
   const rows: { id: string; label: string; value: string; detail?: string | null }[] = [
     { id: "cost-estimate", label: "Estimated cost", value: priced ? inr(estimateInr) : "Unknown — not priced" },
     { id: "cost-max", label: "Estimated maximum", value: priced ? inr(maxInr) : "Unknown — not priced", detail: "an estimate: every request at its worst case" },
+    // After confirmation: the maximum an administrator approved for this job (raised only by a new confirmation).
+    ...(confirmedMaxInr !== undefined ? [{ id: "cost-confirmed-max", label: "Confirmed maximum", value: inr(confirmedMaxInr), detail: "approved by an administrator — never exceeded without a new confirmation" }] : []),
     { id: "cost-job-actual", label: "This job's actual spend", value: j.value, detail: j.detail },
     { id: "cost-month-actual", label: `Importer spend in ${MONTHS[Number(m) - 1] ?? m} ${y}`, value: mo.value, detail: mo.detail ?? "actual, all imports" },
   ];

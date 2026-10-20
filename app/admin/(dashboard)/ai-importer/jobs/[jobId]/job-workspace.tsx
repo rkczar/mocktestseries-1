@@ -12,7 +12,8 @@ import { SelectNative } from "@/components/ui/select-native";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ANSWER_STATUS_LABELS, CHUNK_BYTES, JOB_STATUS_LABELS, SELECTION_TASKS, SELECTION_TASK_LABELS, fileRemovalBlockedReason, formatBytes, statusVariant } from "@/lib/ai-import/config";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
-import type { ResetCheck } from "@/lib/ai-import/jobs";
+import type { ContinueCost, ResetCheck } from "@/lib/ai-import/jobs";
+import { ContinueCostConfirm } from "@/components/admin/ai-importer/continue-cost";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { JobSummary } from "@/lib/ai-import/summary";
 import { JobControls, type JobControlState } from "@/components/admin/ai-importer/job-controls";
@@ -33,7 +34,7 @@ export interface JobView {
   year: number | null;
   paperCode: string | null;
   previousYearPaperId: string | null;
-  /** The estimated maximum the administrator confirmed (a record, not a spending cap). */
+  /** The maximum the administrator confirmed for this job (Confirm / Reconfigure / a confirmed Retry); requests never exceed it. */
   budgetInr: number;
   /** Actual spend of this job and of the importer this IST month (AI Question Importer only). */
   spend: SpendSummary;
@@ -56,6 +57,12 @@ export interface JobView {
   allowUnverified: boolean;
   /** The model plan frozen when the job was confirmed (null: not confirmed, or confirmed before automatic selection). */
   plan: ModelPlan | null;
+  /** Import Settings: may a fallback model cost more per request than the planned one? */
+  pricierFallback: boolean;
+  /** Model switches / replacements / reconfigurations and cost re-confirmations during processing (newest first). */
+  modelChanges: { id: string; at: string; type: string; message: string }[];
+  /** Does each uploaded answer key belong to this paper (printed paper / series compared)? */
+  keyChecks: { keyFile: string; state: "MATCH" | "MISMATCH" | "UNKNOWN"; detail: string; key: string | null; paper: string | null; source: string }[];
   /** Safe reset to editable: every server-side check (null when the status can never be reset). */
   reset: { allowed: boolean; checks: ResetCheck[] } | null;
   canManage: boolean;
@@ -233,8 +240,10 @@ function RemoveFileDialog({ jobId, file, analyzed, onClose, onRemoved }: { jobId
   );
 }
 
-/** The models a confirmed job uses (frozen at confirmation), with the reason for each. */
-function PlanCard({ plan }: { plan: ModelPlan }) {
+const CHANGE_LABELS: Record<string, string> = { MODEL_SWITCHED: "Switched for one request", MODEL_SWITCH_SKIPPED: "Not switched", MODEL_REPLACED: "Replaced for the job", MODEL_RECONFIGURED: "Reconfigured", COST_RECONFIRMED: "Cost re-confirmed" };
+
+/** The models a confirmed job uses (frozen at confirmation), with the reason for each, and every change made while it ran. */
+function PlanCard({ plan, pricierFallback, changes }: { plan: ModelPlan; pricierFallback: boolean; changes: JobView["modelChanges"] }) {
   return (
     <Card data-testid="plan-card">
       <CardHeader>
@@ -256,6 +265,49 @@ function PlanCard({ plan }: { plan: ModelPlan }) {
               </li>
             );
           })}
+        </ul>
+        <p className="mt-3 text-xs text-[var(--color-muted-foreground)]" data-testid="plan-fallback">
+          Mode: {plan.mode === "auto" ? "Automatic" : "Manual"} · Fallback: after an unusable answer (empty, cut off, malformed) or an image the model cannot read, the same request is sent once to another suitable model {pricierFallback ? "(more expensive fallbacks are allowed in Import Settings)" : "that costs the same or less per request"}; after two in a row the switch is kept for the job. Every switch is listed below with its reason.
+        </p>
+        <div className="mt-3" data-testid="model-changes">
+          <p className="text-sm font-medium">Model changes during processing</p>
+          {changes.length ? (
+            <ul className="mt-1 flex flex-col gap-1 text-xs">
+              {changes.map((c) => (
+                <li key={c.id} data-testid="model-change" data-type={c.type}>
+                  <span className="text-[var(--color-muted-foreground)]">{c.at}</span> · <span className="font-medium">{CHANGE_LABELS[c.type] ?? c.type}</span> — {c.message}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">None — every request used the models above.</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Whether each uploaded answer key belongs to this question paper (identifiers printed on both, compared). */
+function KeyCheckCard({ checks }: { checks: JobView["keyChecks"] }) {
+  const tone = (s: string) => (s === "MISMATCH" ? "text-[var(--color-error)]" : s === "MATCH" ? "text-[var(--color-success)]" : "text-[var(--color-muted-foreground)]");
+  return (
+    <Card data-testid="key-check-card">
+      <CardHeader>
+        <CardTitle>Answer key ↔ question paper</CardTitle>
+        <CardDescription>The paper and series printed on the answer key, compared with the question paper. A key for another paper or series never supplies official answers.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="flex flex-col gap-2 text-sm">
+          {checks.map((c) => (
+            <li key={c.keyFile} data-testid="key-check" data-state={c.state}>
+              <span className="font-medium">{c.keyFile}</span>: <span className={tone(c.state)}>{c.state === "MATCH" ? "Matches" : c.state === "MISMATCH" ? "Does not match" : "Could not be checked"}</span>
+              <span className="block text-xs text-[var(--color-muted-foreground)]">
+                Key: {c.key ?? "no paper / series printed"} · Question paper: {c.paper ?? "unknown"}{c.paper ? ` (${c.source})` : ""}
+              </span>
+              <span className="block text-xs">{c.detail}</span>
+            </li>
+          ))}
         </ul>
       </CardContent>
     </Card>
@@ -337,6 +389,8 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
   const [notice, setNotice] = useState<string | null>(null);
   // A refusal of Confirm / Resume is shown next to that button (the page-level message is far above it).
   const [inlineError, setInlineError] = useState<{ at: "confirm" | "resume"; text: string } | null>(null);
+  // Resume that needs a renewed cost confirmation first (nothing was started).
+  const [resumeCost, setResumeCost] = useState<{ value: ContinueCost; changed: boolean } | null>(null);
   const [ctx, setCtx] = useState({ examId: job.examId, paperType: job.paperType, subjectId: job.subjectId ?? "", year: job.year ? String(job.year) : "", paperCode: job.paperCode ?? "", previousYearPaperId: job.previousYearPaperId ?? "" });
   const [removing, setRemoving] = useState<JobFile | null>(null);
   const busy = BUSY.includes(job.status);
@@ -362,6 +416,19 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
         if (ok) setNotice(ok);
         router.refresh();
       }
+    });
+
+  const resume = (confirmedMaxInr?: number) =>
+    start(async () => {
+      setError(null);
+      setNotice(null);
+      setInlineError(null);
+      const r = await callImporter(() => resumeJobAction(job.id, confirmedMaxInr ?? null));
+      if (!r.ok) return setInlineError({ at: "resume", text: r.error });
+      if (!r.data.started) return setResumeCost({ value: r.data.cost, changed: confirmedMaxInr !== undefined });
+      setResumeCost(null);
+      setNotice("Resumed.");
+      router.refresh();
     });
 
   const s = job.summary;
@@ -684,7 +751,8 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
         </Card>
       )}
 
-      {job.plan && job.status !== "DRAFT" && job.status !== "AWAITING_CONFIRMATION" && <PlanCard plan={job.plan} />}
+      {job.plan && job.status !== "DRAFT" && job.status !== "AWAITING_CONFIRMATION" && <PlanCard plan={job.plan} pricierFallback={job.pricierFallback} changes={job.modelChanges} />}
+      {job.keyChecks.length > 0 && <KeyCheckCard checks={job.keyChecks} />}
 
       {job.reset && canUse && (
         <ResetCard
@@ -710,7 +778,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <CostSummary estimateInr={job.estCostInr} maxInr={job.maxCostInr} priced={job.estCostInr !== null && job.maxCostInr !== null} job={job.spend.job} month={job.spend.month} istMonth={job.spend.istMonth} />
+            <CostSummary estimateInr={job.estCostInr} maxInr={job.maxCostInr} priced={job.estCostInr !== null && job.maxCostInr !== null} job={job.spend.job} month={job.spend.month} istMonth={job.spend.istMonth} confirmedMaxInr={job.budgetInr} />
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6" data-testid="batch-summary">
               <Stat label="Questions extracted" value={s.extracted} />
               <Stat label="Eligible for import" value={s.eligibleImport} />
@@ -757,12 +825,13 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                 )}
                 {(job.status === "PAUSED" || job.status === "PAUSED_BUDGET" || job.status === "FAILED") && (
                   <div className="flex w-full flex-col gap-2">
-                    <Button className="w-fit" disabled={pending} onClick={() => act(() => resumeJobAction(job.id), "Resumed.", "resume")} data-testid="resume">
+                    <Button className="w-fit" disabled={pending} onClick={() => resume()} data-testid="resume">
                       Resume
                     </Button>
                     <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="resume-note">
                       Continues from the last finished page — finished pages are not read or charged again. The OpenRouter credit, rate limits and the amount kept for student Ask AI still apply.
                     </p>
+                    {resumeCost && <ContinueCostConfirm cost={resumeCost.value} changed={resumeCost.changed} pending={pending} label="Confirm Cost & Resume" onConfirm={(v) => resume(v)} onCancel={() => setResumeCost(null)} />}
                     {inlineError?.at === "resume" && (
                       <p className="text-sm text-[var(--color-error)]" role="alert" data-testid="resume-error">
                         {inlineError.text}

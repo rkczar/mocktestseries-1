@@ -5,7 +5,7 @@ import { AiImportPaperType } from "@prisma/client";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { ImportJobError, cancelJob, changeJobPaper, confirmJob, createJob, deleteJob, setExpectedQuestions, deleteJobPreview, discardUpload, pauseJob, recoverJob, removeFile, requestAnalysis, resetJob, resumeJob, retryJob, type DeletedJob, type JobDeletePreview, type RemovedFile, type ResetCheck } from "@/lib/ai-import/jobs";
+import { ImportJobError, type ContinueResult, cancelJob, changeJobPaper, confirmJob, createJob, deleteJob, setExpectedQuestions, deleteJobPreview, discardUpload, pauseJob, recoverJob, removeFile, requestAnalysis, resetJob, resumeJob, retryJob, type DeletedJob, type JobDeletePreview, type RemovedFile, type ResetCheck } from "@/lib/ai-import/jobs";
 import {
   acknowledgeSequence,
   addMissingQuestion,
@@ -204,11 +204,9 @@ export async function saveModelPreferenceAction(model: string | null): Promise<I
   });
 }
 
-export async function retryJobAction(jobId: string): Promise<ImporterResult<null>> {
-  return run(await requireUse(), async (actorId) => {
-    await retryJob(jobId, actorId);
-    return null;
-  });
+/** Retry; `confirmedMaxInr`: the new maximum the administrator confirmed after it was shown (else the cost is returned, nothing started). */
+export async function retryJobAction(jobId: string, confirmedMaxInr?: number | null): Promise<ImporterResult<ContinueResult>> {
+  return run(await requireUse(), async (actorId) => retryJob(jobId, actorId, costOf(confirmedMaxInr)));
 }
 
 export async function recoverJobAction(jobId: string): Promise<ImporterResult<{ restarted: boolean; message: string }>> {
@@ -249,11 +247,8 @@ export async function pauseJobAction(jobId: string): Promise<ImporterResult<null
   });
 }
 
-export async function resumeJobAction(jobId: string): Promise<ImporterResult<null>> {
-  return run(await requireUse(), async (actorId) => {
-    await resumeJob(jobId, actorId);
-    return null;
-  });
+export async function resumeJobAction(jobId: string, confirmedMaxInr?: number | null): Promise<ImporterResult<ContinueResult>> {
+  return run(await requireUse(), async (actorId) => resumeJob(jobId, actorId, costOf(confirmedMaxInr)));
 }
 
 export async function cancelJobAction(jobId: string): Promise<ImporterResult<null>> {

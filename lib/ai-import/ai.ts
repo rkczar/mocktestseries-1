@@ -55,7 +55,10 @@ export class ImporterAiUnavailable extends Error {}
 export class ImporterAiFailure extends Error {
   constructor(
     message: string,
-    readonly kind: FailureKind = "provider"
+    readonly kind: FailureKind = "provider",
+    /** The model that produced the failure (set by importerAiCall), and what that attempt was charged. */
+    readonly model: string | null = null,
+    readonly chargedInr: number | null = null
   ) {
     super(message);
   }
@@ -114,6 +117,8 @@ export function notPricier(m: AiModel, preferred: AiModel): boolean {
 
 export interface AiCallInput {
   jobId: string;
+  /** Internal: a model chosen at run time for this one request (output fallback); the plan is unchanged. */
+  override?: TaskChoice;
   task: ImporterTask;
   /** Informational: the call sites pass the plan's model; the request always uses job.config.modelPlan. */
   models: string[];
@@ -201,10 +206,23 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
       const staleJob = /^qi:([a-z0-9]+):/.exec(r.requestKey)?.[1];
       if (staleJob) await tx.aiImportJob.updateMany({ where: { id: staleJob }, data: { spentInr: { increment: r.reservedInr } } });
     }
-    const job = await tx.aiImportJob.findUnique({ where: { id: input.jobId }, select: { status: true } });
+    const job = await tx.aiImportJob.findUnique({ where: { id: input.jobId }, select: { status: true, budgetInr: true, spentInr: true } });
     if (!job) throw new ImporterJobStopped("The import job no longer exists.");
     // Cancelled, paused or deleted meanwhile: no new request is ever reserved (or sent) for it.
     if (job.status !== "PROCESSING") throw new ImporterJobStopped(`The import is ${job.status.toLowerCase().replace(/_/g, " ")}, so no AI request was sent.`);
+    // The administrator's confirmed maximum for THIS job (budgetInr, set by Confirm / Reconfigure / a confirmed
+    // retry) is never exceeded: recorded spend + this job's requests in flight + this request's worst case.
+    // Not a fixed cap (owner decision 2026-10-20): going further only needs a renewed confirmation.
+    const inFlight = await tx.$queryRaw<{ v: number }[]>`SELECT COALESCE(SUM("reservedInr"), 0)::float8 AS v FROM "AiBudgetReservation" WHERE "status" = 'RESERVED' AND "requestKey" LIKE ${`qi:${input.jobId}:%`}`;
+    const committed = job.spentInr + (inFlight[0]?.v ?? 0);
+    if (committed + input.amountInr > job.budgetInr + 0.005) {
+      throw new ImporterBudgetError(
+        job.budgetInr > 0
+          ? `This request could cost up to ${formatInr(input.amountInr)}; with ${formatInr(committed)} already spent or in flight that would exceed the confirmed maximum of ${formatInr(job.budgetInr)} for this import. Nothing was sent. Review the cost and confirm a new maximum (Resume / Retry shows it) to continue.`
+          : "No paid AI cost was confirmed for this import, so nothing was sent. Resume / Retry shows the cost to confirm first.",
+        "job"
+      );
+    }
     // The authoritative settings, read now (not the copy the worker started with): an administrator who
     // switched Paid AI off or lowered a limit after the job started is obeyed before this request is sent.
     const row = await tx.setting.findUnique({ where: { key: IMPORTER_SETTING_KEY } });
@@ -346,7 +364,7 @@ async function log(e: {
  * engine's own rules (serving route, ZDR when required, readable prices, output limit, per-request limit).
  * Route data that cannot be read means nothing is sent (fail closed).
  */
-async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"] }> {
+async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"]; reasoning: boolean }> {
   let snapshot;
   try {
     snapshot = await freshRouteSnapshot(settings.importerModels.includes(choice.model!) ? settings.importerModels : [...settings.importerModels, choice.model!]);
@@ -357,7 +375,7 @@ async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | 
   const ev = evaluateModel(model, choice.model!, choice.task, { snapshot, settings, fxRate, refusals });
   // A usable route over the per-request limit (the only refusal that still carries a price) is left to the
   // reservation below, so it stops as a budget limit (page kept, questions capped) instead of "unavailable".
-  return ev.row.eligible || ev.price ? { problem: null, price: ev.price } : { problem: ev.row.reason ?? "not usable", price: null };
+  return ev.row.eligible || ev.price ? { problem: null, price: ev.price, reasoning: !!ev.reasoning } : { problem: ev.row.reason ?? "not usable", price: null, reasoning: false };
 }
 
 const SELECTION_TASK_OF: Record<ImporterTask, SelectionTask> = { analyze: "extract", extract: "extract", verify: "verify", key: "key", classify: "classify" };
@@ -394,19 +412,24 @@ async function replaceModel(input: AiCallInput, plan: ModelPlan, choice: TaskCho
   if (pricier && !input.settings.budget.allowPricierFallback) {
     throw new ImporterAiUnavailable(`The selected ${label} model ${failed} is unavailable (${why}). The next suitable model, ${alt.model}, could cost up to ${formatInr(alt.maxInr)} per request instead of ${formatInr(choice.maxInr)}; more expensive fallbacks are OFF in Import Settings, so processing stopped. ${sent} Use Reconfigure Models for This Job to review it with its cost.`);
   }
+  return persistReplacement(input.jobId, sel, failed, choice, alt, why, pricier);
+}
+
+/** Makes `alt` the job's model for `sel` from now on (recorded as MODEL_REPLACED). */
+async function persistReplacement(jobId: string, sel: SelectionTask, failed: string, choice: TaskChoice, alt: TaskChoice, why: string, pricier: boolean, unusable = false): Promise<TaskChoice> {
   const replaced: TaskChoice = { ...alt, replaced: { from: failed, at: new Date().toISOString(), why: why.slice(0, 200) } };
   await prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw<{ config: unknown }[]>`SELECT "config" FROM "AiImportJob" WHERE "id" = ${input.jobId} FOR UPDATE`;
+    const locked = await tx.$queryRaw<{ config: unknown }[]>`SELECT "config" FROM "AiImportJob" WHERE "id" = ${jobId} FOR UPDATE`;
     const config = (locked[0]?.config ?? {}) as Record<string, unknown>;
     const current = planOf(config);
     if (!current) return;
-    await tx.aiImportJob.update({ where: { id: input.jobId }, data: { config: { ...config, modelPlan: { ...current, tasks: { ...current.tasks, [sel]: replaced } } } as unknown as Prisma.InputJsonValue } });
+    await tx.aiImportJob.update({ where: { id: jobId }, data: { config: { ...config, modelPlan: { ...current, tasks: { ...current.tasks, [sel]: replaced } } } as unknown as Prisma.InputJsonValue } });
     await tx.aiImportEvent.create({
       data: {
-        jobId: input.jobId,
+        jobId,
         type: "MODEL_REPLACED",
-        message: `${SELECTION_TASK_LABELS[sel]}: ${failed} is unavailable (${why.slice(0, 160)}); now using ${alt.model} (up to ${formatInr(alt.maxInr)} per request, was ${formatInr(choice.maxInr)})${pricier ? " — MORE EXPENSIVE, allowed by Import Settings" : ""}.`.slice(0, 1000),
-        data: { task: sel, from: failed, to: alt.model, fromMaxInr: choice.maxInr, toMaxInr: alt.maxInr, pricier },
+        message: `${SELECTION_TASK_LABELS[sel]}: ${failed} ${unusable ? "gave unusable answers" : "is unavailable"} (${why.slice(0, 160)}); now using ${alt.model} (up to ${formatInr(alt.maxInr)} per request, was ${formatInr(choice.maxInr)})${pricier ? " — MORE EXPENSIVE, allowed by Import Settings" : ""}.`.slice(0, 1000),
+        data: { task: sel, from: failed, to: alt.model, fromMaxInr: choice.maxInr, toMaxInr: alt.maxInr, pricier, reason: why.slice(0, 300) },
       },
     });
   });
@@ -425,7 +448,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { config: true } });
   const plan = planOf(job?.config);
   if (!plan) throw new ImporterAiUnavailable("This job has no confirmed model plan. Nothing was sent.");
-  let choice = plan.tasks[SELECTION_TASK_OF[input.task]];
+  let choice = input.override ?? plan.tasks[SELECTION_TASK_OF[input.task]];
   if (!choice?.model) throw new ImporterAiUnavailable(`No model can be used for ${input.task}: ${choice?.reason ?? "not planned"}`);
   const apiKey = await resolveOpenRouterKey();
   if (!apiKey) throw new ImporterAiUnavailable("OpenRouter is not configured or is disabled (Admin → AI → Providers).");
@@ -435,6 +458,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   if (fx.rate === null) throw new ImporterAiUnavailable(`AI cost cannot be calculated: ${fx.unavailableReason ?? "no USD→INR rate"}. Nothing was sent.`);
 
   const tried: string[] = [];
+  let reasoningRoutes = false;
   // The confirmed model, still approved and usable now? (An admin may have withdrawn it meanwhile.)
   // Then its provider route, price and privacy route, re-checked before this request (stored route data,
   // read again from OpenRouter when older than 6 h; free metadata, never an AI request).
@@ -448,6 +472,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
     }
     const route = await recheckRoute(input.jobId, choice, catalog.get(choice.model!), input.settings, fx.rate);
     if (route.problem === null) {
+      reasoningRoutes = route.reasoning;
       // Never below the confirmed price: the higher of the confirmed and the current price is reserved.
       if (route.price && choice.price) choice = { ...choice, price: { prompt: Math.max(choice.price.prompt, route.price.prompt), completion: Math.max(choice.price.completion, route.price.completion), image: Math.max(choice.price.image, route.price.image), request: Math.max(choice.price.request, route.price.request) } };
       break;
@@ -496,6 +521,10 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         content: input.content,
         maxTokens: input.maxOutputTokens,
         temperature: 0,
+        // A reasoning model can spend the whole output limit thinking and return no answer (seen 2026-10-20:
+        // 8,000 tokens, empty text). Low effort keeps room for the answer; sent only when every route of the
+        // model accepts the parameter (requests use require_parameters) and no OpenRouter-side fallback is listed.
+        ...(reasoningRoutes && !choice.fallbacks.length ? { reasoning: { effort: "low" as const, exclude: true } } : {}),
         provider: {
           // The highest prompt / completion price the plan was confirmed with: no route above it is used.
           max_price: { prompt: cost.price.prompt * 1e6 * PRICE_MARGIN, completion: cost.price.completion * 1e6 * PRICE_MARGIN },
@@ -511,14 +540,23 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       const { charged, overrunInr } = await settle(input.jobId, requestKey, actualInr, r.costUsd);
       const fallbackUsed = !!choice.replaced || (r.model !== requested && !r.model.startsWith(`${requested}-`));
       const empty = !r.text.trim();
-      await log({ input, requestId, attempt, model: r.model, requested, ok: !empty && r.finishReason !== "length", latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, generationId: r.generationId, fallbackUsed, errorCategory: empty ? "empty_response" : r.finishReason === "length" ? "truncated" : null, errorSummary: empty ? describeCategory("empty_response") : r.finishReason === "length" ? describeCategory("truncated") : null });
+      // Cut off at the output limit — also when the text is empty because the model's reasoning used the whole
+      // limit (provider reports finish_reason "length", or the output tokens reach the limit). Checked before "empty".
+      const truncated = r.finishReason === "length" || (empty && r.outputTokens !== null && r.outputTokens >= input.maxOutputTokens * 0.98);
+      const outputProblem = truncated
+        ? empty
+          ? `the model used its whole output limit of ${input.maxOutputTokens} tokens (reasoning) and returned no answer — cut off at the token limit`
+          : "the model's answer was cut off at the output limit"
+        : empty
+          ? describeCategory("empty_response")
+          : null;
+      await log({ input, requestId, attempt, model: r.model, requested, ok: !outputProblem, latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, generationId: r.generationId, fallbackUsed, errorCategory: truncated ? "truncated" : empty ? "empty_response" : null, errorSummary: outputProblem });
       await patchOpenRouterState({ lastSuccessAt: new Date().toISOString() });
       rateLimitStreak.delete(input.jobId);
       if (overrunInr > 0) {
         throw new ImporterBudgetError(`A ${input.task} request cost ${formatInr(charged)}, more than its reserved maximum of ${formatInr(cost.worstInr)} (the provider billed more than the conservative bound). The charge is recorded in full and the job is paused — review the Cost Center before resuming.`, "overrun");
       }
-      if (empty) throw new ImporterAiFailure(failureMessage("model_output", describeCategory("empty_response")), "model_output");
-      if (r.finishReason === "length") throw new ImporterAiFailure(failureMessage("model_output", "the model's answer was cut off at the output limit"), "model_output");
+      if (outputProblem) throw new ImporterAiFailure(failureMessage("model_output", outputProblem), "model_output", r.model, charged);
       return { text: r.text, model: r.model, costInr: charged, inputTokens: r.inputTokens, outputTokens: r.outputTokens, fallbackUsed };
     } catch (error) {
       if (error instanceof ImporterAiFailure || error instanceof ImporterBudgetError || error instanceof ImporterAiUnavailable) throw error;
@@ -548,7 +586,76 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
     }
   }
   const kind = kindOfCategory(lastError!.category, lastError!.message);
-  throw new ImporterAiFailure(failureMessage(kind, `OpenRouter failed: ${describeCategory(lastError!.category)}${lastError!.message !== describeCategory(lastError!.category) ? ` (${sanitize(lastError!.message).slice(0, 160)})` : ""}`), kind);
+  throw new ImporterAiFailure(failureMessage(kind, `OpenRouter failed: ${describeCategory(lastError!.category)}${lastError!.message !== describeCategory(lastError!.category) ? ` (${sanitize(lastError!.message).slice(0, 160)})` : ""}`), kind, choice.model);
+}
+
+/** Failures after which the same request is sent once more to a different model (the answer, not the request, was unusable). */
+const SWITCH_KINDS: FailureKind[] = ["model_output", "image_unsupported"];
+/** Unusable answers in a row from the job's model for a task after which the switch is kept for the rest of the job. */
+export const OUTPUT_FAILURE_PERSIST = 2;
+const outputFailures = new Map<string, { model: string; n: number }>();
+export function resetOutputFailures(jobId: string): void {
+  for (const k of outputFailures.keys()) if (k.startsWith(`${jobId}:`)) outputFailures.delete(k);
+}
+
+/**
+ * The model one failed request is sent to instead: chosen by the same selection engine (importer list, vision,
+ * routes, privacy, per-request limit; not the failed model, and for page reading / verification not the other
+ * one), never more expensive per request unless Import Settings allow pricier fallbacks. Null + reason when none.
+ */
+export async function outputFallback(input: AiCallInput, plan: ModelPlan, failed: string): Promise<{ alt: TaskChoice | null; reason: string; pricier: boolean }> {
+  const sel = SELECTION_TASK_OF[input.task];
+  const choice = plan.tasks[sel];
+  const other = sel === "verify" ? plan.tasks.extract.model : sel === "extract" ? plan.tasks.verify.model : null;
+  const fresh = await computeModelPlan(input.settings, { refresh: false, substitute: true, jobId: input.jobId }, { [sel]: [failed, ...(other ? [other] : [])] });
+  const alt = fresh.tasks[sel];
+  if (!alt.model || alt.model === failed || alt.model === other) return { alt: null, reason: `no other approved model is suitable (${alt.reason.slice(0, 200)})`, pricier: false };
+  const pricier = (alt.maxInr ?? Infinity) > (choice.maxInr ?? 0) + 1e-9;
+  if (pricier && !input.settings.budget.allowPricierFallback) return { alt: null, reason: `the next suitable model, ${alt.model}, could cost up to ${formatInr(alt.maxInr)} per request instead of ${formatInr(choice.maxInr)}, and more expensive fallbacks are OFF in Import Settings`, pricier };
+  return { alt, reason: alt.reason, pricier };
+}
+
+/**
+ * importerAiCall + validation of the answer (`parse` throws ImporterAiFailure "model_output" when the answer is
+ * unusable). After an unusable answer (empty, cut off, malformed, wrong shape) or a model that cannot read the
+ * image, the SAME request is sent ONCE to a different suitable model (outputFallback) — bounded, priced, reserved
+ * and recorded like any request (MODEL_SWITCHED event: models, reason, cost of the failed attempt). After
+ * OUTPUT_FAILURE_PERSIST unusable answers in a row from the job's model, the replacement is kept for the job
+ * (MODEL_REPLACED). Never retried in a loop: if the second model fails too, the failure is reported.
+ */
+export async function importerAiCallChecked<T>(input: AiCallInput, parse: (text: string) => T): Promise<{ value: T; result: AiCallResult }> {
+  const sel = SELECTION_TASK_OF[input.task];
+  const streakKey = `${input.jobId}:${sel}`;
+  try {
+    const result = await importerAiCall(input);
+    const value = parse(result.text);
+    outputFailures.delete(streakKey);
+    return { value, result };
+  } catch (e) {
+    if (!(e instanceof ImporterAiFailure) || !SWITCH_KINDS.includes(e.kind) || input.override) throw e;
+    const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { config: true } });
+    const plan = planOf(job?.config);
+    const failed = e.model ?? plan?.tasks[sel].model ?? null;
+    if (!plan || !failed) throw e;
+    const fb = await outputFallback(input, plan, failed);
+    const label = SELECTION_TASK_LABELS[sel];
+    const where = input.pageId ? " (page request)" : input.questionId ? " (question request)" : "";
+    if (!fb.alt) {
+      await prisma.aiImportEvent.create({ data: { jobId: input.jobId, type: "MODEL_SWITCH_SKIPPED", message: `${label}: ${failed} gave an unusable answer${where} (${e.message.slice(0, 200)}); not sent to another model: ${fb.reason}.`.slice(0, 1000), data: { task: sel, from: failed, reason: e.message.slice(0, 300), pageId: input.pageId ?? null, questionId: input.questionId ?? null, failedChargedInr: e.chargedInr, pricier: fb.pricier } } }).catch(() => undefined);
+      throw new ImporterAiFailure(`${e.message} No other model was tried: ${fb.reason}.`.slice(0, 600), e.kind, failed, e.chargedInr);
+    }
+    await prisma.aiImportEvent.create({ data: { jobId: input.jobId, type: "MODEL_SWITCHED", message: `${label}: ${failed} gave an unusable answer${where} (${e.message.slice(0, 200)}); the same request is sent once to ${fb.alt.model} (up to ${formatInr(fb.alt.maxInr)} per request, was ${formatInr(plan.tasks[sel].maxInr)})${fb.pricier ? " — MORE EXPENSIVE, allowed by Import Settings" : ""}. The failed attempt cost ${e.chargedInr === null ? "an unknown amount (worst case kept)" : formatInr(e.chargedInr)}.`.slice(0, 1000), data: { task: sel, from: failed, to: fb.alt.model, reason: e.message.slice(0, 300), attempt: 2, pageId: input.pageId ?? null, questionId: input.questionId ?? null, failedChargedInr: e.chargedInr, fromMaxInr: plan.tasks[sel].maxInr, toMaxInr: fb.alt.maxInr, pricier: fb.pricier } } }).catch(() => undefined);
+    const result = await importerAiCall({ ...input, override: fb.alt });
+    const value = parse(result.text);
+    const prev = outputFailures.get(streakKey);
+    const n = prev && prev.model === failed ? prev.n + 1 : 1;
+    outputFailures.set(streakKey, { model: failed, n });
+    if (n >= OUTPUT_FAILURE_PERSIST && plan.tasks[sel].model === failed) {
+      await persistReplacement(input.jobId, sel, failed, plan.tasks[sel], fb.alt, `${n} unusable answers in a row (latest: ${e.message.slice(0, 120)})`, fb.pricier, true);
+      outputFailures.delete(streakKey);
+    }
+    return { value, result };
+  }
 }
 
 /** Parses a model's JSON answer (tolerates a ```json fence; nothing else). */
@@ -559,9 +666,23 @@ export function parseModelJson(text: string): unknown {
   const start = body.indexOf("{");
   const end = body.lastIndexOf("}");
   if (start < 0 || end <= start) throw new ImporterAiFailure(failureMessage("model_output", "the model did not return JSON"), "model_output");
+  const json = body.slice(start, end + 1);
   try {
-    return JSON.parse(body.slice(start, end + 1));
+    return JSON.parse(json);
   } catch {
-    throw new ImporterAiFailure(failureMessage("model_output", "the model returned malformed JSON"), "model_output");
+    // Two mechanical slips small models make, repaired without touching the content: a comma before a closing
+    // bracket, and a LaTeX backslash that is not a JSON escape (e.g. a single backslash before "alpha").
+    // Anything else (a cut-off answer, unbalanced brackets) stays an error.
+    try {
+      return JSON.parse(repairJson(json));
+    } catch {
+      throw new ImporterAiFailure(failureMessage("model_output", "the model returned malformed JSON"), "model_output");
+    }
   }
+}
+
+/** Removes trailing commas and doubles backslashes that do not start a valid JSON escape (outside and inside strings). */
+export function repairJson(json: string): string {
+  // Valid escape pairs are consumed first, so an already-escaped backslash pair is never split.
+  return json.replace(/\\(["\\/bfnrtu])|\\/g, (m, esc: string | undefined) => (esc ? m : "\\\\")).replace(/,\s*([}\]])/g, "$1");
 }

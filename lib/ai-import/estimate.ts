@@ -11,7 +11,9 @@ import type { ModelPlan } from "@/lib/ai-import/selection-types";
  * the highest current OpenRouter price over the routes each model may use) and
  * the plan's USD→INR rate. `totalInr` is the typical ESTIMATE; `maxInr` is the
  * conservative MAXIMUM — every possible request at the reserved worst case
- * (full output limit, second reads of every AI page, a retry when enabled).
+ * (full output limit, second reads of every AI page, a retry when enabled, and
+ * the one re-send to another model after an unusable answer — ai.ts
+ * importerAiCallChecked).
  * Actual cost is what the provider reports per call (Cost Center).
  */
 
@@ -103,7 +105,10 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
     const pr = c?.price ?? null;
     const problem = !plan ? "no model plan" : !model ? c?.reason ?? "no model" : !pr ? "no price" : null;
     const usd = pr && model ? inTok * pr.prompt + outTok * pr.completion + calls * (pr.request + (vision ? IMAGE_TOKENS * pr.image : 0)) : null;
-    const maxInr = model && c?.maxInr !== null && c?.maxInr !== undefined ? maxCalls * attemptsPerRequest * c.maxInr : null;
+    // Each request may be sent once more to another model after an unusable answer: at most the same per-request
+    // maximum (or the per-request limit when pricier fallbacks are allowed).
+    const fallbackInr = c?.maxInr === null || c?.maxInr === undefined ? null : settings.budget.allowPricierFallback ? Math.max(c.maxInr, settings.budget.maxRequestInr) : c.maxInr;
+    const maxInr = model && c?.maxInr !== null && c?.maxInr !== undefined && fallbackInr !== null ? maxCalls * (attemptsPerRequest * c.maxInr + fallbackInr) : null;
     return { task, label, model, calls, inputTokens: inTok, outputTokens: outTok, usd, inr: usdToInr(usd, fx.rate), pricePerM: pr ? { prompt: pr.prompt * 1e6, completion: pr.completion * 1e6 } : null, problem: calls ? problem : null, maxCalls, maxInr: calls ? maxInr : 0 };
   };
 

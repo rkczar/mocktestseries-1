@@ -10,7 +10,7 @@ import { runKeyFiles } from "@/lib/ai-import/keys";
 import { runPostProcessing } from "@/lib/ai-import/post";
 import { runImport, type ImportPlan } from "@/lib/ai-import/adapter";
 import { logEvent } from "@/lib/ai-import/jobs";
-import { ImporterAiUnavailable, ImporterBudgetError, resetRateLimitStreak } from "@/lib/ai-import/ai";
+import { ImporterAiUnavailable, ImporterBudgetError, resetOutputFailures, resetRateLimitStreak } from "@/lib/ai-import/ai";
 import { summarizeFailures } from "@/lib/ai-import/failure";
 import { jobQuality, reconcileJob } from "@/lib/ai-import/summary";
 import { removeVaultDir } from "@/lib/ai-import/vault";
@@ -100,6 +100,8 @@ async function processJob(job: AiImportJob): Promise<void> {
   const ctx = makeContext({ ...job, status: AiImportJobStatus.PROCESSING }, settings, { exam: exam?.name ?? "Exam", subject: subject?.name ?? null });
   // The rate-limit circuit breaker counts per run: a resumed or retried job starts again at zero.
   resetRateLimitStreak(job.id);
+  // So is the run of unusable answers that keeps a model switch for the rest of the job.
+  resetOutputFailures(job.id);
   try {
     await stage(job.id, "PAGES");
     await runLocalPasses(ctx);

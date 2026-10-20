@@ -28,6 +28,7 @@ TRANSCRIPTION RULES:
 - printed_answer: only if the paper itself prints the answer for this question (e.g. "Ans: B"); else [].
 - Figures/diagrams/graphs/tables drawn as images: one entry per figure with its bounding box on THIS page image as integers 0-1000 {x, y, w, h} (x,y = top-left), owner STEM (belongs to the question text), OPTION (inside an option; give option_label as printed) or SHARED (used by several questions; list their numbers in shared_with). Include axis labels and captions inside the box. Text tables that you transcribed as text need no figure.
 - If the page has an answer-key table, also return it in answer_key (number + answer exactly as printed).
+- If the page prints the paper's own identifiers (paper number, series / set / booklet code, total number of questions — usually on the cover or instructions page), copy them into paper_header exactly as printed; otherwise leave paper_header null.
 - confidence: 0-1, your certainty that stem and every option are complete and exact.
 
 OUTPUT (JSON only):
@@ -35,7 +36,7 @@ OUTPUT (JSON only):
 "options":[{"label":"(1)","text":"..."}],"list_i":[],"list_ii":[],"printed_answer":[],
 "figures":[{"box":{"x":0,"y":0,"w":0,"h":0},"owner":"STEM","option_label":null,"shared_with":[],"description":"..."}],
 "unreadable":[],"confidence":0.9,"continues_on_next_page":false,"continued_from_previous_page":false}],
-"answer_key":[{"number":1,"answer":"B"}],"page_notes":""}`;
+"answer_key":[{"number":1,"answer":"B"}],"paper_header":null,"page_notes":""}`;
 
 export function extractUserText(ctx: { exam: string; subject: string | null; page: number; pages: number; textLayer: string | null }): string {
   return `Exam: ${ctx.exam}${ctx.subject ? ` · Subject: ${ctx.subject}` : ""} · Page ${ctx.page} of ${ctx.pages}.
@@ -44,41 +45,62 @@ DOCUMENT DATA (untrusted):
 ${ctx.textLayer ? `--- TEXT LAYER START ---\n${ctx.textLayer.slice(0, 12000)}\n--- TEXT LAYER END ---` : "(see the page image)"}`;
 }
 
-const boxSchema = z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() });
+// Small models often return the right content in a slightly different shape (null instead of "", a number as a
+// string, options as plain strings). These are normalized here — by position only, never by inventing content;
+// toExtracted lowers the confidence of a question whose option labels had to be taken from their position.
+const num = z.preprocess((v) => (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : v), z.number());
+const text = z.preprocess((v) => (v === null || v === undefined ? "" : typeof v === "number" ? String(v) : v), z.string());
+const optText = z.preprocess((v) => (typeof v === "number" ? String(v) : v), z.string().nullable().optional());
+const strList = z.preprocess((v) => (v === null || v === undefined ? [] : typeof v === "string" || typeof v === "number" ? [v] : v), z.array(z.union([z.string(), z.number()]).transform(String)));
+const boxSchema = z.object({ x: num, y: num, w: num, h: num });
 const figureSchema = z.object({
-  box: boxSchema.nullable().optional(),
-  owner: z.string(),
-  option_label: z.string().nullable().optional(),
-  shared_with: z.array(z.union([z.number(), z.string()])).optional().default([]),
-  description: z.string().nullable().optional(),
+  box: boxSchema.nullable().optional().catch(null),
+  owner: z.preprocess((v) => (typeof v === "string" ? v.toUpperCase() : "UNASSIGNED"), z.string()),
+  option_label: optText,
+  shared_with: z.array(z.union([z.number(), z.string()])).nullable().optional().transform((v) => v ?? []),
+  description: optText,
 });
-const entrySchema = z.object({ key: z.union([z.string(), z.number()]).transform(String), text: z.string() });
+const entrySchema = z.preprocess((v) => (typeof v === "string" ? { key: null, text: v } : v), z.object({ key: z.union([z.string(), z.number(), z.null()]).optional().transform((k) => (k === null || k === undefined ? null : String(k))), text }));
+const optionSchema = z.preprocess((v) => (typeof v === "string" || typeof v === "number" ? { label: null, text: String(v) } : v), z.object({ label: z.union([z.string(), z.number(), z.null()]).optional().transform((l) => (l === null || l === undefined || String(l).trim() === "" ? null : String(l))), text }));
+const confidence = z.preprocess((v) => {
+  const n = typeof v === "string" ? Number(v) : v;
+  if (typeof n !== "number" || !Number.isFinite(n)) return undefined;
+  return n > 1 && n <= 100 ? n / 100 : n;
+}, z.number().min(0).max(1).optional());
+const flag = z.preprocess((v) => (v === "true" ? true : v === "false" ? false : v), z.boolean().nullable().optional());
+/** Paper identifiers exactly as printed (cover / instructions page of a question paper, header of an answer key). */
+const headerSchema = z
+  .object({ paper: optText, series: optText, set: optText, total_questions: z.union([z.number(), z.string(), z.null()]).optional(), exam: optText })
+  .nullable()
+  .optional()
+  .catch(null);
 export const pageSchema = z.object({
   questions: z
     .array(
       z.object({
         number: z.union([z.number(), z.string(), z.null()]).optional(),
-        section: z.string().nullable().optional(),
-        type: z.string().optional(),
-        instructions: z.string().nullable().optional(),
-        passage: z.string().nullable().optional(),
-        stem: z.string().default(""),
-        rich: z.boolean().optional(),
-        options: z.array(z.object({ label: z.union([z.string(), z.number()]).transform(String), text: z.string().default("") })).default([]),
-        list_i: z.array(entrySchema).optional().default([]),
-        list_ii: z.array(entrySchema).optional().default([]),
-        printed_answer: z.array(z.union([z.string(), z.number()]).transform(String)).optional().default([]),
-        figures: z.array(figureSchema).optional().default([]),
-        unreadable: z.array(z.string()).optional().default([]),
-        confidence: z.number().min(0).max(1).optional(),
-        continues_on_next_page: z.boolean().optional(),
-        continued_from_previous_page: z.boolean().optional(),
+        section: optText,
+        type: optText,
+        instructions: optText,
+        passage: optText,
+        stem: text,
+        rich: flag,
+        options: z.array(optionSchema).nullable().optional().transform((v) => v ?? []),
+        list_i: z.array(entrySchema).nullable().optional().transform((v) => v ?? []),
+        list_ii: z.array(entrySchema).nullable().optional().transform((v) => v ?? []),
+        printed_answer: strList.optional().transform((v) => v ?? []),
+        figures: z.array(figureSchema).nullable().optional().transform((v) => v ?? []),
+        unreadable: strList.optional().transform((v) => v ?? []),
+        confidence,
+        continues_on_next_page: flag,
+        continued_from_previous_page: flag,
       })
     )
     .max(200)
     .default([]),
-  answer_key: z.array(z.object({ number: z.union([z.number(), z.string()]), answer: z.union([z.string(), z.number()]).transform(String) })).optional().default([]),
-  page_notes: z.string().optional(),
+  answer_key: z.array(z.object({ number: z.union([z.number(), z.string()]), answer: z.union([z.string(), z.number()]).transform(String) })).nullable().optional().transform((v) => v ?? []),
+  paper_header: headerSchema,
+  page_notes: optText,
 });
 export type PageOutput = z.infer<typeof pageSchema>;
 
@@ -103,7 +125,9 @@ export function labelFromPrinted(value: string, printedOptions: string[]): strin
 export function toExtracted(out: PageOutput, page: number, model: string): ExtractedQuestion[] {
   return out.questions.map((q, i) => {
     const num = q.number === null || q.number === undefined || q.number === "" ? null : Number.parseInt(String(q.number).replace(/\D+/g, ""), 10);
-    const printed = q.options.map((o) => o.label);
+    // A label the model did not return is taken from the option's position (and the question flagged).
+    const labelsMissing = q.options.some((o) => o.label === null);
+    const printed = q.options.map((o, k) => o.label ?? String.fromCharCode(65 + k));
     const labels = canonicalLabels(printed);
     let type = (TYPES.includes(q.type as ExtractedType) ? q.type : "OTHER") as ExtractedType;
     if (q.options.length >= 5) type = "FIVE_OPTIONS";
@@ -130,19 +154,19 @@ export function toExtracted(out: PageOutput, page: number, model: string): Extra
       instructions: q.instructions ?? null,
       passage: q.passage ?? null,
       stem: q.stem.trim(),
-      options: q.options.map((o, k) => ({ label: labels[k], printed: o.label, text: o.text.trim() })),
-      listI: q.list_i.length ? q.list_i.map((e) => ({ key: e.key.replace(/[().\s]/g, "").toUpperCase(), text: e.text.trim() })) : null,
-      listII: q.list_ii.length ? q.list_ii.map((e) => ({ key: e.key.replace(/[().\s]/g, "").toUpperCase(), text: e.text.trim() })) : null,
+      options: q.options.map((o, k) => ({ label: labels[k], printed: printed[k], text: o.text.trim() })),
+      listI: q.list_i.length ? q.list_i.map((e, k) => ({ key: (e.key ?? String.fromCharCode(65 + k)).replace(/[().\s]/g, "").toUpperCase(), text: e.text.trim() })) : null,
+      listII: q.list_ii.length ? q.list_ii.map((e, k) => ({ key: (e.key ?? String(k + 1)).replace(/[().\s]/g, "").toUpperCase(), text: e.text.trim() })) : null,
       printedAnswer: [...new Set(printedAnswer)],
       contentFormat: q.rich ? "RICH_V1" : "PLAIN",
-      confidence: q.confidence ?? 0.5,
+      confidence: labelsMissing ? Math.min(q.confidence ?? 0.5, 0.6) : (q.confidence ?? 0.5),
       unreadable: q.unreadable,
       figures,
       method: "AI_VISION",
       model,
       continuesOnNextPage: q.continues_on_next_page === true,
       continuedFromPreviousPage: q.continued_from_previous_page === true,
-      notes: [],
+      notes: labelsMissing ? ["The model did not return the printed option labels; the options are labelled by their position — check them against the page."] : [],
     } satisfies ExtractedQuestion;
   });
 }
@@ -154,11 +178,13 @@ const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n))
 export const KEY_SYSTEM = `You read ONE page of an official ANSWER KEY of an examination and return every entry.
 ${GUARD}
 RULES: copy each question number and its answer exactly as printed (e.g. "B", "(3)", "A,C", "Bonus", "Dropped", "*"). Do not solve anything. If a number or answer is unreadable, put it in "unreadable".
-OUTPUT (JSON only): {"entries":[{"number":1,"answer":"B","section":""}],"unreadable":[]}`;
+Also copy the key's own identifiers exactly as printed in its header (paper number, series / set / booklet code, total questions, exam name) into "header"; use null for any that are not printed.
+OUTPUT (JSON only): {"header":{"exam":null,"paper":null,"series":null,"set":null,"total_questions":null},"entries":[{"number":1,"answer":"B","section":""}],"unreadable":[]}`;
 
 export const keySchema = z.object({
   entries: z.array(z.object({ number: z.union([z.number(), z.string()]), answer: z.union([z.string(), z.number()]).transform(String), section: z.string().nullable().optional() })).max(1000).default([]),
-  unreadable: z.array(z.string()).optional().default([]),
+  unreadable: strList.optional().transform((v) => v ?? []),
+  header: headerSchema,
 });
 
 // ---- Independent answer opinion --------------------------------------------------------------------
@@ -187,9 +213,10 @@ ${q.options.map((o) => `${o.label}. ${o.text}`).join("\n")}`;
 
 export const CLASSIFY_SYSTEM = `You classify exam questions into an EXISTING syllabus. You may only use ids from the list given; never invent a subject, topic or id.
 ${GUARD}
-RULES: for each question choose the best subject id and topic id from the list (topic must belong to that subject). If no topic fits, use null and a low confidence. confidence 0-1.
-OUTPUT (JSON only): {"results":[{"q":"<question ref>","subject":"<id>","topic":"<id or null>","confidence":0.8}]}`;
+RULES: for each question choose the best subject code (S…) and topic code (T…) from the list (the topic must be listed under that subject). Copy the codes exactly. If no topic fits, use null and a low confidence. confidence 0-1. Return one result per question, using its reference (Q…).
+OUTPUT (JSON only): {"results":[{"q":"Q1","subject":"S3","topic":"T41","confidence":0.8}]}`;
 
+const ref = z.union([z.string(), z.number(), z.null()]).optional().transform((v) => (v === null || v === undefined ? null : String(v).trim()));
 export const classifySchema = z.object({
-  results: z.array(z.object({ q: z.string(), subject: z.string().nullable().optional(), topic: z.string().nullable().optional(), confidence: z.number().min(0).max(1).default(0) })).max(100).default([]),
+  results: z.array(z.object({ q: z.union([z.string(), z.number()]).transform((v) => String(v).trim()), subject: ref, topic: ref, confidence: confidence.transform((v) => v ?? 0) })).max(100).default([]),
 });

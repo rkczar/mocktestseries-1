@@ -9,6 +9,7 @@ import { getImporterSettings } from "@/lib/ai-import/settings";
 import { jobSummary } from "@/lib/ai-import/summary";
 import { resetEligibility } from "@/lib/ai-import/jobs";
 import { planOf } from "@/lib/ai-import/select";
+import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { jobCards, jobMapping } from "@/lib/ai-import/job-view";
 import { importerSpendSummary } from "@/lib/ai-import/ledger";
 import { jobQuality } from "@/lib/ai-import/summary";
@@ -43,7 +44,14 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     prisma.aiImportKeyEntry.groupBy({ by: ["keyFileId"], where: { jobId: job.id }, _count: { _all: true } }),
   ]);
   const examOptions: ExamOption[] = await Promise.all(exams.map(async (e) => ({ ...e, subjects: await getExamSubjects(prisma, e.id), papers: papers.filter((p) => p.examId === e.id) })));
-  const [[card], mapping, quality, spend] = await Promise.all([jobCards({ ids: [job.id] }, canManage), jobMapping(job.id), jobQuality(job.id), importerSpendSummary(job.id)]);
+  const [[card], mapping, quality, spend, keyChecks, modelEvents] = await Promise.all([
+    jobCards({ ids: [job.id] }, canManage),
+    jobMapping(job.id),
+    jobQuality(job.id),
+    importerSpendSummary(job.id),
+    keyPaperChecks(job.id),
+    prisma.aiImportEvent.findMany({ where: { jobId: job.id, type: { in: ["MODEL_SWITCHED", "MODEL_SWITCH_SKIPPED", "MODEL_REPLACED", "MODEL_RECONFIGURED", "COST_RECONFIRMED"] } }, orderBy: { createdAt: "desc" }, take: 40, select: { id: true, type: true, message: true, createdAt: true } }),
+  ]);
   const runs = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, bulkImportRunId: { not: null } }, distinct: ["bulkImportRunId"], select: { bulkImportRunId: true } });
   const view: JobView = {
     id: job.id,
@@ -87,6 +95,9 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     aiEnabled: settings.aiEnabled,
     allowUnverified: settings.publish.allowUnverifiedAnswers,
     plan: planOf(job.config),
+    pricierFallback: settings.budget.allowPricierFallback,
+    modelChanges: modelEvents.map((e) => ({ id: e.id, at: formatIst(e.createdAt), type: e.type, message: e.message })),
+    keyChecks: keyChecks.map((c) => ({ keyFile: c.keyFile, state: c.state, detail: c.detail, key: c.key ? [c.key.paper && `Paper ${c.key.paper}`, c.key.series && `Series ${c.key.series}`, c.key.set && `Set ${c.key.set}`, c.key.totalQuestions && `${c.key.totalQuestions} questions`].filter(Boolean).join(", ") : null, paper: [c.paper.paper && `Paper ${c.paper.paper}`, c.paper.series && `Series ${c.paper.series}`].filter(Boolean).join(", ") || null, source: c.paper.source })),
     reset,
     canManage,
     controls: { id: job.id, title: job.title, status: job.status, actions: card.actions },

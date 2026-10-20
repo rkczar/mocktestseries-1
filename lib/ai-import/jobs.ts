@@ -5,13 +5,14 @@ import path from "node:path";
 import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPageStatus, AiImportPaperType, Prisma, type AiImportJob } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { CHUNK_BYTES, WORKER_STATUSES, fileRemovalBlockedReason } from "@/lib/ai-import/config";
-import { getImporterSettings } from "@/lib/ai-import/settings";
+import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { checkFilename, detectFile } from "@/lib/ai-import/detect";
 import { pdfInfo } from "@/lib/ai-import/pdf";
 import { adoptFile, tmpDir, removeVaultDir, vaultPath } from "@/lib/ai-import/vault";
 import { kickWorker } from "@/lib/ai-import/kick";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
-import { computeModelPlan } from "@/lib/ai-import/select";
+import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
+import { priceRemainingWork } from "@/lib/ai-import/reconfigure";
 import { BUDGET_LOCK_KEY } from "@/lib/ai-import/ai";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { VerifyMode } from "@/lib/ai-import/config";
@@ -380,16 +381,61 @@ export async function pauseJob(jobId: string, actorId: string) {
   await logEvent(jobId, "PAUSED", "Paused by an administrator", undefined, actorId);
 }
 
+/** The cost an administrator must confirm before Resume / Retry may send paid AI requests again (nothing was started). */
+export interface ContinueCost {
+  /** Recorded spend of the job so far (unknown costs held at their worst case). */
+  spentInr: number;
+  /** The maximum confirmed for the job until now. */
+  confirmedMaxInr: number;
+  /** Conservative maximum of the work still to do (failed / pending pages, failed keys, classification). */
+  remainingMaxInr: number;
+  /** The new confirmed maximum this continuation needs: spent + remaining maximum. */
+  neededMaxInr: number;
+  pages: number;
+  keyFiles: number;
+  questionsToClassify: number;
+}
+
+/** Started, or not started because the shown cost must be confirmed first. */
+export type ContinueResult = { started: true; cost: null } | { started: false; cost: ContinueCost };
+
+/**
+ * Renewed confirmation before a paused / failed / finished import sends paid AI requests again. The remaining work
+ * is priced with the job's models (no AI request); when spent + its maximum fits the confirmed maximum nothing is
+ * asked. Otherwise the caller gets the cost to show, and only a confirmation of at least the freshly priced amount
+ * raises the job's confirmed maximum (to exactly that amount). With Paid AI off nothing can be spent, so nothing is asked.
+ */
+async function authorizeRemaining(job: AiImportJob, actorId: string, confirmedMaxInr: number | null | undefined): Promise<ContinueCost | null> {
+  const current = await getImporterSettings();
+  const plan = planOf(job.config);
+  if (!current.aiEnabled || !plan) return null;
+  const settings = { ...jobRunSettings(job.config, current), models: modelsFromPlan(plan) };
+  const files = await prisma.aiImportFile.findMany({ where: { jobId: job.id }, select: { id: true, role: true, status: true, errorMessage: true, pageCount: true } });
+  const r = await priceRemainingWork({ id: job.id, analysis: job.analysis, files }, plan, settings);
+  if (r.maxInr === null) throw new ImportJobError(`The cost of the remaining work cannot be established (${r.estimate.notes[0] ?? "a model price or the exchange rate is missing"}). Nothing was started — use Reconfigure Models for This Job to choose models with a known price.`);
+  const needed = Math.ceil((job.spentInr + r.maxInr) * 100) / 100;
+  if (needed <= job.budgetInr + 0.005) return null;
+  const cost: ContinueCost = { spentInr: job.spentInr, confirmedMaxInr: job.budgetInr, remainingMaxInr: r.maxInr, neededMaxInr: needed, pages: r.unreadPages, keyFiles: r.failedKeyFiles, questionsToClassify: r.toClassify };
+  const confirmed = typeof confirmedMaxInr === "number" && Number.isFinite(confirmedMaxInr) ? confirmedMaxInr : null;
+  if (confirmed === null || confirmed + 0.005 < needed) return cost;
+  await prisma.aiImportJob.update({ where: { id: job.id }, data: { budgetInr: needed } });
+  await logEvent(job.id, "COST_RECONFIRMED", `New maximum confirmed: ₹${needed.toFixed(2)} (₹${job.spentInr.toFixed(2)} spent + up to ₹${r.maxInr.toFixed(2)} for ${r.unreadPages} page(s)${r.failedKeyFiles ? `, ${r.failedKeyFiles} answer-key file(s)` : ""}${r.toClassify ? ` and classifying ${r.toClassify} question(s)` : ""}); was ₹${job.budgetInr.toFixed(2)}.`, { ...cost }, actorId);
+  return null;
+}
+
 /** Resume after a manual pause, a provider/key pause or a failure (finished pages are never read or paid for again). */
-export async function resumeJob(jobId: string, actorId: string) {
+export async function resumeJob(jobId: string, actorId: string, confirmedMaxInr?: number | null): Promise<ContinueResult> {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status !== AiImportJobStatus.PAUSED && job.status !== AiImportJobStatus.PAUSED_BUDGET && job.status !== AiImportJobStatus.FAILED) throw new ImportJobError("Only a paused or failed import can be resumed.");
+  const cost = await authorizeRemaining(job, actorId, confirmedMaxInr);
+  if (cost) return { started: false, cost };
   await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, leaseOwner: null, leaseUntil: null } });
   // Failed pages get one more attempt on resume (never automatically in a loop).
   await prisma.aiImportPage.updateMany({ where: { jobId, status: "FAILED" }, data: { status: "PENDING", errorMessage: null } });
   await logEvent(jobId, "RESUMED", "Resumed", undefined, actorId);
   kickWorker();
+  return { started: true, cost: null };
 }
 
 /**
@@ -417,16 +463,20 @@ export async function cancelJob(jobId: string, actorId: string) {
  * read or paid for again; failed pages get one more attempt). A cancelled job returns to where it was
  * cancelled: before processing it is analyzed again; after confirmation it is queued again.
  */
-export async function retryJob(jobId: string, actorId: string) {
+export async function retryJob(jobId: string, actorId: string, confirmedMaxInr?: number | null): Promise<ContinueResult> {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status === AiImportJobStatus.PAUSED || job.status === AiImportJobStatus.PAUSED_BUDGET || job.status === AiImportJobStatus.FAILED) {
-    return resumeJob(jobId, actorId);
+    return resumeJob(jobId, actorId, confirmedMaxInr);
   }
-  if (job.status === AiImportJobStatus.NEEDS_REVIEW) return retryFailedParts(job, actorId);
+  if (job.status === AiImportJobStatus.NEEDS_REVIEW) return retryFailedParts(job, actorId, confirmedMaxInr);
   if (job.status !== AiImportJobStatus.CANCELLED) throw new ImportJobError("Only a failed, paused or cancelled import, or a finished one with failed pages, can be retried.");
   if (job.leaseUntil && job.leaseUntil > new Date()) throw new ImportJobError("The worker is still stopping (it finishes its current step first). Try again in a few seconds.", 409);
   const toQueue = !!job.confirmedAt;
+  if (toQueue) {
+    const cost = await authorizeRemaining(job, actorId, confirmedMaxInr);
+    if (cost) return { started: false, cost };
+  }
   const r = await prisma.aiImportJob.updateMany({
     where: { id: jobId, status: AiImportJobStatus.CANCELLED },
     data: toQueue ? { status: AiImportJobStatus.QUEUED, cancelledAt: null, errorMessage: null, pauseReason: null, finishedAt: null, leaseOwner: null, leaseUntil: null } : { status: AiImportJobStatus.DRAFT, cancelledAt: null, errorMessage: null, analysis: Prisma.DbNull, estimate: Prisma.DbNull, estCostInr: null, estCostUsd: null },
@@ -437,6 +487,7 @@ export async function retryJob(jobId: string, actorId: string) {
   await logEvent(jobId, "RETRIED", toQueue ? "Retried after cancellation: processing continues from the last finished page (finished pages are not read or charged again)." : "Retried after cancellation: the files are analyzed again.", undefined, actorId);
   if (toQueue) kickWorker();
   else await requestAnalysis(jobId, actorId);
+  return { started: true, cost: null };
 }
 
 /**
@@ -446,7 +497,7 @@ export async function retryJob(jobId: string, actorId: string) {
  * are matched to their stored rows (no duplicates), and page errors, events and cost records are kept.
  * Paid AI must be on now (with it off the pages could not be read, so nothing is started).
  */
-async function retryFailedParts(job: AiImportJob, actorId: string) {
+async function retryFailedParts(job: AiImportJob, actorId: string, confirmedMaxInr?: number | null): Promise<ContinueResult> {
   if (!job.confirmedAt) throw new ImportJobError("This import was never confirmed for processing, so there is nothing to retry.");
   if (job.leaseUntil && job.leaseUntil > new Date()) throw new ImportJobError("The worker is still finishing this import. Try again in a few seconds.", 409);
   const [failedPages, failedKeys] = await Promise.all([
@@ -455,6 +506,9 @@ async function retryFailedParts(job: AiImportJob, actorId: string) {
   ]);
   if (!failedPages && !failedKeys) throw new ImportJobError("Nothing failed in this import, so there is nothing to retry — review its questions instead.");
   if (!(await getImporterSettings()).aiEnabled) throw new ImportJobError("Paid AI is switched off in Import Settings, so the failed pages cannot be read. Nothing was changed. Switch Paid AI on (and save) first, then retry.");
+  const cost = await authorizeRemaining(job, actorId, confirmedMaxInr);
+  if (cost) return { started: false, cost };
+  const fresh = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { budgetInr: true } });
   const r = await prisma.aiImportJob.updateMany({
     where: { id: job.id, status: AiImportJobStatus.NEEDS_REVIEW, OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }] },
     data: { status: AiImportJobStatus.QUEUED, errorMessage: null, pauseReason: null, finishedAt: null, leaseOwner: null, leaseUntil: null },
@@ -462,8 +516,9 @@ async function retryFailedParts(job: AiImportJob, actorId: string) {
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
   // The previous error stays on the page until it is read again (it is replaced on success or on a new failure).
   await prisma.aiImportPage.updateMany({ where: { jobId: job.id, status: AiImportPageStatus.FAILED }, data: { status: AiImportPageStatus.PENDING } });
-  await logEvent(job.id, "RETRY_FAILED", `Retry of the failed parts: ${failedPages} page(s)${failedKeys ? ` and ${failedKeys} answer-key file(s)` : ""} are read again. Finished pages are not read or charged again.`, { failedPages, failedKeys }, actorId);
+  await logEvent(job.id, "RETRY_FAILED", `Retry of the failed parts: ${failedPages} page(s)${failedKeys ? ` and ${failedKeys} answer-key file(s)` : ""} are read again (confirmed maximum ₹${fresh.budgetInr.toFixed(2)}). Finished pages are not read or charged again.`, { failedPages, failedKeys, confirmedMaxInr: fresh.budgetInr }, actorId);
   kickWorker();
+  return { started: true, cost: null };
 }
 
 /**

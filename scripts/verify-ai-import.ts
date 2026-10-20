@@ -500,7 +500,8 @@ async function main() {
   const evM0 = await prisma.aiImportEvent.findFirst({ where: { jobId: jobM0, type: "CONFIRMED" }, orderBy: { createdAt: "desc" } });
   check("…CONFIRMED event names the confirmed estimate and maximum", /Cost confirmed: estimated ₹.*estimated maximum ₹/.test(evM0?.message ?? ""), evM0?.message);
   await runWorker(120_000);
-  // No job cap: a job whose spend already passed its confirmed maximum (and the former ₹8 cap) keeps processing.
+  // No fixed job cap, but the confirmed maximum holds: a job whose spend already passed it pauses before the next
+  // request, and continues only after a renewed confirmation of spent + the remaining work's maximum.
   const jobM2 = await newJob(actor, exam.id, "FX past the old job cap");
   await upload(actor, jobM2, "scanned.pdf");
   await requestAnalysis(jobM2, actor);
@@ -511,7 +512,19 @@ async function main() {
   const chatsM2 = (await mockStats()).chat;
   await runWorker(300_000);
   const jm2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } });
-  check("spend above the confirmed maximum and the former ₹8 job cap → not paused, completes", jm2.status === "NEEDS_REVIEW" && (await mockStats()).chat > chatsM2, { s: jm2.status, r: jm2.pauseReason });
+  check("spend past the confirmed maximum → paused before the next request, nothing sent", jm2.status === "PAUSED_BUDGET" && /exceed the confirmed maximum/.test(jm2.pauseReason ?? "") && (await mockStats()).chat === chatsM2, { s: jm2.status, r: jm2.pauseReason });
+  const rm1 = await resumeJob(jobM2, actor);
+  const needM2 = rm1.cost?.neededMaxInr ?? 0;
+  check("…Resume without a renewed confirmation starts nothing and asks for spent + the remaining maximum", !rm1.started && rm1.cost.spentInr === 8.5 && needM2 > 8.5 && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } })).status === "PAUSED_BUDGET", rm1.cost);
+  const rm2 = await resumeJob(jobM2, actor, needM2 - 0.05);
+  check("…a confirmation below the priced amount starts nothing", !rm2.started);
+  const rm3 = await resumeJob(jobM2, actor, needM2);
+  const jm2b = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } });
+  const evM2 = await prisma.aiImportEvent.findFirst({ where: { jobId: jobM2, type: "COST_RECONFIRMED" } });
+  check("…confirming it queues the job with exactly that maximum and logs COST_RECONFIRMED", rm3.started && jm2b.status === "QUEUED" && Math.abs(jm2b.budgetInr - needM2) < 0.001 && !!evM2, { s: jm2b.status, b: jm2b.budgetInr, needM2 });
+  await runWorker(300_000);
+  const jm2c = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } });
+  check("…then completes (above the former ₹8 job cap) within the new confirmed maximum", jm2c.status === "NEEDS_REVIEW" && (await mockStats()).chat > chatsM2 && jm2c.spentInr > 8.5 && jm2c.spentInr <= jm2c.budgetInr + 0.005, { s: jm2c.status, spent: jm2c.spentInr, b: jm2c.budgetInr });
   // Monthly / all-time fields in stored settings are no longer enforced (even at ₹0).
   await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 0, totalInr: 0, maxJobInr: 0 } }), actor);
   const jobM3 = await newJob(actor, exam.id, "FX no monthly cap");
@@ -819,8 +832,9 @@ async function attachPlan(jobId: string) {
   const { computeModelPlan } = await import("@/lib/ai-import/select");
   const plan = await computeModelPlan(normalizeImporterSettings(await getImporterSettings()), { refresh: true });
   const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
-  // AI requests are only sent for a PROCESSING job; the far lease keeps the suite's own worker runs away from it.
-  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: "PROCESSING", leaseOwner: "suite-direct-calls", leaseUntil: new Date(Date.now() + 3_600_000), config: { ...((j.config as object) ?? {}), modelPlan: plan } as never } });
+  // AI requests are only sent for a PROCESSING job with a confirmed maximum (as after Confirm); the far lease keeps
+  // the suite's own worker runs away from it.
+  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: "PROCESSING", budgetInr: 50, leaseOwner: "suite-direct-calls", leaseUntil: new Date(Date.now() + 3_600_000), config: { ...((j.config as object) ?? {}), modelPlan: plan } as never } });
   return plan;
 }
 
@@ -886,9 +900,11 @@ async function sectionT(actor: string, examId: string) {
   check("…nothing sent, nothing reserved", (await mockStats()).chat === chats3 && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${ja}:` } } })) === 0);
   // Resume after a provider / key pause, whatever the job already spent (no "raise the budget" step).
   await prisma.aiImportJob.update({ where: { id: jobT }, data: { status: "PAUSED_BUDGET", pauseReason: "The provider refused the request (credit).", spentInr: 12 } });
-  await resumeJob(jobT, actor);
+  const rt1 = await resumeJob(jobT, actor);
+  check("resume: a job paused after ₹12 spent (above every former cap) shows spent + remaining as the new maximum; nothing started", !rt1.started && rt1.cost.spentInr === 12 && rt1.cost.neededMaxInr > 12 && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT } })).status === "PAUSED_BUDGET", rt1.cost);
+  await resumeJob(jobT, actor, rt1.cost?.neededMaxInr);
   const jt2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT } });
-  check("resume: a job paused after ₹12 spent (above every former cap) is queued again, spend kept", jt2.status === "QUEUED" && jt2.spentInr === 12 && jt2.pauseReason === null, { s: jt2.status, spent: jt2.spentInr });
+  check("…confirming it queues the job again, spend kept (no fixed cap to raise)", jt2.status === "QUEUED" && jt2.spentInr === 12 && jt2.pauseReason === null, { s: jt2.status, spent: jt2.spentInr });
   await prisma.aiImportJob.update({ where: { id: jobT }, data: { status: "CANCELLED", spentInr: 0 } });
 
   // T4 — stored job-limit figures lowered after confirmation are not enforced: the job runs.
@@ -1251,7 +1267,10 @@ async function sectionU(actor: string, examId: string) {
   check("…the unavailable attempt cost nothing (released)", u9.spentInr === 0 && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${jobU9}:` }, status: { not: "RELEASED" } } })) === 0);
   // The administrator allows a pricier fallback: resumed, the replacement is used, recorded and shown.
   await setSettings((s) => ({ ...s, budget: { ...s.budget, allowPricierFallback: true } }), actor);
-  await resumeJob(jobU9, actor);
+  // Allowing pricier fallbacks raises what the remaining work may cost: Resume shows it for a renewed confirmation.
+  const r9 = await resumeJob(jobU9, actor);
+  check("…Resume after allowing pricier fallbacks asks to confirm the higher maximum first (nothing started)", !r9.started && r9.cost.neededMaxInr > u9.budgetInr && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobU9 } })).status === "PAUSED", r9.cost);
+  await resumeJob(jobU9, actor, r9.cost?.neededMaxInr);
   await runWorker(120_000);
   u9 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobU9 } });
   const ev9 = await prisma.aiImportEvent.findFirst({ where: { jobId: jobU9, type: "MODEL_REPLACED" } });

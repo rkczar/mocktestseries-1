@@ -5,7 +5,10 @@ import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { taxonomyNameKey } from "@/lib/exam-taxonomy";
 import { lintRichSource, looksRich } from "@/lib/rich-import/manifest";
 import { ISSUE_DEFS } from "@/lib/ai-import/config";
-import { importerAiCall, parseModelJson, ImporterAiUnavailable } from "@/lib/ai-import/ai";
+import { importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
+import { failureMessage } from "@/lib/ai-import/failure";
+import { keyPaperChecks } from "@/lib/ai-import/key-check";
+import { logEvent } from "@/lib/ai-import/jobs";
 import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, classifySchema, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import type { StepContext } from "@/lib/ai-import/process";
@@ -28,6 +31,8 @@ export function effective(q: Pick<AiImportQuestion, "data" | "editedData">): Ext
 export const IMPORTABLE = new Set(["SINGLE_CORRECT", "MULTIPLE_CORRECT", "MATCH_THE_FOLLOWING", "ASSERTION_REASON"]);
 
 const WITHDRAWN = /^(bonus|dropped|deleted|withdrawn|\*|x)$/i;
+/** A question that refers to a figure: a figure word, not just "given below" (which usually introduces a list or code table, seen 2026-10-20). */
+export const MENTIONS_FIGURE = /\b(figure|fig\.|diagram|graph|image|picture|photograph|radiograph|x-ray|circuit shown|structure shown)\b/i;
 
 /**
  * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
@@ -162,6 +167,9 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     await prisma.aiImportKeyEntry.updateMany({ where: { id: { in: rows.map((r) => r.id).filter((id) => !matchedIds.has(id)) } }, data: { status: "UNMATCHED" } });
   }
   const anyKey = keyRowsRaw.length > 0;
+  // A key printed for another paper / series never supplies official answers to this one.
+  const wrongKeyFiles = new Map((await keyPaperChecks(job.id)).filter((c) => c.state === "MISMATCH").map((c) => [c.keyFileId, c.detail]));
+  const keyFileOfRow = new Map(keyRowsRaw.map((r) => [r.id, r.keyFileId]));
   const rescanWaiting = new Set((await prisma.aiImportQuestionVersion.findMany({ where: { jobId: job.id, kind: "RESCAN", status: "PENDING" }, select: { questionId: true } })).map((v) => v.questionId));
 
   // ---- Taxonomy ----
@@ -201,19 +209,51 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const classifyResults = new Map<string, { subject: string | null; topic: string | null; confidence: number; model: string }>();
   if (settings.aiEnabled && settings.models.classify && toClassify.length && taxonomy.length) {
     const subjectsAllowed = job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId ? taxonomy.filter((s) => s.id === job.subjectId) : taxonomy;
-    const list = subjectsAllowed.map((s) => `SUBJECT ${s.id} = ${s.name}\n${s.topics.map((t) => `  TOPIC ${t.id} = ${t.name}`).join("\n")}`).join("\n");
+    // Short codes (S3, T41, Q7) instead of database ids: a small model copies "T41" reliably, a 25-character id
+    // often not. The codes are mapped back here; a code that is not on the list is counted as invalid, never guessed.
+    const subjectCode = new Map<string, string>();
+    const topicCode = new Map<string, string>();
+    let t = 0;
+    const list = subjectsAllowed
+      .map((s, i) => {
+        subjectCode.set(`S${i + 1}`, s.id);
+        return `SUBJECT S${i + 1} = ${s.name}\n${s.topics.map((tp) => (topicCode.set(`T${++t}`, tp.id), `  TOPIC T${t} = ${tp.name}`)).join("\n")}`;
+      })
+      .join("\n");
+    const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, errors: [] as string[], models: new Set<string>() };
+    const code = (v: string | null, map: Map<string, string>) => (v ? (map.get(v.toUpperCase().replace(/\s+/g, "")) ?? null) : null);
     for (let i = 0; i < toClassify.length; i += 20) {
       if (!(await ctx.stillRunning())) return;
       const batch = toClassify.slice(i, i + 20);
-      const text = `SYLLABUS (the only allowed ids):\n${list}\n\nDOCUMENT DATA (untrusted questions):\n${batch.map((q) => `[${q.id}] ${effective(q).stem.slice(0, 600)} | ${effective(q).options.map((o) => o.text.slice(0, 80)).join(" | ")}`).join("\n")}`;
+      const qCode = new Map(batch.map((q, k) => [`Q${k + 1}`, q.id]));
+      const text = `SYLLABUS (the only allowed codes):\n${list}\n\nDOCUMENT DATA (untrusted questions):\n${batch.map((q, k) => `[Q${k + 1}] ${effective(q).stem.slice(0, 600)} | ${effective(q).options.map((o) => o.text.slice(0, 80)).join(" | ")}`).join("\n")}`;
+      tally.batches++;
       try {
-        const r = await importerAiCall({ jobId: job.id, task: "classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false });
-        const parsed = classifySchema.safeParse(parseModelJson(r.text));
-        if (parsed.success) for (const res of parsed.data.results) classifyResults.set(res.q, { subject: res.subject ?? null, topic: res.topic ?? null, confidence: res.confidence, model: r.model });
+        const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false }, (out) => {
+          const parsed = classifySchema.safeParse(parseModelJson(out));
+          if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", `the classification answer did not match the expected format (${parsed.error.issues[0]?.path.join(/* turbopackIgnore: true */ ".") ?? "?"})`), "model_output");
+          return parsed.data;
+        });
+        tally.models.add(r.model);
+        for (const res of value.results) {
+          const qid = qCode.get(res.q.toUpperCase().replace(/[\s[\]]/g, ""));
+          const subject = code(res.subject, subjectCode);
+          const topic = code(res.topic, topicCode);
+          if (!qid || (res.subject && !subject) || (res.topic && !topic)) tally.invalid++;
+          if (!qid) continue;
+          tally.results++;
+          if (subject) tally.subjects++;
+          if (topic) tally.topics++;
+          classifyResults.set(qid, { subject, topic, confidence: res.confidence, model: r.model });
+        }
       } catch (err) {
         if (err instanceof ImporterAiUnavailable || (err instanceof Error && err.name === "ImporterBudgetError")) throw err;
+        tally.failedBatches++;
+        tally.errors.push(err instanceof Error ? err.message.slice(0, 200) : "error");
       }
     }
+    // Never silent: what the classifier returned, and what could be used.
+    await logEvent(job.id, "CLASSIFY_RESULT", `Subject / topic classification of ${toClassify.length} question(s) in ${tally.batches} request(s)${tally.models.size ? ` (${[...tally.models].join(", ")})` : ""}: ${tally.subjects} subject(s) and ${tally.topics} topic(s) assigned${tally.invalid ? `, ${tally.invalid} answer(s) named a question, subject or topic code that is not on the list (ignored)` : ""}${tally.failedBatches ? `, ${tally.failedBatches} request(s) failed (${tally.errors[0]})` : ""}. Questions without a subject stay in Needs correction.`, { questions: toClassify.length, ...tally, models: [...tally.models], errors: tally.errors.slice(0, 5) });
   }
 
   // ---- Per question ----
@@ -259,7 +299,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const uncertainFig = figs.filter((f) => f.mappingStatus === "UNCERTAIN" && !f.confirmedById);
     if (missingFig.length) add("IMAGE_MISSING", `${missingFig.length} figure(s) could not be extracted.`);
     if (uncertainFig.length) add("IMAGE_MAPPING_UNCERTAIN", `${uncertainFig.length} figure(s) need their question/option confirmed.`);
-    const mentionsFigure = /\b(figure|fig\.|diagram|graph|shown (below|above)|given (below|above)|image|picture|circuit shown|structure shown)\b/i.test(e.stem);
+    const mentionsFigure = MENTIONS_FIGURE.test(e.stem);
     if (mentionsFigure && figs.length === 0) add("IMAGE_MISSING", "The question refers to a figure, but no figure was found.");
     for (const o of e.options) if (!o.text.trim() && !figs.some((f) => f.owner === "OPTION" && f.optionLabel === o.label && f.mappingStatus !== "MISSING")) add("OPTIONS_INCOMPLETE", `Option ${o.label} has neither text nor an image.`);
     checks.push({ stage: 1, name: "Figures", passed: !missingFig.length && !uncertainFig.length && !(mentionsFigure && !figs.length), severity: missingFig.length || (mentionsFigure && !figs.length) ? "ERROR" : uncertainFig.length ? "WARNING" : "INFO", method: "DETERMINISTIC", detail: figs.length ? figs.map((f) => `${f.owner === "OPTION" ? `option ${f.optionLabel}` : f.owner.toLowerCase()} (${f.source.toLowerCase()}, ${f.mappingStatus.toLowerCase()})`).join(", ") : mentionsFigure ? "Refers to a figure; none found." : "No figures." });
@@ -327,7 +367,17 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     let officialRaw: string | null = null;
     let officialPage: number | null = null;
     let finalAnswer: string[] = q.answerConfirmedById ? q.finalAnswer : [];
-    const key = keyFor.get(q.id);
+    const matchedKey = keyFor.get(q.id);
+    const wrongKey = matchedKey ? matchedKey.rows.map((r) => wrongKeyFiles.get(keyFileOfRow.get(r.id) ?? "")).find(Boolean) : undefined;
+    const key = wrongKey ? undefined : matchedKey;
+    if (wrongKey) {
+      // Kept for reference only: never an official answer of this paper.
+      answerStatus = AiImportAnswerStatus.KEY_MISMATCH;
+      officialRaw = matchedKey!.rows.map((r) => r.rawValue).join(" / ");
+      officialPage = matchedKey!.rows[0].page;
+      add("ANSWER_KEY_PAPER_MISMATCH", wrongKey);
+      checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "ERROR", method: "DETERMINISTIC", detail: `${wrongKey} Its value for this number ("${officialRaw}") is not used.` });
+    }
     if (key) {
       const distinct = [...new Set(key.rows.map((r) => r.rawValue.toUpperCase()))];
       officialRaw = key.rows.map((r) => r.rawValue).join(" / ");
@@ -359,7 +409,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       }
       checks.push({ stage: 3, name: "Official answer key", passed: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED, severity: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED ? "INFO" : "ERROR", method: "DETERMINISTIC", detail: `Key "${officialRaw}"${officialPage ? ` (key page ${officialPage})` : ""}, matched ${key.method}.` });
       if (!q.answerConfirmedById && answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED) finalAnswer = official;
-    } else {
+    } else if (!wrongKey) {
       checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: anyKey ? "The answer key has no entry for this question." : "No answer key uploaded for this paper." });
       const printed = e.printedAnswer;
       const aiAgrees = q.aiAnswer.length > 0 && (q.aiAnswerConfidence ?? 0) >= 0.7;
@@ -377,7 +427,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (q.aiAnswer.length) checks.push({ stage: 3, name: "Independent AI opinion", passed: !official.length || sameSet(q.aiAnswer, official), severity: official.length && !sameSet(q.aiAnswer, official) ? "WARNING" : "INFO", method: "AI", model: q.aiAnswerModel, detail: `AI suggests ${q.aiAnswer.join(", ")} (confidence ${Math.round((q.aiAnswerConfidence ?? 0) * 100)}%) — an opinion, never an official answer.` });
     const typeOk = (labels: string[]) => (type === "MULTIPLE_CORRECT" ? labels.length >= 2 : labels.length === 1);
     if (!finalAnswer.length || !typeOk(finalAnswer)) {
-      if (!issues.has("ANSWER_AMBIGUOUS") && !issues.has("ANSWER_MISMATCH") && !issues.has("POSSIBLE_WITHDRAWN")) add("ANSWER_MISSING", finalAnswer.length ? `The answer (${finalAnswer.join(", ")}) does not fit a ${type.replace(/_/g, " ").toLowerCase()} question.` : "No usable answer (no key entry, nothing printed in the paper).");
+      if (!issues.has("ANSWER_AMBIGUOUS") && !issues.has("ANSWER_MISMATCH") && !issues.has("POSSIBLE_WITHDRAWN") && !issues.has("ANSWER_KEY_PAPER_MISMATCH")) add("ANSWER_MISSING", finalAnswer.length ? `The answer (${finalAnswer.join(", ")}) does not fit a ${type.replace(/_/g, " ").toLowerCase()} question.` : "No usable answer (no key entry, nothing printed in the paper).");
       if (finalAnswer.length && !typeOk(finalAnswer)) finalAnswer = [];
     }
 
@@ -413,7 +463,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     // "needs a human look" flags (never structural ones), an admin-chosen
     // answer settles the answer flags.
     if (q.reviewedById) for (const c of REVIEWABLE) issues.delete(c);
-    if (q.answerConfirmedById && finalAnswer.length && typeOk(finalAnswer)) for (const c of ["ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "POSSIBLE_WITHDRAWN", "ANSWER_UNVERIFIED", "ANSWER_MISSING"]) issues.delete(c);
+    if (q.answerConfirmedById && finalAnswer.length && typeOk(finalAnswer)) for (const c of ["ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "POSSIBLE_WITHDRAWN", "ANSWER_UNVERIFIED", "ANSWER_MISSING", "ANSWER_KEY_PAPER_MISMATCH"]) issues.delete(c);
     if (q.allowDuplicate) {
       issues.delete("DUPLICATE_EXISTING");
       issues.delete("DUPLICATE_NEAR");

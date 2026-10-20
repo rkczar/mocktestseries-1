@@ -34,6 +34,15 @@
  * refuses under require_parameters; mockparam/zeroout — vision, ₹0 output price but a non-zero input price.
  * Every chat request with provider.require_parameters is refused (404 "No endpoints found that can handle the
  * requested parameters.") when the model's routes do not list every parameter the request sends.
+ * Reliability fixtures (2026-10-20): config {reasonModels: true} adds mockreason/think — a vision model whose routes
+ * accept `reasoning`; WITHOUT a `reasoning` setting it spends the whole max_tokens thinking and returns no text
+ * (finish_reason "length"), with {effort} it answers normally. config {batchModels: true} adds
+ * mockvision/cheap:batch — the cheapest vision model, refused on chat/completions like OpenRouter's batch variants.
+ * config {script: {id: [mode, …]}} answers the next requests to a model with an unusable answer, one mode each:
+ * "empty" | "length" | "malformed" (cut-off JSON) | "shape" (options as plain strings, null labels / list keys,
+ * numbers as strings) | "latex" (unescaped LaTeX backslashes + trailing commas) | "badcodes" (classification codes
+ * not on the list). config {keyHeader: {...}} is returned as the answer key's printed header.
+ * stats.reasoning records each chat request's `reasoning` setting (null when absent).
  */
 import http from "node:http";
 import { readFileSync } from "node:fs";
@@ -65,11 +74,17 @@ const EXTRA = {
   "mockpaid/verify": { p: 0.00000007, c: 0.00000035, vision: true, json: true },
   "mocktext/cheap": { p: 0.00000005, c: 0.0000002, vision: false, json: true },
 };
+const REASON = {
+  "mockreason/think": { p: 0.00000004, c: 0.00000028, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning"], thinks: true },
+};
+const BATCH = {
+  "mockvision/cheap:batch": { p: 0.000000005, c: 0.00000005, vision: true, batch: true },
+};
 const PARAM = {
   "mockparam/notemp": { p: 0.00000002, c: 0.0000001, vision: true, json: true, params: ["max_tokens"] },
   "mockparam/zeroout": { p: 0.00000003, c: 0, vision: true, json: true },
 };
-const M = () => ({ ...MODELS, ...(config.extraModels ? EXTRA : {}), ...(config.paramModels ? PARAM : {}) });
+const M = () => ({ ...MODELS, ...(config.extraModels ? EXTRA : {}), ...(config.paramModels ? PARAM : {}), ...(config.reasonModels ? REASON : {}), ...(config.batchModels ? BATCH : {}) });
 const paramsOf = (m) => m.params ?? ["max_tokens", "temperature", ...(m.json ? ["response_format"] : [])];
 /** Provider routes of a model: [tag, price factor]; every model is ZDR unless `zdr: false`. */
 const routesOf = (id) => {
@@ -87,12 +102,12 @@ const routesOf = (id) => {
   }));
 };
 const zdrRoute = (id) => !config.zdrRemoved.includes(id) && routesOf(id).some((r) => r.tag !== "mockprov/std");
-const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, rateLimit: {}, badRequest: {}, failTask: {} };
+const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, reasonModels: false, batchModels: false, script: {}, keyHeader: null, rateLimit: {}, badRequest: {}, failTask: {} };
 const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
 
-const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0 };
+const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0 };
 let seq = 0;
 
 function json(res, status, body) {
@@ -136,7 +151,7 @@ function classify(text) {
     else if (t && cur) cur.topics.push({ id: t[1], name: t[2] });
   }
   const results = [];
-  for (const m of text.matchAll(/^\[([a-z0-9]+)\] (.*)$/gm)) {
+  for (const m of text.matchAll(/^\[([A-Za-z0-9]+)\] (.*)$/gm)) {
     const q = m[2].toLowerCase();
     let hit = null;
     for (const s of subjects) for (const t of s.topics) if (!hit && q.includes(t.name.toLowerCase())) hit = { s, t };
@@ -157,7 +172,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/__mock/stats") return json(res, 200, stats);
   if (url.pathname === "/__mock/reset") {
-    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0 });
+    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0 });
     Object.assign(config, structuredClone(DEFAULT_CONFIG));
     return json(res, 200, { ok: true });
   }
@@ -195,6 +210,7 @@ const server = http.createServer(async (req, res) => {
     stats.privacy.push(body.provider?.data_collection ?? null);
     stats.zdr.push(body.provider?.zdr === true);
     stats.requireParams.push(body.provider?.require_parameters === true);
+    stats.reasoning.push(body.reasoning ?? null);
     const system = String(body.messages?.find((m) => m.role === "system")?.content ?? "");
     const user = body.messages?.find((m) => m.role === "user")?.content;
     const parts = Array.isArray(user) ? user : [{ type: "text", text: String(user ?? "") }];
@@ -227,7 +243,7 @@ const server = http.createServer(async (req, res) => {
         continue;
       }
       // require_parameters: a route must support every parameter sent (as OpenRouter enforces it).
-      const sentParams = ["max_tokens", "temperature", "response_format"].filter((k) => body[k] !== undefined);
+      const sentParams = ["max_tokens", "temperature", "response_format", "reasoning"].filter((k) => body[k] !== undefined);
       if (body.provider?.require_parameters === true && sentParams.some((k) => !(m.params ?? ["max_tokens", "temperature"]).includes(k))) {
         last = [404, "No endpoints found that can handle the requested parameters. To learn more about provider routing, visit: https://openrouter.ai/docs/guides/routing/provider-selection"];
         continue;
@@ -238,6 +254,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (config.noEndpoint.includes(id) || (body.provider?.zdr === true && !zdrRoute(id))) {
         last = [404, "No endpoints found matching your data policy (Zero data retention)"];
+        continue;
+      }
+      if (m.batch) {
+        last = [404, `${id} cannot be used with the chat/completions endpoint (adapter MockBatchAdapter).`];
         continue;
       }
       if (id === "mockvision/fail") {
@@ -264,15 +284,30 @@ const server = http.createServer(async (req, res) => {
         else out = { questions: id === "mockvision/checker" && fx.checker ? fx.checker.questions : fx.questions, answer_key: fx.answer_key ?? [], page_notes: "" };
       } else if (task === "key") {
         const marker = image ? await markerOf(image) : null;
-        out = marker && fixtures.keys[marker] ? { entries: fixtures.keys[marker].entries, unreadable: [] } : { entries: [], unreadable: ["nothing"] };
+        out = marker && fixtures.keys[marker] ? { ...(config.keyHeader ? { header: config.keyHeader } : {}), entries: fixtures.keys[marker].entries, unreadable: [] } : { entries: [], unreadable: ["nothing"] };
       } else if (task === "solve") out = { answer: ["B"], confidence: 0.8, defective: false, reason: "mock" };
       else if (task === "classify") out = classify(text);
       else out = { error: "unknown task" };
-      const content = JSON.stringify(out);
+      let content = JSON.stringify(out);
+      let finish = "stop";
+      let ctOverride = null;
+      const mode = m.thinks && !body.reasoning?.effort ? "length" : Array.isArray(config.script[id]) && config.script[id].length ? config.script[id].shift() : null;
+      if (mode === "empty") {
+        content = "";
+        ctOverride = 0;
+      } else if (mode === "length") {
+        content = "";
+        finish = "length";
+        ctOverride = body.max_tokens;
+      } else if (mode === "malformed") content = content.slice(0, Math.max(20, Math.floor(content.length / 2)));
+      else if (mode === "shape" && out.questions) {
+        content = JSON.stringify({ ...out, questions: out.questions.map((q) => ({ ...q, number: String(q.number), stem: q.stem ?? null, options: q.options.map((o, i) => (i % 2 ? o.text : { label: null, text: o.text })), list_i: [{ key: null, text: "first entry" }], confidence: "0.9", printed_answer: null })) });
+      } else if (mode === "latex") content = content.replace(/\\\\/g, "\\").replace(/\]/g, ",]").replace(/}$/, ",}");
+      else if (mode === "badcodes" && out.results) content = JSON.stringify({ results: out.results.map((r) => ({ ...r, subject: "cmzzzzzzzzzzzzzzzzzzzzzzz", topic: "nonsense" })) });
       const pt = Math.ceil((system.length + text.length) / 4) + (image ? 1200 : 0);
-      const ct = Math.ceil(content.length / 4);
+      const ct = ctOverride ?? Math.ceil(content.length / 4);
       const cost = Math.round((pt * m.p + ct * m.c + (image && m.image ? Number(m.image) || 0 : 0)) * config.costMultiplier * 1e12) / 1e12;
-      return json(res, 200, { id: `gen-vision-${Date.now()}-${++seq}`, model: id, choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct, cost } });
+      return json(res, 200, { id: `gen-vision-${Date.now()}-${++seq}`, model: id, choices: [{ message: { role: "assistant", content }, finish_reason: finish }], usage: { prompt_tokens: pt, completion_tokens: ct, total_tokens: pt + ct, cost } });
     }
     return err(res, last[0], last[1]);
   }

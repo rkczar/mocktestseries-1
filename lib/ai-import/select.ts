@@ -71,6 +71,8 @@ interface Evaluation {
   row: CandidateRow;
   price: PlanPrice | null;
   maxUsd: number | null;
+  /** Every eligible route accepts the `reasoning` parameter (the request can bound a reasoning model's thinking). */
+  reasoning?: boolean;
 }
 
 export interface EvalCtx {
@@ -91,6 +93,9 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   const problem = modelProblem(m, vision, ctx.settings.importerModels);
   if (problem || !m) return fail(problem ?? "not in the model catalog");
   if (m.isImageModel) return fail("an image-generation model");
+  // OpenRouter serves ":batch" variants only through its batch API; a live chat request is refused
+  // ("cannot be used with the chat/completions endpoint", seen 2026-10-20).
+  if (/:batch$/i.test(id)) return fail("a batch-only variant — OpenRouter serves it only through its batch API, not the live requests the importer sends");
   if (ctx.fxRate === null) return fail("no USD→INR rate, so its cost cannot be set");
   const info = ctx.snapshot?.models[id];
   if (!ctx.snapshot || !info) return fail("its provider routes have not been read (refresh the routes)");
@@ -147,7 +152,7 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   if (maxInr > ctx.settings.budget.maxRequestInr) {
     return { row: { ...row, eligible: false, reason: `one request could cost up to ${formatInr(maxInr)}, above the per-request limit of ${formatInr(ctx.settings.budget.maxRequestInr)}` }, price, maxUsd };
   }
-  return { row, price, maxUsd };
+  return { row, price, maxUsd, reasoning: routes.every((r) => !!r.params?.includes("reasoning")) };
 }
 
 const order = (a: CandidateRow, b: CandidateRow) => Number(b.eligible) - Number(a.eligible) || (a.maxInr ?? Infinity) - (b.maxInr ?? Infinity) || (a.typicalInr ?? Infinity) - (b.typicalInr ?? Infinity) || a.id.localeCompare(b.id);

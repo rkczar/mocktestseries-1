@@ -1,12 +1,12 @@
 import "server-only";
 import { readFile } from "node:fs/promises";
 import * as XLSX from "xlsx";
-import { AiImportFileRole, AiImportFileStatus, type AiImportFile } from "@prisma/client";
+import { AiImportFileRole, AiImportFileStatus, type AiImportFile, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { runTool } from "@/lib/ai-import/tools";
 import { readDocx } from "@/lib/ai-import/docx";
 import { vaultPath } from "@/lib/ai-import/vault";
-import { importerAiCall, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
+import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
 import { KEY_SYSTEM, keySchema } from "@/lib/ai-import/prompts";
 import { visionImage } from "@/lib/ai-import/figures";
@@ -23,6 +23,35 @@ export interface KeyPair {
   number: number;
   section: string;
   raw: string;
+  /** Page of the key file the entry was read from (source reference). */
+  page?: number | null;
+}
+
+/** The key's own identifiers as printed (paper, series / set, total questions) — compared with the question paper. */
+export interface KeyHeader {
+  paper: string | null;
+  series: string | null;
+  set: string | null;
+  totalQuestions: number | null;
+  exam: string | null;
+}
+
+/** Header identifiers printed in a text key ("Paper II", "Series A", "Total Questions 120"); null when none. */
+export function parseKeyHeader(text: string): KeyHeader | null {
+  const head = text.slice(0, 3000);
+  const paper = /\bPaper\s*(?:No\.?|Code)?\s*[-:–]?\s*\(?([IVX]{1,4}|\d{1,2})\)?(?![\w])/i.exec(head)?.[1] ?? null;
+  const series = /\b(?:Series|Booklet\s*(?:Series|Code)?|Test\s*Booklet)\s*[-:–]?\s*\(?([A-D])\)?(?![\w])/i.exec(head)?.[1] ?? null;
+  const set = /\bSet\s*(?:No\.?|Code)?\s*[-:–]?\s*\(?([A-Z0-9]{1,3})\)?(?![\w])/i.exec(head)?.[1] ?? null;
+  const total = /\bTotal\s*(?:No\.?\s*of\s*)?Questions\s*[-:–]?\s*(\d{1,4})/i.exec(head)?.[1];
+  const h = { paper, series, set, totalQuestions: total ? Number(total) : null, exam: null };
+  return h.paper || h.series || h.set || h.totalQuestions ? h : null;
+}
+
+function headerOf(h: { paper?: string | null; series?: string | null; set?: string | null; total_questions?: number | string | null; exam?: string | null } | null | undefined): KeyHeader | null {
+  if (!h) return null;
+  const total = h.total_questions === null || h.total_questions === undefined ? null : Number.parseInt(String(h.total_questions), 10);
+  const out = { paper: h.paper?.trim() || null, series: h.series?.trim() || null, set: h.set?.trim() || null, totalQuestions: Number.isFinite(total) ? total : null, exam: h.exam?.trim() || null };
+  return out.paper || out.series || out.set || out.totalQuestions || out.exam ? out : null;
 }
 
 // A–E / 1–5 are read as printed: a value that is not one of the question's options becomes a KEY MISMATCH, never dropped.
@@ -77,25 +106,30 @@ function sheetPairs(bytes: Buffer, ext: string): KeyPair[] {
   return out;
 }
 
-async function aiKeyPage(ctx: StepContext, file: AiImportFile, page: number): Promise<KeyPair[]> {
+async function aiKeyPage(ctx: StepContext, file: AiImportFile, page: number): Promise<{ pairs: KeyPair[]; header: KeyHeader | null }> {
   const model = ctx.settings.models.key ?? ctx.settings.models.extract;
   const render = await ensureRender(ctx.job, file, page, ctx.settings.limits.renderDpi);
-  const r = await importerAiCall({
-    jobId: ctx.job.id,
-    task: "key",
-    models: [model!],
-    system: KEY_SYSTEM,
-    content: [
-      { type: "text", text: `Answer key page ${page}. DOCUMENT DATA (untrusted): see the image.` },
-      { type: "image_url", image_url: { url: await visionImage(render), detail: "high" } },
-    ],
-    maxOutputTokens: 4000,
-    settings: ctx.settings,
-    needsVision: true,
-  });
-  const parsed = keySchema.safeParse(parseModelJson(r.text));
-  if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", "the answer-key reading did not match the expected format"), "model_output");
-  return parsed.data.entries.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: (e.section ?? "").trim(), raw: e.answer.replace(/[()\s]/g, "") }));
+  const { value } = await importerAiCallChecked(
+    {
+      jobId: ctx.job.id,
+      task: "key",
+      models: [model!],
+      system: KEY_SYSTEM,
+      content: [
+        { type: "text", text: `Answer key page ${page}. DOCUMENT DATA (untrusted): see the image.` },
+        { type: "image_url", image_url: { url: await visionImage(render), detail: "high" } },
+      ],
+      maxOutputTokens: 4000,
+      settings: ctx.settings,
+      needsVision: true,
+    },
+    (text) => {
+      const parsed = keySchema.safeParse(parseModelJson(text));
+      if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", "the answer-key reading did not match the expected format"), "model_output");
+      return parsed.data;
+    }
+  );
+  return { pairs: value.entries.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: (e.section ?? "").trim(), raw: e.answer.replace(/[()\s]/g, ""), page })), header: headerOf(value.header) };
 }
 
 /** Reads every unprocessed answer-key file of the job into AiImportKeyEntry rows. */
@@ -108,6 +142,7 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     const paperFileId = file.paperFileId ?? (papers.length === 1 ? papers[0].id : null);
     const kind = (file.detected as { kind?: string } | null)?.kind;
     let pairs: KeyPair[] = [];
+    let header: KeyHeader | null = null;
     let method = "local";
     const full = vaultPath(file.storageKey!);
     try {
@@ -116,22 +151,29 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
       // pdftotext ends every page with a form feed: never read past the real page count.
       const pages = text.split("\f").slice(0, Math.max(1, file.pageCount ?? 1));
       for (let p = 0; p < pages.length; p++) {
+        header ??= parseKeyHeader(pages[p]);
         const local = parseKeyText(pages[p]);
         if (keyLooksValid(local)) {
-          pairs.push(...local);
+          pairs.push(...local.map((x) => ({ ...x, page: p + 1 })));
           continue;
         }
         if (pages[p].replace(/\s+/g, "").length < 40 && ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
-          pairs.push(...(await aiKeyPage(ctx, file, p + 1)));
+          const read = await aiKeyPage(ctx, file, p + 1);
+          pairs.push(...read.pairs);
+          header ??= read.header;
           method = "ai";
         }
       }
     } else if (kind === "docx") {
-      pairs = parseKeyText((await readDocx(full)).lines.map((l) => l.text).join("\n"));
+      const text = (await readDocx(full)).lines.map((l) => l.text).join("\n");
+      header = parseKeyHeader(text);
+      pairs = parseKeyText(text).map((x) => ({ ...x, page: 1 }));
     } else if (kind === "xlsx" || kind === "csv") {
       pairs = sheetPairs(await readFile(full), kind);
     } else if (ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
-      pairs = await aiKeyPage(ctx, file, 1);
+      const read = await aiKeyPage(ctx, file, 1);
+      pairs = read.pairs;
+      header = read.header;
       method = "ai";
     }
     } catch (e) {
@@ -151,7 +193,10 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
       continue;
     }
     await saveKeyEntries(ctx, file.id, paperFileId, null, pairs);
-    await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: null } });
-    await logEvent(ctx.job.id, "KEY_READ", `${file.originalName}: ${pairs.length} answer-key entries read (${method === "ai" ? "AI vision" : "text layer"})`, { fileId: file.id, entries: pairs.length, method });
+    // The key's printed identifiers are kept with the file (post.ts compares them with the question paper).
+    const detected = { ...((file.detected as Record<string, unknown> | null) ?? {}), keyHeader: header } as unknown as Prisma.InputJsonValue;
+    await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: null, detected } });
+    const printed = header ? [header.paper && `Paper ${header.paper}`, header.series && `Series ${header.series}`, header.set && `Set ${header.set}`, header.totalQuestions && `${header.totalQuestions} questions`].filter(Boolean).join(", ") : "";
+    await logEvent(ctx.job.id, "KEY_READ", `${file.originalName}: ${pairs.length} answer-key entries read (${method === "ai" ? "AI vision" : "text layer"})${printed ? ` — the key is printed for ${printed}` : ""}`, { fileId: file.id, entries: pairs.length, method, header });
   }
 }

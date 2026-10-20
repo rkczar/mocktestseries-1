@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatBytes } from "@/lib/ai-import/config";
-import type { JobDeletePreview } from "@/lib/ai-import/jobs";
+import type { ContinueCost, JobDeletePreview } from "@/lib/ai-import/jobs";
+import { ContinueCostConfirm } from "@/components/admin/ai-importer/continue-cost";
 import { cancelJobAction, deleteJobAction, deleteJobPreviewAction, reconfigureJobAction, reconfigurePreviewAction, recoverJobAction, retryJobAction } from "@/app/admin/(dashboard)/ai-importer/actions";
 import type { ReconfigurePreview } from "@/lib/ai-import/autoconfig-types";
 import { formatInr } from "@/lib/ai-engine/config";
@@ -201,6 +202,8 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
   const [pending, start] = useTransition();
   const [deleting, setDeleting] = useState(false);
   const [reconfiguring, setReconfiguring] = useState(false);
+  // Retry that needs a renewed cost confirmation first (nothing was started): the cost to show.
+  const [cost, setCost] = useState<{ value: ContinueCost; changed: boolean } | null>(null);
   const [local, setLocal] = useState<{ text: string; error: boolean } | null>(null);
   const say = (m: { text: string; error: boolean }) => (onMessage ? onMessage(m) : setLocal(m));
   const act = (fn: () => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>, ok: string | ((d: unknown) => string)) =>
@@ -211,6 +214,16 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
         say({ text: typeof ok === "string" ? ok : ok(r.data), error: false });
         router.refresh();
       }
+    });
+  const retryOk = job.status === "NEEDS_REVIEW" ? "Retrying the failed pages and answer key only — finished pages are not read or charged again." : "Retrying — it continues from the last finished step.";
+  const retry = (confirmedMaxInr?: number) =>
+    start(async () => {
+      const r = await callImporter(() => retryJobAction(job.id, confirmedMaxInr ?? null));
+      if (!r.ok) return say({ text: r.error, error: true });
+      if (!r.data.started) return setCost({ value: r.data.cost, changed: confirmedMaxInr !== undefined });
+      setCost(null);
+      say({ text: retryOk, error: false });
+      router.refresh();
     });
   const a = job.actions;
   if (!a.cancel && !a.retry && !a.delete && !a.recover && !a.reconfigure) return null;
@@ -223,7 +236,7 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
           </Button>
         )}
         {a.retry && (
-          <Button size={size} disabled={pending} onClick={() => act(() => retryJobAction(job.id), job.status === "NEEDS_REVIEW" ? "Retrying the failed pages and answer key only — finished pages are not read or charged again." : "Retrying — it continues from the last finished step.")} data-testid="job-retry">
+          <Button size={size} disabled={pending} onClick={() => retry()} data-testid="job-retry">
             {job.status === "NEEDS_REVIEW" ? "Retry failed pages" : "Retry"}
           </Button>
         )}
@@ -254,6 +267,7 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
           {local.text}
         </p>
       )}
+      {cost && <ContinueCostConfirm cost={cost.value} changed={cost.changed} pending={pending} label={job.status === "NEEDS_REVIEW" ? "Confirm Cost & Retry" : "Confirm Cost & Continue"} onConfirm={(v) => retry(v)} onCancel={() => setCost(null)} />}
       {reconfiguring && (
         <ReconfigureDialog
           job={job}

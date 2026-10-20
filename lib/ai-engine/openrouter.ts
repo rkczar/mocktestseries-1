@@ -182,6 +182,8 @@ export interface ChatParams {
   timeoutMs: number;
   /** OpenRouter Auto: plugin settings. */
   autoRouter?: { costTier: "low" | "medium" | "high"; allowedModels?: string[] };
+  /** Optional reasoning control for models whose routes accept `reasoning` (AI Question Importer only). */
+  reasoning?: { effort: "low" | "medium" | "high"; exclude?: boolean };
 }
 
 export interface ChatResult {
@@ -209,6 +211,7 @@ export async function chatCompletion(p: ChatParams): Promise<ChatResult> {
     temperature: p.temperature,
     provider: p.provider,
   };
+  if (p.reasoning) body.reasoning = p.reasoning;
   if (p.models.length === 1) body.model = p.models[0];
   else {
     body.model = p.models[0];

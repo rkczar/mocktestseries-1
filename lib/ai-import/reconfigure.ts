@@ -1,9 +1,9 @@
 import "server-only";
 import { createHash } from "node:crypto";
-import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPageStatus, Prisma } from "@prisma/client";
+import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, AiImportPageStatus, AiImportQuestionStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formatInr } from "@/lib/ai-engine/config";
-import { SELECTION_TASKS, SELECTION_TASK_LABELS } from "@/lib/ai-import/config";
+import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { readRoutes } from "@/lib/ai-import/routes";
 import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
@@ -60,6 +60,102 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
   const plan = snapshot ? await computeModelPlan(settings, { refresh: false, snapshot, substitute: true, jobId }) : null;
   const confirmed = planOf(job.config);
 
+  const remaining = plan ? await priceRemainingWork(job, plan, settings) : null;
+  const pages = remaining?.pages ?? (await prisma.aiImportPage.findMany({ where: { jobId }, select: { status: true } }));
+  const unreadPages = remaining?.unreadPages ?? 0;
+  const failedKeys = job.files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY && f.status === AiImportFileStatus.ANALYZED && f.errorMessage);
+  const est = remaining?.estimate ?? null;
+  if (!unreadPages && !failedKeys.length) blocking.push("Nothing is left to read in this import (no failed or pending page), so there is nothing to reconfigure.");
+  const GUIDE = "Add an image-capable model with a verified route and a known price within the per-request limit to the importer's list (Import Settings → AI Auto-Configure shows what qualifies), then reconfigure again. Limits are never raised automatically.";
+  if (plan && !plan.tasks.extract.model && unreadPages) blocking.push(`No page-reading model is suitable now: ${plan.tasks.extract.reason} Nothing was changed. ${GUIDE}`);
+  if (plan && failedKeys.length && !plan.tasks.key.model) blocking.push(`No answer-key model is suitable now: ${plan.tasks.key.reason} Nothing was changed.`);
+  if (est && !blocking.length) {
+    if (remaining!.maxInr === null) blocking.push(`The cost of the remaining work cannot be established (${est.notes[0] ?? "missing price"}). Nothing was changed.`);
+  }
+  const tasks = SELECTION_TASKS.map((t) => ({ task: t, label: SELECTION_TASK_LABELS[t], current: confirmed?.tasks[t]?.model ?? null, proposed: plan?.tasks[t].model ?? null, maxInr: plan?.tasks[t].maxInr ?? null, reason: plan?.tasks[t].reason ?? "Not computed.", substituted: plan?.tasks[t].substituted ?? null, quality: "not_tested" as const }));
+  const paidAiOn = current.aiEnabled;
+  const preview: ReconfigurePreview = {
+    jobId,
+    title: job.title,
+    status: job.status,
+    computedAt: new Date().toISOString(),
+    aiRequestsSent: 0,
+    paidAiOn,
+    tasks,
+    donePages: pages.filter((p) => p.status === AiImportPageStatus.DONE).length,
+    retryPages: unreadPages,
+    failedKeyFiles: failedKeys.length,
+    estimateInr: est?.totalInr ?? null,
+    maxInr: remaining?.maxInr ?? null,
+    spentInr: job.spentInr,
+    routesFetchedAt: snapshot?.fetchedAt ?? null,
+    next: paidAiOn
+      ? `After you confirm, the import is queued again with these models: only the ${unreadPages} failed or pending page(s)${failedKeys.length ? ` and ${failedKeys.length} answer-key file(s)` : ""} are read. Finished pages are not read or charged again.`
+      : "Paid AI is OFF: the new models are saved on the import and it stays paused. Nothing is sent until Paid AI is switched on and the import is resumed.",
+    blocking,
+    // The shown cost is part of what is confirmed: a price change after the preview needs a fresh confirmation.
+    proposalKey: hash({ tasks: tasks.map((t) => [t.task, t.proposed]), updatedAt: job.updatedAt.toISOString(), todo: unreadPages, keys: failedKeys.length, maxPaise: remaining?.maxInr == null ? null : Math.round(remaining.maxInr * 100) }),
+  };
+  return { preview, plan, updatedAt: job.updatedAt };
+}
+
+export async function reconfigurePreview(jobId: string): Promise<ReconfigurePreview> {
+  return (await build(jobId)).preview;
+}
+
+export async function reconfigureJob(input: { jobId: string; proposalKey: string; actorId: string }): Promise<ReconfigureResult> {
+  const { preview, plan, updatedAt } = await build(input.jobId);
+  if (preview.blocking.length) throw new ReconfigureError(preview.blocking.join(" "));
+  if (preview.proposalKey !== input.proposalKey) throw new ReconfigureError("The import, the available models or their cost changed since the preview. Nothing was changed — open the preview again and confirm the new cost.");
+  const queue = preview.paidAiOn;
+  const from = Object.fromEntries(preview.tasks.map((t) => [t.task, t.current]));
+  const to = Object.fromEntries(preview.tasks.map((t) => [t.task, t.proposed]));
+  await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ config: unknown; status: string; updatedAt: Date; leaseUntil: Date | null }[]>`SELECT "config", "status", "updatedAt", "leaseUntil" FROM "AiImportJob" WHERE "id" = ${input.jobId} FOR UPDATE`;
+    const j = locked[0];
+    if (!j || j.status !== preview.status || j.updatedAt.getTime() !== updatedAt.getTime() || leased(j)) throw new ReconfigureError("The import changed state at the same moment. Nothing was changed — open the preview again.");
+    const config = (j.config ?? {}) as Record<string, unknown>;
+    const current = await tx.aiImportJob.findUniqueOrThrow({ where: { id: input.jobId }, select: { budgetInr: true, spentInr: true } });
+    const confirmedMax = Math.max(current.budgetInr, Math.round((current.spentInr + (preview.maxInr ?? 0)) * 10_000) / 10_000);
+    const history = Array.isArray(config.reconfigured) ? (config.reconfigured as unknown[]) : [];
+    const nextConfig = { ...config, modelPlan: plan, models: modelsFromPlan(plan!), selection: { mode: plan!.mode }, reconfigured: [...history, { at: new Date().toISOString(), byId: input.actorId, from, to, maxInr: preview.maxInr }] };
+    await tx.aiImportJob.update({
+      where: { id: input.jobId },
+      // The confirmed maximum now covers what was spent plus the maximum shown for the remaining work.
+      data: queue
+        ? { config: nextConfig as unknown as Prisma.InputJsonValue, budgetInr: confirmedMax, status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, leaseOwner: null, leaseUntil: null }
+        : { config: nextConfig as unknown as Prisma.InputJsonValue, budgetInr: confirmedMax, pauseReason: "Models reconfigured. Paid AI is OFF — switch it on in Import Settings, then resume." },
+    });
+    // Finished pages are never touched; failed pages get their next attempt with the new models.
+    if (queue) await tx.aiImportPage.updateMany({ where: { jobId: input.jobId, status: AiImportPageStatus.FAILED }, data: { status: AiImportPageStatus.PENDING } });
+    const summary = preview.tasks.filter((t) => t.current !== t.proposed).map((t) => `${t.label}: ${t.current ?? "none"} → ${t.proposed ?? "none"}${t.substituted ? ` (substitute: ${t.substituted.from} cannot be used — ${t.substituted.why.slice(0, 120)})` : ""}`).join("; ") || "same models, current routes and prices";
+    await tx.aiImportEvent.create({ data: { jobId: input.jobId, type: "MODEL_RECONFIGURED", message: `Models reconfigured by an administrator (${summary}). ${preview.retryPages} page(s) to read, conservative maximum ${formatInr(preview.maxInr)}; ${preview.donePages} finished page(s) kept.${queue ? " Queued again." : " Paid AI is OFF: the import stays paused."}`.slice(0, 1000), data: { from, to, maxInr: preview.maxInr, retryPages: preview.retryPages, queued: queue, confirmedMaxInr: confirmedMax }, actorId: input.actorId } });
+    await tx.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORTER_JOB_RECONFIGURED", entityType: "AiImportJob", entityId: input.jobId, metadata: { from, to, maxInr: preview.maxInr, retryPages: preview.retryPages, donePages: preview.donePages, spentInr: preview.spentInr, queued: queue, aiRequestsSent: 0 } } });
+  });
+  if (queue) kickWorker();
+  return { queued: queue, message: queue ? `Reconfigured and queued: ${preview.retryPages} page(s) will be read with the new models; ${preview.donePages} finished page(s) are kept.` : "Models saved on the import. Paid AI is OFF, so it stays paused — nothing was sent." };
+}
+
+export interface RemainingWork {
+  pages: { status: AiImportPageStatus }[];
+  /** Failed + pending pages (or every page when processing never reached one). */
+  unreadPages: number;
+  failedKeyFiles: number;
+  /** Open questions without a topic: the next run classifies them again. */
+  toClassify: number;
+  estimate: Awaited<ReturnType<typeof estimateJobCost>>;
+  /** Conservative maximum of everything the next run may send (null: a price is missing). */
+  maxInr: number | null;
+}
+
+/**
+ * The conservative maximum of the work still to do for an import with `plan`: failed and pending pages (each
+ * priced as a page the AI reads), answer keys whose reading failed, and the classification (and, when enabled,
+ * the independent answer) of open questions that still need it. Used by Reconfigure and by Resume / Retry,
+ * which ask for a renewed confirmation when it does not fit the confirmed maximum. No AI request.
+ */
+export async function priceRemainingWork(job: { id: string; analysis: Prisma.JsonValue | null; files: { id: string; role: AiImportFileRole; status: AiImportFileStatus; errorMessage: string | null; pageCount: number | null }[] }, plan: ModelPlan, settings: ImporterSettings): Promise<RemainingWork> {
+  const jobId = job.id;
   const pages = await prisma.aiImportPage.findMany({ where: { jobId }, select: { fileId: true, pageNumber: true, status: true, kind: true, textChars: true, imageCount: true } });
   const todo = pages.filter((p) => p.status === AiImportPageStatus.FAILED || p.status === AiImportPageStatus.PENDING);
   const failedKeys = job.files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY && f.status === AiImportFileStatus.ANALYZED && f.errorMessage);
@@ -90,72 +186,16 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
   if (notStarted) paperFacts.push(...allFacts(AiImportFileRole.PAPER));
   const unreadPages = notStarted ? allFacts(AiImportFileRole.PAPER).reduce((a, f) => a + f.pages, 0) : todo.length;
   const keyFacts = notStarted ? allFacts(AiImportFileRole.ANSWER_KEY) : failedKeys.map((f) => ({ ...paperFacts[0], kind: "PDF", pages: f.pageCount ?? 1, scannedPages: f.pageCount ?? 1, documentType: "ANSWER_KEY" as const, pagesDetail: [] }) as FileFacts);
-  const est = plan ? await estimateJobCost({ paperFacts, keyFacts, settings: { ...settings, aiEnabled: true }, plan }) : null;
-
-  if (!unreadPages && !failedKeys.length) blocking.push("Nothing is left to read in this import (no failed or pending page), so there is nothing to reconfigure.");
-  const GUIDE = "Add an image-capable model with a verified route and a known price within the per-request limit to the importer's list (Import Settings → AI Auto-Configure shows what qualifies), then reconfigure again. Limits are never raised automatically.";
-  if (plan && !plan.tasks.extract.model && unreadPages) blocking.push(`No page-reading model is suitable now: ${plan.tasks.extract.reason} Nothing was changed. ${GUIDE}`);
-  if (plan && failedKeys.length && !plan.tasks.key.model) blocking.push(`No answer-key model is suitable now: ${plan.tasks.key.reason} Nothing was changed.`);
-  if (est && !blocking.length) {
-    if (est.maxInr === null) blocking.push(`The cost of the remaining work cannot be established (${est.notes[0] ?? "missing price"}). Nothing was changed.`);
-  }
-  const tasks = SELECTION_TASKS.map((t) => ({ task: t, label: SELECTION_TASK_LABELS[t], current: confirmed?.tasks[t]?.model ?? null, proposed: plan?.tasks[t].model ?? null, maxInr: plan?.tasks[t].maxInr ?? null, reason: plan?.tasks[t].reason ?? "Not computed.", substituted: plan?.tasks[t].substituted ?? null, quality: "not_tested" as const }));
-  const paidAiOn = current.aiEnabled;
-  const preview: ReconfigurePreview = {
-    jobId,
-    title: job.title,
-    status: job.status,
-    computedAt: new Date().toISOString(),
-    aiRequestsSent: 0,
-    paidAiOn,
-    tasks,
-    donePages: pages.filter((p) => p.status === AiImportPageStatus.DONE).length,
-    retryPages: unreadPages,
-    failedKeyFiles: failedKeys.length,
-    estimateInr: est?.totalInr ?? null,
-    maxInr: est?.maxInr ?? null,
-    spentInr: job.spentInr,
-    routesFetchedAt: snapshot?.fetchedAt ?? null,
-    next: paidAiOn
-      ? `After you confirm, the import is queued again with these models: only the ${unreadPages} failed or pending page(s)${failedKeys.length ? ` and ${failedKeys.length} answer-key file(s)` : ""} are read. Finished pages are not read or charged again.`
-      : "Paid AI is OFF: the new models are saved on the import and it stays paused. Nothing is sent until Paid AI is switched on and the import is resumed.",
-    blocking,
-    // The shown cost is part of what is confirmed: a price change after the preview needs a fresh confirmation.
-    proposalKey: hash({ tasks: tasks.map((t) => [t.task, t.proposed]), updatedAt: job.updatedAt.toISOString(), todo: unreadPages, keys: failedKeys.length, maxPaise: est?.maxInr == null ? null : Math.round(est.maxInr * 100) }),
-  };
-  return { preview, plan, updatedAt: job.updatedAt };
-}
-
-export async function reconfigurePreview(jobId: string): Promise<ReconfigurePreview> {
-  return (await build(jobId)).preview;
-}
-
-export async function reconfigureJob(input: { jobId: string; proposalKey: string; actorId: string }): Promise<ReconfigureResult> {
-  const { preview, plan, updatedAt } = await build(input.jobId);
-  if (preview.blocking.length) throw new ReconfigureError(preview.blocking.join(" "));
-  if (preview.proposalKey !== input.proposalKey) throw new ReconfigureError("The import, the available models or their cost changed since the preview. Nothing was changed — open the preview again and confirm the new cost.");
-  const queue = preview.paidAiOn;
-  const from = Object.fromEntries(preview.tasks.map((t) => [t.task, t.current]));
-  const to = Object.fromEntries(preview.tasks.map((t) => [t.task, t.proposed]));
-  await prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw<{ config: unknown; status: string; updatedAt: Date; leaseUntil: Date | null }[]>`SELECT "config", "status", "updatedAt", "leaseUntil" FROM "AiImportJob" WHERE "id" = ${input.jobId} FOR UPDATE`;
-    const j = locked[0];
-    if (!j || j.status !== preview.status || j.updatedAt.getTime() !== updatedAt.getTime() || leased(j)) throw new ReconfigureError("The import changed state at the same moment. Nothing was changed — open the preview again.");
-    const config = (j.config ?? {}) as Record<string, unknown>;
-    const history = Array.isArray(config.reconfigured) ? (config.reconfigured as unknown[]) : [];
-    const nextConfig = { ...config, modelPlan: plan, models: modelsFromPlan(plan!), selection: { mode: plan!.mode }, reconfigured: [...history, { at: new Date().toISOString(), byId: input.actorId, from, to, maxInr: preview.maxInr }] };
-    await tx.aiImportJob.update({
-      where: { id: input.jobId },
-      data: queue
-        ? { config: nextConfig as unknown as Prisma.InputJsonValue, status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, leaseOwner: null, leaseUntil: null }
-        : { config: nextConfig as unknown as Prisma.InputJsonValue, pauseReason: "Models reconfigured. Paid AI is OFF — switch it on in Import Settings, then resume." },
-    });
-    // Finished pages are never touched; failed pages get their next attempt with the new models.
-    if (queue) await tx.aiImportPage.updateMany({ where: { jobId: input.jobId, status: AiImportPageStatus.FAILED }, data: { status: AiImportPageStatus.PENDING } });
-    const summary = preview.tasks.filter((t) => t.current !== t.proposed).map((t) => `${t.label}: ${t.current ?? "none"} → ${t.proposed ?? "none"}${t.substituted ? ` (substitute: ${t.substituted.from} cannot be used — ${t.substituted.why.slice(0, 120)})` : ""}`).join("; ") || "same models, current routes and prices";
-    await tx.aiImportEvent.create({ data: { jobId: input.jobId, type: "MODEL_RECONFIGURED", message: `Models reconfigured by an administrator (${summary}). ${preview.retryPages} page(s) to read, conservative maximum ${formatInr(preview.maxInr)}; ${preview.donePages} finished page(s) kept.${queue ? " Queued again." : " Paid AI is OFF: the import stays paused."}`.slice(0, 1000), data: { from, to, maxInr: preview.maxInr, retryPages: preview.retryPages, queued: queue }, actorId: input.actorId } });
-    await tx.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORTER_JOB_RECONFIGURED", entityType: "AiImportJob", entityId: input.jobId, metadata: { from, to, maxInr: preview.maxInr, retryPages: preview.retryPages, donePages: preview.donePages, spentInr: preview.spentInr, queued: queue, aiRequestsSent: 0 } } });
-  });
-  if (queue) kickWorker();
-  return { queued: queue, message: queue ? `Reconfigured and queued: ${preview.retryPages} page(s) will be read with the new models; ${preview.donePages} finished page(s) are kept.` : "Models saved on the import. Paid AI is OFF, so it stays paused — nothing was sent." };
+  const est = await estimateJobCost({ paperFacts, keyFacts, settings: { ...settings, aiEnabled: true }, plan });
+  // Post-processing classifies every open question still without a topic (and asks for an independent answer
+  // when enabled): price those too, at the same per-request maximum and fallback allowance as the estimate.
+  const open = await prisma.aiImportQuestion.findMany({ where: { jobId, status: { in: [AiImportQuestionStatus.EXTRACTED, AiImportQuestionStatus.READY, AiImportQuestionStatus.NEEDS_CORRECTION, AiImportQuestionStatus.NOT_IMPORTABLE, AiImportQuestionStatus.DUPLICATE] } }, select: { topicId: true, taxonomySource: true, aiAnswer: true } });
+  const toClassify = open.filter((q) => !q.topicId && !q.taxonomySource?.startsWith("admin")).length;
+  const toSolve = settings.verification.independentAnswer ? open.filter((q) => !q.aiAnswer.length).length : 0;
+  const perRequest = (c: { maxInr: number | null } | undefined) => (c?.maxInr == null ? null : (settings.budget.retryTransient ? 2 : 1) * c.maxInr + (settings.budget.allowPricierFallback ? Math.max(c.maxInr, settings.budget.maxRequestInr) : c.maxInr));
+  const classifyEach = plan.tasks.classify.model ? perRequest(plan.tasks.classify) : 0;
+  const solveEach = toSolve && plan.tasks.verify.model ? perRequest(plan.tasks.verify) : 0;
+  const extra = classifyEach === null || solveEach === null ? null : Math.ceil(toClassify / 20) * classifyEach + toSolve * solveEach;
+  const maxInr = est.maxInr === null || extra === null ? null : Math.round((est.maxInr + extra) * 10_000) / 10_000;
+  return { pages, unreadPages, failedKeyFiles: failedKeys.length, toClassify, estimate: est, maxInr };
 }
