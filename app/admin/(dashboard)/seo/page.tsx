@@ -35,6 +35,19 @@ export default async function SeoAdminPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>SEO Intelligence</CardTitle>
+          <CardDescription>
+            Search Console and GA4 reports through the shared Google connection —{" "}
+            <Link href="/admin/seo/intelligence" className="text-[var(--color-primary)] hover:underline">
+              open SEO Intelligence
+            </Link>
+            .
+          </CardDescription>
+        </CardHeader>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Site Defaults</CardTitle>
           <CardDescription>
             {canManage ? "Applies to any public page that doesn't set its own title/description." : "View only — SEO settings require MASTER_ADMIN."}

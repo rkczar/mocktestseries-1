@@ -120,6 +120,14 @@ export const PERMISSIONS = {
   AI_IMPORTER_VIEW: "ai-importer:view",
   AI_IMPORTER_USE: "ai-importer:use",
   AI_IMPORTER_MANAGE: "ai-importer:manage",
+  // SEO Intelligence (Admin -> SEO -> Intelligence): Search Console + GA4
+  // data pulled through ONE shared, read-only Google connection. VIEW = read
+  // the connection status and the synced reports (every admin role, TEACHER
+  // included). MANAGE — connect, disconnect, manual sync — is
+  // MASTER_ADMIN-only, enforced server-side on every action and the OAuth
+  // callback route.
+  SEO_INTEL_VIEW: "seo-intel:view",
+  SEO_INTEL_MANAGE: "seo-intel:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -141,6 +149,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.ACCOUNT_RECOVERY_VIEW,
     PERMISSIONS.AI_ENGINE_VIEW,
     PERMISSIONS.AI_IMPORTER_VIEW,
+    PERMISSIONS.SEO_INTEL_VIEW,
   ],
-  TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE],
+  TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE, PERMISSIONS.SEO_INTEL_VIEW],
 };
