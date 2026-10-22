@@ -19,7 +19,10 @@ URLs or structured data, and nothing writes to Google.
 | `seo.google.oauth` | SEO OAuth client ID, client secret (AES-256-GCM, key from `AUTH_SECRET`), refresh token (encrypted), connected account email + Google `sub` |
 | `seo.intel.snapshot` | latest 28-day report + last sync status (source, errors, fail streak) |
 | `seo.intel.history.YYYY-MM-DD` | one summary per IST day with a successful sync (top 10 queries/pages/channels + totals) |
-| `seo.intel.settings` | daily sync on/off (default OFF), history retention days (default 400, 30–1095) |
+| `seo.intel.settings` | daily sync on/off (default OFF), history retention days (default 400, 30–1095), PageSpeed pages (1–3 same-site paths) |
+| `seo.pagespeed.key` | PageSpeed Insights / CrUX API key (AES-256-GCM); admins only ever see an 8-char fingerprint |
+| `seo.intel.pagespeed` | latest PageSpeed results (per page, mobile + desktop) + origin Chrome UX Report data |
+| `seo.intel.psi-lock` | transient; one PageSpeed check at a time |
 | `seo.intel.sync-lock` | transient; one sync at a time |
 
 `AUTH_SECRET` (shared `.env`) is required to read the client secret and refresh token. Losing it means
@@ -49,6 +52,33 @@ sudo /var/www/mocktestseries-current/ops/seo/set-google-oauth.sh clear    # revo
 Then a Master Admin opens Admin → SEO → Intelligence → **Connect Google**, ticks BOTH Search Console and
 Analytics on Google's consent screen, and presses **Sync now**.
 
+## PageSpeed Insights + Core Web Vitals
+
+Lab test (Lighthouse performance score, LCP, CLS, TBT) for up to 3 of this site's pages on mobile and
+desktop, plus real-user Chrome UX Report data (75th percentile LCP, INP, CLS, FCP, TTFB) for the whole
+origin. Ratings use the web.dev Core Web Vitals thresholds and are always written as text.
+
+- Uses its own **API key** (not the OAuth connection). In Google Cloud restrict it to
+  *APIs: PageSpeed Insights API + Chrome UX Report API* and *Application: IP addresses* = this server's
+  public IP. Never put it in `.env`, a URL, a ticket or chat.
+- The app sends the key only in the `X-goog-api-key` header; `googleFetch` refuses any URL containing
+  `key=` and any PageSpeed target outside `https://mocktestseries.in/`. `/admin`, `/api`, `/student`
+  paths are refused as PageSpeed pages.
+- A run sends all calls in parallel with a 45 s cap each (nginx allows 60 s); at most one run per
+  2 minutes; Master Admin only (**Run PageSpeed check**); every admin role can view and download CSV.
+- Google having too little Chrome user data (CrUX 404) is shown as "not enough data", not as an error.
+
+Install / check / remove the key (hidden prompt; nothing is echoed or logged):
+
+```bash
+sudo /var/www/mocktestseries-current/ops/seo/set-pagespeed-key.sh          # paste at the hidden prompt
+sudo /var/www/mocktestseries-current/ops/seo/set-pagespeed-key.sh status   # fingerprint + last check only
+sudo /var/www/mocktestseries-current/ops/seo/set-pagespeed-key.sh clear
+```
+
+To rotate: create the new key in Cloud Console, run the script with it, check the fingerprint changed, then
+delete the old key in Cloud Console.
+
 ## Daily automatic sync (optional)
 
 1. Admin → SEO → Intelligence → Schedule & Retention → tick **Daily automatic sync** → Save.
@@ -57,8 +87,9 @@ Analytics on Google's consent screen, and presses **Sync now**.
    sudo install -m 644 /var/www/mocktestseries-current/ops/seo/mocktestseries-seo-intel.cron /etc/cron.d/mocktestseries-seo-intel
    ```
    Runs 21:40 UTC (03:10 IST). Log: `/var/log/mocktestseries/seo-intel-sync.log` (status lines only).
-   It skips itself while the switch is OFF, while Google is not connected, and while the connection
-   needs a reconnect. Remove with `sudo rm /etc/cron.d/mocktestseries-seo-intel`.
+   It skips itself while the switch is OFF. Its Google part skips while Google is not connected or the
+   connection needs a reconnect; its PageSpeed part skips while no API key is installed (the two run
+   independently). Remove with `sudo rm /etc/cron.d/mocktestseries-seo-intel`.
 
 ## Reconnect / revoke rules (Google revokes per account, grant-wide)
 
@@ -76,6 +107,10 @@ Analytics on Google's consent screen, and presses **Sync now**.
 | GA4 PERMISSION_DENIED | Give the connected account Viewer on property 553529096 |
 | Google refused the sign-in code | Redirect URI or client secret mismatch → fix in Cloud Console, re-run `set-google-oauth.sh` |
 | missing-scopes | Tick both checkboxes on the consent screen |
+| PageSpeed INVALID_ARGUMENT "API key not valid" | Wrong key, or the key's API restriction lacks PageSpeed Insights / CrUX → fix, re-run `set-pagespeed-key.sh` |
+| PageSpeed PERMISSION_DENIED / "requests from this IP" | The key's IP restriction doesn't include this server's public IP |
+| PageSpeed RESOURCE_EXHAUSTED | Daily quota reached; try tomorrow or raise the quota in Cloud Console |
+| "Google did not answer in time" | PageSpeed took > 45 s for that page; run again later |
 
 ## Tests (scratch DB + mock Google only)
 

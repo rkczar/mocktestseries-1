@@ -20,6 +20,8 @@ import {
   setClientCredentials,
 } from "@/lib/seo-intel/google";
 import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions";
+import { KEY_SETTING_KEY, clearApiKey, getKeyView, parseCrux, parsePsi, setApiKey } from "@/lib/seo-intel/pagespeed";
+import { normalisePagespeedPath } from "@/lib/seo-intel/history";
 import { HISTORY_PREFIX, INTEL_SETTINGS_KEY, comparisonEntry, getIntelSettings, listHistory, pruneHistory, recordHistory, saveIntelSettings } from "@/lib/seo-intel/history";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -135,6 +137,46 @@ async function main() {
   check("retention 60 days deletes only entries older than 60 days", pruned === 1 && h.map((e) => e.date).join(",") === "2026-10-23,2026-10-22,2026-10-14,2026-08-24");
   check("pruning never touches the snapshot/settings/client rows", Boolean(await prisma.setting.findUnique({ where: { key: INTEL_SETTINGS_KEY } })));
   await prisma.setting.deleteMany({ where: { OR: [{ key: { startsWith: HISTORY_PREFIX } }, { key: INTEL_SETTINGS_KEY }] } });
+
+  // PageSpeed / CrUX
+  const PSI_KEY = ["AIza", "SyUnitTestPageSpeedKey012345678abcd"].join("");
+  check("redact removes Google API keys", !redact(`bad key ${PSI_KEY} and key=${PSI_KEY}`).includes("AIza"));
+  check("googleFetch refuses an API key in the URL", await throws(() => googleFetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=https%3A%2F%2Fmocktestseries.in%2F&key=${PSI_KEY}`, { method: "GET" })));
+  check("googleFetch refuses PageSpeed for another site", await throws(() => googleFetch("https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=https%3A%2F%2Fevil.example%2F", { method: "GET" })));
+  check("googleFetch refuses a look-alike site prefix", await throws(() => googleFetch("https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=https%3A%2F%2Fmocktestseries.in.evil.example%2F", { method: "GET" })));
+  check("setApiKey rejects a non-key", await throws(() => setApiKey("not-a-key")));
+  check("setApiKey rejects a too-short AIza key", await throws(() => setApiKey("AIzaShort")));
+  const fp = await setApiKey(` ${PSI_KEY}\n`);
+  const keyRow = JSON.stringify((await prisma.setting.findUnique({ where: { key: KEY_SETTING_KEY } }))?.value);
+  check("API key stored encrypted (no plaintext)", !keyRow.includes(PSI_KEY) && keyRow.includes('"apiKeyCipher":"v1:'));
+  const kv = await getKeyView();
+  check("key view: installed + 8-char fingerprint, never the key", kv.installed && kv.fingerprint === fp.fingerprint && /^[0-9a-f]{8}$/.test(kv.fingerprint ?? "") && !JSON.stringify(kv).includes("AIza"));
+  await clearApiKey();
+  check("clearApiKey removes it", !(await getKeyView()).installed);
+  check("paths: same-site only, private areas refused", normalisePagespeedPath("/exams") === "/exams" && normalisePagespeedPath(" / ") === "/" && [
+    "https://evil.example/", "//evil.example", "/admin", "/admin/seo", "/api/health", "/student/dashboard", "exams", "/a b", "/<x>",
+  ].every((x) => normalisePagespeedPath(x) === null));
+  const ps = await saveIntelSettings({ pagespeedPaths: ["/", "/", "/admin", "/exams", "/a", "/b"] });
+  check("pagespeedPaths de-duplicated, filtered, max 3", JSON.stringify(ps.pagespeedPaths) === JSON.stringify(["/", "/exams", "/a"]));
+  check("pagespeedPaths fall back to defaults when none valid", JSON.stringify((await saveIntelSettings({ pagespeedPaths: ["/admin"] })).pagespeedPaths) === JSON.stringify(["/", "/exams", "/plans-and-pricing"]));
+  await prisma.setting.deleteMany({ where: { key: INTEL_SETTINGS_KEY } });
+  const fieldM = { LARGEST_CONTENTFUL_PAINT_MS: { percentile: 2600 }, INTERACTION_TO_NEXT_PAINT: { percentile: 210 }, CUMULATIVE_LAYOUT_SHIFT_SCORE: { percentile: 12 }, FIRST_CONTENTFUL_PAINT_MS: { percentile: 1500 }, EXPERIMENTAL_TIME_TO_FIRST_BYTE: { percentile: 700 } };
+  const pr = parsePsi(
+    {
+      loadingExperience: { metrics: fieldM, overall_category: "AVERAGE", origin_fallback: true },
+      originLoadingExperience: { metrics: fieldM, overall_category: "AVERAGE" },
+      lighthouseResult: { fetchTime: "2026-10-22T10:00:00.000Z", categories: { performance: { score: 0.876 } }, audits: { "largest-contentful-paint": { numericValue: 3100 }, "cumulative-layout-shift": { numericValue: 0.02 }, "total-blocking-time": { numericValue: 150 } } },
+    },
+    "2026-10-22T10:00:05.000Z"
+  );
+  check("parsePsi: score 0–100, lab metrics, fetch time", pr.ok && pr.score === 88 && pr.lab?.lcpMs === 3100 && pr.lab?.tbtMs === 150 && pr.fetchedAt === "2026-10-22T10:00:00.000Z");
+  check("parsePsi: origin fallback → scope origin, CLS ÷100", pr.field?.scope === "origin" && pr.field.cls === 0.12 && pr.field.inpMs === 210);
+  check("parsePsi: no score → error result", parsePsi({ lighthouseResult: {} }, "x").ok === false);
+  const cr = parseCrux(
+    { record: { metrics: { cumulative_layout_shift: { percentiles: { p75: "0.15" }, histogram: [{ density: 0.7 }, { density: 0.2 }, { density: 0.1 }] }, largest_contentful_paint: { percentiles: { p75: 2400 } } }, collectionPeriod: { firstDate: { year: 2026, month: 9, day: 1 }, lastDate: { year: 2026, month: 9, day: 28 } } } },
+    "x"
+  );
+  check("parseCrux: string p75 parsed, densities, collection period", cr.metrics.cls?.p75 === 0.15 && cr.metrics.cls.good === 0.7 && cr.metrics.lcp?.p75 === 2400 && cr.metrics.inp === null && cr.collectionPeriod?.first === "2026-09-01");
 
   await clearAll();
   console.log(failed ? `\n${failed} FAILED` : "\nAll passed");

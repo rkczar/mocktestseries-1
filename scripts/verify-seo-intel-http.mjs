@@ -362,7 +362,7 @@ await resetThrottle();
 await mock("/__mock/control", { scenario: "ok" });
 cron = runCron();
 const snapCron = await setting("seo.intel.snapshot");
-check("scheduled sync runs when ON + connected", cron.code === 0 && /seo-intel-sync: ok gsc=ok ga4=ok history=\d{4}-\d{2}-\d{2} pruned=0/.test(cron.out), cron.out);
+check("scheduled sync runs when ON + connected", cron.code === 0 && /seo-intel-sync: google ok gsc=ok ga4=ok history=\d{4}-\d{2}-\d{2} pruned=0/.test(cron.out) && cron.out.includes("pagespeed skipped (API key not installed)"), cron.out);
 check("scheduled sync recorded as source=scheduled, streak 0", snapCron.lastSync.source === "scheduled" && snapCron.lastSync.failStreak === 0 && snapCron.lastSync.byId === null);
 check("scheduled sync audited without an actor", (await db.query(`select 1 from "AuditLog" where action='SEO_GOOGLE_SYNC' and "actorId" is null and metadata->>'source'='scheduled'`)).rowCount === 1);
 check("today's history entry written", Boolean(await setting(`seo.intel.history.${istDay(0)}`)));
@@ -408,6 +408,141 @@ res = await anon2.request.get(`${BASE}/api/admin/seo-intel/export?report=queries
 check("signed-out CSV export refused", res.status() === 403);
 await anon2.close();
 
+// ---- PageSpeed + Core Web Vitals ------------------------------------------------------------------
+const PSI_KEY = ["AIza", "SyMockPageSpeedKey0123456789abcdefg"].join(""); // = the mock's key, built at runtime
+const backdatePsi = () =>
+  db.query(`update "Setting" set value = jsonb_set(value, '{lastRun,at}', '"2000-01-01T00:00:00.000Z"') where key='seo.intel.pagespeed' and value->'lastRun' <> 'null'::jsonb`);
+function keyScript(mode, input = "") {
+  return execFileSync("npx", ["tsx", "scripts/set-seo-pagespeed-key.ts", mode], {
+    input,
+    env: { ...process.env, NODE_OPTIONS: "--conditions=react-server", NEXTAUTH_URL: BASE },
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+async function runPsi() {
+  await open(master.page);
+  const started = Date.now();
+  await master.page.getByRole("button", { name: "Run PageSpeed check" }).click();
+  const st = master.page.getByTestId("seo-intel-psi-controls").getByRole("status");
+  await st.waitFor({ timeout: 60000 });
+  return { text: await st.innerText(), ms: Date.now() - started };
+}
+
+html = await open(master.page);
+check("PageSpeed card: key not installed, Run disabled", html.includes("API key not installed") && (await master.page.getByRole("button", { name: "Run PageSpeed check" }).isDisabled()));
+html = await open(full.page);
+check("FULL_ADMIN sees PageSpeed card without controls", html.includes("PageSpeed &amp; Core Web Vitals") && !html.includes('data-testid="seo-intel-psi-controls"'));
+
+let ko = keyScript("set", `${PSI_KEY}\n`);
+htmlSeen.push(ko);
+check("key script saves the key, prints only a fingerprint", /Saved the PageSpeed API key \(encrypted\)\. Fingerprint [0-9a-f]{8}\./.test(ko) && !ko.includes("AIza"));
+const keyRow = await setting("seo.pagespeed.key");
+check("key encrypted at rest", String(keyRow.apiKeyCipher).startsWith("v1:") && !JSON.stringify(keyRow).includes("AIza"));
+check("key install audited (fingerprint only)", (await db.query(`select 1 from "AuditLog" where action='SEO_PAGESPEED_KEY_SET' and metadata::text not like '%AIza%'`)).rowCount === 1);
+
+const runPsiId = actionId("runPageSpeedAction");
+check("found runPageSpeedAction id", Boolean(runPsiId));
+await mock("/__mock/control", { psiScenario: "ok", resetPsiCalls: true });
+for (const [label, sess] of [["TEACHER", teacher], ["FULL_ADMIN", full]]) {
+  const r = await sess.ctx.request.post(PAGE, { headers: { "Next-Action": runPsiId, "Content-Type": "text/plain;charset=UTF-8", Origin: BASE }, data: "[]", maxRedirects: 0 });
+  check(`${label} forged PageSpeed run is refused`, r.status() >= 400 && (await mock("/__mock/stats")).psiCalls.length === 0, `status ${r.status()}`);
+}
+
+let pr = await runPsi();
+let ms = await mock("/__mock/stats");
+const psiCalls = ms.psiCalls.filter((c) => c.api === "psi");
+const cruxCalls = ms.psiCalls.filter((c) => c.api === "crux");
+check("MASTER run completes", pr.text === "PageSpeed check complete.", pr.text);
+check("3 default pages × mobile + desktop, + CrUX phone/desktop", psiCalls.length === 6 && cruxCalls.length === 2 && new Set(psiCalls.map((c) => `${c.target}|${c.strategy}`)).size === 6);
+check("only this site's pages were sent to PageSpeed", psiCalls.every((c) => c.target.startsWith("https://mocktestseries.in/")) && psiCalls.some((c) => c.target === "https://mocktestseries.in/plans-and-pricing"));
+check("key sent in the X-goog-api-key header on every call", ms.psiCalls.every((c) => c.headerKey));
+check("key never in a URL", ms.urlLeaks.length === 0, JSON.stringify(ms.urlLeaks));
+const spread = Math.max(...ms.psiCalls.map((c) => c.t)) - Math.min(...ms.psiCalls.map((c) => c.t));
+check("all calls sent in parallel (one 45 s window)", spread < 1500, `${spread} ms`);
+check("run audited", (await db.query(`select 1 from "AuditLog" where action='SEO_PAGESPEED_RUN' and metadata->>'source'='manual' and metadata->>'ok'='true'`)).rowCount === 1);
+
+await open(teacher.page);
+text = await teacher.page.locator("main").innerText();
+check("TEACHER sees scores with rating text", /Mobile\s+72\s+Needs improvement/.test(text) && /Desktop\s+96\s+Good/.test(text), text.match(/Lab test[\s\S]{0,300}/)?.[0]);
+check("lab LCP/CLS/TBT shown with ratings", text.includes("3.4 s (Needs improvement)") && text.includes("1.2 s (Good)") && text.includes("310 ms"));
+check("field data: this page for /, whole site elsewhere", text.includes("This page: LCP 2.3 s, INP 150 ms, CLS 0.08") && text.includes("Whole site: LCP 2.7 s"));
+check("CrUX origin table with collection period + ratings", text.includes("2026-09-22 to 2026-10-19") && text.includes("2.9 s (Needs improvement)") && text.includes("0.12 (Needs improvement)") && text.includes("90 ms (Good)"));
+check("timestamps shown (Last check …, Checked …)", /Last check \d{2} \w{3} \d{4}/.test(text) && /Checked \d{2} \w{3} \d{4}/.test(text));
+check("teacher does not see the key fingerprint", !/Key fingerprint/.test(text));
+check("today's history has the PageSpeed summary", (await setting(`seo.intel.history.${istDay(0)}`))?.psi?.mobile === 72 && (await setting(`seo.intel.history.${istDay(0)}`)).psi.cruxLcpP75Phone === 2900);
+
+pr = await runPsi();
+check("second run within 2 minutes is throttled", pr.text.includes("less than 2 minutes"));
+
+for (const [scenario, expect, extra] of [
+  ["psiError", "finished with 1 error", "Lighthouse returned error: FAILED_DOCUMENT_REQUEST"],
+  ["quota", "finished with 8 errors", "RESOURCE_EXHAUSTED"],
+  ["badKey", "finished with 8 errors", "INVALID_ARGUMENT"],
+]) {
+  await backdatePsi();
+  await mock("/__mock/control", { psiScenario: scenario });
+  pr = await runPsi();
+  const t = await master.page.locator("main").innerText();
+  check(`${scenario}: reported as errors, other results intact`, pr.text.includes(expect) && t.includes(extra), pr.text);
+  if (scenario === "psiError") check("psiError: the failing row shows its error, the rest keep scores", (await master.page.getByTestId("seo-intel-psi-error").count()) === 1 && /Mobile\s+72/.test(t));
+  if (scenario === "badKey") {
+    const stored = JSON.stringify(await setting("seo.intel.pagespeed"));
+    check("badKey: Google's echoed key is redacted on page and in storage", !t.includes("AIza") && t.includes("[redacted]") && !stored.includes("AIza"));
+  }
+}
+await backdatePsi();
+await mock("/__mock/control", { psiScenario: "slow" });
+pr = await runPsi();
+{
+  // PageSpeed calls (test timeout 1.5 s) time out; CrUX (15 s) still answers after the 3 s delay.
+  const t = await master.page.locator("main").innerText();
+  check("slow Google: PageSpeed calls time out cleanly, CrUX still answers", pr.text.includes("finished with 6 errors") && t.includes("Google did not answer in time.") && pr.ms < 15000, `${pr.text} ${pr.ms}ms`);
+}
+await backdatePsi();
+await mock("/__mock/control", { psiScenario: "cruxNoData" });
+pr = await runPsi();
+text = await master.page.locator("main").innerText();
+check("no Chrome user data is not an error", pr.text === "PageSpeed check complete." && text.includes("Google does not yet have enough Chrome user data"));
+
+// Settings: pages to test
+await open(master.page);
+const f2 = master.page.getByTestId("seo-intel-settings-form");
+for (const [val, ok] of [
+  ["/\n/admin", false],
+  ["https://evil.example/", false],
+  ["/\n/a\n/b\n/c", false],
+  ["/\n/exams", true],
+]) {
+  await open(master.page);
+  await f2.locator("textarea[name=pagespeedPaths]").fill(val);
+  await f2.getByRole("button", { name: "Save" }).click();
+  const st = f2.getByRole("status");
+  await st.waitFor({ timeout: 15000 });
+  const msg = await st.innerText();
+  check(`PageSpeed pages ${JSON.stringify(val)} → ${ok ? "saved" : "refused"}`, ok ? msg.startsWith("Saved") : msg.startsWith("PageSpeed pages:"), msg);
+}
+check("saved PageSpeed pages", JSON.stringify((await setting("seo.intel.settings")).pagespeedPaths) === JSON.stringify(["/", "/exams"]));
+await backdatePsi();
+await mock("/__mock/control", { psiScenario: "ok", resetPsiCalls: true });
+pr = await runPsi();
+check("next run tests only the saved pages", (await mock("/__mock/stats")).psiCalls.filter((c) => c.api === "psi").length === 4);
+
+res = await csvGet(teacher.ctx, "pagespeed");
+body = await res.text();
+htmlSeen.push(body);
+check("TEACHER downloads PageSpeed CSV (no key)", res.status() === 200 && body.startsWith("page,strategy,checked_at,score") && body.includes("/exams,desktop") && !body.includes("AIza"));
+
+// Daily job runs PageSpeed independently of the Google connection
+await backdatePsi();
+await resetThrottle();
+cron = runCron();
+check("scheduled job runs PageSpeed when the key is installed", cron.out.includes("pagespeed ok errors=0") && !cron.out.includes("AIza"), cron.out);
+check("scheduled PageSpeed audited without an actor", (await db.query(`select 1 from "AuditLog" where action='SEO_PAGESPEED_RUN' and "actorId" is null and metadata->>'source'='scheduled'`)).rowCount === 1);
+ko = keyScript("status");
+htmlSeen.push(ko);
+check("key status prints fingerprint + last check, never the key", /key installed \(fingerprint [0-9a-f]{8}/.test(ko) && !ko.includes("AIza"));
+
 // ---- Needs reconnect ---------------------------------------------------------------------------
 await resetThrottle();
 await mock("/__mock/control", { scenario: "invalidGrant" });
@@ -440,6 +575,11 @@ html = await open(master.page);
 check("page shows Not connected", html.includes("Not connected"));
 cron = runCron();
 check("scheduled sync skips while Google is not connected", cron.code === 0 && cron.out.includes("skipped (Google not connected)"), cron.out);
+check("…while PageSpeed still runs on its own (key installed, Google disconnected)", cron.out.includes("pagespeed ok") || cron.out.includes("pagespeed skipped (A PageSpeed check ran less than 2 minutes ago"), cron.out);
+ko = keyScript("clear");
+check("key clear removes the key", ko.includes("PageSpeed API key removed.") && !(await setting("seo.pagespeed.key")));
+cron = runCron();
+check("scheduled PageSpeed skips without a key", cron.out.includes("pagespeed skipped (API key not installed)"), cron.out);
 // No live connection: an unusable token from a failed attempt is revoked (nothing to protect).
 {
   const gb = await grants();
@@ -466,7 +606,7 @@ for (const s of secrets.filter((x) => x.length >= 10)) {
   if (logText.includes(s)) leaks.push(`log:${s.slice(0, 6)}`);
 }
 check(`no issued/received secret (${secrets.length}) in pages, DB rows, audit log or server log`, leaks.length === 0, leaks.join(", "));
-check("server log has no token-shaped strings", !/ya29\.|1\/\/0Mock|GOCSPX-/.test(logText));
+check("server log has no token- or key-shaped strings", !/ya29\.|1\/\/0Mock|GOCSPX-|AIza/.test(logText));
 const clearOut = runScript("clear");
 check("clear script removes everything", /removed/.test(clearOut) && !(await setting("seo.google.oauth")));
 

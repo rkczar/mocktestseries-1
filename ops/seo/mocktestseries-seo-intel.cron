@@ -1,7 +1,9 @@
 # mocktestseries SEO Intelligence daily sync — installed as /etc/cron.d/mocktestseries-seo-intel (source: ops/seo/).
-# 21:40 UTC = 03:10 IST: one read-only Search Console + GA4 sync, stored as that day's history summary
+# 21:40 UTC = 03:10 IST: one read-only Search Console + GA4 sync and one PageSpeed/Core Web Vitals check
+# (each only when set up), stored as that day's history summary
 # (old summaries pruned to Admin → SEO → Intelligence → retention). No-op while "Daily automatic sync"
-# is OFF (default), while Google is not connected, or while the connection needs reconnecting.
+# is OFF (default). The Google part skips while not connected / needing a reconnect; the PageSpeed
+# part skips while no PageSpeed API key is installed.
 # flock keeps exactly one run at a time. See ops/SEO-INTELLIGENCE.md.
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

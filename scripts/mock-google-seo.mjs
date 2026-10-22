@@ -17,6 +17,13 @@
  * that account's whole grant (every refresh + access token issued to it so far);
  * a later consent starts a new grant.
  *
+ * PageSpeed (GET /pagespeedonline/v5/runPagespeed) and Chrome UX Report (POST
+ * /crux/v1/records:queryRecord) require the mock API key in the X-goog-api-key
+ * HEADER (a `key=` query parameter is recorded as a URL leak). psiScenario
+ * (POST /__mock/control {"psiScenario": "..."}): ok, psiError (desktop /exams →
+ * 500), quota (429), badKey (403 echoing the key, to prove redaction), slow
+ * (answers after 3 s), cruxNoData (CrUX 404).
+ *
  * GET /__mock/stats → request counts + revoked tokens; GET /__mock/grants →
  * per-account grant epoch + live refresh tokens; GET /__mock/secrets → every
  * secret value issued or received (for the leak scan).
@@ -27,6 +34,8 @@ import crypto from "node:crypto";
 const PORT = Number(process.argv[2] ?? 3542);
 export const MOCK_CLIENT_ID = "123456789012-mockseoclientabcdefghijk.apps.googleusercontent.com";
 export const MOCK_CLIENT_SECRET = "GOCSPX-mockSeoSecret-1234567890abc";
+// Built at runtime so no API-key-shaped literal sits in source control.
+export const MOCK_PSI_KEY = ["AIza", "SyMockPageSpeedKey0123456789abcdefg"].join("");
 const SCOPE_GSC = "https://www.googleapis.com/auth/webmasters.readonly";
 const SCOPE_GA4 = "https://www.googleapis.com/auth/analytics.readonly";
 
@@ -37,7 +46,9 @@ const state = {
   accounts: new Map(), // email -> { epoch } — bumping the epoch revokes the whole grant
   refresh: new Map(), // refresh -> { email, epoch }
   access: new Map(), // access -> { email, epoch }
-  secrets: new Set([MOCK_CLIENT_SECRET]),
+  secrets: new Set([MOCK_CLIENT_SECRET, MOCK_PSI_KEY]),
+  psiScenario: "ok",
+  psiCalls: [],
   revoked: [],
   stats: {},
   urlLeaks: [],
@@ -112,16 +123,19 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   bump(`${req.method} ${p.replace(/\/sites\/[^/]+\//, "/sites/:site/")}`);
   // A secret must never travel in a URL query.
-  for (const [k] of url.searchParams) if (/token|secret|verifier/i.test(k)) state.urlLeaks.push(`${p}?${k}`);
+  for (const [k] of url.searchParams) if (/token|secret|verifier|^key$/i.test(k)) state.urlLeaks.push(`${p}?${k}`);
+  if (url.search.includes(MOCK_PSI_KEY)) state.urlLeaks.push(`${p}?<api key value>`);
 
   try {
     if (p === "/__mock/control" && req.method === "POST") {
       const body = JSON.parse((await readBody(req)) || "{}");
       if (body.scenario) state.scenario = body.scenario;
       if (body.email) state.email = body.email;
-      return send(res, 200, { scenario: state.scenario });
+      if (body.psiScenario) state.psiScenario = body.psiScenario;
+      if (body.resetPsiCalls) state.psiCalls = [];
+      return send(res, 200, { scenario: state.scenario, psiScenario: state.psiScenario });
     }
-    if (p === "/__mock/stats") return send(res, 200, { scenario: state.scenario, stats: state.stats, revoked: state.revoked, urlLeaks: state.urlLeaks });
+    if (p === "/__mock/stats") return send(res, 200, { scenario: state.scenario, stats: state.stats, revoked: state.revoked, urlLeaks: state.urlLeaks, psiCalls: state.psiCalls });
     if (p === "/__mock/secrets") return send(res, 200, { secrets: [...state.secrets] });
     if (p === "/__mock/grants") {
       const grants = {};
@@ -212,6 +226,69 @@ const server = http.createServer(async (req, res) => {
       if (live(rec)) account(rec.email).epoch++;
       state.revoked.push(rec.email);
       return send(res, 200, {});
+    }
+
+    if (p === "/pagespeedonline/v5/runPagespeed" || p === "/crux/v1/records:queryRecord") {
+      const apiKey = req.headers["x-goog-api-key"];
+      const target = url.searchParams.get("url");
+      const strategy = url.searchParams.get("strategy");
+      state.psiCalls.push({ api: p.startsWith("/crux") ? "crux" : "psi", target, strategy, headerKey: apiKey === MOCK_PSI_KEY, t: Date.now() });
+      if (state.psiScenario === "slow") await new Promise((r) => setTimeout(r, 3000));
+      if (state.psiScenario === "badKey" || apiKey !== MOCK_PSI_KEY) {
+        return send(res, 400, { error: { code: 400, status: "INVALID_ARGUMENT", message: `API key not valid. Please pass a valid API key. key=${apiKey} (${apiKey})` } });
+      }
+      if (state.psiScenario === "quota") return send(res, 429, { error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Quota exceeded for quota metric 'Queries'." } });
+      if (p.startsWith("/crux")) {
+        if (req.method !== "POST") return send(res, 405, {});
+        const body = JSON.parse(await readBody(req));
+        if (body.origin !== "https://mocktestseries.in" || body.url) return send(res, 400, { error: { status: "INVALID_ARGUMENT", message: "origin only" } });
+        if (state.psiScenario === "cruxNoData") return send(res, 404, { error: { code: 404, status: "NOT_FOUND", message: "chrome ux report data not found" } });
+        const phone = body.formFactor === "PHONE";
+        const metric = (p75, d) => ({ histogram: [{ start: 0, density: d[0] }, { density: d[1] }, { density: d[2] }], percentiles: { p75 } });
+        return send(res, 200, {
+          record: {
+            key: { origin: body.origin, formFactor: body.formFactor },
+            metrics: {
+              largest_contentful_paint: metric(phone ? 2900 : 1800, [0.7, 0.2, 0.1]),
+              interaction_to_next_paint: metric(phone ? 180 : 90, [0.8, 0.15, 0.05]),
+              cumulative_layout_shift: metric(phone ? "0.12" : "0.03", [0.75, 0.2, 0.05]),
+              first_contentful_paint: metric(phone ? 1700 : 1100, [0.8, 0.15, 0.05]),
+              experimental_time_to_first_byte: metric(phone ? 950 : 600, [0.6, 0.3, 0.1]),
+            },
+            collectionPeriod: { firstDate: { year: 2026, month: 9, day: 22 }, lastDate: { year: 2026, month: 10, day: 19 } },
+          },
+        });
+      }
+      if (!target || !target.startsWith("https://mocktestseries.in/")) return send(res, 400, { error: { status: "INVALID_ARGUMENT", message: "foreign url" } });
+      if (state.psiScenario === "psiError" && strategy === "desktop" && target.endsWith("/exams")) {
+        return send(res, 500, { error: { code: 500, status: "INTERNAL", message: "Lighthouse returned error: FAILED_DOCUMENT_REQUEST." } });
+      }
+      const mobile = strategy === "mobile";
+      const home = target === "https://mocktestseries.in/";
+      const fieldMetrics = (lcp) => ({
+        LARGEST_CONTENTFUL_PAINT_MS: { percentile: lcp, category: lcp <= 2500 ? "FAST" : "AVERAGE" },
+        INTERACTION_TO_NEXT_PAINT: { percentile: 150, category: "FAST" },
+        CUMULATIVE_LAYOUT_SHIFT_SCORE: { percentile: 8, category: "FAST" },
+        FIRST_CONTENTFUL_PAINT_MS: { percentile: 1500, category: "FAST" },
+        EXPERIMENTAL_TIME_TO_FIRST_BYTE: { percentile: 700, category: "FAST" },
+      });
+      return send(res, 200, {
+        id: target,
+        analysisUTCTimestamp: new Date().toISOString(),
+        loadingExperience: home ? { id: target, metrics: fieldMetrics(2300), overall_category: "FAST" } : { id: "https://mocktestseries.in", metrics: fieldMetrics(2700), overall_category: "AVERAGE", origin_fallback: true },
+        originLoadingExperience: { id: "https://mocktestseries.in", metrics: fieldMetrics(2700), overall_category: "AVERAGE" },
+        lighthouseResult: {
+          fetchTime: new Date().toISOString(),
+          categories: { performance: { score: mobile ? 0.72 : 0.96 } },
+          audits: {
+            "largest-contentful-paint": { numericValue: mobile ? 3400.4 : 1200.2 },
+            "cumulative-layout-shift": { numericValue: mobile ? 0.04 : 0.01 },
+            "total-blocking-time": { numericValue: mobile ? 310 : 20 },
+            "first-contentful-paint": { numericValue: mobile ? 1900 : 700 },
+            "speed-index": { numericValue: mobile ? 4100 : 1300 },
+          },
+        },
+      });
     }
 
     const token = bearer(req);

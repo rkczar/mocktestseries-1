@@ -8,7 +8,8 @@ import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { STATE_COOKIE, STATE_COOKIE_PATH, STATE_TTL_SECONDS, SeoIntelError, beginAuthorization, disconnect } from "@/lib/seo-intel/google";
 import { runSync } from "@/lib/seo-intel/sync";
-import { HISTORY_DAYS_MAX, HISTORY_DAYS_MIN, pruneHistory, saveIntelSettings } from "@/lib/seo-intel/history";
+import { HISTORY_DAYS_MAX, HISTORY_DAYS_MIN, PAGESPEED_PATHS_MAX, normalisePagespeedPath, pruneHistory, saveIntelSettings } from "@/lib/seo-intel/history";
+import { runPageSpeed } from "@/lib/seo-intel/pagespeed";
 
 export interface SeoIntelActionState {
   ok?: boolean;
@@ -86,7 +87,15 @@ export async function saveIntelSettingsAction(_prev: SeoIntelActionState, formDa
   if (!Number.isInteger(days) || days < HISTORY_DAYS_MIN || days > HISTORY_DAYS_MAX) {
     return { ok: false, message: `Keep history for ${HISTORY_DAYS_MIN}–${HISTORY_DAYS_MAX} days.` };
   }
-  const saved = await saveIntelSettings({ autoSyncEnabled: formData.get("autoSyncEnabled") === "on", historyDays: days });
+  const lines = String(formData.get("pagespeedPaths") ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const paths = lines.map(normalisePagespeedPath);
+  if (lines.length === 0 || lines.length > PAGESPEED_PATHS_MAX || paths.some((p) => !p)) {
+    return { ok: false, message: `PageSpeed pages: 1–${PAGESPEED_PATHS_MAX} paths of this site, one per line, starting with / (not /admin, /api or /student).` };
+  }
+  const saved = await saveIntelSettings({ autoSyncEnabled: formData.get("autoSyncEnabled") === "on", historyDays: days, pagespeedPaths: paths as string[] });
   const pruned = await pruneHistory(saved.historyDays);
   await prisma.auditLog.create({
     data: {
@@ -94,9 +103,28 @@ export async function saveIntelSettingsAction(_prev: SeoIntelActionState, formDa
       action: "SEO_INTEL_SETTINGS_SAVED",
       entityType: "Setting",
       entityId: "seo.intel.settings",
-      metadata: { autoSyncEnabled: saved.autoSyncEnabled, historyDays: saved.historyDays, pruned },
+      metadata: { autoSyncEnabled: saved.autoSyncEnabled, historyDays: saved.historyDays, pagespeedPaths: saved.pagespeedPaths, pruned },
     },
   });
   revalidatePath("/admin/seo/intelligence");
   return { ok: true, message: `Saved.${pruned ? ` Removed ${pruned} history day${pruned === 1 ? "" : "s"} older than ${saved.historyDays} days.` : ""}` };
+}
+
+/** PageSpeed (mobile + desktop) for the configured pages + origin Core Web Vitals. Up to ~45 s. */
+export async function runPageSpeedAction(): Promise<SeoIntelActionState> {
+  const session = await requirePermission(PERMISSIONS.SEO_INTEL_MANAGE);
+  const result = await runPageSpeed(session.user.id ?? null, "manual");
+  if (!result.skipped) {
+    await prisma.auditLog.create({
+      data: {
+        actorId: session.user.id,
+        action: "SEO_PAGESPEED_RUN",
+        entityType: "Setting",
+        entityId: "seo.intel.pagespeed",
+        metadata: { source: "manual", ok: result.ok, errors: result.errors },
+      },
+    });
+  }
+  revalidatePath("/admin/seo/intelligence");
+  return { ok: result.ok, message: result.message };
 }

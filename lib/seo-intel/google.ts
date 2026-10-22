@@ -40,6 +40,8 @@ const GOOGLE = {
   revoke: "https://oauth2.googleapis.com/revoke",
   searchConsole: "https://searchconsole.googleapis.com/webmasters/v3",
   analyticsData: "https://analyticsdata.googleapis.com/v1beta",
+  pagespeed: "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+  crux: "https://chromeuxreport.googleapis.com/v1/records:queryRecord",
 };
 const ID_TOKEN_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 const TIMEOUT_MS = 15_000;
@@ -64,6 +66,8 @@ export function googleEndpoints() {
     revoke: `${raw}/revoke`,
     searchConsole: `${raw}/webmasters/v3`,
     analyticsData: `${raw}/v1beta`,
+    pagespeed: `${raw}/pagespeedonline/v5/runPagespeed`,
+    crux: `${raw}/crux/v1/records:queryRecord`,
     testMode: true,
   };
 }
@@ -119,10 +123,11 @@ export function redact(text: string, secrets: (string | null | undefined)[] = []
   for (const s of secrets) if (s && s.length >= 6) out = out.split(s).join("[redacted]");
   return out
     .replace(/("(?:access_token|refresh_token|id_token|client_secret|code|code_verifier)"\s*:\s*")[^"]*"/gi, '$1[redacted]"')
-    .replace(/\b(access_token|refresh_token|id_token|client_secret|code|code_verifier|token)=[^&\s"']+/gi, "$1=[redacted]")
+    .replace(/\b(access_token|refresh_token|id_token|client_secret|code|code_verifier|token|key)=[^&\s"']+/gi, "$1=[redacted]")
     .replace(/\bya29\.[A-Za-z0-9._-]+/g, "[redacted]")
     .replace(/\b1\/\/[A-Za-z0-9._-]{10,}/g, "[redacted]")
     .replace(/\bGOCSPX-[A-Za-z0-9_-]+/g, "[redacted]")
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, "[redacted]")
     .replace(/\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, "[redacted]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]")
     .slice(0, 300);
@@ -206,14 +211,26 @@ export interface GoogleResponse {
 
 function allowedUrl(url: string): boolean {
   const ep = googleEndpoints();
-  return [ep.token, ep.revoke].includes(url) || url.startsWith(`${ep.searchConsole}/`) || url.startsWith(`${ep.analyticsData}/properties/${GA4_PROPERTY_ID}:`);
+  return (
+    [ep.token, ep.revoke, ep.crux].includes(url) ||
+    url.startsWith(`${ep.searchConsole}/`) ||
+    url.startsWith(`${ep.analyticsData}/properties/${GA4_PROPERTY_ID}:`) ||
+    // PageSpeed only ever for this site's own pages.
+    (url.startsWith(`${ep.pagespeed}?`) && new URL(url).searchParams.get("url")?.startsWith(`${SEO_SITE_URL}/`) === true)
+  );
 }
 
-export async function googleFetch(url: string, init: { method: "GET" | "POST"; accessToken?: string; form?: Record<string, string>; json?: unknown }): Promise<GoogleResponse> {
+export async function googleFetch(
+  url: string,
+  init: { method: "GET" | "POST"; accessToken?: string; apiKey?: string; form?: Record<string, string>; json?: unknown; timeoutMs?: number }
+): Promise<GoogleResponse> {
   if (!allowedUrl(url)) throw new SeoIntelError("Blocked request to a non-allow-listed Google endpoint.");
+  if (/[?&]key=/i.test(url)) throw new SeoIntelError("An API key must never be sent in a URL.");
   const headers: Record<string, string> = { Accept: "application/json" };
   let body: string | undefined;
   if (init.accessToken) headers.Authorization = `Bearer ${init.accessToken}`;
+  // API keys go in a header only — never the URL (URLs end up in logs and proxies).
+  if (init.apiKey) headers["X-goog-api-key"] = init.apiKey;
   if (init.form) {
     headers["Content-Type"] = "application/x-www-form-urlencoded";
     body = new URLSearchParams(init.form).toString();
@@ -223,7 +240,7 @@ export async function googleFetch(url: string, init: { method: "GET" | "POST"; a
   }
   let res: Response;
   try {
-    res = await fetch(url, { method: init.method, headers, body, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS) });
+    res = await fetch(url, { method: init.method, headers, body, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(init.timeoutMs ?? TIMEOUT_MS) });
   } catch (err) {
     const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
     throw new SeoIntelError(timedOut ? "Google did not answer in time." : "Could not reach Google.");

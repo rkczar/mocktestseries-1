@@ -6,7 +6,21 @@ import { Input } from "@/components/ui/input";
 import { saveIntelSettingsAction, type SeoIntelActionState } from "./actions";
 
 /** MASTER_ADMIN only (rendered for SEO_INTEL_MANAGE; the action re-checks it). */
-export function IntelSettingsForm({ autoSyncEnabled, historyDays, min, max }: { autoSyncEnabled: boolean; historyDays: number; min: number; max: number }) {
+export function IntelSettingsForm({
+  autoSyncEnabled,
+  historyDays,
+  min,
+  max,
+  pagespeedPaths,
+  maxPaths,
+}: {
+  autoSyncEnabled: boolean;
+  historyDays: number;
+  min: number;
+  max: number;
+  pagespeedPaths: string[];
+  maxPaths: number;
+}) {
   const [state, action] = useActionState<SeoIntelActionState, FormData>(saveIntelSettingsAction, {});
   return (
     <form action={action} className="flex flex-col gap-3" data-testid="seo-intel-settings-form">
@@ -18,6 +32,16 @@ export function IntelSettingsForm({ autoSyncEnabled, historyDays, min, max }: { 
         Keep daily history for
         <Input name="historyDays" type="number" min={min} max={max} step={1} defaultValue={historyDays} required className="h-8 w-24" aria-label="History retention in days" />
         days
+      </label>
+      <label className="flex flex-col gap-1 text-sm text-[var(--color-foreground)]">
+        PageSpeed pages (1–{maxPaths}, one path per line)
+        <textarea
+          name="pagespeedPaths"
+          rows={maxPaths}
+          defaultValue={pagespeedPaths.join("\n")}
+          className="w-full max-w-sm rounded-[var(--radius-input,6px)] border border-[var(--color-border)] bg-transparent p-2 font-mono text-xs"
+          spellCheck={false}
+        />
       </label>
       <div>
         <PendingSubmitButton size="sm" variant="secondary" pendingLabel="Saving…">
