@@ -42,7 +42,9 @@ const htmlSeen = [];
 const mock = async (path, body) =>
   (await fetch(`${MOCK}${path}`, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {})).json();
 const setting = async (key) => (await db.query(`select value from "Setting" where key=$1`, [key])).rows[0]?.value ?? null;
-const resetThrottle = () => db.query(`update "Setting" set value = value - 'lastSync' where key='seo.intel.snapshot'`);
+// Backdate the last sync past the 1-minute throttle (keeps its status + fail streak).
+const resetThrottle = () =>
+  db.query(`update "Setting" set value = jsonb_set(value, '{lastSync,at}', '"2000-01-01T00:00:00.000Z"') where key='seo.intel.snapshot' and value ? 'lastSync' and value->'lastSync' <> 'null'::jsonb`);
 
 function runScript(mode, input = "") {
   return execFileSync("npx", ["tsx", "scripts/set-seo-google-oauth.ts", mode], {
@@ -153,6 +155,7 @@ check("MASTER connect → connected", r.status === "connected", JSON.stringify(r
 check("consent URL used the SEO client, PKCE and read-only scopes", Boolean(consentUrl) && consentUrl.includes(encodeURIComponent(CLIENT_ID)) && consentUrl.includes("code_challenge_method=S256") && !consentUrl.includes("studentlogin"));
 html = await master.page.content();
 check("page shows connected account + GA4 553529096", html.includes("seo-owner@example.test") && html.includes("553529096") && html.includes("Connected"));
+check("timestamps say IST once (no \"IST IST\")", (await master.page.locator("main").innerText()).includes(" IST") && !(await master.page.locator("main").innerText()).includes("IST IST"));
 const stored1 = await setting("seo.google.oauth");
 check("refresh token stored encrypted", String(stored1.refreshTokenCipher).startsWith("v1:") && stored1.accountEmail === "seo-owner@example.test");
 check("state cookie cleared after callback", !(await master.ctx.cookies()).some((c) => c.name === "mts-seo-google-oauth" && c.value));
@@ -290,6 +293,121 @@ await master.page.getByText("Sync partly failed.").waitFor({ timeout: 30000 });
 html = await open(master.page);
 check("GSC garbage → Search Console error, GA4 data kept", html.includes("Search Console:") && html.includes("Organic Search"));
 
+// ---- Schedule, retention, history, reporting, CSV ------------------------------------------------
+function runCron() {
+  try {
+    const out = execFileSync("npx", ["tsx", "scripts/seo-intel-sync.ts"], {
+      env: { ...process.env, NODE_OPTIONS: "--conditions=react-server", NEXTAUTH_URL: BASE, SEO_GOOGLE_TEST_BASE_URL: MOCK },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    htmlSeen.push(out);
+    return { code: 0, out };
+  } catch (e) {
+    const out = `${e.stdout ?? ""}${e.stderr ?? ""}`;
+    htmlSeen.push(out);
+    return { code: e.status, out };
+  }
+}
+let cron = runCron();
+check("scheduled sync is a no-op while OFF (default)", cron.code === 0 && cron.out.includes("skipped (daily sync is OFF)"), cron.out);
+
+html = await open(full.page);
+check("FULL_ADMIN sees Schedule & Retention read-only", html.includes("Schedule &amp; Retention") && html.includes("Daily sync off") && !html.includes('data-testid="seo-intel-settings-form"'));
+const settingsId = actionId("saveIntelSettingsAction");
+check("found saveIntelSettingsAction id", Boolean(settingsId));
+if (settingsId) {
+  const res = await full.ctx.request.post(PAGE, { headers: { "Next-Action": settingsId, "Content-Type": "text/plain;charset=UTF-8", Origin: BASE }, data: "[{},{}]", maxRedirects: 0 });
+  check("FULL_ADMIN forged settings action is refused", res.status() >= 400, `status ${res.status()}`);
+}
+check("settings unchanged by forged action", !(await setting("seo.intel.settings")));
+
+// Seed an old entry (pruned on save) and one 8 days back (comparison point).
+const istDay = (offset) => {
+  const d = new Date(Date.now() + 5.5 * 3600_000);
+  d.setUTCDate(d.getUTCDate() - offset);
+  return d.toISOString().slice(0, 10);
+};
+const seedEntry = (date, clicks, sessions) => ({
+  date,
+  at: `${date}T00:00:00Z`,
+  gsc: { range: { start: date, end: date }, totals: { clicks, impressions: clicks * 40, ctr: 0.025, position: 15 }, topQueries: [], topPages: [] },
+  ga4: { range: { start: date, end: date }, totals: { activeUsers: sessions - 50, sessions, screenPageViews: sessions * 3, engagementRate: 0.5 }, channels: [] },
+});
+await db.query(`insert into "Setting"(key, value, "updatedAt") values ($1,$2,now()), ($3,$4,now())`, [
+  `seo.intel.history.${istDay(8)}`, JSON.stringify(seedEntry(istDay(8), 1000, 400)),
+  `seo.intel.history.${istDay(400)}`, JSON.stringify(seedEntry(istDay(400), 1, 1)),
+]);
+await open(master.page);
+const form = () => master.page.getByTestId("seo-intel-settings-form");
+await form().locator("input[name=historyDays]").evaluate((el) => {
+  el.removeAttribute("min");
+  el.value = "10";
+});
+await form().getByRole("button", { name: "Save" }).click();
+await form().getByText("Keep history for 30–1095 days.").waitFor({ timeout: 15000 });
+check("retention outside 30–1095 is refused server-side", !(await setting("seo.intel.settings")));
+await open(master.page);
+await form().locator("input[name=autoSyncEnabled]").check();
+await form().locator("input[name=historyDays]").fill("90");
+await form().getByRole("button", { name: "Save" }).click();
+await form().getByText(/^Saved\. Removed 1 history day/).waitFor({ timeout: 15000 });
+const savedSettings = await setting("seo.intel.settings");
+check("MASTER saves daily sync ON + 90 days; old history pruned immediately", savedSettings.autoSyncEnabled === true && savedSettings.historyDays === 90 && !(await setting(`seo.intel.history.${istDay(400)}`)) && Boolean(await setting(`seo.intel.history.${istDay(8)}`)));
+check("settings change audited", (await db.query(`select 1 from "AuditLog" where action='SEO_INTEL_SETTINGS_SAVED'`)).rowCount === 1);
+html = await open(master.page);
+check("page warns the scheduler is not installed on this server", html.includes("Daily sync on") && html.includes("Scheduler not installed"));
+
+await resetThrottle();
+await mock("/__mock/control", { scenario: "ok" });
+cron = runCron();
+const snapCron = await setting("seo.intel.snapshot");
+check("scheduled sync runs when ON + connected", cron.code === 0 && /seo-intel-sync: ok gsc=ok ga4=ok history=\d{4}-\d{2}-\d{2} pruned=0/.test(cron.out), cron.out);
+check("scheduled sync recorded as source=scheduled, streak 0", snapCron.lastSync.source === "scheduled" && snapCron.lastSync.failStreak === 0 && snapCron.lastSync.byId === null);
+check("scheduled sync audited without an actor", (await db.query(`select 1 from "AuditLog" where action='SEO_GOOGLE_SYNC' and "actorId" is null and metadata->>'source'='scheduled'`)).rowCount === 1);
+check("today's history entry written", Boolean(await setting(`seo.intel.history.${istDay(0)}`)));
+
+html = await open(teacher.page);
+check("TEACHER sees history table, comparison and both daily charts", html.includes('data-testid="seo-intel-history"') && html.includes('data-testid="seo-intel-compare"') && (html.match(/data-testid="seo-intel-chart"/g) ?? []).length === 2 && html.includes("(daily automatic)"));
+// React separates adjacent text pieces with <!-- --> in the HTML, so read the rendered text.
+let text = await teacher.page.locator("main").innerText();
+check("comparison is against the entry 8 days back", text.includes(`compared with ${istDay(8)}`) && text.includes("▲ +234"), text.match(/compared with[^\n]*/)?.[0]);
+
+// Failure streak via the scheduler
+await mock("/__mock/control", { scenario: "ga4Forbidden" });
+await resetThrottle();
+cron = runCron();
+check("scheduled partial failure exits non-zero and logs FAILED (no token in log line)", cron.code === 1 && cron.out.includes("FAILED gsc=ok ga4=error") && !/ya29\.|1\/\/0Mock/.test(cron.out), cron.out);
+await resetThrottle();
+runCron();
+await open(full.page);
+text = await full.page.locator("main").innerText();
+check("2 consecutive failures shown as a streak", (await setting("seo.intel.snapshot")).lastSync.failStreak === 2 && text.includes("2 failed syncs in a row"));
+await mock("/__mock/control", { scenario: "ok" });
+await resetThrottle();
+cron = runCron();
+check("a successful sync resets the streak", cron.code === 0 && (await setting("seo.intel.snapshot")).lastSync.failStreak === 0);
+
+// CSV export
+const csvGet = (ctx, report) => ctx.request.get(`${BASE}/api/admin/seo-intel/export?report=${report}`, { maxRedirects: 0 });
+let res = await csvGet(teacher.ctx, "queries");
+let body = await res.text();
+htmlSeen.push(body);
+check("TEACHER downloads queries CSV", res.status() === 200 && res.headers()["content-type"].startsWith("text/csv") && /attachment; filename="seo-intel-queries-/.test(res.headers()["content-disposition"]) && body.startsWith("query,clicks,impressions,ctr,position") && body.includes("ruhs mo mock test 1"));
+check("CSV neutralises formula cells", body.includes(`"'=HYPERLINK(""http://evil.example"",""click"")"`) && !/^=HYPERLINK/m.test(body));
+for (const rep of ["pages", "landing-pages", "channels", "history"]) {
+  res = await csvGet(full.ctx, rep);
+  body = await res.text();
+  htmlSeen.push(body);
+  check(`FULL_ADMIN downloads ${rep} CSV`, res.status() === 200 && body.split("\r\n").length > 2);
+}
+check("history CSV has today's and the seeded day", body.includes(istDay(0)) && body.includes(istDay(8)));
+check("unknown report → 400", (await csvGet(master.ctx, "secrets")).status() === 400);
+const anon2 = await browser.newContext();
+res = await anon2.request.get(`${BASE}/api/admin/seo-intel/export?report=queries`, { maxRedirects: 0 });
+check("signed-out CSV export refused", res.status() === 403);
+await anon2.close();
+
 // ---- Needs reconnect ---------------------------------------------------------------------------
 await resetThrottle();
 await mock("/__mock/control", { scenario: "invalidGrant" });
@@ -298,6 +416,9 @@ await master.page.getByRole("button", { name: "Sync now" }).click();
 await master.page.getByRole("status").getByText("A Master Admin must reconnect Google.").waitFor({ timeout: 30000 });
 html = await open(full.page);
 check("invalid_grant → Needs reconnect (seen by FULL_ADMIN)", html.includes("Needs reconnect") && html.includes("A Master Admin must reconnect"));
+await resetThrottle();
+cron = runCron();
+check("scheduled sync skips while the connection needs reconnecting", cron.code === 0 && cron.out.includes("skipped (connection needs a Master Admin to reconnect)"), cron.out);
 
 // ---- Disconnect --------------------------------------------------------------------------------
 await mock("/__mock/control", { scenario: "ok" });
@@ -317,6 +438,8 @@ check("disconnect revoked at Google", (await mock("/__mock/stats")).revoked.leng
 check("disconnect ended account B's whole grant", (await grants())[ACC_B].liveRefresh === 0);
 html = await open(master.page);
 check("page shows Not connected", html.includes("Not connected"));
+cron = runCron();
+check("scheduled sync skips while Google is not connected", cron.code === 0 && cron.out.includes("skipped (Google not connected)"), cron.out);
 // No live connection: an unusable token from a failed attempt is revoked (nothing to protect).
 {
   const gb = await grants();

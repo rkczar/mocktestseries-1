@@ -20,6 +20,7 @@ import {
   setClientCredentials,
 } from "@/lib/seo-intel/google";
 import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions";
+import { HISTORY_PREFIX, INTEL_SETTINGS_KEY, comparisonEntry, getIntelSettings, listHistory, pruneHistory, recordHistory, saveIntelSettings } from "@/lib/seo-intel/history";
 
 const url = process.env.DATABASE_URL ?? "";
 if (!/seointel/.test(url)) {
@@ -101,6 +102,39 @@ async function main() {
   // Student login config untouched by everything above
   const providers = await prisma.setting.findUnique({ where: { key: "auth.providers" } });
   check("student auth.providers still holds its own client", JSON.stringify(providers?.value ?? {}).includes("studentloginclientxyz"));
+
+  // History, retention and settings
+  await prisma.setting.deleteMany({ where: { OR: [{ key: { startsWith: HISTORY_PREFIX } }, { key: INTEL_SETTINGS_KEY }] } });
+  const def = await getIntelSettings();
+  check("settings default: daily sync OFF, 400 days", def.autoSyncEnabled === false && def.historyDays === 400);
+  check("historyDays clamped to 30–1095", (await saveIntelSettings({ historyDays: 5 })).historyDays === 30 && (await saveIntelSettings({ historyDays: 99999 })).historyDays === 1095);
+  await saveIntelSettings({ autoSyncEnabled: true, historyDays: 60 });
+  const s2 = await getIntelSettings();
+  check("settings saved", s2.autoSyncEnabled === true && s2.historyDays === 60);
+  const gsc = { property: "sc-domain:mocktestseries.in", range: { start: "2026-09-01", end: "2026-09-28" }, totals: { clicks: 10, impressions: 100, ctr: 0.1, position: 5 }, daily: [], topQueries: Array.from({ length: 25 }, (_, i) => ({ key: `q${i}`, clicks: 1, impressions: 1, ctr: 1, position: 1 })), topPages: [] };
+  const ga4 = { propertyId: "553529096", range: { start: "2026-09-01", end: "2026-09-28" }, totals: { activeUsers: 7, sessions: 9, screenPageViews: 20, engagementRate: 0.5 }, daily: [], channels: [], landingPages: [] };
+  const day = new Date("2026-10-22T06:00:00Z");
+  check("recordHistory needs at least one fresh half", (await recordHistory({ gsc: null, ga4: null }, day)) === null);
+  check("recordHistory stores the IST day", (await recordHistory({ gsc, ga4: null }, day)) === "2026-10-22");
+  await recordHistory({ gsc: null, ga4 }, new Date("2026-10-22T10:00:00Z"));
+  let h = await listHistory();
+  check("same-day sync merges halves (GA4 added, GSC kept)", h.length === 1 && h[0].gsc?.totals.clicks === 10 && h[0].ga4?.totals.sessions === 9);
+  check("history keeps only top 10 rows", h[0].gsc?.topQueries.length === 10);
+  check("IST day boundary: 20:00 UTC counts as the next IST day", (await recordHistory({ gsc, ga4 }, new Date("2026-10-22T20:00:00Z"))) === "2026-10-23");
+  for (const d of ["2026-10-14", "2026-08-01", "2026-08-24"]) {
+    await prisma.setting.create({ data: { key: `${HISTORY_PREFIX}${d}`, value: { date: d, at: `${d}T00:00:00Z`, gsc: { range: gsc.range, totals: { ...gsc.totals, clicks: 5 }, topQueries: [], topPages: [] }, ga4: null } } });
+  }
+  h = await listHistory();
+  check("history listed newest first", h.map((e) => e.date).join(",") === "2026-10-23,2026-10-22,2026-10-14,2026-08-24,2026-08-01");
+  check("comparison = newest entry ≥7 days older", comparisonEntry(h)?.date === "2026-10-14");
+  check("comparison falls back to oldest", comparisonEntry([h[0], h[1]])?.date === "2026-10-22");
+  check("no comparison with one entry", comparisonEntry([h[0]]) === null);
+  const pruned = await pruneHistory(60, new Date("2026-10-23T06:00:00Z"));
+  h = await listHistory();
+  // 2026-10-23 minus 60 days = 2026-08-24: kept (exactly 60 days), 2026-08-01 deleted.
+  check("retention 60 days deletes only entries older than 60 days", pruned === 1 && h.map((e) => e.date).join(",") === "2026-10-23,2026-10-22,2026-10-14,2026-08-24");
+  check("pruning never touches the snapshot/settings/client rows", Boolean(await prisma.setting.findUnique({ where: { key: INTEL_SETTINGS_KEY } })));
+  await prisma.setting.deleteMany({ where: { OR: [{ key: { startsWith: HISTORY_PREFIX } }, { key: INTEL_SETTINGS_KEY }] } });
 
   await clearAll();
   console.log(failed ? `\n${failed} FAILED` : "\nAll passed");

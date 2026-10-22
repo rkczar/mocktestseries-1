@@ -1,0 +1,9 @@
+# mocktestseries SEO Intelligence daily sync — installed as /etc/cron.d/mocktestseries-seo-intel (source: ops/seo/).
+# 21:40 UTC = 03:10 IST: one read-only Search Console + GA4 sync, stored as that day's history summary
+# (old summaries pruned to Admin → SEO → Intelligence → retention). No-op while "Daily automatic sync"
+# is OFF (default), while Google is not connected, or while the connection needs reconnecting.
+# flock keeps exactly one run at a time. See ops/SEO-INTELLIGENCE.md.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+40 21 * * * root cd /var/www/mocktestseries-current && flock -n /run/mocktestseries-seo-intel.lock env NODE_OPTIONS=--conditions=react-server /usr/bin/npx --no-install tsx scripts/seo-intel-sync.ts >> /var/log/mocktestseries/seo-intel-sync.log 2>&1

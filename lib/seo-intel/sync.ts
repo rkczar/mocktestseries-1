@@ -3,11 +3,14 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { toIstDateString } from "@/lib/ist-time";
 import { GA4_PROPERTY_ID, SEO_SITE_URL, SeoIntelError, getAccessToken, googleEndpoints, googleErrorText, googleFetch } from "@/lib/seo-intel/google";
+import { getIntelSettings, pruneHistory, recordHistory } from "@/lib/seo-intel/history";
 
 /**
- * Manual "Sync now" for SEO Intelligence: pulls a 28-day read-only snapshot
+ * "Sync now" (manual) and the daily scheduled sync (scripts/seo-intel-sync.ts)
+ * for SEO Intelligence: pulls a 28-day read-only snapshot
  * from Search Console and the GA4 Data API through the shared connection and
- * stores it in Setting "seo.intel.snapshot" (no new tables). Nothing here
+ * stores it in Setting "seo.intel.snapshot" (no new tables), plus one daily
+ * history summary (lib/seo-intel/history.ts), pruned to the retention setting. Nothing here
  * writes to Google or changes the site's own SEO output.
  */
 
@@ -34,7 +37,17 @@ export interface Ga4Row {
 }
 
 export interface SeoSnapshot {
-  lastSync: { ok: boolean; at: string; byId: string | null; gscError: string | null; ga4Error: string | null } | null;
+  lastSync: {
+    ok: boolean;
+    at: string;
+    byId: string | null;
+    gscError: string | null;
+    ga4Error: string | null;
+    /** Absent on syncs stored before scheduled sync existed (= manual). */
+    source?: SyncSource;
+    /** Consecutive failed syncs, 0 after a fully successful one. */
+    failStreak?: number;
+  } | null;
   gsc: {
     property: string;
     range: { start: string; end: string };
@@ -212,22 +225,28 @@ async function acquireLock(): Promise<boolean> {
   }
 }
 
-export type SyncResult = { ok: boolean; message: string; gscError: string | null; ga4Error: string | null };
+export type SyncSource = "manual" | "scheduled";
+export type SyncResult = { ok: boolean; message: string; gscError: string | null; ga4Error: string | null; skipped?: boolean; historyDate?: string | null; pruned?: number };
 
-/** One manual sync (MASTER_ADMIN check is the caller's job). Search Console and GA4 succeed or fail independently. */
-export async function runSync(adminId: string | null): Promise<SyncResult> {
+/**
+ * One sync (MASTER_ADMIN check is the caller's job for manual syncs; the
+ * scheduled script checks the auto-sync switch). Search Console and GA4
+ * succeed or fail independently.
+ */
+export async function runSync(adminId: string | null, source: SyncSource = "manual"): Promise<SyncResult> {
   const previous = await getSnapshot();
   if (previous.lastSync && Date.now() - new Date(previous.lastSync.at).getTime() < MIN_SYNC_INTERVAL_MS) {
-    return { ok: false, message: "A sync ran less than a minute ago. Please wait a moment.", gscError: null, ga4Error: null };
+    return { ok: false, skipped: true, message: "A sync ran less than a minute ago. Please wait a moment.", gscError: null, ga4Error: null };
   }
-  if (!(await acquireLock())) return { ok: false, message: "A sync is already running.", gscError: null, ga4Error: null };
+  if (!(await acquireLock())) return { ok: false, skipped: true, message: "A sync is already running.", gscError: null, ga4Error: null };
+  const failStreak = (ok: boolean) => (ok ? 0 : (previous.lastSync?.failStreak ?? (previous.lastSync && !previous.lastSync.ok ? 1 : 0)) + 1);
   try {
     let token: { accessToken: string; secrets: string[] };
     try {
       token = await getAccessToken();
     } catch (err) {
       const message = err instanceof SeoIntelError ? err.message : "Could not get a Google access token.";
-      await saveSnapshot({ ...previous, lastSync: { ok: false, at: new Date().toISOString(), byId: adminId, gscError: message, ga4Error: message } });
+      await saveSnapshot({ ...previous, lastSync: { ok: false, at: new Date().toISOString(), byId: adminId, gscError: message, ga4Error: message, source, failStreak: failStreak(false) } });
       return { ok: false, message, gscError: message, ga4Error: message };
     }
     const failText = (err: unknown) => (err instanceof SeoIntelError ? err.message : "Unexpected error.");
@@ -237,17 +256,31 @@ export async function runSync(adminId: string | null): Promise<SyncResult> {
     if (gsc.status === "rejected" && !(gsc.reason instanceof SeoIntelError)) console.error("[seo-intel] gsc sync failed");
     if (ga4.status === "rejected" && !(ga4.reason instanceof SeoIntelError)) console.error("[seo-intel] ga4 sync failed");
     const ok = !gscError && !ga4Error;
+    const at = new Date();
+    const freshGsc = gsc.status === "fulfilled" ? gsc.value : null;
+    const freshGa4 = ga4.status === "fulfilled" ? ga4.value : null;
     await saveSnapshot({
       // A failed half keeps its last good data.
-      gsc: gsc.status === "fulfilled" ? gsc.value : previous.gsc,
-      ga4: ga4.status === "fulfilled" ? ga4.value : previous.ga4,
-      lastSync: { ok, at: new Date().toISOString(), byId: adminId, gscError, ga4Error },
+      gsc: freshGsc ?? previous.gsc,
+      ga4: freshGa4 ?? previous.ga4,
+      lastSync: { ok, at: at.toISOString(), byId: adminId, gscError, ga4Error, source, failStreak: failStreak(ok) },
     });
+    // History + retention never fail the sync itself.
+    let historyDate: string | null = null;
+    let pruned = 0;
+    try {
+      historyDate = await recordHistory({ gsc: freshGsc, ga4: freshGa4 }, at);
+      pruned = await pruneHistory((await getIntelSettings()).historyDays, at);
+    } catch {
+      console.error("[seo-intel] history/retention step failed");
+    }
     return {
       ok,
       message: ok ? "Synced Search Console and GA4." : gscError && ga4Error ? "Sync failed." : "Sync partly failed.",
       gscError,
       ga4Error,
+      historyDate,
+      pruned,
     };
   } finally {
     await prisma.setting.deleteMany({ where: { key: LOCK_SETTING_KEY } });

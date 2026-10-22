@@ -80,7 +80,9 @@ const gscRows = (dims, limit) => {
       kind === "date"
         ? new Date(Date.UTC(2026, 8, 20 + i)).toISOString().slice(0, 10)
         : kind === "query"
-          ? `ruhs mo mock test ${i + 1}`
+          ? i === 4
+            ? '=HYPERLINK("http://evil.example","click")' // CSV formula-injection probe
+            : `ruhs mo mock test ${i + 1}`
           : `https://mocktestseries.in/exams/sample-${i + 1}`;
     out.push({ keys: [key], clicks: 100 - i, impressions: 2000 - i * 10, ctr: 0.05, position: 3 + i });
   }

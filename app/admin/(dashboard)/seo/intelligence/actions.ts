@@ -8,6 +8,7 @@ import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { STATE_COOKIE, STATE_COOKIE_PATH, STATE_TTL_SECONDS, SeoIntelError, beginAuthorization, disconnect } from "@/lib/seo-intel/google";
 import { runSync } from "@/lib/seo-intel/sync";
+import { HISTORY_DAYS_MAX, HISTORY_DAYS_MIN, pruneHistory, saveIntelSettings } from "@/lib/seo-intel/history";
 
 export interface SeoIntelActionState {
   ok?: boolean;
@@ -71,9 +72,31 @@ export async function syncGoogleAction(): Promise<SeoIntelActionState> {
       action: "SEO_GOOGLE_SYNC",
       entityType: "Setting",
       entityId: "seo.intel.snapshot",
-      metadata: { ok: result.ok, gscError: result.gscError, ga4Error: result.ga4Error },
+      metadata: { source: "manual", ok: result.ok, gscError: result.gscError, ga4Error: result.ga4Error },
     },
   });
   revalidatePath("/admin/seo/intelligence");
   return { ok: result.ok, message: result.message };
+}
+
+/** Daily automatic sync switch + history retention. Saving applies the retention immediately. */
+export async function saveIntelSettingsAction(_prev: SeoIntelActionState, formData: FormData): Promise<SeoIntelActionState> {
+  const session = await requirePermission(PERMISSIONS.SEO_INTEL_MANAGE);
+  const days = Number(formData.get("historyDays"));
+  if (!Number.isInteger(days) || days < HISTORY_DAYS_MIN || days > HISTORY_DAYS_MAX) {
+    return { ok: false, message: `Keep history for ${HISTORY_DAYS_MIN}–${HISTORY_DAYS_MAX} days.` };
+  }
+  const saved = await saveIntelSettings({ autoSyncEnabled: formData.get("autoSyncEnabled") === "on", historyDays: days });
+  const pruned = await pruneHistory(saved.historyDays);
+  await prisma.auditLog.create({
+    data: {
+      actorId: session.user.id,
+      action: "SEO_INTEL_SETTINGS_SAVED",
+      entityType: "Setting",
+      entityId: "seo.intel.settings",
+      metadata: { autoSyncEnabled: saved.autoSyncEnabled, historyDays: saved.historyDays, pruned },
+    },
+  });
+  revalidatePath("/admin/seo/intelligence");
+  return { ok: true, message: `Saved.${pruned ? ` Removed ${pruned} history day${pruned === 1 ? "" : "s"} older than ${saved.historyDays} days.` : ""}` };
 }
