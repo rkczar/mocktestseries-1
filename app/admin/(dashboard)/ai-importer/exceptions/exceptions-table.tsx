@@ -6,7 +6,8 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
-import { approveQuestionsAction, importAction, reclassifyQuestionsAction, rejectQuestionsAction, rescanQuestionsAction, unapproveQuestionsAction } from "../actions";
+import { approveQuestionsAction, bulkTaxonomyAction, importAction, reclassifyQuestionsAction, rejectQuestionsAction, rescanQuestionsAction, unapproveQuestionsAction } from "../actions";
+import { SelectNative } from "@/components/ui/select-native";
 import { statusVariant } from "@/lib/ai-import/config";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
 
@@ -31,9 +32,64 @@ export interface ExceptionRow {
   savedDeleted: boolean;
   approved: boolean;
   rescanPending: boolean;
+  v1: "passed" | "problems" | "stale" | "none";
+  v2: "verified" | "disagree" | "failed" | "stale" | "none";
+  v2Model: string | null;
+  eligible: boolean;
 }
 
-export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: ExceptionRow[]; canUse: boolean; canPublish: boolean; jobId: string | null }) {
+export interface TaxonomyOption {
+  id: string;
+  name: string;
+  topics: { id: string; name: string; subTopics: { id: string; name: string }[] }[];
+}
+
+const V1_LABEL = { passed: "V1 passed", problems: "V1 findings", stale: "V1 out of date", none: "" } as const;
+const V2_LABEL = { verified: "V2 agrees", disagree: "V2 disagrees", failed: "V2 no result", stale: "V2 out of date", none: "" } as const;
+
+/** Bulk subject / topic / subtopic correction — only records of the job's exam are offered. */
+function BulkTaxonomy({ taxonomy, disabled, onApply }: { taxonomy: TaxonomyOption[]; disabled: boolean; onApply: (s: string, t: string | null, u: string | null) => void }) {
+  const [s, setS] = useState("");
+  const [t, setT] = useState("");
+  const [u, setU] = useState("");
+  const subject = taxonomy.find((x) => x.id === s);
+  const topic = subject?.topics.find((x) => x.id === t);
+  return (
+    <span className="flex flex-wrap items-center gap-1" data-testid="bulk-taxonomy">
+      <SelectNative className="h-8 w-auto max-w-48 text-xs" aria-label="Subject" value={s} onChange={(e) => (setS(e.target.value), setT(""), setU(""))} data-testid="bulk-subject">
+        <option value="">Subject…</option>
+        {taxonomy.map((x) => (
+          <option key={x.id} value={x.id}>
+            {x.name}
+          </option>
+        ))}
+      </SelectNative>
+      <SelectNative className="h-8 w-auto max-w-48 text-xs" aria-label="Topic" value={t} disabled={!subject} onChange={(e) => (setT(e.target.value), setU(""))} data-testid="bulk-topic">
+        <option value="">Topic (none)</option>
+        {subject?.topics.map((x) => (
+          <option key={x.id} value={x.id}>
+            {x.name}
+          </option>
+        ))}
+      </SelectNative>
+      {topic && topic.subTopics.length > 0 && (
+        <SelectNative className="h-8 w-auto max-w-48 text-xs" aria-label="Subtopic" value={u} onChange={(e) => setU(e.target.value)} data-testid="bulk-subtopic">
+          <option value="">Subtopic (none)</option>
+          {topic.subTopics.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+        </SelectNative>
+      )}
+      <Button size="sm" variant="outline" disabled={disabled || !s} onClick={() => onApply(s, t || null, u || null)} data-testid="bulk-taxonomy-apply">
+        Set subject / topic
+      </Button>
+    </span>
+  );
+}
+
+export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = [] }: { rows: ExceptionRow[]; canUse: boolean; canPublish: boolean; jobId: string | null; taxonomy?: TaxonomyOption[] }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
@@ -77,6 +133,7 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
           <Button size="sm" variant="outline" disabled={!sameJob || pending} onClick={() => act(() => reclassifyQuestionsAction(ids), (d) => `${d.queued} question(s) queued for subject/topic classification.`)} data-testid="bulk-reclassify">
             Re-classify
           </Button>
+          {jobId && taxonomy.length > 0 && <BulkTaxonomy taxonomy={taxonomy} disabled={!ids.length || pending} onApply={(s, t, u) => act(() => bulkTaxonomyAction(ids, s, t, u), (d) => `Subject / topic set on ${d.updated} question(s)${d.refused.length ? `; not changed: ${d.refused.join(" ")}` : ""}.`)} />}
           {canPublish && (
             <Button size="sm" disabled={!sameJob || !publishable || pending} onClick={() => confirm(`Import and publish the ${publishable} selected question(s) that pass every check? The others stay as drafts/exceptions.`) && act(() => importAction(rows.find((r) => selected.has(r.id))!.jobId, "PUBLISH_SELECTED", ids), "Import & publish of the selection started — see the job page.")} data-testid="publish-selected">
               Import &amp; Publish Selected ({publishable})
@@ -122,6 +179,13 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId }: { rows: Exc
               </td>
               <td className="py-1.5 pr-2">
                 <Badge variant={statusVariant(r.status)}>{QUESTION_STATUS_LABELS[r.status] ?? r.status}</Badge>
+                {(r.v1 !== "none" || r.v2 !== "none") && (
+                  <span className="mt-0.5 flex flex-wrap gap-1 text-[11px]" data-testid="row-verify" data-v1={r.v1} data-v2={r.v2}>
+                    {r.v1 !== "none" && <span className={r.v1 === "passed" ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}>{V1_LABEL[r.v1]}</span>}
+                    {r.v2 !== "none" && <span className={r.v2 === "verified" ? "text-[var(--color-success)]" : r.v2 === "disagree" ? "text-[var(--color-error)]" : "text-[var(--color-warning)]"} title={r.v2Model ?? undefined}>{V2_LABEL[r.v2]}</span>}
+                    {r.eligible && <span className="text-[var(--color-success)]">· eligible</span>}
+                  </span>
+                )}
                 {r.questionId &&
                   (r.savedDeleted ? (
                     <span className="ml-1 text-xs text-[var(--color-muted-foreground)]" data-testid="saved-deleted">

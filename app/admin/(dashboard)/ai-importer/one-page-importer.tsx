@@ -20,6 +20,7 @@ import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
 import type { JobMapping } from "@/lib/ai-import/job-view";
 import type { QualityReport } from "@/lib/ai-import/quality";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
+import { uploadReference } from "@/components/admin/ai-importer/reference-panel";
 import { CostSummary, type CostBreakdownLine } from "@/components/admin/ai-importer/cost-summary";
 import type { SpendSummary } from "@/lib/ai-import/ledger";
 
@@ -93,12 +94,14 @@ function UploadCard({ exams, defaultExamId, limits, aiEnabled }: { exams: ExamOp
   const [expected, setExpected] = useState("");
   const [paper, setPaper] = useState<File | null>(null);
   const [key, setKey] = useState<File | null>(null);
+  const [reference, setReference] = useState<File | null>(null);
   const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const paperInput = useRef<HTMLInputElement>(null);
   const keyInput = useRef<HTMLInputElement>(null);
+  const referenceInput = useRef<HTMLInputElement>(null);
   const exam = exams.find((e) => e.id === ctx.examId);
   const pyq = exam?.papers.find((p) => p.id === ctx.previousYearPaperId) ?? null;
   // The Bulk Import needs a year for every question: the selected paper's year, the exam's own year, or one entered here.
@@ -131,6 +134,11 @@ function UploadCard({ exams, defaultExamId, limits, aiEnabled }: { exams: ExamOp
       if (key) {
         const k = await uploadFile(jobId, key, "ANSWER_KEY", (p) => setProgress(`Uploading the answer key… ${p}%`));
         if (!k.ok) throw new Error(`Answer key ${key.name}: ${k.error}`);
+      }
+      if (reference) {
+        setProgress("Uploading the reference paper…");
+        const r = await uploadReference(jobId, reference);
+        if (!r.ok) throw new Error(`Reference paper ${reference.name}: ${r.error}`);
       }
       setProgress("Analyzing…");
       const an = await callImporter(() => analyzeJobAction(jobId));
@@ -266,6 +274,32 @@ function UploadCard({ exams, defaultExamId, limits, aiEnabled }: { exams: ExamOp
             }}
             data-testid="op-key-input"
           />
+        </div>
+        <div className="flex flex-col gap-1 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[var(--color-muted-foreground)]">5. Reference paper (optional, choose before the paper):</span>
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => referenceInput.current?.click()} data-testid="op-reference-button">
+              {reference ? reference.name : "Choose reference paper"}
+            </Button>
+            {reference && !busy && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setReference(null)}>
+                Remove
+              </Button>
+            )}
+            <input
+              ref={referenceInput}
+              type="file"
+              accept={ACCEPT}
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) setReference(f);
+              }}
+              data-testid="op-reference-input"
+            />
+          </div>
+          <span className="text-xs text-[var(--color-muted-foreground)]">A related previous paper, a clean copy or an answer-key document (up to 18 MB). It is read on this server only and used by Verify 1 to cross-check order, wording, options and answers — as evidence, never to replace the question paper.</span>
         </div>
         <details className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="op-advanced">
           <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>

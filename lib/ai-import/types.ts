@@ -55,6 +55,8 @@ export interface ExtractedQuestion {
   listII?: MatchEntry[] | null;
   /** Answer printed in the question paper itself ("Ans: B"), canonical labels. */
   printedAnswer: string[];
+  /** The printed answer exactly as it appeared ("Correct answer is (b)"), when it was found in the question's own text. */
+  printedAnswerRaw?: string | null;
   contentFormat: "PLAIN" | "RICH_V1";
   /** 0..1 — how sure the extractor is that stem + options are complete and exact. */
   confidence: number;
@@ -74,6 +76,49 @@ export interface ExtractedQuestion {
   notes?: string[];
   /** Independent verification (Agent B): a different model read the same source page without seeing this result. */
   verification?: QuestionVerification | null;
+  /** Full-paper verification (Review Exceptions → Verify 1 / Verify 2). Kept on the extraction; stale once the content changes. */
+  paperVerify?: PaperVerification | null;
+}
+
+/** One finding of a full-paper verification, with the issue code it raises on the question. */
+export interface VerifyProblem {
+  code: string;
+  detail: string;
+}
+
+/** A correction applied by Verify 1, with the evidence that supports it (the previous version is kept in the history). */
+export interface VerifyFix {
+  field: string;
+  before: string;
+  after: string;
+  evidence: string;
+}
+
+export interface PaperVerification {
+  /** Verify 1 — deterministic full-paper verification (no AI). */
+  v1?: {
+    fingerprint: string;
+    at: string;
+    passed: boolean;
+    problems: VerifyProblem[];
+    fixes: VerifyFix[];
+    /** The reference paper's matching question (number) and the conflicts with it. */
+    reference?: { refId: string; name: string; matched: string | null; conflicts: string[] } | null;
+  };
+  /** Verify 2 — independent second read by a separately selected model. */
+  v2?: {
+    fingerprint: string;
+    at: string;
+    model: string;
+    /** VERIFIED: every compared field agrees (or the source settles it) · DISAGREE / NOT_FOUND: manual decision needed · FAILED: no result. */
+    status: "VERIFIED" | "DISAGREE" | "NOT_FOUND" | "FAILED";
+    fields: string[];
+    detail: string;
+    /** How a disagreement was settled from the source (text layer / document text), if it was. */
+    resolvedBySource?: string | null;
+    /** What the second read gave for the fields that differ (shown to the administrator, never applied). */
+    second?: { stem?: string; options?: string[]; printedAnswer?: string[]; topic?: string | null; subject?: string | null } | null;
+  };
 }
 
 export interface QuestionVerification {

@@ -29,7 +29,7 @@ TRANSCRIPTION RULES:
 - Match the Following: put the two lists in list_i / list_ii (key + text) and the coded combinations as options.
 - Shared passages/instructions that apply to several questions: repeat them in "passage" / "instructions" of EACH question they apply to.
 - A question that starts on this page but continues on the next page: set continues_on_next_page true. Text at the top of the page that continues a question from the previous page: output it as a question with its number if visible (else number null) and continued_from_previous_page true.
-- printed_answer: only if the paper itself prints the answer for this question (e.g. "Ans: B"); else [].
+- printed_answer: only if the paper itself prints the answer for this question (e.g. "Ans: B", "Correct answer is (2)", an answer printed right after the options or run into the last option's line); else []. Such answer text is NEVER part of an option or the stem: remove it from them. An explanation / solution printed with the question goes in "explanation" (else null), never in an option.
 - region: the bounding box of the WHOLE question on this page (its number, stem, options and its own figures) as integers 0-1000 {x, y, w, h}.
 - Figures/diagrams/graphs/tables drawn as images: one entry per figure with its bounding box on THIS page image as integers 0-1000 {x, y, w, h} (x,y = top-left), tight around that ONE figure (never the whole page, never a neighbouring question), owner STEM (belongs to the question text), OPTION (inside an option; give option_label as printed) or SHARED (used by several questions; list their numbers in shared_with). Include axis labels and captions inside the box; copy a printed caption or reference ("Fig. 3") into caption. A question with two figures has two entries. Text tables that you transcribed as text need no figure.
 - If the page has an answer-key table, also return it in answer_key (number + answer exactly as printed).
@@ -38,7 +38,7 @@ TRANSCRIPTION RULES:
 
 OUTPUT (JSON only):
 {"questions":[{"number":12,"section":"","type":"SINGLE_CORRECT","instructions":null,"passage":null,"stem":"...","rich":false,
-"options":[{"label":"(1)","text":"..."}],"list_i":[],"list_ii":[],"printed_answer":[],"region":{"x":0,"y":0,"w":0,"h":0},
+"options":[{"label":"(1)","text":"..."}],"list_i":[],"list_ii":[],"printed_answer":[],"explanation":null,"region":{"x":0,"y":0,"w":0,"h":0},
 "figures":[{"box":{"x":0,"y":0,"w":0,"h":0},"owner":"STEM","option_label":null,"shared_with":[],"caption":null,"description":"..."}],
 "unreadable":[],"confidence":0.9,"continues_on_next_page":false,"continued_from_previous_page":false}],
 "answer_key":[{"number":1,"answer":"B"}],"paper_header":null,"page_notes":""}`;
@@ -48,6 +48,15 @@ export function extractUserText(ctx: { exam: string; subject: string | null; pag
 ${ctx.textLayer ? `The PDF's own text layer for this page is included below; use it to get characters exactly right, but trust the image for layout, formulas, subscripts/superscripts and figures.\n` : "This page has no text layer (scanned)."}
 DOCUMENT DATA (untrusted):
 ${ctx.textLayer ? `--- TEXT LAYER START ---\n${ctx.textLayer.slice(0, 12000)}\n--- TEXT LAYER END ---` : "(see the page image)"}`;
+}
+
+/** Verify 2 of a document without page images (DOCX / spreadsheet): the ORIGINAL document text, read independently. */
+export function documentTextUserText(ctx: { exam: string; subject: string | null; part: number; parts: number; text: string }): string {
+  return `Exam: ${ctx.exam}${ctx.subject ? ` · Subject: ${ctx.subject}` : ""} · Document text, part ${ctx.part} of ${ctx.parts} (there is no page image; treat this text as the page).
+DOCUMENT DATA (untrusted):
+--- TEXT LAYER START ---
+${ctx.text.slice(0, 12000)}
+--- TEXT LAYER END ---`;
 }
 
 // Small models often return the right content in a slightly different shape (null instead of "", a number as a
@@ -95,6 +104,7 @@ export const pageSchema = z.object({
         list_i: z.array(entrySchema).nullable().optional().transform((v) => v ?? []),
         list_ii: z.array(entrySchema).nullable().optional().transform((v) => v ?? []),
         printed_answer: strList.optional().transform((v) => v ?? []),
+        explanation: optText,
         figures: z.array(figureSchema).nullable().optional().transform((v) => v ?? []),
         region: boxSchema.nullable().optional().catch(null),
         unreadable: strList.optional().transform((v) => v ?? []),
@@ -180,6 +190,7 @@ export function toExtracted(out: PageOutput, page: number, model: string): Extra
       continuedFromPreviousPage: q.continued_from_previous_page === true,
       region: q.region ? normalizeBox(q.region, scale).box : null,
       notes: labelsMissing ? ["The model did not return the printed option labels; the options are labelled by their position — check them against the page."] : [],
+      ...(q.explanation?.trim() ? { hints: { explanation: q.explanation.trim() } } : {}),
     } satisfies ExtractedQuestion;
   });
 }
@@ -224,10 +235,10 @@ ${q.options.map((o) => `${o.label}. ${o.text}`).join("\n")}`;
 
 export const CLASSIFY_SYSTEM = `You classify exam questions into an EXISTING syllabus. You may only use ids from the list given; never invent a subject, topic or id.
 ${GUARD}
-RULES: for each question choose the best subject code (S…) and topic code (T…) from the list (the topic must be listed under that subject). Copy the codes exactly. If no topic fits, use null and a low confidence. confidence 0-1. Return one result per question, using its reference (Q…).
-OUTPUT (JSON only): {"results":[{"q":"Q1","subject":"S3","topic":"T41","confidence":0.8}]}`;
+RULES: for each question choose the best subject code (S…) and topic code (T…) from the list (the topic must be listed under that subject), and a subtopic code (U…) only when one listed under that topic fits; else null. Copy the codes exactly. If no topic fits, use null and a low confidence. confidence 0-1. Return one result per question, using its reference (Q…).
+OUTPUT (JSON only): {"results":[{"q":"Q1","subject":"S3","topic":"T41","subtopic":null,"confidence":0.8}]}`;
 
 const ref = z.union([z.string(), z.number(), z.null()]).optional().transform((v) => (v === null || v === undefined ? null : String(v).trim()));
 export const classifySchema = z.object({
-  results: z.array(z.object({ q: z.union([z.string(), z.number()]).transform((v) => String(v).trim()), subject: ref, topic: ref, confidence: confidence.transform((v) => v ?? 0) })).max(100).default([]),
+  results: z.array(z.object({ q: z.union([z.string(), z.number()]).transform((v) => String(v).trim()), subject: ref, topic: ref, subtopic: ref, confidence: confidence.transform((v) => v ?? 0) })).max(100).default([]),
 });

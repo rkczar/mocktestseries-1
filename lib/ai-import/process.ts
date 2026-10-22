@@ -66,7 +66,7 @@ type PageState = {
 };
 
 /** Parses a page answer into the page schema (an unusable answer throws "model_output", which may switch the model once). */
-function parsePage(text: string, what = "the model's answer"): PageOutput {
+export function parsePage(text: string, what = "the model's answer"): PageOutput {
   const parsed = pageSchema.safeParse(parseModelJson(text));
   if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", `${what} did not match the expected format (${parsed.error.issues[0]?.path.join(/* turbopackIgnore: true */ ".") ?? "?"})`), "model_output");
   return parsed.data;
@@ -313,7 +313,7 @@ export async function ensureRender(job: { id: string }, file: AiImportFile, page
 }
 
 /** Section names for AI numbers, continuing the local numbering state of the page. */
-function assignSections(qs: ExtractedQuestion[], start: NumberingState | undefined): void {
+export function assignSections(qs: ExtractedQuestion[], start: NumberingState | undefined): void {
   const st = { ...(start ?? { last: 0, sectionIdx: 1 }) };
   for (const q of qs) {
     if (q.number === null) {
@@ -790,6 +790,12 @@ async function localDocxPass(ctx: StepContext, file: AiImportFile): Promise<void
       q.confidence = 0.95;
     }
     if (doc.unconvertedMath) q.notes = [...(q.notes ?? []), "The document has equation parts that could not be converted exactly — check formulas."];
+    // A Word file's sub/superscripts and equations were converted exactly (no PDF text layer that could have
+    // flattened them): the text-layer notation warning does not apply when every equation part was converted.
+    else if (q.notes?.some((n) => n.startsWith("Text layer may have lost notation"))) {
+      q.notes = q.notes.filter((n) => !n.startsWith("Text layer may have lost notation"));
+      if (q.options.length >= 4 && q.options.every((o) => o.text || q.figures.some((f) => f.owner === "OPTION" && f.optionLabel === o.label)) && q.notes.every((n) => n.startsWith("The printed answer"))) q.confidence = 0.95;
+    }
     await saveQuestion(ctx, file, q, order++, async (f) => {
       const mm = f.mediaPart ? media.get(f.mediaPart) : undefined;
       return mm ? { bytes: mm.bytes, ext: mm.ext, source: "EMBEDDED" } : null;

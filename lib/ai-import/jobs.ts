@@ -14,6 +14,7 @@ import { estimateJobCost } from "@/lib/ai-import/estimate";
 import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
 import { priceRemainingWork } from "@/lib/ai-import/reconfigure";
 import { BUDGET_LOCK_KEY } from "@/lib/ai-import/ai";
+import { referenceKeysInUse } from "@/lib/ai-import/reference-keys";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { VerifyMode } from "@/lib/ai-import/config";
 
@@ -413,8 +414,9 @@ async function authorizeRemaining(job: AiImportJob, actorId: string, confirmedMa
   const files = await prisma.aiImportFile.findMany({ where: { jobId: job.id }, select: { id: true, role: true, status: true, errorMessage: true, pageCount: true } });
   const r = await priceRemainingWork({ id: job.id, analysis: job.analysis, files }, plan, settings);
   if (r.maxInr === null) throw new ImportJobError(`The cost of the remaining work cannot be established (${r.estimate.notes[0] ?? "a model price or the exchange rate is missing"}). Nothing was started — use Reconfigure Models for This Job to choose models with a known price.`);
+  // Compared exactly (rounding up to the paisa first could ask again for the very maximum already confirmed).
+  if (job.spentInr + r.maxInr <= job.budgetInr + 0.005) return null;
   const needed = Math.ceil((job.spentInr + r.maxInr) * 100) / 100;
-  if (needed <= job.budgetInr + 0.005) return null;
   const cost: ContinueCost = { spentInr: job.spentInr, confirmedMaxInr: job.budgetInr, remainingMaxInr: r.maxInr, neededMaxInr: needed, pages: r.unreadPages, keyFiles: r.failedKeyFiles, questionsToClassify: r.toClassify };
   const confirmed = typeof confirmedMaxInr === "number" && Number.isFinite(confirmedMaxInr) ? confirmedMaxInr : null;
   if (confirmed === null || confirmed + 0.005 < needed) return cost;
@@ -564,7 +566,8 @@ async function deletePlan(db: Prisma.TransactionClient | typeof prisma, jobId: s
     db.aiImportQuestion.findMany({ where: { jobId, bulkImportRunId: { not: null } }, distinct: ["bulkImportRunId"], select: { bulkImportRunId: true } }),
   ]);
   const fileKeys = [...new Set(job.files.map((f) => f.storageKey).filter((k): k is string => !!k))];
-  const sharedFileKeys = new Set((await db.aiImportFile.findMany({ where: { storageKey: { in: fileKeys }, jobId: { not: jobId }, status: { not: AiImportFileStatus.PURGED } }, select: { storageKey: true } })).map((f) => f.storageKey!));
+  // Also kept: bytes another job's reference paper points at (references are never deleted with a paper).
+  const sharedFileKeys = new Set([...(await db.aiImportFile.findMany({ where: { storageKey: { in: fileKeys }, jobId: { not: jobId }, status: { not: AiImportFileStatus.PURGED } }, select: { storageKey: true } })).map((f) => f.storageKey!), ...(await referenceKeysInUse(db, fileKeys, jobId))]);
   // Figure originals of this job: its figure rows and its kept question versions (re-scan results, history).
   const versionKeys = (rows: { figures: Prisma.JsonValue }[]) => rows.flatMap((r) => ((Array.isArray(r.figures) ? r.figures : []) as { originalKey?: string }[]).map((f) => f?.originalKey ?? "")).filter(Boolean);
   const ownVersions = await db.aiImportQuestionVersion.findMany({ where: { jobId, figures: { not: Prisma.DbNull } }, select: { figures: true } });
@@ -727,7 +730,7 @@ export async function removeFile(input: { jobId: string; fileId: string; actorId
       }
 
       await tx.aiImportFile.delete({ where: { id: file.id } });
-      const sharedWith = file.storageKey ? await tx.aiImportFile.count({ where: { storageKey: file.storageKey, status: { not: AiImportFileStatus.PURGED } } }) : 0;
+      const sharedWith = file.storageKey ? (await tx.aiImportFile.count({ where: { storageKey: file.storageKey, status: { not: AiImportFileStatus.PURGED } } })) + (await referenceKeysInUse(tx, [file.storageKey])).size : 0;
       // Analysis results may include the removed file: clear them and require a new analysis.
       const job = await tx.aiImportJob.findUniqueOrThrow({ where: { id: file.jobId }, select: { analysis: true, status: true } });
       const analysisCleared = job.analysis !== null || job.status === AiImportJobStatus.AWAITING_CONFIRMATION;

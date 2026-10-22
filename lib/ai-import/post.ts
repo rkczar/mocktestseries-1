@@ -13,6 +13,7 @@ import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, classifySchema, labelFromPrinted, solveS
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem } from "@/lib/ai-import/fidelity";
 import type { StepContext } from "@/lib/ai-import/process";
+import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
 
 /**
  * After extraction: answer keys → answer status, optional independent AI
@@ -39,7 +40,7 @@ export const MENTIONS_FIGURE = /\b(figure|fig\.|diagram|graph|image|picture|phot
  * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
  * approved — and an uncertain image placement is cleared only by confirming each figure's placement.
  */
-export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES"];
+export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES"];
 
 interface Check {
   stage: number;
@@ -206,6 +207,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const taxonomy = await getExamTaxonomy(prisma, job.examId);
   const subjectById = new Map(taxonomy.map((s) => [s.id, s]));
   const topicById = new Map(taxonomy.flatMap((s) => s.topics.map((t) => [t.id, t] as const)));
+  const subTopicById = new Map(taxonomy.flatMap((s) => s.topics.flatMap((t) => t.subTopics.map((u) => [u.id, u] as const))));
   const subjectByName = new Map(taxonomy.map((s) => [taxonomyNameKey(s.name), s]));
 
   // ---- Existing questions for duplicate detection (this exam only) ----
@@ -236,18 +238,20 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   }
 
   const toClassify = open.filter((q) => (!only || only.has(q.id)) && !q.topicId && !q.taxonomySource?.startsWith("admin"));
-  const classifyResults = new Map<string, { subject: string | null; topic: string | null; confidence: number; model: string }>();
+  const classifyResults = new Map<string, { subject: string | null; topic: string | null; subTopic: string | null; confidence: number; model: string }>();
   if (settings.aiEnabled && settings.models.classify && toClassify.length && taxonomy.length) {
     const subjectsAllowed = job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId ? taxonomy.filter((s) => s.id === job.subjectId) : taxonomy;
     // Short codes (S3, T41, Q7) instead of database ids: a small model copies "T41" reliably, a 25-character id
     // often not. The codes are mapped back here; a code that is not on the list is counted as invalid, never guessed.
     const subjectCode = new Map<string, string>();
     const topicCode = new Map<string, string>();
+    const subTopicCode = new Map<string, string>();
     let t = 0;
+    let u = 0;
     const list = subjectsAllowed
       .map((s, i) => {
         subjectCode.set(`S${i + 1}`, s.id);
-        return `SUBJECT S${i + 1} = ${s.name}\n${s.topics.map((tp) => (topicCode.set(`T${++t}`, tp.id), `  TOPIC T${t} = ${tp.name}`)).join("\n")}`;
+        return `SUBJECT S${i + 1} = ${s.name}\n${s.topics.map((tp) => (topicCode.set(`T${++t}`, tp.id), `  TOPIC T${t} = ${tp.name}${tp.subTopics.map((st) => (subTopicCode.set(`U${++u}`, st.id), `\n    SUBTOPIC U${u} = ${st.name}`)).join("")}`)).join("\n")}`;
       })
       .join("\n");
     const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, errors: [] as string[], models: new Set<string>() };
@@ -269,12 +273,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           const qid = qCode.get(res.q.toUpperCase().replace(/[\s[\]]/g, ""));
           const subject = code(res.subject, subjectCode);
           const topic = code(res.topic, topicCode);
-          if (!qid || (res.subject && !subject) || (res.topic && !topic)) tally.invalid++;
+          const subTopic = code(res.subtopic, subTopicCode);
+          if (!qid || (res.subject && !subject) || (res.topic && !topic) || (res.subtopic && !subTopic)) tally.invalid++;
           if (!qid) continue;
           tally.results++;
           if (subject) tally.subjects++;
           if (topic) tally.topics++;
-          classifyResults.set(qid, { subject, topic, confidence: res.confidence, model: r.model });
+          classifyResults.set(qid, { subject, topic, subTopic, confidence: res.confidence, model: r.model });
         }
       } catch (err) {
         if (err instanceof ImporterAiUnavailable || (err instanceof Error && err.name === "ImporterBudgetError")) throw err;
@@ -384,6 +389,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     // Subject / topic (existing ids only)
     let subjectId = q.subjectId;
     let topicId = q.topicId;
+    let subTopicId = q.subTopicId;
     let taxConf = q.taxonomyConfidence;
     let taxSource = q.taxonomySource;
     if (!q.taxonomySource?.startsWith("admin")) {
@@ -411,15 +417,37 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           topicId = t.id;
           taxConf = ai.confidence;
           taxSource = `AI (${ai.model})`;
+          const st = ai.subTopic ? t.subTopics.find((x) => x.id === ai.subTopic) : undefined;
+          if (st && !subTopicId) subTopicId = st.id;
         } else if (ai.subject && subjectId && ai.subject !== subjectId && job.paperType === AiImportPaperType.SINGLE_SUBJECT) {
           checks.push({ stage: 2, name: "Subject check", passed: false, severity: "WARNING", method: "AI", model: ai.model, detail: `The classifier thinks this question belongs to ${subjectById.get(ai.subject)?.name ?? "another subject"}, not the selected subject.` });
         }
       }
     }
+    // Only records of this exam's own hierarchy are kept (Exam → Subject → Topic → Subtopic): an id that is not
+    // (or no longer) part of it, or a topic outside its subject, is cleared and reported — never saved.
+    const invalidTax: string[] = [];
+    if (subjectId && !subjectById.has(subjectId)) {
+      invalidTax.push("the subject is not part of this exam");
+      subjectId = null;
+    }
+    if (topicId && (!topicById.has(topicId) || topicById.get(topicId)!.subjectId !== subjectId)) {
+      invalidTax.push(topicById.has(topicId) ? "the topic belongs to another subject" : "the topic is not part of this exam");
+      topicId = null;
+      taxConf = null;
+    }
+    if (subTopicId && (!subTopicById.has(subTopicId) || subTopicById.get(subTopicId)!.topicId !== topicId)) {
+      invalidTax.push(subTopicById.has(subTopicId) ? "the subtopic belongs to another topic" : "the subtopic is not part of this exam");
+      subTopicId = null;
+    }
+    if (invalidTax.length) {
+      checks.push({ stage: 2, name: "Taxonomy validity", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: `Cleared: ${invalidTax.join("; ")}. Choose the subject / topic again.` });
+      await logEvent(job.id, "TAXONOMY_CLEARED", `Q${q.sourceLabel}: ${invalidTax.join("; ")} — cleared (only this exam's own subjects, topics and subtopics are kept).`, { questionId: q.id, cleared: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId } });
+    }
     if (!subjectId) add("SUBJECT_UNKNOWN", "No subject of this exam could be determined. Set it in Review Exceptions.");
     const topicSure = !!topicId && (taxConf ?? 0) >= settings.verification.topicMinConfidence;
     if (!topicSure) add("TOPIC_UNCERTAIN", topicId ? `Topic confidence ${Math.round((taxConf ?? 0) * 100)}%.` : "No topic could be determined.");
-    checks.push({ stage: 2, name: "Subject & topic", passed: !!subjectId && topicSure, severity: !subjectId ? "ERROR" : topicSure ? "INFO" : "WARNING", method: taxSource?.startsWith("AI") ? "AI" : taxSource?.startsWith("admin") ? "ADMIN" : "DETERMINISTIC", detail: `${subjectId ? subjectById.get(subjectId)?.name ?? "?" : "no subject"} › ${topicId ? topicById.get(topicId)?.name ?? "?" : "no topic"}${taxSource ? ` (${taxSource})` : ""}` });
+    checks.push({ stage: 2, name: "Subject & topic", passed: !!subjectId && topicSure, severity: !subjectId ? "ERROR" : topicSure ? "INFO" : "WARNING", method: taxSource?.startsWith("AI") ? "AI" : taxSource?.startsWith("admin") ? "ADMIN" : "DETERMINISTIC", detail: `${subjectId ? subjectById.get(subjectId)?.name ?? "?" : "no subject"} › ${topicId ? topicById.get(topicId)?.name ?? "?" : "no topic"}${subTopicId ? ` › ${subTopicById.get(subTopicId)?.name ?? "?"}` : ""}${taxSource ? ` (${taxSource})` : ""}` });
 
     // Stage 3 — answer
     let answerStatus: AiImportAnswerStatus = AiImportAnswerStatus.KEY_MISSING;
@@ -529,6 +557,25 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const batchTwin = seenInBatch.get(norm);
     if (batchTwin && batchTwin !== q.id && norm.length > 10) add("DUPLICATE_IN_BATCH", "The same question appears earlier in this import.");
     else seenInBatch.set(norm, q.id);
+    // Full-paper verification (Verify 1 / Verify 2), counted only while it still describes this exact content.
+    const fingerprint = contentFingerprint({ e, finalAnswer, subjectId, topicId, subTopicId, figures: figs });
+    const vs = verifyState(q.data, fingerprint);
+    if (vs.pv?.v1) {
+      if (vs.v1 === "stale") checks.push({ stage: 5, name: "Verify 1 — full paper", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: "Out of date: the question changed after Verify 1 ran. Run Verify 1 again." });
+      else {
+        for (const p of vs.pv.v1.problems) addMore(p.code, p.detail);
+        checks.push({ stage: 5, name: "Verify 1 — full paper", passed: vs.v1 === "passed", severity: vs.v1 === "passed" ? "INFO" : "WARNING", method: "DETERMINISTIC", detail: `${vs.v1 === "passed" ? "Passed" : `${vs.pv.v1.problems.length} finding(s): ${vs.pv.v1.problems.map((p) => p.detail).join(" · ").slice(0, 400) || "see the flags"}`}${vs.pv.v1.fixes.length ? ` · corrected: ${vs.pv.v1.fixes.map((f) => `${f.field} (${f.evidence})`).join("; ").slice(0, 300)}` : ""}${vs.pv.v1.reference ? ` · reference “${vs.pv.v1.reference.name}”: ${vs.pv.v1.reference.matched ?? "no matching question"}` : ""}` });
+      }
+    }
+    if (vs.pv?.v2) {
+      const v2 = vs.pv.v2;
+      if (vs.v2 === "stale") checks.push({ stage: 6, name: "Verify 2 — independent model", passed: false, severity: "WARNING", method: "AI", model: v2.model, detail: "Out of date: the question changed after Verify 2 ran. Run Verify 2 again." });
+      else {
+        if (vs.v2 === "disagree") add("VERIFY2_DISAGREES", `${v2.model}: ${v2.detail}`.slice(0, 600));
+        checks.push({ stage: 6, name: "Verify 2 — independent model", passed: vs.v2 === "verified", severity: vs.v2 === "verified" ? "INFO" : vs.v2 === "failed" ? "WARNING" : "ERROR", method: "AI", model: v2.model, detail: `${v2.status === "VERIFIED" ? "Agrees" : v2.status === "FAILED" ? "No result" : v2.status === "NOT_FOUND" ? "Not found by the second read" : "Disagrees"}: ${v2.detail}${v2.resolvedBySource ? ` · settled by the source: ${v2.resolvedBySource}` : ""}`.slice(0, 1000) });
+      }
+    }
+
     // Admin decisions persist across re-runs: a reviewed question drops the
     // "needs a human look" flags (never structural ones), an admin-chosen
     // answer settles the answer flags.
@@ -565,6 +612,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           confidence: conf,
           subjectId,
           topicId,
+          subTopicId,
           taxonomyConfidence: taxConf,
           taxonomySource: taxSource,
           answerStatus,

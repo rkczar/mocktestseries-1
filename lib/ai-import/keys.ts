@@ -93,7 +93,7 @@ export function keyLooksValid(pairs: KeyPair[]): boolean {
   return ordered / Math.max(1, nums.length - 1) >= 0.6;
 }
 
-function sheetPairs(bytes: Buffer, ext: string): KeyPair[] {
+export function sheetPairs(bytes: Buffer, ext: string): KeyPair[] {
   const wb = ext === "csv" ? XLSX.read(bytes.toString("utf8"), { type: "string", raw: true }) : XLSX.read(bytes, { type: "buffer", cellFormula: false, cellHTML: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, blankrows: false }) as unknown[][];

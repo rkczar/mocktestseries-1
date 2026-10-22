@@ -181,13 +181,105 @@ function tidy(s: string): string {
 
 // ---- Printed answers, types -------------------------------------------------------------------
 
-const ANSWER_LINE = /(?:^|\n)\s*(?:Ans(?:wer)?|Correct\s+(?:answer|option)|Key)\s*[:.\-–]?\s*((?:\(?[A-Da-d1-4]\)?\s*(?:,|&|and)?\s*){1,4})\s*(?=\n|$)/i;
+const ANSWER_LINE = /(?:^|\n)\s*(?:(?:The\s+)?(?:Correct|Right)\s+(?:answer|option|choice)(?:\s+is)?|Ans(?:wer)?(?:\s+is)?|Key)\s*[:.\-–=]?\s*(?:option\s*)?((?:\(?[A-Da-d1-4]\)?\s*(?:,|&|and|\/)?\s*){1,4})\s*\.?\s*(?=\n|$)/i;
 
-export function takePrintedAnswer(text: string): { text: string; answer: string[] } {
-  const m = ANSWER_LINE.exec(text);
-  if (!m) return { text, answer: [] };
-  const labels = [...m[1].matchAll(/[A-Da-d1-4]/g)].map((x) => (/\d/.test(x[0]) ? String.fromCharCode(64 + Number(x[0])) : x[0].toUpperCase()));
-  return { text: (text.slice(0, m.index) + text.slice((m.index ?? 0) + m[0].length)).trim(), answer: [...new Set(labels)] };
+/** One option label as printed in an answer ("(b)", "B", "2", "(3)"). */
+const ANS_LABEL = String.raw`(?:\(\s*[A-Da-d1-4]\s*\)|[A-Da-d](?![A-Za-z0-9])|[1-4](?![\d.]))`;
+const ANS_LABELS = String.raw`${ANS_LABEL}(?:\s*(?:,|&|and|\/)\s*${ANS_LABEL}){0,3}`;
+/** "Ans", "Answer", "Correct answer is", "The right option is", "Key:" (key needs a separator: "key A" is often content). */
+const ANS_MARK = String.raw`(?:(?:the\s+)?(?:correct|right)\s+(?:answer|option|choice|response)(?:\s+is)?|ans(?:wer)?(?:\s+is)?(?=[\s:.\-–=(])|key(?=\s*[:\-–=]))`;
+const EXPLANATION = /(?:^|\n|\s)(?:Explanation|Solution|Sol\.)\s*[:.\-–]\s*([\s\S]*)$/i;
+/** An answer printed INSIDE the text (merged into an option, after the options, "Correct answer is (B)"), up to the end of its line. */
+const ANS_INLINE = new RegExp(String.raw`(^|[\s.;,|)\]])(${ANS_MARK})\s*(?:[:\-–=]|\.(?!\d))?\s*(?:option\s*)?(${ANS_LABELS})\s*[.)]?[ \t]*([^\n]*?)[ \t]*(?=\n|$)`, "gi");
+/** "Correct answer is Mitochondria" — the answer written as the option's TEXT (used only when it equals one option exactly). */
+const ANS_TEXT = new RegExp(String.raw`(^|[\s.;,|)\]])(${ANS_MARK})\s*[:\-–=]?\s*([^\n]{1,200}?)\s*\.?[ \t]*(?=\n|$)`, "gi");
+
+export interface PrintedAnswerTake {
+  /** The text without the answer (and its explanation). */
+  text: string;
+  /** Canonical labels A–D. */
+  answer: string[];
+  /** The answer exactly as printed ("Correct answer is (b)"), or null. */
+  raw: string | null;
+  explanation: string | null;
+  /** Why something that looks like an answer was kept in the text, or a doubt about it. */
+  note: string | null;
+}
+
+const labelsOf = (v: string) => [...new Set([...v.matchAll(/[A-Da-d1-4]/g)].map((x) => (/\d/.test(x[0]) ? String.fromCharCode(64 + Number(x[0])) : x[0].toUpperCase())))];
+const normOption = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[\s.,;:()[\]'"`]/g, "");
+
+/**
+ * The answer printed in a question's own text, removed from it (it never stays inside an option):
+ * "Ans: B" on its own line, "(d) Lysosome Ans: (b)" merged into an option, "The correct answer is (2)",
+ * "Correct answer: Mitochondria" (only when it equals one option's text). An explanation printed after the
+ * answer ("Explanation: …") is kept separately. Text that merely contains the word "answer" is never touched.
+ */
+export function takePrintedAnswer(text: string): PrintedAnswerTake {
+  const take = (start: number, end: number, labels: string[], raw: string, note: string | null = null): PrintedAnswerTake => {
+    let rest = text.slice(end);
+    let explanation: string | null = null;
+    const ex = EXPLANATION.exec(rest);
+    if (ex && rest.slice(0, ex.index).trim() === "") {
+      explanation = ex[1].trim() || null;
+      rest = "";
+    }
+    return { text: (text.slice(0, start) + rest).replace(/[ \t]+\n/g, "\n").trim(), answer: labels, raw: raw.trim(), explanation, note };
+  };
+  const own = ANSWER_LINE.exec(text);
+  if (own) return take(own.index, own.index + own[0].length, labelsOf(own[1]), own[0]);
+  // Inside the option area only: an answer marker in the question text before the options is content.
+  const run = chooseRun(markersOf(text));
+  if (!run || run.length < 2) return { text, answer: [], raw: null, explanation: null, note: null };
+  const from = run[0].start;
+  const options = splitOptions(text).options;
+  let best: { start: number; end: number; labels: string[]; raw: string; note: string | null } | null = null;
+  for (const m of text.matchAll(ANS_INLINE)) {
+    const start = (m.index ?? 0) + m[1].length;
+    if (start < from) continue;
+    const labels = labelsOf(m[3]);
+    const trailing = m[4].trim();
+    if (trailing && !/^(?:explanation|solution|sol\.)/i.test(trailing)) {
+      // "(b) Mitochondria": the label with its option text — accepted only when that text is the option's.
+      const opt = labels.length === 1 ? options.find((o) => o.label === labels[0]) : undefined;
+      if (!opt || normOption(opt.text.replace(ANS_INLINE, "")).indexOf(normOption(trailing)) !== 0) continue;
+    }
+    best = { start, end: (m.index ?? 0) + m[0].length - (trailing && /^(?:explanation|solution|sol\.)/i.test(trailing) ? m[4].length : 0), labels, raw: m[0].slice(m[1].length), note: null };
+  }
+  if (best) return take(best.start, best.end, best.labels, best.raw, best.note);
+  for (const m of text.matchAll(ANS_TEXT)) {
+    const start = (m.index ?? 0) + m[1].length;
+    if (start < from) continue;
+    const value = normOption(m[3]);
+    if (!value) continue;
+    const before = splitOptions(text.slice(0, start)).options;
+    const hits = before.filter((o) => normOption(o.text) === value);
+    if (hits.length === 1) return take(start, (m.index ?? 0) + m[0].length, [hits[0].label], m[0].slice(m[1].length), `The printed answer "${m[3].trim()}" was matched to option ${hits[0].label} by its text.`);
+  }
+  return { text, answer: [], raw: null, explanation: null, note: null };
+}
+
+/**
+ * An answer (and explanation) left inside an EXTRACTED option or stem — e.g. a reader that kept
+ * "Lysosome Ans: B" as option D. Returns the cleaned question parts and what was moved, or null when
+ * nothing answer-shaped is found. Used by the full-paper verification (Verify 1), never on admin edits.
+ */
+export function mergedAnswerIn(q: Pick<ExtractedQuestion, "stem" | "options">): { options: ExtractedOption[]; stem: string; labels: string[]; raw: string; explanation: string | null; where: string } | null {
+  const whole = `${q.stem}\n${q.options.map((o) => `(${o.label}) ${o.text}`).join("\n")}`;
+  const r = takePrintedAnswer(whole);
+  if (!r.raw || !r.answer.length) return null;
+  const split = splitOptions(r.text);
+  if (split.options.length !== q.options.length) return null;
+  const changed = q.options.findIndex((o, i) => o.text.trim() !== split.options[i].text.trim());
+  if (changed < 0 && split.stem.trim() === q.stem.trim()) return null;
+  return {
+    stem: split.stem.trim() === q.stem.trim() ? q.stem : split.stem,
+    options: q.options.map((o, i) => ({ ...o, text: split.options[i].text })),
+    labels: r.answer,
+    raw: r.raw,
+    explanation: r.explanation,
+    where: changed >= 0 ? `option ${q.options[changed].label}` : "question text",
+  };
 }
 
 export function detectType(stem: string, optionCount: number, hasFifth: boolean): ExtractedType {
@@ -234,6 +326,7 @@ export function blockToQuestion(b: Block, page: number, method: string): { q: Ex
     confidence = 0.4;
     notes.push(split.options.length === 0 ? "No answer options were found." : `Only ${split.options.length} option(s) were found.`);
   }
+  if (answered.note) notes.push(answered.note);
   if (split.options.some((o) => o.text === "")) {
     confidence = Math.min(confidence, 0.6);
     notes.push("An option has no text (it may be an image).");
@@ -274,7 +367,8 @@ export function blockToQuestion(b: Block, page: number, method: string): { q: Ex
     figures: [],
     method,
     notes,
-    ...(b.heading ? { hints: { subject: b.heading } } : {}),
+    ...(b.heading || answered.explanation ? { hints: { ...(b.heading ? { subject: b.heading } : {}), ...(answered.explanation ? { explanation: answered.explanation } : {}) } } : {}),
+    ...(answered.raw ? { printedAnswerRaw: answered.raw } : {}),
   };
   return { q, split, text: answered.text };
 }

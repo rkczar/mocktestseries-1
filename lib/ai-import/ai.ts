@@ -119,6 +119,12 @@ export interface AiCallInput {
   jobId: string;
   /** Internal: a model chosen at run time for this one request (output fallback); the plan is unchanged. */
   override?: TaskChoice;
+  /**
+   * Full-paper Verify 2: the override is the administrator's confirmed model and must not be swapped for another
+   * one inside this call, nor written into the job's plan — an unusable model fails the request instead (the
+   * caller applies its own bounded, recorded fallback). Every cost guard still applies.
+   */
+  noReplace?: boolean;
   task: ImporterTask;
   /** Informational: the call sites pass the plan's model; the request always uses job.config.modelPlan. */
   models: string[];
@@ -447,8 +453,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   if ((rateLimitStreak.get(input.jobId)?.n ?? 0) >= RATE_LIMIT_STOP) throw rateLimitStop(input.jobId);
   const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { config: true } });
   const plan = planOf(job?.config);
-  if (!plan) throw new ImporterAiUnavailable("This job has no confirmed model plan. Nothing was sent.");
-  let choice = input.override ?? plan.tasks[SELECTION_TASK_OF[input.task]];
+  if (!plan && !(input.override && input.noReplace)) throw new ImporterAiUnavailable("This job has no confirmed model plan. Nothing was sent.");
+  let choice = input.override ?? plan!.tasks[SELECTION_TASK_OF[input.task]];
   if (!choice?.model) throw new ImporterAiUnavailable(`No model can be used for ${input.task}: ${choice?.reason ?? "not planned"}`);
   const apiKey = await resolveOpenRouterKey();
   if (!apiKey) throw new ImporterAiUnavailable("OpenRouter is not configured or is disabled (Admin → AI → Providers).");
@@ -466,8 +472,9 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
     const catalog = await loadModels([choice.model!, ...choice.fallbacks]);
     const p = modelProblem(catalog.get(choice.model!), input.needsVision, input.settings.importerModels);
     if (p) {
+      if (input.noReplace) throw new ImporterAiFailure(failureMessage("route_unavailable", `${choice.model} cannot be used now: ${p}. Nothing was sent`), "route_unavailable", choice.model);
       tried.push(choice.model!);
-      choice = await replaceModel(input, plan, choice, p, tried);
+      choice = await replaceModel(input, plan!, choice, p, tried);
       continue;
     }
     const route = await recheckRoute(input.jobId, choice, catalog.get(choice.model!), input.settings, fx.rate);
@@ -477,8 +484,9 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       if (route.price && choice.price) choice = { ...choice, price: { prompt: Math.max(choice.price.prompt, route.price.prompt), completion: Math.max(choice.price.completion, route.price.completion), image: Math.max(choice.price.image, route.price.image), request: Math.max(choice.price.request, route.price.request) } };
       break;
     }
+    if (input.noReplace) throw new ImporterAiFailure(failureMessage("route_unavailable", `${choice.model}: route re-check: ${route.problem}. Nothing was sent`), "route_unavailable", choice.model);
     tried.push(choice.model!);
-    choice = await replaceModel(input, plan, choice, `route re-check: ${route.problem}`, tried);
+    choice = await replaceModel(input, plan!, choice, `route re-check: ${route.problem}`, tried);
   }
 
   const inputTokens = estimateInputTokens(input.system, input.content);
@@ -573,10 +581,10 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         if (n >= RATE_LIMIT_STOP) throw rateLimitStop(input.jobId);
       } else rateLimitStreak.delete(input.jobId);
       // No route can serve the model under the privacy / price constraints: choose again (never silently pricier).
-      if (UNAVAILABLE_ERRORS.includes(e.category) && !billedUnknown && replacements === 0) {
+      if (UNAVAILABLE_ERRORS.includes(e.category) && !billedUnknown && replacements === 0 && !input.noReplace) {
         tried.push(requested);
         // OpenRouter's own words (e.g. "can handle the requested parameters"), not only the generic category text.
-        choice = await replaceModel(input, plan, choice, `OpenRouter: ${sanitize(e.message).slice(0, 160)}`, tried, true);
+        choice = await replaceModel(input, plan!, choice, `OpenRouter: ${sanitize(e.message).slice(0, 160)}`, tried, true);
         cost = priced(choice);
         replacements++;
         attempt--;

@@ -280,7 +280,7 @@ export function fileRemovalBlockedReason(status: string): string | null {
 // ---- Plain job status (Jobs page and the one-page importer) ----------------------------------
 
 /** Worker stages recorded as STAGE events while a job is PROCESSING. */
-export const JOB_STAGES = { PAGES: "Processing pages", EXTRACT: "Extracting questions", KEY: "Matching answer key", VERIFY: "Independent verification", VALIDATE: "Validating questions" } as const;
+export const JOB_STAGES = { PAGES: "Processing pages", EXTRACT: "Extracting questions", KEY: "Matching answer key", VERIFY: "Independent verification", VALIDATE: "Validating questions", VERIFY2: "Verify 2 — independent full-paper read" } as const;
 export type JobStage = keyof typeof JOB_STAGES;
 
 /** Independent verification of a job: second read of risky pages only (default), or of every page. */
@@ -389,6 +389,9 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   ANSWER_TYPE_CONFLICT: { label: "Answer does not fit the question type", blocking: true, publishBlocking: true },
   NUMBER_CONFLICT: { label: "Question number read twice", blocking: true, publishBlocking: true },
   QUESTION_TEXT_SUSPECT: { label: "Question text incomplete or a placeholder", blocking: true, publishBlocking: true },
+  ANSWER_IN_OPTION: { label: "Answer text inside an option or the question", blocking: true, publishBlocking: true },
+  REFERENCE_CONFLICT: { label: "Differs from the reference paper", blocking: false, publishBlocking: true },
+  VERIFY2_DISAGREES: { label: "Verify 2 (independent model) disagrees", blocking: true, publishBlocking: true },
 };
 
 export function issueLabel(code: string): string {

@@ -43,6 +43,9 @@
  * numbers as strings) | "latex" (unescaped LaTeX backslashes + trailing commas) | "badcodes" (classification codes
  * not on the list). config {keyHeader: {...}} is returned as the answer key's printed header.
  * stats.reasoning records each chat request's `reasoning` setting (null when absent).
+ * Full-paper verification fixtures (2026-10-22): a page fixture may carry `byModel: {id: {questions}}` (what that model
+ * reads); `text: [{match, questions, checker?, byModel?}]` answers page-reading requests WITHOUT an image (Verify 2 of a
+ * DOCX / sheet) with the first entry whose `match` string occurs in the request text.
  */
 import http from "node:http";
 import { readFileSync } from "node:fs";
@@ -280,8 +283,12 @@ const server = http.createServer(async (req, res) => {
         // Marker 5: a synthetic multi-page scanned paper — two questions per page, numbered from the page number.
         const pageNo = Number(/Page (\d+) of/.exec(text)?.[1] ?? 0);
         if (marker === "5") out = { questions: [1, 2].map((k) => ({ number: 2 * pageNo - 2 + k, type: "SINGLE_CORRECT", stem: `Synthetic scanned page ${pageNo}, item ${k}: which option is the synthetic answer?`, options: ["Alpha", "Beta", "Gamma", "Delta"].map((t, i) => ({ label: `(${"ABCD"[i]})`, text: `${t} ${pageNo}.${k}` })), figures: [], confidence: 0.95 })), answer_key: [], page_notes: "" };
-        else if (!fx) out = { questions: [], answer_key: [], page_notes: "nothing recognized" };
-        else out = { questions: id === "mockvision/checker" && fx.checker ? fx.checker.questions : fx.questions, answer_key: fx.answer_key ?? [], page_notes: "" };
+        else if (!image && Array.isArray(fixtures.text)) {
+          // Document text without a page image (Verify 2 of DOCX / sheets): the first fixture whose `match` is in the text.
+          const tf = fixtures.text.find((x) => text.includes(x.match));
+          out = tf ? { questions: (tf.byModel?.[id] ?? (id === "mockvision/checker" && tf.checker ? tf.checker : tf)).questions, answer_key: [], page_notes: "" } : { questions: [], answer_key: [], page_notes: "nothing recognized" };
+        } else if (!fx) out = { questions: [], answer_key: [], page_notes: "nothing recognized" };
+        else out = { questions: fx.byModel?.[id]?.questions ?? (id === "mockvision/checker" && fx.checker ? fx.checker.questions : fx.questions), answer_key: fx.answer_key ?? [], page_notes: "" };
       } else if (task === "key") {
         const marker = image ? await markerOf(image) : null;
         out = marker && fixtures.keys[marker] ? { ...(config.keyHeader ? { header: config.keyHeader } : {}), entries: fixtures.keys[marker].entries, unreadable: [] } : { entries: [], unreadable: ["nothing"] };

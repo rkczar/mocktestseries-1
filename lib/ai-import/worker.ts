@@ -12,7 +12,9 @@ import { runImport, type ImportPlan } from "@/lib/ai-import/adapter";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { ImporterAiUnavailable, ImporterBudgetError, resetOutputFailures, resetRateLimitStreak } from "@/lib/ai-import/ai";
 import { summarizeFailures } from "@/lib/ai-import/failure";
-import { jobQuality, reconcileJob } from "@/lib/ai-import/summary";
+import { jobQuality, reconcileJob, settleJobStatus } from "@/lib/ai-import/summary";
+import { runVerify2, type Verify2State } from "@/lib/ai-import/paper-verify";
+import { formatInr } from "@/lib/ai-engine/config";
 import { removeVaultDir } from "@/lib/ai-import/vault";
 import { autoCleanup } from "@/lib/ai-import/storage";
 import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
@@ -75,7 +77,55 @@ function makeContext(job: AiImportJob, settings: ImporterSettings, names: { exam
   };
 }
 
+/**
+ * A confirmed Verify 2 (full-paper independent read, lib/ai-import/paper-verify.ts). It never re-extracts and
+ * never changes the job's model plan; a cost / provider stop returns the job to review with what was verified so
+ * far (Verify 2 shows the remaining cost again before anything more is sent).
+ */
+async function verify2Job(job: AiImportJob, state: Verify2State): Promise<void> {
+  const current = await getImporterSettings();
+  const settings: ImporterSettings = { ...jobRunSettings(job.config, current), aiEnabled: current.aiEnabled };
+  const exam = await prisma.exam.findUnique({ where: { id: job.examId }, select: { name: true } });
+  if (job.status === AiImportJobStatus.QUEUED) {
+    if (!(await transition(job.id, [AiImportJobStatus.QUEUED], { status: AiImportJobStatus.PROCESSING, startedAt: job.startedAt ?? new Date() }))) return;
+    await logEvent(job.id, "VERIFY2_STARTED", `Verify 2 started with ${state.model} (maximum ${formatInr(state.maxInr)}).`);
+  }
+  const fresh = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id } });
+  const ctx = makeContext({ ...fresh, status: AiImportJobStatus.PROCESSING }, settings, { exam: exam?.name ?? "Exam", subject: null });
+  resetRateLimitStreak(job.id);
+  resetOutputFailures(job.id);
+  await stage(job.id, "VERIFY2");
+  const patchState = async (patch: Partial<Verify2State>) => {
+    const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { config: true } });
+    const cfg = (j.config as Record<string, unknown>) ?? {};
+    return { ...cfg, verify2: { ...(cfg.verify2 as Verify2State), ...patch } } as unknown as Prisma.InputJsonValue;
+  };
+  const deterministic = { ...ctx, settings: { ...settings, aiEnabled: false } };
+  try {
+    const counts = await runVerify2(ctx);
+    if (!(await ctx.stillRunning())) return;
+    await runPostProcessing(deterministic);
+    const after = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { spentInr: true } });
+    const actual = Math.max(0, after.spentInr - state.spentBeforeInr);
+    if (!(await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), errorMessage: null, config: await patchState({ status: "DONE", finishedAt: new Date().toISOString(), counts, stopReason: null }) }))) return;
+    await reconcileJob(job.id);
+    await settleJobStatus(job.id);
+    await logEvent(job.id, "VERIFY2_DONE", `Verify 2 finished (${state.model}): ${counts.VERIFIED} question(s) agree, ${counts.DISAGREE} disagree (manual correction), ${counts.NOT_FOUND} not found by the second read, ${counts.FAILED} without a result${counts.extra ? `, ${counts.extra} question(s) found only by the second read` : ""}. Actual cost ${formatInr(actual)} (estimated ${formatInr(state.estimateInr)}, maximum ${formatInr(state.maxInr)}).`, { ...counts, model: state.model, actualInr: actual, estimateInr: state.estimateInr, maxInr: state.maxInr });
+  } catch (e) {
+    const stop = e instanceof ImporterBudgetError || e instanceof ImporterAiUnavailable;
+    const message = e instanceof Error ? e.message.slice(0, 500) : "unexpected error";
+    if (!stop) console.error(`[ai-import] verify 2 of job ${job.id} failed: ${message}`);
+    await runPostProcessing(deterministic).catch(() => undefined);
+    if (await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), config: await patchState({ status: "STOPPED", stopReason: message, finishedAt: new Date().toISOString() }) })) {
+      await logEvent(job.id, "VERIFY2_STOPPED", `Verify 2 stopped: ${message} Questions verified so far keep their result; use Verify 2 again to see the cost of the rest before anything more is sent.`, { model: state.model });
+      await settleJobStatus(job.id);
+    }
+  }
+}
+
 async function processJob(job: AiImportJob): Promise<void> {
+  const verify2 = (job.config as { verify2?: Verify2State } | null)?.verify2;
+  if (verify2 && (verify2.status === "QUEUED" || verify2.status === "RUNNING")) return verify2Job(job, verify2);
   // Settings frozen at confirmation; the AI switch, models and budget follow the CURRENT settings
   // (an admin who turns AI off or lowers limits mid-job is obeyed).
   // Privacy: the stricter of the confirmed and the current settings. Budgets: the current (lowered limits apply).

@@ -47,6 +47,8 @@ import { ReconfigureError, reconfigureJob, reconfigurePreview } from "@/lib/ai-i
 import type { AutoConfigApplied, AutoConfigPreview, ReconfigurePreview, ReconfigureResult } from "@/lib/ai-import/autoconfig-types";
 import { CLEANUP_CATEGORIES, executeCleanup, findCandidates, findDuplicates, scanStorage, type CleanupCategory, type CleanupItem, type CleanupResult, type StorageReport } from "@/lib/ai-import/storage";
 import type { ImportMode } from "@/lib/ai-import/adapter";
+import { applyReferenceAnswers, importAndPublishEligible, requestVerify2, runVerify1, verify2Preview, type Verify1Result, type Verify2Preview, type Verify2Request } from "@/lib/ai-import/paper-verify";
+import { unlinkReference } from "@/lib/ai-import/reference";
 
 /**
  * AI Question Importer Server Actions. USE (upload, process, review, import,
@@ -631,4 +633,69 @@ export async function executeCleanupAction(categories: CleanupCategory[], keys: 
 
 export async function findDuplicatesAction(): Promise<ImporterResult<Awaited<ReturnType<typeof findDuplicates>>>> {
   return run(await requireManage(), async () => findDuplicates(), []);
+}
+
+// ---- Full-paper verification (Review Exceptions) ----------------------------------------------------
+
+/** Verify 1 — the whole job, deterministic (no AI, nothing paid). */
+export async function verifyPaperAction(jobId: string): Promise<ImporterResult<Verify1Result>> {
+  return run(await requireUse(), async (actorId) => runVerify1(jobId, actorId));
+}
+
+/** Verify 2 — the price (estimate + maximum) and the suitable models; nothing is sent. */
+export async function verify2PreviewAction(jobId: string, model: string | null): Promise<ImporterResult<Verify2Preview>> {
+  return run(await requireUse(), async () => verify2Preview(jobId, typeof model === "string" && model ? model : null));
+}
+
+/** Verify 2 — starts only when `confirmedMaxInr` covers the freshly computed maximum; otherwise the new price comes back. */
+export async function verify2StartAction(jobId: string, model: string, confirmedMaxInr: number | null): Promise<ImporterResult<Verify2Request>> {
+  return run(await requireUse(), async (actorId) => {
+    if (typeof model !== "string" || !model) throw new ImportJobError("Choose the model for Verify 2.");
+    return requestVerify2({ jobId, actorId, model, confirmedMaxInr: costOf(confirmedMaxInr) });
+  });
+}
+
+/** Import & Publish Eligible Questions — both verifications passed and every check clean (needs the publish right). */
+export async function importEligibleAction(jobId: string): Promise<ImporterResult<{ approved: number; requested: number; skipped: number }>> {
+  return run(await requirePublish(), async (actorId) => importAndPublishEligible(jobId, actorId));
+}
+
+/** Bulk subject / topic / subtopic correction (existing records of the job's exam only). */
+export async function bulkTaxonomyAction(ids: string[], subjectId: string, topicId: string | null, subTopicId: string | null): Promise<ImporterResult<{ updated: number; refused: string[] }>> {
+  return run(await requireUse(), async (actorId) => {
+    if (!Array.isArray(ids) || !ids.length) throw new ImportJobError("Select the questions to correct.");
+    if (typeof subjectId !== "string" || !subjectId) throw new ImportJobError("Choose a subject.");
+    let updated = 0;
+    const refused: string[] = [];
+    for (const id of ids.slice(0, 2000)) {
+      try {
+        await setTaxonomy(id, actorId, subjectId, topicId || null, subTopicId || null);
+        updated++;
+      } catch (e) {
+        if (!(e instanceof ImportJobError)) throw e;
+        refused.push(e.message);
+      }
+    }
+    const jobId = await jobOf(ids);
+    if (jobId) await revalidateQuestions(jobId, ids);
+    return { updated, refused: [...new Set(refused)].slice(0, 5) };
+  });
+}
+
+/** Takes the reference paper's answer for selected questions that have none (an explicit administrator decision). */
+export async function applyReferenceAnswersAction(jobId: string, ids: string[]): Promise<ImporterResult<{ applied: number }>> {
+  return run(await requireUse(), async (actorId) => {
+    // No selection = every question of the import that has no answer.
+    const target = Array.isArray(ids) && ids.length ? ids.slice(0, 2000) : (await prisma.aiImportQuestion.findMany({ where: { jobId, finalAnswer: { isEmpty: true } }, select: { id: true } })).map((q) => q.id);
+    const applied = await applyReferenceAnswers(jobId, target, actorId);
+    await revalidateQuestions(jobId, target);
+    return { applied };
+  });
+}
+
+export async function unlinkReferenceAction(jobId: string, refId: string): Promise<ImporterResult<null>> {
+  return run(await requireUse(), async (actorId) => {
+    await unlinkReference(jobId, refId, actorId);
+    return null;
+  });
 }

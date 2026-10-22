@@ -1,0 +1,226 @@
+import "server-only";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { AiImportJobStatus } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { parseImportFile } from "@/lib/bulk-import";
+import { getImporterSettings } from "@/lib/ai-import/settings";
+import { checkFilename, detectFile } from "@/lib/ai-import/detect";
+import { pageLayout, pdfInfo } from "@/lib/ai-import/pdf";
+import { readDocx } from "@/lib/ai-import/docx";
+import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
+import { blockToQuestion, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
+import { parseKeyText, sheetPairs } from "@/lib/ai-import/keys";
+import { readsAgree } from "@/lib/ai-import/process";
+import { adoptFile, removeVaultDir, tmpDir, vaultPath, workDir } from "@/lib/ai-import/vault";
+import { ImportJobError, logEvent } from "@/lib/ai-import/jobs";
+import type { ExtractedQuestion } from "@/lib/ai-import/types";
+
+/**
+ * Optional reference paper of an import (a previous paper, a clean copy, an answer-key document…).
+ *
+ * It is SUPPORTING EVIDENCE only: it is read locally (text layer, DOCX, spreadsheet — no AI, nothing paid),
+ * kept in the private vault with the import (REFERENCE_ADDED event: name, sha256, vault key, what was read)
+ * and compared with the extracted questions by the full-paper verification (Verify 1). Conflicts are shown;
+ * the source paper's content is never replaced. Unlinking a reference keeps its file.
+ */
+
+/** A request body above nginx's 20 MB limit never arrives; references are sent in one request. */
+export const REFERENCE_MAX_BYTES = 18 * 1024 * 1024;
+
+export interface ReferenceQuestion {
+  section: string;
+  number: number | null;
+  stem: string;
+  options: string[];
+  answer: string[];
+  pages: number[];
+}
+
+export interface ReferencePaper {
+  refId: string;
+  name: string;
+  ext: string;
+  kind: string;
+  sha256: string;
+  storageKey: string;
+  bytes: number;
+  pageCount: number | null;
+  uploadedAt: string;
+  uploadedById: string | null;
+  questions: ReferenceQuestion[];
+  key: { number: number; section: string; raw: string }[];
+  textChars: number;
+  /** What could not be read, in plain words (e.g. a scanned reference has no text without AI). */
+  note: string | null;
+}
+
+const FINISHED: AiImportJobStatus[] = [AiImportJobStatus.NEEDS_REVIEW, AiImportJobStatus.COMPLETED, AiImportJobStatus.COMPLETED_WITH_ISSUES];
+const OPEN_FOR_REFERENCE: AiImportJobStatus[] = [AiImportJobStatus.DRAFT, AiImportJobStatus.AWAITING_CONFIRMATION, AiImportJobStatus.PAUSED, AiImportJobStatus.PAUSED_BUDGET, AiImportJobStatus.FAILED, ...FINISHED];
+
+const strip = (s: string) => s.replace(/\s*⟦IMG:(?:\d+|missing)⟧\s*/g, " ").replace(/[ \t]{2,}/g, " ").trim();
+const toRef = (q: ExtractedQuestion): ReferenceQuestion => ({ section: q.section, number: q.number, stem: strip(q.stem).slice(0, 2000), options: q.options.map((o) => strip(o.text).slice(0, 500)), answer: q.printedAnswer, pages: q.pages });
+
+/** Reads a reference file locally (never AI). */
+async function readReference(full: string, kind: string, pages: number, jobId: string): Promise<Pick<ReferencePaper, "questions" | "key" | "textChars" | "note">> {
+  const questions: ReferenceQuestion[] = [];
+  let text = "";
+  let note: string | null = null;
+  if (kind === "pdf") {
+    const work = workDir(jobId);
+    await mkdir(work, { recursive: true, mode: 0o700 });
+    const state: NumberingState = { last: 0, sectionIdx: 1 };
+    let scanned = 0;
+    for (let p = 1; p <= pages; p++) {
+      const layout = await pageLayout(full, p, work);
+      const pageText = layout.lines.map((l) => l.text).join("\n");
+      text += `${pageText}\n`;
+      if (pageText.replace(/\s+/g, "").length < 80) {
+        scanned++;
+        continue;
+      }
+      for (const q of parsePdfPageLocal({ lines: layout.lines, images: layout.images }, p, state).questions) questions.push(toRef(q));
+    }
+    if (scanned) note = `${scanned} of ${pages} page(s) have no text layer (scanned) — they cannot be compared without paid AI, so they are kept as a file only.`;
+  } else if (kind === "docx") {
+    const doc = await readDocx(full);
+    text = doc.lines.map((l) => l.text).join("\n");
+    for (const b of splitQuestions(doc.lines).blocks) questions.push(toRef(blockToQuestion(b, 1, "DOCX").q));
+  } else if (kind === "xlsx" || kind === "csv") {
+    const bytes = await readFile(full);
+    try {
+      const parsed = await parseImportFile(new File([new Uint8Array(bytes)], `reference.${kind}`), "RICH");
+      for (const r of parsed.rows) {
+        const n = Number.parseInt(r.questionNumber ?? "", 10);
+        questions.push({ section: "", number: Number.isFinite(n) ? n : null, stem: r.questionText.trim().slice(0, 2000), options: (["A", "B", "C", "D"] as const).map((l) => String(r[`option${l}` as const] ?? "").trim().slice(0, 500)), answer: [...new Set([...String(r.correctAnswer ?? "").toUpperCase().matchAll(/[A-D]/g)].map((m) => m[0]))], pages: [1] });
+      }
+    } catch {
+      // Not a question sheet: maybe a two-column answer key.
+    }
+    const key = sheetPairs(bytes, kind);
+    return { questions, key, textChars: bytes.length, note: !questions.length && !key.length ? "No questions or answer-key rows were recognized in the spreadsheet." : null };
+  } else {
+    return { questions: [], key: [], textChars: 0, note: "An image has no text layer: it is kept with the import for side-by-side checks, but it cannot be compared without paid AI." };
+  }
+  const key = parseKeyText(text).map((p) => ({ number: p.number, section: p.section, raw: p.raw }));
+  if (!questions.length && !key.length && !note) note = "No numbered questions or answer-key entries were recognized in the reference.";
+  return { questions, key: questions.length >= 3 && key.length < 3 ? [] : key, textChars: text.length, note };
+}
+
+/** Stores and reads one reference file for an import. */
+export async function addReference(input: { jobId: string; actorId: string; name: string; bytes: Buffer }): Promise<ReferencePaper> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { status: true } });
+  if (!job) throw new ImportJobError("Import job not found.", 404);
+  if (!OPEN_FOR_REFERENCE.includes(job.status)) throw new ImportJobError("Add a reference paper before processing starts or once it has finished (not while it is running or after cancellation).", 409);
+  const name = checkFilename(input.name);
+  if (!name.ok) throw new ImportJobError(name.reason);
+  const settings = await getImporterSettings();
+  const max = Math.min(REFERENCE_MAX_BYTES, settings.limits.maxFileMb * 1024 * 1024);
+  if (!input.bytes.length) throw new ImportJobError("The file is empty.");
+  if (input.bytes.length > max) throw new ImportJobError(`A reference paper can be at most ${Math.floor(max / 1024 / 1024)} MB.`);
+  if ((await listReferences(input.jobId)).length >= 5) throw new ImportJobError("An import holds at most 5 reference papers.");
+  const id = `ref${randomBytes(8).toString("hex")}`;
+  const dir = tmpDir(id);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(/* turbopackIgnore: true */ dir, "upload");
+  try {
+    await writeFile(tmp, input.bytes, { mode: 0o600 });
+    const det = await detectFile(tmp, name.ext);
+    if (!det.ok) throw new ImportJobError(det.reason ?? "The file was refused.");
+    let pageCount: number | null = null;
+    if (det.kind === "pdf") {
+      const info = await pdfInfo(tmp);
+      if (info.encrypted) throw new ImportJobError("The PDF is password-protected or encrypted. Upload an unprotected copy.");
+      if (info.pages < 1) throw new ImportJobError("The PDF has no pages.");
+      if (info.pages > settings.limits.maxPagesPerFile) throw new ImportJobError(`The PDF has ${info.pages} pages; the limit is ${settings.limits.maxPagesPerFile}.`);
+      pageCount = info.pages;
+    } else if (det.kind === "png" || det.kind === "jpeg") pageCount = 1;
+    const kind = det.kind!;
+    const adopted = await adoptFile(tmp, "files", kind === "jpeg" ? "jpg" : name.ext);
+    const read = await readReference(vaultPath(adopted.key), kind, pageCount ?? 1, input.jobId).catch((e) => ({ questions: [], key: [], textChars: 0, note: `The reference could not be read (${e instanceof Error ? e.message.slice(0, 160) : "error"}); it is kept as a file only.` }));
+    const ref: ReferencePaper = { refId: id, name: input.name.trim().slice(0, 200), ext: name.ext, kind, sha256: adopted.sha256, storageKey: adopted.key, bytes: adopted.bytes, pageCount, uploadedAt: new Date().toISOString(), uploadedById: input.actorId, ...read };
+    await logEvent(input.jobId, "REFERENCE_ADDED", `Reference paper “${ref.name}” added (${kind.toUpperCase()}${pageCount ? `, ${pageCount} page${pageCount === 1 ? "" : "s"}` : ""}): ${ref.questions.length} question(s)${ref.key.length ? ` and ${ref.key.length} answer-key entr${ref.key.length === 1 ? "y" : "ies"}` : ""} read locally. Used as supporting evidence by Verify 1; the source paper is never changed by it.${ref.note ? ` ${ref.note}` : ""}`, ref as unknown as Record<string, unknown>, input.actorId);
+    await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_REFERENCE_ADDED", entityType: "AiImportJob", entityId: input.jobId, metadata: { refId: id, name: ref.name, sha256: ref.sha256, bytes: ref.bytes } } });
+    return ref;
+  } finally {
+    await removeVaultDir("tmp", id).catch(() => undefined);
+  }
+}
+
+/** The import's linked reference papers, oldest first (unlinked ones are left out; their files are kept). */
+export async function listReferences(jobId: string): Promise<ReferencePaper[]> {
+  const events = await prisma.aiImportEvent.findMany({ where: { jobId, type: { in: ["REFERENCE_ADDED", "REFERENCE_UNLINKED"] } }, orderBy: { createdAt: "asc" }, select: { type: true, data: true } });
+  const unlinked = new Set(events.filter((e) => e.type === "REFERENCE_UNLINKED").map((e) => (e.data as { refId?: string } | null)?.refId));
+  return events.filter((e) => e.type === "REFERENCE_ADDED" && !unlinked.has((e.data as { refId?: string } | null)?.refId)).map((e) => e.data as unknown as ReferencePaper);
+}
+
+export async function unlinkReference(jobId: string, refId: string, actorId: string): Promise<void> {
+  const ref = (await listReferences(jobId)).find((r) => r.refId === refId);
+  if (!ref) throw new ImportJobError("That reference paper is not linked to this import.", 404);
+  await logEvent(jobId, "REFERENCE_UNLINKED", `Reference paper “${ref.name}” unlinked (its file is kept in the vault).`, { refId }, actorId);
+}
+
+// ---- Comparison (used by Verify 1) ----------------------------------------------------------------------
+
+const norm = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[{}\s.,;:()[\]'"`]/g, "");
+export function textSimilarity(x: string, y: string): number {
+  const A = norm(x);
+  const B = norm(y);
+  if (!A && !B) return 1;
+  const grams = (s: string) => new Set(Array.from({ length: Math.max(0, s.length - 2) }, (_, i) => s.slice(i, i + 3)));
+  const ga = grams(A);
+  const gb = grams(B);
+  let inter = 0;
+  for (const g of ga) if (gb.has(g)) inter++;
+  return ga.size + gb.size ? (2 * inter) / (ga.size + gb.size) : A === B ? 1 : 0;
+}
+
+export interface ReferenceComparison {
+  matched: string | null;
+  conflicts: string[];
+  /** The reference's answer for a question that has none (shown, applied only by an administrator). */
+  suggestedAnswer: string[];
+}
+
+const refLabel = (r: { section: string; number: number | null }) => `${r.section ? `${r.section} ` : ""}Q${r.number ?? "?"}`;
+
+/**
+ * One question compared with a reference: matched by section + number, else by text (≥ 75 % similar, then the
+ * numbering difference is a conflict). Question wording, options, numbers / symbols and the answer are compared.
+ */
+export function compareWithReference(q: ExtractedQuestion, answer: string[], ref: Pick<ReferencePaper, "questions" | "key">): ReferenceComparison {
+  const out: ReferenceComparison = { matched: null, conflicts: [], suggestedAnswer: [] };
+  let twin = ref.questions.find((r) => r.number === q.number && r.section === q.section && textSimilarity(r.stem, q.stem) >= 0.5) ?? null;
+  if (!twin && q.stem.trim()) {
+    let best: { r: ReferenceQuestion; s: number } | null = null;
+    for (const r of ref.questions) {
+      const s = textSimilarity(r.stem, q.stem);
+      if (s >= 0.75 && (!best || s > best.s)) best = { r, s };
+    }
+    if (best) {
+      twin = best.r;
+      if (best.r.number !== q.number || best.r.section !== q.section) out.conflicts.push(`The reference numbers this question ${refLabel(best.r)} (here ${refLabel(q)}) — check the question order.`);
+    }
+  }
+  const keyEntry = ref.key.find((k) => k.number === q.number && k.section === q.section) ?? null;
+  if (twin) {
+    out.matched = refLabel(twin);
+    const asQuestion: ExtractedQuestion = { ...q, stem: twin.stem, options: twin.options.map((t, i) => ({ label: String.fromCharCode(65 + i), printed: String.fromCharCode(65 + i), text: t })), printedAnswer: twin.answer, figures: q.figures };
+    const v = readsAgree(q, asQuestion);
+    if (!v.agree) {
+      for (const part of v.detail.split("; ")) if (!/printed answer|figure/.test(part)) out.conflicts.push(`Reference: ${part}.`);
+    }
+  }
+  const refAnswer = twin?.answer.length ? twin.answer : keyEntry ? [...new Set([...keyEntry.raw.toUpperCase().matchAll(/[A-D1-4]/g)].map((m) => (/\d/.test(m[0]) ? String.fromCharCode(64 + Number(m[0])) : m[0])))] : [];
+  if (refAnswer.length) {
+    if (answer.length && [...answer].sort().join() !== [...refAnswer].sort().join()) out.conflicts.push(`The reference gives answer ${refAnswer.join(", ")}, this question has ${answer.join(", ")}.`);
+    else if (!answer.length) out.suggestedAnswer = refAnswer;
+  }
+  return out;
+}
+
+/** Reference questions with no counterpart in the source (possible missing questions — never added automatically). */
+export function referenceOnly(ref: Pick<ReferencePaper, "questions">, questions: ExtractedQuestion[]): string[] {
+  return ref.questions.filter((r) => !questions.some((q) => (q.number === r.number && q.section === r.section) || textSimilarity(q.stem, r.stem) >= 0.75)).map(refLabel);
+}
