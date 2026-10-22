@@ -13,8 +13,13 @@
  * (refresh fails), noSite, ga4Forbidden (echoes the bearer token in its error),
  * gscGarbage (non-JSON).
  *
- * GET /__mock/stats → request counts + revoked tokens; GET /__mock/secrets →
- * every secret value issued or received (for the leak scan).
+ * Revocation is GRANT-WIDE, like Google: revoking any token of an account ends
+ * that account's whole grant (every refresh + access token issued to it so far);
+ * a later consent starts a new grant.
+ *
+ * GET /__mock/stats → request counts + revoked tokens; GET /__mock/grants →
+ * per-account grant epoch + live refresh tokens; GET /__mock/secrets → every
+ * secret value issued or received (for the leak scan).
  */
 import http from "node:http";
 import crypto from "node:crypto";
@@ -29,8 +34,9 @@ const state = {
   scenario: "ok",
   email: "seo-owner@example.test",
   codes: new Map(), // code -> { challenge, nonce, redirectUri, used }
-  refresh: new Map(), // refresh -> { revoked }
-  access: new Set(),
+  accounts: new Map(), // email -> { epoch } — bumping the epoch revokes the whole grant
+  refresh: new Map(), // refresh -> { email, epoch }
+  access: new Map(), // access -> { email, epoch }
   secrets: new Set([MOCK_CLIENT_SECRET]),
   revoked: [],
   stats: {},
@@ -40,6 +46,13 @@ const state = {
 const rand = (n = 24) => crypto.randomBytes(n).toString("base64url");
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const bump = (k) => (state.stats[k] = (state.stats[k] ?? 0) + 1);
+const account = (email) => {
+  if (!state.accounts.has(email)) state.accounts.set(email, { epoch: 0 });
+  return state.accounts.get(email);
+};
+const issue = (map, token, email) => map.set(token, { email, epoch: account(email).epoch });
+const live = (rec) => Boolean(rec && account(rec.email).epoch === rec.epoch);
+const subOf = (email) => BigInt(`0x${crypto.createHash("sha256").update(email).digest("hex").slice(0, 15)}`).toString();
 
 function send(res, status, body, headers = {}) {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -108,6 +121,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === "/__mock/stats") return send(res, 200, { scenario: state.scenario, stats: state.stats, revoked: state.revoked, urlLeaks: state.urlLeaks });
     if (p === "/__mock/secrets") return send(res, 200, { secrets: [...state.secrets] });
+    if (p === "/__mock/grants") {
+      const grants = {};
+      for (const [email, a] of state.accounts) grants[email] = { epoch: a.epoch, liveRefresh: [...state.refresh.values()].filter((r) => r.email === email && live(r)).length };
+      return send(res, 200, { grants });
+    }
 
     if (p === "/o/oauth2/v2/auth" && req.method === "GET") {
       const q = url.searchParams;
@@ -125,7 +143,7 @@ const server = http.createServer(async (req, res) => {
       else {
         const code = `4/0Mock${rand(30)}`;
         state.secrets.add(code);
-        state.codes.set(code, { challenge: q.get("code_challenge"), nonce: q.get("nonce"), redirectUri, used: false });
+        state.codes.set(code, { challenge: q.get("code_challenge"), nonce: q.get("nonce"), redirectUri, used: false, email: state.email });
         back.searchParams.set("code", code);
         back.searchParams.set("scope", scopes.join(" "));
       }
@@ -147,16 +165,16 @@ const server = http.createServer(async (req, res) => {
         if (challenge !== entry.challenge) return send(res, 400, { error: "invalid_grant", error_description: "PKCE verification failed." });
         const access = `ya29.Mock${rand()}`;
         const refresh = `1//0Mock${rand()}`;
-        state.access.add(access);
+        issue(state.access, access, entry.email);
         state.secrets.add(access);
         state.secrets.add(refresh);
-        state.refresh.set(refresh, { revoked: false });
+        if (state.scenario !== "noRefresh") issue(state.refresh, refresh, entry.email);
         const now = Math.floor(Date.now() / 1000);
         const idToken = `${b64({ alg: "RS256", typ: "JWT" })}.${b64({
           iss: "https://accounts.google.com",
           aud: state.scenario === "badAud" ? "someone-else.apps.googleusercontent.com" : MOCK_CLIENT_ID,
-          sub: "1234567890",
-          email: state.email,
+          sub: subOf(entry.email),
+          email: entry.email,
           email_verified: state.scenario !== "unverified",
           nonce: entry.nonce,
           iat: now,
@@ -175,9 +193,9 @@ const server = http.createServer(async (req, res) => {
       }
       if (f.get("grant_type") === "refresh_token") {
         const entry = state.refresh.get(f.get("refresh_token"));
-        if (state.scenario === "invalidGrant" || !entry || entry.revoked) return send(res, 400, { error: "invalid_grant", error_description: "Token has been expired or revoked." });
+        if (state.scenario === "invalidGrant" || !live(entry)) return send(res, 400, { error: "invalid_grant", error_description: "Token has been expired or revoked." });
         const access = `ya29.Mock${rand()}`;
-        state.access.add(access);
+        issue(state.access, access, entry.email);
         state.secrets.add(access);
         return send(res, 200, { access_token: access, expires_in: 3599, token_type: "Bearer", scope: `${SCOPE_GSC} ${SCOPE_GA4}` });
       }
@@ -186,14 +204,17 @@ const server = http.createServer(async (req, res) => {
 
     if (p === "/revoke" && req.method === "POST") {
       const token = new URLSearchParams(await readBody(req)).get("token");
-      if (token && state.refresh.has(token)) state.refresh.get(token).revoked = true;
-      if (token) state.revoked.push(token.slice(0, 8));
-      return send(res, token ? 200 : 400, {});
+      const rec = state.refresh.get(token) ?? state.access.get(token);
+      if (!rec) return send(res, 400, { error: "invalid_token" });
+      // Grant-wide: every token this account was issued so far stops working.
+      if (live(rec)) account(rec.email).epoch++;
+      state.revoked.push(rec.email);
+      return send(res, 200, {});
     }
 
     const token = bearer(req);
     if (p.startsWith("/webmasters/v3/") || p.startsWith("/v1beta/")) {
-      if (!token || !state.access.has(token)) return send(res, 401, { error: { code: 401, status: "UNAUTHENTICATED", message: "Invalid Credentials" } });
+      if (!token || !live(state.access.get(token))) return send(res, 401, { error: { code: 401, status: "UNAUTHENTICATED", message: "Invalid Credentials" } });
     }
     if (p === "/webmasters/v3/sites" && req.method === "GET") {
       if (state.scenario === "gscGarbage") return send(res, 200, "<html>oops</html>");

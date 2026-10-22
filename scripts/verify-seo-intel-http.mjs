@@ -194,30 +194,83 @@ check("MASTER B completing A's flow → other-admin", /reason=other-admin/.test(
 check("connection still A's", (await setting("seo.google.oauth")).refreshTokenCipher === stored1.refreshTokenCipher);
 await master.ctx.clearCookies({ name: "mts-seo-google-oauth" });
 
-// ---- Failure scenarios (each leaves the existing connection in place) ---------------------------
-for (const [scenario, reason] of [
+// ---- Grant safety: Google (and the mock) revoke an account's WHOLE grant -------------------------
+const ACC_A = "seo-owner@example.test";
+const ACC_B = "seo-owner2@example.test";
+const grants = async () => (await mock("/__mock/grants")).grants;
+async function syncOk() {
+  await resetThrottle();
+  await open(master.page);
+  await master.page.getByRole("button", { name: "Sync now" }).click();
+  await master.page.getByTestId("seo-intel-controls").getByRole("status").waitFor({ timeout: 30000 });
+  return (await setting("seo.intel.snapshot"))?.lastSync?.ok === true;
+}
+const FAILS = [
   ["denied", "denied"],
   ["noRefresh", "no-refresh-token"],
   ["missingScope", "missing-scopes"],
   ["badAud", "id-token"],
   ["unverified", "id-token"],
   ["exchangeError", "exchange"],
-]) {
-  await mock("/__mock/control", { scenario });
+];
+
+// Same account, successful reconnect: new token stored, old grant NOT revoked, both work.
+let g0 = await grants();
+await mock("/__mock/control", { scenario: "ok", email: ACC_A });
+r = await connect(master.page);
+let cur = await setting("seo.google.oauth");
+let g1 = await grants();
+check("same-account reconnect → connected, new token stored", r.status === "connected" && cur.accountEmail === ACC_A && cur.refreshTokenCipher !== stored1.refreshTokenCipher && Boolean(cur.accountSub));
+check("same-account reconnect did not revoke the grant", g1[ACC_A].epoch === g0[ACC_A].epoch && g1[ACC_A].liveRefresh >= 2, JSON.stringify({ g0: g0[ACC_A], g1: g1[ACC_A] }));
+check("same-account reconnect: new connection syncs", await syncOk());
+
+// Same account, failed reconnect: live connection untouched and still working.
+for (const [scenario, reason] of FAILS) {
+  const before = await setting("seo.google.oauth");
+  const gb = await grants();
+  await mock("/__mock/control", { scenario, email: ACC_A });
   r = await connect(master.page);
   const after = await setting("seo.google.oauth");
-  check(`${scenario} → ${reason}, message shown, connection kept`, r.status === "error" && r.reason === reason && (await master.page.content()).includes('data-testid="seo-intel-callback"') && after.refreshTokenCipher === stored1.refreshTokenCipher, JSON.stringify(r));
+  const ga = await grants();
+  check(`same-account ${scenario} → ${reason}, message shown, connection kept`, r.status === "error" && r.reason === reason && (await master.page.content()).includes('data-testid="seo-intel-callback"') && after.refreshTokenCipher === before.refreshTokenCipher, JSON.stringify(r));
+  check(`same-account ${scenario}: grant not revoked`, ga[ACC_A].epoch === gb[ACC_A].epoch);
+  await mock("/__mock/control", { scenario: "ok" });
+  check(`same-account ${scenario}: existing connection still syncs`, await syncOk());
+}
+
+// Different account, failed reconnect: live connection (account A) untouched and still working.
+for (const [scenario, reason] of FAILS.filter(([sc]) => ["noRefresh", "missingScope", "badAud", "unverified"].includes(sc))) {
+  const before = await setting("seo.google.oauth");
+  const gb = await grants();
+  await mock("/__mock/control", { scenario, email: ACC_B });
+  r = await connect(master.page);
+  const after = await setting("seo.google.oauth");
+  const ga = await grants();
+  check(`other-account ${scenario} → ${reason}, A kept`, r.status === "error" && r.reason === reason && after.refreshTokenCipher === before.refreshTokenCipher && after.accountEmail === ACC_A, JSON.stringify(r));
+  check(`other-account ${scenario}: A's grant not revoked`, ga[ACC_A].epoch === gb[ACC_A].epoch);
+  if (scenario === "missingScope" || scenario === "noRefresh") {
+    // Verified as a different account → its unusable tokens are cleaned up (B's grant only).
+    check(`other-account ${scenario}: B's unusable grant revoked`, (ga[ACC_B]?.epoch ?? 0) > (gb[ACC_B]?.epoch ?? 0));
+  } else {
+    // Identity not verifiable → never revoked while a connection exists.
+    check(`other-account ${scenario}: unverifiable tokens left alone`, (ga[ACC_B]?.epoch ?? 0) === (gb[ACC_B]?.epoch ?? 0));
+  }
+  await mock("/__mock/control", { scenario: "ok" });
+  check(`other-account ${scenario}: A still syncs`, await syncOk());
 }
 const failAudit = (await db.query(`select metadata from "AuditLog" where action='SEO_GOOGLE_CONNECT_FAILED'`)).rows;
-check("connect failures audited", failAudit.length >= 6);
+check("connect failures audited", failAudit.length >= 10);
 
-// ---- Reconnect replaces + revokes the old grant -------------------------------------------------
-const revokedBefore = (await mock("/__mock/stats")).revoked.length;
-await mock("/__mock/control", { scenario: "ok", email: "seo-owner2@example.test" });
+// Different account, successful reconnect: stored first, THEN A's old grant revoked; B works.
+g0 = await grants();
+await mock("/__mock/control", { scenario: "ok", email: ACC_B });
 r = await connect(master2.page);
 const stored2 = await setting("seo.google.oauth");
-check("MASTER B reconnect replaces the shared connection", r.status === "connected" && stored2.accountEmail === "seo-owner2@example.test" && stored2.connectedById === F.admins.master2.id);
-check("old refresh token revoked at Google", (await mock("/__mock/stats")).revoked.length > revokedBefore);
+g1 = await grants();
+check("MASTER B reconnect with account B replaces the shared connection", r.status === "connected" && stored2.accountEmail === ACC_B && stored2.connectedById === F.admins.master2.id);
+check("account A's old grant revoked at Google", g1[ACC_A].epoch > g0[ACC_A].epoch && g1[ACC_A].liveRefresh === 0);
+check("account B's new grant untouched", g1[ACC_B].epoch === g0[ACC_B].epoch && g1[ACC_B].liveRefresh >= 1);
+check("account B connection syncs", await syncOk());
 
 // ---- Partial failures + redaction --------------------------------------------------------------
 await resetThrottle();
@@ -261,8 +314,18 @@ await master.page.getByText(/^Disconnected\./).waitFor({ timeout: 30000 });
 const stored3 = await setting("seo.google.oauth");
 check("disconnect removes refresh token, keeps client", !stored3.refreshTokenCipher && !stored3.accountEmail && String(stored3.clientSecretCipher).startsWith("v1:"));
 check("disconnect revoked at Google", (await mock("/__mock/stats")).revoked.length > revokedBeforeDisc);
+check("disconnect ended account B's whole grant", (await grants())[ACC_B].liveRefresh === 0);
 html = await open(master.page);
 check("page shows Not connected", html.includes("Not connected"));
+// No live connection: an unusable token from a failed attempt is revoked (nothing to protect).
+{
+  const gb = await grants();
+  await mock("/__mock/control", { scenario: "missingScope", email: ACC_A });
+  r = await connect(master.page);
+  const ga = await grants();
+  check("failed connect with no live connection → unusable grant revoked, still not connected", r.reason === "missing-scopes" && ga[ACC_A].epoch > gb[ACC_A].epoch && !(await setting("seo.google.oauth")).refreshTokenCipher);
+  await mock("/__mock/control", { scenario: "ok" });
+}
 
 // ---- Isolation + leak scan --------------------------------------------------------------------
 check("student Google login config untouched", JSON.stringify(await setting("auth.providers")) === studentBefore);

@@ -88,6 +88,8 @@ interface StoredConnection {
   credentialsSetAt?: string;
   refreshTokenCipher?: string;
   accountEmail?: string;
+  /** Google's stable account id (ID token `sub`) — decides whether a reconnect is the same grant. */
+  accountSub?: string;
   grantedScopes?: string[];
   connectedAt?: string;
   connectedById?: string;
@@ -353,7 +355,9 @@ function decodeIdToken(idToken: string): Record<string, unknown> | null {
 /**
  * Finishes the code flow for the signed-in MASTER_ADMIN `adminId`. Validates
  * state/expiry/initiator first, then exchanges the code (with the PKCE
- * verifier) and stores only the encrypted refresh token + account email.
+ * verifier) and stores only the encrypted refresh token + account identity.
+ * The live connection is never revoked before its replacement is stored, and
+ * never at all when the replacement is the same Google account (same grant).
  */
 export async function completeAuthorization(input: {
   adminId: string;
@@ -396,51 +400,89 @@ export async function completeAuthorization(input: {
   const allSecrets = [...secrets, refreshToken, accessToken, typeof tok.id_token === "string" ? tok.id_token : null];
   if (r.status !== 200 || !accessToken) return { ok: false, reason: "exchange", detail: googleErrorText(r, allSecrets) };
 
+  // 1. Who granted this? Checked before anything is kept or revoked.
+  const identity = typeof tok.id_token === "string" ? verifiedIdentity(tok.id_token, creds.clientId, saved.n) : null;
   const scopes = typeof tok.scope === "string" ? tok.scope.split(/\s+/).filter(Boolean) : [];
   const missing = REQUIRED_SCOPES.filter((s) => !scopes.includes(s));
-  if (missing.length) {
-    await revokeToken(refreshToken ?? accessToken);
-    return { ok: false, reason: "missing-scopes", detail: missing.map((s) => s.split("/").pop()).join(", ") };
-  }
-  if (!refreshToken) {
-    await revokeToken(accessToken);
-    return { ok: false, reason: "no-refresh-token" };
+
+  // 2. Anything unusable is discarded — without ever touching the live connection's grant.
+  const failure: { reason: CallbackFailure; detail?: string } | null = !identity
+    ? { reason: "id-token" }
+    : missing.length
+      ? { reason: "missing-scopes", detail: missing.map((s) => s.split("/").pop()).join(", ") }
+      : !refreshToken
+        ? { reason: "no-refresh-token" }
+        : null;
+  if (failure) {
+    await discardUnusedTokens(refreshToken ?? accessToken, identity);
+    return { ok: false, ...failure };
   }
 
-  const claims = typeof tok.id_token === "string" ? decodeIdToken(tok.id_token) : null;
-  // The ID token came straight from Google's token endpoint over TLS (OIDC Core
-  // 3.1.3.7), so its claims are checked rather than its signature.
-  const email = typeof claims?.email === "string" ? claims.email.toLowerCase() : null;
-  const claimsOk =
-    claims &&
-    ID_TOKEN_ISSUERS.has(String(claims.iss)) &&
-    claims.aud === creds.clientId &&
-    claims.nonce === saved.n &&
-    typeof claims.exp === "number" &&
-    claims.exp * 1000 > Date.now() - 60_000 &&
-    claims.email_verified === true &&
-    email &&
-    /^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email);
-  if (!claimsOk) {
-    await revokeToken(refreshToken);
-    return { ok: false, reason: "id-token" };
-  }
-
-  // Re-read just before writing: replaces any earlier connection (one shared connection).
+  // 3. Persist the replacement first (re-read just before writing: one shared connection) …
   const previous = await readStored();
   const oldRefresh = decryptSecret(previous.refreshTokenCipher);
   await writeStored({
     ...previous,
-    refreshTokenCipher: encryptSecret(refreshToken),
-    accountEmail: email!,
+    refreshTokenCipher: encryptSecret(refreshToken!),
+    accountEmail: identity!.email,
+    accountSub: identity!.sub,
     grantedScopes: scopes,
     connectedAt: new Date().toISOString(),
     connectedById: input.adminId,
     needsReconnect: false,
     needsReconnectReason: undefined,
   });
-  if (oldRefresh && oldRefresh !== refreshToken) await revokeToken(oldRefresh);
-  return { ok: true, email: email!, scopes };
+  // 4. … and only then end the old grant — and only when it belongs to a DIFFERENT
+  // Google account. Same account = same grant: revoking the old token would also
+  // kill the one just stored, so it is simply left to expire unused.
+  if (oldRefresh && previous.refreshTokenCipher && !sameAccount(previous, identity!)) await revokeToken(oldRefresh);
+  return { ok: true, email: identity!.email, scopes };
+}
+
+interface GoogleIdentity {
+  sub: string;
+  email: string;
+}
+
+/**
+ * The account behind an ID token, or null if its claims don't check out. The
+ * token came straight from Google's token endpoint over TLS (OIDC Core
+ * 3.1.3.7), so its claims are checked rather than its signature.
+ */
+function verifiedIdentity(idToken: string, clientId: string, nonce: string): GoogleIdentity | null {
+  const claims = decodeIdToken(idToken);
+  if (!claims) return null;
+  const email = typeof claims.email === "string" ? claims.email.toLowerCase() : null;
+  const sub = typeof claims.sub === "string" && /^[A-Za-z0-9_-]{1,255}$/.test(claims.sub) ? claims.sub : null;
+  const ok =
+    ID_TOKEN_ISSUERS.has(String(claims.iss)) &&
+    claims.aud === clientId &&
+    claims.nonce === nonce &&
+    typeof claims.exp === "number" &&
+    claims.exp * 1000 > Date.now() - 60_000 &&
+    claims.email_verified === true &&
+    sub &&
+    email &&
+    /^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email);
+  return ok ? { sub: sub!, email: email! } : null;
+}
+
+/** Same Google account as the stored connection (by stable `sub`; email only for a connection stored without one). */
+function sameAccount(stored: StoredConnection, identity: GoogleIdentity): boolean {
+  return stored.accountSub ? stored.accountSub === identity.sub : stored.accountEmail === identity.email;
+}
+
+/**
+ * Google revokes the user's WHOLE grant for this Cloud project when any one of
+ * its tokens is revoked — every refresh token of that account, including the
+ * one the live connection uses. So a token we won't keep is revoked only when
+ * there is no live connection, or when it provably belongs to a different
+ * account. Same or unverifiable account: left alone (it expires unused; the
+ * owner can remove it at myaccount.google.com/permissions).
+ */
+async function discardUnusedTokens(token: string | null, identity: GoogleIdentity | null): Promise<void> {
+  const live = await readStored();
+  if (!live.refreshTokenCipher || (identity && !sameAccount(live, identity))) await revokeToken(token);
 }
 
 // ---- Disconnect / access token --------------------------------------------------------------
