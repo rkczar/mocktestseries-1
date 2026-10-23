@@ -35,14 +35,17 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const data = await loadPublicExamAnalysis(slug);
   if (!data) return {};
   const { exam, analysis: a, short } = data;
-  const top = a.spreads.slice(0, 3);
+  // Top three subjects, or two when three would push the snippet past 160 characters.
+  const describe = (count: number) =>
+    `${short} subject-wise weightage from ${a.totalQuestions} PYQs (${span(a)}): ${a.spreads
+      .slice(0, count)
+      .map((s) => `${s.name} ${formatShare(s.share)}`)
+      .join(", ")}. Not a ${exam.year ?? "future"} forecast.`;
   return examPageMetadata({
     exam,
     path: examInsightPath(data.slug, "weightage"),
     title: `${short} Subject-Wise Weightage (${span(a)} PYQs)`,
-    description: `${short} subject-wise weightage from ${a.totalQuestions} PYQs (${span(a)}): ${top
-      .map((s) => `${s.name} ${formatShare(s.share)}`)
-      .join(", ")}. Historical data, not a ${exam.year ?? "future"} forecast.`,
+    description: describe(3).length <= 160 ? describe(3) : describe(2),
   });
 }
 

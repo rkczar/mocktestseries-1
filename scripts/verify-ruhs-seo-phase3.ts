@@ -151,7 +151,7 @@ async function main() {
   });
   await check("2024 page says MODRE-2024, held 27 April 2025, with the official source; other years don't", async () => {
     const { html } = await get(`${HUB}/previous-year-papers/2024`);
-    assert.match(titleOf(html), /2024 Question Paper \(Exam Held April 2025\)/);
+    assert.match(titleOf(html), /2024 Question Paper \(Held 27 April 2025\)/);
     const body = text(html);
     assert.ok(body.includes("MODRE-2024") && body.includes("27 April 2025"));
     assert.ok(html.includes("old.ruhsraj.org/cms/uploads/2025/05/Final_Answer_Key_After_Expert_Opinion__8154.pdf"));

@@ -11,7 +11,11 @@
  * {"scenario": "..."}): ok, denied, noRefresh, missingScope, badAud, unverified,
  * exchangeError (echoes the code in its error, to prove redaction), invalidGrant
  * (refresh fails), noSite, ga4Forbidden (echoes the bearer token in its error),
- * gscGarbage (non-JSON).
+ * gscGarbage (non-JSON), gscPage2Error (Search Console 500 for any startRow > 0, to
+ * prove a failure mid-pagination keeps the last good data).
+ * gscRows (POST /__mock/control {"gscRows": n}): how many rows each Search Console
+ * table has (default 5); every searchAnalytics and GA4 request body is kept for
+ * GET /__mock/requests.
  *
  * Revocation is GRANT-WIDE, like Google: revoking any token of an account ends
  * that account's whole grant (every refresh + access token issued to it so far);
@@ -49,6 +53,9 @@ const state = {
   secrets: new Set([MOCK_CLIENT_SECRET, MOCK_PSI_KEY]),
   psiScenario: "ok",
   psiCalls: [],
+  gscRows: 5,
+  gscBodies: [],
+  ga4Bodies: [],
   revoked: [],
   stats: {},
   urlLeaks: [],
@@ -82,20 +89,27 @@ function bearer(req) {
   return h.startsWith("Bearer ") ? h.slice(7) : null;
 }
 
-const gscRows = (dims, limit) => {
+const DEVICES = ["MOBILE", "DESKTOP", "TABLET"];
+const COUNTRIES = ["ind", "usa", "are", "npl"];
+const gscKey = (kind, i) =>
+  kind === "date"
+    ? new Date(Date.UTC(2026, 8, 20 + i)).toISOString().slice(0, 10)
+    : kind === "query"
+      ? i === 4
+        ? '=HYPERLINK("http://evil.example","click")' // CSV formula-injection probe
+        : `ruhs mo mock test ${i + 1}`
+      : kind === "device"
+        ? DEVICES[i]
+        : kind === "country"
+          ? COUNTRIES[i]
+          : `https://mocktestseries.in/exams/sample-${(i % 7) + 1}`;
+const gscRows = (dims, limit, startRow = 0) => {
   if (dims.length === 0) return [{ clicks: 1234, impressions: 56789, ctr: 0.0217, position: 14.3 }];
   const kind = dims[0];
+  const total = kind === "date" ? 28 : kind === "device" ? DEVICES.length : kind === "country" ? COUNTRIES.length : state.gscRows;
   const out = [];
-  for (let i = 0; i < Math.min(limit, kind === "date" ? 28 : 5); i++) {
-    const key =
-      kind === "date"
-        ? new Date(Date.UTC(2026, 8, 20 + i)).toISOString().slice(0, 10)
-        : kind === "query"
-          ? i === 4
-            ? '=HYPERLINK("http://evil.example","click")' // CSV formula-injection probe
-            : `ruhs mo mock test ${i + 1}`
-          : `https://mocktestseries.in/exams/sample-${i + 1}`;
-    out.push({ keys: [key], clicks: 100 - i, impressions: 2000 - i * 10, ctr: 0.05, position: 3 + i });
+  for (let i = startRow; i < Math.min(total, startRow + limit); i++) {
+    out.push({ keys: dims.map((d) => gscKey(d, i)), clicks: Math.max(0, 100 - i), impressions: 2000 - i, ctr: 0.05, position: 3 + (i % 40) });
   }
   return out;
 };
@@ -110,7 +124,9 @@ const ga4Report = (req) => {
       ? Array.from({ length: 28 }, (_, i) => `202609${String(i + 1).padStart(2, "0")}`)
       : dims[0] === "sessionDefaultChannelGroup"
         ? ["Organic Search", "Direct", "Organic Social"]
-        : ["/", "/exams/ruhs-mo", "/plans-and-pricing"];
+        : req.dimensionFilter?.filter?.stringFilter?.value === "Organic Search"
+          ? ["/exams/rajasthan-medical-officer/preparation-strategy", "/"]
+          : ["/", "/exams/ruhs-mo", "/plans-and-pricing"];
   return {
     dimensionHeaders: dims.map((name) => ({ name })),
     metricHeaders: metrics.map((name) => ({ name })),
@@ -130,6 +146,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__mock/control" && req.method === "POST") {
       const body = JSON.parse((await readBody(req)) || "{}");
       if (body.scenario) state.scenario = body.scenario;
+      if (Number.isInteger(body.gscRows)) state.gscRows = body.gscRows;
       if (body.email) state.email = body.email;
       if (body.psiScenario) state.psiScenario = body.psiScenario;
       if (body.resetPsiCalls) state.psiCalls = [];
@@ -137,6 +154,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === "/__mock/stats") return send(res, 200, { scenario: state.scenario, stats: state.stats, revoked: state.revoked, urlLeaks: state.urlLeaks, psiCalls: state.psiCalls });
     if (p === "/__mock/secrets") return send(res, 200, { secrets: [...state.secrets] });
+    if (p === "/__mock/requests") return send(res, 200, { gsc: state.gscBodies, ga4: state.ga4Bodies });
     if (p === "/__mock/grants") {
       const grants = {};
       for (const [email, a] of state.accounts) grants[email] = { epoch: a.epoch, liveRefresh: [...state.refresh.values()].filter((r) => r.email === email && live(r)).length };
@@ -304,13 +322,19 @@ const server = http.createServer(async (req, res) => {
     if (gsc && req.method === "POST") {
       if (decodeURIComponent(gsc[1]) !== "sc-domain:mocktestseries.in") return send(res, 403, { error: { status: "PERMISSION_DENIED", message: "no access" } });
       const body = JSON.parse(await readBody(req));
-      return send(res, 200, { rows: gscRows(body.dimensions ?? [], body.rowLimit ?? 10), responseAggregationType: "byProperty" });
+      state.gscBodies.push({ dimensions: body.dimensions ?? [], rowLimit: body.rowLimit, startRow: body.startRow ?? 0 });
+      if (state.scenario === "gscPage2Error" && (body.startRow ?? 0) > 0) return send(res, 500, { error: { code: 500, status: "INTERNAL", message: "Backend Error" } });
+      // Search Console caps rowLimit at 25,000.
+      return send(res, 200, { rows: gscRows(body.dimensions ?? [], Math.min(body.rowLimit ?? 1000, 25000), body.startRow ?? 0), responseAggregationType: "byProperty" });
     }
     if (p === "/v1beta/properties/553529096:batchRunReports" && req.method === "POST") {
       if (state.scenario === "ga4Forbidden") {
         return send(res, 403, { error: { code: 403, status: "PERMISSION_DENIED", message: `User does not have sufficient permissions for this property. token=${token} Bearer ${token}` } });
       }
       const body = JSON.parse(await readBody(req));
+      state.ga4Bodies.push(body);
+      // The GA4 Data API allows at most 5 requests per batch.
+      if ((body.requests ?? []).length > 5) return send(res, 400, { error: { code: 400, status: "INVALID_ARGUMENT", message: "Too many requests in batch" } });
       return send(res, 200, { reports: (body.requests ?? []).map(ga4Report) });
     }
     if (p.startsWith("/v1beta/properties/")) return send(res, 403, { error: { status: "PERMISSION_DENIED", message: "wrong property" } });

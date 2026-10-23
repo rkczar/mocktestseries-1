@@ -20,8 +20,9 @@ const LOCK_STALE_MS = 3 * 60_000;
 export const MIN_SYNC_INTERVAL_MS = 60_000;
 const DAYS = 28;
 const TOP_ROWS = 25;
-/** Full Search Console tables (the API allows 25,000 rows per request; this site has far fewer). */
-const GSC_ROWS = 1000;
+/** Full Search Console tables, fetched a page at a time (startRow) up to a cap that bounds the snapshot's size. */
+const GSC_PAGE_ROWS = 1000;
+const GSC_MAX_ROWS = 5000;
 
 export interface GscRow {
   key: string;
@@ -65,6 +66,8 @@ export interface SeoSnapshot {
     queryPages?: GscRow[];
     devices?: GscRow[];
     countries?: GscRow[];
+    /** Tables that hit GSC_MAX_ROWS (more rows exist than were stored). */
+    truncated?: string[];
   } | null;
   ga4: {
     propertyId: string;
@@ -119,11 +122,11 @@ async function syncSearchConsole(accessToken: string, secrets: string[]): Promis
   // Search Console data settles ~2–3 days after the fact.
   const end = isoDaysBefore(toIstDateString(new Date()), 3);
   const start = isoDaysBefore(end, DAYS - 1);
-  const query = async (dimensions: string[], rowLimit: number) => {
+  const query = async (dimensions: string[], rowLimit: number, startRow = 0) => {
     const r = await googleFetch(`${base}/sites/${encodeURIComponent(property)}/searchAnalytics/query`, {
       method: "POST",
       accessToken,
-      json: { startDate: start, endDate: end, dimensions, rowLimit, type: "web" },
+      json: { startDate: start, endDate: end, dimensions, rowLimit, startRow, type: "web" },
     });
     if (r.status !== 200) throw new SeoIntelError(`Search Console query: ${googleErrorText(r, secrets)}`);
     const rows = Array.isArray(r.json?.rows) ? (r.json!.rows as Record<string, unknown>[]) : [];
@@ -136,12 +139,24 @@ async function syncSearchConsole(accessToken: string, secrets: string[]): Promis
       position: num(row.position),
     }));
   };
+  // Every row up to GSC_MAX_ROWS: a short page means the table is complete.
+  const truncated: string[] = [];
+  const queryAll = async (dimensions: string[]) => {
+    const rows: GscRow[] = [];
+    while (rows.length < GSC_MAX_ROWS) {
+      const page = await query(dimensions, GSC_PAGE_ROWS, rows.length);
+      rows.push(...page);
+      if (page.length < GSC_PAGE_ROWS) return rows;
+    }
+    truncated.push(dimensions.join("+"));
+    return rows.slice(0, GSC_MAX_ROWS);
+  };
   const [totalsRows, daily, queries, pages, queryPages, devices, countries] = await Promise.all([
     query([], 1),
     query(["date"], DAYS + 2),
-    query(["query"], GSC_ROWS),
-    query(["page"], GSC_ROWS),
-    query(["query", "page"], GSC_ROWS),
+    queryAll(["query"]),
+    queryAll(["page"]),
+    queryAll(["query", "page"]),
     query(["device"], 10),
     query(["country"], 50),
   ]);
@@ -159,6 +174,7 @@ async function syncSearchConsole(accessToken: string, secrets: string[]): Promis
     queryPages,
     devices,
     countries,
+    ...(truncated.length ? { truncated } : {}),
   };
 }
 

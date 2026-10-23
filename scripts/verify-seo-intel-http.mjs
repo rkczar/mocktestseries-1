@@ -172,6 +172,28 @@ await master.page.getByText("Synced Search Console and GA4.").waitFor({ timeout:
 html = await open(master.page);
 check("GSC data shown (property, totals, queries, pages)", html.includes("sc-domain:mocktestseries.in") && html.includes("ruhs mo mock test 1") && html.includes("https://mocktestseries.in/exams/sample-1") && html.includes("56,789"));
 check("GA4 data shown (channels, landing pages)", html.includes("Organic Search") && html.includes("/exams/ruhs-mo") && html.includes("61.0%"));
+{
+  // Fuller Search Console tables + GA4 organic landing pages (stored; the dashboard keeps its top-25 tables).
+  const s = await setting("seo.intel.snapshot");
+  const g = s?.gsc ?? {};
+  check("GSC full tables stored: queries, pages, query × page, device, country",
+    g.queries?.length === 5 && g.pages?.length === 5 && g.queryPages?.length === 5 && g.devices?.length === 3 && g.countries?.length === 4 && g.topQueries?.length === 5,
+    JSON.stringify({ q: g.queries?.length, p: g.pages?.length, qp: g.queryPages?.length, d: g.devices?.length, c: g.countries?.length }));
+  check("query × page rows carry both keys", g.queryPages?.every((r) => r.key.startsWith("ruhs mo mock test") || r.key.startsWith("=HYPERLINK")) && g.queryPages?.every((r) => /^https:\/\/mocktestseries\.in\//.test(r.key2 ?? "")));
+  check("device + country rows", g.devices?.map((r) => r.key).join() === "MOBILE,DESKTOP,TABLET" && g.countries?.[0]?.key === "ind" && !g.devices?.some((r) => "key2" in r));
+  check("no truncation flag when tables are complete", !("truncated" in g));
+  const reqs = await mock("/__mock/requests");
+  const sent = (dims) => reqs.gsc.filter((b) => b.dimensions.join("+") === dims);
+  check("GSC tables requested with rowLimit 1000 from startRow 0", ["query", "page", "query+page"].every((d) => sent(d).length === 1 && sent(d)[0].rowLimit === 1000 && sent(d)[0].startRow === 0), JSON.stringify(reqs.gsc));
+  const ga = reqs.ga4.at(-1)?.requests ?? [];
+  const organicReq = ga[4];
+  check("GA4 batch has 5 requests; the 5th is Organic Search landing pages",
+    ga.length === 5 && organicReq?.dimensions?.[0]?.name === "landingPage" && organicReq?.dimensionFilter?.filter?.fieldName === "sessionDefaultChannelGroup" && organicReq?.dimensionFilter?.filter?.stringFilter?.value === "Organic Search" && organicReq?.metrics?.map((m) => m.name).join() === "activeUsers,sessions,engagedSessions,keyEvents");
+  const org = s?.ga4?.organicLandingPages ?? [];
+  check("GA4 organic landing pages stored with engaged sessions + key events",
+    org.length === 2 && org[0].key === "/exams/rajasthan-medical-officer/preparation-strategy" && org.every((r) => typeof r.sessions === "number" && typeof r.engagedSessions === "number" && typeof r.keyEvents === "number"), JSON.stringify(org));
+  check("all-channel landing pages unchanged", s?.ga4?.landingPages?.map((r) => r.key).join() === "/,/exams/ruhs-mo,/plans-and-pricing");
+}
 await master.page.getByRole("button", { name: "Sync now" }).click();
 await master.page.getByText("less than a minute ago").waitFor({ timeout: 30000 });
 check("second sync within a minute is throttled", true);
@@ -284,6 +306,7 @@ await master.page.getByText("Sync partly failed.").waitFor({ timeout: 30000 });
 html = await open(master.page);
 check("GA4 403 shown as GA4 error, GSC still synced", html.includes("GA4:") && html.includes("PERMISSION_DENIED") && html.includes("ruhs mo mock test 1"));
 check("GA4 error text is redacted (no bearer token)", !/ya29\.Mock/.test(html) && html.includes("[redacted]"));
+check("GA4 failure keeps the last good organic landing pages", ((await setting("seo.intel.snapshot"))?.ga4?.organicLandingPages ?? []).length === 2);
 
 await resetThrottle();
 await mock("/__mock/control", { scenario: "gscGarbage" });
@@ -292,6 +315,41 @@ await master.page.getByRole("button", { name: "Sync now" }).click();
 await master.page.getByText("Sync partly failed.").waitFor({ timeout: 30000 });
 html = await open(master.page);
 check("GSC garbage → Search Console error, GA4 data kept", html.includes("Search Console:") && html.includes("Organic Search"));
+check("GSC failure keeps the last good full tables", ((await setting("seo.intel.snapshot"))?.gsc?.queryPages ?? []).length === 5);
+
+// ---- Search Console pagination + row cap -----------------------------------------------------------
+async function syncWith(control, expectText) {
+  await resetThrottle();
+  await mock("/__mock/control", control);
+  await open(master.page);
+  await master.page.getByRole("button", { name: "Sync now" }).click();
+  await master.page.getByText(expectText).waitFor({ timeout: 60000 });
+  return setting("seo.intel.snapshot");
+}
+const startRows = async (dims, from) => (await mock("/__mock/requests")).gsc.slice(from).filter((b) => b.dimensions.join("+") === dims).map((b) => b.startRow);
+let mark = (await mock("/__mock/requests")).gsc.length;
+let snap2 = await syncWith({ scenario: "ok", gscRows: 2345 }, "Synced Search Console and GA4.");
+check("pagination: 2,345 rows fetched in pages of 1,000 (startRow 0/1000/2000)",
+  snap2.gsc.queries.length === 2345 && snap2.gsc.pages.length === 2345 && snap2.gsc.queryPages.length === 2345 && (await startRows("query", mark)).join() === "0,1000,2000" && (await startRows("query+page", mark)).join() === "0,1000,2000",
+  JSON.stringify({ q: snap2.gsc.queries.length, sr: await startRows("query", mark) }));
+check("pagination: rows are distinct and in order", new Set(snap2.gsc.queries.map((r) => r.key)).size === 2345 && snap2.gsc.queries[1000].key === "ruhs mo mock test 1001");
+check("pagination: top-25 tables still 25 rows; no truncation flag", snap2.gsc.topQueries.length === 25 && snap2.gsc.topPages.length === 25 && !("truncated" in snap2.gsc));
+mark = (await mock("/__mock/requests")).gsc.length;
+snap2 = await syncWith({ gscRows: 6200 }, "Synced Search Console and GA4.");
+check("row cap: 6,200 available → 5,000 stored, flagged truncated, 5 pages requested",
+  snap2.gsc.queries.length === 5000 && snap2.gsc.queryPages.length === 5000 && (snap2.gsc.truncated ?? []).join() === "query,page,query+page" && (await startRows("query", mark)).join() === "0,1000,2000,3000,4000",
+  JSON.stringify({ q: snap2.gsc.queries.length, t: snap2.gsc.truncated, sr: await startRows("query", mark) }));
+const snapBytes = Number((await db.query(`select pg_column_size(value) n from "Setting" where key='seo.intel.snapshot'`)).rows[0].n);
+html = await open(master.page);
+check("dashboard still renders at the row cap; page stays small", html.includes("Top queries") && html.length < 1_500_000 && snapBytes < 3_000_000, JSON.stringify({ htmlBytes: html.length, snapBytes }));
+const beforeFail = await setting("seo.intel.snapshot");
+snap2 = await syncWith({ scenario: "gscPage2Error", gscRows: 2345 }, "Sync partly failed.");
+check("failure mid-pagination → Search Console error, previous GSC tables kept intact",
+  /Search Console query/.test(snap2.lastSync.gscError ?? "") && JSON.stringify(snap2.gsc) === JSON.stringify(beforeFail.gsc) && snap2.lastSync.ga4Error === null,
+  JSON.stringify({ err: snap2.lastSync.gscError, q: snap2.gsc?.queries?.length }));
+check("failure mid-pagination: history not overwritten with partial GSC rows", ((await setting(`seo.intel.history.${new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10)}`))?.gsc?.topQueries ?? []).length === 10);
+snap2 = await syncWith({ scenario: "ok", gscRows: 5 }, "Synced Search Console and GA4.");
+check("back to normal: 5-row tables", snap2.gsc.queries.length === 5 && !("truncated" in snap2.gsc));
 
 // ---- Schedule, retention, history, reporting, CSV ------------------------------------------------
 function runCron() {
