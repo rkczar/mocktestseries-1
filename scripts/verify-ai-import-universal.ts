@@ -359,7 +359,9 @@ async function main() {
     qs = await questionsOf(jB);
     check("Verify 1 again: Q4 passes", vs(byLabel(qs, "4"))?.v1 === "passed", byLabel(qs, "4")!.issueCodes);
     const sum0 = await paperSummary(jB);
-    check("nothing is eligible to publish before Verify 2", sum0!.eligible.length === 0 && sum0!.v1.passed >= 3, sum0);
+    // Q6 (stored Head & Neck, text about the upper limb) is caught by Verify 1's free subject / topic check since 2026-10-23.
+    check("nothing is eligible to publish before Verify 2", sum0!.eligible.length === 0 && sum0!.v1.passed >= 2, sum0);
+    check("Verify 1's subject / topic check flags Q6's topic (Head & Neck vs Upper Limb), without any AI call", vs(byLabel(qs, "6"))?.pv?.v1?.classification?.status === "DISAGREEMENT" && byLabel(qs, "6")!.issueCodes.includes("TAXONOMY_DISAGREES"), [vs(byLabel(qs, "6"))?.pv?.v1?.classification, byLabel(qs, "6")!.issueCodes]);
 
     // Verify 2 — paid AI on now; the price is shown and confirmed first.
     await saveImporterSettings({ ...settings, aiEnabled: true }, actor);
@@ -384,14 +386,15 @@ async function main() {
     check("Q2: wording differs between the reads, but the source text holds the stored wording → verified, reason recorded", v("2").v2 === "verified" && /source text/.test(v("2").pv?.v2?.resolvedBySource ?? ""), v("2").pv?.v2);
     check("Q4: exponent differs in the second read; the document text confirms 10^{-3} → verified (formula unchanged)", v("4").v2 === "verified" && !!v("4").pv?.v2?.resolvedBySource && /\^\{-3\}/.test(d("4").stem), v("4").pv?.v2);
     check("Q3: printed answer A,B vs A,B,D cannot be settled by the source → VERIFY2_DISAGREES (blocked)", v("3").v2 === "disagree" && byLabel(qs, "3")!.issueCodes.includes("VERIFY2_DISAGREES") && /printed answer/.test(v("3").pv?.v2?.detail ?? ""), [v("3").pv?.v2, byLabel(qs, "3")!.issueCodes]);
-    check("Q6: independent classification says Upper Limb, stored Head & Neck → topic disagreement flagged", v("6").v2 === "disagree" && v("6").pv?.v2?.fields.includes("topic") === true, v("6").pv?.v2);
+    // The subject / topic check is kept apart from the text read (a correct reading is not failed by a taxonomy finding).
+    check("Q6: independent classification says Upper Limb, stored Head & Neck → topic DISAGREEMENT flagged (text read still verified, agrees with Verify 1)", v("6").v2 === "verified" && v("6").pv?.v2?.classification?.status === "DISAGREEMENT" && /topic Head & Neck vs Upper Limb/.test(v("6").pv?.v2?.classification?.findings[0] ?? "") && v("6").pv?.v2?.classification?.comparedWithV1 === "AGREES" && byLabel(qs, "6")!.issueCodes.includes("TAXONOMY_DISAGREES"), [v("6").pv?.v2, byLabel(qs, "6")!.issueCodes]);
     check("the question found only by the second read (Q5) is reported, never added", (await events(jB, "VERIFY_EXTRA")).some((e) => /Q5/.test(e.message)) && !byLabel(qs, "5"));
     const doneEv = (await events(jB, "VERIFY2_DONE"))[0];
     check("VERIFY2_DONE logs model, counts and actual vs estimated / maximum cost", !!doneEv && /mockvision\/checker/.test(doneEv.message) && /Actual cost ₹/.test(doneEv.message) && /maximum ₹/.test(doneEv.message), doneEv?.message);
     const sum1 = await paperSummary(jB);
     const eligibleLabels = qs.filter((x) => sum1!.eligible.includes(x.id)).map((x) => x.sourceLabel).sort();
     check("eligible to publish without individual review: exactly Q1 and Q4 (both verifications, every check clean)", eligibleLabels.join() === "1,4", [eligibleLabels, qs.map((x) => [x.sourceLabel, vs(x)?.v1, vs(x)?.v2, x.status, x.issueCodes])]);
-    check("paper summary: totals, verified, unresolved disagreements, cost estimate vs actual", sum1!.total === 5 && sum1!.verified === 2 && sum1!.unresolved >= 3 && sum1!.missing.includes("Q5") && sum1!.cost.verify2?.actualInr === Math.round(jobB2.spentInr * 100) / 100, sum1);
+    check("paper summary: totals, verified, unresolved disagreements, cost estimate vs actual", sum1!.total === 5 && sum1!.verified === 2 && sum1!.unresolved >= 2 && sum1!.classificationIssues >= 1 && sum1!.missing.includes("Q5") && sum1!.cost.verify2?.actualInr === Math.round(jobB2.spentInr * 100) / 100, sum1);
     // Approval safeguards: Q3 (disagreement) is never approved by the eligible action.
     const pub = await importAndPublishEligible(jB, actor);
     check("Import & Publish Eligible: approves and sends only Q1 and Q4", pub.requested === 2 && pub.approved === 2, pub);

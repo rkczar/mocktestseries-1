@@ -22,6 +22,8 @@ import { compareVersions, snapshotFigures, type FigureSnapshot } from "@/lib/ai-
 import { planOf } from "@/lib/ai-import/select";
 import { formatIst } from "@/lib/ist-time";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
+import { fingerprintOf } from "@/lib/ai-import/paper-verify";
+import { verifyState } from "@/lib/ai-import/verify-core";
 
 export const metadata = { title: "Review Question — AI Question Importer" };
 export const dynamic = "force-dynamic";
@@ -275,6 +277,14 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             subjectId: q.subjectId,
             topicId: q.topicId,
             subTopicId: q.subTopicId,
+            classification: (() => {
+              const rec = (q.data as unknown as ExtractedQuestion).classification;
+              const vs = verifyState(q.data, fingerprintOf(q));
+              const v1 = vs.v1 === "passed" || vs.v1 === "problems" ? vs.pv?.v1?.classification : null;
+              const v2 = vs.v2 !== "stale" && vs.v2 !== "none" ? vs.pv?.v2?.classification : null;
+              const KIND: Record<string, string> = { ok: "", uncertain: "Uncertain — not forced", missing_taxonomy: "Missing taxonomy configuration", engine_failure: "Classifier failure (no answer)", text_incomplete: "Text incomplete (extraction problem)", admin: "Set by an administrator" };
+              return { source: q.taxonomySource, confidence: q.taxonomyConfidence, kind: rec ? KIND[rec.kind] || null : null, reason: rec?.reason ?? null, v1: v1 ? `${v1.status.replace(/_/g, " ").toLowerCase()} — ${v1.findings.join(" · ")}`.slice(0, 400) : null, v2: v2 ? `${v2.status.replace(/_/g, " ").toLowerCase()} (${v2.method}${v2.comparedWithV1 === "AGREES" ? ", agrees with Verify 1" : v2.comparedWithV1 === "DIFFERS" ? ", differs from Verify 1" : ""}) — ${v2.findings.join(" · ")}`.slice(0, 400) : null };
+            })(),
             allowDuplicate: q.allowDuplicate,
             duplicate: q.duplicateKind,
             approved: !!q.approvedById,

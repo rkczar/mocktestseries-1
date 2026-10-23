@@ -32,10 +32,12 @@ import {
   setAnswer,
   setFigure,
   setTaxonomy,
+  bulkSetTaxonomy,
   type QuestionEdit,
 } from "@/lib/ai-import/review";
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
 import { saveProfileFromJob, updateFormatProfile, type FormatProfile, type FormatRules } from "@/lib/ai-import/format-profile";
+import { addConfusion, addSynonym, removeMemoryEntry } from "@/lib/ai-import/taxonomy-memory";
 import { settleJobStatus } from "@/lib/ai-import/summary";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { importerModelCatalog, importerSettingsProblems } from "@/lib/ai-import/models";
@@ -362,12 +364,12 @@ export async function setAnswerAction(id: string, labels: string[]): Promise<Imp
   });
 }
 
-export async function setTaxonomyAction(id: string, subjectId: string, topicId: string | null, subTopicId: string | null = null): Promise<ImporterResult<null>> {
+export async function setTaxonomyAction(id: string, subjectId: string, topicId: string | null, subTopicId: string | null = null, remember = false): Promise<ImporterResult<{ remembered: boolean }>> {
   return run(await requireUse(), async (actorId) => {
-    await setTaxonomy(id, actorId, subjectId, topicId, subTopicId || null);
+    const r = await setTaxonomy(id, actorId, subjectId, topicId, subTopicId || null, { remember: remember === true });
     const jobId = await jobOf([id]);
     if (jobId) await revalidateQuestions(jobId, [id]);
-    return null;
+    return { remembered: r.remembered };
   });
 }
 
@@ -673,24 +675,16 @@ export async function importEligibleAction(jobId: string): Promise<ImporterResul
 }
 
 /** Bulk subject / topic / subtopic correction (existing records of the job's exam only). */
-export async function bulkTaxonomyAction(ids: string[], subjectId: string, topicId: string | null, subTopicId: string | null): Promise<ImporterResult<{ updated: number; refused: string[] }>> {
+/**
+ * Bulk subject / topic / subtopic correction. The administrator must confirm the exact number of questions shown in
+ * the confirmation (checked here too, so a stale or scripted call cannot change more than was reviewed); every
+ * question is validated against its exam's own taxonomy one by one and audited.
+ */
+export async function bulkTaxonomyAction(ids: string[], subjectId: string, topicId: string | null, subTopicId: string | null, confirm?: { count: number; remember?: boolean }): Promise<ImporterResult<{ updated: number; refused: string[]; remembered: number }>> {
   return run(await requireUse(), async (actorId) => {
-    if (!Array.isArray(ids) || !ids.length) throw new ImportJobError("Select the questions to correct.");
-    if (typeof subjectId !== "string" || !subjectId) throw new ImportJobError("Choose a subject.");
-    let updated = 0;
-    const refused: string[] = [];
-    for (const id of ids.slice(0, 2000)) {
-      try {
-        await setTaxonomy(id, actorId, subjectId, topicId || null, subTopicId || null);
-        updated++;
-      } catch (e) {
-        if (!(e instanceof ImportJobError)) throw e;
-        refused.push(e.message);
-      }
-    }
-    const jobId = await jobOf(ids);
-    if (jobId) await revalidateQuestions(jobId, ids);
-    return { updated, refused: [...new Set(refused)].slice(0, 5) };
+    const r = await bulkSetTaxonomy(ids, actorId, subjectId, topicId, subTopicId, confirm);
+    if (r.jobId) await revalidateQuestions(r.jobId, [...new Set(ids)]);
+    return { updated: r.updated, refused: r.refused, remembered: r.remembered };
   });
 }
 
@@ -722,5 +716,32 @@ export async function updateFormatProfileAction(input: { id: string; name?: stri
   return run(await requireMasterAdmin(), async (actorId) => {
     if (!input || typeof input.id !== "string") throw new ImportJobError("Choose a format profile.");
     return updateFormatProfile({ id: input.id, actorId, name: typeof input.name === "string" ? input.name : undefined, enabled: typeof input.enabled === "boolean" ? input.enabled : undefined, rules: input.rules && typeof input.rules === "object" ? input.rules : undefined, note: typeof input.note === "string" ? input.note : undefined });
+  });
+}
+
+/** Exam taxonomy reference: a synonym / alternative term for a subject or topic of the exam (Manage permission). */
+export async function addTaxonomySynonymAction(examId: string, term: string, subjectId: string | null, topicId: string | null): Promise<ImporterResult<null>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof examId !== "string" || !examId) throw new ImportJobError("Choose an exam.");
+    await addSynonym(examId, actorId, typeof term === "string" ? term : "", typeof subjectId === "string" && subjectId ? subjectId : null, typeof topicId === "string" && topicId ? topicId : null);
+    return null;
+  });
+}
+
+/** Exam taxonomy reference: two subjects of the exam that are commonly confused (Manage permission). */
+export async function addTaxonomyConfusionAction(examId: string, a: string, b: string, note: string): Promise<ImporterResult<null>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof examId !== "string" || !examId) throw new ImportJobError("Choose an exam.");
+    await addConfusion(examId, actorId, String(a ?? ""), String(b ?? ""), typeof note === "string" ? note : "");
+    return null;
+  });
+}
+
+/** Removes one entry of an exam's taxonomy reference (audited; Manage permission). */
+export async function removeTaxonomyMemoryAction(examId: string, kind: "synonym" | "confusion" | "correction", id: string): Promise<ImporterResult<null>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof examId !== "string" || !["synonym", "confusion", "correction"].includes(kind) || typeof id !== "string") throw new ImportJobError("Choose the entry to remove.");
+    await removeMemoryEntry(examId, actorId, kind, id);
+    return null;
   });
 }

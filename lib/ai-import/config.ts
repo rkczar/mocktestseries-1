@@ -372,6 +372,8 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   UNSUPPORTED_TYPE: { label: "Not importable (type not supported)", blocking: true, publishBlocking: true },
   TOPIC_UNCERTAIN: { label: "Topic missing or uncertain", blocking: false, publishBlocking: true },
   SUBJECT_UNKNOWN: { label: "Subject unknown", blocking: true, publishBlocking: true },
+  CLASSIFICATION_FAILED: { label: "Classification failed (no classifier answer)", blocking: true, publishBlocking: true },
+  TAXONOMY_DISAGREES: { label: "Subject / topic check disagrees", blocking: false, publishBlocking: true },
   ANSWER_MISSING: { label: "No answer available", blocking: true, publishBlocking: true },
   ANSWER_MISMATCH: { label: "Answer key mismatch", blocking: false, publishBlocking: true },
   ANSWER_AMBIGUOUS: { label: "Ambiguous answer-key mapping", blocking: false, publishBlocking: true },

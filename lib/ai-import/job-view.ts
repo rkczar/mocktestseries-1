@@ -89,7 +89,7 @@ function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCa
       if (canRetryFailed(j, pages, failedKeys)) return `${j.errorMessage ?? `${pages.failed} page(s) failed.`} The ${c.extracted} question(s) already read are kept.`;
       if (c.approved > 0) return `${c.approved} approved question(s) are ready. Click Add approved questions to the Question Bank to store them as Draft.`;
       if (c.ready > 0) return `${c.ready} question(s) passed every check. Review and approve them — nothing enters the Question Bank before approval.`;
-      if (c.noSubject > 0) return `${c.noSubject} question(s) have no subject (the file has no subject headings and AI classification is off). Open Review questions and set the subject — or delete this import and upload again as a Single-subject paper (Advanced options).`;
+      if (c.noSubject > 0) return `${c.noSubject} question(s) have no subject of this exam yet (no subject heading, and the classifier could not decide reliably — each question shows why). Open Review questions and set the subject — or delete this import and upload again as a Single-subject paper (Advanced options).`;
       return `${c.needsReview + c.notImportable + c.duplicates} question(s) need attention before they can be imported — open Review questions.`;
     case "COMPLETED":
       return `Done: ${c.imported} question(s) are in the Question Bank${c.published ? ` (${c.published} published)` : " as Draft"}. Review and publish them in the Question Bank.`;
@@ -106,7 +106,7 @@ async function countsFor(jobIds: string[]): Promise<Map<string, JobCounts>> {
     prisma.aiImportQuestion.groupBy({ by: ["jobId", "status"], where: { jobId: { in: jobIds } }, _count: { _all: true } }),
     prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: { not: null } }, _count: { _all: true } }),
     prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, answerStatus: "UNVERIFIED" }, _count: { _all: true } }),
-    prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: null, issueCodes: { has: "SUBJECT_UNKNOWN" } }, _count: { _all: true } }),
+    prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: null, issueCodes: { hasSome: ["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED"] } }, _count: { _all: true } }),
     prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: null, approvedById: { not: null }, status: { notIn: [AiImportQuestionStatus.REJECTED] } }, _count: { _all: true } }),
   ]);
   const out = new Map<string, JobCounts>();

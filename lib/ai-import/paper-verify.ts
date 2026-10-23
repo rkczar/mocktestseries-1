@@ -14,7 +14,9 @@ import { effective, runPostProcessing } from "@/lib/ai-import/post";
 import { blockToQuestion, mergedAnswerIn, splitQuestions } from "@/lib/ai-import/local-parse";
 import { applyFormatProfile } from "@/lib/ai-import/format-profile";
 import { referenceStatus, type ReferenceStatus } from "@/lib/ai-import/reference-status";
-import { classifyUserText, echoMatches, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
+import { classifyUserText, decideClassification, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
+import { classifyPaper, textSufficient, verifyStoredTaxonomy, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
+import { classifierContext } from "@/lib/ai-import/taxonomy-memory";
 import { readDocx } from "@/lib/ai-import/docx";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
 import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
@@ -92,6 +94,8 @@ export interface Verify1Result {
   referencesNotCompared: string[];
   /** Questions whose line breaks (statements, paragraphs) were restored from the Word source. */
   whitespaceRestored: number;
+  /** Subject / topic check results (free): AGREED / DISAGREEMENT / NEEDS_REVIEW / NOT_VERIFIED. */
+  classification?: Record<string, number>;
 }
 
 export async function runVerify1(jobId: string, actorId: string): Promise<Verify1Result> {
@@ -173,8 +177,24 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
   const profileFindings = profileRun?.findings ?? new Map<string, { id: string; version: number; findings: string[] }>();
   const profileNote = profileRun?.summary ?? null;
 
-  // 2. Every deterministic check of the importer, on the corrected content (no AI).
+  // 2. Every deterministic check of the importer, on the corrected content (no AI). Questions still without a
+  // subject / topic get the free local classification there (never a paid call).
   await runPostProcessing(ctx);
+
+  // 2b. Subject / topic check (free): the local classifier over the whole paper WITHOUT the stored choice (only a
+  // single-subject paper stays within its selected subject), compared with what is stored.
+  const examTaxonomy = await getExamTaxonomy(prisma, job.examId);
+  const independent = new Map<string, LocalClassification>();
+  {
+    const rows = (await prisma.aiImportQuestion.findMany({ where: { jobId }, orderBy: [{ fileId: "asc" }, { orderIndex: "asc" }] })).filter((q) => !LOCKED.includes(q.status));
+    if (examTaxonomy.length && rows.length) {
+      const cc = await classifierContext(job.examId);
+      const single = job.paperType === "SINGLE_SUBJECT" && job.subjectId ? [job.subjectId] : null;
+      const { results } = classifyPaper(cc.index, rows.map((q) => effective(q)), { allowedSubjects: rows.map(() => single), topicMin: settings.verification.topicMinConfidence });
+      rows.forEach((q, i) => independent.set(q.id, results[i]));
+    }
+  }
+  const taxTally = { AGREED: 0, DISAGREEMENT: 0, NEEDS_REVIEW: 0, VERIFICATION_FAILED: 0, NOT_VERIFIED: 0 };
 
   // 3. Full-paper checks + reference papers.
   const refs = await listReferences(jobId);
@@ -188,6 +208,9 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     const e = effective(q);
     const problems: VerifyProblem[] = [...(fixProblems.get(q.id) ?? [])];
     for (const f of profileFindings.get(q.id)?.findings ?? []) problems.push({ code: "FORMAT_DEVIATION", detail: `Format profile: ${f}` });
+    const tax = verifyStoredTaxonomy({ subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource }, independent.get(q.id), examTaxonomy);
+    taxTally[tax.verification.status]++;
+    problems.push(...tax.problems);
     if (e.continuesOnNextPage && e.pages.length === 1 && e.pages[0] < (lastPage.get(q.fileId) ?? 1)) problems.push({ code: "QUESTION_TEXT_SUSPECT", detail: `Marked as continuing on page ${e.pages[0] + 1}, but no continuation was joined to it — check both pages.` });
     const texts = [e.stem, ...e.options.map((o) => o.text)];
     if (texts.some((t) => /�|[-]/.test(t))) problems.push({ code: "FORMULA_ISSUE", detail: "Unreadable characters (font encoding / OCR) in the text — compare with the source page." });
@@ -238,7 +261,7 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     const ok = !problems.length && !blockingNow.length && q.status !== AiImportQuestionStatus.NOT_IMPORTABLE && q.status !== AiImportQuestionStatus.DUPLICATE;
     if (ok) passed++;
     else withProblems++;
-    await savePaperVerify(q, { v1: { fingerprint: fingerprintOf(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference, references, profile: profileFindings.get(q.id) ?? null } });
+    await savePaperVerify(q, { v1: { fingerprint: fingerprintOf(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference, references, profile: profileFindings.get(q.id) ?? null, classification: tax.verification } });
   }
 
   // 4. The findings become the questions' flags (still no AI), then the job's status follows its quality.
@@ -248,8 +271,8 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
   const refOnly = refs.filter(referenceComparable).flatMap((r) => referenceOnly(r, questions.map((x) => effective(x))).map((l) => `${l} (${r.name})`));
   const compared = refs.filter(referenceComparable);
   const notCompared = refs.filter((r) => !referenceComparable(r));
-  const result: Verify1Result = { questions: passed + withProblems, passed, withProblems, corrected: fixesBy.size, missing: quality?.missing ?? [], duplicateNumbers: quality?.duplicateNumbers ?? [], referenceOnly: refOnly.slice(0, 200), referenceConflicts: refConflicts, referencesCompared: compared.length, referencesNotCompared: notCompared.map((r) => r.name), whitespaceRestored: restored };
-  await logEvent(jobId, "VERIFY1_DONE", `Verify 1 (full paper, no AI): ${result.questions} question(s) checked — ${passed} passed, ${withProblems} with findings, ${result.corrected} corrected from the source${result.missing.length ? `; missing ${result.missing.slice(0, 10).join(", ")}${result.missing.length > 10 ? " …" : ""}` : ""}${result.duplicateNumbers.length ? `; numbers read twice ${result.duplicateNumbers.slice(0, 10).join(", ")}` : ""}${compared.length ? `; reference papers compared: ${compared.map((r) => `“${r.name}”`).join(", ")} — ${refConflicts} conflict(s)${refOnly.length ? `, ${refOnly.length} reference question(s) not in the source (${refOnly.slice(0, 6).join(", ")})` : ""}` : ""}${notCompared.length ? `; NOT compared (scanned, stored only — needs OCR / vision): ${notCompared.map((r) => `“${r.name}” (${scannedPagesOf(r)} page(s))`).join(", ")}` : ""}${result.whitespaceRestored ? `; line breaks restored from the Word source in ${result.whitespaceRestored} question(s)` : ""}${profileNote ? `; ${profileNote}` : ""}.`, result as unknown as Record<string, unknown>, actorId);
+  const result: Verify1Result = { questions: passed + withProblems, passed, withProblems, corrected: fixesBy.size, missing: quality?.missing ?? [], duplicateNumbers: quality?.duplicateNumbers ?? [], referenceOnly: refOnly.slice(0, 200), referenceConflicts: refConflicts, referencesCompared: compared.length, referencesNotCompared: notCompared.map((r) => r.name), whitespaceRestored: restored, classification: taxTally };
+  await logEvent(jobId, "VERIFY1_DONE", `Verify 1 (full paper, no AI): ${result.questions} question(s) checked — ${passed} passed, ${withProblems} with findings, ${result.corrected} corrected from the source${result.missing.length ? `; missing ${result.missing.slice(0, 10).join(", ")}${result.missing.length > 10 ? " …" : ""}` : ""}${result.duplicateNumbers.length ? `; numbers read twice ${result.duplicateNumbers.slice(0, 10).join(", ")}` : ""}${compared.length ? `; reference papers compared: ${compared.map((r) => `“${r.name}”`).join(", ")} — ${refConflicts} conflict(s)${refOnly.length ? `, ${refOnly.length} reference question(s) not in the source (${refOnly.slice(0, 6).join(", ")})` : ""}` : ""}${notCompared.length ? `; NOT compared (scanned, stored only — needs OCR / vision): ${notCompared.map((r) => `“${r.name}” (${scannedPagesOf(r)} page(s))`).join(", ")}` : ""}${result.whitespaceRestored ? `; line breaks restored from the Word source in ${result.whitespaceRestored} question(s)` : ""}${profileNote ? `; ${profileNote}` : ""}; subject / topic check (free): ${taxTally.AGREED} agreed, ${taxTally.DISAGREEMENT} disagreement(s), ${taxTally.NEEDS_REVIEW} need review, ${taxTally.NOT_VERIFIED} not verified.`, result as unknown as Record<string, unknown>, actorId);
   await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_VERIFY1", entityType: "AiImportJob", entityId: jobId, metadata: { questions: result.questions, passed, corrected: result.corrected } } });
   return result;
 }
@@ -784,49 +807,108 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
     state = await saveState(ctx.job.id, { doneUnits: done, counts });
   }
 
-  // Subject / topic / subtopic: an independent classification by the same model, compared with the stored mapping.
+  // Subject / topic / subtopic: an independent classification by the Verify 2 model over EVERY question with enough
+  // text (also those without a subject), from the exam's full code list — it never sees the stored choice or Verify 1's.
+  // Its result is kept apart from the text read (v2.classification): a taxonomy disagreement never turns a correct
+  // reading into a failed one, and a failed / missing / truncated answer is VERIFICATION_FAILED, never agreement.
   const taxonomy = await getExamTaxonomy(prisma, ctx.job.examId);
-  const toCheck = (await prisma.aiImportQuestion.findMany({ where: { jobId: ctx.job.id, status: { notIn: LOCKED } }, include: { figures: true } })).filter((q) => q.subjectId && !q.taxonomySource?.startsWith("admin") && q.taxonomySource !== "source column" && verifyState(q.data, fingerprintOf(q)).v2 === "verified");
-  if (taxonomy.length && toCheck.length) {
+  const all = await prisma.aiImportQuestion.findMany({ where: { jobId: ctx.job.id, status: { notIn: LOCKED } }, include: { figures: true }, orderBy: [{ fileId: "asc" }, { orderIndex: "asc" }] });
+  const tc = { AGREED: 0, DISAGREEMENT: 0, NEEDS_REVIEW: 0, VERIFICATION_FAILED: 0, NOT_VERIFIED: 0 };
+  const saveTax = async (q: QRow, c: NonNullable<V2Result["classification"]>) => {
+    tc[c.status]++;
+    const fresh = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: q.id }, include: { figures: true } });
+    const pv = (fresh.data as unknown as ExtractedQuestion).paperVerify ?? {};
+    const base: V2Result = pv.v2 && pv.v2.fingerprint === fingerprintOf(fresh) ? pv.v2 : { fingerprint: fingerprintOf(fresh), at: new Date().toISOString(), model: state!.model, status: "UNAVAILABLE", fields: [], detail: "no independent text read of this question in this run", error: null };
+    await savePaperVerify(fresh, { v2: { ...base, classification: c } });
+  };
+  const storedOf = (q: QRow) => ({ subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId });
+  const v1Of = (q: QRow) => {
+    const pv = (q.data as unknown as ExtractedQuestion).paperVerify;
+    return pv?.v1 && pv.v1.fingerprint === fingerprintOf(q) ? (pv.v1.classification ?? null) : null;
+  };
+  const vsV1 = (q: QRow, found: { subjectId: string | null; topicId: string | null }): "AGREES" | "DIFFERS" | "NO_V1" => {
+    const v1 = v1Of(q)?.found;
+    if (!v1 || !v1.subjectId) return "NO_V1";
+    return v1.subjectId === found.subjectId && (!v1.topicId || !found.topicId || v1.topicId === found.topicId) ? "AGREES" : "DIFFERS";
+  };
+  const checkable: QRow[] = [];
+  for (const q of all) {
+    if (!taxonomy.length) await saveTax(q, { status: "NOT_VERIFIED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: ["this exam has no subjects configured — missing configuration"], comparedWithV1: "NO_V1" });
+    else if (!textSufficient(effective(q)).ok) await saveTax(q, { status: "NOT_VERIFIED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: [`not classified: ${textSufficient(effective(q)).why} (an extraction problem, not a taxonomy one)`], comparedWithV1: "NO_V1" });
+    else checkable.push(q);
+  }
+  if (checkable.length) {
     const codes = taxonomyCodes(taxonomy);
-    for (let i = 0; i < toCheck.length; i += 20) {
+    for (let i = 0; i < checkable.length; i += 20) {
       if (!(await ctx.stillRunning())) return counts;
-      const batch = toCheck.slice(i, i + 20);
+      const batch = checkable.slice(i, i + 20);
       const text = classifyUserText(codes.list, batch.map((q) => effective(q)));
+      let value: { results: { q: string; subject: string | null; topic: string | null; subtopic: string | null; confidence: number; about: string | string[] | null; reason: string | null }[] } | null = null;
+      let model = state.model;
+      let failure: string | null = null;
       try {
-        const { value } = await verifyCall(ctx, state, { task: "classify", system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, needsVision: false }, (out) => {
+        const r = await verifyCall(ctx, state, { task: "classify", system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, needsVision: false }, (out) => {
           const parsed = classifySchema.safeParse(parseModelJson(out));
           if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format"), "model_output");
           return parsed.data;
         });
-        for (const res of value.results) {
-          const k = Number.parseInt(res.q.replace(/\D+/g, ""), 10) - 1;
-          const q = batch[k];
-          if (!q) continue;
-          // A result whose echoed key words are not in this question belongs to another one (shifted answer): ignored.
-          if (!echoMatches(res.about, effective(q))) continue;
-          const subject = codes.subject(res.subject);
-          const topic = codes.topic(res.topic);
-          const subTopic = codes.subTopic(res.subtopic);
-          const pv = (q.data as unknown as ExtractedQuestion).paperVerify!;
-          const v2 = pv.v2!;
-          const subjectDiffers = !!subject && subject !== q.subjectId && res.confidence >= 0.6;
-          const topicDiffers = !subjectDiffers && !!topic && !!q.topicId && topic !== q.topicId && res.confidence >= 0.7;
-          const subTopicDiffers = !subjectDiffers && !topicDiffers && !!subTopic && !!q.subTopicId && subTopic !== q.subTopicId && res.confidence >= 0.7;
-          if (!subjectDiffers && !topicDiffers && !subTopicDiffers) continue;
-          const name = (id: string | null) => codes.name(id);
-          const why = res.reason ? ` — reason given: ${res.reason.slice(0, 160)}` : "";
-          const detail = subjectDiffers ? `subject ${name(q.subjectId)} vs ${name(subject)} (independent classification, ${Math.round(res.confidence * 100)}%)${why}` : topicDiffers ? `topic ${name(q.topicId)} vs ${name(topic)} (independent classification, ${Math.round(res.confidence * 100)}%)${why}` : `subtopic ${name(q.subTopicId)} vs ${name(subTopic)} (independent classification, ${Math.round(res.confidence * 100)}%)`;
-          counts.VERIFIED--;
-          counts.DISAGREE++;
-          await savePaperVerify(q, { v2: { ...v2, status: "DISAGREE", fields: [...v2.fields, subjectDiffers ? "subject" : topicDiffers ? "topic" : "subtopic"], detail: `${detail} — choose the subject / topic by hand (bulk correction is available).`, second: { ...(v2.second ?? {}), subject, topic, subTopic } } });
-        }
+        value = r.value;
+        model = r.model;
       } catch (e) {
-        if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) throw e;
-        await logEvent(ctx.job.id, "VERIFY2_FAILED", `Verify 2 classification request failed (${e instanceof Error ? e.message.slice(0, 200) : "error"}); the subject / topic of those ${batch.length} question(s) was not cross-checked.`, {});
+        if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) {
+          for (const q of checkable.slice(i)) await saveTax(q, { status: "VERIFICATION_FAILED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: [`not checked — Verify 2 stopped: ${(e as Error).message.slice(0, 200)}`], comparedWithV1: "NO_V1" });
+          throw e;
+        }
+        failure = e instanceof Error ? e.message.slice(0, 300) : "request failed";
+        await logEvent(ctx.job.id, "VERIFY2_FAILED", `Verify 2 classification request failed (${failure.slice(0, 200)}); the subject / topic of those ${batch.length} question(s) is VERIFICATION_FAILED (not agreement).`, {});
+      }
+      for (const [k, q] of batch.entries()) {
+        const stored = storedOf(q);
+        if (!value) {
+          await saveTax(q, { status: "VERIFICATION_FAILED", stored, found: null, confidence: null, method: model, findings: [`the classification request failed: ${failure}`], comparedWithV1: "NO_V1" });
+          continue;
+        }
+        const res = value.results.find((x) => Number.parseInt(x.q.replace(/\D+/g, ""), 10) - 1 === k);
+        if (!res) {
+          await saveTax(q, { status: "VERIFICATION_FAILED", stored, found: null, confidence: null, method: model, findings: [`${model} returned no answer for this question (${value.results.length} answer(s) for ${batch.length} question(s))`], comparedWithV1: "NO_V1" });
+          continue;
+        }
+        const d = decideClassification(res, effective(q), codes, taxonomy, model);
+        const found = { subjectId: d.subject, topicId: d.topic, subTopicId: d.subTopic };
+        const name = (id: string | null) => codes.name(id);
+        if (!d.subject) {
+          // An answer that cannot be tied to this question, or names codes outside the exam, is a failed check.
+          const failed = !!d.rejected && (/key words/.test(d.rejected) || /not in this exam/.test(d.rejected));
+          await saveTax(q, { status: failed ? "VERIFICATION_FAILED" : "NEEDS_REVIEW", stored, found: null, confidence: res.confidence, method: model, findings: [failed ? `unusable answer: ${d.rejected}` : `${model} could not place it reliably (${d.rejected ?? "no subject fits"})${stored.subjectId ? ` — the stored ${name(stored.subjectId)} is not confirmed` : ""}`], comparedWithV1: "NO_V1" });
+          continue;
+        }
+        const findings: string[] = [];
+        let status: NonNullable<V2Result["classification"]>["status"] = "AGREED";
+        if (!stored.subjectId) {
+          status = "NEEDS_REVIEW";
+          findings.push(`no subject is stored; Verify 2 suggests ${name(d.subject)}${d.topic ? ` › ${name(d.topic)}` : ""} (${Math.round(d.confidence * 100)}%) — never applied automatically`);
+        } else if (d.subject !== stored.subjectId) {
+          status = "DISAGREEMENT";
+          findings.push(`subject ${name(stored.subjectId)} vs ${name(d.subject)} (independent classification, ${Math.round(d.confidence * 100)}%)${res.reason ? ` — reason given: ${res.reason.slice(0, 160)}` : ""}`);
+        } else if (d.topic && stored.topicId && d.topic !== stored.topicId && d.confidence >= 0.7) {
+          status = "DISAGREEMENT";
+          findings.push(`topic ${name(stored.topicId)} vs ${name(d.topic)} (independent classification, ${Math.round(d.confidence * 100)}%)${res.reason ? ` — reason given: ${res.reason.slice(0, 160)}` : ""}`);
+        } else if (d.subTopic && stored.subTopicId && d.subTopic !== stored.subTopicId && d.confidence >= 0.7) {
+          status = "DISAGREEMENT";
+          findings.push(`subtopic ${name(stored.subTopicId)} vs ${name(d.subTopic)} (independent classification, ${Math.round(d.confidence * 100)}%)`);
+        } else if (!stored.topicId && d.topic) {
+          status = "NEEDS_REVIEW";
+          findings.push(`subject confirmed; no topic is stored — Verify 2 suggests ${name(d.topic)} (never applied automatically)`);
+        } else findings.push(`${name(d.subject)}${stored.topicId ? ` › ${name(stored.topicId)}` : ""} confirmed independently (${Math.round(d.confidence * 100)}%)`);
+        if (d.rejected) findings.push(`ignored: ${d.rejected}`);
+        await saveTax(q, { status, stored, found, confidence: d.confidence, method: model, findings, comparedWithV1: vsV1(q, found) });
       }
     }
   }
+  await logEvent(ctx.job.id, "VERIFY2_CLASSIFIED", `Verify 2 subject / topic check of ${all.length} question(s): ${tc.AGREED} agreed, ${tc.DISAGREEMENT} disagreement(s), ${tc.NEEDS_REVIEW} need review, ${tc.VERIFICATION_FAILED} verification failed (never counted as agreement), ${tc.NOT_VERIFIED} not verified.`, { ...tc });
+  counts.taxAgreed = tc.AGREED;
+  counts.taxDisagree = tc.DISAGREEMENT;
+  counts.taxFailed = tc.VERIFICATION_FAILED;
   return counts;
 }
 
@@ -847,7 +929,7 @@ export interface PaperSummary {
   /** Question / option / answer boundaries: answer text in an option, statements run together, placeholder text, options missing. */
   structureIssues: number;
   classificationIssues: number;
-  classification: { subjectUnknown: number; subjectMismatch: number; topicMissing: number };
+  classification: { subjectUnknown: number; subjectMismatch: number; topicMissing: number; classificationFailed: number; disagreements: number };
   formulaIssues: number;
   figureIssues: number;
   unresolved: number;
@@ -859,7 +941,7 @@ export interface PaperSummary {
 
 const has = (q: { issueCodes: string[] }, codes: string[]) => q.issueCodes.some((c) => codes.includes(c));
 export const STRUCTURE_CODES = ["ANSWER_IN_OPTION", "STATEMENTS_MERGED", "QUESTION_TEXT_SUSPECT", "OPTIONS_INCOMPLETE", "NUMBER_CONFLICT"];
-export const TAXONOMY_CODES = ["SUBJECT_UNKNOWN", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN"];
+export const TAXONOMY_CODES = ["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN", "TAXONOMY_DISAGREES"];
 
 /** Pages of a reference with no text layer (stored, but not compared without OCR / vision). */
 export function scannedPagesOf(r: Pick<ReferencePaper, "note" | "kind" | "pageCount"> & { scannedPages?: number }): number {
@@ -905,7 +987,7 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
     answerIssues: active.filter((q) => has(q, ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"])).length,
     structureIssues: active.filter((q) => has(q, STRUCTURE_CODES)).length,
     classificationIssues: active.filter((q) => has(q, TAXONOMY_CODES)).length,
-    classification: { subjectUnknown: active.filter((q) => has(q, ["SUBJECT_UNKNOWN"])).length, subjectMismatch: active.filter((q) => has(q, ["SUBJECT_MISMATCH"])).length, topicMissing: active.filter((q) => has(q, ["TOPIC_UNCERTAIN"])).length },
+    classification: { subjectUnknown: active.filter((q) => has(q, ["SUBJECT_UNKNOWN"])).length, subjectMismatch: active.filter((q) => has(q, ["SUBJECT_MISMATCH"])).length, topicMissing: active.filter((q) => has(q, ["TOPIC_UNCERTAIN"])).length, classificationFailed: active.filter((q) => has(q, ["CLASSIFICATION_FAILED"])).length, disagreements: active.filter((q) => has(q, ["TAXONOMY_DISAGREES"])).length },
     formulaIssues: active.filter((q) => has(q, ["FORMULA_ISSUE", "UNREADABLE_TEXT", "EXTRACTION_UNCERTAIN", "QUESTION_TEXT_SUSPECT"])).length,
     figureIssues: active.filter((q) => has(q, ["IMAGE_MISSING", "IMAGE_MAPPING_UNCERTAIN"])).length,
     unresolved: active.filter((q) => has(q, ["VERIFY2_DISAGREES", "VERIFY_DISAGREES", "REFERENCE_CONFLICT"])).length,

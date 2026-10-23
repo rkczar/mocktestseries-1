@@ -51,6 +51,19 @@ export interface ExceptionRow {
   answerLine: string | null;
   taxonomySource: string | null;
   taxonomyEvidence: string | null;
+  /** Subject / topic decision: why, how sure, and what Verify 1 / Verify 2 found (names, never ids). */
+  tax: {
+    subTopic: string | null;
+    confidence: number | null;
+    /** Mismatch / Uncertain / Missing taxonomy configuration / Classifier failure / Text incomplete / Set by an administrator. */
+    kind: string | null;
+    reason: string | null;
+    localSuggestion: string | null;
+    ai: string | null;
+    v1: { status: string; found: string | null; findings: string[] } | null;
+    v2: { status: string; found: string | null; findings: string[]; model: string; vsV1: string } | null;
+    agreement: string;
+  };
   eligible: boolean;
 }
 
@@ -62,15 +75,51 @@ export interface TaxonomyOption {
 
 const toneOf = (label: string) => (label === "Passed" ? "text-[var(--color-success)]" : label.startsWith("Disagreement") ? "text-[var(--color-error)]" : label === "Not run" ? "text-[var(--color-muted-foreground)]" : "text-[var(--color-warning)]");
 const STRUCTURE = new Set(["ANSWER_IN_OPTION", "STATEMENTS_MERGED", "QUESTION_TEXT_SUSPECT", "OPTIONS_INCOMPLETE", "NUMBER_CONFLICT"]);
-const TAXONOMY = new Set(["SUBJECT_UNKNOWN", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN"]);
+/** The decisive part of a classification reason (the full text stays in the cell's tooltip). */
+const shortReason = (reason: string) => {
+  const matched = /matched (“[^;]*?”)(?:;|$)/.exec(reason)?.[1];
+  const head = reason.replace(/; paper context:.*$/, "");
+  return (matched && /\(subject \d+%/.test(head) ? `matched ${matched}` : head).slice(0, 160);
+};
+/** A Verify 1 / Verify 2 classification result in a few words: the finding only when the check does not simply agree. */
+const verdict = (v: { status: string; found: string | null; findings: string[] } | null) => (!v ? "not run" : v.status === "AGREED" ? "agreed" : `${v.status.replace(/_/g, " ").toLowerCase()} — ${v.findings[0] ?? ""}`.slice(0, 180));
+const TAXONOMY = new Set(["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN", "TAXONOMY_DISAGREES"]);
 
-/** Bulk subject / topic / subtopic correction — only records of the job's exam are offered. */
-function BulkTaxonomy({ taxonomy, disabled, onApply }: { taxonomy: TaxonomyOption[]; disabled: boolean; onApply: (s: string, t: string | null, u: string | null) => void }) {
+/**
+ * Bulk subject / topic / subtopic correction — only records of the job's exam are offered. Applying needs an explicit
+ * confirmation that lists the questions (the server checks the confirmed count again).
+ */
+function BulkTaxonomy({ taxonomy, disabled, labels, onApply }: { taxonomy: TaxonomyOption[]; disabled: boolean; labels: string[]; onApply: (s: string, t: string | null, u: string | null, confirm: { count: number; remember: boolean }) => void }) {
   const [s, setS] = useState("");
   const [t, setT] = useState("");
   const [u, setU] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [remember, setRemember] = useState(false);
   const subject = taxonomy.find((x) => x.id === s);
   const topic = subject?.topics.find((x) => x.id === t);
+  const subTopic = topic?.subTopics.find((x) => x.id === u);
+  if (confirming && labels.length)
+    return (
+      <span className="flex w-full flex-col gap-1 rounded border border-[var(--color-warning)] p-2 text-xs" data-testid="bulk-taxonomy-confirm">
+        <span>
+          Set <b>{subject?.name ?? "?"}</b> › {topic?.name ?? "no topic"}
+          {subTopic ? ` › ${subTopic.name}` : ""} on <b data-testid="bulk-taxonomy-count">{labels.length}</b> question(s): {labels.slice(0, 40).join(", ")}
+          {labels.length > 40 ? ` … (+${labels.length - 40})` : ""}
+        </span>
+        <span className="text-[var(--color-muted-foreground)]">Only questions of this exam can be changed. They are not verified by this: they must still be approved, and their Verify 1 / Verify 2 results become out of date until run again.</span>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} data-testid="bulk-taxonomy-remember" /> Remember these as confirmed examples for this exam (only if you have checked each question)
+        </label>
+        <span className="flex gap-1">
+          <Button size="sm" disabled={disabled} onClick={() => (setConfirming(false), onApply(s, t || null, u || null, { count: labels.length, remember }))} data-testid="bulk-taxonomy-confirm-apply">
+            Confirm — change {labels.length} question(s)
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setConfirming(false)} data-testid="bulk-taxonomy-cancel">
+            Cancel
+          </Button>
+        </span>
+      </span>
+    );
   return (
     <span className="flex flex-wrap items-center gap-1" data-testid="bulk-taxonomy">
       <SelectNative className="h-8 w-auto max-w-48 text-xs" aria-label="Subject" value={s} onChange={(e) => (setS(e.target.value), setT(""), setU(""))} data-testid="bulk-subject">
@@ -99,8 +148,8 @@ function BulkTaxonomy({ taxonomy, disabled, onApply }: { taxonomy: TaxonomyOptio
           ))}
         </SelectNative>
       )}
-      <Button size="sm" variant="outline" disabled={disabled || !s} onClick={() => onApply(s, t || null, u || null)} data-testid="bulk-taxonomy-apply">
-        Set subject / topic
+      <Button size="sm" variant="outline" disabled={disabled || !s || !labels.length} onClick={() => setConfirming(true)} data-testid="bulk-taxonomy-apply">
+        Set subject / topic…
       </Button>
     </span>
   );
@@ -150,7 +199,14 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
           <Button size="sm" variant="outline" disabled={!sameJob || pending} onClick={() => act(() => reclassifyQuestionsAction(ids), (d) => `${d.queued} question(s) queued for subject/topic classification.`)} data-testid="bulk-reclassify">
             Re-classify
           </Button>
-          {jobId && taxonomy.length > 0 && <BulkTaxonomy taxonomy={taxonomy} disabled={!ids.length || pending} onApply={(s, t, u) => act(() => bulkTaxonomyAction(ids, s, t, u), (d) => `Subject / topic set on ${d.updated} question(s)${d.refused.length ? `; not changed: ${d.refused.join(" ")}` : ""}.`)} />}
+          {jobId && taxonomy.length > 0 && (
+            <BulkTaxonomy
+              taxonomy={taxonomy}
+              disabled={!ids.length || pending}
+              labels={rows.filter((r) => selected.has(r.id)).map((r) => `${r.section ? `${r.section} ` : ""}Q${r.label}`)}
+              onApply={(s, t, u, confirm) => act(() => bulkTaxonomyAction(ids, s, t, u, confirm), (d) => `Subject / topic set on ${d.updated} question(s)${d.remembered ? ` (${d.remembered} saved as examples for this exam)` : ""}${d.refused.length ? `; not changed: ${d.refused.join(" ")}` : ""}. They still need approval; run Verify 1 / Verify 2 again to check them.`)}
+            />
+          )}
           {canPublish && (
             <Button size="sm" disabled={!sameJob || !publishable || pending} onClick={() => confirm(`Import and publish the ${publishable} selected question(s) that pass every check? The others stay as drafts/exceptions.`) && act(() => importAction(rows.find((r) => selected.has(r.id))!.jobId, "PUBLISH_SELECTED", ids), "Import & publish of the selection started — see the job page.")} data-testid="publish-selected">
               Import &amp; Publish Selected ({publishable})
@@ -257,12 +313,34 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                 <Badge variant={statusVariant(r.answerStatus)}>{ANSWER_STATUS_LABELS[r.answerStatus] ?? r.answerStatus}</Badge>
                 {r.finalAnswer.length > 0 && <span className="ml-1 font-mono text-xs">{r.finalAnswer.join(",")}</span>}
               </td>
-              <td className="py-1.5 pr-2 text-xs" data-testid="row-taxonomy">
-                <span className={r.issues.some((c) => TAXONOMY.has(c)) ? "text-[var(--color-warning)]" : ""}>
+              <td className="max-w-xs py-1.5 pr-2 text-xs" data-testid="row-taxonomy" data-kind={r.tax.kind ?? undefined}>
+                <span className={r.issues.some((c) => TAXONOMY.has(c)) ? "text-[var(--color-warning)]" : ""} data-testid="row-taxonomy-selected">
                   {r.subject ?? "—"} › {r.topic ?? "—"}
+                  {r.tax.subTopic ? ` › ${r.tax.subTopic}` : ""}
                 </span>
-                {r.taxonomySource && <p className="text-[11px] text-[var(--color-muted-foreground)]">{r.taxonomySource}</p>}
-                {r.taxonomyEvidence && <p className="text-[11px] text-[var(--color-muted-foreground)]" title={r.taxonomyEvidence}>{r.taxonomyEvidence.slice(0, 140)}</p>}
+                <p className="text-[11px] text-[var(--color-muted-foreground)]">
+                  {r.taxonomySource ?? "not set"}
+                  {r.tax.confidence !== null && r.subject ? ` · ${Math.round(r.tax.confidence * 100)}%` : ""}
+                </p>
+                {r.tax.kind && <p className="text-[11px] font-medium text-[var(--color-warning)]" data-testid="row-taxonomy-kind">{r.tax.kind}</p>}
+                {r.tax.reason && (
+                  <p className="text-[11px] text-[var(--color-muted-foreground)]" title={r.tax.reason} data-testid="row-taxonomy-reason">
+                    {shortReason(r.tax.reason)}
+                  </p>
+                )}
+                {r.tax.localSuggestion && <p className="text-[11px] text-[var(--color-muted-foreground)]">Free check suggests: {r.tax.localSuggestion}</p>}
+                {r.tax.ai && <p className="text-[11px] text-[var(--color-muted-foreground)]" title={r.tax.ai}>AI: {r.tax.ai.slice(0, 140)}</p>}
+                <p className="mt-0.5 text-[11px]" data-testid="row-taxonomy-v1" data-status={r.tax.v1?.status ?? "none"}>
+                  <span className="text-[var(--color-muted-foreground)]">V1: </span>
+                  {verdict(r.tax.v1)}
+                </p>
+                <p className="text-[11px]" data-testid="row-taxonomy-v2" data-status={r.tax.v2?.status ?? "none"}>
+                  <span className="text-[var(--color-muted-foreground)]">V2: </span>
+                  {verdict(r.tax.v2)}
+                </p>
+                <p className={`text-[11px] ${r.tax.agreement === "Both checks agree" ? "text-[var(--color-success)]" : r.tax.agreement.startsWith("Disagreement") || r.tax.agreement.includes("failed") ? "text-[var(--color-error)]" : "text-[var(--color-muted-foreground)]"}`} data-testid="row-taxonomy-agreement">
+                  {r.tax.agreement}
+                </p>
               </td>
               <td className="py-1.5 pr-2 text-xs">
                 <ul className="flex flex-col gap-0.5">

@@ -18,6 +18,7 @@ import { effective, runPostProcessing } from "@/lib/ai-import/post";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { planOf } from "@/lib/ai-import/select";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
+import { rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
 /**
@@ -263,8 +264,13 @@ export async function setAnswer(id: string, actorId: string, labels: string[]) {
   await logEvent(q.jobId, "ANSWER_SET", `Q${q.sourceLabel}: answer ${clean.join(", ")} set by an administrator`, { questionId: id }, actorId);
 }
 
-/** Subject / topic / sub-topic from the exam's own taxonomy only (existing ids; nothing is created). */
-export async function setTaxonomy(id: string, actorId: string, subjectId: string, topicId: string | null, subTopicId: string | null = null) {
+/**
+ * Subject / topic / sub-topic from the exam's own taxonomy only (existing ids; nothing is created). Recorded in the
+ * question's checks, the job's events and the audit log; with `remember` the confirmed mapping is stored as a reusable
+ * example of this exam (lib/ai-import/taxonomy-memory.ts). It never marks the question verified: its Verify 1 / Verify 2
+ * results become out of date (the ids are part of their fingerprint) and it must still be approved.
+ */
+export async function setTaxonomy(id: string, actorId: string, subjectId: string, topicId: string | null, subTopicId: string | null = null, opts: { remember?: boolean; bulk?: boolean } = {}) {
   const q = await editable(id);
   const tax = await getExamTaxonomy(prisma, q.job.examId);
   const subject = tax.find((s) => s.id === subjectId);
@@ -275,8 +281,39 @@ export async function setTaxonomy(id: string, actorId: string, subjectId: string
   if (subTopicId && (!topic || !topic.subTopics.some((st) => st.id === subTopicId))) throw new ImportJobError("That sub-topic does not belong to the topic (for this exam).");
   const subTopic = subTopicId ? topic!.subTopics.find((st) => st.id === subTopicId)! : null;
   await prisma.aiImportQuestion.update({ where: { id }, data: { subjectId, topicId, subTopicId: subTopicId ?? null, taxonomyConfidence: 1, taxonomySource: "admin", ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED } });
-  await adminCheck(id, "Topic set", `${subject.name} › ${topic ? topic.name : "no topic"}${subTopic ? ` › ${subTopic.name}` : ""}`);
-  await logEvent(q.jobId, "TAXONOMY_SET", `Q${q.sourceLabel}: ${subject.name} › ${topic?.name ?? "no topic"}${subTopic ? ` › ${subTopic.name}` : ""}`, { questionId: id, from: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId }, to: { subjectId, topicId, subTopicId } }, actorId);
+  const remembered = opts.remember ? await rememberCorrection({ examId: q.job.examId, jobId: q.jobId, questionId: id, e: effective(q), subjectId, topicId, subTopicId: subTopicId ?? null, actorId, bulk: !!opts.bulk }) : false;
+  await adminCheck(id, "Topic set", `${subject.name} › ${topic ? topic.name : "no topic"}${subTopic ? ` › ${subTopic.name}` : ""}${opts.bulk ? " (bulk correction)" : ""}${remembered ? " — saved as an example for this exam" : ""}`);
+  await logEvent(q.jobId, "TAXONOMY_SET", `Q${q.sourceLabel}: ${subject.name} › ${topic?.name ?? "no topic"}${subTopic ? ` › ${subTopic.name}` : ""}${opts.bulk ? " (bulk)" : ""}${remembered ? " — saved as an example for this exam" : ""}`, { questionId: id, from: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource }, to: { subjectId, topicId, subTopicId }, remembered, bulk: !!opts.bulk }, actorId);
+  await prisma.auditLog.create({ data: { actorId, action: opts.bulk ? "AI_IMPORT_TAXONOMY_BULK_SET" : "AI_IMPORT_TAXONOMY_SET", entityType: "AiImportQuestion", entityId: id, metadata: { jobId: q.jobId, from: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource }, to: { subjectId, topicId, subTopicId: subTopicId ?? null }, remembered } } });
+  return { remembered };
+}
+
+/**
+ * Bulk subject / topic / subtopic correction of questions of ONE import, after an explicit confirmation of the exact
+ * number of questions shown (a stale or scripted request cannot change more than was reviewed). Each question is
+ * validated against its exam's own taxonomy by setTaxonomy (refusals are reported, nothing else is touched).
+ */
+export async function bulkSetTaxonomy(ids: string[], actorId: string, subjectId: string, topicId: string | null, subTopicId: string | null, confirm: { count: number; remember?: boolean } | null | undefined): Promise<{ updated: number; refused: string[]; remembered: number; jobId: string | null }> {
+  const unique = [...new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === "string"))].slice(0, 2000);
+  if (!unique.length) throw new ImportJobError("Select the questions to correct.");
+  if (typeof subjectId !== "string" || !subjectId) throw new ImportJobError("Choose a subject.");
+  if (!confirm || confirm.count !== unique.length) throw new ImportJobError(`Confirm the bulk correction of the ${unique.length} selected question(s) first. Nothing was changed.`);
+  const jobsOf = await prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { id: { in: unique } } });
+  if (jobsOf.length !== 1) throw new ImportJobError(jobsOf.length ? "Bulk correction works on the questions of one import at a time. Nothing was changed." : "Question not found.");
+  let updated = 0;
+  let remembered = 0;
+  const refused: string[] = [];
+  for (const id of unique) {
+    try {
+      const r = await setTaxonomy(id, actorId, subjectId, topicId || null, subTopicId || null, { remember: confirm.remember === true, bulk: true });
+      if (r.remembered) remembered++;
+      updated++;
+    } catch (e) {
+      if (!(e instanceof ImportJobError)) throw e;
+      refused.push(e.message);
+    }
+  }
+  return { updated, refused: [...new Set(refused)].slice(0, 5), remembered, jobId: jobsOf[0].jobId };
 }
 
 async function figureHistory(questionId: string, jobId: string, actorId: string, note: string) {
@@ -578,17 +615,19 @@ export async function reclassifyQuestions(ids: string[], actorId: string): Promi
   const job = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
   if (BUSY.includes(job.status) || job.status === AiImportJobStatus.QUEUED || job.status === AiImportJobStatus.CANCELLED) throw new ImportJobError("The import is running or cancelled. Try again when it has finished.");
   const settings = await getImporterSettings();
-  if (!settings.aiEnabled || !planOf(job.config)?.tasks.classify.model) throw new ImportJobError("Re-classification uses the AI classification model, which is switched off or not in this import's model plan. Nothing was changed — set the subject and topic by hand.");
+  // The free local classifier always runs; the AI classifier only for what it cannot settle, when paid AI is on and the
+  // import's model plan has a classification model.
+  const aiToo = settings.aiEnabled && !!planOf(job.config)?.tasks.classify.model;
   const target = qs.filter((q) => !LOCKED.includes(q.status) && !q.taxonomySource?.startsWith("admin"));
   if (!target.length) throw new ImportJobError("Every selected question has a subject/topic chosen by an administrator (or is already stored); nothing to re-classify.");
   // An AI-chosen subject is cleared too (a wrong subject would otherwise survive and block every correct topic);
   // a subject from the paper itself (selected subject, printed heading / column) is kept.
-  const aiChosen = target.filter((q) => !q.taxonomySource || q.taxonomySource.startsWith("AI")).map((q) => q.id);
+  const aiChosen = target.filter((q) => !q.taxonomySource || q.taxonomySource.startsWith("AI") || q.taxonomySource === "local classifier" || q.taxonomySource === "confirmed example").map((q) => q.id);
   if (aiChosen.length) await prisma.aiImportQuestion.updateMany({ where: { id: { in: aiChosen } }, data: { subjectId: null } });
   await prisma.aiImportQuestion.updateMany({ where: { id: { in: target.map((q) => q.id) } }, data: { topicId: null, subTopicId: null, taxonomyConfidence: null, taxonomySource: null, ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED } });
   const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: job.status }, data: { status: AiImportJobStatus.QUEUED, finishedAt: null } });
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
-  await logEvent(jobId, "RECLASSIFY_REQUESTED", `${target.length} question(s) queued for subject/topic classification`, { questionIds: target.map((q) => q.id) }, actorId);
+  await logEvent(jobId, "RECLASSIFY_REQUESTED", `${target.length} question(s) queued for subject/topic classification (free local classifier${aiToo ? ", then the AI classifier for what it cannot settle" : "; AI classification is off or not in this import's model plan"})`, { questionIds: target.map((q) => q.id), ai: aiToo }, actorId);
   kickWorker();
   return target.length;
 }

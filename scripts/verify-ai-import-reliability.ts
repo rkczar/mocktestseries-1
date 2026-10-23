@@ -340,7 +340,9 @@ async function main() {
     const cr = (await events(jE, "CLASSIFY_RESULT"))[0];
     const q1E = qe.find((q) => q.sourceLabel === "1");
     check("classification assigned subject / topic from codes (Q1 → Lower Limb)", !!q1E?.topicId && (await prisma.topic.findUniqueOrThrow({ where: { id: q1E.topicId! } })).name === "Lower Limb");
-    check("…CLASSIFY_RESULT event: 3 questions, subjects assigned, no invalid codes", !!cr && (cr.data as { questions: number; subjects: number; invalid: number }).questions === 3 && (cr.data as { subjects: number }).subjects >= 1 && (cr.data as { invalid: number }).invalid === 0, cr?.message);
+    // Since 2026-10-23 the free local classifier runs first; the AI classifier only gets what it cannot settle.
+    const lcE = (await events(jE, "LOCAL_CLASSIFY_RESULT"))[0];
+    check("…classification events: free classification of 3 questions; the AI got only the rest, with no invalid codes", !!lcE && (lcE.data as { questions: number }).questions === 3 && (!cr || ((cr.data as { questions: number }).questions < 3 && (cr.data as { invalid: number }).invalid === 0)), [lcE?.message, cr?.message]);
     await manual({ extract: "mockvision/reader", classify: "mocktext/classifier" }, ["mockvision/reader", "mocktext/classifier"]);
     await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
     await mockConfig({ ...MOCK_BASE, script: { "mocktext/classifier": ["badcodes"] } });
@@ -349,8 +351,11 @@ async function main() {
     await runJob(actor, jF);
     const crF = (await events(jF, "CLASSIFY_RESULT"))[0];
     const qF = await prisma.aiImportQuestion.findMany({ where: { jobId: jF } });
-    check("codes not on the list → nothing assigned, nothing guessed", qF.length === 3 && qF.every((q) => !q.subjectId && !q.topicId), qF.map((q) => [q.subjectId, q.topicId]));
-    check("…CLASSIFY_RESULT reports the invalid answers in plain words", !!crF && (crF.data as { invalid: number }).invalid >= 3 && /not on the list/.test(crF.message) && /stay in Needs correction/.test(crF.message), crF?.message);
+    const linkedF = new Set((await prisma.examSubject.findMany({ where: { examId: exam.id } })).map((l) => l.subjectId));
+    const topicsF = new Set((await prisma.examTopic.findMany({ where: { examId: exam.id } })).map((l) => l.topicId));
+    check("codes not on the list → never stored: only this exam's own subjects / topics (from the free classifier), nothing guessed", qF.length === 3 && qF.every((q) => (!q.subjectId || linkedF.has(q.subjectId)) && (!q.topicId || topicsF.has(q.topicId))), qF.map((q) => [q.subjectId, q.topicId, q.taxonomySource]));
+    const sentF = crF ? (crF.data as { questions: number }).questions : 0;
+    check("…when the AI classifier was asked, CLASSIFY_RESULT reports its invalid answers in plain words", !crF || ((crF.data as { invalid: number }).invalid >= sentF && /not on the list/.test(crF.message) && /stay in Needs correction/.test(crF.message)), crF?.message);
 
     // ------------------------------------------------------------------ G
     section("G. Answer key printed for another paper / series");

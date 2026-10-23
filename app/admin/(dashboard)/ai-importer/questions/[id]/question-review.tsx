@@ -66,6 +66,8 @@ export interface ReviewQ {
   subjectId: string | null;
   topicId: string | null;
   subTopicId: string | null;
+  /** Why this subject / topic (or why none), how sure, and what Verify 1 / Verify 2 found. */
+  classification: { source: string | null; confidence: number | null; kind: string | null; reason: string | null; v1: string | null; v2: string | null } | null;
   allowDuplicate: boolean;
   duplicate: string | null;
   approved: boolean;
@@ -243,6 +245,7 @@ export function QuestionReview({
   const [subjectId, setSubjectId] = useState(q.subjectId ?? "");
   const [topicId, setTopicId] = useState(q.topicId ?? "");
   const [subTopicId, setSubTopicId] = useState(q.subTopicId ?? "");
+  const [rememberTax, setRememberTax] = useState(true);
   const [take, setTake] = useState<Set<string>>(new Set());
   const [addImg, setAddImg] = useState({ owner: "STEM", label: "A" });
   const [addCrop, setAddCrop] = useState<number | null>(null);
@@ -521,9 +524,24 @@ export function QuestionReview({
                 ))}
               </SelectNative>
             )}
-            <Button size="sm" disabled={pending || !subjectId} onClick={() => act(() => setTaxonomyAction(q.id, subjectId, topicId || null, subTopicId || null), "Subject/topic saved.")} data-testid="rv-set-topic">
+            <label className="flex items-center gap-1 text-xs">
+              <input type="checkbox" checked={rememberTax} onChange={(e) => setRememberTax(e.target.checked)} data-testid="rv-remember-topic" /> Remember as a confirmed example for this exam
+            </label>
+            <Button size="sm" disabled={pending || !subjectId} onClick={() => act(() => setTaxonomyAction(q.id, subjectId, topicId || null, subTopicId || null, rememberTax), "Subject/topic saved. The question still needs approval; run Verify 1 / Verify 2 again to check it.")} data-testid="rv-set-topic">
               Save
             </Button>
+            {q.classification && (
+              <div className="flex w-full flex-col gap-0.5 text-xs text-[var(--color-muted-foreground)]" data-testid="rv-classification">
+                <p>
+                  Source: {q.classification.source ?? "not set"}
+                  {q.classification.confidence !== null ? ` · ${Math.round(q.classification.confidence * 100)}%` : ""}
+                  {q.classification.kind ? <span className="ml-1 font-medium text-[var(--color-warning)]">{q.classification.kind}</span> : null}
+                </p>
+                {q.classification.reason && <p>{q.classification.reason}</p>}
+                {q.classification.v1 && <p>Verify 1: {q.classification.v1}</p>}
+                {q.classification.v2 && <p>Verify 2: {q.classification.v2}</p>}
+              </div>
+            )}
           </CardContent>
         </Card>
 

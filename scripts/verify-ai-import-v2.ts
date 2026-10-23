@@ -375,7 +375,9 @@ async function main() {
   check("an untouched question is replaced by the re-scan", (s2r.data as unknown as ExtractedQuestion).stem === "Special Senses: Which layer is labelled X?", (s2r.data as unknown as ExtractedQuestion).stem);
   const v2 = await prisma.aiImportQuestionVersion.findMany({ where: { questionId: s2q.id }, orderBy: { createdAt: "asc" } });
   check("…with its previous extraction kept in its history", v2.some((v) => v.kind === "EXTRACTION" && (v.data as unknown as ExtractedQuestion).stem === "Garbled extraction of question two") && v2.some((v) => v.kind === "RESCAN" && v.status === "AUTO_APPLIED"), v2.map((v) => [v.kind, v.status]));
-  check("a question outside the re-scan scope is untouched", JSON.stringify(s3r.data) === s3before && !(await prisma.aiImportQuestionVersion.count({ where: { questionId: s3q.id, kind: "RESCAN" } })));
+  // The content is compared; the classification check record (rewritten by every check run since 2026-10-23) is not content.
+  const content = (d: unknown) => JSON.stringify({ ...(d as Record<string, unknown>), classification: undefined });
+  check("a question outside the re-scan scope is untouched", content(s3r.data) === content(JSON.parse(s3before)) && !(await prisma.aiImportQuestionVersion.count({ where: { questionId: s3q.id, kind: "RESCAN" } })));
   const done = await prisma.aiImportEvent.findFirst({ where: { jobId: j2, type: "RESCAN_DONE" } });
   check("the re-scan attempt and its outcome are recorded", !!done && /1 replaced/.test(done.message) && /1 waiting for your choice/.test(done.message), done?.message);
   check("the re-scan read the original page again (one more reader call, no extra checker call needed)", ((await (await fetch(`${MOCK}/__mock/stats`)).json()) as { byModel: Record<string, number> }).byModel["mockvision/reader"] > (stats.byModel["mockvision/reader"] ?? 0));

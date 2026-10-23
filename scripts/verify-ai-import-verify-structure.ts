@@ -347,8 +347,9 @@ async function main() {
     check("Q1 stored with its statements on separate lines, clean options, answer C — no ANSWER_IN_OPTION / STATEMENTS_MERGED", statementsOf(d1.stem).length === 4 && d1.options[3].text === "I, II and III" && byLabel(qs, "1").finalAnswer.join() === "C" && !byLabel(qs, "1").issueCodes.some((c) => c === "ANSWER_IN_OPTION" || c === "STATEMENTS_MERGED"), [d1.stem, d1.options, byLabel(qs, "1").issueCodes]);
     check("no option of any question contains an answer line", qs.every((q) => eff(q).options.every((o) => !/Official Answer/.test(o.text))));
     const shiftEv = (await events(jB, "CLASSIFY_RESULT")).at(-1);
-    check("shifted classifier answers are NOT used: no subject assigned, the event says why", qs.every((q) => !q.subjectId) && /key words were not in the question/.test(shiftEv?.message ?? ""), [qs.map((q) => q.subjectId), shiftEv?.message]);
-    check("each question says why it has no subject (Subject unknown, with the classifier's evidence)", qs.every((q) => q.issueCodes.includes("SUBJECT_UNKNOWN") && /key words/.test(((q.issues as Record<string, string>) ?? {}).SUBJECT_UNKNOWN ?? "")));
+    // Since 2026-10-23 the free local classifier decides first; the (shifted) AI classifier only gets what it cannot settle.
+    check("shifted classifier answers are NOT used: no subject / topic comes from the AI, the heart-sounds question is never filed under another subject", qs.every((q) => !q.taxonomySource?.startsWith("AI")) && byLabel(qs, "1").subjectId !== subjectOf("Biochemistry").id, [qs.map((q) => [q.sourceLabel, q.subjectId, q.taxonomySource]), shiftEv?.message]);
+    check("each question without a subject says why (its own reason, never the bare generic message)", qs.filter((q) => !q.subjectId).every((q) => { const t = ((q.issues as Record<string, string>) ?? {}); const why = t.SUBJECT_UNKNOWN ?? t.CLASSIFICATION_FAILED ?? ""; return why.length > 60 && !/^No subject of this exam could be determined\. Set it/.test(why); }), qs.filter((q) => !q.subjectId).map((q) => q.issues));
     await mockConfig({ classifyShift: false });
     // Bulk re-classification with the same restrictions.
     const n = await reclassifyQuestions(qs.map((q) => q.id), actor);
@@ -358,8 +359,8 @@ async function main() {
     check("bulk re-classification queued all 20 and assigned exam subjects / topics by meaning", n === 20 && heartQ.subjectId === subjectOf("Physiology").id && heartQ.topicId === topicId("Cardiovascular System") && byLabel(qs, "3").topicId === topicId("Upper Limb"), [n, heartQ.subjectId, heartQ.topicId]);
     const prime = byLabel(qs, "19");
     check("a question with no suitable taxonomy match stays unresolved (no unrelated subject filled in)", !prime.subjectId && prime.issueCodes.includes("SUBJECT_UNKNOWN"), [prime.subjectId, prime.issueCodes]);
-    const evidence = await prisma.aiImportCheck.findFirst({ where: { questionId: heartQ.id, name: "Classification evidence" } });
-    check("the classification is explained: subject › topic, model, confidence, key words", /Physiology › Cardiovascular System/.test(evidence?.detail ?? "") && /90%/.test(evidence?.detail ?? "") && /key words/.test(evidence?.detail ?? ""), evidence?.detail);
+    const evidence = await prisma.aiImportCheck.findFirst({ where: { questionId: heartQ.id, name: { in: ["Classification evidence", "Local classification"] } }, orderBy: { createdAt: "desc" } });
+    check("the classification is explained: subject › topic, confidence, the words / key words that decided it", /Physiology › Cardiovascular System/.test(evidence?.detail ?? "") && /\d+%/.test(evidence?.detail ?? "") && /matched|key words/.test(evidence?.detail ?? ""), evidence?.detail);
     // Manual / bulk subject-topic setting: this exam's records only.
     const otherExam = await prisma.exam.findFirst({ where: { id: { not: exam.id }, examSubjects: { some: {} } }, select: { id: true } });
     const foreignTopic = otherExam ? await prisma.topic.findFirst({ where: { examLinks: { some: { examId: otherExam.id } }, NOT: { examLinks: { some: { examId: exam.id } } } }, select: { id: true, subjectId: true } }) : null;
@@ -372,7 +373,9 @@ async function main() {
     await reclassifyQuestions([byLabel(qs, "4").id], actor);
     await runWorker(120_000);
     qs = await questionsOf(jB);
-    check("invalid subject / topic codes from the classifier are ignored (question unresolved, counted as invalid)", !byLabel(qs, "4").subjectId && /not on the list/.test((await events(jB, "CLASSIFY_RESULT")).at(-1)?.message ?? ""), (await events(jB, "CLASSIFY_RESULT")).at(-1)?.message);
+    const q4links = new Set((await prisma.examSubject.findMany({ where: { examId: exam.id } })).map((l) => l.subjectId));
+    const badEv = (await events(jB, "CLASSIFY_RESULT")).at(-1);
+    check("invalid subject / topic codes from the classifier are never stored (only this exam's ids; counted as invalid when the AI was asked)", (!byLabel(qs, "4").subjectId || q4links.has(byLabel(qs, "4").subjectId!)) && !byLabel(qs, "4").taxonomySource?.startsWith("AI") && (((byLabel(qs, "4").data as unknown as ExtractedQuestion).classification?.ai?.status ?? "") !== "REJECTED" || /not on the list/.test(badEv?.message ?? "")), [byLabel(qs, "4").subjectId, byLabel(qs, "4").taxonomySource, badEv?.message]);
     await reclassifyQuestions([byLabel(qs, "4").id], actor);
     await runWorker(120_000);
     qs = await questionsOf(jB);
@@ -429,7 +432,8 @@ async function main() {
     check("Q10: printed answer read differently (the source cannot settle it) → disagreement with the field named", vs(byLabel(qs, "10")).v2 === "disagree" && v2Of(byLabel(qs, "10"))!.fields.some((x) => /answer/.test(x)) && byLabel(qs, "10").issueCodes.includes("VERIFY2_DISAGREES"), [vs(byLabel(qs, "10")).v2, v2Of(byLabel(qs, "10"))?.fields]);
     check("Q11: option C read differently, but the Word text contains the stored wording → agrees, settled by the source (shown)", vs(byLabel(qs, "11")).v2 === "verified" && v2Of(byLabel(qs, "11"))!.fields.includes("option C") && !!v2Of(byLabel(qs, "11"))!.resolvedBySource, v2Of(byLabel(qs, "11")));
     check("Q12: not found by the second read → its own state (a disagreement to decide), not agreement", vs(byLabel(qs, "12")).v2 === "not_found" && byLabel(qs, "12").issueCodes.includes("VERIFY2_DISAGREES"));
-    check("Q9: the independent classification files it under Anatomy, not the stored Biochemistry → Subject mismatch", vs(byLabel(qs, "9")).v2 === "disagree" && v2Of(byLabel(qs, "9"))!.fields.includes("subject") && byLabel(qs, "9").issueCodes.includes("SUBJECT_MISMATCH"), [v2Of(byLabel(qs, "9")), byLabel(qs, "9").issueCodes]);
+    // The subject / topic check is its own result (v2.classification); the text read keeps its own verdict.
+    check("Q9: the independent classification files it under Anatomy, not the stored Biochemistry → DISAGREEMENT + Subject mismatch", v2Of(byLabel(qs, "9"))?.classification?.status === "DISAGREEMENT" && v2Of(byLabel(qs, "9"))?.classification?.found?.subjectId === subjectOf("Anatomy").id && byLabel(qs, "9").issueCodes.includes("SUBJECT_MISMATCH") && byLabel(qs, "9").issueCodes.includes("TAXONOMY_DISAGREES"), [v2Of(byLabel(qs, "9")), byLabel(qs, "9").issueCodes]);
     sum = (await paperSummary(jB))!;
     const b2 = sum.v2;
     check("counters add up: Verify 1 and Verify 2 buckets each sum to the questions processed", sum.v1.passed + sum.v1.problems + sum.v1.stale + sum.v1.none === sum.total && b2.verified + b2.disagree + b2.not_found + b2.failed + b2.unavailable + b2.stale + b2.none === sum.total && b2.failed === 8, [sum.total, sum.v1, b2]);

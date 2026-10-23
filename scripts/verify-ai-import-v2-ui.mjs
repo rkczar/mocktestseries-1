@@ -218,7 +218,7 @@ await full.goto(`${BASE}/admin/ai-importer/questions/${await qid(jobId, "2")}`);
 check("FULL_ADMIN sees the question and its paper but no edit / approve / re-scan tools", (await full.locator("[data-testid=paper-mapping]").count()) === 1 && (await full.locator("[data-testid=question-review]").count()) === 0);
 const upl = await full.evaluate(async (u) => { const f = new FormData(); f.set("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), "x.png"); const r = await fetch(u, { method: "POST", body: f }); return r.status; }, `/api/admin/ai-importer/questions/${await qid(jobId, "2")}/figures`);
 check("FULL_ADMIN image upload refused server-side (403)", upl === 403, upl);
-const manifest = JSON.parse(readFileSync(".next/server/server-reference-manifest.json", "utf8"));
+const manifest = JSON.parse(readFileSync(`${process.env.APP_DIR ?? "."}/.next/server/server-reference-manifest.json`, "utf8"));
 const actionId = (name) => Object.entries(manifest.node).find(([, v]) => v.exportedName === name || JSON.stringify(v).includes(`"${name}"`))?.[0];
 const raw = await inPage(full, `/admin/ai-importer/questions/${await qid(jobId, "2")}`, { method: "POST", headers: { "Next-Action": actionId("approveQuestionsAction"), Accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify([[await qid(jobId, "2")]]) });
 check("FULL_ADMIN raw approveQuestionsAction refused", !!actionId("approveQuestionsAction") && /do not have permission/.test(raw.text), raw.text.slice(-200));

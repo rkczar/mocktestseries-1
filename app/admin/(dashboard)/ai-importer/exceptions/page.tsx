@@ -20,6 +20,7 @@ import { listReferences } from "@/lib/ai-import/reference";
 import { V1_DISPLAY, v2Display, verifyState } from "@/lib/ai-import/verify-core";
 import { referenceStatusText } from "@/lib/ai-import/reference-status";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
+import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
 export const metadata = { title: "AI Import Review Exceptions — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";
@@ -42,8 +43,8 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const issue = sp.issue && sp.issue in ISSUE_DEFS ? sp.issue : undefined;
   const VERIFY_FILTERS = { verified: "Verified (1 + 2)", eligible: "Eligible to publish", "v1-problems": "Verify 1 findings", "v2-disagree": "Verify 2 disagreements", "v2-noresult": "Verify 2 failed / unavailable", "v2-notrun": "Verify 2 not run / out of date", unverified: "Not verified yet" } as const;
   const verify = sp.verify && sp.verify in VERIFY_FILTERS ? (sp.verify as keyof typeof VERIFY_FILTERS) : undefined;
-  const PROBLEM_FILTERS = { structure: "Structure errors (stem / option / answer boundaries)", taxonomy: "Subject / topic errors", "subject-mismatch": "Subject mismatch", answer: "Answer-key / type", reference: "Reference differences" } as const;
-  const PROBLEM_CODES: Record<keyof typeof PROBLEM_FILTERS, string[]> = { structure: STRUCTURE_CODES, taxonomy: TAXONOMY_CODES, "subject-mismatch": ["SUBJECT_MISMATCH"], answer: ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"], reference: ["REFERENCE_CONFLICT"] };
+  const PROBLEM_FILTERS = { structure: "Structure errors (stem / option / answer boundaries)", taxonomy: "Subject / topic errors", "subject-mismatch": "Subject mismatch", "taxonomy-disagree": "Subject / topic check disagrees (Verify 1 / 2)", "classifier-failed": "Classifier failed (no answer)", answer: "Answer-key / type", reference: "Reference differences" } as const;
+  const PROBLEM_CODES: Record<keyof typeof PROBLEM_FILTERS, string[]> = { structure: STRUCTURE_CODES, taxonomy: TAXONOMY_CODES, "subject-mismatch": ["SUBJECT_MISMATCH"], "taxonomy-disagree": ["TAXONOMY_DISAGREES"], "classifier-failed": ["CLASSIFICATION_FAILED"], answer: ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"], reference: ["REFERENCE_CONFLICT"] };
   const problem = sp.problem && sp.problem in PROBLEM_FILTERS ? (sp.problem as keyof typeof PROBLEM_FILTERS) : undefined;
   const where: Prisma.AiImportQuestionWhereInput = {
     ...(jobId ? { jobId } : {}),
@@ -63,8 +64,21 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
     : allRows;
   const taxonomy = job ? (await getExamTaxonomy(prisma, job.examId)).map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((u) => ({ id: u.id, name: u.name })) })) })) : [];
   const references = jobId ? (await listReferences(jobId)).map((r) => ({ refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note, status: (() => { const s = summary?.references.find((x) => x.refId === r.refId)?.status; return s ? referenceStatusText(s) : null; })() })) : [];
-  const subjects = await prisma.subject.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.subjectId).filter((x): x is string => !!x))] } }, select: { id: true, name: true } });
-  const topics = await prisma.topic.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.topicId).filter((x): x is string => !!x))] } }, select: { id: true, name: true } });
+  // Names of every subject / topic / subtopic shown: the stored ones and what Verify 1 / Verify 2 found.
+  const taxIds = (pick: (x: { subjectId: string | null; topicId: string | null; subTopicId: string | null }) => string | null) => {
+    const out = new Set<string>();
+    for (const r of rows) {
+      const pv = (r.data as unknown as ExtractedQuestion).paperVerify;
+      for (const x of [r, pv?.v1?.classification?.found, pv?.v2?.classification?.found]) if (x && pick(x)) out.add(pick(x)!);
+    }
+    return [...out];
+  };
+  const subjects = await prisma.subject.findMany({ where: { id: { in: taxIds((x) => x.subjectId) } }, select: { id: true, name: true } });
+  const topics = await prisma.topic.findMany({ where: { id: { in: taxIds((x) => x.topicId) } }, select: { id: true, name: true } });
+  const subTopics = await prisma.subTopic.findMany({ where: { id: { in: taxIds((x) => x.subTopicId) } }, select: { id: true, name: true } });
+  const nameOf = (x: { subjectId: string | null; topicId: string | null; subTopicId: string | null } | null | undefined) =>
+    x?.subjectId ? `${subjects.find((s) => s.id === x.subjectId)?.name ?? "?"}${x.topicId ? ` › ${topics.find((t) => t.id === x.topicId)?.name ?? "?"}` : ""}${x.subTopicId ? ` › ${subTopics.find((t) => t.id === x.subTopicId)?.name ?? "?"}` : ""}` : null;
+  const KIND_LABEL: Record<string, string> = { ok: "", uncertain: "Uncertain — not forced", missing_taxonomy: "Missing taxonomy configuration", engine_failure: "Classifier failure (no answer)", text_incomplete: "Text incomplete (extraction problem)", admin: "Set by an administrator" };
   // questionId has no FK (the import record outlives the question): only link saved questions that still exist.
   const saved = new Set(
     (await prisma.question.findMany({ where: { id: { in: rows.map((r) => r.questionId).filter((x): x is string => !!x) } }, select: { id: true } })).map((x) => x.id),
@@ -77,6 +91,11 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
     const e = effective(r);
     const vs = verifyState(r.data, fingerprintOf(r));
     const contaminated = mergedAnswerIn(e);
+    const rec = (r.data as unknown as ExtractedQuestion).classification ?? null;
+    const v1c = vs.v1 === "passed" || vs.v1 === "problems" ? (vs.pv?.v1?.classification ?? null) : null;
+    const v2c = vs.v2 !== "stale" && vs.v2 !== "none" ? (vs.pv?.v2?.classification ?? null) : null;
+    const agreement = !v1c && !v2c ? "Not checked yet" : v1c?.status === "DISAGREEMENT" || v2c?.status === "DISAGREEMENT" ? "Disagreement" : v2c?.status === "VERIFICATION_FAILED" ? "Verify 2 check failed — not agreement" : v1c?.status === "AGREED" && v2c?.status === "AGREED" ? "Both checks agree" : v1c?.status === "AGREED" && !v2c ? "Verify 1 agrees; Verify 2 not run" : "Not confirmed";
+    const mismatch = v1c?.status === "DISAGREEMENT" || v2c?.status === "DISAGREEMENT" || r.issueCodes.includes("SUBJECT_MISMATCH");
     return {
       id: r.id,
       jobId: r.jobId,
@@ -114,6 +133,17 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       answerLine: contaminated?.raw ?? e.printedAnswerRaw ?? null,
       taxonomySource: r.taxonomySource,
       taxonomyEvidence: taxEvidence.get(r.id) ?? null,
+      tax: {
+        subTopic: subTopics.find((t) => t.id === r.subTopicId)?.name ?? null,
+        confidence: r.taxonomyConfidence,
+        kind: mismatch ? "Mismatch — the checks point elsewhere" : rec ? (KIND_LABEL[rec.kind] ?? rec.kind) || null : null,
+        reason: rec?.reason ?? null,
+        localSuggestion: rec?.local && rec.local.subjectId && (rec.local.subjectId !== r.subjectId || rec.local.topicId !== r.topicId) ? `${nameOf(rec.local)} (subject ${Math.round(rec.local.subjectConfidence * 100)}%${rec.local.topicId ? `, topic ${Math.round(rec.local.topicConfidence * 100)}%` : ""})` : null,
+        ai: rec?.ai ? `${rec.ai.model ?? "AI"}: ${rec.ai.status.replace(/_/g, " ").toLowerCase()} — ${rec.ai.detail}`.slice(0, 300) : null,
+        v1: v1c ? { status: v1c.status, found: nameOf(v1c.found), findings: v1c.findings.slice(0, 3) } : null,
+        v2: v2c ? { status: v2c.status, found: nameOf(v2c.found), findings: v2c.findings.slice(0, 3), model: v2c.method, vsV1: v2c.comparedWithV1 } : null,
+        agreement,
+      },
       eligible: eligible.has(r.id),
     };
   });

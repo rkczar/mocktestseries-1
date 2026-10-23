@@ -1,0 +1,228 @@
+import "server-only";
+import { createHash, randomBytes } from "node:crypto";
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { ImportJobError } from "@/lib/ai-import/jobs";
+import { getExamTaxonomy, type ExamTaxonomySubject } from "@/lib/exam-taxonomy";
+import { buildTaxonomyIndex, classificationText, type ClassifierMemory, type TaxonomyIndex } from "@/lib/ai-import/taxonomy-classify";
+import type { ExtractedQuestion } from "@/lib/ai-import/types";
+
+/**
+ * Exam-specific taxonomy reference of the AI Question Importer ("taxonomy memory"), one Setting row per exam
+ * (no schema change, like the importer's format profiles):
+ *
+ *  - synonyms / alternative terms an administrator added for a subject or topic of the exam,
+ *  - pairs of subjects an administrator marked as commonly confused,
+ *  - administrator-CONFIRMED classifications (a correction in Review Exceptions with "remember" on) — the question's
+ *    words and the ids chosen, with job, question, administrator and time.
+ *
+ * Nothing the AI predicted is ever stored here as knowledge. Every entry is scoped to its exam and holds that exam's
+ * own ids; when the exam's taxonomy changes (records unlinked, renamed, moved) the fingerprint changes and entries
+ * whose ids are no longer part of it are dropped on the next refresh (and never used before that — the classifier
+ * checks every id again). The classifier's term profiles also read reviewed Question Bank questions filed under the
+ * exam's linked topics (canonical, published, not flagged for review, not AI variants) — as words only.
+ */
+
+export const TAXONOMY_MEMORY_PREFIX = "ai.importer.taxonomyMemory:";
+const MAX_CORRECTIONS = 5000;
+
+export interface MemorySynonym {
+  id: string;
+  term: string;
+  subjectId: string | null;
+  topicId: string | null;
+  byId: string;
+  at: string;
+}
+export interface MemoryConfusion {
+  id: string;
+  a: string;
+  b: string;
+  note: string | null;
+  byId: string;
+  at: string;
+}
+export interface MemoryCorrection {
+  id: string;
+  /** The question's words (stem, statements, options), at most 1,200 characters. */
+  text: string;
+  subjectId: string;
+  topicId: string | null;
+  subTopicId: string | null;
+  jobId: string;
+  questionId: string;
+  byId: string;
+  at: string;
+  source: "admin correction" | "admin bulk correction";
+}
+export interface ExamTaxonomyMemory {
+  examId: string;
+  version: number;
+  taxonomyFingerprint: string;
+  synonyms: MemorySynonym[];
+  confusions: MemoryConfusion[];
+  corrections: MemoryCorrection[];
+  /** Entries dropped by the last refresh because their ids left the exam's taxonomy. */
+  lastRefresh: { at: string; dropped: number; fingerprint: string } | null;
+  updatedAt: string;
+}
+
+/** Fingerprint of an exam's taxonomy (ids, names and hierarchy): any change makes stored references re-checked. */
+export function taxonomyFingerprint(taxonomy: ExamTaxonomySubject[]): string {
+  const body = taxonomy.map((s) => [s.id, s.name, s.topics.map((t) => [t.id, t.name, t.subTopics.map((st) => [st.id, st.name])])]);
+  return createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 24);
+}
+
+const emptyMemory = (examId: string, fingerprint: string): ExamTaxonomyMemory => ({ examId, version: 0, taxonomyFingerprint: fingerprint, synonyms: [], confusions: [], corrections: [], lastRefresh: null, updatedAt: new Date(0).toISOString() });
+
+export async function loadExamMemory(examId: string): Promise<ExamTaxonomyMemory | null> {
+  const row = await prisma.setting.findUnique({ where: { key: `${TAXONOMY_MEMORY_PREFIX}${examId}` } });
+  const v = row?.value as Partial<ExamTaxonomyMemory> | null | undefined;
+  if (!v || typeof v !== "object" || v.examId !== examId) return null;
+  return { ...emptyMemory(examId, v.taxonomyFingerprint ?? ""), ...v, synonyms: Array.isArray(v.synonyms) ? v.synonyms : [], confusions: Array.isArray(v.confusions) ? v.confusions : [], corrections: Array.isArray(v.corrections) ? v.corrections : [] } as ExamTaxonomyMemory;
+}
+
+async function saveExamMemory(mem: ExamTaxonomyMemory, actorId: string | null, action: string, metadata: Record<string, unknown>): Promise<ExamTaxonomyMemory> {
+  const next = { ...mem, version: mem.version + 1, updatedAt: new Date().toISOString() };
+  const value = JSON.stringify(next);
+  await prisma.$executeRaw(Prisma.sql`
+    INSERT INTO "Setting" ("key", "value", "updatedAt") VALUES (${`${TAXONOMY_MEMORY_PREFIX}${mem.examId}`}, ${value}::jsonb, now())
+    ON CONFLICT ("key") DO UPDATE SET "value" = ${value}::jsonb, "updatedAt" = now()`);
+  if (actorId) await prisma.auditLog.create({ data: { actorId, action, entityType: "AiImportTaxonomyMemory", entityId: mem.examId, metadata: metadata as Prisma.InputJsonValue } });
+  cache.delete(mem.examId);
+  return next;
+}
+
+/** Only entries whose ids are (still) part of the exam's taxonomy, with the hierarchy intact. */
+export function validEntries(mem: ExamTaxonomyMemory, taxonomy: ExamTaxonomySubject[]): Pick<ExamTaxonomyMemory, "synonyms" | "confusions" | "corrections"> {
+  const subjects = new Map(taxonomy.map((s) => [s.id, s]));
+  const topicSubject = new Map(taxonomy.flatMap((s) => s.topics.map((t) => [t.id, s.id] as const)));
+  const subTopicTopic = new Map(taxonomy.flatMap((s) => s.topics.flatMap((t) => t.subTopics.map((st) => [st.id, t.id] as const))));
+  return {
+    synonyms: mem.synonyms.filter((x) => x.term.trim() && (x.topicId ? topicSubject.has(x.topicId) && (!x.subjectId || topicSubject.get(x.topicId) === x.subjectId) : !!x.subjectId && subjects.has(x.subjectId))),
+    confusions: mem.confusions.filter((x) => subjects.has(x.a) && subjects.has(x.b) && x.a !== x.b),
+    corrections: mem.corrections.filter((x) => subjects.has(x.subjectId) && (!x.topicId || topicSubject.get(x.topicId) === x.subjectId) && (!x.subTopicId || (!!x.topicId && subTopicTopic.get(x.subTopicId) === x.topicId))),
+  };
+}
+
+/** Drops entries that left the exam's taxonomy and records the new fingerprint (only writes when something changed). */
+export async function refreshExamMemory(examId: string, taxonomy?: ExamTaxonomySubject[]): Promise<{ memory: ExamTaxonomyMemory | null; dropped: number }> {
+  const mem = await loadExamMemory(examId);
+  if (!mem) return { memory: null, dropped: 0 };
+  const tax = taxonomy ?? (await getExamTaxonomy(prisma, examId));
+  const fp = taxonomyFingerprint(tax);
+  if (mem.taxonomyFingerprint === fp) return { memory: mem, dropped: 0 };
+  const valid = validEntries(mem, tax);
+  const dropped = mem.synonyms.length - valid.synonyms.length + (mem.confusions.length - valid.confusions.length) + (mem.corrections.length - valid.corrections.length);
+  const saved = await saveExamMemory({ ...mem, ...valid, taxonomyFingerprint: fp, lastRefresh: { at: new Date().toISOString(), dropped, fingerprint: fp } }, null, "AI_IMPORT_TAXONOMY_MEMORY_REFRESHED", { dropped });
+  return { memory: saved, dropped };
+}
+
+// ---- Classifier context (cached per exam) -----------------------------------------------------------------
+
+export interface ClassifierContext {
+  examId: string;
+  taxonomy: ExamTaxonomySubject[];
+  index: TaxonomyIndex;
+  fingerprint: string;
+  memory: ExamTaxonomyMemory | null;
+  /** Reviewed Question Bank questions used as topic evidence. */
+  evidenceQuestions: number;
+  /** Entries of the memory dropped by this load's refresh (taxonomy changed). */
+  droppedOnRefresh: number;
+}
+
+const cache = new Map<string, { key: string; at: number; ctx: ClassifierContext }>();
+const CACHE_MS = 10 * 60 * 1000;
+
+/**
+ * Reviewed Question Bank questions under the exam's linked topics: canonical (not AI variants), published, filed
+ * consistently (the question's subject is the topic's subject), and not flagged for a subject / topic problem. A
+ * review flag about something else (difficulty default, "Sub-topic not provided") does not make the topic doubtful.
+ */
+export const TAXONOMY_DOUBT = /\b(subject|topic)\b/i;
+export const evidenceUsable = (r: { reviewRequired: boolean; reviewReason: string | null }) => !r.reviewRequired || !TAXONOMY_DOUBT.test((r.reviewReason ?? "").replace(/sub-?topic not provided/gi, ""));
+async function loadEvidence(taxonomy: ExamTaxonomySubject[]): Promise<{ topicId: string; text: string }[]> {
+  const topicIds = taxonomy.flatMap((s) => s.topics.map((t) => t.id));
+  if (!topicIds.length) return [];
+  const subjectOf = new Map(taxonomy.flatMap((s) => s.topics.map((t) => [t.id, s.id] as const)));
+  const rows = await prisma.question.findMany({
+    where: { status: "PUBLISHED", parentQuestionId: null, OR: [{ aiVariantType: null }, { aiVariantType: "CANONICAL" }], topicId: { in: topicIds } },
+    select: { topicId: true, subjectId: true, text: true, reviewRequired: true, reviewReason: true, options: { select: { text: true }, orderBy: { order: "asc" } } },
+    orderBy: { createdAt: "desc" },
+    take: 40_000,
+  });
+  return rows.filter((r) => r.topicId && subjectOf.get(r.topicId) === r.subjectId && evidenceUsable(r)).map((r) => ({ topicId: r.topicId!, text: `${r.text}\n${r.options.map((o) => o.text).join("\n")}` }));
+}
+
+export async function classifierContext(examId: string): Promise<ClassifierContext> {
+  const taxonomy = await getExamTaxonomy(prisma, examId);
+  const fingerprint = taxonomyFingerprint(taxonomy);
+  const { memory, dropped } = await refreshExamMemory(examId, taxonomy);
+  const published = await prisma.question.aggregate({ where: { status: "PUBLISHED" }, _count: { _all: true }, _max: { updatedAt: true } });
+  const key = `${fingerprint}|${memory?.version ?? 0}|${published._count._all}|${published._max.updatedAt?.toISOString() ?? ""}`;
+  const hit = cache.get(examId);
+  if (hit && hit.key === key && Date.now() - hit.at < CACHE_MS) return { ...hit.ctx, droppedOnRefresh: dropped };
+  const evidence = await loadEvidence(taxonomy);
+  const valid = memory ? validEntries(memory, taxonomy) : null;
+  const mem: ClassifierMemory | null = valid ? { synonyms: valid.synonyms, confusions: valid.confusions, corrections: valid.corrections } : null;
+  const ctx: ClassifierContext = { examId, taxonomy, index: buildTaxonomyIndex(taxonomy, evidence, mem), fingerprint, memory, evidenceQuestions: evidence.length, droppedOnRefresh: dropped };
+  cache.set(examId, { key, at: Date.now(), ctx });
+  return ctx;
+}
+
+// ---- Administrator changes ----------------------------------------------------------------------------------
+
+async function current(examId: string): Promise<{ mem: ExamTaxonomyMemory; taxonomy: ExamTaxonomySubject[] }> {
+  const taxonomy = await getExamTaxonomy(prisma, examId);
+  const fp = taxonomyFingerprint(taxonomy);
+  const mem = (await loadExamMemory(examId)) ?? emptyMemory(examId, fp);
+  return { mem: { ...mem, ...validEntries(mem, taxonomy), taxonomyFingerprint: fp }, taxonomy };
+}
+
+/**
+ * Stores an administrator-confirmed classification of one imported question as a reusable example of its exam
+ * (replacing an earlier example of the same question). Questions with too little text are not stored.
+ */
+export async function rememberCorrection(input: { examId: string; jobId: string; questionId: string; e: ExtractedQuestion; subjectId: string; topicId: string | null; subTopicId: string | null; actorId: string; bulk: boolean }): Promise<boolean> {
+  const text = classificationText(input.e).replace(/⟦IMG:[^⟧]*⟧/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200);
+  if (text.split(" ").length < 4) return false;
+  const { mem, taxonomy } = await current(input.examId);
+  const s = taxonomy.find((x) => x.id === input.subjectId);
+  if (!s || (input.topicId && !s.topics.some((t) => t.id === input.topicId))) return false;
+  const entry: MemoryCorrection = { id: randomBytes(6).toString("hex"), text, subjectId: input.subjectId, topicId: input.topicId, subTopicId: input.subTopicId, jobId: input.jobId, questionId: input.questionId, byId: input.actorId, at: new Date().toISOString(), source: input.bulk ? "admin bulk correction" : "admin correction" };
+  const corrections = [...mem.corrections.filter((c) => c.questionId !== input.questionId), entry].slice(-MAX_CORRECTIONS);
+  await saveExamMemory({ ...mem, corrections }, input.actorId, "AI_IMPORT_TAXONOMY_EXAMPLE_SAVED", { questionId: input.questionId, jobId: input.jobId, subjectId: input.subjectId, topicId: input.topicId, subTopicId: input.subTopicId });
+  return true;
+}
+
+export async function addSynonym(examId: string, actorId: string, term: string, subjectId: string | null, topicId: string | null): Promise<void> {
+  const clean = term.replace(/\s+/g, " ").trim().slice(0, 120);
+  if (clean.length < 2) throw new ImportJobError("Enter the term.");
+  const { mem, taxonomy } = await current(examId);
+  const topicSubject = taxonomy.flatMap((s) => s.topics.map((t) => [t.id, s.id] as const)).find(([t]) => t === topicId)?.[1];
+  if (topicId && !topicSubject) throw new ImportJobError("That topic is not part of this exam.");
+  if (!topicId && (!subjectId || !taxonomy.some((s) => s.id === subjectId))) throw new ImportJobError("Choose a subject or topic of this exam.");
+  if (mem.synonyms.some((x) => x.term.toLowerCase() === clean.toLowerCase() && x.topicId === topicId && x.subjectId === (topicSubject ?? subjectId))) throw new ImportJobError("That term is already listed.");
+  const entry: MemorySynonym = { id: randomBytes(6).toString("hex"), term: clean, subjectId: topicSubject ?? subjectId, topicId, byId: actorId, at: new Date().toISOString() };
+  await saveExamMemory({ ...mem, synonyms: [...mem.synonyms, entry] }, actorId, "AI_IMPORT_TAXONOMY_SYNONYM_ADDED", { term: clean, subjectId: entry.subjectId, topicId });
+}
+
+export async function addConfusion(examId: string, actorId: string, a: string, b: string, note: string): Promise<void> {
+  const { mem, taxonomy } = await current(examId);
+  if (a === b || !taxonomy.some((s) => s.id === a) || !taxonomy.some((s) => s.id === b)) throw new ImportJobError("Choose two different subjects of this exam.");
+  if (mem.confusions.some((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a))) throw new ImportJobError("That pair is already listed.");
+  const entry: MemoryConfusion = { id: randomBytes(6).toString("hex"), a, b, note: note.trim().slice(0, 200) || null, byId: actorId, at: new Date().toISOString() };
+  await saveExamMemory({ ...mem, confusions: [...mem.confusions, entry] }, actorId, "AI_IMPORT_TAXONOMY_CONFUSION_ADDED", { a, b });
+}
+
+/** Removes one synonym / confusion / stored example (the audit log keeps what was removed). */
+export async function removeMemoryEntry(examId: string, actorId: string, kind: "synonym" | "confusion" | "correction", id: string): Promise<void> {
+  const mem = await loadExamMemory(examId);
+  if (!mem) throw new ImportJobError("Nothing is stored for this exam.");
+  const list = kind === "synonym" ? mem.synonyms : kind === "confusion" ? mem.confusions : mem.corrections;
+  const gone = (list as { id: string }[]).find((x) => x.id === id);
+  if (!gone) throw new ImportJobError("That entry no longer exists.");
+  const next = { ...mem, synonyms: kind === "synonym" ? mem.synonyms.filter((x) => x.id !== id) : mem.synonyms, confusions: kind === "confusion" ? mem.confusions.filter((x) => x.id !== id) : mem.confusions, corrections: kind === "correction" ? mem.corrections.filter((x) => x.id !== id) : mem.corrections };
+  await saveExamMemory(next, actorId, "AI_IMPORT_TAXONOMY_MEMORY_REMOVED", { kind, entry: gone as unknown as Prisma.InputJsonValue });
+}

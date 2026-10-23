@@ -44,7 +44,8 @@
  * not on the list). config {keyHeader: {...}} is returned as the answer key's printed header.
  * stats.reasoning records each chat request's `reasoning` setting (null when absent). Script mode "refusal" answers with
  * a plain-text refusal; config {classifyShift: true} makes classification echo the NEXT question's key words and topic
- * (shifted answers), {classifyNoAbout: true} leaves the key words out (2026-10-23).
+ * (shifted answers), {classifyNoAbout: true} leaves the key words out, {classifyKeep: n} returns only the first n
+ * answers (2026-10-23).
  * Full-paper verification fixtures (2026-10-22): a page fixture may carry `byModel: {id: {questions}}` (what that model
  * reads); `text: [{match, questions, checker?, byModel?}]` answers page-reading requests WITHOUT an image (Verify 2 of a
  * DOCX / sheet) with the first entry whose `match` string occurs in the request text.
@@ -107,7 +108,7 @@ const routesOf = (id) => {
   }));
 };
 const zdrRoute = (id) => !config.zdrRemoved.includes(id) && routesOf(id).some((r) => r.tag !== "mockprov/std");
-const DEFAULT_CONFIG = { classifyShift: false, classifyNoAbout: false, keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, reasonModels: false, batchModels: false, script: {}, keyHeader: null, rateLimit: {}, badRequest: {}, failTask: {} };
+const DEFAULT_CONFIG = { classifyKeep: null, classifyShift: false, classifyNoAbout: false, keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, reasonModels: false, batchModels: false, script: {}, keyHeader: null, rateLimit: {}, badRequest: {}, failTask: {} };
 const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
@@ -168,7 +169,8 @@ function classify(text) {
     const r = hit ? { q: m[1], subject: hit.s.id, topic: hit.t.id, confidence: 0.9 } : { q: m[1], subject: subjects[0]?.id ?? null, topic: null, confidence: 0.3 };
     results.push(config.classifyNoAbout ? r : { ...r, about: about(src[2]), reason: "mock" });
   });
-  return { results };
+  // config.classifyKeep: only the first n answers (a model that stops early / drops questions — 2026-10-23 production).
+  return { results: typeof config.classifyKeep === "number" ? results.slice(0, config.classifyKeep) : results };
 }
 
 const server = http.createServer(async (req, res) => {

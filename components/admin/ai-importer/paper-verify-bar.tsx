@@ -167,7 +167,7 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
         <Stat id="missing" label="Missing / duplicate" value={`${summary.missing.length} / ${summary.duplicates.length}`} tone={summary.missing.length || summary.duplicates.length ? "error" : undefined} />
         <Stat id="structure" label="Structure (stem / option / answer)" value={summary.structureIssues} tone={summary.structureIssues ? "error" : undefined} href={hrefs.structure} />
         <Stat id="answers" label="Answer-key & type issues" value={summary.answerIssues} tone={summary.answerIssues ? "error" : undefined} href={hrefs.answers} />
-        <Stat id="taxonomy" label="Subject mismatch / unknown / topic" value={`${summary.classification.subjectMismatch} / ${summary.classification.subjectUnknown} / ${summary.classification.topicMissing}`} tone={summary.classificationIssues ? "warning" : undefined} href={hrefs.taxonomy} />
+        <Stat id="taxonomy" label="Subject mismatch / unknown / classifier failed / topic / check disagrees" value={`${summary.classification.subjectMismatch} / ${summary.classification.subjectUnknown} / ${summary.classification.classificationFailed} / ${summary.classification.topicMissing} / ${summary.classification.disagreements}`} tone={summary.classificationIssues ? "warning" : undefined} href={hrefs.taxonomy} />
         <Stat id="formula" label="Formula / OCR issues" value={summary.formulaIssues} tone={summary.formulaIssues ? "warning" : undefined} />
         <Stat id="figures" label="Figure / crop issues" value={summary.figureIssues} tone={summary.figureIssues ? "warning" : undefined} />
         <Stat id="unresolved" label="Unresolved disagreements" value={summary.unresolved} tone={summary.unresolved ? "error" : undefined} />

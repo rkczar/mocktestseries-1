@@ -263,7 +263,10 @@ check("reopened saved question: all 4 option images load from /media", reopened.
 await admin.goto(`${BASE}/admin/ai-importer/history`);
 check("Import History lists the job with counts", (await admin.locator("[data-testid=history-table]", { hasText: `AIUI digital ${F.suffix}` }).count()) === 1);
 await admin.goto(`${BASE}/admin/ai-importer/costs`);
-check("Cost Center shows calls (classification) with cost", (await admin.locator("[data-testid=cost-calls] tbody tr").count()) > 0);
+// Since 2026-10-23 the free classifier settles most questions, so this local paper may need no AI call at all: the
+// Cost Center must list exactly the calls that were made (and none that were not).
+const aiCalls = Number((await db.query(`select count(*)::int n from "AiImportAiCall" where "jobId"=$1`, [jobId])).rows[0].n);
+check("Cost Center lists the AI calls that were made (none invented when the free classifier settled everything)", (await admin.locator("[data-testid=cost-calls]").count()) === 1 && (aiCalls > 0 ? (await admin.locator("[data-testid=cost-calls] tbody tr").count()) > 0 : true), { aiCalls });
 
 // ------------------------------------------------------------------ publishing policy in the Question Bank
 section("E. Question Bank publishing gate");
@@ -433,7 +436,7 @@ await mDlg.getByRole("button", { name: "Keep file" }).click();
 // View-only admin: no button, and the Server Action refuses.
 await full.goto(`${BASE}/admin/ai-importer/jobs/${rmJob}`);
 check("FULL_ADMIN sees the files but no Remove buttons", (await full.locator("[data-testid=file-row]").count()) === 2 && (await full.locator("[data-testid=file-remove]").count()) === 0);
-const manifest = JSON.parse(readFileSync(".next/server/server-reference-manifest.json", "utf8"));
+const manifest = JSON.parse(readFileSync(`${process.env.APP_DIR ?? "."}/.next/server/server-reference-manifest.json`, "utf8"));
 const removeActionId = Object.entries(manifest.node).find(([, v]) => v.exportedName === "removeFileAction" || JSON.stringify(v).includes("removeFileAction"))?.[0];
 const keyId = (await db.query(`select id from "AiImportFile" where "jobId"=$1 and "originalName"='key-digital.pdf'`, [rmJob])).rows[0].id;
 const rawRemove = await inPage(full, `/admin/ai-importer/jobs/${rmJob}`, { method: "POST", headers: { "Next-Action": removeActionId, Accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify([rmJob, keyId]) });
@@ -490,9 +493,12 @@ await startImport(admin, { dbl: true, expected: (await admin.locator("[data-test
 check("double click → one start (button disabled at once)", await until(async () => (await admin.locator("[data-testid=process-import]").count()) === 0 || (await admin.locator("[data-testid=process-import]").isDisabled())));
 check("quality summary shown on the same page, without visiting other pages", (await waitFor(admin, "[data-testid=quality-panel]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
 check("nothing stored before approval", (await val("q-stored")) === 0);
-// Every question of this paper carries a flag (no subject on the paper, and the classifier is unsure → the subject is
-// left unresolved, never filled in at low confidence): no one-click approval.
-check("no 'Approve all without flags' when every question has a flag", (await admin.locator("[data-testid=qp-approve-clean]").count()) === 0 && (await val("q-topics")) > 0);
+// One-click approval is offered only when some question has no flag at all; a subject is never filled in at low
+// confidence (the free classifier and the AI classifier both leave an unsure question unresolved).
+const wordQs = (await db.query(`select "issueCodes", status, "subjectId", "taxonomyConfidence", "taxonomySource" from "AiImportQuestion" where "jobId"=$1`, [newJob])).rows;
+const clean = wordQs.filter((r) => !r.issueCodes.length && r.status === "READY").length;
+check("'Approve all without flags' offered only when flag-free questions exist", ((await admin.locator("[data-testid=qp-approve-clean]").count()) > 0) === (clean > 0), { clean, rows: wordQs });
+check("no subject filled in at low confidence (free / AI classifier ≥ 60%)", wordQs.every((r) => !r.subjectId || !/local classifier|^AI/.test(r.taxonomySource ?? "") || (r.taxonomyConfidence ?? 0) >= 0.6), wordQs);
 const wordUrl = admin.url();
 await admin.goto(`${BASE}/admin/ai-importer/exceptions?job=${newJob}`);
 await waitFor(admin, "[data-testid=exception-row]", 30000);
@@ -500,6 +506,9 @@ await waitFor(admin, "[data-testid=exception-row]", 30000);
 for (const box of await admin.locator("[data-testid=exception-row] input[type=checkbox]").all()) await box.check();
 await admin.locator("[data-testid=bulk-subject]").selectOption({ index: 1 });
 await admin.click("[data-testid=bulk-taxonomy-apply]");
+// A confirmation lists the selected questions first (the server checks the confirmed count again).
+await waitFor(admin, "[data-testid=bulk-taxonomy-confirm]", 10000);
+await admin.click("[data-testid=bulk-taxonomy-confirm-apply]");
 await admin.locator("[data-testid=bulk-msg]").waitFor({ timeout: 30000 });
 check("…subject set for the selection by the administrator", /Subject \/ topic set on [1-9]/.test(await admin.locator("[data-testid=bulk-msg]").textContent()), await admin.locator("[data-testid=bulk-msg]").textContent());
 await waitFor(admin, "[data-testid=exception-row]", 30000);
