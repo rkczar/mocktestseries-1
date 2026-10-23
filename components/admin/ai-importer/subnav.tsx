@@ -16,6 +16,7 @@ export const AI_IMPORTER_MORE_SECTIONS = [
   { label: "Answer Keys & Verification", href: "/admin/ai-importer/answers" },
   { label: "Import History", href: "/admin/ai-importer/history" },
   { label: "AI Cost Center", href: "/admin/ai-importer/costs" },
+  { label: "Format Profiles", href: "/admin/ai-importer/formats" },
   { label: "Original Paper Vault", href: "/admin/ai-importer/vault" },
   { label: "Storage Manager", href: "/admin/ai-importer/storage" },
 ] as const;

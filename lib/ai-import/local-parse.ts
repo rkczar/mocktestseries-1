@@ -72,6 +72,10 @@ export function splitQuestions(lines: Line[], state: NumberingState = { last: 0,
       const n = Number(m[1]);
       const next = last === 0 ? n >= 1 && n <= 400 : n === last + 1 || (prefixed !== null && n > last && n <= last + 3);
       const restart = last >= 5 && n === 1;
+      if ((next || restart) && !prefixed && current && isStatementLine(current, n)) {
+        current.lines.push(line);
+        continue;
+      }
       if (next || restart) {
         if (restart) sectionIdx++;
         current = { heading, section: restart || sectionIdx > 1 ? `S${sectionIdx}` : "", number: n, label: String(n), lines: [{ ...line, text: (m[2] ?? "").trim() }], text: "" };
@@ -87,6 +91,18 @@ export function splitQuestions(lines: Line[], state: NumberingState = { last: 0,
   state.last = last;
   state.sectionIdx = sectionIdx;
   return { blocks, preamble };
+}
+
+/**
+ * "1. …", "2. …" under "Consider the following statements" belong to the open question, not to the next one: the
+ * question has no options yet, and either it already lists the previous number as a statement, or the number
+ * restarts at 1 right after a statement lead-in. A "Q7." prefix always starts a question.
+ */
+function isStatementLine(current: Block, n: number): boolean {
+  const text = current.lines.map((l) => l.text).join("\n");
+  if ((chooseRun(markersOf(text))?.length ?? 0) >= 2) return false;
+  if (n === 1) return /\b(statements?|assertions?|consider the following|given below)\b/i.test(text);
+  return current.lines.slice(1).some((l) => new RegExp(`^\\s*\\(?${n - 1}\\s*[.)]\\s`).test(l.text));
 }
 
 // ---- Options --------------------------------------------------------------------------------
@@ -181,14 +197,17 @@ function tidy(s: string): string {
 
 // ---- Printed answers, types -------------------------------------------------------------------
 
-const ANSWER_LINE = /(?:^|\n)\s*(?:(?:The\s+)?(?:Correct|Right)\s+(?:answer|option|choice)(?:\s+is)?|Ans(?:wer)?(?:\s+is)?|Key)\s*[:.\-–=]?\s*(?:option\s*)?((?:\(?[A-Da-d1-4]\)?\s*(?:,|&|and|\/)?\s*){1,4})\s*\.?\s*(?=\n|$)/i;
+const ANSWER_LINE = /(?:^|\n)\s*(?:[►▶➤→•]\s*)?(?:(?:Official|Final)\s+)?(?:(?:The\s+)?(?:Correct|Right)\s+(?:answer|option|choice)(?:\s+is)?|Ans(?:wer)?(?:\s+is)?|Key)\s*[:.\-–=]?\s*(?:option\s*)?((?:\(?[A-Da-d1-4]\)?\s*(?:,|&|and|\/)?\s*){1,4})\s*\.?\s*(?=\n|$)/i;
 
 /** One option label as printed in an answer ("(b)", "B", "2", "(3)"). */
 const ANS_LABEL = String.raw`(?:\(\s*[A-Da-d1-4]\s*\)|[A-Da-d](?![A-Za-z0-9])|[1-4](?![\d.]))`;
 const ANS_LABELS = String.raw`${ANS_LABEL}(?:\s*(?:,|&|and|\/)\s*${ANS_LABEL}){0,3}`;
-/** "Ans", "Answer", "Correct answer is", "The right option is", "Key:" (key needs a separator: "key A" is often content). */
-const ANS_MARK = String.raw`(?:(?:the\s+)?(?:correct|right)\s+(?:answer|option|choice|response)(?:\s+is)?|ans(?:wer)?(?:\s+is)?(?=[\s:.\-–=(])|key(?=\s*[:\-–=]))`;
-const EXPLANATION = /(?:^|\n|\s)(?:Explanation|Solution|Sol\.)\s*[:.\-–]\s*([\s\S]*)$/i;
+/**
+ * "Ans", "Answer", "Correct answer is", "The right option is", "Key:" (key needs a separator: "key A" is often content),
+ * also behind a bullet / arrow and "Official" / "Final" ("► Official Answer: Option (c) — III and IV", seen 2026-10-23).
+ */
+const ANS_MARK = String.raw`(?:[►▶➤→•]\s*)?(?:(?:official|final)\s+)?(?:(?:the\s+)?(?:correct|right)\s+(?:answer|option|choice|response)(?:\s+is)?|ans(?:wer)?(?:\s+is)?(?=[\s:.\-–=(])|key(?=\s*[:\-–=]))`;
+const EXPLANATION = /(?:^|\n|\s)(?:Explanation|Solution|Sol\.|Rationale)\s*[:.\-–]\s*([\s\S]*)$/i;
 /** An answer printed INSIDE the text (merged into an option, after the options, "Correct answer is (B)"), up to the end of its line. */
 const ANS_INLINE = new RegExp(String.raw`(^|[\s.;,|)\]])(${ANS_MARK})\s*(?:[:\-–=]|\.(?!\d))?\s*(?:option\s*)?(${ANS_LABELS})\s*[.)]?[ \t]*([^\n]*?)[ \t]*(?=\n|$)`, "gi");
 /** "Correct answer is Mitochondria" — the answer written as the option's TEXT (used only when it equals one option exactly). */
@@ -215,6 +234,45 @@ const normOption = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[\s.,;:()
  * "Correct answer: Mitochondria" (only when it equals one option's text). An explanation printed after the
  * answer ("Explanation: …") is kept separately. Text that merely contains the word "answer" is never touched.
  */
+/** The answer starts after the last option marker of a complete option run (so what follows it is not an option). */
+function answerAfterOptions(text: string, start: number): boolean {
+  const run = chooseRun(markersOf(text));
+  return !!run && run.length >= 4 && start > run[run.length - 1].start;
+}
+
+export interface Statement {
+  key: string;
+  text: string;
+}
+
+const STATEMENT_LINE = /^\s*\(?((?:X|IX|IV|V?I{1,3}|V|VI{1,3})|[1-9]|[A-H])[.)]\s+(\S.*)$/;
+
+/**
+ * Numbered statements of a question stem ("I. Opening snap", "2. …", "(iii) …", "A. …"), one per line, in order.
+ * Lines of the same numbering family only; fewer than two is no statement list.
+ */
+export function statementsOf(stem: string): Statement[] {
+  const rows = stem.split("\n").map((l) => STATEMENT_LINE.exec(l)).filter((m): m is RegExpExecArray => !!m);
+  const family = (k: string) => (/^\d$/.test(k) ? "arabic" : /^[IVX]+$/.test(k) ? "roman" : "letter");
+  const byFamily = new Map<string, Statement[]>();
+  for (const m of rows) {
+    const f = family(m[1]);
+    byFamily.set(f, [...(byFamily.get(f) ?? []), { key: m[1], text: m[2].trim() }]);
+  }
+  const best = [...byFamily.values()].sort((a, b) => b.length - a.length)[0] ?? [];
+  return best.length >= 2 ? best : [];
+}
+
+/**
+ * Numbered statements run together on one line ("…stethoscope?I. Opening snapII. Systolic click", a reader that lost
+ * the line breaks): the markers that are glued to the previous word, or null.
+ */
+export function mergedStatements(stem: string): string[] | null {
+  const glued = [...stem.matchAll(/[a-z?:;)](?=((?:IX|IV|V?I{1,3}|VI{1,3})\.\s+\S))/g)].map((m) => m[1].split(".")[0]);
+  const arabic = [...stem.matchAll(/[?:](?=([1-9])\.\s+[A-Z])/g)].map((m) => m[1]);
+  return glued.length >= 2 || arabic.length >= 1 ? [...glued, ...arabic] : null;
+}
+
 export function takePrintedAnswer(text: string): PrintedAnswerTake {
   const take = (start: number, end: number, labels: string[], raw: string, note: string | null = null): PrintedAnswerTake => {
     let rest = text.slice(end);
@@ -223,6 +281,11 @@ export function takePrintedAnswer(text: string): PrintedAnswerTake {
     if (ex && rest.slice(0, ex.index).trim() === "") {
       explanation = ex[1].trim() || null;
       rest = "";
+    } else if (rest.trim() && answerAfterOptions(text, start)) {
+      // Text printed after an answer that follows the options cannot be option text: it is the explanation.
+      explanation = rest.trim();
+      rest = "";
+      note = [note, "The text printed after the answer was kept as its explanation — check it."].filter(Boolean).join(" ");
     }
     return { text: (text.slice(0, start) + rest).replace(/[ \t]+\n/g, "\n").trim(), answer: labels, raw: raw.trim(), explanation, note };
   };
@@ -238,13 +301,14 @@ export function takePrintedAnswer(text: string): PrintedAnswerTake {
     const start = (m.index ?? 0) + m[1].length;
     if (start < from) continue;
     const labels = labelsOf(m[3]);
-    const trailing = m[4].trim();
-    if (trailing && !/^(?:explanation|solution|sol\.)/i.test(trailing)) {
+    // "Option (c) — III and IV": the option's text after a dash / colon / equals sign.
+    const trailing = m[4].trim().replace(/^[-–—:=]+\s*/, "");
+    if (trailing && !/^(?:explanation|solution|sol\.|rationale)/i.test(trailing)) {
       // "(b) Mitochondria": the label with its option text — accepted only when that text is the option's.
       const opt = labels.length === 1 ? options.find((o) => o.label === labels[0]) : undefined;
       if (!opt || normOption(opt.text.replace(ANS_INLINE, "")).indexOf(normOption(trailing)) !== 0) continue;
     }
-    best = { start, end: (m.index ?? 0) + m[0].length - (trailing && /^(?:explanation|solution|sol\.)/i.test(trailing) ? m[4].length : 0), labels, raw: m[0].slice(m[1].length), note: null };
+    best = { start, end: (m.index ?? 0) + m[0].length - (trailing && /^(?:explanation|solution|sol\.|rationale)/i.test(trailing) ? m[4].length : 0), labels, raw: m[0].slice(m[1].length), note: null };
   }
   if (best) return take(best.start, best.end, best.labels, best.raw, best.note);
   for (const m of text.matchAll(ANS_TEXT)) {

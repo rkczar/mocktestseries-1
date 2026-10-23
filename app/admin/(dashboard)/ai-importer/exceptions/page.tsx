@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Prisma } from "@prisma/client";
 import { RestrictedCard } from "@/components/admin/restricted-card";
-import { hasPermission } from "@/lib/rbac";
+import { getAdminSession, hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,9 +14,10 @@ import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { jobMapping } from "@/lib/ai-import/job-view";
 import { PaperVerifyBar } from "@/components/admin/ai-importer/paper-verify-bar";
 import { ReferencePanel } from "@/components/admin/ai-importer/reference-panel";
-import { fingerprintOf, paperSummary } from "@/lib/ai-import/paper-verify";
+import { STRUCTURE_CODES, TAXONOMY_CODES, fingerprintOf, paperSummary } from "@/lib/ai-import/paper-verify";
+import { mergedAnswerIn, statementsOf } from "@/lib/ai-import/local-parse";
 import { listReferences } from "@/lib/ai-import/reference";
-import { verifyState } from "@/lib/ai-import/verify-core";
+import { V1_DISPLAY, v2Display, verifyState } from "@/lib/ai-import/verify-core";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 
 export const metadata = { title: "AI Import Review Exceptions — Mock Test Series.in Admin" };
@@ -32,17 +33,21 @@ const EXCEPTION_STATUSES = ["NEEDS_CORRECTION", "NOT_IMPORTABLE", "DUPLICATE", "
 export default async function ExceptionsPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="Review Exceptions" />;
   const sp = await searchParams;
-  const [canUse, canPublish, settings] = await Promise.all([hasPermission(PERMISSIONS.AI_IMPORTER_USE), hasPermission(PERMISSIONS.QUESTIONS_MANAGE), getImporterSettings()]);
+  const [canUse, canPublish, settings, session] = await Promise.all([hasPermission(PERMISSIONS.AI_IMPORTER_USE), hasPermission(PERMISSIONS.QUESTIONS_MANAGE), getImporterSettings(), getAdminSession()]);
+  const canManage = session?.user?.role === "MASTER_ADMIN";
   const jobs = await prisma.aiImportJob.findMany({ orderBy: { updatedAt: "desc" }, take: 100, select: { id: true, title: true, status: true, examId: true } });
   const jobId = sp.job && jobs.some((j) => j.id === sp.job) ? sp.job : undefined;
   const status = sp.status === "all" ? null : sp.status === "approval" ? "approval" : sp.status && sp.status in QUESTION_STATUS_LABELS ? sp.status : "exceptions";
   const issue = sp.issue && sp.issue in ISSUE_DEFS ? sp.issue : undefined;
-  const VERIFY_FILTERS = { verified: "Verified (1 + 2)", eligible: "Eligible to publish", "v1-problems": "Verify 1 findings", "v2-disagree": "Verify 2 disagrees", unverified: "Not verified yet" } as const;
+  const VERIFY_FILTERS = { verified: "Verified (1 + 2)", eligible: "Eligible to publish", "v1-problems": "Verify 1 findings", "v2-disagree": "Verify 2 disagreements", "v2-noresult": "Verify 2 failed / unavailable", "v2-notrun": "Verify 2 not run / out of date", unverified: "Not verified yet" } as const;
   const verify = sp.verify && sp.verify in VERIFY_FILTERS ? (sp.verify as keyof typeof VERIFY_FILTERS) : undefined;
+  const PROBLEM_FILTERS = { structure: "Structure errors (stem / option / answer boundaries)", taxonomy: "Subject / topic errors", "subject-mismatch": "Subject mismatch", answer: "Answer-key / type", reference: "Reference differences" } as const;
+  const PROBLEM_CODES: Record<keyof typeof PROBLEM_FILTERS, string[]> = { structure: STRUCTURE_CODES, taxonomy: TAXONOMY_CODES, "subject-mismatch": ["SUBJECT_MISMATCH"], answer: ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"], reference: ["REFERENCE_CONFLICT"] };
+  const problem = sp.problem && sp.problem in PROBLEM_FILTERS ? (sp.problem as keyof typeof PROBLEM_FILTERS) : undefined;
   const where: Prisma.AiImportQuestionWhereInput = {
     ...(jobId ? { jobId } : {}),
     ...(status === "exceptions" ? { status: { in: [...EXCEPTION_STATUSES] } } : status === "approval" ? { status: "READY", approvedById: null, questionId: null } : status ? { status: status as never } : {}),
-    ...(issue ? { issueCodes: { has: issue } } : {}),
+    ...(issue ? { issueCodes: { has: issue } } : problem ? { issueCodes: { hasSome: PROBLEM_CODES[problem] } } : {}),
   };
   const job = jobId ? jobs.find((j) => j.id === jobId)! : null;
   const summary = jobId ? await paperSummary(jobId) : null;
@@ -52,7 +57,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const rows = verify
     ? allRows.filter((r) => {
         const s = verifyState(r.data, fingerprintOf(r));
-        return verify === "verified" ? s.v1 === "passed" && s.v2 === "verified" : verify === "eligible" ? eligible.has(r.id) : verify === "v1-problems" ? s.v1 === "problems" : verify === "v2-disagree" ? s.v2 === "disagree" : s.v1 !== "passed" || s.v2 !== "verified";
+        return verify === "verified" ? s.v1 === "passed" && s.v2 === "verified" : verify === "eligible" ? eligible.has(r.id) : verify === "v1-problems" ? s.v1 === "problems" : verify === "v2-disagree" ? s.v2 === "disagree" || s.v2 === "not_found" : verify === "v2-noresult" ? s.v2 === "failed" || s.v2 === "unavailable" : verify === "v2-notrun" ? s.v2 === "none" || s.v2 === "stale" : s.v1 !== "passed" || s.v2 !== "verified";
       })
     : allRows;
   const taxonomy = job ? (await getExamTaxonomy(prisma, job.examId)).map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((u) => ({ id: u.id, name: u.name })) })) })) : [];
@@ -64,9 +69,13 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
     (await prisma.question.findMany({ where: { id: { in: rows.map((r) => r.questionId).filter((x): x is string => !!x) } }, select: { id: true } })).map((x) => x.id),
   );
   const pendingRescan = new Set((await prisma.aiImportQuestionVersion.findMany({ where: { questionId: { in: rows.map((r) => r.id) }, kind: "RESCAN", status: "PENDING" }, select: { questionId: true } })).map((v) => v.questionId));
+  const jobV2 = job ? ((await prisma.aiImportJob.findUnique({ where: { id: job.id }, select: { config: true } }))?.config as { verify2?: { status: string } } | null)?.verify2 ?? null : null;
+  const checks = await prisma.aiImportCheck.findMany({ where: { questionId: { in: rows.map((r) => r.id) }, name: "Classification evidence" }, select: { questionId: true, detail: true } });
+  const taxEvidence = new Map(checks.map((c) => [c.questionId, c.detail]));
   const view: ExceptionRow[] = rows.map((r) => {
     const e = effective(r);
     const vs = verifyState(r.data, fingerprintOf(r));
+    const contaminated = mergedAnswerIn(e);
     return {
       id: r.id,
       jobId: r.jobId,
@@ -90,6 +99,20 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       v1: vs.v1,
       v2: vs.v2,
       v2Model: vs.pv?.v2?.model ?? null,
+      v1Label: V1_DISPLAY[vs.v1],
+      v2Label: v2Display(vs.v2, jobV2),
+      v1Findings: vs.v1 === "problems" || vs.v1 === "passed" ? (vs.pv?.v1?.problems ?? []).map((p) => `${p.code}: ${p.detail}`).slice(0, 6) : [],
+      v1Fixes: vs.v1 !== "stale" ? (vs.pv?.v1?.fixes ?? []).map((f) => `${f.field} (${f.evidence})`).slice(0, 4) : [],
+      v2Detail: vs.pv?.v2 && vs.v2 !== "stale" ? `${vs.pv.v2.part ? `${vs.pv.v2.part}: ` : ""}${vs.pv.v2.error ? `${vs.pv.v2.error.message}` : vs.pv.v2.detail}`.slice(0, 400) : vs.v2 === "stale" ? "the question changed after Verify 2 ran" : null,
+      v2Fields: vs.v2 === "disagree" || vs.v2 === "not_found" ? (vs.pv?.v2?.fields ?? []) : [],
+      references: (vs.v1 !== "stale" ? (vs.pv?.v1?.references ?? []) : []).map((x) => ({ name: x.name, compared: x.compared, matched: x.matched, similarity: x.similarity, conflicts: x.conflicts.slice(0, 3), note: x.note ?? null })),
+      fullStem: [e.instructions, e.passage, e.stem].filter(Boolean).join("\n").slice(0, 1500),
+      options: e.options.map((o) => ({ label: o.label, text: o.text.slice(0, 200), contaminated: contaminated?.where === `option ${o.label}` })),
+      statements: statementsOf(e.stem).length,
+      stemContaminated: contaminated?.where === "question text",
+      answerLine: contaminated?.raw ?? e.printedAnswerRaw ?? null,
+      taxonomySource: r.taxonomySource,
+      taxonomyEvidence: taxEvidence.get(r.id) ?? null,
       eligible: eligible.has(r.id),
     };
   });
@@ -98,7 +121,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   for (const r of rows) for (const c of r.issueCodes) issueCounts.set(c, (issueCounts.get(c) ?? 0) + 1);
   const link = (patch: Record<string, string | undefined>) => {
     const u = new URLSearchParams();
-    for (const [k, v] of Object.entries({ job: jobId, status: sp.status, issue, verify, ...patch })) if (v) u.set(k, v);
+    for (const [k, v] of Object.entries({ job: jobId, status: sp.status, issue, verify, problem, ...patch })) if (v) u.set(k, v);
     return `/admin/ai-importer/exceptions?${u}`;
   };
   return (
@@ -110,7 +133,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
         </p>
       </div>
       {jobId && summary && job && (
-        <PaperVerifyBar jobId={jobId} jobStatus={job.status} summary={summary} canUse={canUse} canPublish={canPublish && canUse} hrefs={{ verified: link({ status: "all", verify: "verified" }), v1Problems: link({ status: "all", verify: "v1-problems" }), v2Disagree: link({ status: "all", verify: "v2-disagree" }) }} />
+        <PaperVerifyBar jobId={jobId} jobStatus={job.status} summary={summary} canUse={canUse} canPublish={canPublish && canUse} canManage={canManage} hrefs={{ verified: link({ status: "all", verify: "verified" }), v1Problems: link({ status: "all", verify: "v1-problems" }), v2Disagree: link({ status: "all", verify: "v2-disagree" }), v2NoResult: link({ status: "all", verify: "v2-noresult" }), structure: link({ status: "all", problem: "structure", issue: undefined }), taxonomy: link({ status: "all", problem: "taxonomy", issue: undefined }), answers: link({ status: "all", problem: "answer", issue: undefined }) }} />
       )}
       {jobId && (
         <Card>
@@ -163,6 +186,17 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
               ))}
             </div>
           )}
+          <div className="flex flex-wrap gap-2" data-testid="problem-filters">
+            <span className="text-[var(--color-muted-foreground)]">Problem:</span>
+            <Link className={!problem ? "font-semibold underline" : "underline"} href={link({ problem: undefined })}>
+              any
+            </Link>
+            {Object.entries(PROBLEM_FILTERS).map(([k, v]) => (
+              <Link key={k} className={problem === k ? "font-semibold underline" : "underline"} href={link({ problem: k, issue: undefined, status: "all" })} data-testid={`problem-${k}`}>
+                {v}
+              </Link>
+            ))}
+          </div>
           {issueCounts.size > 0 && (
             <div className="flex flex-wrap gap-2">
               <span className="text-[var(--color-muted-foreground)]">Issue:</span>

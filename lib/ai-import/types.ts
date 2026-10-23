@@ -104,20 +104,37 @@ export interface PaperVerification {
     fixes: VerifyFix[];
     /** The reference paper's matching question (number) and the conflicts with it. */
     reference?: { refId: string; name: string; matched: string | null; conflicts: string[] } | null;
+    /**
+     * Every reference paper, each identifiable: whether it could be compared at all (a scanned reference that was
+     * only stored is `compared: false` — never reported as compared), the matching question, how similar its wording
+     * is (0–1) and the differences found.
+     */
+    references?: { refId: string; name: string; compared: boolean; matched: string | null; similarity: number | null; conflicts: string[]; note?: string | null }[];
+    /** A reusable paper-format profile applied to this paper and what it found here (lib/ai-import/format-profile.ts). */
+    profile?: { id: string; version: number; findings: string[] } | null;
   };
   /** Verify 2 — independent second read by a separately selected model. */
   v2?: {
     fingerprint: string;
     at: string;
     model: string;
-    /** VERIFIED: every compared field agrees (or the source settles it) · DISAGREE / NOT_FOUND: manual decision needed · FAILED: no result. */
-    status: "VERIFIED" | "DISAGREE" | "NOT_FOUND" | "FAILED";
+    /**
+     * VERIFIED: every compared field agrees (or the source settles it) · DISAGREE / NOT_FOUND: manual decision needed ·
+     * FAILED: the request was sent but gave no usable answer (timeout, refusal, empty, cut off, malformed) ·
+     * UNAVAILABLE: nothing usable could be sent (model / route unavailable, paid AI off, budget stop). Neither of the
+     * last two is ever counted as agreement.
+     */
+    status: "VERIFIED" | "DISAGREE" | "NOT_FOUND" | "FAILED" | "UNAVAILABLE";
+    /** Why there is no result (FAILED / UNAVAILABLE): the failure kind and the provider's / importer's own message. */
+    error?: { kind: string; message: string; model: string | null } | null;
+    /** The source part that was read ("cms 2025.docx part 3 of 12", "page 4"). */
+    part?: string | null;
     fields: string[];
     detail: string;
     /** How a disagreement was settled from the source (text layer / document text), if it was. */
     resolvedBySource?: string | null;
     /** What the second read gave for the fields that differ (shown to the administrator, never applied). */
-    second?: { stem?: string; options?: string[]; printedAnswer?: string[]; topic?: string | null; subject?: string | null } | null;
+    second?: { stem?: string; options?: string[]; printedAnswer?: string[]; topic?: string | null; subject?: string | null; subTopic?: string | null; statements?: number } | null;
   };
 }
 

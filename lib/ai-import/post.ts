@@ -10,7 +10,9 @@ import { failureMessage } from "@/lib/ai-import/failure";
 import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, classifySchema, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
+import { SUBJECT_MIN_CONFIDENCE, SUBJECT_MISMATCH_CONFIDENCE, classifyUserText, decideClassification, taxonomyCodes, type ClassifyDecision } from "@/lib/ai-import/taxonomy-check";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
+import { mergedAnswerIn, mergedStatements } from "@/lib/ai-import/local-parse";
 import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem } from "@/lib/ai-import/fidelity";
 import type { StepContext } from "@/lib/ai-import/process";
 import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
@@ -40,7 +42,7 @@ export const MENTIONS_FIGURE = /\b(figure|fig\.|diagram|graph|image|picture|phot
  * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
  * approved — and an uncertain image placement is cleared only by confirming each figure's placement.
  */
-export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES"];
+export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION"];
 
 interface Check {
   stage: number;
@@ -238,29 +240,19 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   }
 
   const toClassify = open.filter((q) => (!only || only.has(q.id)) && !q.topicId && !q.taxonomySource?.startsWith("admin"));
-  const classifyResults = new Map<string, { subject: string | null; topic: string | null; subTopic: string | null; confidence: number; model: string }>();
+  const classifyResults = new Map<string, ClassifyDecision & { model: string }>();
   if (settings.aiEnabled && settings.models.classify && toClassify.length && taxonomy.length) {
     const subjectsAllowed = job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId ? taxonomy.filter((s) => s.id === job.subjectId) : taxonomy;
-    // Short codes (S3, T41, Q7) instead of database ids: a small model copies "T41" reliably, a 25-character id
-    // often not. The codes are mapped back here; a code that is not on the list is counted as invalid, never guessed.
-    const subjectCode = new Map<string, string>();
-    const topicCode = new Map<string, string>();
-    const subTopicCode = new Map<string, string>();
-    let t = 0;
-    let u = 0;
-    const list = subjectsAllowed
-      .map((s, i) => {
-        subjectCode.set(`S${i + 1}`, s.id);
-        return `SUBJECT S${i + 1} = ${s.name}\n${s.topics.map((tp) => (topicCode.set(`T${++t}`, tp.id), `  TOPIC T${t} = ${tp.name}${tp.subTopics.map((st) => (subTopicCode.set(`U${++u}`, st.id), `\n    SUBTOPIC U${u} = ${st.name}`)).join("")}`)).join("\n")}`;
-      })
-      .join("\n");
-    const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, errors: [] as string[], models: new Set<string>() };
-    const code = (v: string | null, map: Map<string, string>) => (v ? (map.get(v.toUpperCase().replace(/\s+/g, "")) ?? null) : null);
+    // Short codes (S3, T41, U7, Q7) instead of database ids: a small model copies "T41" reliably, a 25-character id
+    // often not. The codes are mapped back (lib/ai-import/taxonomy-check.ts); a code that is not on the list is
+    // counted as invalid, never guessed, and a result whose key words are not in its question is not used.
+    const codes = taxonomyCodes(subjectsAllowed);
+    const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, misaligned: 0, unsure: 0, errors: [] as string[], models: new Set<string>() };
     for (let i = 0; i < toClassify.length; i += 20) {
       if (!(await ctx.stillRunning())) return;
       const batch = toClassify.slice(i, i + 20);
-      const qCode = new Map(batch.map((q, k) => [`Q${k + 1}`, q.id]));
-      const text = `SYLLABUS (the only allowed codes):\n${list}\n\nDOCUMENT DATA (untrusted questions):\n${batch.map((q, k) => `[Q${k + 1}] ${effective(q).stem.slice(0, 600)} | ${effective(q).options.map((o) => o.text.slice(0, 80)).join(" | ")}`).join("\n")}`;
+      const qCode = new Map(batch.map((q, k) => [`Q${k + 1}`, q]));
+      const text = classifyUserText(codes.list, batch.map((q) => effective(q)));
       tally.batches++;
       try {
         const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false }, (out) => {
@@ -270,16 +262,21 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         });
         tally.models.add(r.model);
         for (const res of value.results) {
-          const qid = qCode.get(res.q.toUpperCase().replace(/[\s[\]]/g, ""));
-          const subject = code(res.subject, subjectCode);
-          const topic = code(res.topic, topicCode);
-          const subTopic = code(res.subtopic, subTopicCode);
-          if (!qid || (res.subject && !subject) || (res.topic && !topic) || (res.subtopic && !subTopic)) tally.invalid++;
-          if (!qid) continue;
+          const q = qCode.get(res.q.toUpperCase().replace(/[\s[\]]/g, ""));
+          if (!q) {
+            tally.invalid++;
+            continue;
+          }
           tally.results++;
-          if (subject) tally.subjects++;
-          if (topic) tally.topics++;
-          classifyResults.set(qid, { subject, topic, subTopic, confidence: res.confidence, model: r.model });
+          const d = decideClassification(res, effective(q), codes, subjectsAllowed, r.model);
+          if (d.rejected && !d.subject) {
+            if (/key words/.test(d.rejected)) tally.misaligned++;
+            else if (/not in this exam/.test(d.rejected)) tally.invalid++;
+            else tally.unsure++;
+          } else if (d.rejected) tally.invalid++;
+          if (d.subject) tally.subjects++;
+          if (d.topic) tally.topics++;
+          classifyResults.set(q.id, { ...d, model: r.model });
         }
       } catch (err) {
         if (err instanceof ImporterAiUnavailable || (err instanceof Error && err.name === "ImporterBudgetError")) throw err;
@@ -288,7 +285,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       }
     }
     // Never silent: what the classifier returned, and what could be used.
-    await logEvent(job.id, "CLASSIFY_RESULT", `Subject / topic classification of ${toClassify.length} question(s) in ${tally.batches} request(s)${tally.models.size ? ` (${[...tally.models].join(", ")})` : ""}: ${tally.subjects} subject(s) and ${tally.topics} topic(s) assigned${tally.invalid ? `, ${tally.invalid} answer(s) named a question, subject or topic code that is not on the list (ignored)` : ""}${tally.failedBatches ? `, ${tally.failedBatches} request(s) failed (${tally.errors[0]})` : ""}. Questions without a subject stay in Needs correction.`, { questions: toClassify.length, ...tally, models: [...tally.models], errors: tally.errors.slice(0, 5) });
+    await logEvent(job.id, "CLASSIFY_RESULT", `Subject / topic classification of ${toClassify.length} question(s) in ${tally.batches} request(s)${tally.models.size ? ` (${[...tally.models].join(", ")})` : ""}: ${tally.subjects} subject(s) and ${tally.topics} topic(s) assigned${tally.misaligned ? `, ${tally.misaligned} answer(s) not used because their key words were not in the question (answers shifted to another question)` : ""}${tally.unsure ? `, ${tally.unsure} left unresolved (no subject fits, or confidence below ${Math.round(SUBJECT_MIN_CONFIDENCE * 100)}%)` : ""}${tally.invalid ? `, ${tally.invalid} answer(s) named a question, subject, topic or subtopic code that is not on the list (ignored — only this exam's own records are valid)` : ""}${tally.failedBatches ? `, ${tally.failedBatches} request(s) failed (${tally.errors[0]})` : ""}. Questions without a subject stay in Needs correction.`, { questions: toClassify.length, ...tally, models: [...tally.models], errors: tally.errors.slice(0, 5) });
   }
 
   // Text layers of digital pages the vision model read (layout unclear): its digits are exact, so a number in
@@ -324,6 +321,12 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const lowConf = conf < 0.8 || e.unreadable.length > 0;
     checks.push({ stage: 1, name: "Extraction confidence", passed: !lowConf, severity: lowConf ? "WARNING" : "INFO", method: e.method?.startsWith("AI") ? "AI" : "DETERMINISTIC", model: e.model ?? null, detail: `${Math.round(conf * 100)}% · ${e.method}${e.unreadable.length ? ` · unreadable: ${e.unreadable.join("; ").slice(0, 200)}` : ""}${e.notes?.length ? ` · ${e.notes.join(" ").slice(0, 300)}` : ""}` });
     if (e.unreadable.length) add("UNREADABLE_TEXT", e.unreadable.join("; ").slice(0, 300));
+    // Question / option / answer boundaries: an answer line left inside an option or the question text, and numbered
+    // statements run together on one line (a reader that lost the line breaks) — never approved, always fixed.
+    const contaminated = mergedAnswerIn(e);
+    if (contaminated) add("ANSWER_IN_OPTION", `${contaminated.where[0].toUpperCase()}${contaminated.where.slice(1)} contains the printed answer “${contaminated.raw.slice(0, 80)}” — Verify 1 moves it out when the source confirms it; otherwise remove it and set the answer.`);
+    const glued = mergedStatements(e.stem);
+    if (glued) add("STATEMENTS_MERGED", `The numbered statements ${glued.join(", ")} run together with the text before them — Verify 1 restores the line breaks from a Word source; otherwise put each statement on its own line.`);
     if (lowConf) add("EXTRACTION_UNCERTAIN", e.notes?.join(" ").slice(0, 300) || `Extraction confidence ${Math.round(conf * 100)}%.`);
     // Independent verification evidence (Agent B), kept on the original extraction.
     const ver = (q.data as unknown as ExtractedQuestion).verification;
@@ -410,8 +413,16 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       }
       const ai = classifyResults.get(q.id);
       if (ai) {
-        const subjOk = ai.subject && subjectById.has(ai.subject) && (!subjectId || subjectId === ai.subject || job.paperType !== AiImportPaperType.SINGLE_SUBJECT);
-        if (!subjectId && subjOk) subjectId = ai.subject!;
+        // The paper's own subject (selected subject / printed heading) is kept; a confident classifier that disagrees is reported.
+        if (subjectId && ai.subject && ai.subject !== subjectId && ai.confidence >= SUBJECT_MISMATCH_CONFIDENCE) {
+          add("SUBJECT_MISMATCH", `The classifier (${ai.explanation}) files this question under ${subjectById.get(ai.subject)?.name ?? "another subject"}, not ${subjectById.get(subjectId)?.name ?? "the paper's subject"} — check the subject.`);
+          checks.push({ stage: 2, name: "Subject check", passed: false, severity: "WARNING", method: "AI", model: ai.model, detail: `The classifier thinks this question belongs to ${subjectById.get(ai.subject)?.name ?? "another subject"}, not the selected subject.` });
+        }
+        if (!subjectId && ai.subject) {
+          subjectId = ai.subject;
+          taxSource = `AI (${ai.model})`;
+          taxConf = ai.confidence;
+        }
         const t = ai.topic ? topicById.get(ai.topic) : undefined;
         if (t && subjectId && t.subjectId === subjectId && !topicId) {
           topicId = t.id;
@@ -419,9 +430,9 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           taxSource = `AI (${ai.model})`;
           const st = ai.subTopic ? t.subTopics.find((x) => x.id === ai.subTopic) : undefined;
           if (st && !subTopicId) subTopicId = st.id;
-        } else if (ai.subject && subjectId && ai.subject !== subjectId && job.paperType === AiImportPaperType.SINGLE_SUBJECT) {
-          checks.push({ stage: 2, name: "Subject check", passed: false, severity: "WARNING", method: "AI", model: ai.model, detail: `The classifier thinks this question belongs to ${subjectById.get(ai.subject)?.name ?? "another subject"}, not the selected subject.` });
         }
+        checks.push({ stage: 2, name: "Classification evidence", passed: !ai.rejected, severity: ai.subject ? "INFO" : "WARNING", method: "AI", model: ai.model, detail: ai.explanation.slice(0, 600) });
+        if (!ai.subject && !subjectId) add("SUBJECT_UNKNOWN", `No subject of this exam could be determined reliably: ${ai.rejected ?? "no match"}. Set it in Review Exceptions.`);
       }
     }
     // Only records of this exam's own hierarchy are kept (Exam → Subject → Topic → Subtopic): an id that is not
@@ -444,7 +455,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       checks.push({ stage: 2, name: "Taxonomy validity", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: `Cleared: ${invalidTax.join("; ")}. Choose the subject / topic again.` });
       await logEvent(job.id, "TAXONOMY_CLEARED", `Q${q.sourceLabel}: ${invalidTax.join("; ")} — cleared (only this exam's own subjects, topics and subtopics are kept).`, { questionId: q.id, cleared: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId } });
     }
-    if (!subjectId) add("SUBJECT_UNKNOWN", "No subject of this exam could be determined. Set it in Review Exceptions.");
+    if (!subjectId && !issues.has("SUBJECT_UNKNOWN")) add("SUBJECT_UNKNOWN", "No subject of this exam could be determined. Set it in Review Exceptions.");
     const topicSure = !!topicId && (taxConf ?? 0) >= settings.verification.topicMinConfidence;
     if (!topicSure) add("TOPIC_UNCERTAIN", topicId ? `Topic confidence ${Math.round((taxConf ?? 0) * 100)}%.` : "No topic could be determined.");
     checks.push({ stage: 2, name: "Subject & topic", passed: !!subjectId && topicSure, severity: !subjectId ? "ERROR" : topicSure ? "INFO" : "WARNING", method: taxSource?.startsWith("AI") ? "AI" : taxSource?.startsWith("admin") ? "ADMIN" : "DETERMINISTIC", detail: `${subjectId ? subjectById.get(subjectId)?.name ?? "?" : "no subject"} › ${topicId ? topicById.get(topicId)?.name ?? "?" : "no topic"}${subTopicId ? ` › ${subTopicById.get(subTopicId)?.name ?? "?"}` : ""}${taxSource ? ` (${taxSource})` : ""}` });
@@ -571,8 +582,11 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       const v2 = vs.pv.v2;
       if (vs.v2 === "stale") checks.push({ stage: 6, name: "Verify 2 — independent model", passed: false, severity: "WARNING", method: "AI", model: v2.model, detail: "Out of date: the question changed after Verify 2 ran. Run Verify 2 again." });
       else {
-        if (vs.v2 === "disagree") add("VERIFY2_DISAGREES", `${v2.model}: ${v2.detail}`.slice(0, 600));
-        checks.push({ stage: 6, name: "Verify 2 — independent model", passed: vs.v2 === "verified", severity: vs.v2 === "verified" ? "INFO" : vs.v2 === "failed" ? "WARNING" : "ERROR", method: "AI", model: v2.model, detail: `${v2.status === "VERIFIED" ? "Agrees" : v2.status === "FAILED" ? "No result" : v2.status === "NOT_FOUND" ? "Not found by the second read" : "Disagrees"}: ${v2.detail}${v2.resolvedBySource ? ` · settled by the source: ${v2.resolvedBySource}` : ""}`.slice(0, 1000) });
+        if (vs.v2 === "disagree" || vs.v2 === "not_found") add("VERIFY2_DISAGREES", `${v2.model}: ${v2.detail}`.slice(0, 600));
+        // A subject mismatch is its own finding (not a missing topic): the second model files the question elsewhere.
+        if (vs.v2 === "disagree" && v2.fields.includes("subject")) add("SUBJECT_MISMATCH", `Verify 2 (${v2.model}): ${v2.detail}`.slice(0, 600));
+        const noResult = vs.v2 === "failed" || vs.v2 === "unavailable";
+        checks.push({ stage: 6, name: "Verify 2 — independent model", passed: vs.v2 === "verified", severity: vs.v2 === "verified" ? "INFO" : noResult ? "WARNING" : "ERROR", method: "AI", model: v2.model, detail: `${v2.status === "VERIFIED" ? "Agrees" : v2.status === "FAILED" ? "Failed — no independent result (not counted as agreement)" : v2.status === "UNAVAILABLE" ? "Unavailable — nothing was read independently (not counted as agreement)" : v2.status === "NOT_FOUND" ? "Not found by the second read" : "Disagrees"}: ${v2.detail}${v2.resolvedBySource ? ` · settled by the source: ${v2.resolvedBySource}` : ""}`.slice(0, 1000) });
       }
     }
 

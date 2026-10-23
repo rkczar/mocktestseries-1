@@ -13,7 +13,7 @@ import { logEvent } from "@/lib/ai-import/jobs";
 import { ImporterAiUnavailable, ImporterBudgetError, resetOutputFailures, resetRateLimitStreak } from "@/lib/ai-import/ai";
 import { summarizeFailures } from "@/lib/ai-import/failure";
 import { jobQuality, reconcileJob, settleJobStatus } from "@/lib/ai-import/summary";
-import { runVerify2, type Verify2State } from "@/lib/ai-import/paper-verify";
+import { runVerify2, verify2Outcome, type Verify2State } from "@/lib/ai-import/paper-verify";
 import { formatInr } from "@/lib/ai-engine/config";
 import { removeVaultDir } from "@/lib/ai-import/vault";
 import { autoCleanup } from "@/lib/ai-import/storage";
@@ -107,10 +107,14 @@ async function verify2Job(job: AiImportJob, state: Verify2State): Promise<void> 
     await runPostProcessing(deterministic);
     const after = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { spentInr: true } });
     const actual = Math.max(0, after.spentInr - state.spentBeforeInr);
-    if (!(await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), errorMessage: null, config: await patchState({ status: "DONE", finishedAt: new Date().toISOString(), counts, stopReason: null }) }))) return;
+    const outcome = verify2Outcome(counts);
+    if (!(await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), errorMessage: null, config: await patchState({ status: "DONE", outcome, finishedAt: new Date().toISOString(), counts, stopReason: null, actualInr: Math.round(actual * 100) / 100 }) }))) return;
     await reconcileJob(job.id);
     await settleJobStatus(job.id);
-    await logEvent(job.id, "VERIFY2_DONE", `Verify 2 finished (${state.model}): ${counts.VERIFIED} question(s) agree, ${counts.DISAGREE} disagree (manual correction), ${counts.NOT_FOUND} not found by the second read, ${counts.FAILED} without a result${counts.extra ? `, ${counts.extra} question(s) found only by the second read` : ""}. Actual cost ${formatInr(actual)} (estimated ${formatInr(state.estimateInr)}, maximum ${formatInr(state.maxInr)}).`, { ...counts, model: state.model, actualInr: actual, estimateInr: state.estimateInr, maxInr: state.maxInr });
+    const results = counts.VERIFIED + counts.DISAGREE + counts.NOT_FOUND;
+    const noResult = (counts.FAILED ?? 0) + (counts.UNAVAILABLE ?? 0);
+    const head = outcome === "NO_RESULT" ? `Verify 2 produced NO independent result (${state.model}): all ${noResult} question(s) attempted failed or were unavailable, so none counts as verified` : outcome === "PARTIAL" ? `Verify 2 finished with gaps (${state.model}): ${results} of ${counts.attempted} question(s) have an independent result` : `Verify 2 finished (${state.model}): ${results} of ${counts.attempted} question(s) have an independent result`;
+    await logEvent(job.id, outcome === "NO_RESULT" ? "VERIFY2_NO_RESULT" : "VERIFY2_DONE", `${head} — ${counts.VERIFIED} agree, ${counts.DISAGREE} disagree (manual correction), ${counts.NOT_FOUND} not found by the second read, ${counts.FAILED ?? 0} failed, ${counts.UNAVAILABLE ?? 0} unavailable${counts.failedUnits ? ` (${counts.failedUnits} of ${counts.units} source part(s) without an answer — use Verify 2 again to retry only those parts)` : ""}${counts.extra ? `, ${counts.extra} question(s) found only by the second read` : ""}. Actual cost ${formatInr(actual)} (estimated ${formatInr(state.estimateInr)}, maximum ${formatInr(state.maxInr)}).`, { ...counts, outcome, model: state.model, actualInr: actual, estimateInr: state.estimateInr, maxInr: state.maxInr });
   } catch (e) {
     const stop = e instanceof ImporterBudgetError || e instanceof ImporterAiUnavailable;
     const message = e instanceof Error ? e.message.slice(0, 500) : "unexpected error";

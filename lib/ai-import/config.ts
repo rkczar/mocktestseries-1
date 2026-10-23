@@ -370,7 +370,7 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   IMAGE_MAPPING_UNCERTAIN: { label: "Image mapping uncertain", blocking: true, publishBlocking: true },
   IMAGE_MISSING: { label: "Essential image missing", blocking: true, publishBlocking: true },
   UNSUPPORTED_TYPE: { label: "Not importable (type not supported)", blocking: true, publishBlocking: true },
-  TOPIC_UNCERTAIN: { label: "Topic needs correction", blocking: false, publishBlocking: true },
+  TOPIC_UNCERTAIN: { label: "Topic missing or uncertain", blocking: false, publishBlocking: true },
   SUBJECT_UNKNOWN: { label: "Subject unknown", blocking: true, publishBlocking: true },
   ANSWER_MISSING: { label: "No answer available", blocking: true, publishBlocking: true },
   ANSWER_MISMATCH: { label: "Answer key mismatch", blocking: false, publishBlocking: true },
@@ -390,6 +390,9 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   NUMBER_CONFLICT: { label: "Question number read twice", blocking: true, publishBlocking: true },
   QUESTION_TEXT_SUSPECT: { label: "Question text incomplete or a placeholder", blocking: true, publishBlocking: true },
   ANSWER_IN_OPTION: { label: "Answer text inside an option or the question", blocking: true, publishBlocking: true },
+  STATEMENTS_MERGED: { label: "Numbered statements run together", blocking: true, publishBlocking: true },
+  SUBJECT_MISMATCH: { label: "Subject does not fit the question", blocking: true, publishBlocking: true },
+  FORMAT_DEVIATION: { label: "Differs from this paper format's profile", blocking: false, publishBlocking: true },
   REFERENCE_CONFLICT: { label: "Differs from the reference paper", blocking: false, publishBlocking: true },
   VERIFY2_DISAGREES: { label: "Verify 2 (independent model) disagrees", blocking: true, publishBlocking: true },
 };

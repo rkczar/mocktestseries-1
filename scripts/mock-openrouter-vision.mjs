@@ -42,7 +42,9 @@
  * "empty" | "length" | "malformed" (cut-off JSON) | "shape" (options as plain strings, null labels / list keys,
  * numbers as strings) | "latex" (unescaped LaTeX backslashes + trailing commas) | "badcodes" (classification codes
  * not on the list). config {keyHeader: {...}} is returned as the answer key's printed header.
- * stats.reasoning records each chat request's `reasoning` setting (null when absent).
+ * stats.reasoning records each chat request's `reasoning` setting (null when absent). Script mode "refusal" answers with
+ * a plain-text refusal; config {classifyShift: true} makes classification echo the NEXT question's key words and topic
+ * (shifted answers), {classifyNoAbout: true} leaves the key words out (2026-10-23).
  * Full-paper verification fixtures (2026-10-22): a page fixture may carry `byModel: {id: {questions}}` (what that model
  * reads); `text: [{match, questions, checker?, byModel?}]` answers page-reading requests WITHOUT an image (Verify 2 of a
  * DOCX / sheet) with the first entry whose `match` string occurs in the request text.
@@ -105,7 +107,7 @@ const routesOf = (id) => {
   }));
 };
 const zdrRoute = (id) => !config.zdrRemoved.includes(id) && routesOf(id).some((r) => r.tag !== "mockprov/std");
-const DEFAULT_CONFIG = { keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, reasonModels: false, batchModels: false, script: {}, keyHeader: null, rateLimit: {}, badRequest: {}, failTask: {} };
+const DEFAULT_CONFIG = { classifyShift: false, classifyNoAbout: false, keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, reasonModels: false, batchModels: false, script: {}, keyHeader: null, rateLimit: {}, badRequest: {}, failTask: {} };
 const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
@@ -148,18 +150,24 @@ function classify(text) {
   const subjects = [];
   let cur = null;
   for (const line of text.split("\n")) {
-    const s = /^SUBJECT (\S+) = (.+)$/.exec(line);
-    const t = /^\s+TOPIC (\S+) = (.+)$/.exec(line);
+    const s = /^SUBJECT (\S+) = (.+?)(?: \(syllabus: .*\))?$/.exec(line);
+    const t = /^\s+TOPIC (\S+) = (.+?)(?: \(syllabus: .*\))?$/.exec(line);
     if (s) subjects.push((cur = { id: s[1], name: s[2], topics: [] }));
     else if (t && cur) cur.topics.push({ id: t[1], name: t[2] });
   }
   const results = [];
-  for (const m of text.matchAll(/^\[([A-Za-z0-9]+)\] (.*)$/gm)) {
-    const q = m[2].toLowerCase();
+  const qs = [...text.matchAll(/^\[([A-Za-z0-9]+)\] (.*)$/gm)];
+  // Key words echoed from the question (as the prompt asks); config.classifyShift echoes the NEXT question's words
+  // and topic (a model that shifted its answers), config.classifyNoAbout leaves them out.
+  const about = (t) => t.split(/[^A-Za-z]+/).filter((w) => w.length >= 5).slice(0, 3);
+  qs.forEach((m, i) => {
+    const src = config.classifyShift ? (qs[i + 1] ?? qs[0]) : m;
+    const q = src[2].toLowerCase();
     let hit = null;
     for (const s of subjects) for (const t of s.topics) if (!hit && q.includes(t.name.toLowerCase())) hit = { s, t };
-    results.push(hit ? { q: m[1], subject: hit.s.id, topic: hit.t.id, confidence: 0.9 } : { q: m[1], subject: subjects[0]?.id ?? null, topic: null, confidence: 0.3 });
-  }
+    const r = hit ? { q: m[1], subject: hit.s.id, topic: hit.t.id, confidence: 0.9 } : { q: m[1], subject: subjects[0]?.id ?? null, topic: null, confidence: 0.3 };
+    results.push(config.classifyNoAbout ? r : { ...r, about: about(src[2]), reason: "mock" });
+  });
   return { results };
 }
 
@@ -299,7 +307,8 @@ const server = http.createServer(async (req, res) => {
       let finish = "stop";
       let ctOverride = null;
       const mode = m.thinks && !body.reasoning?.effort ? "length" : Array.isArray(config.script[id]) && config.script[id].length ? config.script[id].shift() : null;
-      if (mode === "empty") {
+      if (mode === "refusal") content = "I'm sorry, but I can't help with transcribing this document.";
+      else if (mode === "empty") {
         content = "";
         ctOverride = 0;
       } else if (mode === "length") {

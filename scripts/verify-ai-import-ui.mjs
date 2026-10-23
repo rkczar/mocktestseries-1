@@ -490,14 +490,22 @@ await startImport(admin, { dbl: true, expected: (await admin.locator("[data-test
 check("double click → one start (button disabled at once)", await until(async () => (await admin.locator("[data-testid=process-import]").count()) === 0 || (await admin.locator("[data-testid=process-import]").isDisabled())));
 check("quality summary shown on the same page, without visiting other pages", (await waitFor(admin, "[data-testid=quality-panel]", 240000)) && /\/admin\/ai-importer\?job=/.test(admin.url()), admin.url());
 check("nothing stored before approval", (await val("q-stored")) === 0);
-// Every question of this paper carries a flag (no subject on the paper → topic uncertain): no one-click approval.
+// Every question of this paper carries a flag (no subject on the paper, and the classifier is unsure → the subject is
+// left unresolved, never filled in at low confidence): no one-click approval.
 check("no 'Approve all without flags' when every question has a flag", (await admin.locator("[data-testid=qp-approve-clean]").count()) === 0 && (await val("q-topics")) > 0);
 const wordUrl = admin.url();
 await admin.goto(`${BASE}/admin/ai-importer/exceptions?job=${newJob}`);
 await waitFor(admin, "[data-testid=exception-row]", 30000);
+// The administrator sets the subject (this exam's records only) for the selection, then approves after review.
+for (const box of await admin.locator("[data-testid=exception-row] input[type=checkbox]").all()) await box.check();
+await admin.locator("[data-testid=bulk-subject]").selectOption({ index: 1 });
+await admin.click("[data-testid=bulk-taxonomy-apply]");
+await admin.locator("[data-testid=bulk-msg]").waitFor({ timeout: 30000 });
+check("…subject set for the selection by the administrator", /Subject \/ topic set on [1-9]/.test(await admin.locator("[data-testid=bulk-msg]").textContent()), await admin.locator("[data-testid=bulk-msg]").textContent());
+await waitFor(admin, "[data-testid=exception-row]", 30000);
 for (const box of await admin.locator("[data-testid=exception-row] input[type=checkbox]").all()) await box.check();
 await admin.click("[data-testid=bulk-approve]");
-await admin.locator("[data-testid=bulk-msg]").waitFor({ timeout: 30000 });
+await until(async () => /approved/.test((await admin.locator("[data-testid=bulk-msg]").textContent().catch(() => "")) ?? ""), 30000);
 check("flagged questions approved one by one after review (bulk selection)", /^[1-9]\d* approved/.test(await admin.locator("[data-testid=bulk-msg]").textContent()), await admin.locator("[data-testid=bulk-msg]").textContent());
 await admin.goto(wordUrl);
 await waitFor(admin, "[data-testid=qp-store-approved]", 30000);

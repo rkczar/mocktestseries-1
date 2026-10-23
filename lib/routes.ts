@@ -81,6 +81,7 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   { pageName: "AI Import History", route: "/admin/ai-importer/history", module: "AI Question Importer", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai-importer", status: "CONNECTED" },
   { pageName: "AI Import Cost Center", route: "/admin/ai-importer/costs", module: "AI Question Importer", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai-importer", status: "CONNECTED" },
   { pageName: "AI Import Paper Vault", route: "/admin/ai-importer/vault", module: "AI Question Importer", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai-importer", status: "CONNECTED" },
+  { pageName: "AI Import Format Profiles", route: "/admin/ai-importer/formats", module: "AI Question Importer", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai-importer", status: "CONNECTED" },
   { pageName: "AI Import Storage Manager", route: "/admin/ai-importer/storage", module: "AI Question Importer", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai-importer", status: "CONNECTED" },
   { pageName: "AI Import Settings", route: "/admin/ai-importer/settings", module: "AI Question Importer", userType: "ADMIN", authRequired: true, parentRoute: "/admin/ai-importer", status: "CONNECTED" },
   { pageName: "Question Templates", route: "/admin/questions/templates", module: "Questions", userType: "ADMIN", authRequired: true, parentRoute: "/admin/questions", status: "CONNECTED" },

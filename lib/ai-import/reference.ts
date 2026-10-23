@@ -60,6 +60,8 @@ export interface ReferencePaper {
   textChars: number;
   /** What could not be read, in plain words (e.g. a scanned reference has no text without AI). */
   note: string | null;
+  /** Pages without a text layer: stored, NOT compared (OCR / vision would be paid AI). Absent on older references. */
+  scannedPages?: number;
 }
 
 const FINISHED: AiImportJobStatus[] = [AiImportJobStatus.NEEDS_REVIEW, AiImportJobStatus.COMPLETED, AiImportJobStatus.COMPLETED_WITH_ISSUES];
@@ -69,7 +71,7 @@ const strip = (s: string) => s.replace(/\s*⟦IMG:(?:\d+|missing)⟧\s*/g, " ").
 const toRef = (q: ExtractedQuestion): ReferenceQuestion => ({ section: q.section, number: q.number, stem: strip(q.stem).slice(0, 2000), options: q.options.map((o) => strip(o.text).slice(0, 500)), answer: q.printedAnswer, pages: q.pages });
 
 /** Reads a reference file locally (never AI). */
-async function readReference(full: string, kind: string, pages: number, jobId: string): Promise<Pick<ReferencePaper, "questions" | "key" | "textChars" | "note">> {
+async function readReference(full: string, kind: string, pages: number, jobId: string): Promise<Pick<ReferencePaper, "questions" | "key" | "textChars" | "note" | "scannedPages">> {
   const questions: ReferenceQuestion[] = [];
   let text = "";
   let note: string | null = null;
@@ -89,6 +91,11 @@ async function readReference(full: string, kind: string, pages: number, jobId: s
       for (const q of parsePdfPageLocal({ lines: layout.lines, images: layout.images }, p, state).questions) questions.push(toRef(q));
     }
     if (scanned) note = `${scanned} of ${pages} page(s) have no text layer (scanned) — they cannot be compared without paid AI, so they are kept as a file only.`;
+    if (scanned) {
+      const key = parseKeyText(text).map((p) => ({ number: p.number, section: p.section, raw: p.raw }));
+      if (!questions.length && !key.length) note = `${note} Nothing of this reference has been compared: reading it needs OCR / vision (${scanned} page image(s)).`;
+      return { questions, key: questions.length >= 3 && key.length < 3 ? [] : key, textChars: text.length, note, scannedPages: scanned };
+    }
   } else if (kind === "docx") {
     const doc = await readDocx(full);
     text = doc.lines.map((l) => l.text).join("\n");
@@ -107,7 +114,7 @@ async function readReference(full: string, kind: string, pages: number, jobId: s
     const key = sheetPairs(bytes, kind);
     return { questions, key, textChars: bytes.length, note: !questions.length && !key.length ? "No questions or answer-key rows were recognized in the spreadsheet." : null };
   } else {
-    return { questions: [], key: [], textChars: 0, note: "An image has no text layer: it is kept with the import for side-by-side checks, but it cannot be compared without paid AI." };
+    return { questions: [], key: [], textChars: 0, note: "An image has no text layer: it is kept with the import for side-by-side checks, but it cannot be compared without paid AI.", scannedPages: 1 };
   }
   const key = parseKeyText(text).map((p) => ({ number: p.number, section: p.section, raw: p.raw }));
   if (!questions.length && !key.length && !note) note = "No numbered questions or answer-key entries were recognized in the reference.";
@@ -163,7 +170,7 @@ async function storeReference(input: { jobId: string; actorId: string; name: str
   const adopted = await adoptFile(tmp, "files", kind === "jpeg" ? "jpg" : ext);
   const read = await readReference(vaultPath(adopted.key), kind, pageCount ?? 1, input.jobId).catch((e) => ({ questions: [], key: [], textChars: 0, note: `The reference could not be read (${e instanceof Error ? e.message.slice(0, 160) : "error"}); it is kept as a file only.` }));
   const ref: ReferencePaper = { refId: id, name: input.name.trim().slice(0, 200), ext: ext, kind, sha256: adopted.sha256, storageKey: adopted.key, bytes: adopted.bytes, pageCount, uploadedAt: new Date().toISOString(), uploadedById: input.actorId, ...read };
-  await logEvent(input.jobId, "REFERENCE_ADDED", `Reference paper “${ref.name}” added (${kind.toUpperCase()}${pageCount ? `, ${pageCount} page${pageCount === 1 ? "" : "s"}` : ""}): ${ref.questions.length} question(s)${ref.key.length ? ` and ${ref.key.length} answer-key entr${ref.key.length === 1 ? "y" : "ies"}` : ""} read locally. Used as supporting evidence by Verify 1; the source paper is never changed by it.${ref.note ? ` ${ref.note}` : ""}`, ref as unknown as Record<string, unknown>, input.actorId);
+  await logEvent(input.jobId, "REFERENCE_ADDED", `Reference paper “${ref.name}” added (${kind.toUpperCase()}${pageCount ? `, ${pageCount} page${pageCount === 1 ? "" : "s"}` : ""}): ${ref.questions.length} question(s)${ref.key.length ? ` and ${ref.key.length} answer-key entr${ref.key.length === 1 ? "y" : "ies"}` : ""} read locally. ${ref.questions.length || ref.key.length ? "Used as supporting evidence by Verify 1; the source paper is never changed by it." : "It will NOT be compared by Verify 1 (nothing could be read from it without paid AI)."}${ref.note ? ` ${ref.note}` : ""}`, ref as unknown as Record<string, unknown>, input.actorId);
   await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_REFERENCE_ADDED", entityType: "AiImportJob", entityId: input.jobId, metadata: { refId: id, name: ref.name, sha256: ref.sha256, bytes: ref.bytes } } });
   return ref;
 }
@@ -264,6 +271,8 @@ export function textSimilarity(x: string, y: string): number {
 
 export interface ReferenceComparison {
   matched: string | null;
+  /** Wording similarity (0–1) of the matched reference question, or null when none matched. */
+  similarity: number | null;
   conflicts: string[];
   /** The reference's answer for a question that has none (shown, applied only by an administrator). */
   suggestedAnswer: string[];
@@ -276,7 +285,7 @@ const refLabel = (r: { section: string; number: number | null }) => `${r.section
  * numbering difference is a conflict). Question wording, options, numbers / symbols and the answer are compared.
  */
 export function compareWithReference(q: ExtractedQuestion, answer: string[], ref: Pick<ReferencePaper, "questions" | "key">): ReferenceComparison {
-  const out: ReferenceComparison = { matched: null, conflicts: [], suggestedAnswer: [] };
+  const out: ReferenceComparison = { matched: null, similarity: null, conflicts: [], suggestedAnswer: [] };
   let twin = ref.questions.find((r) => r.number === q.number && r.section === q.section && textSimilarity(r.stem, q.stem) >= 0.5) ?? null;
   if (!twin && q.stem.trim()) {
     let best: { r: ReferenceQuestion; s: number } | null = null;
@@ -292,6 +301,7 @@ export function compareWithReference(q: ExtractedQuestion, answer: string[], ref
   const keyEntry = ref.key.find((k) => k.number === q.number && k.section === q.section) ?? null;
   if (twin) {
     out.matched = refLabel(twin);
+    out.similarity = Math.round(textSimilarity(twin.stem, q.stem) * 100) / 100;
     const asQuestion: ExtractedQuestion = { ...q, stem: twin.stem, options: twin.options.map((t, i) => ({ label: String.fromCharCode(65 + i), printed: String.fromCharCode(65 + i), text: t })), printedAnswer: twin.answer, figures: q.figures };
     const v = readsAgree(q, asQuestion);
     if (!v.agree) {

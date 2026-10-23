@@ -11,7 +11,9 @@ import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { ImportJobError, logEvent } from "@/lib/ai-import/jobs";
 import { kickWorker } from "@/lib/ai-import/kick";
 import { effective, runPostProcessing } from "@/lib/ai-import/post";
-import { mergedAnswerIn } from "@/lib/ai-import/local-parse";
+import { blockToQuestion, mergedAnswerIn, splitQuestions } from "@/lib/ai-import/local-parse";
+import { applyFormatProfile } from "@/lib/ai-import/format-profile";
+import { classifyUserText, echoMatches, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
 import { readDocx } from "@/lib/ai-import/docx";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
 import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
@@ -20,7 +22,7 @@ import { importerAiCall, parseModelJson, estimateInputTokens, ImporterAiFailure,
 import { failureMessage } from "@/lib/ai-import/failure";
 import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, classifySchema, documentTextUserText, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
 import { computeModelPlan, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
-import { compareWithReference, listReferences, referenceOnly, textSimilarity } from "@/lib/ai-import/reference";
+import { compareWithReference, listReferences, referenceOnly, textSimilarity, type ReferencePaper } from "@/lib/ai-import/reference";
 import { recordVersion, snapshotFigures } from "@/lib/ai-import/versions";
 import { exists as vaultExists, vaultPath } from "@/lib/ai-import/vault";
 import { jobQuality, settleJobStatus } from "@/lib/ai-import/summary";
@@ -84,6 +86,11 @@ export interface Verify1Result {
   duplicateNumbers: string[];
   referenceOnly: string[];
   referenceConflicts: number;
+  referencesCompared: number;
+  /** References that were only stored (scanned): named, never counted as compared. */
+  referencesNotCompared: string[];
+  /** Questions whose line breaks (statements, paragraphs) were restored from the Word source. */
+  whitespaceRestored: number;
 }
 
 export async function runVerify1(jobId: string, actorId: string): Promise<Verify1Result> {
@@ -126,6 +133,45 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     fixesBy.set(q.id, fixes);
   }
 
+  // 1b. Line breaks lost by an earlier reading (numbered statements run together): restored from the Word source when
+  // the source's text is the same apart from whitespace. Only whitespace changes; the previous version is kept.
+  let restored = 0;
+  for (const file of files) {
+    if ((file.detected as { kind?: string } | null)?.kind !== "docx") continue;
+    const row = await prisma.aiImportFile.findUnique({ where: { id: file.id }, select: { storageKey: true, originalName: true } });
+    if (!row?.storageKey) continue;
+    const fresh = new Map<string, ExtractedQuestion>();
+    try {
+      const doc = await readDocx(vaultPath(row.storageKey));
+      for (const b of splitQuestions(doc.lines).blocks) {
+        const fq = blockToQuestion(b, 1, "DOCX").q;
+        fresh.set(`${fq.section}|${fq.number}`, fq);
+      }
+    } catch {
+      continue;
+    }
+    const strip = (t: string) => t.replace(/\s*⟦IMG:(?:\d+|missing)⟧\s*/g, " ");
+    const flat = (t: string) => strip(t).replace(/\s+/g, "");
+    for (const q of await prisma.aiImportQuestion.findMany({ where: { fileId: file.id }, include: { figures: true } })) {
+      if (LOCKED.includes(q.status) || q.editedData) continue;
+      const d = q.data as unknown as ExtractedQuestion;
+      const src = fresh.get(`${d.section}|${d.number}`);
+      if (!src) continue;
+      const stem = strip(src.stem).replace(/[ \t]{2,}/g, " ").trim();
+      if (stem === d.stem || flat(stem) !== flat(d.stem)) continue;
+      const fixes: VerifyFix[] = [{ field: "question text", before: d.stem.slice(0, 300), after: stem.slice(0, 300), evidence: `line breaks as printed in ${row.originalName} (whitespace only)` }];
+      await recordVersion({ questionId: q.id, jobId, kind: "EXTRACTION", data: d, figures: snapshotFigures(q.figures), changes: fixes, actorId, note: "Before Verify 1 restored the line breaks from the Word source." });
+      await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { data: { ...d, stem, notes: [...(d.notes ?? []), "Verify 1 restored the line breaks of the question text from the Word source (whitespace only)."] } as unknown as Prisma.InputJsonValue, approvedById: null, approvedAt: null } });
+      fixesBy.set(q.id, [...(fixesBy.get(q.id) ?? []), ...fixes]);
+      restored++;
+    }
+  }
+
+  // 1c. A reusable paper-format profile for this exam / format, checked against THIS paper (never trusted blindly).
+  const profileRun = await applyFormatProfile(jobId);
+  const profileFindings = profileRun?.findings ?? new Map<string, { id: string; version: number; findings: string[] }>();
+  const profileNote = profileRun?.summary ?? null;
+
   // 2. Every deterministic check of the importer, on the corrected content (no AI).
   await runPostProcessing(ctx);
 
@@ -140,6 +186,7 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     if (LOCKED.includes(q.status)) continue;
     const e = effective(q);
     const problems: VerifyProblem[] = [...(fixProblems.get(q.id) ?? [])];
+    for (const f of profileFindings.get(q.id)?.findings ?? []) problems.push({ code: "FORMAT_DEVIATION", detail: `Format profile: ${f}` });
     if (e.continuesOnNextPage && e.pages.length === 1 && e.pages[0] < (lastPage.get(q.fileId) ?? 1)) problems.push({ code: "QUESTION_TEXT_SUSPECT", detail: `Marked as continuing on page ${e.pages[0] + 1}, but no continuation was joined to it — check both pages.` });
     const texts = [e.stem, ...e.options.map((o) => o.text)];
     if (texts.some((t) => /�|[-]/.test(t))) problems.push({ code: "FORMULA_ISSUE", detail: "Unreadable characters (font encoding / OCR) in the text — compare with the source page." });
@@ -170,8 +217,15 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
       }
     }
     let reference: NonNullable<PaperVerification["v1"]>["reference"] = null;
+    const references: NonNullable<NonNullable<PaperVerification["v1"]>["references"]> = [];
     for (const ref of refs) {
+      // A reference nothing could be read from (scanned, only stored) is recorded as NOT compared — never as "no conflict".
+      if (!referenceComparable(ref)) {
+        references.push({ refId: ref.refId, name: ref.name, compared: false, matched: null, similarity: null, conflicts: [], note: `not compared: ${scannedPagesOf(ref)} scanned page(s) without a text layer need OCR / vision (paid AI) — stored only` });
+        continue;
+      }
       const c = compareWithReference(e, q.finalAnswer, ref);
+      references.push({ refId: ref.refId, name: ref.name, compared: true, matched: c.matched, similarity: c.similarity, conflicts: c.conflicts });
       if (!reference || c.matched) reference = { refId: ref.refId, name: ref.name, matched: c.matched, conflicts: c.conflicts };
       if (c.conflicts.length) {
         refConflicts++;
@@ -183,16 +237,18 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     const ok = !problems.length && !blockingNow.length && q.status !== AiImportQuestionStatus.NOT_IMPORTABLE && q.status !== AiImportQuestionStatus.DUPLICATE;
     if (ok) passed++;
     else withProblems++;
-    await savePaperVerify(q, { v1: { fingerprint: fingerprintOf(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference } });
+    await savePaperVerify(q, { v1: { fingerprint: fingerprintOf(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference, references, profile: profileFindings.get(q.id) ?? null } });
   }
 
   // 4. The findings become the questions' flags (still no AI), then the job's status follows its quality.
   await runPostProcessing(ctx);
   await settleJobStatus(jobId);
   const quality = await jobQuality(jobId);
-  const refOnly = refs.flatMap((r) => referenceOnly(r, questions.map((x) => effective(x))).map((l) => `${l} (${r.name})`));
-  const result: Verify1Result = { questions: passed + withProblems, passed, withProblems, corrected: fixesBy.size, missing: quality?.missing ?? [], duplicateNumbers: quality?.duplicateNumbers ?? [], referenceOnly: refOnly.slice(0, 200), referenceConflicts: refConflicts };
-  await logEvent(jobId, "VERIFY1_DONE", `Verify 1 (full paper, no AI): ${result.questions} question(s) checked — ${passed} passed, ${withProblems} with findings, ${result.corrected} corrected from the source${result.missing.length ? `; missing ${result.missing.slice(0, 10).join(", ")}${result.missing.length > 10 ? " …" : ""}` : ""}${result.duplicateNumbers.length ? `; numbers read twice ${result.duplicateNumbers.slice(0, 10).join(", ")}` : ""}${refs.length ? `; reference papers: ${refConflicts} conflict(s)${refOnly.length ? `, ${refOnly.length} reference question(s) not in the source (${refOnly.slice(0, 6).join(", ")})` : ""}` : ""}.`, result as unknown as Record<string, unknown>, actorId);
+  const refOnly = refs.filter(referenceComparable).flatMap((r) => referenceOnly(r, questions.map((x) => effective(x))).map((l) => `${l} (${r.name})`));
+  const compared = refs.filter(referenceComparable);
+  const notCompared = refs.filter((r) => !referenceComparable(r));
+  const result: Verify1Result = { questions: passed + withProblems, passed, withProblems, corrected: fixesBy.size, missing: quality?.missing ?? [], duplicateNumbers: quality?.duplicateNumbers ?? [], referenceOnly: refOnly.slice(0, 200), referenceConflicts: refConflicts, referencesCompared: compared.length, referencesNotCompared: notCompared.map((r) => r.name), whitespaceRestored: restored };
+  await logEvent(jobId, "VERIFY1_DONE", `Verify 1 (full paper, no AI): ${result.questions} question(s) checked — ${passed} passed, ${withProblems} with findings, ${result.corrected} corrected from the source${result.missing.length ? `; missing ${result.missing.slice(0, 10).join(", ")}${result.missing.length > 10 ? " …" : ""}` : ""}${result.duplicateNumbers.length ? `; numbers read twice ${result.duplicateNumbers.slice(0, 10).join(", ")}` : ""}${compared.length ? `; reference papers compared: ${compared.map((r) => `“${r.name}”`).join(", ")} — ${refConflicts} conflict(s)${refOnly.length ? `, ${refOnly.length} reference question(s) not in the source (${refOnly.slice(0, 6).join(", ")})` : ""}` : ""}${notCompared.length ? `; NOT compared (scanned, stored only — needs OCR / vision): ${notCompared.map((r) => `“${r.name}” (${scannedPagesOf(r)} page(s))`).join(", ")}` : ""}${result.whitespaceRestored ? `; line breaks restored from the Word source in ${result.whitespaceRestored} question(s)` : ""}${profileNote ? `; ${profileNote}` : ""}.`, result as unknown as Record<string, unknown>, actorId);
   await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_VERIFY1", entityType: "AiImportJob", entityId: jobId, metadata: { questions: result.questions, passed, corrected: result.corrected } } });
   return result;
 }
@@ -219,6 +275,16 @@ export interface Verify2State {
   finishedAt?: string | null;
   stopReason?: string | null;
   counts?: Record<string, number>;
+  /** COMPLETE: every part answered · PARTIAL: some parts gave no answer · NO_RESULT: not one independent result. */
+  outcome?: "COMPLETE" | "PARTIAL" | "NO_RESULT";
+  actualInr?: number;
+}
+
+/** How a finished Verify 2 went, from its counts (a run without one independent result is never "done" in the UI). */
+export function verify2Outcome(c: Record<string, number>): NonNullable<Verify2State["outcome"]> {
+  const results = (c.VERIFIED ?? 0) + (c.DISAGREE ?? 0) + (c.NOT_FOUND ?? 0);
+  if (!results && (c.attempted ?? 0) > 0) return "NO_RESULT";
+  return (c.failedUnits ?? 0) > 0 || (c.FAILED ?? 0) + (c.UNAVAILABLE ?? 0) > 0 ? "PARTIAL" : "COMPLETE";
 }
 
 interface Unit {
@@ -230,9 +296,66 @@ interface Unit {
   textLayer?: string | null;
   startState?: unknown;
   parts?: string[];
+  /** Text part: its position, and the questions (section|number) the local reading found in it. */
+  partIndex?: number;
+  partCount?: number;
+  qkeys?: string[];
+  /** Every question key of the file's text parts (a stored question outside all of them is compared in the last part). */
+  fileKeys?: Set<string>;
 }
 
 const CHUNK = 11_000;
+/**
+ * Verify 2 reads a text document in small parts — at most PART_QUESTIONS questions / PART_CHARS characters, split at
+ * question starts — so one answer fits the output limit with room for a reasoning model's thinking. (2026-10-23: a
+ * 120-question DOCX went out as ~11,000-character parts; the reasoning model spent its whole 8,000-token limit and the
+ * fallback's answer was cut off, so all 120 questions had no result.) A failed part leaves only its own questions
+ * without a result.
+ */
+const PART_CHARS = 4_500;
+const PART_QUESTIONS = 8;
+
+const qkey = (section: string | null | undefined, number: number | null | undefined) => `${section ?? ""}|${number ?? "?"}`;
+type IdxLine = { text: string; idx: number };
+
+/** Document lines → Verify 2 text parts, each starting at a question start, with the questions it holds. */
+export function verify2TextParts(lines: string[]): { text: string; keys: string[] }[] {
+  const tagged: IdxLine[] = lines.map((text, idx) => ({ text, idx }));
+  const { blocks } = splitQuestions(tagged);
+  if (!blocks.length) return chunkText(lines).map((text) => ({ text, keys: [] }));
+  const starts = blocks.map((b) => (b.lines[0] as unknown as IdxLine).idx);
+  const out: { text: string; keys: string[] }[] = [];
+  let from = 0;
+  let keys: string[] = [];
+  let chars = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    const end = i + 1 < blocks.length ? starts[i + 1] : lines.length;
+    const size = lines.slice(starts[i], end).join("\n").length + 1;
+    if (keys.length && (chars + size > PART_CHARS || keys.length >= PART_QUESTIONS)) {
+      out.push({ text: lines.slice(from, starts[i]).join("\n"), keys });
+      from = starts[i];
+      keys = [];
+      chars = 0;
+    }
+    keys.push(qkey(blocks[i].section, blocks[i].number));
+    chars += size;
+  }
+  out.push({ text: lines.slice(from).join("\n"), keys });
+  return out;
+}
+
+/** The second read numbers questions as printed; sections (numbering restarts) come from the part's known questions. */
+function sectionsFromKeys(qs: ExtractedQuestion[], keys: string[]): void {
+  const left = [...keys];
+  for (const q of qs) {
+    if (q.number === null) continue;
+    const i = left.findIndex((k) => k.endsWith(`|${q.number}`));
+    if (i >= 0) {
+      q.section = left[i].split("|")[0];
+      left.splice(i, 1);
+    } else q.section = keys.length && keys.every((k) => k.split("|")[0] === keys[0].split("|")[0]) ? keys[0].split("|")[0] : "";
+  }
+}
 
 function chunkText(lines: string[]): string[] {
   const out: string[] = [];
@@ -267,7 +390,9 @@ async function verify2Units(jobId: string): Promise<Unit[]> {
       for (const p of pages) units.push({ key: `${file.id}:p${p.pageNumber}`, kind: "page", file, pageId: p.id, pageNumber: p.pageNumber, textLayer: p.textLayer, startState: (p.rawOutput as { startState?: unknown } | null)?.startState });
     } else if (kind === "docx" || kind === "xlsx" || kind === "csv") {
       const lines = kind === "docx" ? (await readDocx(vaultPath(file.storageKey))).lines.map((l) => l.text.replace(/⟦IMG:(?:\d+|missing)⟧/g, "[image]")) : await sheetLines(file);
-      units.push({ key: `${file.id}:text`, kind: "text", file, parts: chunkText(lines) });
+      const parts = verify2TextParts(lines);
+      const fileKeys = new Set(parts.flatMap((x) => x.keys));
+      parts.forEach((x, i) => units.push({ key: `${file.id}:t${i + 1}of${parts.length}`, kind: "text", file, parts: [x.text], partIndex: i, partCount: parts.length, qkeys: x.keys, fileKeys }));
     }
   }
   return units;
@@ -294,15 +419,25 @@ async function usedModels(jobId: string, config: unknown): Promise<string[]> {
 const usedBy = (used: string[], id: string) => used.some((m) => m === id || m.startsWith(`${id}-`));
 
 type UnitRow = QRow;
-/** A question is compared once its LAST page has been read again (a question spanning pages is joined first). */
-const inUnit = (u: Unit, q: UnitRow) => q.fileId === u.file.id && (u.kind !== "page" || q.pages[q.pages.length - 1] === u.pageNumber);
+/**
+ * A question is compared once its LAST page has been read again (a question spanning pages is joined first); in a
+ * text document, in the part that holds it (a question the local reading did not place: in the last part).
+ */
+const inUnit = (u: Unit, q: UnitRow) => {
+  if (q.fileId !== u.file.id) return false;
+  if (u.kind === "page") return q.pages[q.pages.length - 1] === u.pageNumber;
+  if (!u.qkeys) return true;
+  const k = qkey(effective(q).section, effective(q).number);
+  return u.qkeys.includes(k) || (u.partIndex === (u.partCount ?? 1) - 1 && !u.fileKeys?.has(k));
+};
+const unitLabel = (u: Unit) => `${u.file.originalName}${u.kind === "page" ? ` page ${u.pageNumber}` : (u.partCount ?? 1) > 1 ? ` part ${(u.partIndex ?? 0) + 1} of ${u.partCount}` : ""}`;
 
 /** A unit needs no new read when this model already read it and every one of its questions still has an up-to-date result. */
 function unitDone(u: Unit, rows: UnitRow[], state: Verify2State | null, model: string | null): boolean {
   if (!state || state.model !== model || !state.doneUnits.includes(u.key)) return false;
   return rows.filter((q) => inUnit(u, q)).every((q) => {
     const s = verifyState(q.data, fingerprintOf(q));
-    return (s.v2 === "verified" || s.v2 === "disagree") && s.pv?.v2?.model !== undefined;
+    return (s.v2 === "verified" || s.v2 === "disagree" || s.v2 === "not_found") && s.pv?.v2?.model !== undefined;
   });
 }
 
@@ -335,6 +470,11 @@ export interface Verify2Preview {
   confirmedMaxInr: number;
   state: Verify2State | null;
   problems: string[];
+  /**
+   * Scanned reference papers: only stored, NOT compared. Comparing them needs OCR / vision of every page — paid AI that
+   * is NOT part of this Verify 2 and is never sent by it; the estimate is shown so the cost is known before any use.
+   */
+  referenceOcr: { name: string; pages: number; processing: string; estimateInr: number | null; maxInr: number | null }[];
 }
 
 async function priceVerify2(jobId: string, modelArg: string | null, refresh: boolean) {
@@ -384,8 +524,20 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
       estimateInr = Math.ceil((usdToInr(typUsd, fx.rate) ?? 0) * 100) / 100;
     } else problems.push(`${model} cannot be used for Verify 2: ${choice.reason}`);
   } else problems.push(`No suitable model for Verify 2: ${reason}`);
+  const refs = await listReferences(jobId);
+  const pageMax = choice?.price && choice.model === model ? requestUsd(choice.price, profileInputTokens("verify"), 8000, 1) * PRICE_MARGIN : null;
+  const pageTyp = choice?.price && choice.model === model ? requestUsd(choice.price, profileInputTokens("verify"), 3200, 1) : null;
+  const fxRate = auto.fxRate;
+  const referenceOcr = refs
+    .filter((r) => !referenceComparable(r) || scannedPagesOf(r) > 0)
+    .map((r) => {
+      const pages = scannedPagesOf(r);
+      const inr = (usd: number | null) => (usd === null || !fxRate ? null : Math.ceil((usdToInr(usd * pages, fxRate) ?? 0) * 100) / 100);
+      return { name: r.name, pages, processing: `OCR / vision reading of ${pages} scanned page image(s)${model ? ` (e.g. with ${model})` : ""}`, estimateInr: inr(pageTyp), maxInr: inr(pageMax) };
+    })
+    .filter((r) => r.pages > 0);
   const alternates = candidates.filter((c) => c.eligible && c.id !== model && (settings.budget.allowPricierFallback || (c.maxInr ?? Infinity) <= (choice?.maxInr ?? 0) + 1e-9)).map((c) => c.id).slice(0, 3);
-  return { job, settings, used, candidates, model, choice, reason, units: todo, allUnits: units, questions, classifyBatches, estimateInr, maxInr, problems, prior, alternates };
+  return { job, settings, used, candidates, model, choice, reason, units: todo, allUnits: units, questions, classifyBatches, estimateInr, maxInr, problems, prior, alternates, referenceOcr };
 }
 
 export async function verify2Preview(jobId: string, model: string | null): Promise<Verify2Preview> {
@@ -408,6 +560,7 @@ export async function verify2Preview(jobId: string, model: string | null): Promi
     confirmedMaxInr: p.job.budgetInr,
     state: p.prior,
     problems: p.problems,
+    referenceOcr: p.referenceOcr,
   };
 }
 
@@ -447,7 +600,7 @@ export async function requestVerify2(input: { jobId: string; actorId: string; mo
   };
   const r = await prisma.aiImportJob.updateMany({ where: { id: input.jobId, status: p.job.status }, data: { status: AiImportJobStatus.QUEUED, finishedAt: null, budgetInr: budget, config: { ...((p.job.config as object) ?? {}), verify2: state } as unknown as Prisma.InputJsonValue } });
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
-  await logEvent(input.jobId, "VERIFY2_REQUESTED", `Verify 2 confirmed with ${input.model}: ${p.units.length} source unit(s) + ${p.classifyBatches} classification request(s), estimated ${formatInr(p.estimateInr)}, maximum ${formatInr(p.maxInr)} (confirmed ${formatInr(confirmed)}). Confirmed maximum of the import: ${formatInr(budget)} (₹${p.job.spentInr.toFixed(2)} spent so far).`, { model: input.model, units: p.units.length, classifyBatches: p.classifyBatches, estimateInr: p.estimateInr, maxInr: p.maxInr, confirmedMaxInr: confirmed, budgetInr: budget, alternates: p.alternates, usedModels: p.used }, input.actorId);
+  await logEvent(input.jobId, "VERIFY2_REQUESTED", `Verify 2 confirmed with ${input.model}: ${p.units.length} source read(s) (${p.units.filter((u) => u.kind === "page").length} page image(s), ${p.units.filter((u) => u.kind === "text").length} document text part(s) of at most ${PART_QUESTIONS} questions) + ${p.classifyBatches} classification request(s), estimated ${formatInr(p.estimateInr)}, maximum ${formatInr(p.maxInr)} (confirmed ${formatInr(confirmed)}). Confirmed maximum of the import: ${formatInr(budget)} (₹${p.job.spentInr.toFixed(2)} spent so far).`, { model: input.model, units: p.units.length, classifyBatches: p.classifyBatches, estimateInr: p.estimateInr, maxInr: p.maxInr, confirmedMaxInr: confirmed, budgetInr: budget, alternates: p.alternates, usedModels: p.used }, input.actorId);
   await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_VERIFY2_REQUESTED", entityType: "AiImportJob", entityId: input.jobId, metadata: { model: input.model, maxInr: p.maxInr, confirmedMaxInr: confirmed } } });
   kickWorker();
   return { started: true, maxInr: p.maxInr };
@@ -521,6 +674,16 @@ function compareSecond(q: QRow, twin: SecondRead | undefined, v1: NonNullable<Pa
   return { fingerprint: fp, at: now, model: twin.model, status: "DISAGREE", fields, detail: `${diffs.join("; ")} — the source cannot settle it; correct the question by hand or approve it after checking.${alsoV1}`.slice(0, 900), second };
 }
 
+type V2Result = NonNullable<PaperVerification["v2"]>;
+
+/** Why a request gave no result: FAILED (sent, unusable answer / provider error) or UNAVAILABLE (nothing usable could be sent). */
+function noResultOf(e: unknown, model: string): { status: "FAILED" | "UNAVAILABLE"; error: NonNullable<V2Result["error"]> } {
+  const message = (e instanceof Error ? e.message : "request failed").slice(0, 400);
+  if (e instanceof ImporterAiFailure) return { status: e.kind === "route_unavailable" || e.kind === "image_unsupported" || e.kind === "paid_ai_off" ? "UNAVAILABLE" : "FAILED", error: { kind: e.kind, message, model: e.model ?? model } };
+  if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) return { status: "UNAVAILABLE", error: { kind: e instanceof ImporterAiUnavailable ? "unavailable" : "budget", message, model } };
+  return { status: "FAILED", error: { kind: "error", message, model } };
+}
+
 /** Worker: the confirmed Verify 2 of one job (job is PROCESSING, leased). Throws budget / unavailable stops. */
 export async function runVerify2(ctx: StepContext): Promise<Record<string, number>> {
   let state = (ctx.job.config as { verify2?: Verify2State } | null)?.verify2;
@@ -529,14 +692,33 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   const rows = await prisma.aiImportQuestion.findMany({ where: { jobId: ctx.job.id, status: { notIn: LOCKED } }, include: { figures: true } });
   const units = (await verify2Units(ctx.job.id)).filter((u) => !unitDone(u, rows, state!, state!.model));
   const exam = await prisma.exam.findUnique({ where: { id: ctx.job.examId }, select: { name: true } });
-  const counts: Record<string, number> = { VERIFIED: 0, DISAGREE: 0, NOT_FOUND: 0, FAILED: 0, units: 0, failedUnits: 0, extra: 0 };
+  const counts: Record<string, number> = { VERIFIED: 0, DISAGREE: 0, NOT_FOUND: 0, FAILED: 0, UNAVAILABLE: 0, attempted: 0, units: 0, failedUnits: 0, extra: 0 };
   const done = [...state.doneUnits];
   // The second read's last question of the previous page when it continues on the next page (joined there).
   const tail = new Map<string, { q: ExtractedQuestion; page: number } | null>();
-  for (const u of units) {
+  // Every second-read question of a text document so far (a question the local reading did not place is matched against all of them).
+  const fileSecond = new Map<string, SecondRead[]>();
+
+  /** A stop (paid AI off, budget, provider unavailable): every question still without a current result is marked UNAVAILABLE with the reason. */
+  const markUnavailable = async (from: number, e: unknown) => {
+    const why = noResultOf(e, state!.model);
+    for (const u of units.slice(from)) {
+      const qs = await prisma.aiImportQuestion.findMany({ where: { fileId: u.file.id, status: { notIn: LOCKED } }, include: { figures: true } });
+      for (const q of qs.filter((x) => inUnit(u, x))) {
+        const cur = verifyState(q.data, fingerprintOf(q)).v2;
+        if (cur === "verified" || cur === "disagree" || cur === "not_found") continue;
+        await savePaperVerify(q, { v2: { fingerprint: fingerprintOf(q), at: new Date().toISOString(), model: state!.model, status: "UNAVAILABLE", fields: [], detail: `not read independently — Verify 2 stopped: ${why.error.message}`.slice(0, 600), error: { ...why.error, kind: why.error.kind }, part: unitLabel(u) } });
+        counts.UNAVAILABLE++;
+        counts.attempted++;
+      }
+    }
+  };
+
+  for (let ui = 0; ui < units.length; ui++) {
+    const u = units[ui];
     if (!(await ctx.stillRunning())) return counts;
     const second: SecondRead[] = [];
-    let failed: string | null = null;
+    let failed: ReturnType<typeof noResultOf> | null = null;
     try {
       if (u.kind === "page") {
         const render = await ensureRender(ctx.job, u.file, u.pageNumber!, ctx.settings.limits.renderDpi);
@@ -552,66 +734,64 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
         const last = qs[qs.length - 1];
         tail.set(u.file.id, last?.continuesOnNextPage ? { q: last, page: u.pageNumber! } : null);
       } else {
-        const parts = u.parts ?? [];
-        const all: ExtractedQuestion[] = [];
-        let model = state.model;
-        for (let i = 0; i < parts.length; i++) {
-          if (!(await ctx.stillRunning())) return counts;
-          const r = await verifyCall(ctx, state, { task: "verify", system: EXTRACT_SYSTEM, content: [{ type: "text", text: documentTextUserText({ exam: exam?.name ?? "Exam", subject: null, part: i + 1, parts: parts.length, text: parts[i] }) }], maxOutputTokens: 8000, needsVision: false }, (t) => parsePage(t, "the Verify 2 model's answer"));
-          model = r.model;
-          all.push(...toExtracted(r.value, 1, r.model));
-        }
-        // Sections (numbering restarts) over the whole document, as the local reader numbers them.
-        assignSections(all, undefined);
-        for (const q of all) second.push({ q, model, sourceText: parts.join("\n") });
+        const text = u.parts?.[0] ?? "";
+        const r = await verifyCall(ctx, state, { task: "verify", system: EXTRACT_SYSTEM, content: [{ type: "text", text: documentTextUserText({ exam: exam?.name ?? "Exam", subject: null, part: (u.partIndex ?? 0) + 1, parts: u.partCount ?? 1, text }) }], maxOutputTokens: 8000, needsVision: false }, (t) => parsePage(t, "the Verify 2 model's answer"));
+        const qs = toExtracted(r.value, 1, r.model);
+        // Sections (numbering restarts) as the local reader numbered this part's questions.
+        if (u.qkeys?.length) sectionsFromKeys(qs, u.qkeys);
+        else assignSections(qs, undefined);
+        for (const q of qs) second.push({ q, model: r.model, sourceText: text });
+        fileSecond.set(u.file.id, [...(fileSecond.get(u.file.id) ?? []), ...second]);
       }
     } catch (e) {
       if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) {
-        await saveState(ctx.job.id, { doneUnits: done });
+        await markUnavailable(ui, e);
+        await saveState(ctx.job.id, { doneUnits: done, counts });
         throw e;
       }
-      failed = e instanceof Error ? e.message.slice(0, 300) : "request failed";
+      failed = noResultOf(e, state.model);
     }
-    // Compare with every stored question of this unit (a page: the questions that start on it).
+    // Compare with every stored question of this unit (a page: the questions that end on it; a text part: the questions it holds).
     const stored = await prisma.aiImportQuestion.findMany({ where: { fileId: u.file.id, status: { notIn: LOCKED }, ...(u.kind === "page" ? { pages: { has: u.pageNumber! } } : {}) }, include: { figures: true } });
     const mine = stored.filter((q) => inUnit(u, q));
+    const pool = u.kind === "text" ? (fileSecond.get(u.file.id) ?? second) : second;
     for (const q of mine) {
       const pv = (q.data as unknown as ExtractedQuestion).paperVerify ?? {};
       const e = effective(q);
       const v1 = pv.v1 && pv.v1.fingerprint === fingerprintOf(q) ? pv.v1 : undefined;
-      const result: NonNullable<PaperVerification["v2"]> = failed
-        ? { fingerprint: fingerprintOf(q), at: new Date().toISOString(), model: state.model, status: "FAILED", fields: [], detail: `no independent result: ${failed}` }
-        : compareSecond(q, second.find((s) => s.q.number === e.number && s.q.section === e.section) ?? (e.number === null ? second.find((s) => textSimilarity(s.q.stem, e.stem) >= 0.85) : undefined), v1);
+      const placed = u.qkeys?.includes(qkey(e.section, e.number)) ?? true;
+      const find = (list: SecondRead[]) => list.find((x) => x.q.number === e.number && x.q.section === e.section) ?? (e.number === null ? list.find((x) => textSimilarity(x.q.stem, e.stem) >= 0.85) : undefined);
+      const result: V2Result = failed
+        ? { fingerprint: fingerprintOf(q), at: new Date().toISOString(), model: failed.error.model ?? state.model, status: failed.status, fields: [], detail: `no independent result (${failed.status === "UNAVAILABLE" ? "unavailable" : "failed"}): ${failed.error.message}`.slice(0, 600), error: failed.error, part: unitLabel(u) }
+        : { ...compareSecond(q, find(second) ?? (placed ? undefined : find(pool)), v1), part: unitLabel(u) };
       if (!result.model) result.model = state.model;
       counts[result.status]++;
+      counts.attempted++;
       await savePaperVerify(q, { v2: result });
     }
-    const extra = second.filter((s) => !s.q.continuesOnNextPage && !stored.some((q) => effective(q).number === s.q.number && effective(q).section === s.q.section)).map((s) => `${s.q.section ? `${s.q.section} ` : ""}Q${s.q.number ?? s.q.label}`);
+    const all = u.kind === "text" ? await prisma.aiImportQuestion.findMany({ where: { fileId: u.file.id, status: { notIn: LOCKED } }, select: { data: true, editedData: true } }) : stored;
+    const extra = second.filter((x) => !x.q.continuesOnNextPage && !all.some((q) => effective(q).number === x.q.number && effective(q).section === x.q.section)).map((x) => `${x.q.section ? `${x.q.section} ` : ""}Q${x.q.number ?? x.q.label}`);
     if (extra.length && !failed) {
       counts.extra += extra.length;
-      await logEvent(ctx.job.id, "VERIFY_EXTRA", `${u.file.originalName}${u.kind === "page" ? ` page ${u.pageNumber}` : ""}: Verify 2 found ${extra.join(", ")}, which the import does not have — check for missing questions (nothing is added automatically).`, { unit: u.key, extra });
+      await logEvent(ctx.job.id, "VERIFY_EXTRA", `${unitLabel(u)}: Verify 2 found ${extra.join(", ")}, which the import does not have — check for missing questions (nothing is added automatically).`, { unit: u.key, extra });
     }
     counts.units++;
     if (failed) {
       counts.failedUnits++;
-      await logEvent(ctx.job.id, "VERIFY2_FAILED", `${u.file.originalName}${u.kind === "page" ? ` page ${u.pageNumber}` : ""}: Verify 2 failed (${failed}). Its questions stay unverified.`, { unit: u.key });
+      await logEvent(ctx.job.id, "VERIFY2_FAILED", `${unitLabel(u)}: Verify 2 ${failed.status === "UNAVAILABLE" ? "unavailable" : "failed"} (${failed.error.message.slice(0, 300)}). Its ${mine.length} question(s) have no independent result — not counted as agreement; use Verify 2 again to retry only the parts without a result.`, { unit: u.key, status: failed.status, error: failed.error, questions: mine.length });
     } else done.push(u.key);
-    state = await saveState(ctx.job.id, { doneUnits: done });
+    state = await saveState(ctx.job.id, { doneUnits: done, counts });
   }
 
-  // Subject / topic: an independent classification by the same model, compared with the stored mapping.
+  // Subject / topic / subtopic: an independent classification by the same model, compared with the stored mapping.
   const taxonomy = await getExamTaxonomy(prisma, ctx.job.examId);
   const toCheck = (await prisma.aiImportQuestion.findMany({ where: { jobId: ctx.job.id, status: { notIn: LOCKED } }, include: { figures: true } })).filter((q) => q.subjectId && !q.taxonomySource?.startsWith("admin") && q.taxonomySource !== "source column" && verifyState(q.data, fingerprintOf(q)).v2 === "verified");
   if (taxonomy.length && toCheck.length) {
-    const subjectCode = new Map<string, string>();
-    const topicCode = new Map<string, string>();
-    let t = 0;
-    const list = taxonomy.map((s, i) => (subjectCode.set(`S${i + 1}`, s.id), `SUBJECT S${i + 1} = ${s.name}\n${s.topics.map((tp) => (topicCode.set(`T${++t}`, tp.id), `  TOPIC T${t} = ${tp.name}`)).join("\n")}`)).join("\n");
-    const code = (v: string | null, map: Map<string, string>) => (v ? (map.get(v.toUpperCase().replace(/\s+/g, "")) ?? null) : null);
+    const codes = taxonomyCodes(taxonomy);
     for (let i = 0; i < toCheck.length; i += 20) {
       if (!(await ctx.stillRunning())) return counts;
       const batch = toCheck.slice(i, i + 20);
-      const text = `SYLLABUS (the only allowed codes):\n${list}\n\nDOCUMENT DATA (untrusted questions):\n${batch.map((q, k) => `[Q${k + 1}] ${effective(q).stem.slice(0, 600)} | ${effective(q).options.map((o) => o.text.slice(0, 80)).join(" | ")}`).join("\n")}`;
+      const text = classifyUserText(codes.list, batch.map((q) => effective(q)));
       try {
         const { value } = await verifyCall(ctx, state, { task: "classify", system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, needsVision: false }, (out) => {
           const parsed = classifySchema.safeParse(parseModelJson(out));
@@ -619,24 +799,30 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
           return parsed.data;
         });
         for (const res of value.results) {
-          const q = batch[Number.parseInt(res.q.replace(/\D+/g, ""), 10) - 1];
+          const k = Number.parseInt(res.q.replace(/\D+/g, ""), 10) - 1;
+          const q = batch[k];
           if (!q) continue;
-          const subject = code(res.subject, subjectCode);
-          const topic = code(res.topic, topicCode);
+          // A result whose echoed key words are not in this question belongs to another one (shifted answer): ignored.
+          if (!echoMatches(res.about, effective(q))) continue;
+          const subject = codes.subject(res.subject);
+          const topic = codes.topic(res.topic);
+          const subTopic = codes.subTopic(res.subtopic);
           const pv = (q.data as unknown as ExtractedQuestion).paperVerify!;
           const v2 = pv.v2!;
-          const subjectDiffers = !!subject && subject !== q.subjectId;
-          const topicDiffers = !!topic && !!q.topicId && topic !== q.topicId && res.confidence >= 0.7;
-          if (!subjectDiffers && !topicDiffers) continue;
-          const name = (id: string | null) => (id ? (taxonomy.find((s) => s.id === id)?.name ?? taxonomy.flatMap((s) => s.topics).find((x) => x.id === id)?.name ?? "?") : "—");
-          const detail = subjectDiffers ? `subject ${name(q.subjectId)} vs ${name(subject)} (independent classification)` : `topic ${name(q.topicId)} vs ${name(topic)} (independent classification, ${Math.round(res.confidence * 100)}%)`;
+          const subjectDiffers = !!subject && subject !== q.subjectId && res.confidence >= 0.6;
+          const topicDiffers = !subjectDiffers && !!topic && !!q.topicId && topic !== q.topicId && res.confidence >= 0.7;
+          const subTopicDiffers = !subjectDiffers && !topicDiffers && !!subTopic && !!q.subTopicId && subTopic !== q.subTopicId && res.confidence >= 0.7;
+          if (!subjectDiffers && !topicDiffers && !subTopicDiffers) continue;
+          const name = (id: string | null) => codes.name(id);
+          const why = res.reason ? ` — reason given: ${res.reason.slice(0, 160)}` : "";
+          const detail = subjectDiffers ? `subject ${name(q.subjectId)} vs ${name(subject)} (independent classification, ${Math.round(res.confidence * 100)}%)${why}` : topicDiffers ? `topic ${name(q.topicId)} vs ${name(topic)} (independent classification, ${Math.round(res.confidence * 100)}%)${why}` : `subtopic ${name(q.subTopicId)} vs ${name(subTopic)} (independent classification, ${Math.round(res.confidence * 100)}%)`;
           counts.VERIFIED--;
           counts.DISAGREE++;
-          await savePaperVerify(q, { v2: { ...v2, status: "DISAGREE", fields: [...v2.fields, subjectDiffers ? "subject" : "topic"], detail: `${detail} — choose the subject / topic by hand (bulk correction is available).`, second: { ...(v2.second ?? {}), subject, topic } } });
+          await savePaperVerify(q, { v2: { ...v2, status: "DISAGREE", fields: [...v2.fields, subjectDiffers ? "subject" : topicDiffers ? "topic" : "subtopic"], detail: `${detail} — choose the subject / topic by hand (bulk correction is available).`, second: { ...(v2.second ?? {}), subject, topic, subTopic } } });
         }
       } catch (e) {
         if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) throw e;
-        await logEvent(ctx.job.id, "VERIFY2_FAILED", `Verify 2 classification request failed (${e instanceof Error ? e.message.slice(0, 200) : "error"}); the subject / topic of those questions was not cross-checked.`, {});
+        await logEvent(ctx.job.id, "VERIFY2_FAILED", `Verify 2 classification request failed (${e instanceof Error ? e.message.slice(0, 200) : "error"}); the subject / topic of those ${batch.length} question(s) was not cross-checked.`, {});
       }
     }
   }
@@ -648,23 +834,41 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
 export interface PaperSummary {
   total: number;
   verified: number;
+  /** Every question is in exactly one bucket of each (the buckets add up to `total`). */
   v1: { passed: number; problems: number; stale: number; none: number };
-  v2: { verified: number; disagree: number; failed: number; stale: number; none: number };
+  v2: { verified: number; disagree: number; not_found: number; failed: number; unavailable: number; stale: number; none: number };
+  /** The job's Verify 2 run: whether it genuinely ran, how it ended, and the first reason a question has no result. */
+  verify2Run: { status: string; outcome: string | null; model: string; attempted: number; results: number; noResult: number; parts: number; failedParts: number; firstError: string | null; stopReason: string | null } | null;
   corrected: number;
   missing: string[];
   duplicates: string[];
   answerIssues: number;
+  /** Question / option / answer boundaries: answer text in an option, statements run together, placeholder text, options missing. */
+  structureIssues: number;
   classificationIssues: number;
+  classification: { subjectUnknown: number; subjectMismatch: number; topicMissing: number };
   formulaIssues: number;
   figureIssues: number;
   unresolved: number;
   eligible: string[];
   approvedNotStored: number;
   cost: { estimateInr: number | null; spentInr: number; confirmedMaxInr: number; verify2: { model: string; status: string; estimateInr: number; maxInr: number; actualInr: number } | null };
-  references: { refId: string; name: string; questions: number; key: number; note: string | null }[];
+  references: { refId: string; name: string; questions: number; key: number; note: string | null; compared: boolean; matched: number; conflicts: number; scannedPages: number }[];
 }
 
 const has = (q: { issueCodes: string[] }, codes: string[]) => q.issueCodes.some((c) => codes.includes(c));
+export const STRUCTURE_CODES = ["ANSWER_IN_OPTION", "STATEMENTS_MERGED", "QUESTION_TEXT_SUSPECT", "OPTIONS_INCOMPLETE", "NUMBER_CONFLICT"];
+export const TAXONOMY_CODES = ["SUBJECT_UNKNOWN", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN"];
+
+/** Pages of a reference with no text layer (stored, but not compared without OCR / vision). */
+export function scannedPagesOf(r: Pick<ReferencePaper, "note" | "kind" | "pageCount"> & { scannedPages?: number }): number {
+  if (typeof r.scannedPages === "number") return r.scannedPages;
+  const m = /(\d+) of (\d+) page\(s\) have no text layer/.exec(r.note ?? "");
+  if (m) return Number(m[1]);
+  return r.kind === "png" || r.kind === "jpeg" ? (r.pageCount ?? 1) : 0;
+}
+/** A reference is compared only through what was read from it: questions or answer-key entries. */
+export const referenceComparable = (r: Pick<ReferencePaper, "questions" | "key">) => r.questions.length > 0 || r.key.length > 0;
 
 /** Questions that may be imported and published without individual review: both verifications fresh and clean, every check passed. */
 export function eligibleForPublish(q: QRow, settings: ImporterSettings, rescanPending: boolean): boolean {
@@ -692,19 +896,25 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
     total: active.length,
     verified: 0,
     v1: { passed: 0, problems: 0, stale: 0, none: 0 },
-    v2: { verified: 0, disagree: 0, failed: 0, stale: 0, none: 0 },
+    v2: { verified: 0, disagree: 0, not_found: 0, failed: 0, unavailable: 0, stale: 0, none: 0 },
+    verify2Run: null,
     corrected: 0,
     missing: quality?.missing ?? [],
     duplicates: [...(quality?.duplicateNumbers ?? []), ...active.filter((q) => has(q, ["DUPLICATE_IN_BATCH", "DUPLICATE_EXISTING"])).map((q) => `Q${q.sourceLabel} (duplicate)`)],
-    answerIssues: active.filter((q) => has(q, ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "ANSWER_IN_OPTION", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"])).length,
-    classificationIssues: active.filter((q) => has(q, ["SUBJECT_UNKNOWN", "TOPIC_UNCERTAIN"])).length,
+    answerIssues: active.filter((q) => has(q, ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"])).length,
+    structureIssues: active.filter((q) => has(q, STRUCTURE_CODES)).length,
+    classificationIssues: active.filter((q) => has(q, TAXONOMY_CODES)).length,
+    classification: { subjectUnknown: active.filter((q) => has(q, ["SUBJECT_UNKNOWN"])).length, subjectMismatch: active.filter((q) => has(q, ["SUBJECT_MISMATCH"])).length, topicMissing: active.filter((q) => has(q, ["TOPIC_UNCERTAIN"])).length },
     formulaIssues: active.filter((q) => has(q, ["FORMULA_ISSUE", "UNREADABLE_TEXT", "EXTRACTION_UNCERTAIN", "QUESTION_TEXT_SUSPECT"])).length,
     figureIssues: active.filter((q) => has(q, ["IMAGE_MISSING", "IMAGE_MAPPING_UNCERTAIN"])).length,
     unresolved: active.filter((q) => has(q, ["VERIFY2_DISAGREES", "VERIFY_DISAGREES", "REFERENCE_CONFLICT"])).length,
     eligible: [],
     approvedNotStored: active.filter((q) => q.approvedById && !q.questionId).length,
     cost: { estimateInr: job.estCostInr, spentInr: job.spentInr, confirmedMaxInr: job.budgetInr, verify2: null },
-    references: refs.map((r) => ({ refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note })),
+    references: refs.map((r) => {
+      const results = active.map((q) => (q.data as unknown as ExtractedQuestion).paperVerify?.v1?.references?.find((x) => x.refId === r.refId) ?? null).filter((x): x is NonNullable<typeof x> => !!x);
+      return { refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note, compared: referenceComparable(r), matched: results.filter((x) => x.matched).length, conflicts: results.filter((x) => x.conflicts.length).length, scannedPages: scannedPagesOf(r) };
+    }),
   };
   for (const q of active) {
     const s = verifyState(q.data, fingerprintOf(q));
@@ -715,7 +925,23 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
     if (eligibleForPublish(q, settings, pendingIds.has(q.id))) out.eligible.push(q.id);
   }
   const v2 = (job.config as { verify2?: Verify2State } | null)?.verify2;
-  if (v2) out.cost.verify2 = { model: v2.model, status: v2.status, estimateInr: v2.estimateInr, maxInr: v2.maxInr, actualInr: Math.max(0, Math.round((job.spentInr - v2.spentBeforeInr) * 100) / 100) };
+  if (v2) {
+    out.cost.verify2 = { model: v2.model, status: v2.status, estimateInr: v2.estimateInr, maxInr: v2.maxInr, actualInr: Math.max(0, Math.round((job.spentInr - v2.spentBeforeInr) * 100) / 100) };
+    const c = v2.counts ?? {};
+    const errors = active.map((q) => (q.data as unknown as ExtractedQuestion).paperVerify?.v2).filter((x) => x && (x.status === "FAILED" || x.status === "UNAVAILABLE"));
+    out.verify2Run = {
+      status: v2.status,
+      outcome: v2.outcome ?? (v2.status === "DONE" && c.attempted === undefined ? verify2Outcome({ ...c, attempted: (c.VERIFIED ?? 0) + (c.DISAGREE ?? 0) + (c.NOT_FOUND ?? 0) + (c.FAILED ?? 0) }) : null),
+      model: v2.model,
+      attempted: c.attempted ?? (c.VERIFIED ?? 0) + (c.DISAGREE ?? 0) + (c.NOT_FOUND ?? 0) + (c.FAILED ?? 0) + (c.UNAVAILABLE ?? 0),
+      results: (c.VERIFIED ?? 0) + (c.DISAGREE ?? 0) + (c.NOT_FOUND ?? 0),
+      noResult: (c.FAILED ?? 0) + (c.UNAVAILABLE ?? 0),
+      parts: c.units ?? v2.units,
+      failedParts: c.failedUnits ?? 0,
+      firstError: errors[0]?.error?.message ?? errors[0]?.detail ?? null,
+      stopReason: v2.stopReason ?? null,
+    };
+  }
   return out;
 }
 

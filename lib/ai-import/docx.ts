@@ -148,10 +148,15 @@ interface ParaCtx {
   stats: { unconverted: number; external: number };
 }
 
+/** <w:br/>, <w:br w:type="textWrapping"/>, <w:br w:type="page"/>, <w:cr/>: a line break inside the paragraph. */
+const BREAK = /^<w:(?:br\b[^>]*|cr)\/>$/;
+
 async function paragraphText(xml: string, ctx: ParaCtx): Promise<{ text: string; rich: boolean }> {
   let text = "";
   let rich = false;
-  const re = /<m:oMathPara\b[\s\S]*?<\/m:oMathPara>|<m:oMath\b[\s\S]*?<\/m:oMath>|<w:r\b[^>]*>[\s\S]*?<\/w:r>|<w:hyperlink\b[^>]*>|<w:tab\/>|<w:br\/>/g;
+  // A line break carries attributes in most generated files (<w:br w:type="textWrapping"/>, seen 2026-10-23: the
+  // numbered statements of a question ran together without it); <w:cr/> is a carriage return. Both are a new line.
+  const re = /<m:oMathPara\b[\s\S]*?<\/m:oMathPara>|<m:oMath\b[\s\S]*?<\/m:oMath>|<w:r\b[^>]*>[\s\S]*?<\/w:r>|<w:hyperlink\b[^>]*>|<w:tab\/>|<w:br\b[^>]*\/>|<w:cr\/>/g;
   for (const m of xml.matchAll(re)) {
     const part = m[0];
     if (part.startsWith("<m:oMath")) {
@@ -163,16 +168,16 @@ async function paragraphText(xml: string, ctx: ParaCtx): Promise<{ text: string;
       text += "  ";
       continue;
     }
-    if (part === "<w:br/>") {
+    if (BREAK.test(part)) {
       text += "\n";
       continue;
     }
     if (!part.startsWith("<w:r")) continue;
     const vert = /<w:vertAlign w:val="(superscript|subscript)"/.exec(part)?.[1];
-    for (const piece of part.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>|<w:tab\/>|<w:br\/>|<w:drawing>[\s\S]*?<\/w:drawing>|<w:pict>[\s\S]*?<\/w:pict>/g)) {
+    for (const piece of part.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>|<w:tab\/>|<w:br\b[^>]*\/>|<w:cr\/>|<w:drawing>[\s\S]*?<\/w:drawing>|<w:pict>[\s\S]*?<\/w:pict>/g)) {
       const p = piece[0];
       if (p === "<w:tab/>") text += "  ";
-      else if (p === "<w:br/>") text += "\n";
+      else if (BREAK.test(p)) text += "\n";
       else if (p.startsWith("<w:drawing") || p.startsWith("<w:pict")) {
         const rid = /r:(?:embed|id)="([^"]+)"/.exec(p)?.[1];
         const rel = rid ? ctx.rels.get(rid) : undefined;

@@ -235,10 +235,23 @@ ${q.options.map((o) => `${o.label}. ${o.text}`).join("\n")}`;
 
 export const CLASSIFY_SYSTEM = `You classify exam questions into an EXISTING syllabus. You may only use ids from the list given; never invent a subject, topic or id.
 ${GUARD}
-RULES: for each question choose the best subject code (S…) and topic code (T…) from the list (the topic must be listed under that subject), and a subtopic code (U…) only when one listed under that topic fits; else null. Copy the codes exactly. If no topic fits, use null and a low confidence. confidence 0-1. Return one result per question, using its reference (Q…).
-OUTPUT (JSON only): {"results":[{"q":"Q1","subject":"S3","topic":"T41","subtopic":null,"confidence":0.8}]}`;
+RULES: for each question decide from its clinical / subject meaning (not from words that merely sound alike) the best subject code (S…) and topic code (T…) from the list (the topic must be listed under that subject), and a subtopic code (U…) only when one listed under that topic fits; else null. Copy the codes exactly. If no subject of the list really fits, use null for subject and topic — never pick an unrelated subject to fill the field. If no topic fits, use null and a low confidence. confidence 0-1. Return one result per question, using its reference (Q…), with "about": two to four key words copied exactly from THAT question's text, and "reason": one short phrase.
+OUTPUT (JSON only): {"results":[{"q":"Q1","about":["heart sounds","stethoscope"],"subject":"S3","topic":"T41","subtopic":null,"confidence":0.8,"reason":"auscultation of heart sounds"}]}`;
 
 const ref = z.union([z.string(), z.number(), z.null()]).optional().transform((v) => (v === null || v === undefined ? null : String(v).trim()));
 export const classifySchema = z.object({
-  results: z.array(z.object({ q: z.union([z.string(), z.number()]).transform((v) => String(v).trim()), subject: ref, topic: ref, subtopic: ref, confidence: confidence.transform((v) => v ?? 0) })).max(100).default([]),
+  results: z
+    .array(
+      z.object({
+        q: z.union([z.string(), z.number()]).transform((v) => String(v).trim()),
+        subject: ref,
+        topic: ref,
+        subtopic: ref,
+        confidence: confidence.transform((v) => v ?? 0),
+        about: z.union([z.string(), z.array(z.union([z.string(), z.number()]).transform(String)), z.null()]).optional().transform((v) => v ?? null),
+        reason: z.union([z.string(), z.null()]).optional().transform((v) => v ?? null),
+      })
+    )
+    .max(100)
+    .default([]),
 });

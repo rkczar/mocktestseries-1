@@ -35,6 +35,7 @@ import {
   type QuestionEdit,
 } from "@/lib/ai-import/review";
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
+import { saveProfileFromJob, updateFormatProfile, type FormatProfile, type FormatRules } from "@/lib/ai-import/format-profile";
 import { settleJobStatus } from "@/lib/ai-import/summary";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { importerModelCatalog, importerSettingsProblems } from "@/lib/ai-import/models";
@@ -86,6 +87,17 @@ async function requireManage(): Promise<string | null> {
 }
 
 /** Publishing also needs the Question Bank publish right. */
+/** Format profiles: Master Admin only (the manage permission AND the role, re-read on every call). */
+async function requireMasterAdmin(): Promise<string | null> {
+  try {
+    const session = await requirePermission(PERMISSIONS.AI_IMPORTER_MANAGE);
+    return session.user.role === "MASTER_ADMIN" ? (session.user.id ?? null) : null;
+  } catch (error) {
+    if (error instanceof UnauthorizedError) return null;
+    throw error;
+  }
+}
+
 async function requirePublish(): Promise<string | null> {
   try {
     await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
@@ -697,5 +709,18 @@ export async function unlinkReferenceAction(jobId: string, refId: string): Promi
   return run(await requireUse(), async (actorId) => {
     await unlinkReference(jobId, refId, actorId);
     return null;
+  });
+}
+
+/** Format profile learned from this import's verified questions only (Master Admin). */
+export async function saveFormatProfileAction(jobId: string, name: string): Promise<ImporterResult<FormatProfile>> {
+  return run(await requireMasterAdmin(), async (actorId) => saveProfileFromJob({ jobId, actorId, name: typeof name === "string" ? name : "" }));
+}
+
+/** Edit / enable / disable a format profile (Master Admin); every change is a new version, the old one kept in history. */
+export async function updateFormatProfileAction(input: { id: string; name?: string; enabled?: boolean; rules?: Partial<FormatRules>; note?: string }): Promise<ImporterResult<FormatProfile>> {
+  return run(await requireMasterAdmin(), async (actorId) => {
+    if (!input || typeof input.id !== "string") throw new ImportJobError("Choose a format profile.");
+    return updateFormatProfile({ id: input.id, actorId, name: typeof input.name === "string" ? input.name : undefined, enabled: typeof input.enabled === "boolean" ? input.enabled : undefined, rules: input.rules && typeof input.rules === "object" ? input.rules : undefined, note: typeof input.note === "string" ? input.note : undefined });
   });
 }

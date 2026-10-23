@@ -33,8 +33,24 @@ export interface ExceptionRow {
   approved: boolean;
   rescanPending: boolean;
   v1: "passed" | "problems" | "stale" | "none";
-  v2: "verified" | "disagree" | "failed" | "stale" | "none";
+  v2: "verified" | "disagree" | "not_found" | "failed" | "unavailable" | "stale" | "none";
   v2Model: string | null;
+  /** Pending / Running / Passed / Findings / Disagreement / Failed / Unavailable / Out of date / Not run. */
+  v1Label: string;
+  v2Label: string;
+  v1Findings: string[];
+  v1Fixes: string[];
+  /** Why Verify 2 agrees / disagrees, or the provider's / importer's reason for no result. */
+  v2Detail: string | null;
+  v2Fields: string[];
+  references: { name: string; compared: boolean; matched: string | null; similarity: number | null; conflicts: string[]; note: string | null }[];
+  fullStem: string;
+  options: { label: string; text: string; contaminated: boolean }[];
+  statements: number;
+  stemContaminated: boolean;
+  answerLine: string | null;
+  taxonomySource: string | null;
+  taxonomyEvidence: string | null;
   eligible: boolean;
 }
 
@@ -44,8 +60,9 @@ export interface TaxonomyOption {
   topics: { id: string; name: string; subTopics: { id: string; name: string }[] }[];
 }
 
-const V1_LABEL = { passed: "V1 passed", problems: "V1 findings", stale: "V1 out of date", none: "" } as const;
-const V2_LABEL = { verified: "V2 agrees", disagree: "V2 disagrees", failed: "V2 no result", stale: "V2 out of date", none: "" } as const;
+const toneOf = (label: string) => (label === "Passed" ? "text-[var(--color-success)]" : label.startsWith("Disagreement") ? "text-[var(--color-error)]" : label === "Not run" ? "text-[var(--color-muted-foreground)]" : "text-[var(--color-warning)]");
+const STRUCTURE = new Set(["ANSWER_IN_OPTION", "STATEMENTS_MERGED", "QUESTION_TEXT_SUSPECT", "OPTIONS_INCOMPLETE", "NUMBER_CONFLICT"]);
+const TAXONOMY = new Set(["SUBJECT_UNKNOWN", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN"]);
 
 /** Bulk subject / topic / subtopic correction — only records of the job's exam are offered. */
 function BulkTaxonomy({ taxonomy, disabled, onApply }: { taxonomy: TaxonomyOption[]; disabled: boolean; onApply: (s: string, t: string | null, u: string | null) => void }) {
@@ -147,13 +164,14 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
         </div>
       )}
       {msg && <p className={`text-sm ${msg.ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`} data-testid="bulk-msg">{msg.text}</p>}
-      <table className="w-full min-w-[1000px] text-left text-sm" data-testid="exceptions-table">
+      <table className="w-full min-w-[1200px] text-left text-sm" data-testid="exceptions-table">
         <thead className="text-xs text-[var(--color-muted-foreground)]">
           <tr>
             {canUse && <th className="w-6 py-1" />}
             <th className="py-1 pr-2 font-medium">Q</th>
             <th className="py-1 pr-2 font-medium">Question</th>
             <th className="py-1 pr-2 font-medium">Status</th>
+            <th className="py-1 pr-2 font-medium">Verify 1 / Verify 2</th>
             <th className="py-1 pr-2 font-medium">Approval</th>
             <th className="py-1 pr-2 font-medium">Answer</th>
             <th className="py-1 pr-2 font-medium">Subject › Topic</th>
@@ -174,18 +192,28 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                 </Link>
               </td>
               <td className="max-w-md py-1.5 pr-2">
-                {r.stem}
-                {r.figures > 0 && <span className="ml-1 text-xs text-[var(--color-muted-foreground)]">· {r.figures} figure(s)</span>}
+                <details>
+                  <summary className="cursor-pointer whitespace-pre-line" data-testid="row-stem">
+                    {r.stem}
+                    {r.figures > 0 && <span className="ml-1 text-xs text-[var(--color-muted-foreground)]">· {r.figures} figure(s)</span>}
+                    {r.statements > 0 && <span className="ml-1 text-xs text-[var(--color-muted-foreground)]">· {r.statements} numbered statements</span>}
+                  </summary>
+                  {/* Stem / option / answer boundaries as stored: an answer line inside an option is marked. */}
+                  <div className="mt-1 flex flex-col gap-0.5 rounded border border-[var(--color-border)] p-2 text-xs" data-testid="row-structure">
+                    <p className={`whitespace-pre-line ${r.stemContaminated ? "bg-[var(--color-error)]/10" : ""}`}>{r.fullStem}</p>
+                    {r.options.map((o) => (
+                      <p key={o.label} className={`whitespace-pre-line ${o.contaminated ? "rounded bg-[var(--color-error)]/10 text-[var(--color-error)]" : ""}`} data-contaminated={o.contaminated ? "true" : undefined}>
+                        <span className="font-mono">{o.label}.</span> {o.text}
+                        {o.contaminated && <span className="ml-1 font-medium">← contains the answer line</span>}
+                      </p>
+                    ))}
+                    {r.answerLine && <p className="text-[var(--color-muted-foreground)]">Printed answer: {r.answerLine}</p>}
+                  </div>
+                </details>
               </td>
               <td className="py-1.5 pr-2">
                 <Badge variant={statusVariant(r.status)}>{QUESTION_STATUS_LABELS[r.status] ?? r.status}</Badge>
-                {(r.v1 !== "none" || r.v2 !== "none") && (
-                  <span className="mt-0.5 flex flex-wrap gap-1 text-[11px]" data-testid="row-verify" data-v1={r.v1} data-v2={r.v2}>
-                    {r.v1 !== "none" && <span className={r.v1 === "passed" ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}>{V1_LABEL[r.v1]}</span>}
-                    {r.v2 !== "none" && <span className={r.v2 === "verified" ? "text-[var(--color-success)]" : r.v2 === "disagree" ? "text-[var(--color-error)]" : "text-[var(--color-warning)]"} title={r.v2Model ?? undefined}>{V2_LABEL[r.v2]}</span>}
-                    {r.eligible && <span className="text-[var(--color-success)]">· eligible</span>}
-                  </span>
-                )}
+                {r.eligible && <span className="ml-1 text-[11px] text-[var(--color-success)]">eligible</span>}
                 {r.questionId &&
                   (r.savedDeleted ? (
                     <span className="ml-1 text-xs text-[var(--color-muted-foreground)]" data-testid="saved-deleted">
@@ -197,6 +225,31 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                     </Link>
                   ))}
               </td>
+              <td className="max-w-xs py-1.5 pr-2 text-[11px]" data-testid="row-verify" data-v1={r.v1} data-v2={r.v2}>
+                <p>
+                  <span className="text-[var(--color-muted-foreground)]">V1: </span>
+                  <span className={toneOf(r.v1Label)} data-testid="row-v1">{r.v1Label}</span>
+                </p>
+                {r.v1Findings.map((f) => (
+                  <p key={f} className="text-[var(--color-warning)]">· {f.slice(0, 160)}</p>
+                ))}
+                {r.v1Fixes.map((f) => (
+                  <p key={f} className="text-[var(--color-muted-foreground)]">· corrected: {f}</p>
+                ))}
+                {r.references.map((x) => (
+                  <p key={x.name} className={!x.compared ? "text-[var(--color-warning)]" : x.conflicts.length ? "text-[var(--color-error)]" : "text-[var(--color-muted-foreground)]"} data-testid="row-reference" data-compared={x.compared ? "true" : "false"}>
+                    · {x.name}: {!x.compared ? x.note ?? "not compared" : x.matched ? `${x.matched}${x.similarity !== null ? `, ${Math.round(x.similarity * 100)}% similar wording` : ""}${x.conflicts.length ? ` — ${x.conflicts.join(" ")}` : " — no difference"}` : "no matching question"}
+                  </p>
+                ))}
+                <p className="mt-0.5">
+                  <span className="text-[var(--color-muted-foreground)]">V2: </span>
+                  <span className={toneOf(r.v2Label)} title={r.v2Model ?? undefined} data-testid="row-v2">
+                    {r.v2Label}
+                  </span>
+                  {r.v2Model && r.v2 !== "none" && <span className="text-[var(--color-muted-foreground)]"> · {r.v2Model}</span>}
+                </p>
+                {r.v2Detail && <p className={r.v2 === "verified" ? "text-[var(--color-muted-foreground)]" : "text-[var(--color-warning)]"} data-testid="row-v2-detail">{r.v2Fields.length ? `${r.v2Fields.join(", ")}: ` : ""}{r.v2Detail}</p>}
+              </td>
               <td className="py-1.5 pr-2 text-xs" data-testid="row-approval" data-approved={r.approved ? "true" : "false"}>
                 {r.questionId ? <span className="text-[var(--color-success)]">in Question Bank</span> : r.approved ? <Badge variant="success">Approved</Badge> : r.rescanPending ? <Badge variant="warning">Re-scan to decide</Badge> : <span className="text-[var(--color-muted-foreground)]">not approved</span>}
               </td>
@@ -204,13 +257,19 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                 <Badge variant={statusVariant(r.answerStatus)}>{ANSWER_STATUS_LABELS[r.answerStatus] ?? r.answerStatus}</Badge>
                 {r.finalAnswer.length > 0 && <span className="ml-1 font-mono text-xs">{r.finalAnswer.join(",")}</span>}
               </td>
-              <td className="py-1.5 pr-2 text-xs">
-                {r.subject ?? "—"} › {r.topic ?? "—"}
+              <td className="py-1.5 pr-2 text-xs" data-testid="row-taxonomy">
+                <span className={r.issues.some((c) => TAXONOMY.has(c)) ? "text-[var(--color-warning)]" : ""}>
+                  {r.subject ?? "—"} › {r.topic ?? "—"}
+                </span>
+                {r.taxonomySource && <p className="text-[11px] text-[var(--color-muted-foreground)]">{r.taxonomySource}</p>}
+                {r.taxonomyEvidence && <p className="text-[11px] text-[var(--color-muted-foreground)]" title={r.taxonomyEvidence}>{r.taxonomyEvidence.slice(0, 140)}</p>}
               </td>
               <td className="py-1.5 pr-2 text-xs">
                 <ul className="flex flex-col gap-0.5">
                   {r.issues.map((c) => (
-                    <li key={c} className={ISSUE_DEFS[c]?.blocking ? "text-[var(--color-error)]" : "text-[var(--color-warning)]"}>
+                    <li key={c} className={ISSUE_DEFS[c]?.blocking ? "text-[var(--color-error)]" : "text-[var(--color-warning)]"} data-kind={STRUCTURE.has(c) ? "structure" : TAXONOMY.has(c) ? "taxonomy" : undefined}>
+                      {STRUCTURE.has(c) && <span className="mr-1 rounded bg-[var(--color-error)]/10 px-1 text-[10px] uppercase">structure</span>}
+                      {TAXONOMY.has(c) && <span className="mr-1 rounded bg-[var(--color-warning)]/10 px-1 text-[10px] uppercase">taxonomy</span>}
                       {ISSUE_DEFS[c]?.label ?? c}
                       {r.issueText[c] ? ` — ${r.issueText[c]}` : ""}
                     </li>
@@ -224,7 +283,7 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
           ))}
           {!rows.length && (
             <tr>
-              <td colSpan={8} className="py-4 text-[var(--color-muted-foreground)]">
+              <td colSpan={9} className="py-4 text-[var(--color-muted-foreground)]">
                 Nothing here.
               </td>
             </tr>

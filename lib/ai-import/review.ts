@@ -1,4 +1,5 @@
 import "server-only";
+import { ISSUE_DEFS } from "@/lib/ai-import/config";
 import { AiImportJobStatus, AiImportPageStatus, AiImportQuestionStatus, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logEvent, ImportJobError } from "@/lib/ai-import/jobs";
@@ -160,6 +161,9 @@ export interface ApproveResult {
  * each uncertain placement is confirmed on its own. Reviewable flags (uncertain text, near-duplicate,
  * numbering gap, topic, independent-read disagreement) are cleared by this decision and recorded.
  */
+/** Findings a bulk approval never clears: each needs an administrator's look at that one question. */
+export const DECIDE_INDIVIDUALLY = ["VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "REFERENCE_CONFLICT"];
+
 export async function approveQuestions(ids: string[], actorId: string): Promise<ApproveResult> {
   const settings = await getImporterSettings();
   // Decide on the current facts: changes made since the last check are re-checked first (no AI calls).
@@ -175,6 +179,12 @@ export async function approveQuestions(ids: string[], actorId: string): Promise<
     }
     if (await prisma.aiImportQuestionVersion.count({ where: { questionId: id, kind: "RESCAN", status: "PENDING" } })) {
       out.refused.push({ id, label: q.sourceLabel, reason: "a re-scan result is waiting for your choice" });
+      continue;
+    }
+    // An unresolved disagreement is decided on its own question page, never cleared by a bulk approval.
+    const unresolved = ids.length > 1 ? q.issueCodes.filter((c) => DECIDE_INDIVIDUALLY.includes(c)) : [];
+    if (unresolved.length) {
+      out.refused.push({ id, label: q.sourceLabel, reason: `unresolved ${unresolved.map((c) => ISSUE_DEFS[c]?.label ?? c).join(", ").toLowerCase()} — open the question and decide it on its own` });
       continue;
     }
     const figures = await prisma.aiImportFigure.findMany({ where: { questionId: id } });
@@ -571,6 +581,10 @@ export async function reclassifyQuestions(ids: string[], actorId: string): Promi
   if (!settings.aiEnabled || !planOf(job.config)?.tasks.classify.model) throw new ImportJobError("Re-classification uses the AI classification model, which is switched off or not in this import's model plan. Nothing was changed — set the subject and topic by hand.");
   const target = qs.filter((q) => !LOCKED.includes(q.status) && !q.taxonomySource?.startsWith("admin"));
   if (!target.length) throw new ImportJobError("Every selected question has a subject/topic chosen by an administrator (or is already stored); nothing to re-classify.");
+  // An AI-chosen subject is cleared too (a wrong subject would otherwise survive and block every correct topic);
+  // a subject from the paper itself (selected subject, printed heading / column) is kept.
+  const aiChosen = target.filter((q) => !q.taxonomySource || q.taxonomySource.startsWith("AI")).map((q) => q.id);
+  if (aiChosen.length) await prisma.aiImportQuestion.updateMany({ where: { id: { in: aiChosen } }, data: { subjectId: null } });
   await prisma.aiImportQuestion.updateMany({ where: { id: { in: target.map((q) => q.id) } }, data: { topicId: null, subTopicId: null, taxonomyConfidence: null, taxonomySource: null, ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED } });
   const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: job.status }, data: { status: AiImportJobStatus.QUEUED, finishedAt: null } });
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
