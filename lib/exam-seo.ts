@@ -5,6 +5,13 @@ import { displayExamName } from "@/lib/exam-display";
 import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
 import { getSiteUrl } from "@/lib/site-url";
 import { defaultSocialImage, examSocialImage, socialMetadata } from "@/lib/social-metadata";
+import { examShortName } from "@/lib/exam-editorial-facts";
+
+/** "RUHS MO" (or "RUHS MO 2026" with the year): the short name students search with, for titles. */
+export function examSearchName(exam: Pick<Exam, "code" | "name" | "year">, withYear = false): string {
+  const short = examShortName(exam.code, displayExamName(exam.name).replace(/\s\d{4}$/, ""));
+  return withYear && exam.year ? `${short} ${exam.year}` : short;
+}
 
 /**
  * Metadata for the public exam hub and its deep pages: one canonical URL

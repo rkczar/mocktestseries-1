@@ -42,7 +42,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return examPageMetadata({
     exam,
     path: examInsightPath(data.slug, "analysis"),
-    title: `${short} Previous Year Paper Analysis: ${span(a)} Trends`,
+    title: `${short} Previous Year Paper Analysis ${span(a)}`,
     description: `${a.papers.length} ${short} previous year papers (${span(a)}) analysed: ${a.totalQuestions} questions, the subject mix year by year, the subjects asked every year and what changed.`,
   });
 }

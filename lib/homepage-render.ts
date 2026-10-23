@@ -23,6 +23,9 @@ import {
 import { paidBenefits, type OfferDisplayRow } from "@/lib/payments/offer-display-shared";
 import { getAiSettings } from "@/lib/ai-settings";
 import { displayExamName } from "@/lib/exam-display";
+import { isExamDateTentative } from "@/lib/exam-editorial-facts";
+import { getExamPyqInsights } from "@/lib/exam-pyq-insights";
+import { EXAM_INSIGHT_PAGES, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
 
 export interface ResolvedStatValue {
   label: string;
@@ -86,6 +89,8 @@ export interface ResolvedExamSummary {
   name: string;
   hubHref: string | null;
   examDate: Date | null;
+  /** The date is not officially confirmed yet: show it as "tentative". */
+  examDateTentative: boolean;
   daysLeft: number | null;
   plannedMocks: number;
   publishedMocks: number;
@@ -231,6 +236,13 @@ const EXAM_PAGE_LINKS: { segment: string; label: (exam: string) => string; descr
   { segment: "syllabus", label: (e) => `${e} Syllabus`, description: "Subjects and topics to cover" },
   { segment: "exam-pattern", label: (e) => `${e} Exam Pattern`, description: "Questions, marks, duration and mode" },
   { segment: "question-bank", label: (e) => `${e} Question Bank`, description: "Subject-wise questions for practice" },
+];
+
+/** Shown only when the exam has enough past papers for its analysis pages (hasPyqAnalysis). */
+const EXAM_INSIGHT_LINKS: { segment: string; label: (exam: string) => string; description: string }[] = [
+  { segment: EXAM_INSIGHT_PAGES.weightage, label: (e) => `${e} Subject-wise Weightage`, description: "Each subject's share of past-paper questions" },
+  { segment: EXAM_INSIGHT_PAGES.analysis, label: (e) => `${e} Previous Year Paper Analysis`, description: "How the paper changed year by year" },
+  { segment: EXAM_INSIGHT_PAGES.strategy, label: (e) => `${e} Preparation Strategy`, description: "A study plan built from the past papers" },
 ];
 
 /** Rows of the live comparison whose FREE column is really available ("—" means not free). */
@@ -522,6 +534,7 @@ async function buildExamSummary(
     where: { id: examId },
     select: {
       name: true,
+      code: true,
       isActive: true,
       publicSlug: true,
       publicPageEnabled: true,
@@ -531,9 +544,10 @@ async function buildExamSummary(
     },
   });
   if (!exam || !exam.isActive) return null;
-  const [series, papers] = await Promise.all([
+  const [series, papers, insights] = await Promise.all([
     seriesFor(examId),
     prisma.previousYearPaper.findMany({ where: { examId, isActive: true }, select: { year: true } }),
+    getExamPyqInsights(examId),
   ]);
   const ms = series?.mockSeries ?? null;
   const freeMocks = ms ? ms.tests.filter((t) => t.accessType === "FREE").length : 0;
@@ -545,6 +559,7 @@ async function buildExamSummary(
     name: exam.name,
     hubHref,
     examDate: daysLeft !== null && daysLeft >= 0 ? examDate : null,
+    examDateTentative: isExamDateTentative(exam.code),
     daysLeft: daysLeft !== null && daysLeft >= 0 ? daysLeft : null,
     plannedMocks: ms?.planned ?? 0,
     publishedMocks: ms?.published ?? 0,
@@ -556,7 +571,7 @@ async function buildExamSummary(
     questions: exam._count.questions,
     subjects: exam._count.examSubjects,
     links: hubHref
-      ? EXAM_PAGE_LINKS.filter((l) => l.segment !== "mock-test-series" || ms).map((l) => ({
+      ? [...EXAM_PAGE_LINKS.filter((l) => l.segment !== "mock-test-series" || ms), ...(hasPyqAnalysis(insights) ? EXAM_INSIGHT_LINKS : [])].map((l) => ({
           label: l.label(shortName),
           description: l.description,
           href: `${hubHref}/${l.segment}`,

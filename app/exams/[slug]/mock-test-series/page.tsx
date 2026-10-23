@@ -11,6 +11,7 @@ import { getExamMockSeriesSummary, getSeriesComparison, getSeriesCta, mockSeries
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings, applyTitleTemplate } from "@/lib/seo-settings";
 import { displayExamName } from "@/lib/exam-display";
+import { examShortName } from "@/lib/exam-editorial-facts";
 import { defaultSocialImage, examSocialImage, socialMetadata } from "@/lib/social-metadata";
 import { getStudentSession } from "@/lib/student-session";
 import { formatIst } from "@/lib/ist-time";
@@ -51,7 +52,10 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { exam, summary } = data;
   const name = seriesTitle(exam.name, summary.mockSeries?.series.name);
   const planned = summary.mockSeries?.planned ?? 0;
-  const title = applyTitleTemplate(seo.titleTemplate, planned > 0 ? `${name}: ${planned} Mocks, PYQs & AI Review` : name);
+  const available = summary.mockSeries?.available ?? 0;
+  // Short name first ("RUHS MO Test Series 2026"); the count shown is what students can open today.
+  const short = `${examShortName(exam.code, displayExamName(exam.name).replace(/\s\d{4}$/, ""))} Test Series${exam.year ? ` ${exam.year}` : ""}`;
+  const title = applyTitleTemplate(seo.titleTemplate, available > 0 ? `${short}: ${available} Mock Tests Live` : name);
   const description =
     summary.mockSeries
       ? `${name}: ${planned > 0 ? `${planned} exam-pattern mock tests planned, ` : ""}${summary.mockSeries.available} available now, with previous year papers, practice OMR, AI explanations and performance analytics.`

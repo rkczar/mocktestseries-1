@@ -6,7 +6,7 @@ import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug } from "@/lib/exam-public";
 import { getSiteUrl } from "@/lib/site-url";
 import { displayExamName } from "@/lib/exam-display";
-import { examPageMetadata } from "@/lib/exam-seo";
+import { examPageMetadata, examSearchName } from "@/lib/exam-seo";
 import { Card, CardContent } from "@/components/ui/card";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
 import { ExamSubNav } from "@/components/public-exam/exam-subnav";
@@ -23,8 +23,8 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return examPageMetadata({
     exam,
     path: `/exams/${exam.publicSlug}/exam-pattern`,
-    title: `${name} Exam Pattern & Marking Scheme`,
-    description: `${name} exam pattern: number of questions, marks, duration, mode and negative marking, with confirmed facts kept separate from previous-cycle details.`,
+    title: `${examSearchName(exam)} Exam Pattern${exam.year ? ` ${exam.year}` : ""} & Marking Scheme`,
+    description: `${name} exam pattern: questions, marks, duration, mode and negative marking, with confirmed facts kept apart from previous-cycle details.`,
   });
 }
 

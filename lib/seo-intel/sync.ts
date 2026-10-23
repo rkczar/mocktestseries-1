@@ -20,9 +20,13 @@ const LOCK_STALE_MS = 3 * 60_000;
 export const MIN_SYNC_INTERVAL_MS = 60_000;
 const DAYS = 28;
 const TOP_ROWS = 25;
+/** Full Search Console tables (the API allows 25,000 rows per request; this site has far fewer). */
+const GSC_ROWS = 1000;
 
 export interface GscRow {
   key: string;
+  /** Second dimension (the page, for query × page rows). */
+  key2?: string;
   clicks: number;
   impressions: number;
   ctr: number;
@@ -55,6 +59,12 @@ export interface SeoSnapshot {
     daily: GscRow[];
     topQueries: GscRow[];
     topPages: GscRow[];
+    /** Absent on snapshots stored before the full tables existed. */
+    queries?: GscRow[];
+    pages?: GscRow[];
+    queryPages?: GscRow[];
+    devices?: GscRow[];
+    countries?: GscRow[];
   } | null;
   ga4: {
     propertyId: string;
@@ -63,6 +73,8 @@ export interface SeoSnapshot {
     daily: Ga4Row[];
     channels: Ga4Row[];
     landingPages: Ga4Row[];
+    /** Organic Search sessions only; absent on older snapshots. */
+    organicLandingPages?: (Ga4Row & { engagedSessions: number; keyEvents: number })[];
   } | null;
 }
 
@@ -117,21 +129,36 @@ async function syncSearchConsole(accessToken: string, secrets: string[]): Promis
     const rows = Array.isArray(r.json?.rows) ? (r.json!.rows as Record<string, unknown>[]) : [];
     return rows.map((row) => ({
       key: Array.isArray(row.keys) ? str(row.keys[0]) : "",
+      ...(Array.isArray(row.keys) && row.keys.length > 1 ? { key2: str(row.keys[1]) } : {}),
       clicks: num(row.clicks),
       impressions: num(row.impressions),
       ctr: num(row.ctr),
       position: num(row.position),
     }));
   };
-  const [totalsRows, daily, topQueries, topPages] = await Promise.all([query([], 1), query(["date"], DAYS + 2), query(["query"], TOP_ROWS), query(["page"], TOP_ROWS)]);
+  const [totalsRows, daily, queries, pages, queryPages, devices, countries] = await Promise.all([
+    query([], 1),
+    query(["date"], DAYS + 2),
+    query(["query"], GSC_ROWS),
+    query(["page"], GSC_ROWS),
+    query(["query", "page"], GSC_ROWS),
+    query(["device"], 10),
+    query(["country"], 50),
+  ]);
   const t = totalsRows[0];
   return {
     property,
     range: { start, end },
     totals: { clicks: t?.clicks ?? 0, impressions: t?.impressions ?? 0, ctr: t?.ctr ?? 0, position: t?.position ?? 0 },
     daily: daily.sort((a, b) => a.key.localeCompare(b.key)),
-    topQueries,
-    topPages,
+    // The dashboard tables and history keep reading the top 25.
+    topQueries: queries.slice(0, TOP_ROWS),
+    topPages: pages.slice(0, TOP_ROWS),
+    queries,
+    pages,
+    queryPages,
+    devices,
+    countries,
   };
 }
 
@@ -168,6 +195,14 @@ async function syncGa4(accessToken: string, secrets: string[]): Promise<NonNulla
           orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
           limit: TOP_ROWS,
         },
+        {
+          dateRanges,
+          dimensions: [{ name: "landingPage" }],
+          metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "engagedSessions" }, { name: "keyEvents" }],
+          dimensionFilter: { filter: { fieldName: "sessionDefaultChannelGroup", stringFilter: { value: "Organic Search" } } },
+          orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+          limit: 100,
+        },
       ],
     },
   });
@@ -203,6 +238,7 @@ async function syncGa4(accessToken: string, secrets: string[]): Promise<NonNulla
     daily: rowsOf(1).map(toRow).map((d) => ({ ...d, key: d.key.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") })),
     channels: rowsOf(2).map(toRow),
     landingPages: rowsOf(3).map(toRow),
+    organicLandingPages: rowsOf(4).map((x) => ({ ...toRow(x), engagedSessions: x.m.engagedSessions ?? 0, keyEvents: x.m.keyEvents ?? 0 })),
   };
 }
 

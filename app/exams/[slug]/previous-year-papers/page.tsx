@@ -12,7 +12,7 @@ import { MockSeriesPromo } from "@/components/public-exam/mock-series-promo";
 import { ExamDisclaimer, ExamSection, FaqList, SubjectWeightageTable } from "@/components/public-exam/seo-blocks";
 import { getExamMockSeriesSummary } from "@/lib/mock-series";
 import { displayExamName } from "@/lib/exam-display";
-import { examPageMetadata } from "@/lib/exam-seo";
+import { examPageMetadata, examSearchName } from "@/lib/exam-seo";
 import { formatShare, getExamPyqInsights, pyqYearPath, type ExamPyqInsights } from "@/lib/exam-pyq-insights";
 import { getPaperNote } from "@/lib/exam-editorial-facts";
 import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
@@ -36,10 +36,10 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return examPageMetadata({
     exam,
     path: `/exams/${exam.publicSlug}/previous-year-papers`,
-    title: `${name} Previous Year Papers${span ? ` (${span})` : ""}`,
+    title: `${examSearchName(exam)} Previous Year Papers${span ? ` ${span}` : ""} – Attempt Online`,
     description:
       papers.length > 0
-        ? `${papers.length} ${name} previous year question papers (${span}) to attempt online in the exam format, with subject-wise question counts and question-wise review after you submit.`
+        ? `Attempt ${papers.length} real ${examSearchName(exam)} papers (${span}) online in the exam format, then review every answer. Subject-wise question counts for each year.`
         : `${name} previous year question papers, as they are added, to attempt online in the exam format.`,
   });
 }

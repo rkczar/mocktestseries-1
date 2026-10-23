@@ -5,7 +5,7 @@ import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug, getExamSubjectsWithCounts, getExamPublicStats } from "@/lib/exam-public";
 import { getSiteUrl } from "@/lib/site-url";
 import { displayExamName } from "@/lib/exam-display";
-import { examPageMetadata } from "@/lib/exam-seo";
+import { examPageMetadata, examSearchName } from "@/lib/exam-seo";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ExamBreadcrumbs } from "@/components/public-exam/breadcrumbs";
@@ -20,11 +20,12 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const exam = await getPublicExamBySlug(slug);
   if (!exam) return {};
   const name = displayExamName(exam.name);
+  const stats = await getExamPublicStats(exam.id);
   return examPageMetadata({
     exam,
     path: `/exams/${exam.publicSlug}/question-bank`,
-    title: `${name} Practice Questions by Subject`,
-    description: `Subject-wise ${name} practice questions with topic coverage and AI-powered explanations, for focused revision between full mock tests.`,
+    title: `${examSearchName(exam)} Question Bank: ${stats.questions.toLocaleString("en-IN")} MCQs by Subject`,
+    description: `Practise ${stats.questions.toLocaleString("en-IN")} ${name} MCQs across ${stats.subjects} subjects, each with an explanation. Pick a subject and see its topics.`,
   });
 }
 

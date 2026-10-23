@@ -189,8 +189,11 @@ function HeroExamCard({ exam }: { exam: ResolvedExamSummary }) {
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[var(--color-muted-foreground)]">
             <CalendarDays className="h-4 w-4" aria-hidden />
             Exam date {formatExamDate(exam.examDate)}
+            {exam.examDateTentative ? " (tentative)" : null}
             {exam.daysLeft !== null ? (
-              <Badge variant={exam.daysLeft <= 14 ? "warning" : "neutral"}>{daysLabel(exam.daysLeft)}</Badge>
+              <Badge variant={exam.daysLeft <= 14 ? "warning" : "neutral"}>
+                {exam.examDateTentative ? `About ${daysLabel(exam.daysLeft)}` : daysLabel(exam.daysLeft)}
+              </Badge>
             ) : null}
           </p>
         ) : null}
@@ -247,7 +250,9 @@ export function FeaturedExamSection({ content, resolved }: SectionProps) {
   const links = showDeepLinks ? (summary?.links ?? []) : [];
   const facts = summary
     ? [
-        summary.examDate ? { label: "Exam date", value: formatExamDate(summary.examDate) } : null,
+        summary.examDate
+          ? { label: summary.examDateTentative ? "Exam date (tentative)" : "Exam date", value: formatExamDate(summary.examDate) }
+          : null,
         summary.plannedMocks > 0 ? { label: "Mock tests", value: `${summary.plannedMocks} planned · ${summary.availableMocks} open` } : null,
         summary.papers > 0 ? { label: "Previous year papers", value: `${summary.papers} papers · ${summary.paperYears} years` } : null,
         summary.questions > 0 ? { label: "Questions", value: summary.questions.toLocaleString("en-IN") } : null,

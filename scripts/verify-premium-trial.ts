@@ -514,7 +514,7 @@ async function main() {
   check("Comparison: PYQ practice row = '1 selected paper'", freeCell("pyq-practice") === "1 selected paper");
   check("Comparison: subject practice = '1 selected subject test'", freeCell("subject-practice") === "1 selected subject test");
   check("Comparison: free mock count = selected free mocks in the series (mock + subject mock + free Live CBT)", cmp.freeMocks === 3, cmp.freeMocks);
-  const summary = { name: exam.name, hubHref: "/exams/x", examDate: null, daysLeft: null, plannedMocks: 7, publishedMocks: 7, availableMocks: 7, freeMocks: 2, freeMocksAvailable: 2, papers: 2, paperYears: 2, questions: 6, subjects: 1, links: [] };
+  const summary = { name: exam.name, hubHref: "/exams/x", examDate: null, examDateTentative: false, daysLeft: null, plannedMocks: 7, publishedMocks: 7, availableMocks: 7, freeMocks: 2, freeMocksAvailable: 2, papers: 2, paperYears: 2, questions: 6, subjects: 1, links: [] };
   const cards = hp.buildFreeCards(summary, cmp, 5);
   const card = (k: string) => cards.find((c) => c.key === k);
   check("Homepage: PYQ card kept, says '1 free' + the paper title + 'with Premium'", card("pyq")?.value === "1 free" && Boolean(card("pyq")?.detail.includes("PREM 2024")) && Boolean(card("pyq")?.detail.includes("All 2 papers with Premium")));

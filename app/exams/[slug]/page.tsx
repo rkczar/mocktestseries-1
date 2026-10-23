@@ -19,6 +19,7 @@ import { displayExamName } from "@/lib/exam-display";
 import { examPageMetadata } from "@/lib/exam-seo";
 import { formatShare, getExamPyqInsights, pyqYearPath } from "@/lib/exam-pyq-insights";
 import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
+import { getOfficialSources } from "@/lib/exam-editorial-facts";
 
 type PublicExam = NonNullable<Awaited<ReturnType<typeof getPublicExamBySlug>>>;
 
@@ -271,6 +272,25 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
             </p>
           )}
         </ExamSection>
+
+        {getOfficialSources(exam.code).length > 0 ? (
+          <ExamSection id="official-sources" title="Official RUHS notices and sources">
+            <p className="max-w-3xl text-sm leading-relaxed text-[var(--color-muted-foreground)]">
+              Facts on this page come from these official documents. Dates marked tentative are not yet confirmed by RUHS; check the
+              official sites and your admit card before the exam.
+            </p>
+            <ul className="mt-4 grid gap-3">
+              {getOfficialSources(exam.code).map((s) => (
+                <li key={s.url} className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-4">
+                  <a href={s.url} target="_blank" rel="noopener noreferrer" className="font-medium text-[var(--color-foreground)] underline underline-offset-4">
+                    {s.label}
+                  </a>
+                  <p className="mt-1 text-sm text-[var(--color-muted-foreground)]">{s.note}</p>
+                </li>
+              ))}
+            </ul>
+          </ExamSection>
+        ) : null}
 
         {exam.eligibility ? (
           <ExamSection id="eligibility" title="Eligibility">

@@ -44,6 +44,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const data = await load(slug, year);
   if (!data) return {};
   const baseName = examBaseName(displayExamName(data.exam.name));
+  const short = examShortName(data.exam.code, baseName);
   const questions = data.papers.reduce((sum, p) => sum + p.questionCount, 0);
   const subjects = new Set(data.papers.flatMap((p) => p.subjects.map((s) => s.name))).size;
   const top = data.papers[0].subjects[0].name;
@@ -53,11 +54,11 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     exam: data.exam,
     path: pyqYearPath(data.exam.publicSlug!, data.year),
     title: note
-      ? `${baseName} ${data.year} Question Paper (Exam Held ${note.heldMonth})`
-      : `${baseName} ${data.year} Question Paper: Subject-wise Analysis`,
+      ? `${short} ${data.year} Question Paper (Held ${note.heldOn})`
+      : `${short} ${data.year} Question Paper – Subject-wise Analysis`,
     description: note
-      ? `${baseName} ${data.year} question paper (${note.cycle}), the exam held on ${note.heldOn}: ${questions} questions across ${subjects} subjects, led by ${top}. Subject-wise analysis and an online attempt.`
-      : `${baseName} ${data.year} question paper: ${questions} questions across ${subjects} subjects, led by ${top}. Subject-wise analysis and an online attempt in the exam format.`,
+      ? `${short} ${data.year} paper (${note.cycle}, held ${note.heldOn}): ${questions} questions, ${subjects} subjects, led by ${top}. Attempt online; official answer key linked.`
+      : `${short} ${data.year} question paper: ${questions} questions across ${subjects} subjects, led by ${top}. Subject-wise analysis and an online attempt.`,
   });
 }
 
@@ -233,12 +234,16 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
         ) : null}
 
         <ExamSection id="keep-preparing" title="Keep preparing">
-          <ul className={`grid gap-3 sm:grid-cols-2 ${hasAnalysis ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
+          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {[
               { href: base, title: name, body: "Dates, eligibility, pattern and preparation plan." },
               { href: `${base}/syllabus`, title: "Syllabus", body: "Every subject with its topic-wise list." },
               ...(hasAnalysis
-                ? [{ href: examInsightPath(exam.publicSlug!, "weightage"), title: "Subject-wise weightage", body: "Each subject's share of all past-paper questions." }]
+                ? [
+                    { href: examInsightPath(exam.publicSlug!, "weightage"), title: "Subject-wise weightage", body: "Each subject's share of all past-paper questions." },
+                    { href: examInsightPath(exam.publicSlug!, "analysis"), title: "Paper analysis, all years", body: "How the subject mix changed from paper to paper." },
+                    { href: examInsightPath(exam.publicSlug!, "strategy"), title: "Preparation strategy", body: "A 12-week study plan built from the past papers." },
+                  ]
                 : []),
               seriesHref
                 ? { href: seriesHref, title: "Mock test series", body: "Fresh full-length mocks in the exam pattern." }

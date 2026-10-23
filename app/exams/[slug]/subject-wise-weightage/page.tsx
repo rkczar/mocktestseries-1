@@ -39,10 +39,10 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return examPageMetadata({
     exam,
     path: examInsightPath(data.slug, "weightage"),
-    title: `${short} Subject-Wise Weightage: ${span(a)} PYQ Analysis`,
-    description: `${short} subject-wise weightage from ${a.papers.length} previous year papers (${span(a)}, ${a.totalQuestions} questions): ${top
+    title: `${short} Subject-Wise Weightage (${span(a)} PYQs)`,
+    description: `${short} subject-wise weightage from ${a.totalQuestions} PYQs (${span(a)}): ${top
       .map((s) => `${s.name} ${formatShare(s.share)}`)
-      .join(", ")}. Historical, not a ${exam.year ?? "future"} forecast.`,
+      .join(", ")}. Historical data, not a ${exam.year ?? "future"} forecast.`,
   });
 }
 

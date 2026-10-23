@@ -51,8 +51,8 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return examPageMetadata({
     exam,
     path: examInsightPath(data.slug, "strategy"),
-    title: `How to Prepare for ${short}${yr}: Strategy Based on Past Papers`,
-    description: `A step-by-step ${short}${yr} preparation strategy built on ${a.papers.length} previous year papers: where the questions come from, how to split your time, and how to use PYQs, subject tests and mocks.`,
+    title: `How to Prepare for ${short}${yr}: 12-Week PYQ Plan`,
+    description: `A 12-week ${short}${yr} study plan built from ${a.totalQuestions} past-paper questions: which subjects to cover first, how to use PYQs and when to start full mocks.`,
   });
 }
 

@@ -22,7 +22,8 @@ export async function saveSeoSettingsAction(_prev: SeoFormState, formData: FormD
   const update: SeoSettingsUpdate = {
     siteName: String(formData.get("siteName") ?? "").trim() || undefined,
     titleTemplate: String(formData.get("titleTemplate") ?? "").trim() || undefined,
-    defaultMetaDescription: String(formData.get("defaultMetaDescription") ?? "").trim(),
+    // A meta description is one line: pasted line breaks become spaces.
+    defaultMetaDescription: String(formData.get("defaultMetaDescription") ?? "").replace(/\s+/g, " ").trim(),
     canonicalBase: String(formData.get("canonicalBase") ?? "").trim().replace(/\/+$/, ""),
     defaultOgImage: String(formData.get("defaultOgImage") ?? "").trim(),
     siteIndexable: formData.get("siteIndexable") === "on",
