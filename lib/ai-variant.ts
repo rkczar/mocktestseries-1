@@ -7,15 +7,19 @@ import { generateForFeature, isFeatureConfigured, type GatewayContext } from "@/
 import { isPlatformOpen } from "@/lib/platform-controls";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, type ExplanationContent } from "@/lib/ai-explanation";
 import { getAiSettings } from "@/lib/ai-settings";
-import { parseCandidateBatch, screenCandidates, type ComparableQuestion, type GeneratedVariant } from "@/lib/ai-variant-validation";
+import { parseCandidateBatch, screenCandidates, validateCandidate, type ComparableQuestion, type GeneratedVariant } from "@/lib/ai-variant-validation";
 
 export { validateGenerated } from "@/lib/ai-variant-validation";
 
 /**
  * AI Question Variants (AI01–AI05) — generated automatically from Ask AI and
- * saved straight into the canonical Question Bank, linked to their source
- * question via `parentQuestionId`. Admin → AI → Variants is monitoring and
- * quality control only; no normal variant needs an admin approval step.
+ * saved into the canonical Question Bank as DRAFT (review required), linked to
+ * their source question via `parentQuestionId`. Ask AI shows them as practice
+ * questions at once; tests only ever select PUBLISHED questions, so a variant
+ * enters Mock / Subject Test / Custom Module pools only after an administrator
+ * reviews and publishes it (Admin → AI → Variants), which re-checks it first.
+ * (2026-10-23: variants had been published straight from the generator's own
+ * answer key — e.g. five from a free reasoning model — with no review.)
  *
  * Flow (ensureQuestionVariants):
  *   existing active variants → if enough, return them (no provider call)
@@ -248,10 +252,12 @@ async function persistVariants(source: SourceQuestion, accepted: GeneratedVarian
         topicId: source.topicId,
         subTopicId: source.subTopicId,
         difficulty: source.difficulty,
-        // Part of the canonical Question Bank immediately — no admin approval
-        // step. Provenance is parentQuestionId + aiVariantType + aiSlot; the
-        // source is QUESTION_BANK (never PYQ, never linked to a PYQ paper).
-        status: QuestionStatus.PUBLISHED,
+        // In the Question Bank as a DRAFT that needs review: shown in Ask AI,
+        // never selected for a test until an administrator publishes it.
+        // Provenance is parentQuestionId + aiVariantType + aiSlot; the source is
+        // QUESTION_BANK (never PYQ, never linked to a PYQ paper).
+        status: QuestionStatus.DRAFT,
+        reviewRequired: true,
         source: "QUESTION_BANK" as const,
         previousYearPaperId: null,
         examYear: null,
@@ -399,19 +405,37 @@ export async function archiveVariant(variantId: string) {
   return prisma.question.update({ where: { id: variantId }, data: { status: QuestionStatus.ARCHIVED } });
 }
 
-/** Restores an archived (or legacy draft) COMPLETED variant into the active Question Bank. Refuses if the source already has 5 active variants. */
+/**
+ * An administrator's review decision: publishes a DRAFT (or restores an archived) COMPLETED variant into the active
+ * Question Bank, after checking its stored content again — question text, exactly four distinct options A–D with
+ * exactly one correct, and the source question still published. Refuses if the source already has 5 active variants.
+ */
 export async function publishVariant(variantId: string) {
   const variant = await loadVariant(variantId);
   if (variant.aiGenerationStatus !== AiGenerationStatus.COMPLETED) {
     throw new VariantNotPublishableError("Only a successfully generated variant can be published.");
   }
   if (variant.status === QuestionStatus.PUBLISHED) return variant;
+  const problem = await publishProblem(variant.id, variant.parentQuestionId!);
+  if (problem) throw new VariantNotPublishableError(`Not published: ${problem}. Fix the variant in the Question Bank or archive it.`);
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ai-variant:${variant.parentQuestionId}`}))`;
     const activeCount = await tx.question.count({ where: { parentQuestionId: variant.parentQuestionId, ...ACTIVE_VARIANT_WHERE } });
     if (variant.status === QuestionStatus.ARCHIVED && activeCount >= MAX_VARIANTS_PER_QUESTION) {
       throw new MaxVariantsReachedError("This question already has 5 active AI variants.");
     }
-    return tx.question.update({ where: { id: variantId }, data: { status: QuestionStatus.PUBLISHED } });
+    return tx.question.update({ where: { id: variantId }, data: { status: QuestionStatus.PUBLISHED, reviewRequired: false } });
   });
+}
+
+/** Why a stored variant must not be published (null = it may): the same structure rules as at generation, on what is stored now. */
+async function publishProblem(variantId: string, parentQuestionId: string): Promise<string | null> {
+  const [row, parent] = await Promise.all([
+    prisma.question.findUnique({ where: { id: variantId }, select: { text: true, options: { select: { label: true, text: true, isCorrect: true }, orderBy: { order: "asc" } } } }),
+    prisma.question.findUnique({ where: { id: parentQuestionId }, select: { status: true } }),
+  ]);
+  if (!row) return "the variant no longer exists";
+  if (parent?.status !== QuestionStatus.PUBLISHED) return "its source question is not published";
+  const ok = validateCandidate({ text: row.text, options: row.options, explanation: "", optionAnalysis: {} });
+  return ok ? null : "it needs a question text and exactly four distinct options A–D with exactly one correct answer";
 }

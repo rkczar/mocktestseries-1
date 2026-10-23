@@ -19,14 +19,14 @@ const GENERATION_BADGE = {
 
 const STATUS_BADGE = {
   PUBLISHED: { label: "In Question Bank", variant: "success" as const },
-  DRAFT: { label: "Draft (legacy)", variant: "neutral" as const },
+  DRAFT: { label: "Draft — needs review", variant: "warning" as const },
   ARCHIVED: { label: "Archived", variant: "warning" as const },
 };
 
 /**
- * AI Variant Monitoring / Audit. Variants are generated automatically from
- * Ask AI and saved straight into the Question Bank (lib/ai-variant.ts) —
- * this page only monitors them and links to per-source quality control.
+ * AI Variant Monitoring / Review. Variants are generated automatically from
+ * Ask AI and saved as drafts that need review (lib/ai-variant.ts); an
+ * administrator publishes them from the per-source page before any test uses them.
  */
 export default async function AiVariantsPage({
   searchParams,
@@ -84,11 +84,11 @@ export default async function AiVariantsPage({
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">AI Variant Monitoring</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">
           AI Question Variants (AI01–AI05 per source question) are generated automatically from Ask AI, validated,
-          de-duplicated and saved straight into the Question Bank. No approval is needed — use this page to audit
-          them and archive any that fall short.
+          de-duplicated and saved as drafts that need review: students see them in Ask AI as practice questions, but no
+          test uses a variant until an administrator checks it and publishes it here. Archive any that fall short.
         </p>
         <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">
-          In Question Bank: {countFor("PUBLISHED")} · Draft (legacy): {countFor("DRAFT")} · Archived: {countFor("ARCHIVED")}
+          In Question Bank: {countFor("PUBLISHED")} · Draft — needs review: {countFor("DRAFT")} · Archived: {countFor("ARCHIVED")}
         </p>
       </div>
 

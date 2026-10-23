@@ -6,11 +6,12 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { ensureQuestionVariants, archiveVariant, publishVariant, MAX_VARIANTS_PER_QUESTION } from "@/lib/ai-variant";
 import { AiNotConfiguredError } from "@/lib/ai-explanation";
 import { consumeQuote } from "@/lib/ai-engine/quote";
+import { prisma } from "@/lib/prisma";
 
 /**
- * Admin quality control for AI Question Variants. Normal variants are
- * generated and saved automatically from Ask AI (lib/ai-variant.ts
- * ensureQuestionVariants) — nothing here is a required approval step.
+ * Admin review of AI Question Variants. Variants are generated from Ask AI
+ * (lib/ai-variant.ts ensureQuestionVariants) and saved as drafts that need
+ * review; publishing one here is the administrator's review decision.
  */
 
 export interface VariantActionState {
@@ -54,14 +55,15 @@ export async function archiveVariantAction(variantId: string, parentQuestionId: 
 }
 
 export async function publishVariantAction(variantId: string, parentQuestionId: string, _prev: VariantActionState, _formData: FormData): Promise<VariantActionState> {
-  await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
+  const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
   try {
     await publishVariant(variantId);
   } catch (error) {
     return { error: describeError(error) };
   }
+  await prisma.auditLog.create({ data: { actorId: session.user.id ?? null, action: "AI_VARIANT_PUBLISHED", entityType: "Question", entityId: variantId, metadata: { parentQuestionId } } });
   revalidate(parentQuestionId);
-  return { success: "Restored to Question Bank." };
+  return { success: "Reviewed and published to the Question Bank." };
 }
 
 function describeError(error: unknown): string {

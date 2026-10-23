@@ -38,7 +38,8 @@ import { readDocx } from "@/lib/ai-import/docx";
 import { addReference } from "@/lib/ai-import/reference";
 import { contentFingerprint, v2Display, verifyState } from "@/lib/ai-import/verify-core";
 import { importAndPublishEligible, paperSummary, requestVerify2, runVerify1, verify2Outcome, verify2Preview, verify2TextParts } from "@/lib/ai-import/paper-verify";
-import { approveQuestions, reclassifyQuestions } from "@/lib/ai-import/review";
+import { approveQuestions, reclassifyQuestions, setTaxonomy } from "@/lib/ai-import/review";
+import { referenceStatus } from "@/lib/ai-import/reference-status";
 import { decideClassification, echoMatches, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
 import { FORMAT_PROFILES_KEY, deriveRules, listFormatProfiles, profileDeviations, saveProfileFromJob, updateFormatProfile } from "@/lib/ai-import/format-profile";
 import { refreshRoutes } from "@/lib/ai-import/routes";
@@ -136,6 +137,9 @@ const SRC: SrcQ[] = [
   { n: 2, stem: "Consider the following statements about renal physiology:\n1. The loop of Henle concentrates urine\n2. Renin is secreted by the juxtaglomerular cells\n3. The proximal tubule secretes all of the filtered glucose", code: "Which of the statements given above are correct?", options: ["1 only", "1 and 2 only", "2 and 3 only", "1, 2 and 3"], answer: "b", explanation: "Glucose is reabsorbed, not secreted, in the proximal tubule." },
   ...SIMPLE.map(([stem, options, answer], i): SrcQ => ({ n: i + 3, stem, options, answer, ...(i === 4 ? { plainExplanation: "The diaphragm does most of the work of quiet breathing." } : {}) })),
 ];
+/** Every run's paper is its own (a run tag on each question's first line), so no earlier run's stored questions are duplicates of it. */
+const RUN = Date.now().toString(36);
+for (const q of SRC) q.stem = q.stem.replace(/^([^\n]*)/, `$1 (set ${RUN})`);
 const answerLine = (q: SrcQ) => `► Official Answer: Option (${q.answer}) — ${q.options["abcd".indexOf(q.answer)]}`;
 function paperParagraphs(qs: SrcQ[], misspell = false): string[] {
   const out = [p("UPSC-style synthetic paper — Official Keys are provided immediately below each question.")];
@@ -224,7 +228,11 @@ async function main() {
   const savedSettings = normalizeImporterSettings(await getImporterSettings());
   const routerWasEnabled = (await getOpenRouterConfig()).enabled;
   const profilesBefore = await prisma.setting.findUnique({ where: { key: FORMAT_PROFILES_KEY } });
+  // Profiles left by an earlier kept run would apply to this run's papers: set aside, restored in `finally`.
+  await prisma.setting.deleteMany({ where: { key: FORMAT_PROFILES_KEY } });
   const questionsBefore = await prisma.question.count();
+  const taxonomyCounts = async () => [await prisma.subject.count(), await prisma.topic.count(), await prisma.subTopic.count(), await prisma.examSubject.count(), await prisma.examTopic.count(), await prisma.examSubTopic.count()].join("/");
+  const taxonomyBefore = await taxonomyCounts();
   const stored: string[] = [];
   let mockProc: ChildProcess | null = null;
 
@@ -277,6 +285,11 @@ async function main() {
     check("confidence below 60% → unresolved (no subject just to fill the field)", decideClassification({ subject: "S2", topic: null, subtopic: null, confidence: 0.3, about: "heart sounds" }, heart, codes, T, "m").subject === null);
     check("no subject fits (null) → unresolved", /no subject of this exam fits/.test(decideClassification({ subject: null, topic: null, subtopic: null, confidence: 0.2, about: "heart sounds" }, heart, codes, T, "m").rejected ?? ""));
     check("key-word echo tolerates plural / case (“Heart Sound”, “murmurs”), rejects unrelated words", echoMatches(["Heart Sound", "murmurs"], heart) && !echoMatches(["pigmentation"], heart));
+
+    // Reference status words.
+    check("reference status: scanned → stored, no text, NOT compared (needs OCR / vision, cost shown first)", referenceStatus({ questions: 0, key: 0, scannedPages: 32 }, 0).state === "not compared" && /OCR \/ vision/.test(referenceStatus({ questions: 0, key: 0, scannedPages: 32 }, 0).reason ?? ""));
+    check("reference status: text read, Verify 1 not run → text extracted (not compared yet)", referenceStatus({ questions: 20, key: 0, scannedPages: 0 }, 0).state === "text extracted");
+    check("reference status: compared by Verify 1 → compared", referenceStatus({ questions: 20, key: 5, scannedPages: 0 }, 20).state === "compared");
 
     // Verification states and outcome.
     const fpx = "f";
@@ -347,6 +360,13 @@ async function main() {
     check("a question with no suitable taxonomy match stays unresolved (no unrelated subject filled in)", !prime.subjectId && prime.issueCodes.includes("SUBJECT_UNKNOWN"), [prime.subjectId, prime.issueCodes]);
     const evidence = await prisma.aiImportCheck.findFirst({ where: { questionId: heartQ.id, name: "Classification evidence" } });
     check("the classification is explained: subject › topic, model, confidence, key words", /Physiology › Cardiovascular System/.test(evidence?.detail ?? "") && /90%/.test(evidence?.detail ?? "") && /key words/.test(evidence?.detail ?? ""), evidence?.detail);
+    // Manual / bulk subject-topic setting: this exam's records only.
+    const otherExam = await prisma.exam.findFirst({ where: { id: { not: exam.id }, examSubjects: { some: {} } }, select: { id: true } });
+    const foreignTopic = otherExam ? await prisma.topic.findFirst({ where: { examLinks: { some: { examId: otherExam.id } }, NOT: { examLinks: { some: { examId: exam.id } } } }, select: { id: true, subjectId: true } }) : null;
+    const refuse = async (fn: () => Promise<unknown>) => fn().then(() => "", (e: unknown) => (e instanceof Error ? e.message : String(e)));
+    check("setting a topic of ANOTHER subject is refused", /does not belong to the subject/.test(await refuse(() => setTaxonomy(byLabel(qs, "3").id, actor, subjectOf("Physiology").id, topicId("Upper Limb"), null))));
+    check("setting a subject / topic that is not linked to this exam is refused", !foreignTopic || /not configured for this exam|does not belong/.test(await refuse(() => setTaxonomy(byLabel(qs, "3").id, actor, foreignTopic.subjectId, foreignTopic.id, null))), foreignTopic);
+
     // Invalid codes from the classifier: never stored.
     await mockConfig({ script: { "mocktext/classifier": ["badcodes"] } });
     await reclassifyQuestions([byLabel(qs, "4").id], actor);
@@ -356,6 +376,8 @@ async function main() {
     await reclassifyQuestions([byLabel(qs, "4").id], actor);
     await runWorker(120_000);
     qs = await questionsOf(jB);
+
+    check("the importer created no subject, topic or subtopic (and no exam link) — classification, re-classification, invalid codes", (await taxonomyCounts()) === taxonomyBefore, [taxonomyBefore, await taxonomyCounts()]);
 
     section("B2. Verify 1: legacy question restored from the Word source, references");
     // Simulate a question stored by the old reader (exactly the production record): statements run together and the
@@ -376,12 +398,13 @@ async function main() {
     check("Verify 1 moved the official answer out of option D (source evidence) and restored the statement line breaks", fd.options[3].text === "I, II and III" && statementsOf(fd.stem).length === 4 && fd.printedAnswer.join() === "C" && v1.whitespaceRestored >= 1 && v1.corrected >= 1, [fd.stem, fd.options[3], v1]);
     const versions = await prisma.aiImportQuestionVersion.findMany({ where: { questionId: fixed.id }, orderBy: { createdAt: "asc" } });
     check("the original extraction is kept in the history (two versions: before the answer move, before the line breaks)", versions.length >= 2 && versions.some((v) => /line breaks/.test(v.note ?? "")) && versions.some((v) => /printed answer/.test(v.note ?? "")), versions.map((v) => v.note));
-    check("Verify 1 result of Q1: passed after the corrections", vs(fixed).v1 === "passed", [vs(fixed).v1, vs(fixed).pv?.v1?.problems]);
+    check("Verify 1 result of Q1: passed after the corrections", vs(fixed).v1 === "passed", [vs(fixed).v1, vs(fixed).pv?.v1?.problems, fixed.issueCodes, fixed.issues, fixed.status]);
     const ref3 = vs(byLabel(qs, "3")).pv?.v1?.references ?? [];
     check("text reference: Q3 wording difference shown with its similarity, the scanned reference recorded as NOT compared", ref3.some((x) => x.name === "Clean copy.docx" && x.compared && x.matched === "Q3" && x.similarity !== null && x.similarity < 0.9 && x.conflicts.length > 0) && ref3.some((x) => x.name === "Scanned copy.pdf" && !x.compared && /not compared/.test(x.note ?? "")), ref3);
     check("text reference: Q4 answer difference is a reference conflict (source not replaced)", byLabel(qs, "4").issueCodes.includes("REFERENCE_CONFLICT") && eff(byLabel(qs, "4")).options[0].text === SRC[3].options[0], byLabel(qs, "4").issueCodes);
     check("Verify 1 result names the reference that was not compared", v1.referencesCompared === 1 && v1.referencesNotCompared.join() === "Scanned copy.pdf" && /NOT compared/.test((await events(jB, "VERIFY1_DONE")).at(-1)?.message ?? ""), [v1, (await events(jB, "VERIFY1_DONE")).at(-1)?.message]);
     let sum = (await paperSummary(jB))!;
+    check("summary: reference states — clean copy “compared”, scanned copy “not compared” (stored, no text)", sum.references.find((r) => r.name === "Clean copy.docx")?.status.state === "compared" && sum.references.find((r) => r.name === "Scanned copy.pdf")?.status.state === "not compared" && sum.references.find((r) => r.name === "Scanned copy.pdf")?.status.extracted === null, sum.references.map((r) => r.status));
     check("summary: each reference identifiable — clean copy compared, scanned copy NOT compared (1 page)", sum.references.length === 2 && sum.references.find((r) => r.name === "Clean copy.docx")?.compared === true && sum.references.find((r) => r.name === "Scanned copy.pdf")?.compared === false && sum.references.find((r) => r.name === "Scanned copy.pdf")?.scannedPages === 1, sum.references);
 
     section("B3. Verify 2: cost confirmation, parts, a failed part, retry, disagreement, subject mismatch");

@@ -96,8 +96,8 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
                     {STATUS_BADGE[variant?.aiGenerationStatus ?? "NONE"].label}
                   </Badge>
                   {variant?.aiGenerationStatus === "COMPLETED" ? (
-                    <Badge variant={variant.status === "PUBLISHED" ? "success" : variant.status === "ARCHIVED" ? "warning" : "neutral"}>
-                      {variant.status === "PUBLISHED" ? "In Question Bank" : variant.status === "ARCHIVED" ? "Archived" : "Draft (legacy)"}
+                    <Badge variant={variant.status === "PUBLISHED" ? "success" : "warning"}>
+                      {variant.status === "PUBLISHED" ? "In Question Bank" : variant.status === "ARCHIVED" ? "Archived" : "Draft — needs review"}
                     </Badge>
                   ) : null}
                 </div>
@@ -142,7 +142,7 @@ export default async function VariantDetailPage({ params }: { params: Promise<{ 
                         <PublishVariantControl
                           variantId={variant.id}
                           parentQuestionId={parent.id}
-                          label={variant.status === "ARCHIVED" ? "Restore" : "Add to Question Bank"}
+                          label={variant.status === "ARCHIVED" ? "Restore" : "Reviewed — publish to Question Bank"}
                         />
                       ) : null}
                     </div>

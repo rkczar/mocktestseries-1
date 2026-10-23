@@ -9,6 +9,7 @@ import { SelectNative } from "@/components/ui/select-native";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
 import { importAction, importEligibleAction, saveFormatProfileAction, verify2PreviewAction, verify2StartAction, verifyPaperAction } from "@/app/admin/(dashboard)/ai-importer/actions";
 import type { PaperSummary, Verify2Preview } from "@/lib/ai-import/paper-verify";
+import { referenceStatusText } from "@/lib/ai-import/reference-status";
 
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `₹${v.toFixed(2)}`);
 
@@ -175,8 +176,8 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
       {summary.references.length > 0 && (
         <ul className="text-xs" data-testid="ps-references">
           {summary.references.map((r) => (
-            <li key={r.refId} className={r.compared ? "" : "text-[var(--color-warning)]"} data-compared={r.compared ? "true" : "false"}>
-              Reference “{r.name}”: {r.compared ? `compared — ${r.matched} question(s) matched, ${r.conflicts} with differences (${r.questions} question(s) and ${r.key} key entries read from it)` : `NOT compared — ${r.scannedPages} scanned page(s) are only stored; reading them needs OCR / vision (paid AI, estimate shown with Verify 2)`}
+            <li key={r.refId} className={r.compared ? "" : "text-[var(--color-warning)]"} data-compared={r.compared ? "true" : "false"} data-state={r.status.state}>
+              Reference “{r.name}”: {referenceStatusText(r.status)}{r.compared ? ` — ${r.matched} matched, ${r.conflicts} with differences` : ""}
             </li>
           ))}
         </ul>

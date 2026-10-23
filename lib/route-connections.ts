@@ -238,7 +238,7 @@ export const ROUTE_CONNECTIONS: RouteConnection[] = [
   // canonical Question Bank as Source → AI01…AI05 → displayed inline.
   { from: "/student/attempt/[attemptId]/review", to: "/admin/questions", source: "internal", label: "Ask AI → AI Question Variants: existing check → generate missing → validate + dedupe → Question Bank (Source → AI01–AI05) → inline display" },
   { from: "/admin/questions", to: "/admin/ai/variants", source: "button", label: "Source question → View AI variants / filter: AI Variant, Has AI Variants" },
-  { from: "/admin/ai/variants", to: "/student/attempt/[attemptId]/review", source: "admin-config", label: "AI Variant Monitoring / Quality Control (archive, restore, generate missing) — no approval needed" },
+  { from: "/admin/ai/variants", to: "/student/attempt/[attemptId]/review", source: "admin-config", label: "AI Variant Monitoring / Review (publish after review, archive, restore, generate missing)" },
 
   // --- Student auth: ONE canonical Student Login (/login) -------------------
   // Protected /student/* → middleware → /login?callbackUrl=<path+query> →

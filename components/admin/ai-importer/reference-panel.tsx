@@ -13,6 +13,8 @@ export interface ReferenceRow {
   questions: number;
   key: number;
   note: string | null;
+  /** stored / text extracted / compared / not compared (lib/ai-import/reference-status.ts). */
+  status?: string | null;
 }
 
 /** The import's reference papers: add, download the original, unlink (the file is kept), use their answers. */
@@ -35,9 +37,8 @@ export function ReferencePanel({ jobId, refs, canUse }: { jobId: string; refs: R
               <a className="underline" href={`/api/admin/ai-importer/references/${jobId}/${r.refId}`}>
                 {r.name}
               </a>
-              <span className="text-xs text-[var(--color-muted-foreground)]">
-                {r.questions} question(s){r.key ? `, ${r.key} answer-key entries` : ""}
-                {r.note ? ` · ${r.note}` : ""}
+              <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="reference-status">
+                {r.status ?? `${r.questions} question(s)${r.key ? `, ${r.key} answer-key entries` : ""}${r.note ? ` · ${r.note}` : ""}`}
               </span>
               {canUse && (
                 <Button size="sm" variant="ghost" disabled={pending} onClick={() => confirm(`Unlink “${r.name}” from this import? Its file is kept.`) && start(async () => {

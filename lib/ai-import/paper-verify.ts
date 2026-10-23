@@ -13,6 +13,7 @@ import { kickWorker } from "@/lib/ai-import/kick";
 import { effective, runPostProcessing } from "@/lib/ai-import/post";
 import { blockToQuestion, mergedAnswerIn, splitQuestions } from "@/lib/ai-import/local-parse";
 import { applyFormatProfile } from "@/lib/ai-import/format-profile";
+import { referenceStatus, type ReferenceStatus } from "@/lib/ai-import/reference-status";
 import { classifyUserText, echoMatches, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
 import { readDocx } from "@/lib/ai-import/docx";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
@@ -853,7 +854,7 @@ export interface PaperSummary {
   eligible: string[];
   approvedNotStored: number;
   cost: { estimateInr: number | null; spentInr: number; confirmedMaxInr: number; verify2: { model: string; status: string; estimateInr: number; maxInr: number; actualInr: number } | null };
-  references: { refId: string; name: string; questions: number; key: number; note: string | null; compared: boolean; matched: number; conflicts: number; scannedPages: number }[];
+  references: { refId: string; name: string; questions: number; key: number; note: string | null; compared: boolean; matched: number; conflicts: number; scannedPages: number; status: ReferenceStatus }[];
 }
 
 const has = (q: { issueCodes: string[] }, codes: string[]) => q.issueCodes.some((c) => codes.includes(c));
@@ -913,7 +914,8 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
     cost: { estimateInr: job.estCostInr, spentInr: job.spentInr, confirmedMaxInr: job.budgetInr, verify2: null },
     references: refs.map((r) => {
       const results = active.map((q) => (q.data as unknown as ExtractedQuestion).paperVerify?.v1?.references?.find((x) => x.refId === r.refId) ?? null).filter((x): x is NonNullable<typeof x> => !!x);
-      return { refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note, compared: referenceComparable(r), matched: results.filter((x) => x.matched).length, conflicts: results.filter((x) => x.conflicts.length).length, scannedPages: scannedPagesOf(r) };
+      const status = referenceStatus({ questions: r.questions.length, key: r.key.length, scannedPages: scannedPagesOf(r) }, results.filter((x) => x.compared).length);
+      return { refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note, compared: status.state === "compared", matched: results.filter((x) => x.matched).length, conflicts: results.filter((x) => x.conflicts.length).length, scannedPages: scannedPagesOf(r), status };
     }),
   };
   for (const q of active) {

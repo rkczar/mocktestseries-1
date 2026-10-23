@@ -4,7 +4,8 @@
  * Part 1 (pure, no DB): validation + duplicate/near-duplicate detection.
  * Part 2 (disposable fixture exam, scripted provider — no real AI call and no
  * production question is touched): the real ensureQuestionVariants flow —
- * generation, auto-save to the Question Bank, AI0n codes, metadata
+ * generation, save to the Question Bank as DRAFT needing review (never in a
+ * test pool until published), the review/publish re-check, AI0n codes, metadata
  * inheritance, max 5, duplicate rejection, partial results, bounded retry,
  * reuse, concurrency. Fixture rows are deleted at the end.
  *
@@ -12,6 +13,11 @@
  *   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/verify-ai-variants.ts --pure   # part 1 only
  */
 import "dotenv/config";
+
+if (!process.argv.includes("--pure") && /mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
+  console.error("Refusing to run Part 2 against what looks like the production database.");
+  process.exit(2);
+}
 import { validateGenerated, validateCandidate, isNearDuplicate, screenCandidates, parseCandidateBatch } from "@/lib/ai-variant-validation";
 import { createFixtureSubject, createFixtureTopic, deleteFixtureTaxonomy } from "./fixture-taxonomy";
 
@@ -70,7 +76,8 @@ function part1() {
 async function part2() {
   console.log("\n--- Part 2: ensureQuestionVariants on a disposable fixture exam ---");
   const { prisma } = await import("@/lib/prisma");
-  const { ensureQuestionVariants, getActiveVariants, archiveVariant, MAX_VARIANTS_PER_QUESTION } = await import("@/lib/ai-variant");
+  const { ensureQuestionVariants, getActiveVariants, archiveVariant, publishVariant, MAX_VARIANTS_PER_QUESTION } = await import("@/lib/ai-variant");
+  const { countPublishedQuestions } = await import("@/lib/question-selection");
   type Gen = NonNullable<NonNullable<Parameters<typeof ensureQuestionVariants>[1]>["generate"]>;
 
   const suffix = Date.now().toString(36).toUpperCase();
@@ -115,7 +122,9 @@ async function part2() {
     const r1 = await ensureQuestionVariants(s1.id, { target: 3, generate: scripted([DISTINCT.slice(0, 3)]) });
     check("T1 zero variants → 3 generated in ONE provider call", r1.generatedNow === 3 && r1.providerCalls === 1 && calls[0] === 3);
     const rows1 = await prisma.question.findMany({ where: { parentQuestionId: s1.id }, include: { options: true, aiExplanation: true }, orderBy: { aiSlot: "asc" } });
-    check("T1 saved to Question Bank as PUBLISHED (no approval step)", rows1.length === 3 && rows1.every((r) => r.status === "PUBLISHED"));
+    check("T1 saved to the Question Bank as DRAFT that needs review (not published)", rows1.length === 3 && rows1.every((r) => r.status === "DRAFT" && r.reviewRequired));
+    check("T1 drafts are still offered in Ask AI (practice), and no test pool selects them", (await getActiveVariants(s1.id)).length === 3 && (await countPublishedQuestions({ examId: exam.id })) === 1);
+
     check("T1 explanation stored with each variant", r1.variants.every((v) => v.explanation === "Because.") && rows1.every((r) => r.aiExplanation?.status === "COMPLETED"));
     check("T8 source → variant relationship (parentQuestionId)", rows1.every((r) => r.parentQuestionId === s1.id));
     check("T9 codes follow existing convention '<source code> AI0n'", rows1.map((r) => r.code).join("|") === [1, 2, 3].map((k) => `${s1.code} AI0${k}`).join("|"));
@@ -184,6 +193,33 @@ async function part2() {
     const refill = await ensureQuestionVariants(s7.id, { target: 3, generate: scripted([[DISTINCT[0], DISTINCT[4]]]) });
     check("archived text still blocks a regenerated duplicate; a new unique one fills a free slot", refill.variants.length === 3 && refill.rejectedDuplicate === 1);
 
+    // TEST 11: review → publish (its own source, so the reuse tests above keep their rows).
+    const s11 = await makeSource();
+    await ensureQuestionVariants(s11.id, { target: 3, generate: scripted([DISTINCT.slice(0, 3)]) });
+    const rows11 = await prisma.question.findMany({ where: { parentQuestionId: s11.id }, orderBy: { aiSlot: "asc" } });
+    const poolBefore = await countPublishedQuestions({ examId: exam.id });
+    // Review → publish re-checks what is stored: a variant edited into two correct answers is refused.
+    await prisma.questionOption.updateMany({ where: { questionId: rows11[0].id }, data: { isCorrect: true } });
+    let invalidRefused = "";
+    try {
+      await publishVariant(rows11[0].id);
+    } catch (e) {
+      invalidRefused = e instanceof Error ? e.message : String(e);
+    }
+    check("T11 publishing re-checks the stored variant: two correct answers → refused, still DRAFT", /exactly one correct answer/.test(invalidRefused) && (await prisma.question.findUniqueOrThrow({ where: { id: rows11[0].id } })).status === "DRAFT");
+    await archiveVariant(rows11[0].id);
+    await publishVariant(rows11[1].id);
+    const pub = await prisma.question.findUniqueOrThrow({ where: { id: rows11[1].id } });
+    check("T11 a reviewed valid variant is published (review flag cleared) and only then enters the test pool", pub.status === "PUBLISHED" && !pub.reviewRequired && (await countPublishedQuestions({ examId: exam.id })) === poolBefore + 1);
+    await prisma.question.update({ where: { id: s11.id }, data: { status: "DRAFT" } });
+    let sourceRefused = false;
+    try {
+      await publishVariant(rows11[2].id);
+    } catch {
+      sourceRefused = true;
+    }
+    check("T11 a variant whose source is no longer published is not published", sourceRefused);
+    await prisma.question.update({ where: { id: s11.id }, data: { status: "PUBLISHED" } });
     let variantSourceRefused = false;
     try {
       await ensureQuestionVariants(rows1[0].id, { target: 1, generate: scripted([[DISTINCT[5]]]) });

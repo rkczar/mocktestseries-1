@@ -18,6 +18,7 @@ import { STRUCTURE_CODES, TAXONOMY_CODES, fingerprintOf, paperSummary } from "@/
 import { mergedAnswerIn, statementsOf } from "@/lib/ai-import/local-parse";
 import { listReferences } from "@/lib/ai-import/reference";
 import { V1_DISPLAY, v2Display, verifyState } from "@/lib/ai-import/verify-core";
+import { referenceStatusText } from "@/lib/ai-import/reference-status";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 
 export const metadata = { title: "AI Import Review Exceptions — Mock Test Series.in Admin" };
@@ -61,7 +62,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       })
     : allRows;
   const taxonomy = job ? (await getExamTaxonomy(prisma, job.examId)).map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((u) => ({ id: u.id, name: u.name })) })) })) : [];
-  const references = jobId ? (await listReferences(jobId)).map((r) => ({ refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note })) : [];
+  const references = jobId ? (await listReferences(jobId)).map((r) => ({ refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note, status: (() => { const s = summary?.references.find((x) => x.refId === r.refId)?.status; return s ? referenceStatusText(s) : null; })() })) : [];
   const subjects = await prisma.subject.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.subjectId).filter((x): x is string => !!x))] } }, select: { id: true, name: true } });
   const topics = await prisma.topic.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.topicId).filter((x): x is string => !!x))] } }, select: { id: true, name: true } });
   // questionId has no FK (the import record outlives the question): only link saved questions that still exist.
