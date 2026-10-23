@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
 import { JobControls } from "@/components/admin/ai-importer/job-controls";
-import { CHUNK_BYTES } from "@/lib/ai-import/config";
 import type { JobCard } from "@/lib/ai-import/job-view";
 import type { AnalyzerVerdict } from "@/lib/ai-import/verdict";
 import { JobContextFields, type ExamOption } from "./new-import-form";
@@ -20,7 +19,7 @@ import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
 import type { JobMapping } from "@/lib/ai-import/job-view";
 import type { QualityReport } from "@/lib/ai-import/quality";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
-import { uploadReference } from "@/components/admin/ai-importer/reference-panel";
+import { ACCEPT, STAGE_LABEL, SUPPORTED_LABEL, checkLocalFile, uploadJobFile, uploadReferenceFile, type UploadStage } from "@/components/admin/ai-importer/upload-client";
 import { CostSummary, type CostBreakdownLine } from "@/components/admin/ai-importer/cost-summary";
 import type { SpendSummary } from "@/lib/ai-import/ledger";
 
@@ -44,30 +43,6 @@ export interface CurrentJob {
 }
 
 const BUSY = ["DRAFT", "ANALYZING", "QUEUED", "PROCESSING", "IMPORTING"];
-const ACCEPT = ".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.csv";
-
-/** Uploads one file in chunks through the importer's upload API; resolves with the server's verdict. */
-async function uploadFile(jobId: string, file: File, role: "PAPER" | "ANSWER_KEY", onPct: (pct: number) => void): Promise<{ ok: true; note: string } | { ok: false; error: string }> {
-  const start = await fetch("/api/admin/ai-importer/files", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jobId, name: file.name, size: file.size, role, paperFileId: null }) });
-  const s = await start.json().catch(() => ({}));
-  if (!start.ok) return { ok: false, error: s.error ?? "The upload was refused." };
-  for (let c = 0; c < s.chunks; c++) {
-    const blob = file.slice(c * CHUNK_BYTES, Math.min(file.size, (c + 1) * CHUNK_BYTES));
-    let ok = false;
-    for (let attempt = 0; attempt < 3 && !ok; attempt++) {
-      const r = await fetch(`/api/admin/ai-importer/files/${s.fileId}/chunks/${c}`, { method: "PUT", body: blob });
-      ok = r.ok;
-      if (!ok && r.status < 500) return { ok: false, error: (await r.json().catch(() => ({}))).error ?? "The upload was refused." };
-    }
-    if (!ok) return { ok: false, error: "A part of the file could not be uploaded. Check the connection and try again." };
-    onPct(Math.round(((c + 1) / s.chunks) * 95));
-  }
-  const done = await fetch(`/api/admin/ai-importer/files/${s.fileId}/complete`, { method: "POST" });
-  const d = await done.json().catch(() => ({}));
-  if (!done.ok || !d.ok) return { ok: false, error: d.reason ?? d.error ?? "The file was refused." };
-  onPct(100);
-  return { ok: true, note: `${String(d.kind).toUpperCase()}${d.pageCount ? ` · ${d.pageCount} page(s)` : ""}` };
-}
 
 function toneVariant(t: JobCard["tone"]): "success" | "warning" | "error" | "info" | "neutral" {
   return t;
@@ -87,68 +62,263 @@ function Fact({ f }: { f: AnalyzerVerdict["facts"][number] }) {
 
 const paperLabel = (p: ExamOption["papers"][number]) => `${p.year} — ${p.title}${p.paperCode ? ` (${p.paperCode})` : ""}`;
 
-/** Upload area: 1 exam → 2 Previous Year Paper → 3 question paper (+ 4 answer key, expected count). */
-function UploadCard({ exams, defaultExamId, limits, aiEnabled }: { exams: ExamOption[]; defaultExamId: string; limits: { maxFileMb: number; maxPagesPerFile: number }; aiEnabled: boolean }) {
+/** The models the importer would use now, per stage — the same plan Import Settings shows (computeModelPlan). */
+export interface AiConfigView {
+  aiEnabled: boolean;
+  mode: "auto" | "manual";
+  stages: { task: string; label: string; model: string | null; reason: string }[];
+  problems: string[];
+}
+
+type Slot = "paper" | "key" | "reference";
+type SlotState = { file: File | null; invalid: string | null; pct: number; done: string | null; error: string | null };
+const EMPTY: SlotState = { file: null, invalid: null, pct: 0, done: null, error: null };
+const SLOT_LABEL: Record<Slot, string> = { paper: "Question paper", key: "Answer key", reference: "Reference paper" };
+
+/** One file picker: chosen name, check result, progress, Remove / Replace. Choosing a file never uploads it. */
+function FileSlot(props: { slot: Slot; step: string; hint: string; state: SlotState; locked: boolean; onPick: (f: File) => void; onRemove: () => void; required?: boolean }) {
+  const input = useRef<HTMLInputElement>(null);
+  const { state: s, slot } = props;
+  const status = s.error ? "failed" : s.done ? "uploaded" : s.pct > 0 ? "uploading" : s.invalid ? "invalid" : s.file ? "ready" : "empty";
+  return (
+    <div className="flex flex-col gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid={`op-slot-${slot}`} data-status={status}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-medium">
+          {props.step} {SLOT_LABEL[slot]} {props.required ? "" : <span className="font-normal text-[var(--color-muted-foreground)]">(optional)</span>}
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" disabled={props.locked} onClick={() => input.current?.click()} data-testid={`op-${slot}-button`}>
+            {s.file ? "Replace" : "Choose file"}
+          </Button>
+          {s.file && !props.locked && (
+            <Button type="button" variant="ghost" size="sm" onClick={props.onRemove} data-testid={`op-${slot}-remove`}>
+              Remove
+            </Button>
+          )}
+        </div>
+        <input
+          ref={input}
+          type="file"
+          accept={ACCEPT}
+          className="hidden"
+          disabled={props.locked}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (f) props.onPick(f);
+          }}
+          data-testid={slot === "paper" ? "op-upload-input" : `op-${slot}-input`}
+        />
+      </div>
+      {s.file ? (
+        <div className="flex flex-col gap-1 text-xs">
+          <span className="[overflow-wrap:anywhere]" data-testid={`op-${slot}-name`}>
+            {s.file.name} · {(s.file.size / 1024 / 1024).toFixed(1)} MB
+          </span>
+          {s.invalid && (
+            <span className="text-[var(--color-error)]" role="alert" data-testid={`op-${slot}-invalid`}>
+              Not accepted: {s.invalid}
+            </span>
+          )}
+          {!s.invalid && !s.done && !s.error && s.pct === 0 && <span className="text-[var(--color-success)]">Ready — uploaded when you click Submit &amp; Analyze.</span>}
+          {s.pct > 0 && !s.done && !s.error && (
+            <div className="h-1.5 w-full overflow-hidden rounded bg-[var(--color-border)]" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={s.pct} data-testid={`op-${slot}-progress`}>
+              <span className="block h-full bg-[var(--color-primary)] transition-[width]" style={{ width: `${s.pct}%` }} />
+            </div>
+          )}
+          {s.done && (
+            <span className="text-[var(--color-success)]" data-testid={`op-${slot}-done`}>
+              Uploaded ✓ {s.done}
+            </span>
+          )}
+          {s.error && (
+            <span className="text-[var(--color-error)]" role="alert" data-testid={`op-${slot}-error`}>
+              {s.error}
+            </span>
+          )}
+        </div>
+      ) : (
+        <span className="text-xs text-[var(--color-muted-foreground)]">{props.hint}</span>
+      )}
+    </div>
+  );
+}
+
+/** AI Configuration: the model chosen for each stage (read-only plan) and an optional override for this import. */
+function AiConfiguration({ ai, importerModels, canManage, override, setOverride, locked }: { ai: AiConfigView; importerModels: string[]; canManage: boolean; override: string; setOverride: (v: string) => void; locked: boolean }) {
+  const router = useRouter();
+  const [remember, setRemember] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const [pending, start] = useTransition();
+  return (
+    <section className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="op-ai-config" data-ai={ai.aiEnabled ? "on" : "off"}>
+      <h3 className="text-sm font-semibold">7. AI Configuration</h3>
+      <p className="text-xs text-[var(--color-muted-foreground)]">
+        {ai.aiEnabled
+          ? `${ai.mode === "auto" ? "Automatic — the cheapest suitable model on the importer's list" : "Manual — the saved importer choice"}, checked for availability, image support, privacy and price. The same plan is shown under Import Settings and is checked again (with fresh prices) before anything is charged.`
+          : "Paid AI is switched off: digital PDFs and Word files are read locally for free; scanned pages and image answer keys cannot be read. Nothing is charged."}
+      </p>
+      <ul className="grid gap-1.5 sm:grid-cols-2" data-testid="op-ai-stages">
+        {ai.stages.map((s) => (
+          <li key={s.task} className="flex flex-col rounded border border-[var(--color-border)] p-2 text-xs" data-testid="op-ai-stage" data-task={s.task} data-model={s.model ?? ""}>
+            <span className="text-[var(--color-muted-foreground)]">{s.label}</span>
+            <span className={`font-medium [overflow-wrap:anywhere] ${s.model ? "" : "text-[var(--color-warning)]"}`}>{s.model ?? (ai.aiEnabled ? "Not available" : "Local reader only (free)")}</span>
+            {!s.model && <span className="text-[var(--color-muted-foreground)]">{s.reason}</span>}
+          </li>
+        ))}
+      </ul>
+      {ai.problems.length > 0 && (
+        <ul className="text-xs text-[var(--color-warning)]" data-testid="op-ai-problems">
+          {ai.problems.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      )}
+      {ai.aiEnabled && importerModels.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="op-ai-override">Page-reading model for this import (optional override)</Label>
+          <SelectNative id="op-ai-override" value={override} disabled={locked} onChange={(e) => setOverride(e.target.value)} data-testid="op-ai-override">
+            <option value="">Automatic (recommended)</option>
+            {importerModels.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </SelectNative>
+          <span className="text-xs text-[var(--color-muted-foreground)]">An override passes the same suitability, privacy and price checks at the cost confirmation; if it fails them you are told why and nothing is charged.</span>
+          {canManage && (
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} data-testid="op-ai-remember" />
+                Save as the importer default (Import Settings)
+              </label>
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                disabled={pending || !remember || locked}
+                onClick={() =>
+                  start(async () => {
+                    const r = await callImporter(() => saveModelPreferenceAction(override || null));
+                    setMsg(r.ok ? { text: r.data.mode === "auto" ? "Saved: Automatic is the default." : `Saved: ${r.data.model} is the default.`, error: false } : { text: r.error, error: true });
+                    if (r.ok) router.refresh();
+                  })
+                }
+                data-testid="op-ai-save"
+              >
+                Save default
+              </Button>
+            </div>
+          )}
+          {msg && <p className={`text-xs ${msg.error ? "text-[var(--color-error)]" : "text-[var(--color-success)]"}`}>{msg.text}</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * New import: 1 exam → 2 Previous Year Paper → 3 expected count → 4 question paper → 5 answer key (optional)
+ * → 6 reference paper (optional) → 7 AI configuration → Submit & Analyze. Choosing a file only selects it; the
+ * import is created, uploaded and analyzed when Submit & Analyze is clicked. A failed step can be retried on the
+ * same import (the job is created with a stable key, finished uploads are not repeated), so nothing is duplicated.
+ * The free local analysis runs here; paid AI still needs the cost confirmation on the next screen.
+ */
+function UploadCard({ exams, defaultExamId, limits, ai, importerModels, canManage }: { exams: ExamOption[]; defaultExamId: string; limits: { maxFileMb: number; maxPagesPerFile: number }; ai: AiConfigView; importerModels: string[]; canManage: boolean }) {
   const router = useRouter();
   const [ctx, setCtx] = useState({ examId: defaultExamId, paperType: "FULL_PAPER", subjectId: "", year: "", paperCode: "", previousYearPaperId: "" });
   const [expected, setExpected] = useState("");
-  const [paper, setPaper] = useState<File | null>(null);
-  const [key, setKey] = useState<File | null>(null);
-  const [reference, setReference] = useState<File | null>(null);
-  const [drag, setDrag] = useState(false);
+  const [slots, setSlots] = useState<Record<Slot, SlotState>>({ paper: EMPTY, key: EMPTY, reference: EMPTY });
+  const [override, setOverride] = useState("");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const paperInput = useRef<HTMLInputElement>(null);
-  const keyInput = useRef<HTMLInputElement>(null);
-  const referenceInput = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<{ stage: UploadStage; text: string } | null>(null);
+  // The import this form is filling: kept across a retry so the job and finished uploads are never repeated.
+  const [jobId, setJobId] = useState<string | null>(null);
+  const running = useRef(false);
+  const abort = useRef<AbortController | null>(null);
+  const clientKey = useRef<string | null>(null);
+  const [drag, setDrag] = useState(false);
   const exam = exams.find((e) => e.id === ctx.examId);
   const pyq = exam?.papers.find((p) => p.id === ctx.previousYearPaperId) ?? null;
   // The Bulk Import needs a year for every question: the selected paper's year, the exam's own year, or one entered here.
   const needsYear = !!exam && !exam.year && !pyq;
-  const contextMissing = !ctx.examId
-    ? "Select the exam first."
+  const locked = busy || jobId !== null;
+  const missing = !ctx.examId
+    ? "Select the exam."
     : needsYear && !/^\d{4}$/.test(ctx.year)
       ? "Select the Previous Year Paper, or enter the paper's year — this exam has no year set, and the Question Bank needs one."
       : ctx.paperType === "SINGLE_SUBJECT" && !ctx.subjectId
         ? "Select the subject (Advanced options)."
-        : expected && !/^\d{1,4}$/.test(expected)
-          ? "Enter the expected number of questions as a whole number."
-          : null;
+        : !/^[1-9]\d{0,3}$/.test(expected)
+          ? "Enter the expected number of questions."
+          : !slots.paper.file
+            ? "Choose the question paper."
+            : (["paper", "key", "reference"] as const).map((k) => slots[k].invalid && `${SLOT_LABEL[k]}: ${slots[k].invalid}`).find(Boolean) || null;
 
-  async function go(file: File) {
-    if (busy) return;
-    if (contextMissing) return setError(contextMissing);
-    if (file.size > limits.maxFileMb * 1024 * 1024) return setError(`The file is larger than ${limits.maxFileMb} MB.`);
+  const patch = (k: Slot, v: Partial<SlotState>) => setSlots((s) => ({ ...s, [k]: { ...s[k], ...v } }));
+  const pick = (k: Slot, f: File) => {
+    setError(null);
+    setSlots((s) => ({ ...s, [k]: { ...EMPTY, file: f, invalid: checkLocalFile(f, limits.maxFileMb) } }));
+  };
+
+  async function submit() {
+    if (running.current || missing) return;
+    running.current = true;
     setBusy(true);
     setError(null);
+    const ctl = new AbortController();
+    abort.current = ctl;
+    let stage: UploadStage = "validation";
     try {
-      // One key per chosen file: a double click or a retried request returns the same job.
-      const clientKey = `up_${file.size}_${file.lastModified}_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-      setProgress("Creating the import…");
-      const created = await callImporter(() => createJobAction({ title: file.name.replace(/\.[^.]+$/, "").slice(0, 160) || "Untitled import", ...ctx, year: pyq ? null : ctx.year || null, paperCode: pyq ? null : ctx.paperCode || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, clientKey, expectedQuestions: expected || null }));
-      if (!created.ok) throw new Error(created.error);
-      const jobId = created.data.jobId;
-      const up = await uploadFile(jobId, file, "PAPER", (p) => setProgress(`Uploading ${file.name}… ${p}%`));
-      if (!up.ok) throw new Error(`${file.name}: ${up.error}`);
-      if (key) {
-        const k = await uploadFile(jobId, key, "ANSWER_KEY", (p) => setProgress(`Uploading the answer key… ${p}%`));
-        if (!k.ok) throw new Error(`Answer key ${key.name}: ${k.error}`);
+      let id = jobId;
+      if (!id) {
+        // One key per form: a double click or a retried request returns the same job.
+        clientKey.current ??= `up_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+        setProgress("Creating the import…");
+        const paper = slots.paper.file!;
+        const created = await callImporter(() => createJobAction({ title: paper.name.replace(/\.[^.]+$/, "").slice(0, 160) || "Untitled import", ...ctx, year: pyq ? null : ctx.year || null, paperCode: pyq ? null : ctx.paperCode || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, clientKey: clientKey.current, expectedQuestions: expected }));
+        if (!created.ok) throw Object.assign(new Error(created.error), { stage: "validation" as UploadStage });
+        id = created.data.jobId;
+        setJobId(id);
       }
-      if (reference) {
-        setProgress("Uploading the reference paper…");
-        const r = await uploadReference(jobId, reference);
-        if (!r.ok) throw new Error(`Reference paper ${reference.name}: ${r.error}`);
+      stage = "upload";
+      for (const k of ["paper", "key", "reference"] as const) {
+        const s = slots[k];
+        if (!s.file || s.done) continue;
+        patch(k, { error: null, pct: 1 });
+        setProgress(`Uploading the ${SLOT_LABEL[k].toLowerCase()}…`);
+        const onPct = (p: number) => patch(k, { pct: Math.max(1, p) });
+        const r = k === "reference" ? await uploadReferenceFile(id, s.file, onPct, ctl.signal) : await uploadJobFile(id, s.file, k === "paper" ? "PAPER" : "ANSWER_KEY", onPct, ctl.signal);
+        if (!r.ok) {
+          patch(k, { pct: 0, error: `${STAGE_LABEL[r.stage]} failed: ${r.error}` });
+          throw Object.assign(new Error(`${SLOT_LABEL[k]} “${s.file.name}”: ${r.error}`), { stage: r.stage });
+        }
+        patch(k, { done: r.note, pct: 100 });
       }
-      setProgress("Analyzing…");
-      const an = await callImporter(() => analyzeJobAction(jobId));
-      if (!an.ok) throw new Error(an.error);
-      router.replace(`/admin/ai-importer?job=${jobId}`);
+      stage = "analysis";
+      setProgress("Analyzing on this server (free)…");
+      const an = await callImporter(() => analyzeJobAction(id!));
+      if (!an.ok) throw Object.assign(new Error(an.error), { stage: "analysis" as UploadStage });
+      router.replace(`/admin/ai-importer?job=${id}${override ? `&model=${encodeURIComponent(override)}` : ""}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "The upload failed.");
+      const st = (e as { stage?: UploadStage }).stage ?? stage;
+      setError({ stage: st, text: ctl.signal.aborted ? "Cancelled. Finished uploads are kept on this import — click Submit & Analyze to continue, or Start over." : e instanceof Error ? e.message : "The step failed." });
       setBusy(false);
       setProgress(null);
+      running.current = false;
     }
+  }
+
+  function startOver() {
+    abort.current?.abort();
+    clientKey.current = null;
+    running.current = false;
+    setJobId(null);
+    setSlots({ paper: EMPTY, key: EMPTY, reference: EMPTY });
+    setError(null);
+    setBusy(false);
+    setProgress(null);
   }
 
   return (
@@ -156,15 +326,14 @@ function UploadCard({ exams, defaultExamId, limits, aiEnabled }: { exams: ExamOp
       <CardHeader>
         <CardTitle>New import</CardTitle>
         <CardDescription>
-          PDF, Word (DOCX), JPG, PNG, XLSX or CSV · up to {limits.maxFileMb} MB and {limits.maxPagesPerFile} pages per file. The file is analyzed automatically on this server (free); nothing is charged before you confirm the estimated cost.
-          {!aiEnabled && " Paid AI is off: digital PDFs and Word files work fully; scanned pages cannot be read."}
+          {SUPPORTED_LABEL} · up to {limits.maxFileMb} MB and {limits.maxPagesPerFile} pages per file. Fill in the steps, then click Submit &amp; Analyze. The analysis runs on this server (free); nothing is charged before you confirm the estimated cost.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="op-exam">1. Exam</Label>
-            <SelectNative id="op-exam" value={ctx.examId} disabled={busy} onChange={(e) => setCtx((c) => ({ ...c, examId: e.target.value, subjectId: "", previousYearPaperId: "" }))} data-testid="op-exam">
+            <SelectNative id="op-exam" value={ctx.examId} disabled={locked} onChange={(e) => setCtx((c) => ({ ...c, examId: e.target.value, subjectId: "", previousYearPaperId: "" }))} data-testid="op-exam">
               <option value="">Select an exam…</option>
               {exams.map((e) => (
                 <option key={e.id} value={e.id}>
@@ -176,7 +345,7 @@ function UploadCard({ exams, defaultExamId, limits, aiEnabled }: { exams: ExamOp
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="op-pyq">2. Previous Year Paper</Label>
-            <SelectNative id="op-pyq" value={ctx.previousYearPaperId} disabled={busy || !exam} onChange={(e) => setCtx((c) => ({ ...c, previousYearPaperId: e.target.value, year: "", paperCode: "" }))} data-testid="op-pyq">
+            <SelectNative id="op-pyq" value={ctx.previousYearPaperId} disabled={locked || !exam} onChange={(e) => setCtx((c) => ({ ...c, previousYearPaperId: e.target.value, year: "", paperCode: "" }))} data-testid="op-pyq">
               <option value="">{exam ? "None — add to the Question Bank only" : "Select the exam first"}</option>
               {exam?.papers.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -196,121 +365,72 @@ function UploadCard({ exams, defaultExamId, limits, aiEnabled }: { exams: ExamOp
           {needsYear && (
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="op-year">Paper year</Label>
-              <Input id="op-year" inputMode="numeric" maxLength={4} placeholder="e.g. 2024" value={ctx.year} disabled={busy} onChange={(e) => setCtx((c) => ({ ...c, year: e.target.value.replace(/\D/g, "") }))} data-testid="op-year" />
+              <Input id="op-year" inputMode="numeric" maxLength={4} placeholder="e.g. 2024" value={ctx.year} disabled={locked} onChange={(e) => setCtx((c) => ({ ...c, year: e.target.value.replace(/\D/g, "") }))} data-testid="op-year" />
               <span className="text-xs text-[var(--color-muted-foreground)]">Required: no paper is selected and this exam has no year set.</span>
             </div>
           )}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="op-expected">Expected number of questions</Label>
-            <Input id="op-expected" inputMode="numeric" maxLength={4} placeholder="e.g. 100" value={expected} disabled={busy} onChange={(e) => setExpected(e.target.value.replace(/\D/g, ""))} data-testid="op-expected" />
+            <Label htmlFor="op-expected">3. Expected number of questions</Label>
+            <Input id="op-expected" inputMode="numeric" maxLength={4} placeholder="e.g. 100" value={expected} disabled={locked} onChange={(e) => setExpected(e.target.value.replace(/\D/g, ""))} data-testid="op-expected" />
             <span className="text-xs text-[var(--color-muted-foreground)]">As printed on the paper. You confirm it again before processing; missing questions are detected against it.</span>
           </div>
         </div>
         <div
-          role="button"
-          tabIndex={0}
-          aria-disabled={busy}
-          onClick={() => !busy && paperInput.current?.click()}
-          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && !busy && (e.preventDefault(), paperInput.current?.click())}
           onDragOver={(e) => {
             e.preventDefault();
-            setDrag(true);
+            if (!locked) setDrag(true);
           }}
           onDragLeave={() => setDrag(false)}
           onDrop={(e) => {
             e.preventDefault();
             setDrag(false);
             const f = e.dataTransfer.files?.[0];
-            if (f && !busy) {
-              setPaper(f);
-              go(f);
-            }
+            if (f && !locked) pick("paper", f);
           }}
-          className={`flex min-h-40 cursor-pointer flex-col items-center justify-center gap-2 rounded-[var(--radius-card)] border-2 border-dashed p-6 text-center transition-colors ${drag ? "border-[var(--color-primary)] bg-[var(--color-primary)]/5" : "border-[var(--color-border)] hover:border-[var(--color-primary)]"} ${busy ? "cursor-wait opacity-80" : ""}`}
+          className={`rounded-[var(--radius-card)] ${drag ? "ring-2 ring-[var(--color-primary)]" : ""}`}
           data-testid="drop-zone"
         >
-          <svg aria-hidden="true" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.6" className="text-[var(--color-muted-foreground)]">
-            <path d="M12 16V4m0 0-4 4m4-4 4 4" />
-            <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
-          </svg>
-          <span className="text-base font-medium">{busy ? progress ?? "Working…" : paper ? paper.name : "3. Drop the question paper here, or click to choose"}</span>
-          <span className="text-xs text-[var(--color-muted-foreground)]">{busy ? "Keep this page open until the analysis appears." : "Upload starts as soon as a file is chosen — choose the answer key first if you have one."}</span>
-          <input
-            ref={paperInput}
-            type="file"
-            accept={ACCEPT}
-            className="hidden"
-            disabled={busy}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) {
-                setPaper(f);
-                go(f);
-              }
-            }}
-            data-testid="op-upload-input"
-          />
+          <FileSlot slot="paper" step="4." required hint="Choose the question paper or drop it here. It is uploaded only when you click Submit & Analyze." state={slots.paper} locked={locked} onPick={(f) => pick("paper", f)} onRemove={() => patch("paper", EMPTY)} />
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-[var(--color-muted-foreground)]">4. Official answer key (optional, choose before the paper):</span>
-          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => keyInput.current?.click()} data-testid="op-key-button">
-            {key ? key.name : "Choose answer key"}
-          </Button>
-          {key && !busy && (
-            <Button type="button" variant="ghost" size="sm" onClick={() => setKey(null)}>
-              Remove
-            </Button>
-          )}
-          <input
-            ref={keyInput}
-            type="file"
-            accept={ACCEPT}
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) setKey(f);
-            }}
-            data-testid="op-key-input"
-          />
-        </div>
-        <div className="flex flex-col gap-1 text-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[var(--color-muted-foreground)]">5. Reference paper (optional, choose before the paper):</span>
-            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => referenceInput.current?.click()} data-testid="op-reference-button">
-              {reference ? reference.name : "Choose reference paper"}
-            </Button>
-            {reference && !busy && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setReference(null)}>
-                Remove
-              </Button>
-            )}
-            <input
-              ref={referenceInput}
-              type="file"
-              accept={ACCEPT}
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                e.target.value = "";
-                if (f) setReference(f);
-              }}
-              data-testid="op-reference-input"
-            />
-          </div>
-          <span className="text-xs text-[var(--color-muted-foreground)]">A related previous paper, a clean copy or an answer-key document (up to 18 MB). It is read on this server only and used by Verify 1 to cross-check order, wording, options and answers — as evidence, never to replace the question paper.</span>
-        </div>
+        <FileSlot slot="key" step="5." hint="The official answer key, if you have it (a digital key is read for free)." state={slots.key} locked={busy || !!slots.key.done} onPick={(f) => pick("key", f)} onRemove={() => patch("key", EMPTY)} />
+        <FileSlot slot="reference" step="6." hint={`A related paper, a clean copy or an answer-key document (${SUPPORTED_LABEL}, up to ${limits.maxFileMb} MB). Read on this server only and used by Verify 1 as evidence — conflicts are shown, the question paper is never replaced. Old .doc files: save as .docx or PDF first.`} state={slots.reference} locked={busy || !!slots.reference.done} onPick={(f) => pick("reference", f)} onRemove={() => patch("reference", EMPTY)} />
+        <AiConfiguration ai={ai} importerModels={importerModels} canManage={canManage} override={override} setOverride={setOverride} locked={busy} />
         <details className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="op-advanced">
           <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>
           <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">Rarely needed: paper type (single-subject papers) and a paper code when no Previous Year Paper is selected.</p>
           <div className="mt-3">
-            <JobContextFields exams={exams} value={ctx} onChange={(v) => setCtx((c) => ({ ...c, ...v }))} hidePaper />
+            <JobContextFields exams={exams} value={ctx} onChange={(v) => !locked && setCtx((c) => ({ ...c, ...v }))} hidePaper />
           </div>
         </details>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="lg" className="w-full sm:w-auto" disabled={busy || !!missing} onClick={submit} data-testid="op-submit">
+              {busy ? "Working…" : jobId ? "Retry — Submit & Analyze" : "Submit & Analyze"}
+            </Button>
+            {busy && (
+              <Button type="button" variant="outline" onClick={() => abort.current?.abort()} data-testid="op-cancel">
+                Cancel upload
+              </Button>
+            )}
+            {jobId && !busy && (
+              <Button type="button" variant="ghost" onClick={startOver} data-testid="op-start-over">
+                Start over
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="op-submit-hint">
+            {busy ? progress ?? "Working…" : missing ? `To continue: ${missing}` : "Ready. The import is created, the files are uploaded and analyzed (free); the cost is shown for confirmation before any paid AI."}
+          </p>
+          {jobId && !busy && (
+            <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="op-draft-note">
+              This import is already created; a retry continues it (finished uploads are not repeated). Start over begins a new import — the unfinished one stays under Recent imports, where it can be deleted.
+            </p>
+          )}
+        </div>
         {error && (
-          <p className="text-sm text-[var(--color-error)]" role="alert" data-testid="op-upload-error">
-            {error}
+          <p className="text-sm text-[var(--color-error)]" role="alert" data-testid="op-upload-error" data-stage={error.stage}>
+            <span className="font-medium">{STAGE_LABEL[error.stage]} failed: </span>
+            {error.text}
           </p>
         )}
       </CardContent>
@@ -411,12 +531,13 @@ function ModelOverride({ jobId, importerModels, canManage, selection, value, onC
   );
 }
 
-function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels, selection }: { current: CurrentJob; canUse: boolean; canManage: boolean; aiEnabled: boolean; importerModels: string[]; selection: { mode: "auto" | "manual"; model: string | null } }) {
+function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels, selection, initialOverride }: { current: CurrentJob; canUse: boolean; canManage: boolean; aiEnabled: boolean; importerModels: string[]; selection: { mode: "auto" | "manual"; model: string | null }; initialOverride: string }) {
   const router = useRouter();
   const { card: j, verdict: v } = current;
   const [pending, start] = useTransition();
   const [clicked, setClicked] = useState(false);
-  const [override, setOverride] = useState("");
+  // A page-reading override chosen on the import form (AI Configuration) carries over to the confirmation.
+  const [override, setOverride] = useState(initialOverride);
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
   const [expected, setExpected] = useState(String(current.mapping.expectedQuestions ?? current.estimatedQuestions ?? ""));
   const [verifyMode, setVerifyMode] = useState<"risk" | "all">("risk");
@@ -672,6 +793,8 @@ export function OnePageImporter(props: {
   aiEnabled: boolean;
   selection: { mode: "auto" | "manual"; model: string | null };
   importerModels: string[];
+  ai: AiConfigView;
+  initialOverride: string;
   current: CurrentJob | null;
   missingJob: boolean;
   recent: JobCard[];
@@ -681,7 +804,7 @@ export function OnePageImporter(props: {
     <div className="flex flex-col gap-4">
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">AI Question Importer</h1>
-        <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">Upload a question paper, check the analysis, then click Process &amp; Import Questions. Questions enter the Question Bank as Draft through the existing Bulk Import.</p>
+        <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">Fill in the import, click Submit &amp; Analyze, check the analysis and cost, then confirm processing. Questions enter the Question Bank as Draft through the existing Bulk Import.</p>
       </div>
       {props.missingJob && (
         <p className="text-sm text-[var(--color-warning)]" data-testid="op-missing-job">
@@ -689,9 +812,9 @@ export function OnePageImporter(props: {
         </p>
       )}
       {current ? (
-        <CurrentJobPanel current={current} canUse={props.canUse} canManage={props.canManage} aiEnabled={props.aiEnabled} importerModels={props.importerModels} selection={props.selection} />
+        <CurrentJobPanel current={current} canUse={props.canUse} canManage={props.canManage} aiEnabled={props.aiEnabled} importerModels={props.importerModels} selection={props.selection} initialOverride={props.initialOverride} />
       ) : props.canUse ? (
-        <UploadCard exams={props.exams} defaultExamId={props.defaultExamId} limits={props.limits} aiEnabled={props.aiEnabled} />
+        <UploadCard exams={props.exams} defaultExamId={props.defaultExamId} limits={props.limits} ai={props.ai} importerModels={props.importerModels} canManage={props.canManage} />
       ) : (
         <Card>
           <CardContent className="py-4 text-sm text-[var(--color-muted-foreground)]">You can view imports but not start one (Master Admin only).</CardContent>

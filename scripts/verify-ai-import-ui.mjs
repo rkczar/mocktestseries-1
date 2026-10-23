@@ -72,7 +72,7 @@ async function until(fn, timeout = 15000) {
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 /**
  * Starts an import the normal way: the one-page importer (exam preselected, optional details under
- * Advanced options), upload → automatic analysis. Returns the job id from the page URL.
+ * Advanced options), choose the files → Submit & Analyze. Returns the job id from the page URL.
  */
 async function startOnMainPage(page, file, { name, examId, pyqId, year, key, expected } = {}) {
   await page.goto(`${BASE}/admin/ai-importer`);
@@ -80,10 +80,12 @@ async function startOnMainPage(page, file, { name, examId, pyqId, year, key, exp
   // Step 2: the Previous Year Paper is chosen on the main card (its year comes from the paper).
   if (pyqId) await page.selectOption("[data-testid=op-pyq]", pyqId);
   if (await page.locator("[data-testid=op-year]").count()) await page.fill("[data-testid=op-year]", year ?? "2024");
-  if (expected) await page.fill("[data-testid=op-expected]", expected);
+  // The expected count is a required step of the form (it is confirmed again before processing).
+  await page.fill("[data-testid=op-expected]", expected ?? "10");
   if (key) await page.locator("[data-testid=op-key-input]").setInputFiles(path.join(FX, key));
   const input = name ? { name, mimeType: file.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : file.endsWith(".xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf", buffer: readFileSync(path.join(FX, file)) } : path.join(FX, file);
-  await Promise.all([page.waitForURL(/\/admin\/ai-importer\?job=[a-z0-9]+$/, { timeout: 90000 }), page.locator("[data-testid=op-upload-input]").setInputFiles(input)]);
+  await page.locator("[data-testid=op-upload-input]").setInputFiles(input);
+  await Promise.all([page.waitForURL(/\/admin\/ai-importer\?job=[a-z0-9]+$/, { timeout: 90000 }), page.locator("[data-testid=op-submit]").click()]);
   return new URL(page.url()).searchParams.get("job");
 }
 /** Confirm summary → Confirm Cost & Start Processing (expected count required, explicit confirmation). */
@@ -445,7 +447,7 @@ await admin.goto(`${BASE}/admin/ai-importer`);
 const subnav = await admin.locator("[data-testid=ai-importer-subnav] > a").allTextContents();
 check("main navigation is short: Import, Imports, Review Exceptions, Import Settings + More", JSON.stringify(subnav) === JSON.stringify(["Import", "Imports", "Review Exceptions", "Import Settings"]) && (await admin.locator("[data-testid=ai-importer-more]").count()) === 1, subnav);
 const upText = await admin.locator("[data-testid=upload-card]").textContent();
-check("upload area with formats and the real limits", /New import/.test(upText) && /PDF, Word \(DOCX\), JPG, PNG, XLSX or CSV/.test(upText) && /up to 100 MB and 300 pages/.test(upText), upText.slice(0, 200));
+check("upload area with formats and the real limits", /New import/.test(upText) && /PDF, Word \(\.docx\), JPG, PNG, Excel \(\.xlsx\) or CSV/.test(upText) && /up to 100 MB and 300 pages/.test(upText), upText.slice(0, 200));
 check("exam preselected from the last import (no form to fill)", (await admin.locator("[data-testid=op-exam]").inputValue()) === F.examId);
 const opJob = await startOnMainPage(admin, "digital-clean.pdf", { name: `AIUI onepage ${F.suffix}.pdf`, key: "key-digital.pdf" });
 check("upload → automatic analysis on the same page", !!opJob && (await waitFor(admin, "[data-testid=analyzer]", 90000)));
@@ -478,9 +480,9 @@ await db.query(`update "Setting" set value = jsonb_set(value, '{aiEnabled}', 'tr
 // The exam has no year: the upload asks for the paper's year instead of failing every question later.
 await admin.goto(`${BASE}/admin/ai-importer`);
 check("exam without a year → Paper year is asked for on the upload area", (await admin.locator("[data-testid=op-year]").count()) === 1);
+await admin.fill("[data-testid=op-expected]", "3");
 await admin.locator("[data-testid=op-upload-input]").setInputFiles(path.join(FX, "paper.docx"));
-await admin.locator("[data-testid=op-upload-error]").waitFor({ timeout: 10000 });
-check("…upload refused until the year is entered (nothing created)", /paper's year/.test(await admin.locator("[data-testid=op-upload-error]").textContent()) && /\/admin\/ai-importer$/.test(admin.url()));
+check("…Submit stays disabled until the year is entered (nothing created)", (await admin.locator("[data-testid=op-submit]").isDisabled()) && /paper's year/.test(await admin.locator("[data-testid=op-submit-hint]").textContent()) && /\/admin\/ai-importer$/.test(admin.url()));
 // A new paper with its key, defaults untouched (exam preselected, automatic model): one click imports it.
 const newJob = await startOnMainPage(admin, "paper.docx", { name: `AIUI word ${F.suffix}.docx`, key: "key.csv" });
 check("Word paper analyzed on the main page", await waitFor(admin, "[data-testid=analyzer]", 90000));

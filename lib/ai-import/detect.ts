@@ -57,7 +57,10 @@ const expected: Record<AcceptedExtension, DetectedKind> = { pdf: "pdf", png: "pn
 export async function detectFile(full: string, ext: AcceptedExtension): Promise<Detection> {
   const h = await head(full, 4096);
   let kind: DetectedKind | null = null;
-  if (h.subarray(0, 5).toString("latin1") === "%PDF-") kind = "pdf";
+  const pdfAt = h.subarray(0, 1029).indexOf("%PDF-", 0, "latin1");
+  // Readers accept the PDF header after up to 1 KB of leading bytes (some scanners and mail gateways add a
+  // preamble); that is honoured for a file named .pdf only, so no other type is ever re-labelled a PDF.
+  if (pdfAt === 0 || (ext === "pdf" && pdfAt > 0 && pdfAt <= 1024)) kind = "pdf";
   else if (h.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) kind = "png";
   else if (h[0] === 0xff && h[1] === 0xd8 && h[2] === 0xff) kind = "jpeg";
   else if (h.subarray(0, 4).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0]))) {

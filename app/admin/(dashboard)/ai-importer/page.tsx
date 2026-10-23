@@ -4,13 +4,15 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getExamSubjects } from "@/lib/exam-taxonomy";
 import { getImporterSettings } from "@/lib/ai-import/settings";
+import { computeModelPlan } from "@/lib/ai-import/select";
+import { SELECTION_TASKS, SELECTION_TASK_LABELS } from "@/lib/ai-import/config";
 import { jobCards, jobMapping } from "@/lib/ai-import/job-view";
 import { importerSpendSummary } from "@/lib/ai-import/ledger";
 import { jobQuality } from "@/lib/ai-import/summary";
 import { analyzerVerdict } from "@/lib/ai-import/verdict";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { CostEstimate } from "@/lib/ai-import/estimate";
-import { OnePageImporter, type CurrentJob } from "./one-page-importer";
+import { OnePageImporter, type AiConfigView, type CurrentJob } from "./one-page-importer";
 import type { ExamOption } from "./new-import-form";
 
 export const metadata = { title: "AI Question Importer — Mock Test Series.in Admin" };
@@ -24,9 +26,9 @@ export const dynamic = "force-dynamic";
  * eligible questions through the existing Bulk Import as Draft. The page
  * follows the job (?job=…) until its result is shown.
  */
-export default async function AiImporterPage({ searchParams }: { searchParams: Promise<{ job?: string }> }) {
+export default async function AiImporterPage({ searchParams }: { searchParams: Promise<{ job?: string; model?: string }> }) {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="AI Question Importer" />;
-  const { job: jobParam } = await searchParams;
+  const { job: jobParam, model: modelParam } = await searchParams;
   const [canUse, canManage, settings, exams, papers, lastJob] = await Promise.all([
     hasPermission(PERMISSIONS.AI_IMPORTER_USE),
     hasPermission(PERMISSIONS.AI_IMPORTER_MANAGE),
@@ -73,6 +75,15 @@ export default async function AiImporterPage({ searchParams }: { searchParams: P
       };
     }
   }
+  // AI Configuration: the same plan Import Settings shows (stored route snapshot, no provider call on page load).
+  const plan = settings.aiEnabled && !current ? await computeModelPlan(settings, { refresh: false }).catch((e) => (console.error("ai-importer plan error:", e instanceof Error ? e.message : e), null)) : null;
+  const ai: AiConfigView = {
+    aiEnabled: settings.aiEnabled,
+    mode: settings.selection.mode,
+    stages: SELECTION_TASKS.map((task) => ({ task, label: SELECTION_TASK_LABELS[task], model: plan?.tasks[task].model ?? null, reason: plan?.tasks[task].reason ?? (settings.aiEnabled ? "The model plan could not be computed — open Import Settings to check the provider." : "Paid AI is off.") })),
+    problems: plan?.problems ?? [],
+  };
+  const initialOverride = typeof modelParam === "string" && settings.importerModels.includes(modelParam) ? modelParam : "";
   const recent = (await jobCards({ take: 6 }, canManage)).filter((j) => j.id !== current?.card.id).slice(0, 5);
 
   return (
@@ -85,6 +96,8 @@ export default async function AiImporterPage({ searchParams }: { searchParams: P
       aiEnabled={settings.aiEnabled}
       selection={{ mode: settings.selection.mode, model: settings.selection.mode === "manual" ? settings.models.extract : null }}
       importerModels={settings.importerModels}
+      ai={ai}
+      initialOverride={initialOverride}
       current={current}
       missingJob={!!jobParam && !current}
       recent={recent}

@@ -1,11 +1,12 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AiImportJobStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseImportFile } from "@/lib/bulk-import";
 import { getImporterSettings } from "@/lib/ai-import/settings";
+import { CHUNK_BYTES } from "@/lib/ai-import/config";
 import { checkFilename, detectFile } from "@/lib/ai-import/detect";
 import { pageLayout, pdfInfo } from "@/lib/ai-import/pdf";
 import { readDocx } from "@/lib/ai-import/docx";
@@ -26,7 +27,12 @@ import type { ExtractedQuestion } from "@/lib/ai-import/types";
  * the source paper's content is never replaced. Unlinking a reference keeps its file.
  */
 
-/** A request body above nginx's 20 MB limit never arrives; references are sent in one request. */
+/**
+ * A single-request reference (the older multipart route) must stay under nginx's 20 MB request limit. Larger
+ * references — up to the importer's per-file limit, like the question paper — are sent in parts
+ * (startReferenceUpload → putReferenceChunk → completeReferenceUpload), because nginx answers a bigger single
+ * request with its own HTML 413 page before the app ever sees it.
+ */
 export const REFERENCE_MAX_BYTES = 18 * 1024 * 1024;
 
 export interface ReferenceQuestion {
@@ -108,44 +114,124 @@ async function readReference(full: string, kind: string, pages: number, jobId: s
   return { questions, key: questions.length >= 3 && key.length < 3 ? [] : key, textChars: text.length, note };
 }
 
-/** Stores and reads one reference file for an import. */
-export async function addReference(input: { jobId: string; actorId: string; name: string; bytes: Buffer }): Promise<ReferencePaper> {
-  const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId }, select: { status: true } });
+/** The checks every reference passes before any byte is stored (job state, name, size, count). */
+async function checkReference(jobId: string, rawName: string, size: number, maxBytes: number) {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { status: true } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (!OPEN_FOR_REFERENCE.includes(job.status)) throw new ImportJobError("Add a reference paper before processing starts or once it has finished (not while it is running or after cancellation).", 409);
-  const name = checkFilename(input.name);
+  const name = checkFilename(rawName);
   if (!name.ok) throw new ImportJobError(name.reason);
   const settings = await getImporterSettings();
-  const max = Math.min(REFERENCE_MAX_BYTES, settings.limits.maxFileMb * 1024 * 1024);
-  if (!input.bytes.length) throw new ImportJobError("The file is empty.");
-  if (input.bytes.length > max) throw new ImportJobError(`A reference paper can be at most ${Math.floor(max / 1024 / 1024)} MB.`);
-  if ((await listReferences(input.jobId)).length >= 5) throw new ImportJobError("An import holds at most 5 reference papers.");
+  const max = Math.min(maxBytes, settings.limits.maxFileMb * 1024 * 1024);
+  if (!size) throw new ImportJobError("The file is empty.");
+  if (size > max) throw new ImportJobError(`The reference paper is ${(size / 1024 / 1024).toFixed(1)} MB; the limit is ${Math.floor(max / 1024 / 1024)} MB.`, 413);
+  if ((await listReferences(jobId)).length >= 5) throw new ImportJobError("An import holds at most 5 reference papers.");
+  return { ext: name.ext, settings };
+}
+
+/** Stores and reads one reference file for an import (single request, ≤ REFERENCE_MAX_BYTES). */
+export async function addReference(input: { jobId: string; actorId: string; name: string; bytes: Buffer }): Promise<ReferencePaper> {
+  await checkReference(input.jobId, input.name, input.bytes.length, REFERENCE_MAX_BYTES);
   const id = `ref${randomBytes(8).toString("hex")}`;
   const dir = tmpDir(id);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(/* turbopackIgnore: true */ dir, "upload");
   try {
     await writeFile(tmp, input.bytes, { mode: 0o600 });
-    const det = await detectFile(tmp, name.ext);
-    if (!det.ok) throw new ImportJobError(det.reason ?? "The file was refused.");
-    let pageCount: number | null = null;
-    if (det.kind === "pdf") {
-      const info = await pdfInfo(tmp);
-      if (info.encrypted) throw new ImportJobError("The PDF is password-protected or encrypted. Upload an unprotected copy.");
-      if (info.pages < 1) throw new ImportJobError("The PDF has no pages.");
-      if (info.pages > settings.limits.maxPagesPerFile) throw new ImportJobError(`The PDF has ${info.pages} pages; the limit is ${settings.limits.maxPagesPerFile}.`);
-      pageCount = info.pages;
-    } else if (det.kind === "png" || det.kind === "jpeg") pageCount = 1;
-    const kind = det.kind!;
-    const adopted = await adoptFile(tmp, "files", kind === "jpeg" ? "jpg" : name.ext);
-    const read = await readReference(vaultPath(adopted.key), kind, pageCount ?? 1, input.jobId).catch((e) => ({ questions: [], key: [], textChars: 0, note: `The reference could not be read (${e instanceof Error ? e.message.slice(0, 160) : "error"}); it is kept as a file only.` }));
-    const ref: ReferencePaper = { refId: id, name: input.name.trim().slice(0, 200), ext: name.ext, kind, sha256: adopted.sha256, storageKey: adopted.key, bytes: adopted.bytes, pageCount, uploadedAt: new Date().toISOString(), uploadedById: input.actorId, ...read };
-    await logEvent(input.jobId, "REFERENCE_ADDED", `Reference paper “${ref.name}” added (${kind.toUpperCase()}${pageCount ? `, ${pageCount} page${pageCount === 1 ? "" : "s"}` : ""}): ${ref.questions.length} question(s)${ref.key.length ? ` and ${ref.key.length} answer-key entr${ref.key.length === 1 ? "y" : "ies"}` : ""} read locally. Used as supporting evidence by Verify 1; the source paper is never changed by it.${ref.note ? ` ${ref.note}` : ""}`, ref as unknown as Record<string, unknown>, input.actorId);
-    await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_REFERENCE_ADDED", entityType: "AiImportJob", entityId: input.jobId, metadata: { refId: id, name: ref.name, sha256: ref.sha256, bytes: ref.bytes } } });
-    return ref;
+    return await storeReference({ jobId: input.jobId, actorId: input.actorId, name: input.name, refId: id, tmp });
   } finally {
     await removeVaultDir("tmp", id).catch(() => undefined);
   }
+}
+
+/** Detects, vaults, reads and records an assembled reference file (`tmp`); the caller removes `tmp`. */
+async function storeReference(input: { jobId: string; actorId: string; name: string; refId: string; tmp: string }): Promise<ReferencePaper> {
+  const id = input.refId;
+  const tmp = input.tmp;
+  const { ext, settings } = await checkReference(input.jobId, input.name, (await stat(tmp)).size, Number.MAX_SAFE_INTEGER);
+  const det = await detectFile(tmp, ext);
+  if (!det.ok) throw new ImportJobError(det.reason ?? "The file was refused.");
+  let pageCount: number | null = null;
+  if (det.kind === "pdf") {
+    const info = await pdfInfo(tmp);
+    if (info.encrypted) throw new ImportJobError("The PDF is password-protected or encrypted. Upload an unprotected copy.");
+    if (info.pages < 1) throw new ImportJobError("The PDF has no pages.");
+    if (info.pages > settings.limits.maxPagesPerFile) throw new ImportJobError(`The PDF has ${info.pages} pages; the limit is ${settings.limits.maxPagesPerFile}.`);
+    pageCount = info.pages;
+  } else if (det.kind === "png" || det.kind === "jpeg") pageCount = 1;
+  const kind = det.kind!;
+  const adopted = await adoptFile(tmp, "files", kind === "jpeg" ? "jpg" : ext);
+  const read = await readReference(vaultPath(adopted.key), kind, pageCount ?? 1, input.jobId).catch((e) => ({ questions: [], key: [], textChars: 0, note: `The reference could not be read (${e instanceof Error ? e.message.slice(0, 160) : "error"}); it is kept as a file only.` }));
+  const ref: ReferencePaper = { refId: id, name: input.name.trim().slice(0, 200), ext: ext, kind, sha256: adopted.sha256, storageKey: adopted.key, bytes: adopted.bytes, pageCount, uploadedAt: new Date().toISOString(), uploadedById: input.actorId, ...read };
+  await logEvent(input.jobId, "REFERENCE_ADDED", `Reference paper “${ref.name}” added (${kind.toUpperCase()}${pageCount ? `, ${pageCount} page${pageCount === 1 ? "" : "s"}` : ""}): ${ref.questions.length} question(s)${ref.key.length ? ` and ${ref.key.length} answer-key entr${ref.key.length === 1 ? "y" : "ies"}` : ""} read locally. Used as supporting evidence by Verify 1; the source paper is never changed by it.${ref.note ? ` ${ref.note}` : ""}`, ref as unknown as Record<string, unknown>, input.actorId);
+  await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_REFERENCE_ADDED", entityType: "AiImportJob", entityId: input.jobId, metadata: { refId: id, name: ref.name, sha256: ref.sha256, bytes: ref.bytes } } });
+  return ref;
+}
+
+// ---- Chunked reference upload (same parts as the question paper: CHUNK_BYTES each) ----------------------
+
+interface RefUploadManifest {
+  jobId: string;
+  actorId: string;
+  name: string;
+  size: number;
+  chunks: number;
+  createdAt: string;
+}
+
+const manifestPath = (uploadId: string) => path.join(/* turbopackIgnore: true */ tmpDir(uploadId), "manifest.json");
+const partPath = (uploadId: string, i: number) => path.join(/* turbopackIgnore: true */ tmpDir(uploadId), `part-${i}`);
+
+async function readManifest(uploadId: string, actorId: string): Promise<RefUploadManifest> {
+  if (!/^ru[a-f0-9]{16}$/.test(uploadId)) throw new ImportJobError("Unknown reference upload.", 404);
+  const m = (await readFile(manifestPath(uploadId), "utf8").then((s) => JSON.parse(s) as RefUploadManifest).catch(() => null));
+  if (!m) throw new ImportJobError("This reference upload expired or was cancelled — choose the file again.", 404);
+  if (m.actorId !== actorId) throw new ImportJobError("This reference upload belongs to another administrator.", 403);
+  return m;
+}
+
+/** Starts a chunked reference upload after the name/size/job checks (nothing is stored in the vault yet). */
+export async function startReferenceUpload(input: { jobId: string; actorId: string; name: string; size: number }): Promise<{ uploadId: string; chunks: number; chunkBytes: number }> {
+  if (!Number.isSafeInteger(input.size) || input.size < 0) throw new ImportJobError("The file size is missing.");
+  await checkReference(input.jobId, input.name, input.size, Number.MAX_SAFE_INTEGER);
+  const uploadId = `ru${randomBytes(8).toString("hex")}`;
+  const chunks = Math.ceil(input.size / CHUNK_BYTES);
+  await mkdir(tmpDir(uploadId), { recursive: true, mode: 0o700 });
+  const m: RefUploadManifest = { jobId: input.jobId, actorId: input.actorId, name: input.name.trim().slice(0, 200), size: input.size, chunks, createdAt: new Date().toISOString() };
+  await writeFile(manifestPath(uploadId), JSON.stringify(m), { mode: 0o600 });
+  return { uploadId, chunks, chunkBytes: CHUNK_BYTES };
+}
+
+/** Stores one part (idempotent per index: a retried part replaces the earlier copy). */
+export async function putReferenceChunk(input: { uploadId: string; actorId: string; index: number; bytes: Buffer }): Promise<void> {
+  const m = await readManifest(input.uploadId, input.actorId);
+  if (!Number.isInteger(input.index) || input.index < 0 || input.index >= m.chunks) throw new ImportJobError("Invalid part number.");
+  const want = input.index === m.chunks - 1 ? m.size - CHUNK_BYTES * (m.chunks - 1) : CHUNK_BYTES;
+  if (input.bytes.length !== want) throw new ImportJobError(`Part ${input.index + 1} has ${input.bytes.length} bytes; expected ${want}. Upload the file again.`);
+  await writeFile(partPath(input.uploadId, input.index), input.bytes, { mode: 0o600 });
+}
+
+/** Joins the parts, then detects, vaults and reads the reference like a single-request one. Always clears the parts. */
+export async function completeReferenceUpload(input: { uploadId: string; actorId: string }): Promise<ReferencePaper> {
+  const m = await readManifest(input.uploadId, input.actorId);
+  try {
+    const have = new Set((await readdir(tmpDir(input.uploadId))).filter((f) => f.startsWith("part-")));
+    const missing = Array.from({ length: m.chunks }, (_, i) => i).filter((i) => !have.has(`part-${i}`));
+    if (missing.length) throw new ImportJobError(`${missing.length} part(s) of the reference never arrived. Upload the file again.`);
+    const full = path.join(/* turbopackIgnore: true */ tmpDir(input.uploadId), "upload");
+    await writeFile(full, Buffer.alloc(0), { mode: 0o600 });
+    for (let i = 0; i < m.chunks; i++) await appendFile(full, await readFile(partPath(input.uploadId, i)));
+    if ((await stat(full)).size !== m.size) throw new ImportJobError("The assembled reference has the wrong size. Upload the file again.");
+    return await storeReference({ jobId: m.jobId, actorId: input.actorId, name: m.name, refId: `ref${randomBytes(8).toString("hex")}`, tmp: full });
+  } finally {
+    await removeVaultDir("tmp", input.uploadId).catch(() => undefined);
+  }
+}
+
+/** Cancels an unfinished reference upload (its parts are deleted; nothing was vaulted). */
+export async function cancelReferenceUpload(input: { uploadId: string; actorId: string }): Promise<void> {
+  await readManifest(input.uploadId, input.actorId);
+  await removeVaultDir("tmp", input.uploadId);
 }
 
 /** The import's linked reference papers, oldest first (unlinked ones are left out; their files are kept). */

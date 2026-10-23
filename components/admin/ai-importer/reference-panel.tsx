@@ -5,19 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
 import { applyReferenceAnswersAction, unlinkReferenceAction } from "@/app/admin/(dashboard)/ai-importer/actions";
-
-const ACCEPT = ".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.csv";
-
-/** Sends one optional reference paper (read locally on the server, never sent to AI). */
-export async function uploadReference(jobId: string, file: File): Promise<{ ok: true; note: string } | { ok: false; error: string }> {
-  const body = new FormData();
-  body.append("file", file);
-  const r = await fetch(`/api/admin/ai-importer/references/${jobId}`, { method: "POST", body }).catch(() => null);
-  if (!r) return { ok: false, error: "The server could not be reached." };
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) return { ok: false, error: d.error ?? "The reference paper was refused." };
-  return { ok: true, note: `${d.questions} question(s)${d.key ? `, ${d.key} answer-key entries` : ""} read${d.note ? ` — ${d.note}` : ""}` };
-}
+import { ACCEPT, STAGE_LABEL, uploadReferenceFile } from "@/components/admin/ai-importer/upload-client";
 
 export interface ReferenceRow {
   refId: string;
@@ -90,10 +78,10 @@ export function ReferencePanel({ jobId, refs, canUse }: { jobId: string; refs: R
               e.target.value = "";
               if (!f) return;
               setBusy(true);
-              setMsg(null);
-              const r = await uploadReference(jobId, f);
+              setMsg({ ok: true, text: `Uploading “${f.name}”… 0%` });
+              const r = await uploadReferenceFile(jobId, f, (p) => setMsg({ ok: true, text: `Uploading “${f.name}”… ${p}%` }));
               setBusy(false);
-              setMsg(r.ok ? { ok: true, text: `“${f.name}” added: ${r.note}. Run Verify 1 to compare.` } : { ok: false, text: r.error });
+              setMsg(r.ok ? { ok: true, text: `“${f.name}” added: ${r.note}. Run Verify 1 to compare.` } : { ok: false, text: `${STAGE_LABEL[r.stage]} failed — ${f.name}: ${r.error}` });
               if (r.ok) router.refresh();
             }}
             data-testid="reference-input"
