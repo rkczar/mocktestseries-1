@@ -56,14 +56,16 @@ export async function archiveVariantAction(variantId: string, parentQuestionId: 
 
 export async function publishVariantAction(variantId: string, parentQuestionId: string, _prev: VariantActionState, _formData: FormData): Promise<VariantActionState> {
   const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
+  let r: { published: boolean };
   try {
-    await publishVariant(variantId);
+    r = await publishVariant(variantId);
   } catch (error) {
     return { error: describeError(error) };
   }
-  await prisma.auditLog.create({ data: { actorId: session.user.id ?? null, action: "AI_VARIANT_PUBLISHED", entityType: "Question", entityId: variantId, metadata: { parentQuestionId } } });
+  // One audit entry per real publication (a repeated / concurrent click publishes nothing and records nothing).
+  if (r.published) await prisma.auditLog.create({ data: { actorId: session.user.id ?? null, action: "AI_VARIANT_REVIEWED_PUBLISHED", entityType: "Question", entityId: variantId, metadata: { parentQuestionId, reviewedAt: new Date().toISOString() } } });
   revalidate(parentQuestionId);
-  return { success: "Reviewed and published to the Question Bank." };
+  return { success: r.published ? "Reviewed and published to the Question Bank." : "Already published — nothing changed." };
 }
 
 function describeError(error: unknown): string {

@@ -410,29 +410,33 @@ export async function archiveVariant(variantId: string) {
  * Question Bank, after checking its stored content again — question text, exactly four distinct options A–D with
  * exactly one correct, and the source question still published. Refuses if the source already has 5 active variants.
  */
-export async function publishVariant(variantId: string) {
+export async function publishVariant(variantId: string): Promise<{ published: boolean }> {
   const variant = await loadVariant(variantId);
   if (variant.aiGenerationStatus !== AiGenerationStatus.COMPLETED) {
     throw new VariantNotPublishableError("Only a successfully generated variant can be published.");
   }
-  if (variant.status === QuestionStatus.PUBLISHED) return variant;
-  const problem = await publishProblem(variant.id, variant.parentQuestionId!);
-  if (problem) throw new VariantNotPublishableError(`Not published: ${problem}. Fix the variant in the Question Bank or archive it.`);
+  if (variant.status === QuestionStatus.PUBLISHED) return { published: false };
   return prisma.$transaction(async (tx) => {
+    // Serialized per source: a second (double-clicked / concurrent) publish waits here, then finds it already published.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ai-variant:${variant.parentQuestionId}`}))`;
+    const current = await tx.question.findUniqueOrThrow({ where: { id: variantId }, select: { status: true } });
+    if (current.status === QuestionStatus.PUBLISHED) return { published: false };
+    const problem = await publishProblem(tx, variant.id, variant.parentQuestionId!);
+    if (problem) throw new VariantNotPublishableError(`Not published: ${problem}. Fix the variant in the Question Bank or archive it.`);
     const activeCount = await tx.question.count({ where: { parentQuestionId: variant.parentQuestionId, ...ACTIVE_VARIANT_WHERE } });
-    if (variant.status === QuestionStatus.ARCHIVED && activeCount >= MAX_VARIANTS_PER_QUESTION) {
+    if (current.status === QuestionStatus.ARCHIVED && activeCount >= MAX_VARIANTS_PER_QUESTION) {
       throw new MaxVariantsReachedError("This question already has 5 active AI variants.");
     }
-    return tx.question.update({ where: { id: variantId }, data: { status: QuestionStatus.PUBLISHED, reviewRequired: false } });
+    const r = await tx.question.updateMany({ where: { id: variantId, status: { not: QuestionStatus.PUBLISHED } }, data: { status: QuestionStatus.PUBLISHED, reviewRequired: false } });
+    return { published: r.count === 1 };
   });
 }
 
 /** Why a stored variant must not be published (null = it may): the same structure rules as at generation, on what is stored now. */
-async function publishProblem(variantId: string, parentQuestionId: string): Promise<string | null> {
+async function publishProblem(db: Prisma.TransactionClient, variantId: string, parentQuestionId: string): Promise<string | null> {
   const [row, parent] = await Promise.all([
-    prisma.question.findUnique({ where: { id: variantId }, select: { text: true, options: { select: { label: true, text: true, isCorrect: true }, orderBy: { order: "asc" } } } }),
-    prisma.question.findUnique({ where: { id: parentQuestionId }, select: { status: true } }),
+    db.question.findUnique({ where: { id: variantId }, select: { text: true, options: { select: { label: true, text: true, isCorrect: true }, orderBy: { order: "asc" } } } }),
+    db.question.findUnique({ where: { id: parentQuestionId }, select: { status: true } }),
   ]);
   if (!row) return "the variant no longer exists";
   if (parent?.status !== QuestionStatus.PUBLISHED) return "its source question is not published";

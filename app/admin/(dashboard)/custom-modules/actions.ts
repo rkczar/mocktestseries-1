@@ -6,6 +6,7 @@ import { CustomModuleStatus, QuestionDifficulty, QuestionStatus, SelectionMode }
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
+import { publishedQuestionIds } from "@/lib/question-selection";
 
 const customModuleSchema = z.object({
   examId: z.string().min(1, "Select an exam."),
@@ -93,7 +94,10 @@ export async function setCustomModuleStatusAction(moduleId: string, status: Cust
 
 export async function syncCustomModuleQuestionsAction(moduleId: string, formData: FormData) {
   const session = await requirePermission(PERMISSIONS.CUSTOM_MODULES_MANAGE);
-  const questionIds = formData.getAll("questionIds").map(String);
+  const requested = formData.getAll("questionIds").map(String);
+  // Only PUBLISHED questions enter a module (attempts copy the module's list as is): a Draft — e.g. an AI variant
+  // still waiting for review — never reaches students through a hand-picked module.
+  const questionIds = await publishedQuestionIds(requested);
 
   await prisma.$transaction([
     prisma.customModuleQuestion.deleteMany({ where: { customModuleId: moduleId } }),
@@ -108,7 +112,7 @@ export async function syncCustomModuleQuestionsAction(moduleId: string, formData
       action: "CUSTOM_MODULE_QUESTIONS_UPDATED",
       entityType: "CustomModule",
       entityId: moduleId,
-      metadata: { count: questionIds.length },
+      metadata: { count: questionIds.length, skippedNotPublished: requested.length - questionIds.length },
     },
   });
 

@@ -111,6 +111,15 @@ export async function countPublishedQuestions(filters: QuestionSelectionFilters)
   return prisma.question.count({ where: await buildQuestionWhere(filters) });
 }
 
+/**
+ * The subset of `ids` that is PUBLISHED, in the given order. A hand-picked Custom Module takes only these, so a Draft
+ * (an AI variant waiting for review, a question flagged by an import) never reaches students through one.
+ */
+export async function publishedQuestionIds(ids: string[]): Promise<string[]> {
+  const ok = new Set((await prisma.question.findMany({ where: { id: { in: ids }, status: QuestionStatus.PUBLISHED }, select: { id: true } })).map((q) => q.id));
+  return ids.filter((id) => ok.has(id));
+}
+
 /** True if the count needed is more than what is PUBLISHED and in scope. */
 export async function hasEnoughQuestions(request: QuestionSelectionRequest): Promise<boolean> {
   return (await countPublishedQuestions(request)) >= request.count;

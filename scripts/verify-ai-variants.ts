@@ -77,7 +77,7 @@ async function part2() {
   console.log("\n--- Part 2: ensureQuestionVariants on a disposable fixture exam ---");
   const { prisma } = await import("@/lib/prisma");
   const { ensureQuestionVariants, getActiveVariants, archiveVariant, publishVariant, MAX_VARIANTS_PER_QUESTION } = await import("@/lib/ai-variant");
-  const { countPublishedQuestions } = await import("@/lib/question-selection");
+  const { countPublishedQuestions, selectPublishedQuestions, publishedQuestionIds } = await import("@/lib/question-selection");
   type Gen = NonNullable<NonNullable<Parameters<typeof ensureQuestionVariants>[1]>["generate"]>;
 
   const suffix = Date.now().toString(36).toUpperCase();
@@ -219,7 +219,17 @@ async function part2() {
       sourceRefused = true;
     }
     check("T11 a variant whose source is no longer published is not published", sourceRefused);
+    // Draft leak checks: test generation (Subject Test / Custom Module selection) and hand-picked Custom Modules.
+    const drafts = (await prisma.question.findMany({ where: { examId: exam.id, status: "DRAFT", parentQuestionId: { not: null } }, select: { id: true } })).map((d) => d.id);
+    const picked = await selectPublishedQuestions({ examId: exam.id, count: await countPublishedQuestions({ examId: exam.id }) });
+    check("T12 test generation never selects a draft variant", drafts.length > 0 && picked.questions.every((x) => !drafts.includes(x.id)));
+    check("T12 a hand-picked Custom Module keeps only published questions (drafts dropped)", (await publishedQuestionIds([...drafts, rows11[1].id])).join() === rows11[1].id);
     await prisma.question.update({ where: { id: s11.id }, data: { status: "PUBLISHED" } });
+    // Double / concurrent publish of the same draft: exactly one publication.
+    await prisma.question.update({ where: { id: rows11[2].id }, data: { status: "DRAFT" } });
+    const both = await Promise.all([publishVariant(rows11[2].id), publishVariant(rows11[2].id)]);
+    check("T13 two concurrent publishes of one variant → published once (the other changes nothing)", both.filter((x) => x.published).length === 1 && (await prisma.question.findUniqueOrThrow({ where: { id: rows11[2].id } })).status === "PUBLISHED");
+    check("T13 publishing an already published variant changes nothing", !(await publishVariant(rows11[2].id)).published);
     let variantSourceRefused = false;
     try {
       await ensureQuestionVariants(rows1[0].id, { target: 1, generate: scripted([[DISTINCT[5]]]) });

@@ -525,7 +525,7 @@ async function main() {
       await prisma.$disconnect();
       return;
     }
-    if (profilesBefore) await prisma.setting.update({ where: { key: FORMAT_PROFILES_KEY }, data: { value: profilesBefore.value as Prisma.InputJsonValue } }).catch(() => undefined);
+    if (profilesBefore) await prisma.setting.upsert({ where: { key: FORMAT_PROFILES_KEY }, update: { value: profilesBefore.value as Prisma.InputJsonValue }, create: { key: FORMAT_PROFILES_KEY, value: profilesBefore.value as Prisma.InputJsonValue } }).catch(() => undefined);
     else await prisma.setting.deleteMany({ where: { key: FORMAT_PROFILES_KEY } }).catch(() => undefined);
     if (stored.length) {
       const runs = (await prisma.aiImportQuestion.findMany({ where: { questionId: { in: stored } }, select: { bulkImportRunId: true } })).map((x) => x.bulkImportRunId).filter((x): x is string => !!x);
