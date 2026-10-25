@@ -72,6 +72,8 @@ try {
   check("motion skills listed (with Builds on …)", (await page.locator("[data-testid=motion-skills] li").count()) >= 16 && (await page.getByTestId("motion-skills").textContent()).includes("Builds on"));
   await page.screenshot({ path: `${SHOTS}/m01-dashboard.png`, fullPage: true });
   await page.goto(`${BASE}/admin/video-studio/motion/styles`);
+  // Previews mount after hydration (they need the page origin for their CSP).
+  await page.waitForFunction(() => document.querySelectorAll("[data-testid=motion-preview]").length >= 18, null, { timeout: 15000 }).catch(() => undefined);
   check("style library: 6 styles × 3 live previews", (await page.locator("[data-style]").count()) === 6 && (await page.getByTestId("motion-preview").count()) === 18);
   const f0 = await (await page.getByTestId("motion-preview").first().elementHandle()).contentFrame();
   await f0.waitForFunction(() => document.fonts.status === "loaded", null, { timeout: 15000 });

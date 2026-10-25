@@ -95,9 +95,15 @@ export function motionFrameDocument(frame: MotionFrameInput, o: MotionDocOptions
   // Bottom of the safe zone, from the edge up: brand line, caption band, then the content box.
   const brandH = o.brand.showBranding ? Math.round(52 * u) : 0;
   const capBottom = z.bottom + brandH;
-  // The calendar sits at the top of the safe zone; content starts below it.
-  const box = { top: z.top + (style.layout === "calendar" ? Math.round(210 * u) : 0), left: z.side, right: z.side, bottom: capBottom + capH + Math.round(24 * u) };
-  const big = Math.round((graphemeCount(frame.onScreen) > 34 ? 70 : graphemeCount(frame.onScreen) > 22 ? 84 : 100) * u);
+  // Layout chrome at the top of the safe zone (calendar, level HUD, case-file header); content starts below it.
+  const chromeTop = style.layout === "calendar" ? Math.round(210 * u) : style.layout === "levels" || style.layout === "case" ? Math.round(84 * u) : 0;
+  // The case file's progress track sits just above the captions: keep content clear of it.
+  const chromeBottom = style.layout === "case" ? Math.round(36 * u) : 0;
+  const box = { top: z.top + chromeTop, left: z.side, right: z.side, bottom: capBottom + capH + Math.round(24 * u) + chromeBottom };
+  // Landscape question frames (stem + options + answer) use a compact scale so they fit the shorter safe zone.
+  const compact = !vertical && v.type === "question";
+  const k = compact ? 0.78 : 1;
+  const big = Math.round((compact ? 64 : graphemeCount(frame.onScreen) > 34 ? 70 : graphemeCount(frame.onScreen) > 22 ? 84 : 100) * u);
   const mainMotion = { push_in: "popIn", slide_up: "riseIn", pop: "popIn", draw: "fadeIn", count: "popIn", stagger: "fadeIn", pan: "fadeIn", flip: "flipIn", ken_burns: "fadeIn" }[v.motion];
 
   // ---- the visual (inside the content box) ----
@@ -217,7 +223,7 @@ export function motionFrameDocument(frame: MotionFrameInput, o: MotionDocOptions
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{width:${W}px;height:${H}px;overflow:hidden}
 body{position:relative;background:${cssVal(p.background)};color:${cssVal(p.text)};font-family:MTSLatin,${dev},MTSFallback;font-weight:500;-webkit-font-smoothing:antialiased}
-.content{position:absolute;top:${box.top}px;left:${box.left}px;right:${box.right}px;bottom:${box.bottom}px;display:flex;flex-direction:column;justify-content:center;gap:${Math.round(34 * u)}px${v.motion === "push_in" ? `;animation:push ${s2(dur)} linear both;transform-origin:50% 45%` : ""}}
+.content{position:absolute;top:${box.top}px;left:${box.left}px;right:${box.right}px;bottom:${box.bottom}px;display:flex;flex-direction:column;justify-content:center;gap:${Math.round(34 * u * k * k)}px${v.motion === "push_in" ? `;animation:push ${s2(dur)} linear both;transform-origin:50% 45%` : ""}}
 h1.main{font-weight:700;font-size:${big}px;line-height:1.22;letter-spacing:-.01em;animation:${mainMotion} .7s cubic-bezier(.2,.8,.2,1) .05s both}
 mark{background:transparent;color:inherit;padding:0 .08em;border-radius:.12em;${style.highlight === "underline" ? `background-image:linear-gradient(${cssVal(p.highlight)},${cssVal(p.highlight)});background-repeat:no-repeat;background-position:0 92%;background-size:0 .14em;` : `background-image:linear-gradient(${cssVal(p.highlight)},${cssVal(p.highlight)});background-repeat:no-repeat;background-position:0 60%;background-size:0 ${style.highlight === "box" ? "100%" : "62%"};`}animation:mark .4s ease-out var(--h) both;color:${style.highlight === "box" ? cssVal(p.highlightText) : "inherit"}}
 .in{animation:${v.motion === "pop" || v.motion === "count" ? "popIn" : v.motion === "flip" ? "flipIn" : "riseIn"} .55s cubic-bezier(.2,.8,.2,1) var(--d) both}
@@ -239,11 +245,11 @@ mark{background:transparent;color:inherit;padding:0 .08em;border-radius:.12em;${
 .cmp{display:grid;grid-template-columns:1fr auto 1fr;gap:${Math.round(20 * u)}px;align-items:center}
 .cmp div{padding:${Math.round(30 * u)}px;border-radius:${Math.round(22 * u)}px;background:${cssVal(p.surface)};border:${Math.round(3 * u)}px solid ${cssVal(p.line)};font-size:${Math.round(44 * u)}px;font-weight:700;text-align:center}
 .cmp b{font-size:${Math.round(40 * u)}px;color:${cssVal(p.muted)}}
-.q .stem{font-size:${Math.round(44 * u)}px;font-weight:700;line-height:1.4}
-.q ul{list-style:none;display:flex;flex-direction:column;gap:${Math.round(14 * u)}px;margin-top:${Math.round(18 * u)}px}
-.q li{display:flex;gap:${Math.round(18 * u)}px;padding:${Math.round(18 * u)}px ${Math.round(24 * u)}px;border-radius:${Math.round(18 * u)}px;background:${cssVal(p.surface)};border:${Math.round(3 * u)}px solid ${cssVal(p.line)};font-size:${Math.round(38 * u)}px}
+.q .stem{font-size:${Math.round(44 * u * k)}px;font-weight:700;line-height:1.4}
+.q ul{list-style:none;display:flex;flex-direction:column;gap:${Math.round(14 * u * k)}px;margin-top:${Math.round(18 * u * k)}px}
+.q li{display:flex;gap:${Math.round(18 * u)}px;padding:${Math.round(18 * u * k * k)}px ${Math.round(24 * u)}px;border-radius:${Math.round(18 * u)}px;background:${cssVal(p.surface)};border:${Math.round(3 * u)}px solid ${cssVal(p.line)};font-size:${Math.round(38 * u * k)}px}
 .q li.ok{animation:riseIn .55s ease-out var(--d) both,ok .45s ease-out var(--r) both}
-.ans{font-size:${Math.round(40 * u)}px;font-weight:700;margin-top:${Math.round(14 * u)}px;opacity:0;animation:fadeIn .4s ease-out var(--r) both}
+.ans{font-size:${Math.round(40 * u * k)}px;font-weight:700;margin-top:${Math.round(14 * u * k)}px;opacity:0;animation:fadeIn .4s ease-out var(--r) both}
 .cta{font-size:${Math.round(64 * u)}px;font-weight:700;padding:${Math.round(26 * u)}px ${Math.round(36 * u)}px;border-radius:${Math.round(24 * u)}px;background:${cssVal(p.highlight)};color:${cssVal(p.highlightText)};align-self:flex-start}
 .pic{border-radius:${Math.round(24 * u)}px;overflow:hidden;max-height:${Math.round(H * 0.3)}px}
 .pic img{width:100%;height:100%;object-fit:cover;display:block}
