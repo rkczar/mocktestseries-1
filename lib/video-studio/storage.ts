@@ -88,7 +88,8 @@ export async function dirBytes(dir: string): Promise<number> {
     const p = path.join(/* turbopackIgnore: true */ dir, e.name);
     if (e.isSymbolicLink()) continue;
     if (e.isDirectory()) total += await dirBytes(p);
-    else if (e.isFile()) total += (await lstat(p)).size;
+    // A file removed meanwhile (the worker's cleanup, a render clearing its frames) counts as 0, not as an error.
+    else if (e.isFile()) total += (await lstat(p).catch((err: NodeJS.ErrnoException) => (err.code === "ENOENT" ? { size: 0 } : Promise.reject(err)))).size;
   }
   return total;
 }

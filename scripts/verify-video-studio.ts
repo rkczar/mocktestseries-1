@@ -480,6 +480,16 @@ async function main() {
     assert.equal(out.find((c) => c.jobId === "capped-draft")!.abandon, true);
     assert.match(out.find((c) => c.jobId === "capped-running")!.reason, /maximum retention/);
   });
+  await check("concurrent cleanup: two runCleanup calls at once both succeed (files vanishing mid-count are not errors)", async () => {
+    const ids = ["cleanuprace00000000a1", "cleanuprace00000000b2"];
+    for (const id of ids) {
+      const dir = await storage.ensureJobDir(id);
+      await mkdir(path.join(dir, "render/frames"), { recursive: true });
+      for (let i = 0; i < 400; i++) await writeFile(path.join(dir, `render/frames/f${i}.jpg`), "x".repeat(64));
+    }
+    const r = await Promise.allSettled([jobs.runCleanup(null), jobs.runCleanup(null), jobs.runCleanup(null)]);
+    assert.ok(r.every((x) => x.status === "fulfilled"), JSON.stringify(r.filter((x) => x.status === "rejected").map((x) => String((x as PromiseRejectedResult).reason).slice(0, 120))));
+  });
   await check("settings: retention values are clamped (failed ≤ 14 days, hard cap 1–30 days; never unlimited)", () => {
     const s = vsettings.parseVideoSettings({ failedRetentionHours: 99999, maxRetentionDays: 0 });
     assert.equal(s.failedRetentionHours, 24 * 14);

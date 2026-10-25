@@ -137,7 +137,10 @@ try {
   await page.goto(`${BASE}/admin/video-studio/settings`);
   await page.getByTestId("run-cleanup").click();
   await page.getByTestId("settings-msg").waitFor({ timeout: 30000 });
-  check("cleanup runs from Settings", (await page.getByTestId("settings-msg").textContent()).startsWith("Cleanup done"));
+  const cleanupMsg = await page.getByTestId("settings-msg").textContent();
+  check("cleanup runs from Settings", cleanupMsg.startsWith("Cleanup done"), cleanupMsg);
+  // Precondition: no render worker. (Confirming a job above makes the server start the worker, which writes a fresh heartbeat.)
+  sql(`DELETE FROM "Setting" WHERE key='video.worker'`);
   await page.goto(`${BASE}/admin/video-studio/editor`);
   check("AI Video Editor states it is not available yet (no fake upload)", (await page.getByTestId("editor-unavailable").count()) === 1 && (await page.locator("input[type=file]").count()) === 0);
 
