@@ -421,6 +421,32 @@ async function replaceModel(input: AiCallInput, plan: ModelPlan, choice: TaskCho
   return persistReplacement(input.jobId, sel, failed, choice, alt, why, pricier);
 }
 
+/**
+ * How much more one fallback request may cost than the job's model without "more expensive fallbacks" switched on:
+ * at most 50 % or ₹0.10 more per request (whichever is larger) — 2026-10-24: a ₹0.05 fallback was refused for being a
+ * fraction of a paisa above a ₹0.05 model, leaving 17 questions unclassified.
+ */
+export const FALLBACK_SLACK = { ratio: 1.5, inr: 0.1 } as const;
+
+/**
+ * Whether a slightly more expensive fallback may be used: within FALLBACK_SLACK of the job's model, within the
+ * per-request limit, and within what is left of the job's confirmed maximum (spent + in flight + this request).
+ * The reservation before the request checks all of it again (key reserve included); this only decides whether to try.
+ */
+export async function fallbackAllowance(jobId: string, primaryMaxInr: number | null, altMaxInr: number | null, settings: ImporterSettings): Promise<{ ok: boolean; reason: string }> {
+  if (altMaxInr === null || primaryMaxInr === null) return { ok: false, reason: "its price is unknown" };
+  const slack = Math.max(primaryMaxInr * FALLBACK_SLACK.ratio, primaryMaxInr + FALLBACK_SLACK.inr);
+  if (altMaxInr > slack + 1e-9) return { ok: false, reason: `more than slightly more expensive (allowed up to ${formatInr(slack)} without the setting)` };
+  const cap = Math.min(settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
+  if (altMaxInr > cap + 1e-9) return { ok: false, reason: `above the per-request limit of ${formatInr(cap)}` };
+  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { budgetInr: true, spentInr: true } });
+  if (!job) return { ok: false, reason: "the import no longer exists" };
+  const inFlight = await prisma.$queryRaw<{ v: number }[]>`SELECT COALESCE(SUM("reservedInr"), 0)::float8 AS v FROM "AiBudgetReservation" WHERE "status" = 'RESERVED' AND "requestKey" LIKE ${`qi:${jobId}:%`}`;
+  const left = job.budgetInr - job.spentInr - (inFlight[0]?.v ?? 0);
+  if (altMaxInr > left + 0.005) return { ok: false, reason: `only ${formatInr(Math.max(0, left))} is left of this import's confirmed maximum` };
+  return { ok: true, reason: "" };
+}
+
 /** Makes `alt` the job's model for `sel` from now on (recorded as MODEL_REPLACED). */
 async function persistReplacement(jobId: string, sel: SelectionTask, failed: string, choice: TaskChoice, alt: TaskChoice, why: string, pricier: boolean, unusable = false): Promise<TaskChoice> {
   const replaced: TaskChoice = { ...alt, replaced: { from: failed, at: new Date().toISOString(), why: why.slice(0, 200) } };
@@ -508,8 +534,9 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   const feature = importerFeature(input.task);
 
   let lastError: OpenRouterError | null = null;
-  // One attempt; at most ONE retry, only when enabled and only after a transient error — never a loop, never after a timeout.
-  const attempts = input.settings.budget.retryTransient ? 2 : 1;
+  // One attempt; at most ONE retry, only after a transient error (any, when enabled; a dropped connection —
+  // "terminated" — always) — never a loop, never after a timeout.
+  const attempts = 2;
   let replacements = 0;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const requestCap = Math.min(input.settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
@@ -530,9 +557,10 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         maxTokens: input.maxOutputTokens,
         temperature: 0,
         // A reasoning model can spend the whole output limit thinking and return no answer (seen 2026-10-20:
-        // 8,000 tokens, empty text). Low effort keeps room for the answer; sent only when every route of the
-        // model accepts the parameter (requests use require_parameters) and no OpenRouter-side fallback is listed.
-        ...(reasoningRoutes && !choice.fallbacks.length ? { reasoning: { effort: "low" as const, exclude: true } } : {}),
+        // 8,000 tokens, empty text). Low effort keeps room for the answer; sent whenever a route of the model accepts
+        // the parameter (requests use require_parameters, so only such routes are used) — also when fallbacks are
+        // configured (2026-10-25: Verify 2 had a fallback, so the bound was left out and 12 reads were cut off).
+        ...(reasoningRoutes ? { reasoning: { effort: "low" as const, exclude: true } } : {}),
         provider: {
           // The highest prompt / completion price the plan was confirmed with: no route above it is used.
           max_price: { prompt: cost.price.prompt * 1e6 * PRICE_MARGIN, completion: cost.price.completion * 1e6 * PRICE_MARGIN },
@@ -591,11 +619,15 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         continue;
       }
       if (!TRANSIENT_OPENROUTER_ERRORS.includes(e.category)) break;
+      if (!input.settings.budget.retryTransient && !DROPPED_CONNECTION.test(e.message)) break;
     }
   }
   const kind = kindOfCategory(lastError!.category, lastError!.message);
   throw new ImporterAiFailure(failureMessage(kind, `OpenRouter failed: ${describeCategory(lastError!.category)}${lastError!.message !== describeCategory(lastError!.category) ? ` (${sanitize(lastError!.message).slice(0, 160)})` : ""}`), kind, choice.model);
 }
+
+/** A connection the provider dropped mid-request (2026-10-23: "OpenRouter returned an error. (terminated)"): retried once. */
+export const DROPPED_CONNECTION = /\bterminated\b|ECONNRESET|socket hang up|other side closed/i;
 
 /** Failures after which the same request is sent once more to a different model (the answer, not the request, was unusable). */
 const SWITCH_KINDS: FailureKind[] = ["model_output", "image_unsupported"];
@@ -616,10 +648,21 @@ export async function outputFallback(input: AiCallInput, plan: ModelPlan, failed
   const choice = plan.tasks[sel];
   const other = sel === "verify" ? plan.tasks.extract.model : sel === "extract" ? plan.tasks.verify.model : null;
   const fresh = await computeModelPlan(input.settings, { refresh: false, substitute: true, jobId: input.jobId }, { [sel]: [failed, ...(other ? [other] : [])] });
-  const alt = fresh.tasks[sel];
+  let alt = fresh.tasks[sel];
   if (!alt.model || alt.model === failed || alt.model === other) return { alt: null, reason: `no other approved model is suitable (${alt.reason.slice(0, 200)})`, pricier: false };
+  // A model of ANOTHER family is preferred (the same family tends to fail the same way, e.g. malformed JSON): the
+  // cheapest eligible one within the same price allowance, else the cheapest suitable model as before.
+  const family = (id: string) => id.split("/")[0];
+  const cross = fresh.tasks[sel].candidates.find((c) => c.eligible && c.id !== failed && c.id !== other && family(c.id) !== family(failed));
+  if (cross && family(alt.model) === family(failed) && (cross.maxInr ?? Infinity) <= (alt.maxInr ?? Infinity) * FALLBACK_SLACK.ratio + 1e-9) {
+    const priced = await computeModelPlan({ ...input.settings, selection: { ...input.settings.selection, mode: "auto" } }, { refresh: false, jobId: input.jobId }, { [sel]: fresh.tasks[sel].candidates.filter((c) => c.id !== cross.id).map((c) => c.id) });
+    if (priced.tasks[sel].model === cross.id) alt = priced.tasks[sel];
+  }
   const pricier = (alt.maxInr ?? Infinity) > (choice.maxInr ?? 0) + 1e-9;
-  if (pricier && !input.settings.budget.allowPricierFallback) return { alt: null, reason: `the next suitable model, ${alt.model}, could cost up to ${formatInr(alt.maxInr)} per request instead of ${formatInr(choice.maxInr)}, and more expensive fallbacks are OFF in Import Settings`, pricier };
+  if (pricier && !input.settings.budget.allowPricierFallback) {
+    const allowance = await fallbackAllowance(input.jobId, choice.maxInr, alt.maxInr, input.settings);
+    if (!allowance.ok) return { alt: null, reason: `the next suitable model, ${alt.model}, could cost up to ${formatInr(alt.maxInr)} per request instead of ${formatInr(choice.maxInr)}; ${allowance.reason}, and more expensive fallbacks are OFF in Import Settings`, pricier };
+  }
   return { alt, reason: alt.reason, pricier };
 }
 

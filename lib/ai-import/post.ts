@@ -9,7 +9,7 @@ import { importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailur
 import { failureMessage } from "@/lib/ai-import/failure";
 import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { logEvent } from "@/lib/ai-import/jobs";
-import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, classifySchema, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
+import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
 import { SUBJECT_MIN_CONFIDENCE, SUBJECT_MISMATCH_CONFIDENCE, classifyUserText, decideClassification, taxonomyCodes, type ClassifyDecision } from "@/lib/ai-import/taxonomy-check";
 import { classifyPaper, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
 import { classifierContext } from "@/lib/ai-import/taxonomy-memory";
@@ -37,14 +37,47 @@ export function effective(q: Pick<AiImportQuestion, "data" | "editedData">): Ext
 export const IMPORTABLE = new Set(["SINGLE_CORRECT", "MULTIPLE_CORRECT", "MATCH_THE_FOLLOWING", "ASSERTION_REASON"]);
 
 const WITHDRAWN = /^(bonus|dropped|deleted|withdrawn|\*|x)$/i;
-/** A question that refers to a figure: a figure word, not just "given below" (which usually introduces a list or code table, seen 2026-10-20). */
-export const MENTIONS_FIGURE = /\b(figure|fig\.|diagram|graph|image|picture|photograph|radiograph|x-ray|circuit shown|structure shown)\b/i;
+/** Words for a visual a question can point at (a bare mention is not a pointer: "seen on chest X-ray" is text). */
+const VISUAL = String.raw`(?:figure|fig\.?|diagram|graph|image|picture|photo(?:graph|micrograph)?|radiograph|x-ray|xray|ecg|ekg|chart|illustration|circuit|structure|specimen)`;
+/**
+ * A question that points at a visual that should be on the page: "in the figure", "the X-ray shown", "the following
+ * diagram", "Figure 2", "study the graph". A bare figure word is NOT a pointer (2026-10-25: "Unusual bulge on chest
+ * X-ray", a text-only statement, was blocked as "Essential image missing"), nor is "given below" alone (which usually
+ * introduces a list or code table, seen 2026-10-20).
+ */
+export const MENTIONS_FIGURE = new RegExp(
+  [
+    String.raw`\b(?:in|see|study|observe|examine|refer to|look at|based on|shown in|given in|marked in|labell?ed in)\s+(?:the|this|these)\s+(?:(?:given|following|above|below|adjacent|accompanying)\s+)?${VISUAL}\b`,
+    String.raw`\b(?:the|this|following|given|above|below|accompanying|adjacent)\s+${VISUAL}\s+(?:shown|given|below|above|depicted|illustrated|displayed|provided|here)\b`,
+    String.raw`\b(?:following|given|above|below|accompanying|adjacent)\s+${VISUAL}\b`,
+    String.raw`\b${VISUAL}\s+(?:shown|depicted|illustrated|displayed)\b`,
+    String.raw`\b(?:fig\.?|figure)\s*(?:no\.?\s*)?\d`,
+  ].join("|"),
+  "i"
+);
+
+/**
+ * Whether the question's source could hold an image the extraction did not capture (null facts → assume yes, the safe
+ * side): a Word / spreadsheet file only when it embeds images; a PDF when one of the question's pages has an image or is
+ * scanned; a photo / scan always.
+ */
+export function sourceMayHoldImage(detected: unknown, pages: number[]): boolean {
+  const f = (detected as { facts?: { kind?: string; embeddedImages?: number; pagesDetail?: { page: number; images: number; kind: string }[] } } | null)?.facts;
+  if (!f || !f.kind) return true;
+  const kind = f.kind.toUpperCase();
+  if (kind === "DOCX" || kind === "XLSX" || kind === "CSV") return (f.embeddedImages ?? 0) > 0;
+  if (kind === "PDF") {
+    const detail = (f.pagesDetail ?? []).filter((p) => !pages.length || pages.includes(p.page));
+    return !detail.length || detail.some((p) => p.images > 0 || p.kind === "SCANNED");
+  }
+  return true;
+}
 
 /**
  * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
  * approved — and an uncertain image placement is cleared only by confirming each figure's placement.
  */
-export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES"];
+export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN"];
 
 interface Check {
   stage: number;
@@ -135,6 +168,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const questions = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id }, orderBy: [{ fileId: "asc" }, { orderIndex: "asc" }], include: { figures: true } });
   const open = questions.filter((q) => OPEN.includes(q.status));
   if (!open.length) return;
+  const fileFacts = new Map((await prisma.aiImportFile.findMany({ where: { jobId: job.id }, select: { id: true, detected: true } })).map((f) => [f.id, f.detected]));
 
   // ---- Answer keys ----
   const keyRowsRaw = await prisma.aiImportKeyEntry.findMany({ where: { jobId: job.id }, orderBy: [{ keyFileId: "asc" }, { createdAt: "asc" }, { id: "asc" }] });
@@ -276,17 +310,18 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     // counted as invalid, never guessed, and a result whose key words are not in its question is not used.
     const codes = taxonomyCodes(subjectsAllowed);
     const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, misaligned: 0, unsure: 0, missing: 0, errors: [] as string[], models: new Set<string>() };
-    for (let i = 0; i < toAi.length; i += 20) {
+    for (let i = 0; i < toAi.length; i += CLASSIFY_BATCH) {
       if (!(await ctx.stillRunning())) return;
-      const batch = toAi.slice(i, i + 20);
+      const batch = toAi.slice(i, i + CLASSIFY_BATCH);
       const qCode = new Map(batch.map((q, k) => [`Q${k + 1}`, q]));
       const text = classifyUserText(codes.list, batch.map((q) => effective(q)));
       tally.batches++;
       try {
         const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false }, (out) => {
-          const parsed = classifySchema.safeParse(parseModelJson(out));
-          if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", `the classification answer did not match the expected format (${parsed.error.issues[0]?.path.join(/* turbopackIgnore: true */ ".") ?? "?"})`), "model_output");
-          return parsed.data;
+          // Item by item: a malformed entry only leaves its own question without a result.
+          const parsed = classifyAnswerOf(parseModelJson(out));
+          if (!parsed) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format (no usable result list)"), "model_output");
+          return parsed;
         });
         tally.models.add(r.model);
         for (const res of value.results) {
@@ -391,10 +426,14 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       const reasons = [...new Set(uncertainFig.map((f) => (f.box as { reason?: string } | null)?.reason).filter((r): r is string => !!r))];
       add("IMAGE_MAPPING_UNCERTAIN", `${uncertainFig.length} figure(s) need their question/option confirmed.${reasons.length ? ` ${reasons.join(" ")}` : ""}`.slice(0, 600));
     }
-    const mentionsFigure = MENTIONS_FIGURE.test(e.stem);
-    if (mentionsFigure && figs.length === 0) add("IMAGE_MISSING", "The question refers to a figure, but no figure was found.");
+    // Only an explicit pointer to a visual counts; it blocks only when the source could hold an uncaptured image —
+    // a source without any embedded image gets a reviewable flag (an administrator decides), never a blocking one.
+    const pointsAtFigure = MENTIONS_FIGURE.test(e.stem) && figs.length === 0;
+    const mentionsFigure = pointsAtFigure && sourceMayHoldImage(fileFacts.get(q.fileId), q.pages);
+    if (mentionsFigure) add("IMAGE_MISSING", "The question refers to a figure, but no figure was found.");
+    else if (pointsAtFigure) add("IMAGE_REFERENCE_UNCERTAIN", "The question text points at a figure, but its source file has no embedded image. Check whether an image is really needed: upload it, or approve the question as text-only.");
     for (const o of e.options) if (!o.text.trim() && !figs.some((f) => f.owner === "OPTION" && f.optionLabel === o.label && f.mappingStatus !== "MISSING")) add("OPTIONS_INCOMPLETE", `Option ${o.label} has neither text nor an image.`);
-    checks.push({ stage: 1, name: "Figures", passed: !missingFig.length && !uncertainFig.length && !(mentionsFigure && !figs.length), severity: missingFig.length || (mentionsFigure && !figs.length) ? "ERROR" : uncertainFig.length ? "WARNING" : "INFO", method: "DETERMINISTIC", detail: figs.length ? figs.map((f) => `${f.owner === "OPTION" ? `option ${f.optionLabel}` : f.owner.toLowerCase()} (${f.source.toLowerCase()}, ${f.mappingStatus.toLowerCase()})`).join(", ") : mentionsFigure ? "Refers to a figure; none found." : "No figures." });
+    checks.push({ stage: 1, name: "Figures", passed: !missingFig.length && !uncertainFig.length && !pointsAtFigure, severity: missingFig.length || mentionsFigure ? "ERROR" : uncertainFig.length || pointsAtFigure ? "WARNING" : "INFO", method: "DETERMINISTIC", detail: figs.length ? figs.map((f) => `${f.owner === "OPTION" ? `option ${f.optionLabel}` : f.owner.toLowerCase()} (${f.source.toLowerCase()}, ${f.mappingStatus.toLowerCase()})`).join(", ") : mentionsFigure ? "Refers to a figure; none found." : pointsAtFigure ? "Points at a figure; the source file has no embedded image (reviewable)." : "No figures." });
 
     // Stage 2 — structure & subject
     let type = e.type;

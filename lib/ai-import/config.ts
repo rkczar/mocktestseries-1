@@ -369,6 +369,7 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   UNREADABLE_TEXT: { label: "Unreadable text", blocking: false, publishBlocking: true },
   IMAGE_MAPPING_UNCERTAIN: { label: "Image mapping uncertain", blocking: true, publishBlocking: true },
   IMAGE_MISSING: { label: "Essential image missing", blocking: true, publishBlocking: true },
+  IMAGE_REFERENCE_UNCERTAIN: { label: "Text points at a figure (source has no image)", blocking: false, publishBlocking: true },
   UNSUPPORTED_TYPE: { label: "Not importable (type not supported)", blocking: true, publishBlocking: true },
   TOPIC_UNCERTAIN: { label: "Topic missing or uncertain", blocking: false, publishBlocking: true },
   SUBJECT_UNKNOWN: { label: "Subject unknown", blocking: true, publishBlocking: true },

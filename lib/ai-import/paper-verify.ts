@@ -21,9 +21,9 @@ import { readDocx } from "@/lib/ai-import/docx";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
 import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
 import { assignSections, ensureRender, mergeContinuation, parsePage, readsAgree, type StepContext } from "@/lib/ai-import/process";
-import { importerAiCall, parseModelJson, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN } from "@/lib/ai-import/ai";
+import { importerAiCall, parseModelJson, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, FALLBACK_SLACK } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
-import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, classifySchema, documentTextUserText, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
+import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, documentTextUserText, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
 import { computeModelPlan, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
 import { compareWithReference, listReferences, referenceOnly, textSimilarity, type ReferencePaper } from "@/lib/ai-import/reference";
 import { recordVersion, snapshotFigures } from "@/lib/ai-import/versions";
@@ -31,7 +31,7 @@ import { exists as vaultExists, vaultPath } from "@/lib/ai-import/vault";
 import { jobQuality, settleJobStatus } from "@/lib/ai-import/summary";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { approveQuestions, requestImport } from "@/lib/ai-import/review";
-import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
+import { MAX_VERIFY_PASSES, V2_RESULT_STATUSES, contentFingerprint, needsVerify2, passCount, verifyState, withPass } from "@/lib/ai-import/verify-core";
 import type { CandidateRow, TaskChoice } from "@/lib/ai-import/selection-types";
 import type { ExtractedQuestion, PaperVerification, VerifyFix, VerifyProblem } from "@/lib/ai-import/types";
 
@@ -249,6 +249,11 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
         continue;
       }
       const c = compareWithReference(e, q.finalAnswer, ref);
+      // Uncertain OCR is shown as "reference unreadable" and is no evidence either way (never a conflict, never agreement).
+      if (c.unreadable) {
+        references.push({ refId: ref.refId, name: ref.name, compared: false, matched: c.matched, similarity: null, conflicts: [], note: "reference unreadable — its OCR reading of this question is too uncertain to compare (confidence below 70 %)" });
+        continue;
+      }
       references.push({ refId: ref.refId, name: ref.name, compared: true, matched: c.matched, similarity: c.similarity, conflicts: c.conflicts });
       if (!reference || c.matched) reference = { refId: ref.refId, name: ref.name, matched: c.matched, conflicts: c.conflicts };
       if (c.conflicts.length) {
@@ -261,7 +266,7 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     const ok = !problems.length && !blockingNow.length && q.status !== AiImportQuestionStatus.NOT_IMPORTABLE && q.status !== AiImportQuestionStatus.DUPLICATE;
     if (ok) passed++;
     else withProblems++;
-    await savePaperVerify(q, { v1: { fingerprint: fingerprintOf(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference, references, profile: profileFindings.get(q.id) ?? null, classification: tax.verification } });
+    await savePaperVerify(q, { v1: { fingerprint: fingerprintOf(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference, references, profile: profileFindings.get(q.id) ?? null, classification: tax.verification }, passes: withPass((q.data as unknown as ExtractedQuestion).paperVerify, "v1") });
   }
 
   // 4. The findings become the questions' flags (still no AI), then the job's status follows its quality.
@@ -442,6 +447,24 @@ async function usedModels(jobId: string, config: unknown): Promise<string[]> {
 /** A catalog id the job already used (the provider may report a dated variant, e.g. "<id>-2025-04-01"). */
 const usedBy = (used: string[], id: string) => used.some((m) => m === id || m.startsWith(`${id}-`));
 
+/** Pass 2 targets: questions Verify 2 still has to read, and those whose subject / topic check is not yet agreed. */
+const pvOf = (q: QRow) => (q.data as unknown as ExtractedQuestion).paperVerify;
+const taxAgreed = (q: QRow) => pvOf(q)?.v2?.classification?.status === "AGREED" && pvOf(q)?.v2?.fingerprint === fingerprintOf(q);
+function verify2Targets(rows: QRow[]): { read: Set<string>; classify: Set<string>; atLimit: number } {
+  const read = new Set<string>();
+  const classify = new Set<string>();
+  let atLimit = 0;
+  for (const q of rows) {
+    if (passCount(pvOf(q)) >= MAX_VERIFY_PASSES) {
+      atLimit++;
+      continue;
+    }
+    if (needsVerify2(q, fingerprintOf(q))) read.add(q.id);
+    if (!taxAgreed(q)) classify.add(q.id);
+  }
+  return { read, classify, atLimit };
+}
+
 type UnitRow = QRow;
 /**
  * A question is compared once its LAST page has been read again (a question spanning pages is joined first); in a
@@ -515,9 +538,11 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
   const prior = (job.config as { verify2?: Verify2State } | null)?.verify2 ?? null;
   const units = await verify2Units(jobId);
   const rows = await prisma.aiImportQuestion.findMany({ where: { jobId, status: { notIn: LOCKED } }, include: { figures: true } });
-  const todo = units.filter((u) => !unitDone(u, rows, prior, model));
-  const questions = rows.length;
-  const classifyBatches = Math.ceil(questions / 20);
+  // Targeted: only parts holding a question that still needs a read (no agreeing result, under the pass limit).
+  const targets = verify2Targets(rows);
+  const todo = units.filter((u) => !unitDone(u, rows, prior, model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
+  const questions = new Set([...targets.read, ...targets.classify]).size;
+  const classifyBatches = Math.ceil(targets.classify.size / CLASSIFY_BATCH);
   let choice: TaskChoice | null = null;
   let estimateInr: number | null = null;
   let maxInr: number | null = null;
@@ -553,14 +578,23 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
   const pageTyp = choice?.price && choice.model === model ? requestUsd(choice.price, profileInputTokens("verify"), 3200, 1) : null;
   const fxRate = auto.fxRate;
   const referenceOcr = refs
-    .filter((r) => !referenceComparable(r) || scannedPagesOf(r) > 0)
+    .filter((r) => !r.ocr && (!referenceComparable(r) || scannedPagesOf(r) > 0))
     .map((r) => {
       const pages = scannedPagesOf(r);
       const inr = (usd: number | null) => (usd === null || !fxRate ? null : Math.ceil((usdToInr(usd * pages, fxRate) ?? 0) * 100) / 100);
       return { name: r.name, pages, processing: `OCR / vision reading of ${pages} scanned page image(s)${model ? ` (e.g. with ${model})` : ""}`, estimateInr: inr(pageTyp), maxInr: inr(pageMax) };
     })
     .filter((r) => r.pages > 0);
-  const alternates = candidates.filter((c) => c.eligible && c.id !== model && (settings.budget.allowPricierFallback || (c.maxInr ?? Infinity) <= (choice?.maxInr ?? 0) + 1e-9)).map((c) => c.id).slice(0, 3);
+  // Fallbacks: up to the same "slightly more expensive" allowance as the main reader (FALLBACK_SLACK, never above the
+  // per-request limit; the job's confirmed maximum is checked again before each request), another model family first.
+  const primaryMax = choice?.maxInr ?? 0;
+  const slack = Math.min(Math.max(primaryMax * FALLBACK_SLACK.ratio, primaryMax + FALLBACK_SLACK.inr), settings.budget.maxRequestInr);
+  const family = (id: string | null) => (id ?? "").split("/")[0];
+  const alternates = candidates
+    .filter((c) => c.eligible && c.id !== model && (settings.budget.allowPricierFallback || (c.maxInr ?? Infinity) <= slack + 1e-9))
+    .sort((a, b) => Number(family(a.id) === family(model)) - Number(family(b.id) === family(model)))
+    .map((c) => c.id)
+    .slice(0, 3);
   return { job, settings, used, candidates, model, choice, reason, units: todo, allUnits: units, questions, classifyBatches, estimateInr, maxInr, problems, prior, alternates, referenceOcr };
 }
 
@@ -600,7 +634,7 @@ export async function requestVerify2(input: { jobId: string; actorId: string; mo
   const preview = await verify2Preview(input.jobId, input.model);
   if (!p.settings.aiEnabled) throw new ImportJobError("Paid AI is switched off in Import Settings, so Verify 2 cannot run. Nothing was sent.");
   if (!p.choice || p.choice.model !== input.model || p.maxInr === null) throw new ImportJobError(`Verify 2 cannot use ${input.model}: ${p.problems.join(" ") || p.reason}`);
-  if (!p.units.length) throw new ImportJobError("Every page of this import was already read by Verify 2 with this model. Choose another model to read it again.");
+  if (!p.units.length) throw new ImportJobError("Every page of this import was already read by Verify 2 with this model, or its questions already agree or reached the limit of 3 verification passes. Nothing more is sent.");
   const confirmed = typeof input.confirmedMaxInr === "number" && Number.isFinite(input.confirmedMaxInr) ? input.confirmedMaxInr : null;
   const freshPreview = { ...preview, maxInr: p.maxInr, estimateInr: p.estimateInr, perRequestMaxInr: p.choice.maxInr };
   if (confirmed === null) return { started: false, preview: freshPreview, reason: "Confirm the maximum cost first." };
@@ -714,7 +748,10 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   if (!state) throw new Error("Verify 2 request missing.");
   state = await saveState(ctx.job.id, { status: "RUNNING", startedAt: state.startedAt ?? new Date().toISOString() });
   const rows = await prisma.aiImportQuestion.findMany({ where: { jobId: ctx.job.id, status: { notIn: LOCKED } }, include: { figures: true } });
-  const units = (await verify2Units(ctx.job.id)).filter((u) => !unitDone(u, rows, state!, state!.model));
+  // Pass 2 is targeted (fixed at the start of the run): a question with an up-to-date agreeing result, or at the pass
+  // limit, keeps its result and is not read again; a part with none of the targets is not sent.
+  const targets = verify2Targets(rows);
+  const units = (await verify2Units(ctx.job.id)).filter((u) => !unitDone(u, rows, state!, state!.model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
   const exam = await prisma.exam.findUnique({ where: { id: ctx.job.examId }, select: { name: true } });
   const counts: Record<string, number> = { VERIFIED: 0, DISAGREE: 0, NOT_FOUND: 0, FAILED: 0, UNAVAILABLE: 0, attempted: 0, units: 0, failedUnits: 0, extra: 0 };
   const done = [...state.doneUnits];
@@ -728,7 +765,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
     const why = noResultOf(e, state!.model);
     for (const u of units.slice(from)) {
       const qs = await prisma.aiImportQuestion.findMany({ where: { fileId: u.file.id, status: { notIn: LOCKED } }, include: { figures: true } });
-      for (const q of qs.filter((x) => inUnit(u, x))) {
+      for (const q of qs.filter((x) => inUnit(u, x) && targets.read.has(x.id))) {
         const cur = verifyState(q.data, fingerprintOf(q)).v2;
         if (cur === "verified" || cur === "disagree" || cur === "not_found") continue;
         await savePaperVerify(q, { v2: { fingerprint: fingerprintOf(q), at: new Date().toISOString(), model: state!.model, status: "UNAVAILABLE", fields: [], detail: `not read independently — Verify 2 stopped: ${why.error.message}`.slice(0, 600), error: { ...why.error, kind: why.error.kind }, part: unitLabel(u) } });
@@ -777,7 +814,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
     }
     // Compare with every stored question of this unit (a page: the questions that end on it; a text part: the questions it holds).
     const stored = await prisma.aiImportQuestion.findMany({ where: { fileId: u.file.id, status: { notIn: LOCKED }, ...(u.kind === "page" ? { pages: { has: u.pageNumber! } } : {}) }, include: { figures: true } });
-    const mine = stored.filter((q) => inUnit(u, q));
+    const mine = stored.filter((q) => inUnit(u, q) && targets.read.has(q.id));
     const pool = u.kind === "text" ? (fileSecond.get(u.file.id) ?? second) : second;
     for (const q of mine) {
       const pv = (q.data as unknown as ExtractedQuestion).paperVerify ?? {};
@@ -791,7 +828,8 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
       if (!result.model) result.model = state.model;
       counts[result.status]++;
       counts.attempted++;
-      await savePaperVerify(q, { v2: result });
+      // A read with a result is one verification pass (a failed / unavailable one can be retried).
+      await savePaperVerify(q, V2_RESULT_STATUSES.includes(result.status) ? { v2: result, passes: withPass(pvOf(q), "v2", result.model) } : { v2: result });
     }
     const all = u.kind === "text" ? await prisma.aiImportQuestion.findMany({ where: { fileId: u.file.id, status: { notIn: LOCKED } }, select: { data: true, editedData: true } }) : stored;
     const extra = second.filter((x) => !x.q.continuesOnNextPage && !all.some((q) => effective(q).number === x.q.number && effective(q).section === x.q.section)).map((x) => `${x.q.section ? `${x.q.section} ` : ""}Q${x.q.number ?? x.q.label}`);
@@ -833,24 +871,26 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   };
   const checkable: QRow[] = [];
   for (const q of all) {
+    // Targeted: an up-to-date agreeing check, or a question at the pass limit before this run, is not asked again.
+    if (!targets.classify.has(q.id)) continue;
     if (!taxonomy.length) await saveTax(q, { status: "NOT_VERIFIED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: ["this exam has no subjects configured — missing configuration"], comparedWithV1: "NO_V1" });
     else if (!textSufficient(effective(q)).ok) await saveTax(q, { status: "NOT_VERIFIED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: [`not classified: ${textSufficient(effective(q)).why} (an extraction problem, not a taxonomy one)`], comparedWithV1: "NO_V1" });
     else checkable.push(q);
   }
   if (checkable.length) {
     const codes = taxonomyCodes(taxonomy);
-    for (let i = 0; i < checkable.length; i += 20) {
+    for (let i = 0; i < checkable.length; i += CLASSIFY_BATCH) {
       if (!(await ctx.stillRunning())) return counts;
-      const batch = checkable.slice(i, i + 20);
+      const batch = checkable.slice(i, i + CLASSIFY_BATCH);
       const text = classifyUserText(codes.list, batch.map((q) => effective(q)));
       let value: { results: { q: string; subject: string | null; topic: string | null; subtopic: string | null; confidence: number; about: string | string[] | null; reason: string | null }[] } | null = null;
       let model = state.model;
       let failure: string | null = null;
       try {
         const r = await verifyCall(ctx, state, { task: "classify", system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, needsVision: false }, (out) => {
-          const parsed = classifySchema.safeParse(parseModelJson(out));
-          if (!parsed.success) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format"), "model_output");
-          return parsed.data;
+          const parsed = classifyAnswerOf(parseModelJson(out));
+          if (!parsed) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format"), "model_output");
+          return parsed;
         });
         value = r.value;
         model = r.model;
@@ -989,7 +1029,7 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
     classificationIssues: active.filter((q) => has(q, TAXONOMY_CODES)).length,
     classification: { subjectUnknown: active.filter((q) => has(q, ["SUBJECT_UNKNOWN"])).length, subjectMismatch: active.filter((q) => has(q, ["SUBJECT_MISMATCH"])).length, topicMissing: active.filter((q) => has(q, ["TOPIC_UNCERTAIN"])).length, classificationFailed: active.filter((q) => has(q, ["CLASSIFICATION_FAILED"])).length, disagreements: active.filter((q) => has(q, ["TAXONOMY_DISAGREES"])).length },
     formulaIssues: active.filter((q) => has(q, ["FORMULA_ISSUE", "UNREADABLE_TEXT", "EXTRACTION_UNCERTAIN", "QUESTION_TEXT_SUSPECT"])).length,
-    figureIssues: active.filter((q) => has(q, ["IMAGE_MISSING", "IMAGE_MAPPING_UNCERTAIN"])).length,
+    figureIssues: active.filter((q) => has(q, ["IMAGE_MISSING", "IMAGE_MAPPING_UNCERTAIN", "IMAGE_REFERENCE_UNCERTAIN"])).length,
     unresolved: active.filter((q) => has(q, ["VERIFY2_DISAGREES", "VERIFY_DISAGREES", "REFERENCE_CONFLICT"])).length,
     eligible: [],
     approvedNotStored: active.filter((q) => q.approvedById && !q.questionId).length,

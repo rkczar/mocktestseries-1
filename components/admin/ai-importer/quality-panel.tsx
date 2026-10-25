@@ -129,7 +129,7 @@ export function QualityPanel({
               onClick={() => confirm(`Add the ${r.approvedNotStored} approved question(s) to the Question Bank as Draft? They stay unpublished until you publish them in the Question Bank.`) && act(() => importAction(jobId, "DRAFT", null), () => "Adding the approved questions to the Question Bank — this page updates by itself.")}
               data-testid="qp-store-approved"
             >
-              Add {r.approvedNotStored} approved question(s) to the Question Bank
+              Add approved to Question Bank (Draft) ({r.approvedNotStored})
             </Button>
           )}
         </div>

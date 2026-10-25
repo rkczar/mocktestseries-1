@@ -207,7 +207,9 @@ async function saveQuestion(ctx: StepContext, file: AiImportFile, q: ExtractedQu
     pages: q.pages,
     orderIndex,
     status: AiImportQuestionStatus.EXTRACTED,
-    data: q as unknown as Prisma.InputJsonValue,
+    // A re-scan replaces the extraction (its old verification results no longer apply) but never the pass log: the
+    // limit of verification passes per question must survive the re-scan it counts.
+    data: (existing && rescan && (existing.data as unknown as ExtractedQuestion).paperVerify?.passes ? { ...q, paperVerify: { passes: (existing.data as unknown as ExtractedQuestion).paperVerify!.passes } } : q) as unknown as Prisma.InputJsonValue,
     questionType: q.type,
     optionCount: q.options.length,
     contentFormat: q.contentFormat,

@@ -20,6 +20,7 @@ import { planOf } from "@/lib/ai-import/select";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
+import { MAX_VERIFY_PASSES, passCount, withPass } from "@/lib/ai-import/verify-core";
 
 /**
  * Admin decisions on extracted questions. Every change is recorded (event
@@ -508,7 +509,7 @@ export type RescanScope = "question" | "page";
  * original is gone, the file was read exactly (Word / spreadsheet), or paid AI cannot run.
  */
 export async function rescanQuestions(ids: string[], scope: RescanScope, actorId: string): Promise<{ pages: number; questions: number }> {
-  const qs = await prisma.aiImportQuestion.findMany({ where: { id: { in: ids } }, select: { id: true, jobId: true, fileId: true, pages: true, status: true, sourceKey: true, sourceLabel: true } });
+  const qs = await prisma.aiImportQuestion.findMany({ where: { id: { in: ids } }, select: { id: true, jobId: true, fileId: true, pages: true, status: true, sourceKey: true, sourceLabel: true, data: true } });
   if (!qs.length) throw new ImportJobError("Select the questions to re-scan.");
   const jobId = qs[0].jobId;
   if (qs.some((q) => q.jobId !== jobId)) throw new ImportJobError("Re-scan questions of one import at a time.");
@@ -521,6 +522,9 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
   if (!planOf(job.config)?.tasks.extract.model) throw new ImportJobError("This import's confirmed model plan has no page-reading model, so its pages cannot be read again. Nothing was changed — use Reconfigure Models, or correct the question by hand.");
   const open = qs.filter((q) => !LOCKED.includes(q.status));
   if (!open.length) throw new ImportJobError("These questions are already in the Question Bank — edit them there.");
+  // A re-scan is a paid verification pass: a question that already had MAX_VERIFY_PASSES is decided by hand.
+  const atLimit = open.filter((q) => passCount((q.data as unknown as ExtractedQuestion).paperVerify) >= MAX_VERIFY_PASSES);
+  if (atLimit.length) throw new ImportJobError(`${atLimit.slice(0, 8).map((q) => `Q${q.sourceLabel}`).join(", ")}${atLimit.length > 8 ? " …" : ""} already had ${MAX_VERIFY_PASSES} verification passes (Verify 1, Verify 2, re-scan). Nothing was sent — decide ${atLimit.length === 1 ? "it" : "them"} by hand.`);
   const files = await prisma.aiImportFile.findMany({ where: { id: { in: [...new Set(open.map((q) => q.fileId))] } } });
   for (const f of files) {
     const kind = (f.detected as { kind?: string } | null)?.kind;
@@ -551,6 +555,11 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
   if (!pages) throw new ImportJobError("No readable source page was found for these questions.");
   const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: job.status }, data: { status: AiImportJobStatus.QUEUED, finishedAt: null, errorMessage: null } });
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
+  const model = planOf(job.config)?.tasks.extract.model ?? null;
+  for (const q of open) {
+    const d = q.data as unknown as ExtractedQuestion;
+    await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { data: { ...d, paperVerify: { ...(d.paperVerify ?? {}), passes: withPass(d.paperVerify, "rescan", model) } } as unknown as Prisma.InputJsonValue } });
+  }
   await logEvent(jobId, "RESCAN_REQUESTED", `Re-scan requested: ${scope === "page" ? `${pages} whole page(s)` : `${open.length} question(s) on ${pages} page(s)`} are read again from the original file. Manual corrections are kept; new results you have to choose from appear on each question.`, { scope, questionIds: open.map((q) => q.id), pages }, actorId);
   await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_RESCAN_REQUESTED", entityType: "AiImportJob", entityId: jobId, metadata: { scope, questionIds: open.map((q) => q.id) } } });
   kickWorker();

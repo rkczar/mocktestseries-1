@@ -222,6 +222,13 @@ const approveMsg = await admin.locator("[data-testid=bulk-msg]").textContent();
 check("bulk approval approves what is ready and names what it refused, with reasons", /\d+ approved/.test(approveMsg) && /not approved — Q\d+:/.test(approveMsg), approveMsg);
 await admin.reload();
 check("review list shows the approval of each question", (await admin.locator("[data-testid=row-approval][data-approved=true]").count()) > 0);
+// 2026-10-25: the Draft action is on the Exceptions toolbar and the one-page card, with one label everywhere.
+const exDraft = admin.locator("[data-testid=exceptions-import-draft]");
+check("Exceptions toolbar offers 'Add approved to Question Bank (Draft) (N)', enabled once questions are approved", (await exDraft.count()) === 1 && /^Add approved to Question Bank \(Draft\) \([1-9]\d*\)$/.test((await exDraft.textContent()).trim()) && !(await exDraft.isDisabled()), await exDraft.textContent().catch(() => null));
+await admin.goto(`${BASE}/admin/ai-importer?job=${jobId}`);
+await waitFor(admin, "[data-testid=qp-store-approved]", 30000);
+check("one-page card: the same label on its Draft action", /^Add approved to Question Bank \(Draft\) \([1-9]\d*\)$/.test((await admin.locator("[data-testid=qp-store-approved]").textContent()).trim()), await admin.locator("[data-testid=qp-store-approved]").textContent());
+check("…and the next step names that exact button", /Add approved to Question Bank \(Draft\)/.test(await admin.locator("[data-testid=op-next-action]").textContent()), await admin.locator("[data-testid=op-next-action]").textContent());
 await admin.goto(`${BASE}/admin/ai-importer/jobs/${jobId}`);
 await admin.click("[data-testid=import-publish-all]");
 await until(async () => (await db.query(`select count(*)::int n from "AiImportEvent" where "jobId"=$1 and type='QUALITY_GATE'`, [jobId])).rows[0].n > 0, 240000);
@@ -516,9 +523,12 @@ for (const box of await admin.locator("[data-testid=exception-row] input[type=ch
 await admin.click("[data-testid=bulk-approve]");
 await until(async () => /approved/.test((await admin.locator("[data-testid=bulk-msg]").textContent().catch(() => "")) ?? ""), 30000);
 check("flagged questions approved one by one after review (bulk selection)", /^[1-9]\d* approved/.test(await admin.locator("[data-testid=bulk-msg]").textContent()), await admin.locator("[data-testid=bulk-msg]").textContent());
+// Stored through the Exceptions toolbar's Draft action (the existing importAction "DRAFT" → Bulk Import path).
+await admin.reload();
+await waitFor(admin, "[data-testid=exceptions-import-draft]", 30000);
+await admin.locator("[data-testid=exceptions-import-draft]").click();
+await until(async () => /Adding the approved questions as Draft/.test((await admin.locator("[data-testid=bulk-msg]").textContent().catch(() => "")) ?? ""), 30000);
 await admin.goto(wordUrl);
-await waitFor(admin, "[data-testid=qp-store-approved]", 30000);
-await admin.locator("[data-testid=qp-store-approved]").click();
 await until(async () => { await admin.reload(); return (await admin.locator("[data-testid=q-stored]").count()) && (await val("q-stored")) > 0; }, 240000);
 const nImported = await val("q-stored");
 const wRows = (await db.query(`select q.status, q."questionId", qq.status qs from "AiImportQuestion" q left join "Question" qq on qq.id = q."questionId" where q."jobId"=$1`, [newJob])).rows;

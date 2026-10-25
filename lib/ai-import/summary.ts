@@ -6,6 +6,24 @@ import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { qualityReport, type QualityReport, type SequenceAck } from "@/lib/ai-import/quality";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
+/** Statuses in which approved questions can be added to the Question Bank (lib/ai-import/review.ts requestImport). */
+export const DRAFT_IMPORT_STATUSES = ["NEEDS_REVIEW", "COMPLETED_WITH_ISSUES", "COMPLETED"];
+/** The label of the one action that adds a job's approved questions to the Question Bank as Draft (every page uses it). */
+export const ADD_DRAFT_LABEL = "Add approved to Question Bank (Draft)";
+
+/**
+ * Approved questions of each job that "Add approved to Question Bank (Draft)" would add now: approved by an
+ * administrator, not in the Question Bank, and passing every mandatory check (importBlocker) — the same rule the
+ * job page's count and the worker use. Read-only.
+ */
+export async function approvedReadyCounts(jobIds: string[]): Promise<Map<string, number>> {
+  const out = new Map(jobIds.map((id) => [id, 0]));
+  if (!jobIds.length) return out;
+  const [settings, qs] = await Promise.all([getImporterSettings(), prisma.aiImportQuestion.findMany({ where: { jobId: { in: jobIds }, questionId: null, approvedById: { not: null } }, include: { figures: true } })]);
+  for (const q of qs) if (!importBlocker(q, settings)) out.set(q.jobId, (out.get(q.jobId) ?? 0) + 1);
+  return out;
+}
+
 /**
  * Batch-level reconciliation: every detected question is in exactly one
  * bucket. A job is never "Completed" while `unaccounted` or `pendingDecision`
@@ -62,7 +80,7 @@ export async function jobSummary(jobId: string): Promise<JobSummary> {
     rejected: count(AiImportQuestionStatus.REJECTED),
     importFailed: count(AiImportQuestionStatus.IMPORT_FAILED),
     unverifiedAnswers: qs.filter((q) => q.answerStatus === AiImportAnswerStatus.UNVERIFIED).length,
-    imageIssues: qs.filter((q) => q.issueCodes.some((c) => c === "IMAGE_MISSING" || c === "IMAGE_MAPPING_UNCERTAIN")).length,
+    imageIssues: qs.filter((q) => q.issueCodes.some((c) => c === "IMAGE_MISSING" || c === "IMAGE_MAPPING_UNCERTAIN" || c === "IMAGE_REFERENCE_UNCERTAIN")).length,
     pendingDecision: qs.filter((q) => q.status === AiImportQuestionStatus.READY && !q.questionId).length,
     approvedReady: qs.filter((q) => !q.questionId && !!q.approvedById && !importBlocker(q, settings)).length,
     unaccounted: count(AiImportQuestionStatus.EXTRACTED),

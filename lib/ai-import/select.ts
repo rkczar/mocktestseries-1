@@ -7,7 +7,7 @@ import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, KEY_SYSTEM } from "@/lib/ai-import/pro
 import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings, type SelectionTask } from "@/lib/ai-import/config";
 import { candidateModels, freshRouteSnapshot, getRouteSnapshot, isStale, type Route, type RouteSnapshot } from "@/lib/ai-import/routes";
 import type { CandidateRow, ModelHealth, ModelPlan, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
-import { importerModelHealth, rateLimitAvoidance, routeRefusal } from "@/lib/ai-import/health";
+import { importerModelHealth, rateLimitAvoidance, routeRefusal, unusableAvoidance, unusableHistory } from "@/lib/ai-import/health";
 
 /**
  * Automatic model selection for the AI Question Importer.
@@ -71,7 +71,7 @@ interface Evaluation {
   row: CandidateRow;
   price: PlanPrice | null;
   maxUsd: number | null;
-  /** Every eligible route accepts the `reasoning` parameter (the request can bound a reasoning model's thinking). */
+  /** An eligible route accepts the `reasoning` parameter (the request bounds the thinking; require_parameters keeps only such routes). */
   reasoning?: boolean;
 }
 
@@ -83,6 +83,8 @@ export interface EvalCtx {
   health?: Record<string, ModelHealth>;
   /** The job's own request history: a model OpenRouter refused for this job recently is ineligible. */
   refusals?: Record<string, ModelHealth>;
+  /** Classification models whose recent answers were repeatedly unusable (lib/ai-import/health.ts unusableHistory). */
+  unusable?: Record<string, { n: number; last: string; reason: string }>;
   now?: number;
 }
 
@@ -152,7 +154,7 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   if (maxInr > ctx.settings.budget.maxRequestInr) {
     return { row: { ...row, eligible: false, reason: `one request could cost up to ${formatInr(maxInr)}, above the per-request limit of ${formatInr(ctx.settings.budget.maxRequestInr)}` }, price, maxUsd };
   }
-  return { row, price, maxUsd, reasoning: routes.every((r) => !!r.params?.includes("reasoning")) };
+  return { row, price, maxUsd, reasoning: routes.some((r) => !!r.params?.includes("reasoning")) };
 }
 
 const order = (a: CandidateRow, b: CandidateRow) => Number(b.eligible) - Number(a.eligible) || (a.maxInr ?? Infinity) - (b.maxInr ?? Infinity) || (a.typicalInr ?? Infinity) - (b.typicalInr ?? Infinity) || a.id.localeCompare(b.id);
@@ -190,7 +192,8 @@ export function choose(models: AiModel[], ctx: EvalCtx & { substitute?: boolean 
     for (const [id, e] of evals) {
       if (s.selection.mode === "manual" && id === manualModel(s, task)) continue;
       if (s.selection.mode === "manual" && !ctx.substitute) continue;
-      const avoid = autoSkip(e.row, ctx.health, ctx.now);
+      // Strict-JSON classification: a model that keeps returning unusable answers is skipped like a rate-limited one.
+      const avoid = autoSkip(e.row, ctx.health, ctx.now) ?? (task === "classify" && s.selection.mode === "auto" && e.row.eligible ? unusableAvoidance(ctx.unusable?.[id], ctx.now) : null);
       if (avoid) evals.set(id, { ...e, row: { ...e.row, eligible: false, reason: avoid } });
     }
     // Independent verification never reuses the page-reading model.
@@ -289,7 +292,8 @@ export async function computeModelPlan(settings: ImporterSettings, opts: { refre
   const usable = opts.refresh && stale ? null : snapshot;
   const health = await importerModelHealth(models.map((m) => m.id));
   const refusals = opts.jobId ? await importerModelHealth(models.map((m) => m.id), Date.now(), opts.jobId) : undefined;
-  const tasks = choose(models, { snapshot: usable, settings, fxRate: fx.rate, health, refusals, substitute: opts.substitute }, exclude);
+  const unusable = await unusableHistory("classify");
+  const tasks = choose(models, { snapshot: usable, settings, fxRate: fx.rate, health, refusals, unusable, substitute: opts.substitute }, exclude);
   return {
     computedAt: new Date().toISOString(),
     mode: settings.selection.mode,

@@ -53,3 +53,42 @@ export function v2Display(v2: V2State, job: { status: string } | null | undefine
   if ((v2 === "none" || v2 === "stale" || v2 === "failed" || v2 === "unavailable") && job && (job.status === "QUEUED" || job.status === "RUNNING")) return job.status === "QUEUED" ? "Pending" : "Running";
   return { verified: "Passed", disagree: "Disagreement", not_found: "Disagreement (not found)", failed: "Failed", unavailable: "Unavailable", stale: "Out of date", none: "Not run" }[v2];
 }
+
+// ---- Targeted verification passes ---------------------------------------------------------------------------
+
+/**
+ * At most three verification passes per question: Pass 1 = Verify 1 (free, deterministic; counted once), Pass 2 =
+ * Verify 2 only where it is still needed, Pass 3 = a re-scan of a remaining disagreement. A question at the limit is
+ * never sent again; its open findings stay for the administrator (nothing is approved by reaching the limit).
+ */
+export const MAX_VERIFY_PASSES = 3;
+
+/**
+ * A Verify 2 read counts as a pass only when it gave a result (agree / disagree / not found): a failed or unavailable
+ * read is no verification, so it never uses up the limit and the question can be retried (resume, not restart).
+ */
+export const V2_RESULT_STATUSES = ["VERIFIED", "DISAGREE", "NOT_FOUND"];
+
+/** Passes so far (older questions without a log: Verify 1 / a Verify 2 read with a result count as one each). */
+export function passCount(pv: PaperVerification | null | undefined): number {
+  if (!pv) return 0;
+  if (pv.passes) return pv.passes.length;
+  return (pv.v1 ? 1 : 0) + (pv.v2 && V2_RESULT_STATUSES.includes(pv.v2.status) ? 1 : 0);
+}
+
+/** The pass log with one more pass (Verify 1 only once; older questions get their earlier passes recorded first). */
+export function withPass(pv: PaperVerification | null | undefined, kind: "v1" | "v2" | "rescan", model: string | null = null, at = new Date().toISOString()): NonNullable<PaperVerification["passes"]> {
+  const log = pv?.passes ? [...pv.passes] : [...(pv?.v1 ? [{ kind: "v1" as const, at: pv.v1.at }] : []), ...(pv?.v2 && V2_RESULT_STATUSES.includes(pv.v2.status) ? [{ kind: "v2" as const, at: pv.v2.at, model: pv.v2.model }] : [])];
+  if (kind === "v1" && log.some((p) => p.kind === "v1")) return log;
+  return [...log, { kind, at, model }];
+}
+
+/**
+ * Whether Verify 2 should read this question again (Pass 2 is targeted): not when it is at the pass limit, and not
+ * when it already has an up-to-date agreeing result (a successful check is never re-run without a reason). No result,
+ * a failed or unavailable read, an out-of-date result or an unresolved disagreement still needs it.
+ */
+export function needsVerify2(q: { data: unknown }, fingerprint: string): boolean {
+  const s = verifyState(q.data, fingerprint);
+  return passCount(s.pv) < MAX_VERIFY_PASSES && s.v2 !== "verified";
+}

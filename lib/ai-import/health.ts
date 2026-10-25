@@ -78,3 +78,33 @@ export async function importerModelHealth(ids: readonly string[], now = Date.now
   }
   return out;
 }
+
+/** Automatic selection skips a classifier whose recent answers were unusable at least this often… */
+export const UNUSABLE_AVOID_AFTER = 2;
+/** …within this window (the importer's own MODEL_SWITCHED / MODEL_SWITCH_SKIPPED records). */
+export const UNUSABLE_AVOID_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * Unusable answers (malformed JSON, cut off, empty, wrong shape) per model for one task, as the importer recorded them
+ * when it switched — or could not switch — to another model (2026-10-23/24: granite-4.0-h-micro returned malformed
+ * classification JSON 3 times and left 17 of 18 questions unclassified). Measured facts only; read-only.
+ */
+export async function unusableHistory(task: string, now = Date.now()): Promise<Record<string, { n: number; last: string; reason: string }>> {
+  const rows = await prisma.aiImportEvent.findMany({ where: { type: { in: ["MODEL_SWITCHED", "MODEL_SWITCH_SKIPPED"] }, createdAt: { gte: new Date(now - UNUSABLE_AVOID_MS) } }, orderBy: { createdAt: "desc" }, select: { data: true, createdAt: true }, take: 2_000 });
+  const out: Record<string, { n: number; last: string; reason: string }> = {};
+  for (const r of rows) {
+    const d = r.data as { task?: string; from?: string; reason?: string } | null;
+    if (!d?.from || d.task !== task) continue;
+    const h = (out[d.from] ??= { n: 0, last: r.createdAt.toISOString(), reason: (d.reason ?? "").slice(0, 120) });
+    h.n++;
+  }
+  return out;
+}
+
+/** Whether automatic selection should avoid the model for that task now because of repeated unusable answers (null = no). */
+export function unusableAvoidance(h: { n: number; last: string; reason: string } | undefined, now = Date.now()): string | null {
+  if (!h || h.n < UNUSABLE_AVOID_AFTER) return null;
+  const until = new Date(new Date(h.last).getTime() + UNUSABLE_AVOID_MS);
+  if (until.getTime() <= now) return null;
+  return `${h.n} of its recent answers for this task were unusable${h.reason ? ` (latest: ${h.reason})` : ""}, so automatic selection skips it until ${until.toISOString().slice(0, 16).replace("T", " ")} UTC — choose it under Manual override to try it again`;
+}

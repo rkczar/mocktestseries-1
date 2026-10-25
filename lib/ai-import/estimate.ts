@@ -5,6 +5,7 @@ import { IMAGE_TOKENS } from "@/lib/ai-import/ai";
 import type { ImporterSettings, ImporterTask, SelectionTask, VerifyMode } from "@/lib/ai-import/config";
 import type { FileFacts } from "@/lib/ai-import/analyze";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
+import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
 
 /**
  * Pre-processing cost estimate from the job's model plan (lib/ai-import/select.ts:
@@ -126,7 +127,7 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
   if (settings.verification.independentAnswer && verifyModel) {
     lines.push(line("verify", "verify", "Independent answer opinion (per question)", false, expectedQuestions, expectedQuestions * 600, expectedQuestions * 250, expectedQuestions));
   }
-  const classifyCalls = Math.ceil(expectedQuestions / 20);
+  const classifyCalls = Math.ceil(expectedQuestions / CLASSIFY_BATCH);
   lines.push(line("classify", "classify", "Topic classification (20 questions per call)", false, classifyCalls, classifyCalls * (SYSTEM_TOKENS + 20 * 250 + 3_500), classifyCalls * 900, classifyCalls));
   if (keyPages) lines.push(line("key", "key", "Scanned answer-key pages", true, keyPages, keyPages * (SYSTEM_TOKENS + IMAGE_TOKENS + 200), keyPages * 1_200, keyPages));
 

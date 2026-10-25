@@ -239,19 +239,37 @@ RULES: for each question decide from its clinical / subject meaning (not from wo
 OUTPUT (JSON only): {"results":[{"q":"Q1","about":["heart sounds","stethoscope"],"subject":"S3","topic":"T41","subtopic":null,"confidence":0.8,"reason":"auscultation of heart sounds"}]}`;
 
 const ref = z.union([z.string(), z.number(), z.null()]).optional().transform((v) => (v === null || v === undefined ? null : String(v).trim()));
-export const classifySchema = z.object({
-  results: z
-    .array(
-      z.object({
-        q: z.union([z.string(), z.number()]).transform((v) => String(v).trim()),
-        subject: ref,
-        topic: ref,
-        subtopic: ref,
-        confidence: confidence.transform((v) => v ?? 0),
-        about: z.union([z.string(), z.array(z.union([z.string(), z.number()]).transform(String)), z.null()]).optional().transform((v) => v ?? null),
-        reason: z.union([z.string(), z.null()]).optional().transform((v) => v ?? null),
-      })
-    )
-    .max(100)
-    .default([]),
+const classifyItem = z.object({
+  q: z.union([z.string(), z.number()]).transform((v) => String(v).trim()),
+  subject: ref,
+  topic: ref,
+  subtopic: ref,
+  confidence: confidence.transform((v) => v ?? 0),
+  about: z.union([z.string(), z.array(z.union([z.string(), z.number()]).transform(String)), z.null()]).optional().transform((v) => v ?? null),
+  reason: z.union([z.string(), z.null()]).optional().transform((v) => v ?? null),
 });
+export const classifySchema = z.object({
+  results: z.array(classifyItem).max(100).default([]),
+});
+export type ClassifyAnswer = z.infer<typeof classifySchema>;
+
+/** Questions per classification request (2026-10-24: a 20-question request failed as one malformed answer for all 20). */
+export const CLASSIFY_BATCH = 10;
+
+/**
+ * A classification answer, item by item: every well-formed result is kept and a malformed one only drops ITS
+ * question (it then has no result — never "nothing fits"). Null when there is no usable result list at all
+ * (the whole answer is unusable: the caller treats it as a model-output failure).
+ */
+export function classifyAnswerOf(json: unknown): (ClassifyAnswer & { dropped: number }) | null {
+  const list = (json as { results?: unknown } | null)?.results;
+  if (!Array.isArray(list) || list.length > 100) return null;
+  const results: ClassifyAnswer["results"] = [];
+  let dropped = 0;
+  for (const item of list) {
+    const r = classifyItem.safeParse(item);
+    if (r.success) results.push(r.data);
+    else dropped++;
+  }
+  return list.length && !results.length ? null : { results, dropped };
+}

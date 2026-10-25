@@ -14,10 +14,11 @@ import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { jobMapping } from "@/lib/ai-import/job-view";
 import { PaperVerifyBar } from "@/components/admin/ai-importer/paper-verify-bar";
 import { ReferencePanel } from "@/components/admin/ai-importer/reference-panel";
-import { STRUCTURE_CODES, TAXONOMY_CODES, fingerprintOf, paperSummary } from "@/lib/ai-import/paper-verify";
+import { STRUCTURE_CODES, TAXONOMY_CODES, fingerprintOf, paperSummary, scannedPagesOf } from "@/lib/ai-import/paper-verify";
 import { mergedAnswerIn, statementsOf } from "@/lib/ai-import/local-parse";
 import { listReferences } from "@/lib/ai-import/reference";
 import { V1_DISPLAY, v2Display, verifyState } from "@/lib/ai-import/verify-core";
+import { DRAFT_IMPORT_STATUSES, approvedReadyCounts } from "@/lib/ai-import/summary";
 import { referenceStatusText } from "@/lib/ai-import/reference-status";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
@@ -53,6 +54,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   };
   const job = jobId ? jobs.find((j) => j.id === jobId)! : null;
   const summary = jobId ? await paperSummary(jobId) : null;
+  const draft = job ? { count: (await approvedReadyCounts([job.id])).get(job.id) ?? 0, open: DRAFT_IMPORT_STATUSES.includes(job.status) } : null;
   const eligible = new Set(summary?.eligible ?? []);
   const allRows = await prisma.aiImportQuestion.findMany({ where, orderBy: [{ jobId: "asc" }, { fileId: "asc" }, { orderIndex: "asc" }], take: 1000, include: { figures: true } });
   // Verification filters are judged against each question's current content (an out-of-date result does not count).
@@ -63,7 +65,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       })
     : allRows;
   const taxonomy = job ? (await getExamTaxonomy(prisma, job.examId)).map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((u) => ({ id: u.id, name: u.name })) })) })) : [];
-  const references = jobId ? (await listReferences(jobId)).map((r) => ({ refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note, status: (() => { const s = summary?.references.find((x) => x.refId === r.refId)?.status; return s ? referenceStatusText(s) : null; })() })) : [];
+  const references = jobId ? (await listReferences(jobId)).map((r) => ({ refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note, ocrAvailable: !r.ocr && scannedPagesOf(r) > 0, status: (() => { const s = summary?.references.find((x) => x.refId === r.refId)?.status; return s ? referenceStatusText(s) : null; })() })) : [];
   // Names of every subject / topic / subtopic shown: the stored ones and what Verify 1 / Verify 2 found.
   const taxIds = (pick: (x: { subjectId: string | null; topicId: string | null; subTopicId: string | null }) => string | null) => {
     const out = new Set<string>();
@@ -251,7 +253,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
           <CardDescription>Open a question to see its source page beside the extracted question, fix it, set the answer or topic, or confirm its figures.</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          <ExceptionsTable rows={view} canUse={canUse} canPublish={canPublish && canUse} jobId={jobId ?? null} taxonomy={taxonomy} />
+          <ExceptionsTable rows={view} canUse={canUse} canPublish={canPublish && canUse} jobId={jobId ?? null} taxonomy={taxonomy} draft={draft} />
         </CardContent>
       </Card>
     </div>

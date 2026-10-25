@@ -155,7 +155,7 @@ function BulkTaxonomy({ taxonomy, disabled, labels, onApply }: { taxonomy: Taxon
   );
 }
 
-export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = [] }: { rows: ExceptionRow[]; canUse: boolean; canPublish: boolean; jobId: string | null; taxonomy?: TaxonomyOption[] }) {
+export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = [], draft = null }: { rows: ExceptionRow[]; canUse: boolean; canPublish: boolean; jobId: string | null; taxonomy?: TaxonomyOption[]; /** This job's "Add approved to Question Bank (Draft)": how many it adds now, and whether the job is finished. */ draft?: { count: number; open: boolean } | null }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
@@ -210,6 +210,11 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
           {canPublish && (
             <Button size="sm" disabled={!sameJob || !publishable || pending} onClick={() => confirm(`Import and publish the ${publishable} selected question(s) that pass every check? The others stay as drafts/exceptions.`) && act(() => importAction(rows.find((r) => selected.has(r.id))!.jobId, "PUBLISH_SELECTED", ids), "Import & publish of the selection started — see the job page.")} data-testid="publish-selected">
               Import &amp; Publish Selected ({publishable})
+            </Button>
+          )}
+          {jobId && draft?.open && (
+            <Button size="sm" disabled={!draft.count || pending} onClick={() => confirm(`Add the ${draft.count} approved question(s) of this import to the Question Bank as Draft? Nothing is published; Import History records the run and can roll it back.`) && act(() => importAction(jobId, "DRAFT", null), "Adding the approved questions as Draft — see the job page.")} data-testid="exceptions-import-draft">
+              Add approved to Question Bank (Draft) ({draft.count})
             </Button>
           )}
           {jobId && (

@@ -3,6 +3,7 @@ import { AiImportQuestionStatus, type AiImportJob } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formatIst } from "@/lib/ist-time";
 import { STALL_AFTER_MS, WORKER_STATUSES, plainJobStatus, type PlainTone } from "@/lib/ai-import/config";
+import { ADD_DRAFT_LABEL, approvedReadyCounts } from "@/lib/ai-import/summary";
 
 /**
  * Plain, truthful view of import jobs for the one-page importer and the
@@ -26,6 +27,8 @@ export interface JobCounts {
   noSubject: number;
   /** Approved by an administrator and not in the Question Bank yet. */
   approved: number;
+  /** Of those, the ones that pass every mandatory check now: what "Add approved to Question Bank (Draft)" adds. */
+  approvedReady: number;
 }
 
 export interface JobCard {
@@ -87,7 +90,8 @@ function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCa
     case "NEEDS_REVIEW":
       if (c.extracted === 0) return j.errorMessage ?? "No questions could be read from this file.";
       if (canRetryFailed(j, pages, failedKeys)) return `${j.errorMessage ?? `${pages.failed} page(s) failed.`} The ${c.extracted} question(s) already read are kept.`;
-      if (c.approved > 0) return `${c.approved} approved question(s) are ready. Click Add approved questions to the Question Bank to store them as Draft.`;
+      if (c.approvedReady > 0) return `${c.approvedReady} approved question(s) are ready. Click “${ADD_DRAFT_LABEL}” to store them as Draft (nothing is published).`;
+      if (c.approved > 0) return `${c.approved} approved question(s) still fail a mandatory check — open Review questions to fix them before adding them to the Question Bank.`;
       if (c.ready > 0) return `${c.ready} question(s) passed every check. Review and approve them — nothing enters the Question Bank before approval.`;
       if (c.noSubject > 0) return `${c.noSubject} question(s) have no subject of this exam yet (no subject heading, and the classifier could not decide reliably — each question shows why). Open Review questions and set the subject — or delete this import and upload again as a Single-subject paper (Advanced options).`;
       return `${c.needsReview + c.notImportable + c.duplicates} question(s) need attention before they can be imported — open Review questions.`;
@@ -109,6 +113,7 @@ async function countsFor(jobIds: string[]): Promise<Map<string, JobCounts>> {
     prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: null, issueCodes: { hasSome: ["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED"] } }, _count: { _all: true } }),
     prisma.aiImportQuestion.groupBy({ by: ["jobId"], where: { jobId: { in: jobIds }, questionId: null, approvedById: { not: null }, status: { notIn: [AiImportQuestionStatus.REJECTED] } }, _count: { _all: true } }),
   ]);
+  const ready = await approvedReadyCounts(jobIds.filter((id) => (approved.find((r) => r.jobId === id)?._count._all ?? 0) > 0));
   const out = new Map<string, JobCounts>();
   for (const id of jobIds) {
     const n = (s: AiImportQuestionStatus) => byStatus.find((r) => r.jobId === id && r.status === s)?._count._all ?? 0;
@@ -125,6 +130,7 @@ async function countsFor(jobIds: string[]): Promise<Map<string, JobCounts>> {
       unverifiedAnswers: unverified.find((r) => r.jobId === id)?._count._all ?? 0,
       noSubject: noSubject.find((r) => r.jobId === id)?._count._all ?? 0,
       approved: approved.find((r) => r.jobId === id)?._count._all ?? 0,
+      approvedReady: ready.get(id) ?? 0,
     });
   }
   return out;

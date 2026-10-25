@@ -437,7 +437,7 @@ async function main() {
     // ------------------------------------------------------------------ B5
     section("B5. Verify 2: independent classification with cost confirmation");
     const pv = await verify2Preview(j1, "mockvision/checker");
-    check("Verify 2 preview shows the estimate and maximum incl. classification requests (nothing sent yet)", pv.maxInr !== null && pv.maxInr > 0 && pv.classifyBatches === 1 && pv.estimateInr !== null, pv);
+    check("Verify 2 preview shows the estimate and maximum incl. classification requests (nothing sent yet)", pv.maxInr !== null && pv.maxInr > 0 && pv.classifyBatches === Math.ceil(pv.questions / 10) && pv.classifyBatches >= 1 && pv.estimateInr !== null, pv);
     const beforeRefuse = await mockStats();
     const refused = await requestVerify2({ jobId: j1, actorId: actor, model: "mockvision/checker", confirmedMaxInr: null });
     const lower = await requestVerify2({ jobId: j1, actorId: actor, model: "mockvision/checker", confirmedMaxInr: Math.max(0, (pv.maxInr ?? 0) / 10) });

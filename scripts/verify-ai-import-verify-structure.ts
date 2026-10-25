@@ -469,11 +469,12 @@ async function main() {
     let fst = (f.job.config as { verify2?: { outcome?: string } }).verify2!;
     check("timeout: every question FAILED with the provider's message; outcome NO_RESULT; nothing verified", fqs.every((q) => vs(q).v2 === "failed" && /OpenRouter failed/.test(v2Of(q)?.error?.message ?? "")) && fst.outcome === "NO_RESULT" && (await paperSummary(jF))!.verified === 0, [fst, fqs.map((q) => v2Of(q)?.error?.message?.slice(0, 60)).slice(0, 2)]);
     check("timeout: the event says Verify 2 produced NO independent result", (await events(jF, "VERIFY2_NO_RESULT")).length === 1 && /none counts as verified/.test((await events(jF, "VERIFY2_NO_RESULT"))[0].message));
-    await mockConfig({ failTask: {}, script: { "mockvision/mid": ["empty", "empty", "empty"], "mockvision/reader": ["empty", "empty", "empty"] } });
+    // Every allowed fallback answers empty too (since 2026-10-25 a slightly pricier one, mockvision/checker, is allowed).
+    await mockConfig({ failTask: {}, script: { "mockvision/mid": ["empty", "empty", "empty"], "mockvision/reader": ["empty", "empty", "empty"], "mockvision/checker": ["empty", "empty", "empty"] } });
     f = await verify2(jF, actor, "mockvision/mid");
     fqs = await questionsOf(jF);
     check("empty answers (and an empty fallback): FAILED with “empty” reason, never agreement", fqs.every((q) => vs(q).v2 === "failed" && /empty|no answer/i.test(v2Of(q)?.error?.message ?? "")), fqs.map((q) => v2Of(q)?.error?.message?.slice(0, 80)).slice(0, 2));
-    await mockConfig({ script: {}, noEndpoint: ["mockvision/mid", "mockvision/reader"] });
+    await mockConfig({ script: {}, noEndpoint: ["mockvision/mid", "mockvision/reader", "mockvision/checker"] });
     f = await verify2(jF, actor, "mockvision/mid");
     fqs = await questionsOf(jF);
     fst = (f.job.config as { verify2?: { outcome?: string } }).verify2!;

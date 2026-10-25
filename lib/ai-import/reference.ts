@@ -42,7 +42,14 @@ export interface ReferenceQuestion {
   options: string[];
   answer: string[];
   pages: number[];
+  /** Read by paid OCR / vision (REFERENCE_READ): the reader's confidence (0–1). Absent for text read locally. */
+  confidence?: number;
+  /** OCR too uncertain to be evidence ("reference unreadable"): never used for a conflict or an answer. */
+  unreadable?: boolean;
 }
+
+/** Below this OCR confidence (or without readable text) a reference question is "unreadable", never authoritative. */
+export const OCR_MIN_CONFIDENCE = 0.7;
 
 export interface ReferencePaper {
   refId: string;
@@ -62,6 +69,8 @@ export interface ReferencePaper {
   note: string | null;
   /** Pages without a text layer: stored, NOT compared (OCR / vision would be paid AI). Absent on older references. */
   scannedPages?: number;
+  /** The administrator-confirmed OCR / vision reading of the scanned pages (latest REFERENCE_READ event), if any. */
+  ocr?: { model: string; at: string; pagesRead: number[]; failedPages: number[]; unreadable: number } | null;
 }
 
 const FINISHED: AiImportJobStatus[] = [AiImportJobStatus.NEEDS_REVIEW, AiImportJobStatus.COMPLETED, AiImportJobStatus.COMPLETED_WITH_ISSUES];
@@ -243,9 +252,30 @@ export async function cancelReferenceUpload(input: { uploadId: string; actorId: 
 
 /** The import's linked reference papers, oldest first (unlinked ones are left out; their files are kept). */
 export async function listReferences(jobId: string): Promise<ReferencePaper[]> {
-  const events = await prisma.aiImportEvent.findMany({ where: { jobId, type: { in: ["REFERENCE_ADDED", "REFERENCE_UNLINKED"] } }, orderBy: { createdAt: "asc" }, select: { type: true, data: true } });
+  const events = await prisma.aiImportEvent.findMany({ where: { jobId, type: { in: ["REFERENCE_ADDED", "REFERENCE_UNLINKED", "REFERENCE_READ"] } }, orderBy: { createdAt: "asc" }, select: { type: true, data: true } });
   const unlinked = new Set(events.filter((e) => e.type === "REFERENCE_UNLINKED").map((e) => (e.data as { refId?: string } | null)?.refId));
-  return events.filter((e) => e.type === "REFERENCE_ADDED" && !unlinked.has((e.data as { refId?: string } | null)?.refId)).map((e) => e.data as unknown as ReferencePaper);
+  // The latest confirmed OCR reading of each reference (lib/ai-import/reference-ocr.ts): its questions are the
+  // reference's content for comparison; the stored file and the locally read text are never changed by it.
+  const read = new Map<string, ReferenceRead>();
+  for (const e of events) if (e.type === "REFERENCE_READ") read.set((e.data as unknown as ReferenceRead).refId, e.data as unknown as ReferenceRead);
+  return events
+    .filter((e) => e.type === "REFERENCE_ADDED" && !unlinked.has((e.data as { refId?: string } | null)?.refId))
+    .map((e) => {
+      const ref = e.data as unknown as ReferencePaper;
+      const r = read.get(ref.refId);
+      if (!r) return ref;
+      return { ...ref, questions: [...ref.questions, ...r.questions], ocr: { model: r.model, at: r.at, pagesRead: r.pagesRead, failedPages: r.failedPages, unreadable: r.questions.filter((q) => q.unreadable).length } };
+    });
+}
+
+/** Data of a REFERENCE_READ event: what the confirmed OCR / vision reading of a scanned reference found. */
+export interface ReferenceRead {
+  refId: string;
+  model: string;
+  at: string;
+  pagesRead: number[];
+  failedPages: number[];
+  questions: ReferenceQuestion[];
 }
 
 export async function unlinkReference(jobId: string, refId: string, actorId: string): Promise<void> {
@@ -270,6 +300,8 @@ export function textSimilarity(x: string, y: string): number {
 }
 
 export interface ReferenceComparison {
+  /** The matching reference question was read by OCR too uncertainly to count ("reference unreadable"): no conflict, no answer. */
+  unreadable?: boolean;
   matched: string | null;
   /** Wording similarity (0–1) of the matched reference question, or null when none matched. */
   similarity: number | null;
@@ -286,7 +318,13 @@ const refLabel = (r: { section: string; number: number | null }) => `${r.section
  */
 export function compareWithReference(q: ExtractedQuestion, answer: string[], ref: Pick<ReferencePaper, "questions" | "key">): ReferenceComparison {
   const out: ReferenceComparison = { matched: null, similarity: null, conflicts: [], suggestedAnswer: [] };
-  let twin = ref.questions.find((r) => r.number === q.number && r.section === q.section && textSimilarity(r.stem, q.stem) >= 0.5) ?? null;
+  // By number first (an OCR-read reference has no sections: its number alone is matched), then by wording.
+  const sameNumber = (r: ReferenceQuestion) => r.number === q.number && (r.section === q.section || (r.confidence !== undefined && !r.section));
+  let twin = ref.questions.find((r) => sameNumber(r) && !r.unreadable && textSimilarity(r.stem, q.stem) >= 0.5) ?? null;
+  if (!twin) {
+    const unreadable = ref.questions.find((r) => sameNumber(r) && r.unreadable);
+    if (unreadable) return { ...out, matched: refLabel(unreadable), unreadable: true };
+  }
   if (!twin && q.stem.trim()) {
     let best: { r: ReferenceQuestion; s: number } | null = null;
     for (const r of ref.questions) {
@@ -299,6 +337,8 @@ export function compareWithReference(q: ExtractedQuestion, answer: string[], ref
     }
   }
   const keyEntry = ref.key.find((k) => k.number === q.number && k.section === q.section) ?? null;
+  // Uncertain OCR is never presented as authoritative: shown as unreadable, compared with nothing.
+  if (twin?.unreadable) return { ...out, matched: refLabel(twin), unreadable: true, conflicts: [] };
   if (twin) {
     out.matched = refLabel(twin);
     out.similarity = Math.round(textSimilarity(twin.stem, q.stem) * 100) / 100;

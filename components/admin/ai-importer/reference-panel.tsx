@@ -4,7 +4,8 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
-import { applyReferenceAnswersAction, unlinkReferenceAction } from "@/app/admin/(dashboard)/ai-importer/actions";
+import { applyReferenceAnswersAction, referenceOcrPreviewAction, referenceOcrStartAction, unlinkReferenceAction } from "@/app/admin/(dashboard)/ai-importer/actions";
+import type { ReferenceOcrPreview } from "@/lib/ai-import/reference-ocr";
 import { ACCEPT, STAGE_LABEL, uploadReferenceFile } from "@/components/admin/ai-importer/upload-client";
 
 export interface ReferenceRow {
@@ -15,6 +16,69 @@ export interface ReferenceRow {
   note: string | null;
   /** stored / text extracted / compared / not compared (lib/ai-import/reference-status.ts). */
   status?: string | null;
+  /** Scanned pages not read yet: the optional paid OCR can be priced and confirmed. */
+  ocrAvailable?: boolean;
+}
+
+const inr = (v: number | null) => (v === null ? "—" : `₹${v.toFixed(2)}`);
+
+/** Price → Confirm for reading a scanned reference with OCR / vision (paid). Nothing is sent before the confirmation. */
+function ReferenceOcr({ jobId, refId, onDone }: { jobId: string; refId: string; onDone: (text: string, ok: boolean) => void }) {
+  const router = useRouter();
+  const [preview, setPreview] = useState<ReferenceOcrPreview | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  if (!preview)
+    return (
+      <Button size="sm" variant="outline" disabled={pending} onClick={() => start(async () => {
+        const x = await callImporter(() => referenceOcrPreviewAction(jobId, refId));
+        if (x.ok) setPreview(x.data);
+        else onDone(x.error ?? "Failed", false);
+      })} data-testid="reference-ocr-preview">
+        Read scanned pages (OCR, paid)…
+      </Button>
+    );
+  return (
+    <div className="flex w-full flex-col gap-1 rounded border border-[var(--color-border)] p-2 text-xs" data-testid="reference-ocr-panel">
+      <p>
+        {preview.pages.length} scanned page(s) with {preview.model ?? "no suitable model"} — estimated <b data-testid="reference-ocr-estimate">{inr(preview.estimateInr)}</b>, maximum <b data-testid="reference-ocr-max">{inr(preview.maxInr)}</b> (up to {inr(preview.perRequestMaxInr)} per page). The reading is evidence only: it never changes a question, an answer, a subject or an image.
+      </p>
+      <ul className="grid gap-0.5 sm:grid-cols-2" data-testid="reference-ocr-budgets">
+        {preview.budgets.map((b) => (
+          <li key={b.label} className={b.afterInr !== null && b.afterInr < -0.005 ? "text-[var(--color-error)]" : ""}>
+            {b.label}: limit {inr(b.limitInr)}{b.label === "Per request" ? "" : `, used ${inr(b.usedInr)}`}, left after this {inr(b.afterInr)}
+          </li>
+        ))}
+      </ul>
+      {preview.problems.length > 0 && (
+        <ul className="list-disc pl-5 text-[var(--color-error)]" data-testid="reference-ocr-problems">
+          {preview.problems.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      )}
+      {note && <p className="text-[var(--color-warning)]" role="alert">{note}</p>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={pending || !preview.canRun || preview.maxInr === null} onClick={() => confirm(`Read ${preview.pages.length} scanned page(s) with paid OCR for at most ${inr(preview.maxInr)}?`) && start(async () => {
+          const x = await callImporter(() => referenceOcrStartAction(jobId, refId, preview.maxInr));
+          if (!x.ok) return onDone(x.error ?? "Failed", false);
+          if (x.data.started) {
+            setPreview(null);
+            onDone(`Reference OCR started (maximum ${inr(x.data.maxInr)}). Run Verify 1 when it finishes.`, true);
+            router.refresh();
+          } else {
+            setPreview(x.data.preview);
+            setNote(x.data.reason);
+          }
+        })} data-testid="reference-ocr-confirm">
+          Confirm maximum {inr(preview.maxInr)} and read
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 /** The import's reference papers: add, download the original, unlink (the file is kept), use their answers. */
@@ -40,6 +104,7 @@ export function ReferencePanel({ jobId, refs, canUse }: { jobId: string; refs: R
               <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="reference-status">
                 {r.status ?? `${r.questions} question(s)${r.key ? `, ${r.key} answer-key entries` : ""}${r.note ? ` · ${r.note}` : ""}`}
               </span>
+              {canUse && r.ocrAvailable && <ReferenceOcr jobId={jobId} refId={r.refId} onDone={(text, ok) => setMsg({ ok, text })} />}
               {canUse && (
                 <Button size="sm" variant="ghost" disabled={pending} onClick={() => confirm(`Unlink “${r.name}” from this import? Its file is kept.`) && start(async () => {
                   const x = await callImporter(() => unlinkReferenceAction(jobId, r.refId));

@@ -210,7 +210,7 @@ export function qualityReport(input: QualityInput): QualityReport {
       unmatchedEntries: input.unmatchedKeyEntries,
       failedFiles: input.failedKeyFiles,
     },
-    imageIssues: by((q) => has(q, "IMAGE_MISSING") || has(q, "IMAGE_MAPPING_UNCERTAIN")),
+    imageIssues: by((q) => has(q, "IMAGE_MISSING") || has(q, "IMAGE_MAPPING_UNCERTAIN") || has(q, "IMAGE_REFERENCE_UNCERTAIN")),
     topicUncertain: by((q) => has(q, "TOPIC_UNCERTAIN") || has(q, "SUBJECT_UNKNOWN") || has(q, "CLASSIFICATION_FAILED")),
     pages,
     missing,

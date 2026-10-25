@@ -24,6 +24,7 @@ import { formatIst } from "@/lib/ist-time";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { fingerprintOf } from "@/lib/ai-import/paper-verify";
 import { verifyState } from "@/lib/ai-import/verify-core";
+import { listReferences } from "@/lib/ai-import/reference";
 
 export const metadata = { title: "Review Question — AI Question Importer" };
 export const dynamic = "force-dynamic";
@@ -102,6 +103,16 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
   const pageIdOf = new Map(pages.map((p) => [p.pageNumber, p.id]));
   const verification = (q.data as unknown as ExtractedQuestion).verification ?? null;
   const fmt = e.contentFormat;
+  // Reference comparison (Verify 1, current or not): the prepared file, the reference's reading and the official key
+  // side by side for every difference or unreadable reference — evidence for the administrator, never applied.
+  const refEntries = ((q.data as unknown as ExtractedQuestion).paperVerify?.v1?.references ?? []).filter((r) => r.conflicts.length || /unreadable/.test(r.note ?? ""));
+  const refPapers = refEntries.length ? await listReferences(q.jobId) : [];
+  const refSides = refEntries.map((r) => {
+    const paper = refPapers.find((p) => p.refId === r.refId);
+    const twin = paper?.questions.find((x) => `${x.section ? `${x.section} ` : ""}Q${x.number ?? "?"}` === r.matched) ?? null;
+    return { ...r, twin, ocr: !!paper?.ocr };
+  });
+  const v1Stale = !!refEntries.length && verifyState(q.data, fingerprintOf(q)).v1 === "stale";
   const blockerImport = importBlocker(q, settings);
   const blockerPublish = q.questionId ? publishBlocker(q, settings) : blockerImport ?? publishBlocker(q, settings);
   // Complete figure at its stored aspect ratio (never cropped to a box), tap to zoom.
@@ -234,6 +245,57 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           </CardContent>
         </Card>
       </div>
+      {refSides.length > 0 && (
+        <Card data-testid="reference-compare">
+          <CardHeader>
+            <CardTitle>Reference comparison</CardTitle>
+            <CardDescription>Evidence only: the reference never changes this question, its answer, subject or images. Decide each difference yourself.{v1Stale ? " (From an earlier Verify 1 — run it again after changes.)" : ""}</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {refSides.map((r) => (
+              <div key={r.refId} className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3" data-testid="reference-side-by-side">
+                <div>
+                  <p className="text-xs font-medium text-[var(--color-muted-foreground)]">Prepared file ({file?.originalName})</p>
+                  <p className="whitespace-pre-wrap" data-testid="ref-prepared">{e.stem}</p>
+                  <ol className="mt-1 text-xs">
+                    {e.options.map((o) => (
+                      <li key={o.label}>({o.label.toLowerCase()}) {o.text}</li>
+                    ))}
+                  </ol>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--color-muted-foreground)]">Reference “{r.name}”{r.matched ? ` · ${r.matched}` : ""}{r.ocr ? " · OCR" : ""}</p>
+                  {r.twin && !r.twin.unreadable ? (
+                    <>
+                      <p className="whitespace-pre-wrap" data-testid="ref-reference">{r.twin.stem}</p>
+                      <ol className="mt-1 text-xs">
+                        {r.twin.options.map((t, i) => (
+                          <li key={i}>({String.fromCharCode(97 + i)}) {t}</li>
+                        ))}
+                      </ol>
+                      {r.twin.confidence !== undefined && <p className="text-xs text-[var(--color-muted-foreground)]">OCR confidence {Math.round(r.twin.confidence * 100)}%</p>}
+                    </>
+                  ) : (
+                    <p className="text-[var(--color-warning)]" data-testid="ref-unreadable">Reference unreadable{r.twin?.confidence !== undefined ? ` (OCR confidence ${Math.round(r.twin.confidence * 100)}%)` : ""} — not used as evidence.</p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--color-muted-foreground)]">Official answer key</p>
+                  <p data-testid="ref-key">{q.officialAnswerRaw ?? "—"}{q.officialKeyPage ? ` (key page ${q.officialKeyPage})` : ""}</p>
+                  <p className="text-xs">This question&apos;s answer: {q.finalAnswer.join(", ") || "—"} · reference: {r.twin && !r.twin.unreadable && r.twin.answer.length ? r.twin.answer.join(", ") : "—"}</p>
+                  {r.conflicts.length > 0 && (
+                    <ul className="mt-1 list-disc pl-4 text-xs text-[var(--color-warning)]">
+                      {r.conflicts.map((c) => (
+                        <li key={c}>{c}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Checks</CardTitle>

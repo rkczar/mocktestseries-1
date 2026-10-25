@@ -12,6 +12,7 @@ import { kickWorker } from "@/lib/ai-import/kick";
 import type { FileFacts, JobAnalysis } from "@/lib/ai-import/analyze";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import type { ReconfigurePreview, ReconfigureResult } from "@/lib/ai-import/autoconfig-types";
+import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
 
 /**
  * "Reconfigure Models for This Job" — an explicit action for a PAUSED import, never automatic. The job's
@@ -195,7 +196,7 @@ export async function priceRemainingWork(job: { id: string; analysis: Prisma.Jso
   const perRequest = (c: { maxInr: number | null } | undefined) => (c?.maxInr == null ? null : (settings.budget.retryTransient ? 2 : 1) * c.maxInr + (settings.budget.allowPricierFallback ? Math.max(c.maxInr, settings.budget.maxRequestInr) : c.maxInr));
   const classifyEach = plan.tasks.classify.model ? perRequest(plan.tasks.classify) : 0;
   const solveEach = toSolve && plan.tasks.verify.model ? perRequest(plan.tasks.verify) : 0;
-  const extra = classifyEach === null || solveEach === null ? null : Math.ceil(toClassify / 20) * classifyEach + toSolve * solveEach;
+  const extra = classifyEach === null || solveEach === null ? null : Math.ceil(toClassify / CLASSIFY_BATCH) * classifyEach + toSolve * solveEach;
   const maxInr = est.maxInr === null || extra === null ? null : Math.round((est.maxInr + extra) * 10_000) / 10_000;
   return { pages, unreadPages, failedKeyFiles: failedKeys.length, toClassify, estimate: est, maxInr };
 }

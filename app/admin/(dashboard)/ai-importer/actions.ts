@@ -52,6 +52,7 @@ import { CLEANUP_CATEGORIES, executeCleanup, findCandidates, findDuplicates, sca
 import type { ImportMode } from "@/lib/ai-import/adapter";
 import { applyReferenceAnswers, importAndPublishEligible, requestVerify2, runVerify1, verify2Preview, type Verify1Result, type Verify2Preview, type Verify2Request } from "@/lib/ai-import/paper-verify";
 import { unlinkReference } from "@/lib/ai-import/reference";
+import { referenceOcrPreview, requestReferenceOcr, type ReferenceOcrPreview, type ReferenceOcrRequest } from "@/lib/ai-import/reference-ocr";
 
 /**
  * AI Question Importer Server Actions. USE (upload, process, review, import,
@@ -697,6 +698,16 @@ export async function applyReferenceAnswersAction(jobId: string, ids: string[]):
     await revalidateQuestions(jobId, target);
     return { applied };
   });
+}
+
+/** Reference OCR (paid, optional): the estimate, the per-request maximum and every budget — nothing is sent by this. */
+export async function referenceOcrPreviewAction(jobId: string, refId: string): Promise<ImporterResult<ReferenceOcrPreview>> {
+  return run(await requireUse(), async () => referenceOcrPreview(jobId, String(refId)));
+}
+
+/** Reference OCR — starts only when `confirmedMaxInr` covers the freshly computed maximum and every budget allows it. */
+export async function referenceOcrStartAction(jobId: string, refId: string, confirmedMaxInr: number | null): Promise<ImporterResult<ReferenceOcrRequest>> {
+  return run(await requireUse(), async (actorId) => requestReferenceOcr({ jobId, refId: String(refId), actorId, confirmedMaxInr: costOf(confirmedMaxInr) }));
 }
 
 export async function unlinkReferenceAction(jobId: string, refId: string): Promise<ImporterResult<null>> {

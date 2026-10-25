@@ -856,7 +856,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             <Button disabled={pending || !s.approvedReady} onClick={() => act(() => importAction(job.id, "DRAFT", null), "Import started.")} data-testid="import-draft">
-              Add approved as Draft ({s.approvedReady})
+              Add approved to Question Bank (Draft) ({s.approvedReady})
             </Button>
             {canPublish && (
               <Button

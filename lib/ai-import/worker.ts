@@ -14,6 +14,7 @@ import { ImporterAiUnavailable, ImporterBudgetError, resetOutputFailures, resetR
 import { summarizeFailures } from "@/lib/ai-import/failure";
 import { jobQuality, reconcileJob, settleJobStatus } from "@/lib/ai-import/summary";
 import { runVerify2, verify2Outcome, type Verify2State } from "@/lib/ai-import/paper-verify";
+import { runReferenceOcr, type ReferenceOcrState } from "@/lib/ai-import/reference-ocr";
 import { formatInr } from "@/lib/ai-engine/config";
 import { removeVaultDir } from "@/lib/ai-import/vault";
 import { autoCleanup } from "@/lib/ai-import/storage";
@@ -127,9 +128,45 @@ async function verify2Job(job: AiImportJob, state: Verify2State): Promise<void> 
   }
 }
 
+/**
+ * A confirmed reference OCR (lib/ai-import/reference-ocr.ts): reads the scanned reference pages only. It never
+ * changes a question; a cost / provider stop returns the job to review with the pages read so far kept for a resume.
+ */
+async function referenceOcrJob(job: AiImportJob, state: ReferenceOcrState): Promise<void> {
+  const current = await getImporterSettings();
+  const settings: ImporterSettings = { ...jobRunSettings(job.config, current), aiEnabled: current.aiEnabled };
+  if (job.status === AiImportJobStatus.QUEUED) {
+    if (!(await transition(job.id, [AiImportJobStatus.QUEUED], { status: AiImportJobStatus.PROCESSING, startedAt: job.startedAt ?? new Date() }))) return;
+    await logEvent(job.id, "REFERENCE_OCR_STARTED", `Reference OCR of “${state.name}” started with ${state.model} (maximum ${formatInr(state.maxInr)}).`);
+  }
+  const fresh = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id } });
+  const ctx = makeContext({ ...fresh, status: AiImportJobStatus.PROCESSING }, settings, { exam: "", subject: null });
+  resetRateLimitStreak(job.id);
+  const patchState = async (patch: Partial<ReferenceOcrState>) => {
+    const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { config: true } });
+    const cfg = (j.config as Record<string, unknown>) ?? {};
+    return { ...cfg, referenceOcr: { ...(cfg.referenceOcr as ReferenceOcrState), ...patch } } as unknown as Prisma.InputJsonValue;
+  };
+  try {
+    const done = await runReferenceOcr(ctx);
+    if (done.status !== "DONE") return;
+    if (await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), errorMessage: null, config: await patchState({}) })) await settleJobStatus(job.id);
+  } catch (e) {
+    const stop = e instanceof ImporterBudgetError || e instanceof ImporterAiUnavailable;
+    const message = e instanceof Error ? e.message.slice(0, 500) : "unexpected error";
+    if (!stop) console.error(`[ai-import] reference OCR of job ${job.id} failed: ${message}`);
+    if (await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), config: await patchState({ status: "STOPPED", stopReason: message, finishedAt: new Date().toISOString() }) })) {
+      await logEvent(job.id, "REFERENCE_OCR_STOPPED", `Reference OCR stopped: ${message} Pages read so far are kept; nothing was changed.`, { refId: state.refId });
+      await settleJobStatus(job.id);
+    }
+  }
+}
+
 async function processJob(job: AiImportJob): Promise<void> {
   const verify2 = (job.config as { verify2?: Verify2State } | null)?.verify2;
   if (verify2 && (verify2.status === "QUEUED" || verify2.status === "RUNNING")) return verify2Job(job, verify2);
+  const refOcr = (job.config as { referenceOcr?: ReferenceOcrState } | null)?.referenceOcr;
+  if (refOcr && (refOcr.status === "QUEUED" || refOcr.status === "RUNNING")) return referenceOcrJob(job, refOcr);
   // Settings frozen at confirmation; the AI switch, models and budget follow the CURRENT settings
   // (an admin who turns AI off or lowers limits mid-job is obeyed).
   // Privacy: the stricter of the confirmed and the current settings. Budgets: the current (lowered limits apply).

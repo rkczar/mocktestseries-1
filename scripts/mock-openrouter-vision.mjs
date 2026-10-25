@@ -45,7 +45,8 @@
  * stats.reasoning records each chat request's `reasoning` setting (null when absent). Script mode "refusal" answers with
  * a plain-text refusal; config {classifyShift: true} makes classification echo the NEXT question's key words and topic
  * (shifted answers), {classifyNoAbout: true} leaves the key words out, {classifyKeep: n} returns only the first n
- * answers (2026-10-23).
+ * answers (2026-10-23). Script modes "terminated" (HTTP 502 "terminated", a dropped connection) and "baditem" (the first
+ * classification result replaced by a malformed entry) — 2026-10-25.
  * Full-paper verification fixtures (2026-10-22): a page fixture may carry `byModel: {id: {questions}}` (what that model
  * reads); `text: [{match, questions, checker?, byModel?}]` answers page-reading requests WITHOUT an image (Verify 2 of a
  * DOCX / sheet) with the first entry whose `match` string occurs in the request text.
@@ -309,7 +310,10 @@ const server = http.createServer(async (req, res) => {
       let finish = "stop";
       let ctOverride = null;
       const mode = m.thinks && !body.reasoning?.effort ? "length" : Array.isArray(config.script[id]) && config.script[id].length ? config.script[id].shift() : null;
-      if (mode === "refusal") content = "I'm sorry, but I can't help with transcribing this document.";
+      // 2026-10-25: a connection the provider drops mid-request, and a classification list with one malformed entry.
+      if (mode === "terminated") return err(res, 502, "terminated");
+      if (mode === "baditem" && out.results) content = JSON.stringify({ results: [{ bogus: true }, ...out.results.slice(1)] });
+      else if (mode === "refusal") content = "I'm sorry, but I can't help with transcribing this document.";
       else if (mode === "empty") {
         content = "";
         ctOverride = 0;

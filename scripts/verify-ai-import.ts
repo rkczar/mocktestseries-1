@@ -245,7 +245,8 @@ async function main() {
   const q1 = await q(jobC, "1");
   check("Q1: near-duplicate flagged (not blocked)", q1.issueCodes.includes("DUPLICATE_NEAR") && q1.status !== "DUPLICATE", q1.issueCodes);
   const q10 = await q(jobC, "10");
-  check("Q10: refers to a diagram with no image → image missing", q10.issueCodes.includes("IMAGE_MISSING"), q10.issueCodes);
+  // 2026-10-25: a digital page without any embedded image → reviewable (an administrator decides), never blocking.
+  check("Q10: points at a diagram, its page has no image → reviewable IMAGE_REFERENCE_UNCERTAIN, not blocking", q10.issueCodes.includes("IMAGE_REFERENCE_UNCERTAIN") && !q10.issueCodes.includes("IMAGE_MISSING"), q10.issueCodes);
   check("without AI, topics are flagged for correction", q2.issueCodes.includes("TOPIC_UNCERTAIN") || !!q2.topicId);
   check("checks persisted for stages 1–4", [1, 2, 3, 4].every((s) => q3.checks.some((c) => c.stage === s)), q3.checks.map((c) => c.stage));
   let sum = await jobSummary(jobC);
