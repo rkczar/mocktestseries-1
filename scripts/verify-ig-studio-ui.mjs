@@ -248,8 +248,8 @@ try {
   // Checks: question number + warnings; no approval step anywhere
   await page.getByTestId("tab-checks").click();
   const issueText = await page.getByTestId("issue-list").innerText();
-  check("checks list the missing printed question number + AI content warning", /No printed question number/.test(issueText) && /written by AI/.test(issueText), issueText);
-  check("no Mark Ready / approval controls", (await page.getByTestId("mark-ready").count()) === 0 && (await page.locator('[data-testid="issue-list"] input[type=checkbox]').count()) === 0 && (await page.locator('[data-testid^="check-"]').count()) === 0);
+  check("checks list the missing printed question number + AI content warning", /no printed question number/i.test(issueText) && /AI-generated medical content/.test(issueText), issueText);
+  check("no Mark Ready / approval controls", (await page.getByTestId("mark-ready").count()) === 0 && (await page.locator('[data-testid="issue-list"] input[type=checkbox]:not([data-testid="q-verified"])').count()) === 0 && (await page.locator('[data-testid^="check-"]').count()) === 0);
   await page.getByTestId("q-number").fill("12");
   await page.getByTestId("q-verified").check();
   await page.getByTestId("q-save").click();

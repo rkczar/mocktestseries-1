@@ -5,6 +5,8 @@ import { checkDiagram, diagramLayout, diagramTexts, diagramTitleOverflows } from
 import { checkTrap, trapLengthNotes, trapTexts } from "@/lib/instagram/trap";
 import { EXCLUDED_TERMS, isExcludedExam } from "@/lib/instagram/exam-scope";
 import { MAX_SLIDES, MODULE_LABELS, type PostContent, type PostDesign, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
+import { describeChar } from "@/lib/instagram/text-normalize";
+import { DIFFICULTY_LABELS, legacyDifficultyNote } from "@/lib/question-difficulty";
 
 /**
  * The publish gate. Pure: the server re-runs it when publishing starts (never
@@ -122,16 +124,33 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
   // --- Attribution --------------------------------------------------------------
   if (input.series === "PYQ") {
     if (!s.paperId || !s.paperYear) err("NOT_PYQ", "This question is not linked to a previous year paper.");
-    if (!input.questionNumber) warn("QUESTION_NUMBER_MISSING", "No printed question number entered — the slides will not show a question number.");
-    else if (!input.questionNumberVerified) warn("QUESTION_NUMBER_UNVERIFIED", `Question number ${input.questionNumber} is not marked verified — it will not be shown on the slides.`);
+    // Optional on every template: without a verified number the slides simply leave it out (never derived from the stored order).
+    if (!input.questionNumber) warn("QUESTION_NUMBER_MISSING", "Optional: no printed question number entered, so the slides show none. Enter it from the original paper if you want it on the slide.");
+    else if (!input.questionNumberVerified) warn("QUESTION_NUMBER_UNVERIFIED", `Question number ${input.questionNumber} is not marked verified against the original paper, so it is not shown on the slides.`);
   }
   if (s.status !== "PUBLISHED") warn("QB_NOT_PUBLISHED", `The question is ${s.status.toLowerCase()} in the Question Bank.`);
-  if (s.reviewRequired) warn("QB_REVIEW_REQUIRED", `The Question Bank flags this question for review${s.reviewReason ? `: ${s.reviewReason}` : "."}`);
+  if (s.reviewRequired) {
+    const legacy = legacyDifficultyNote(s.reviewReason);
+    if (legacy?.mapped) {
+      warn(
+        "QB_DIFFICULTY_LEGACY",
+        `Question Bank difficulty (not changed here): the import code "${legacy.original}" was not recognised, so the Question Bank stores Medium and flags it for review ("${legacy.original}" usually means ${DIFFICULTY_LABELS[legacy.mapped]}). Instagram Studio does not edit the Question Bank; this does not affect the slides or block publishing.`
+      );
+      if (legacy.remainingReason) warn("QB_REVIEW_REQUIRED", `The Question Bank flags this question for review: ${legacy.remainingReason}`);
+    } else if (legacy) {
+      warn("QB_DIFFICULTY_UNKNOWN", `Question Bank difficulty (not changed here): the import value "${legacy.original}" is not a known difficulty code, so the Question Bank stores Medium. Instagram Studio does not edit the Question Bank.`);
+      if (legacy.remainingReason) warn("QB_REVIEW_REQUIRED", `The Question Bank flags this question for review: ${legacy.remainingReason}`);
+    } else warn("QB_REVIEW_REQUIRED", `The Question Bank flags this question for review${s.reviewReason ? `: ${s.reviewReason}` : "."}`);
+  }
 
   if (input.series === "MOST_MISSED") {
     if (!input.seriesStats) err("STATS_MISSING", "Most Missed numbers were not captured for this draft.");
     else if (input.seriesStats.attempts < 20) warn("STATS_SMALL_SAMPLE", `Only ${input.seriesStats.attempts} answered attempts — the percentage may not be meaningful.`);
   }
+
+  // A medical review recorded for exactly this text (see currentMedicalReview) covers the "check it medically" warnings.
+  const review = currentMedicalReview(c);
+  const reviewed = Boolean(review?.fullReview);
 
   // --- Slides ---------------------------------------------------------------------
   // Slide numbers/indexes are positions in the rendered sequence (a long Examiner Trap adds continuation slides).
@@ -154,7 +173,7 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     if (diagramLayout(c.diagram).overflow || diagramTitleOverflows(c.diagram.title)) {
       err("DIAGRAM_OVERFLOW", `Slide ${diagramIdx + 1} (diagram) has too much text for its boxes. Shorten the labels or use fewer boxes.`, diagramIdx);
     }
-    if (!c.diagram.reviewed) warn("DIAGRAM_UNREVIEWED", `Slide ${diagramIdx + 1}: check every label of the diagram for medical accuracy.`, diagramIdx);
+    if (!c.diagram.reviewed && !reviewed) warn("DIAGRAM_UNREVIEWED", `Slide ${diagramIdx + 1}: check every label of the diagram for medical accuracy.`, diagramIdx);
   }
   const trapIdx = at("TRAP");
   if (trapIdx >= 0 && c.trap) {
@@ -163,11 +182,11 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     if (parts > 1) warn("TRAP_CONTINUED", `Slide ${trapIdx + 1} (examiner trap) is long, so it continues automatically on ${parts > 2 ? `slides ${trapIdx + 2}–${trapIdx + parts}` : `slide ${trapIdx + 2}`}. Nothing is cut.`, trapIdx);
     for (const m of trapLengthNotes(c.trap)) warn(`TRAP_LONG:${m.slice(0, 30)}`, `Examiner trap: ${m}`, trapIdx);
     if (c.trap.status === "rejected") err("TRAP_REJECTED", `Slide ${trapIdx + 1}: this Examiner Trap question was rejected. Regenerate it or remove the trap slide.`, trapIdx);
-    else if (c.trap.status !== "approved") warn("TRAP_UNAPPROVED", `Slide ${trapIdx + 1}: the Examiner Trap is a new question — check its stem, options and answer.`, trapIdx);
-    for (const ch of c.trap.checks) if (!ch.ok) warn(`TRAP_CHECK:${ch.code}`, `Examiner trap: ${ch.message}`, trapIdx);
+    else if (c.trap.status !== "approved" && !reviewed) warn("TRAP_UNAPPROVED", `Slide ${trapIdx + 1}: the Examiner Trap is a new question — check its stem, options and answer.`, trapIdx);
+    if (!reviewed) for (const ch of c.trap.checks) if (!ch.ok) warn(`TRAP_CHECK:${ch.code}`, `Examiner trap: ${ch.message}`, trapIdx);
   }
   const imageIdx = at("MEDICAL_IMAGE");
-  if (imageIdx >= 0 && c.medicalImage) {
+  if (imageIdx >= 0 && c.medicalImage && !reviewed) {
     warn(
       "MEDICAL_IMAGE_REVIEW",
       c.medicalImage.source.kind === "ai"
@@ -224,18 +243,55 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
       if (bad.length) {
         err(
           `GLYPHS:${f.name}`,
-          `${f.name} contains ${bad.map((ch) => `"${ch}"`).join(", ")}, which the slide fonts can't draw (shown as □). ${f.name.startsWith("Question") || f.name.startsWith("Option") ? "Fix it in the Question Bank and refresh the snapshot." : "Remove or replace it."}`
+          `${f.name} contains ${bad.map(describeChar).join(", ")}, which the slide fonts can't draw (it would show as □). ${f.name.startsWith("Question") || f.name.startsWith("Option") ? "Fix it in the Question Bank and refresh the snapshot." : "Replace it with a supported character."}`
         );
       }
     }
   }
   if (!c.caption.trim()) err("CAPTION_EMPTY", "The caption is empty.");
-  if (c.origin.kind === "ai" || c.origin.kind === "existing-explanation") {
-    warn("AI_CONTENT", "Explanation, trick and pearl were written by AI — check every medical statement.");
+  // Medical review: AI-written medical text stays flagged until an admin records a review of that exact text.
+  if ((c.origin.kind === "ai" || c.origin.kind === "existing-explanation") && medicalTexts(c).length && !reviewed) {
+    warn("AI_CONTENT", "AI-generated medical content — not yet medically reviewed. Check every medical statement, then record the review.");
   }
   if (s.aiExplanation?.isStale && c.origin.kind === "existing-explanation") warn("AI_STALE", "The source AI explanation is marked stale (the question changed after it was generated).");
-  c.aiFlags.forEach((f, i) => warn(`AI_FLAG:${i}`, `AI note: ${f}`));
+  c.aiFlags.forEach((f, i) => {
+    if (!review?.flags.some((x) => x.flag === f)) warn(`AI_FLAG:${i}`, `AI note: ${f}`);
+  });
   return issues;
+}
+
+/** The AI-written medical statements (what AI_CONTENT is about). Captions/hashtags are marketing text, not included. */
+export function medicalTexts(c: PostContent): string[] {
+  return [c.hookText, c.explanation, c.memoryTrick, c.clinicalPearl, ...c.quickRevision, ...c.pearls, ...c.mistakes, c.showFinalTrick ? c.finalTrick : ""].map((t) => t.trim()).filter(Boolean);
+}
+
+/** Everything a medical review attests: the medical text, diagram, trap, image and the AI notes. */
+function reviewedMaterial(c: PostContent): unknown {
+  return [
+    medicalTexts(c),
+    c.diagram ? diagramTexts(c.diagram) : null,
+    c.trap ? [c.trap.question, c.trap.options, c.trap.correct, c.trap.trapExplanation, c.trap.avoidTip] : null,
+    c.medicalImage ? [c.medicalImage.key, c.medicalImage.title, c.medicalImage.memoryTip] : null,
+    c.aiFlags,
+  ];
+}
+
+/** Stable hash of the medical text + AI notes (two FNV-1a 32 passes, pure — runs in the browser too). */
+export function medicalTextHash(c: PostContent): string {
+  const text = JSON.stringify(reviewedMaterial(c));
+  let a = 0x811c9dc5;
+  let b = 0x01000193 ^ text.length;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    a = Math.imul(a ^ ch, 0x01000193) >>> 0;
+    b = Math.imul(b ^ ch ^ (i & 0xff), 0x01000193) >>> 0;
+  }
+  return a.toString(16).padStart(8, "0") + b.toString(16).padStart(8, "0");
+}
+
+/** The recorded medical review if it still covers the current text (any later edit or regeneration voids it). */
+export function currentMedicalReview(c: PostContent) {
+  return c.medicalReview && c.medicalReview.contentHash === medicalTextHash(c) ? c.medicalReview : null;
 }
 
 export function blockingIssues(issues: QualityIssue[]): QualityIssue[] {

@@ -18,6 +18,7 @@ import {
   type PostContent,
   type SourceSnapshot,
 } from "@/lib/instagram/types";
+import { normalizeEquivalent } from "@/lib/instagram/text-normalize";
 
 /**
  * Pure prompt builders + response validators for the AI Studio features that
@@ -89,7 +90,7 @@ export function buildDiagramPrompt(params: { snapshot: SourceSnapshot; explanati
 export type DiagramParse = { ok: true; diagram: DiagramSpec; flags: string[] } | { ok: false; error: string };
 
 export function parseDiagram(text: string, snapshot: SourceSnapshot, kind: DiagramKind | "auto"): DiagramParse {
-  const data = extractJson(text);
+  const data = extractJson(normalizeEquivalent(text));
   if (!data) return { ok: false, error: "The AI response was not valid JSON." };
   const spec = normalizeDiagram({ ...data, reviewed: false });
   if (!spec) return { ok: false, error: "The AI did not return a supported diagram type." };

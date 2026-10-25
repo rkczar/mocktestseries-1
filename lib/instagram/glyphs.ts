@@ -1,6 +1,7 @@
 import "server-only";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { INVISIBLE, normalizeSlideText, type NormalizeResult } from "@/lib/instagram/text-normalize";
 
 /**
  * Which characters the slide fonts can draw. Satori asks the network
@@ -8,7 +9,9 @@ import path from "node:path";
  * renderer must never be handed such a character: the quality gate blocks
  * them (UNSUPPORTED_CHARACTERS) and the preview shows "□" in their place.
  * Coverage = Geist (brand font) + Liberation Sans (bundled OFL fallback for
- * Greek and other symbols), read from the fonts' own cmap tables.
+ * Greek and other symbols), read from the fonts' own cmap tables. The
+ * Handwritten templates list Kalam first and then the same two families, so
+ * this coverage holds in both design modes (Satori falls back per glyph).
  */
 
 export const FONT_FILES = {
@@ -66,28 +69,36 @@ function covered(): Set<number> {
   return coverage;
 }
 
-/** Whitespace / joiners that are never drawn. */
-const INVISIBLE = new Set([0x09, 0x0a, 0x0d, 0x20, 0xa0, 0x200b, 0x200c, 0x200d, 0xfe0e, 0xfe0f]);
-
-/** Distinct characters in `text` that no slide font can draw (e.g. emoji, superscript ⁺). */
-export function unsupportedChars(text: string): string[] {
-  const cov = covered();
-  const bad = new Set<string>();
-  for (const ch of text) {
-    const cp = ch.codePointAt(0)!;
-    if (!INVISIBLE.has(cp) && !cov.has(cp)) bad.add(ch);
-  }
-  return [...bad];
+/** Can the slide fonts draw this code point? (shared by every slide type and both design modes) */
+export function isDrawable(cp: number): boolean {
+  return INVISIBLE.has(cp) || covered().has(cp);
 }
 
-/** Text safe to hand to Satori: undrawable characters become "□" (the post can't be approved while they exist). */
+/**
+ * Distinct characters in `text` that no slide font can draw (e.g. emoji, ⇌),
+ * AFTER the equivalent replacements the renderer applies on its own (a
+ * non-breaking hyphen is drawn as "-", so it is not a problem).
+ */
+export function unsupportedChars(text: string): string[] {
+  return normalizeSlideText(text, isDrawable).remaining;
+}
+
+/** The shared normalizer bound to the real font coverage (lib/instagram/text-normalize.ts). */
+export function normalizeForSlides(text: string, allowContextual = false): NormalizeResult {
+  return normalizeSlideText(text, isDrawable, allowContextual);
+}
+
+/**
+ * Text safe to hand to Satori: equivalent characters are replaced first
+ * (U+2011 → "-"); anything still undrawable becomes "□" in the editor
+ * preview. Such a post can't be published, and the slide download refuses it.
+ */
 export function renderable(text: string): string {
-  const cov = covered();
   let out = "";
-  for (const ch of text) {
+  for (const ch of normalizeSlideText(text, isDrawable).text) {
     const cp = ch.codePointAt(0)!;
     if (cp === 0xfe0e || cp === 0xfe0f || cp === 0x200d) continue;
-    out += INVISIBLE.has(cp) || cov.has(cp) ? ch : "□";
+    out += isDrawable(cp) ? ch : "□";
   }
   return out;
 }

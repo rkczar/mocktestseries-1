@@ -4,7 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { isExamInScope } from "@/lib/instagram/scope";
 import { allowedCaptionDomains, getStudioSettings, type StudioSettings } from "@/lib/instagram/config";
 import { runQualityGate, type QualityIssue } from "@/lib/instagram/quality";
-import { unsupportedChars } from "@/lib/instagram/glyphs";
+import { normalizeForSlides, unsupportedChars } from "@/lib/instagram/glyphs";
+import { adviseIssue, type IssueAdvice } from "@/lib/instagram/fixes";
 import { buildSnapshot, currentSourceHash } from "@/lib/instagram/snapshot";
 import { publishView, type PublishView } from "@/lib/instagram/publish-view";
 import {
@@ -75,6 +76,8 @@ export interface PostDto {
   sourceChanged: boolean;
   sourceDeleted: boolean;
   issues: QualityIssue[];
+  /** One entry per issue: category (auto / admin / medical) and the next action (lib/instagram/fixes.ts). */
+  advice: IssueAdvice[];
   canUndo: boolean;
   revisions: RevisionSummary[];
 }
@@ -132,6 +135,15 @@ export async function toDto(post: InstagramPost, settings?: StudioSettings): Pro
     currentSourceHash(post.questionId),
     settings ? Promise.resolve(settings) : getStudioSettings(),
   ]);
+  const issues = issuesFor(post, currentHash, s);
+  const fixCtx = {
+    snapshot: post.sourceSnapshot as unknown as SourceSnapshot,
+    content: normalizeContent(post.content),
+    design: normalizeDesign(post.design),
+    series: post.series,
+    normalize: normalizeForSlides,
+    questionEditHref: `/admin/questions?tab=add&id=${post.questionId}`,
+  };
   const names = await adminNames([...revisions.map((r) => r.createdById), post.reviewedById]);
   const head = revisions.find((r) => r.revision === post.revision);
   const review = (post.review ?? {}) as { acknowledged?: string[] };
@@ -161,7 +173,8 @@ export async function toDto(post: InstagramPost, settings?: StudioSettings): Pro
     isCurrent: post.supersededAt === null,
     sourceChanged: currentHash !== null && currentHash !== post.sourceHash,
     sourceDeleted: currentHash === null,
-    issues: issuesFor(post, currentHash, s),
+    issues,
+    advice: issues.map((i) => adviseIssue(i, fixCtx)),
     canUndo: head?.baseRevision != null,
     revisions: revisions.map((r) => ({
       revision: r.revision,
@@ -389,6 +402,11 @@ async function writeRevision(
   });
   if (hadConfirmation) await audit(actorId, "INSTAGRAM_CONFIRMATION_CLEARED", post.id, { reason: note, revision: post.revision });
   return (await prisma.instagramPost.findUnique({ where: { id: post.id } }))!;
+}
+
+/** writeRevision on top of the post's current revision (lib/instagram/repair.ts, proposals). Same conflict guard. */
+export function writeRevisionFor(post: InstagramPost, next: { content: PostContent; design: PostDesign }, note: string, actorId: string, extra: Prisma.InstagramPostUpdateManyMutationInput = {}): Promise<InstagramPost> {
+  return writeRevision(post, next, note.slice(0, 200), actorId, post.revision, extra);
 }
 
 export async function applyChange(params: {

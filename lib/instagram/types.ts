@@ -289,6 +289,33 @@ export interface PostContent {
   origin: ContentOrigin;
   /** Uncertainty notes reported by the AI ("confidence: medium — …"). Shown as review warnings. */
   aiFlags: string[];
+  /** Server-owned: the medical review an admin recorded for the AI-written text (void once that text changes). */
+  medicalReview: MedicalReview | null;
+}
+
+export const FLAG_DECISIONS = ["confirmed", "context", "corrected"] as const;
+export type FlagDecision = (typeof FLAG_DECISIONS)[number];
+export const FLAG_DECISION_LABELS: Record<FlagDecision, string> = {
+  confirmed: "Checked — the statement is correct as written",
+  context: "Checked — correct in this exam context (the note was too broad)",
+  corrected: "Checked — I corrected the text",
+};
+
+/**
+ * A reviewer's record for one exact version of the medical text (hash from
+ * lib/instagram/quality.ts medicalTextHash). It never claims more than the
+ * reviewer stated; the gate ignores it as soon as the text changes.
+ */
+export interface MedicalReview {
+  contentHash: string;
+  reviewerId: string;
+  reviewerName: string;
+  at: string;
+  note: string;
+  /** true = the reviewer checked every medical statement on the slides (explanation, pearls, diagram, trap, image); false = only the AI notes below. */
+  fullReview: boolean;
+  /** Decisions on AI notes, keyed by the exact note text. */
+  flags: { flag: string; decision: FlagDecision; note: string }[];
 }
 
 export interface PostDesign {
@@ -450,6 +477,7 @@ export function emptyContent(): PostContent {
     hashtags: [],
     origin: { kind: "empty" },
     aiFlags: [],
+    medicalReview: null,
   };
 }
 
@@ -487,7 +515,20 @@ export function normalizeContent(raw: unknown): PostContent {
     hashtags: strList(r.hashtags),
     origin: { ...origin, kind: (["empty", "ai", "existing-explanation", "manual"] as const).includes(origin.kind) ? origin.kind : "empty" },
     aiFlags: strList(r.aiFlags),
+    medicalReview: normalizeMedicalReview(r.medicalReview),
   };
+}
+
+function normalizeMedicalReview(raw: unknown): MedicalReview | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.contentHash !== "string" || typeof r.reviewerId !== "string" || typeof r.at !== "string") return null;
+  const flags = Array.isArray(r.flags)
+    ? (r.flags as Record<string, unknown>[])
+        .filter((f) => f && typeof f.flag === "string" && (FLAG_DECISIONS as readonly string[]).includes(f.decision as string))
+        .map((f) => ({ flag: f.flag as string, decision: f.decision as FlagDecision, note: str(f.note) }))
+    : [];
+  return { contentHash: r.contentHash, reviewerId: r.reviewerId, reviewerName: str(r.reviewerName), at: r.at, note: str(r.note), fullReview: r.fullReview === true, flags };
 }
 
 function originOf(v: unknown): ContentOrigin | undefined {

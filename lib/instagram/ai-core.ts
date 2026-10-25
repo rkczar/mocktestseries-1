@@ -1,5 +1,6 @@
 import { checkText, type SafetyContext } from "@/lib/instagram/content-safety";
 import { plainText } from "@/lib/instagram/layout";
+import { normalizeEquivalent } from "@/lib/instagram/text-normalize";
 import { examProfile, stripExcluded } from "@/lib/instagram/exam-scope";
 import {
   HOOK_STYLES,
@@ -164,7 +165,8 @@ export function parseAiResponse(text: string, snapshot: SourceSnapshot, targets:
     const problems = checkText(value, ctx, { strictYears: strict, allowedDomains: field === "caption" ? allowedDomains : undefined });
     return problems.length ? problems.map((p) => p.message).join(" ") : null;
   };
-  const str = (v: unknown) => (typeof v === "string" ? v.replace(/\s+\n/g, "\n").trim() : "");
+  // Equivalent characters (U+2011 non-breaking hyphen etc.) become their drawable twins on the way in (lib/instagram/text-normalize.ts).
+  const str = (v: unknown) => (typeof v === "string" ? normalizeEquivalent(v).replace(/\s+\n/g, "\n").trim() : "");
 
   for (const field of targets) {
     const raw = data[field];

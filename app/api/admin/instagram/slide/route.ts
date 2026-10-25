@@ -28,6 +28,10 @@ export async function GET(request: NextRequest) {
   try {
     const [post, settings] = await Promise.all([getPostDto(postId), getStudioSettings()]);
     if (index >= slideSequence(post.content, post.design).length) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
+    // A downloaded (exported) image never contains a missing-glyph box: undrawable characters must be fixed first
+    // (Checks → Fix This Error). In-app thumbnails still render, with "□" marking the problem.
+    const glyphs = post.issues.filter((i) => i.code.startsWith("GLYPHS:"));
+    if (glyphs.length && params.get("download") === "1") return NextResponse.json({ error: `Fix the unsupported characters first (Checks tab): ${glyphs.map((g) => g.message).join(" ")}` }, { status: 409 });
     const jpeg = await renderSlideJpeg(
       {
         snapshot: post.snapshot,

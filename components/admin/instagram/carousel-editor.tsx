@@ -23,7 +23,6 @@ import {
   refreshSnapshotAction,
   restoreRevisionAction,
   saveDraftAction,
-  setQuestionNumberAction,
   undoAction,
   type Result,
 } from "@/app/admin/(dashboard)/instagram/actions";
@@ -36,6 +35,7 @@ import { useCostPreview } from "@/components/admin/ai/cost-preview";
 import { parseLayoutInstruction } from "@/lib/instagram/instructions";
 import { CaptionVersions } from "@/components/admin/instagram/caption-versions";
 import { DesignModePicker } from "@/components/admin/instagram/design-mode-picker";
+import { ChecksPanel } from "@/components/admin/instagram/checks-panel";
 import {
   CONTENT_FIELD_LABELS,
   DEFAULT_LAYOUTS,
@@ -155,8 +155,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [instruction, setInstruction] = useState("");
-  const [qNumber, setQNumber] = useState("");
-  const [qVerified, setQVerified] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmNewVersion, setConfirmNewVersion] = useState(false);
   const [publishOpen, setPublishOpen] = useState(Boolean(target?.publish));
@@ -167,8 +165,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   const adopt = useCallback((p: PostDto) => {
     setPost(p);
     setDraft(toDraft(p));
-    setQNumber(p.questionNumber ? String(p.questionNumber) : "");
-    setQVerified(p.questionNumberVerified);
     setSlide((s) => Math.min(s, slideSequence(p.content, p.design).length - 1));
   }, []);
 
@@ -328,6 +324,10 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
 
   const runAi = (opts: { instruction?: string; fields?: string[]; selected?: boolean }) => {
     if (!post || !draft) return;
+    // "Generate all content" rewrites every text field: never replace written text without asking (History/Undo keep it).
+    const full = !opts.fields && !opts.instruction && !opts.selected;
+    const written = [draft.content.explanation, draft.content.memoryTrick, draft.content.clinicalPearl, draft.revisionText, draft.pearlsText, draft.mistakesText, draft.content.caption].some((t) => t.trim());
+    if (full && written && !window.confirm("Generate all content replaces the current hook, explanation, trick, pearl, revision points, pearls, mistakes, caption and hashtags. The current text stays in History (Undo restores it). To change only one part, use Generate with AI in the Checks tab or Regenerate slide. Continue?")) return;
     // A layout-only instruction (font size, theme…) changes the design without any AI call — no cost preview.
     const layoutOnly = Boolean(opts.instruction && parseLayoutInstruction(opts.instruction, draft.design));
     if (layoutOnly) return runAiWith(opts, undefined);
@@ -357,7 +357,6 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
 
   const issues = post?.issues ?? [];
   const errors = issues.filter((i) => i.severity === "error");
-  const warnings = issues.filter((i) => i.severity === "warning");
 
   // Rendered slides: design.modules, plus continuation slides when a long Examiner Trap needs them.
   const modules = draft ? slideSequence(draft.content, draft.design) : [];
@@ -815,61 +814,16 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                   ) : null}
 
                   {tab === "checks" ? (
-                    <div className="flex flex-col gap-4" data-testid="review-panel">
-                      {dirty ? <p className="rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 p-2 text-sm">Save your changes first — the checks below are for the saved version.</p> : null}
-                      <section className="flex flex-col gap-2">
-                        <h3 className="text-sm font-semibold">{`Quality checks — ${errors.length} blocking, ${warnings.length} to check`}</h3>
-                        {issues.length === 0 ? <p className="text-sm text-[var(--color-success)]">No problems found.</p> : null}
-                        <ul className="flex flex-col gap-1.5" data-testid="issue-list">
-                          {errors.map((i) => (
-                            <li key={i.code} data-code={i.code} className="rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/5 p-2 text-sm">
-                              <span className="font-semibold text-[var(--color-error)]">Blocking · </span>
-                              {i.message}
-                            </li>
-                          ))}
-                          {warnings.map((i) => (
-                            <li key={i.code} data-code={i.code} className="rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 p-2 text-sm">
-                              <span className="font-semibold">Check · </span>
-                              {i.message}
-                            </li>
-                          ))}
-                        </ul>
-                        <p className="text-xs text-[var(--color-muted-foreground)]">
-                          Blocking issues must be fixed before publishing. Warnings are shown again in the final &quot;Publish to Instagram?&quot; confirmation — there is no separate approval step.
-                        </p>
-                      </section>
-
-                      {post.series === "PYQ" ? (
-                        <section className="flex flex-col gap-2">
-                          <h3 className="text-sm font-semibold">Printed question number</h3>
-                          <p className="text-xs text-[var(--color-muted-foreground)]">
-                            The stored order is not the printed paper number. Enter it from the original paper; it appears on the slide only when marked verified.
-                          </p>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Input className="w-24" inputMode="numeric" value={qNumber} onChange={(e) => setQNumber(e.target.value.replace(/\D/g, "").slice(0, 3))} disabled={!editable} data-testid="q-number" />
-                            <label className="flex items-center gap-2 text-sm">
-                              <input type="checkbox" checked={qVerified} onChange={(e) => setQVerified(e.target.checked)} disabled={!editable} data-testid="q-verified" />
-                              Verified against the original paper
-                            </label>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={!editable || pending || dirty}
-                              data-testid="q-save"
-                              onClick={() =>
-                                act(
-                                  () => setQuestionNumberAction(post.id, post.revision, qNumber ? Number(qNumber) : null, qVerified),
-                                  (p) => (adopt(p), setMessage({ tone: "ok", text: "Question number saved." }))
-                                )
-                              }
-                            >
-                              Save number
-                            </Button>
-                          </div>
-                        </section>
-                      ) : null}
-
-                    </div>
+                    <ChecksPanel
+                      post={post}
+                      editable={editable}
+                      dirty={dirty}
+                      provider={provider}
+                      askCost={costPreview.ask}
+                      onPost={(p, text) => (adopt(p), (changed.current = true), setMessage({ tone: "ok", text }))}
+                      onTab={setTab}
+                      onStart={() => setMessage(null)}
+                    />
                   ) : null}
 
                   {tab === "history" ? (

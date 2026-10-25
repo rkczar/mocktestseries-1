@@ -4,6 +4,7 @@ import { checkText } from "@/lib/instagram/content-safety";
 import type { ExamProfile } from "@/lib/instagram/exam-scope";
 import { plainText } from "@/lib/instagram/layout";
 import { TRAP_LABELS, TRAP_LIMITS, TRAP_MAX, type SourceSnapshot, type TrapVariant } from "@/lib/instagram/types";
+import { normalizeEquivalent } from "@/lib/instagram/text-normalize";
 
 /**
  * "How the Examiner Traps You" — an AI variant question for the TRAP slide.
@@ -110,7 +111,7 @@ function extractJson(text: string): Record<string, unknown> | null {
 }
 
 export function parseTrap(text: string): TrapParse {
-  const data = extractJson(text);
+  const data = extractJson(normalizeEquivalent(text));
   if (!data) return { ok: false, error: "The AI response was not valid JSON." };
   const v = validateCandidate(data);
   if (!v) return { ok: false, error: "The AI question did not have exactly four distinct options with exactly one correct answer." };

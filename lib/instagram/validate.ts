@@ -101,6 +101,8 @@ export function checkContentInput(raw: unknown, previous: PostContent): Checked<
   const textChanged = TEXT_FIELDS.some((f) => f.key !== "caption" && c[f.key] !== previous[f.key]) || c.quickRevision.join("\n") !== previous.quickRevision.join("\n");
   c.origin = textChanged && previous.origin.kind === "empty" ? { kind: "manual" } : previous.origin;
   c.aiFlags = previous.aiFlags;
+  // The medical review record is server-owned (recordMedicalReview); it simply stops counting once the text changes.
+  c.medicalReview = previous.medicalReview;
   return { ok: true, value: c };
 }
 
