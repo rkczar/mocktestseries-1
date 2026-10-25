@@ -26,6 +26,7 @@ export const AI_FEATURES = [
   { key: "ig_trends", label: "Trend Analysis", group: "Instagram" },
   { key: "ig_competitors", label: "Competitor Content Analysis", group: "Instagram" },
   { key: "ig_image", label: "Medical Image Generation", group: "Instagram" },
+  { key: "video_script", label: "Video Script (AI Video Studio)", group: "Video Studio" },
 ] as const;
 export type AiFeature = (typeof AI_FEATURES)[number]["key"];
 export const AI_FEATURE_KEYS = AI_FEATURES.map((f) => f.key) as AiFeature[];

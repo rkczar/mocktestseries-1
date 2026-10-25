@@ -128,6 +128,14 @@ export const PERMISSIONS = {
   // callback route.
   SEO_INTEL_VIEW: "seo-intel:view",
   SEO_INTEL_MANAGE: "seo-intel:manage",
+  // AI Video Studio (Admin -> AI Video Studio). VIEW = read jobs, history,
+  // skills, designs and the cost center (MASTER_ADMIN + FULL_ADMIN). USE =
+  // create/configure/confirm/cancel video jobs, voice previews, downloads and
+  // presets (MASTER_ADMIN). MANAGE = studio settings, branding, retention and
+  // storage cleanup (MASTER_ADMIN). Enforced server-side everywhere.
+  VIDEO_STUDIO_VIEW: "video-studio:view",
+  VIDEO_STUDIO_USE: "video-studio:use",
+  VIDEO_STUDIO_MANAGE: "video-studio:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -150,6 +158,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.AI_ENGINE_VIEW,
     PERMISSIONS.AI_IMPORTER_VIEW,
     PERMISSIONS.SEO_INTEL_VIEW,
+    PERMISSIONS.VIDEO_STUDIO_VIEW,
   ],
   TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE, PERMISSIONS.SEO_INTEL_VIEW],
 };

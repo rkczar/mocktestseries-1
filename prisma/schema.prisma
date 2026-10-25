@@ -4019,3 +4019,155 @@ model AiImportCleanup {
 
   @@index([createdAt])
 }
+
+// ---- AI Video Studio (Admin -> AI Video Studio) -------------------------------------------
+// Additive only. Media bytes never live in the database: they sit in the job's temporary
+// folder under VIDEO_STUDIO_DIR and are removed by the retention/cleanup policy. These rows
+// keep only the metadata needed for history and cost accounting.
+
+enum VideoJobKind {
+  GENERATE
+  EDIT
+  /// Motion Workflow Studio (storyboard → one-take narration → word-timed motion frames).
+  MOTION
+}
+
+enum VideoJobStatus {
+  DRAFT
+  CONFIGURING
+  AWAITING_CONFIRMATION
+  QUEUED
+  GENERATING_SCRIPT
+  GENERATING_AUDIO
+  RENDERING
+  REVIEW_REQUIRED
+  COMPLETED
+  FAILED
+  CANCELLED
+  CLEANUP_PENDING
+}
+
+model VideoJob {
+  id              String         @id @default(cuid())
+  kind            VideoJobKind   @default(GENERATE)
+  title           String
+  status          VideoJobStatus @default(DRAFT)
+  /// What the video is made from: { type, topic, prompt, questionIds, examId, ... } (validated in lib/video-studio).
+  source          Json
+  /// The editable configuration (Auto Configure proposal + the admin's edits).
+  config          Json?
+  /// Selected Skill keys with the registry version each was used at.
+  skills          Json?
+  customPrompt    String?
+  /// Exam label shown in the video; null = general educational format.
+  examLabel       String?
+  examId          String?
+  /// Last cost estimate shown before confirmation (lines, totals, uncertainty notes).
+  estimate        Json?
+  estTotalInr     Float?
+  /// Recorded provider cost (INR). Unknown costs are counted separately, never as 0.
+  actualInr       Float          @default(0)
+  unknownCostCalls Int           @default(0)
+  /// AiCostQuote ids consumed by this job (one per paid step).
+  quoteIds        String[]
+  createdById     String
+  confirmedAt     DateTime?
+  confirmedById   String?
+  /// Worker lease (one worker per job across processes).
+  leaseOwner      String?
+  leaseUntil      DateTime?
+  heartbeatAt     DateTime?
+  attempts        Int            @default(0)
+  errorMessage    String?
+  /// Bytes currently held in the job folder (updated by the worker / cleanup).
+  storageBytes    BigInt         @default(0)
+  /// Worker progress: current stage key ("script", "voice", "render", "ingest", "export", "transcribe") and percent.
+  stage           String?
+  progressPct     Int            @default(0)
+  /// Stage that failed last (Retry resumes there; finished stages are kept).
+  failedStage     String?
+  /// Validated output MP4 (relative key inside the job folder), its size and duration, and render wall time.
+  outputKey       String?
+  outputBytes     BigInt?
+  outputSec       Float?
+  renderMs        Int?
+  /// Uploaded inputs: [{ key, kind: "pdf" | "image" | "video" | "music", name, bytes, pages?, probe? }] (validated server-side).
+  assets          Json?
+  /// AI Video Editor project (segments, overlays, subtitles, audio, output settings).
+  edit            Json?
+  /// Delivery: first successful download / publish. Cleanup waits for one of them (or expiry).
+  deliveredAt     DateTime?
+  /// Media are deleted after this time whatever the state (retention policy).
+  expiresAt       DateTime?
+  mediaDeletedAt  DateTime?
+  lastActivityAt  DateTime       @default(now())
+  finishedAt      DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  scenes VideoScene[]
+  events VideoJobEvent[]
+
+  @@index([status, updatedAt])
+  @@index([createdById, createdAt])
+  @@index([expiresAt])
+}
+
+/// One scene of a video: narration, on-screen text and the visual it shows.
+model VideoScene {
+  id           String   @id @default(cuid())
+  jobId        String
+  job          VideoJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  index        Int
+  narration    String   @default("")
+  onScreenText String   @default("")
+  /// { kind: "title" | "bullets" | "diagram" | "question" | "image" | "cta", ... }
+  visual       Json?
+  /// Planned duration; replaced by the measured audio length once narration audio exists.
+  durationSec  Float    @default(5)
+  /// Relative key of the narration audio inside the job folder (null = none yet).
+  audioKey     String?
+  audioSec     Float?
+  /// Needs a human check (unverified medical claim, ambiguous source, missing answer).
+  needsReview  Boolean  @default(false)
+  reviewNote   String?
+  /// sha256 of (model, voice, narration) the audio was made from — changed text = new audio needed.
+  audioHash    String?
+  /// Uploaded image / PDF page shown in this scene (relative key inside the job folder).
+  assetKey     String?
+  /// A confirmed AI regeneration of this scene waiting for the worker (consumed quote id + the admin's note).
+  regenQuoteId String?
+  regenNote    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([jobId, index])
+}
+
+model VideoJobEvent {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       VideoJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  actorId   String?
+  type      String
+  message   String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+/// Saved Skill combinations (+ custom instructions) an admin can re-apply.
+model VideoSkillPreset {
+  id           String   @id @default(cuid())
+  name         String
+  skillKeys    String[]
+  instructions String   @default("")
+  favorite     Boolean  @default(false)
+  createdById  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([createdById, updatedAt])
+}

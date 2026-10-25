@@ -1,0 +1,9 @@
+# mocktestseries AI Video Studio worker — installed as /etc/cron.d/mocktestseries-video (source: ops/video-worker/).
+# Every minute: script / narration / transcription steps and renders of confirmed video jobs, retention cleanup.
+# The admin actions also start the worker at once (lib/video-studio/kick.ts) under the SAME flock, so at most
+# one worker (and one render container) ever runs. Low CPU priority; renders run in the isolated container
+# (ops/video-worker/Dockerfile, image mts-video-render:1). Starts nothing while a Live CBT is running.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * root cd /var/www/mocktestseries-current && flock -n /run/mocktestseries-video.lock nice -n 10 env NODE_OPTIONS=--conditions=react-server /usr/bin/npx --no-install tsx scripts/video-worker.ts >> /var/log/mocktestseries/video-worker.log 2>&1

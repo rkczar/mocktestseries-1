@@ -8,7 +8,7 @@ import { getEngineConfig, patchOpenRouterState, resolveOpenRouterKey, type Engin
 import { getUsdInr, type FxRate } from "@/lib/ai-engine/fx";
 import { releaseBudget, reserveBudget, settleBudget } from "@/lib/ai-engine/budget";
 import { IMAGE_ASPECT, IMAGE_RESOLUTION, planImage, planText } from "@/lib/ai-engine/router";
-import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, generateImage, sanitize, type ProviderPreferences } from "@/lib/ai-engine/openrouter";
+import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, generateImage, sanitize, type ChatContentPart, type ProviderPreferences } from "@/lib/ai-engine/openrouter";
 
 /**
  * AI Engine execution: one priced, budgeted, logged OpenRouter request.
@@ -135,7 +135,8 @@ function providerPrefs(engine: EngineConfig, maxPrice: ProviderPreferences["max_
 }
 
 /** Text generation through OpenRouter for one feature. Same contract as the gateway's other providers. */
-export async function generateTextViaOpenRouter(feature: AiFeature, prompt: string, opts: AiGenerationOptions, ctx: EngineContext = {}): Promise<AiGenerationResult> {
+/** `extra.content`: optional multimodal parts (AI Video Studio image sources); sent instead of `prompt` when set. */
+export async function generateTextViaOpenRouter(feature: AiFeature, prompt: string, opts: AiGenerationOptions, ctx: EngineContext = {}, extra: { content?: ChatContentPart[] } = {}): Promise<AiGenerationResult> {
   const { apiKey, engine, fx, cfg } = await prepare(feature, "text");
   const def = ENGINE_FEATURE_MAP[feature];
   const maxOut = cfg.maxOutputTokens ?? opts.maxOutputTokens;
@@ -158,6 +159,7 @@ export async function generateTextViaOpenRouter(feature: AiFeature, prompt: stri
         apiKey,
         models: plan.models.map((m) => m.id),
         prompt,
+        ...(extra.content ? { content: extra.content } : {}),
         maxTokens: maxOut,
         temperature: opts.temperature,
         provider: providerPrefs(engine, { prompt: plan.maxPricePerM.prompt, completion: plan.maxPricePerM.completion }),

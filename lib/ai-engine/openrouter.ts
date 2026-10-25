@@ -367,3 +367,133 @@ export async function getGenerationCost(apiKey: string, id: string): Promise<{ c
   const c = data.data?.total_cost;
   return { costUsd: typeof c === "number" && Number.isFinite(c) && c >= 0 ? c : null, model: data.data?.model ?? null };
 }
+
+// ---- Speech (text-to-speech) and transcription — AI Video Studio ----------------------------
+//
+//   POST /api/v1/audio/speech          { model, input, voice, response_format: "mp3", instructions?, provider? }
+//                                      → raw audio bytes (no JSON, no usage block in the body).
+//   POST /api/v1/audio/transcriptions  { model, input_audio: { data, format }, language?, response_format:
+//                                        "verbose_json", timestamp_granularities: ["word","segment"] }
+//                                      → { text, words?, segments?, usage: { cost, seconds } }.
+// Verified against openrouter.ai/openapi.json on 2026-10-24.
+
+export interface SpeechParams {
+  apiKey: string;
+  model: string;
+  voice: string;
+  input: string;
+  instructions?: string;
+  provider: ProviderPreferences;
+  timeoutMs: number;
+}
+
+export interface SpeechResult {
+  audio: Buffer;
+  contentType: string;
+  /** OpenRouter generation id when the response carries one in a header (cost lookup); null otherwise. */
+  generationId: string | null;
+}
+
+const MAX_SPEECH_BYTES = 40 * 1024 * 1024;
+
+export async function createSpeech(p: SpeechParams): Promise<SpeechResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), p.timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${openRouterBase()}/audio/speech`, {
+      method: "POST",
+      headers: headers(p.apiKey),
+      body: JSON.stringify({ model: p.model, input: p.input, voice: p.voice, response_format: "mp3", ...(p.instructions ? { instructions: p.instructions } : {}), provider: p.provider }),
+      signal: controller.signal,
+      cache: "no-store",
+      redirect: "error",
+    });
+  } catch (error) {
+    clearTimeout(timer);
+    if (error instanceof Error && error.name === "AbortError") throw new OpenRouterError("timeout", `OpenRouter did not answer within ${Math.round(p.timeoutMs / 1000)} s.`);
+    throw new OpenRouterError("network", "Could not reach OpenRouter.");
+  }
+  try {
+    const type = res.headers.get("content-type") ?? "";
+    const genId = res.headers.get("x-generation-id") ?? res.headers.get("openrouter-generation-id");
+    if (!res.ok || type.includes("json")) {
+      const text = await res.text();
+      let err: { message?: string; code?: number } | undefined;
+      try {
+        err = (JSON.parse(text) as { error?: { message?: string; code?: number } }).error;
+      } catch {
+        err = undefined;
+      }
+      const message = sanitize(err?.message ?? `OpenRouter speech request failed (${res.status}).`);
+      const status = !res.ok ? res.status : typeof err?.code === "number" ? err.code : 500;
+      throw new OpenRouterError(categorize(status, message), message, status, genId);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_SPEECH_BYTES) throw new OpenRouterError("provider_error", "The speech response is larger than allowed.");
+    if (buf.length < 64) throw new OpenRouterError("empty_response", describeCategory("empty_response"), res.status, genId);
+    return { audio: buf, contentType: type || "audio/mpeg", generationId: genId && /^[A-Za-z0-9_-]{4,120}$/.test(genId) ? genId : null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export interface TranscriptionParams {
+  apiKey: string;
+  model: string;
+  audioBase64: string;
+  format: "mp3" | "wav";
+  language?: string;
+  provider: ProviderPreferences;
+  timeoutMs: number;
+}
+
+export interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
+export interface TranscriptionResult {
+  text: string;
+  words: TranscriptWord[];
+  segments: { start: number; end: number; text: string }[];
+  costUsd: number | null;
+  seconds: number | null;
+  generationId: string | null;
+}
+
+export async function createTranscription(p: TranscriptionParams): Promise<TranscriptionResult> {
+  const { data } = await request<{
+    id?: string;
+    text?: string;
+    words?: { word?: unknown; start?: unknown; end?: unknown }[];
+    segments?: { start?: unknown; end?: unknown; text?: unknown }[];
+    usage?: { cost?: unknown; seconds?: unknown };
+  }>(p.apiKey, "/audio/transcriptions", {
+    method: "POST",
+    body: {
+      model: p.model,
+      input_audio: { data: p.audioBase64, format: p.format },
+      ...(p.language ? { language: p.language } : {}),
+      response_format: "verbose_json",
+      timestamp_granularities: ["word", "segment"],
+      provider: p.provider,
+    },
+    timeoutMs: p.timeoutMs,
+  });
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
+  const words = (Array.isArray(data.words) ? data.words : [])
+    .map((w) => ({ word: typeof w.word === "string" ? w.word.slice(0, 80) : "", start: n(w.start) ?? -1, end: n(w.end) ?? -1 }))
+    .filter((w) => w.word && w.start >= 0 && w.end >= w.start);
+  const segments = (Array.isArray(data.segments) ? data.segments : [])
+    .map((s) => ({ start: n(s.start) ?? -1, end: n(s.end) ?? -1, text: typeof s.text === "string" ? s.text.slice(0, 600) : "" }))
+    .filter((s) => s.text && s.start >= 0 && s.end >= s.start);
+  return { text: typeof data.text === "string" ? data.text : "", words, segments, costUsd: n(data.usage?.cost), seconds: n(data.usage?.seconds), generationId: typeof data.id === "string" ? data.id : null };
+}
+
+/** Transcription (speech-to-text) models with their price — free catalog read. */
+export async function listTranscriptionModels(apiKey: string | null): Promise<RawModel[]> {
+  const { data } = await request<{ data?: RawModel[] }>(apiKey, "/models?output_modalities=transcription", { timeoutMs: 30_000 });
+  return data.data ?? [];
+}
