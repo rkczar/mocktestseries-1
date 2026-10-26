@@ -509,6 +509,8 @@ async function main() {
     for (const id of stored) await prisma.question.delete({ where: { id } }).catch(() => undefined);
     for (const id of jobs) await prisma.aiImportJob.delete({ where: { id } }).catch(() => undefined);
     await prisma.setting.deleteMany({ where: { key: memoryKey } }).catch(() => undefined);
+    // This suite's structured-output mock model stays out of the shared scratch catalog (other suites list models by name).
+    await prisma.aiModel.deleteMany({ where: { id: "mockstruct/reader" } }).catch(() => undefined);
     if (memoryBefore) await prisma.setting.create({ data: { key: memoryKey, value: memoryBefore.value as Prisma.InputJsonValue } }).catch(() => undefined);
     mockProc?.kill();
     await prisma.$disconnect();
