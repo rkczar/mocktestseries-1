@@ -183,7 +183,9 @@ export interface ChatParams {
   /** OpenRouter Auto: plugin settings. */
   autoRouter?: { costTier: "low" | "medium" | "high"; allowedModels?: string[] };
   /** Optional reasoning control for models whose routes accept `reasoning` (AI Question Importer only). */
-  reasoning?: { effort: "low" | "medium" | "high"; exclude?: boolean };
+  reasoning?: { effort: "low" | "medium" | "high"; exclude?: boolean } | { max_tokens: number; exclude?: boolean };
+  /** Optional structured output (AI Question Importer only): JSON mode or a JSON Schema, sent only to routes that accept it. */
+  responseFormat?: { type: "json_object" } | { type: "json_schema"; json_schema: { name: string; strict: boolean; schema: unknown } };
 }
 
 export interface ChatResult {
@@ -212,6 +214,7 @@ export async function chatCompletion(p: ChatParams): Promise<ChatResult> {
     provider: p.provider,
   };
   if (p.reasoning) body.reasoning = p.reasoning;
+  if (p.responseFormat) body.response_format = p.responseFormat;
   if (p.models.length === 1) body.model = p.models[0];
   else {
     body.model = p.models[0];

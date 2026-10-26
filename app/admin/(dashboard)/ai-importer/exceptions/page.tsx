@@ -55,8 +55,10 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const job = jobId ? jobs.find((j) => j.id === jobId)! : null;
   const summary = jobId ? await paperSummary(jobId) : null;
   const draft = job ? { count: (await approvedReadyCounts([job.id])).get(job.id) ?? 0, open: DRAFT_IMPORT_STATUSES.includes(job.status) } : null;
-  const eligible = new Set(summary?.eligible ?? []);
   const allRows = await prisma.aiImportQuestion.findMany({ where, orderBy: [{ jobId: "asc" }, { fileId: "asc" }, { orderIndex: "asc" }], take: 1000, include: { figures: true } });
+  // Eligibility to publish is the server's own rule (paper-verify.ts eligibleForPublish), for every job shown.
+  const eligible = new Set(summary?.eligible ?? []);
+  for (const j of new Set(allRows.map((r) => r.jobId))) if (j !== jobId) for (const id of (await paperSummary(j))?.eligible ?? []) eligible.add(id);
   // Verification filters are judged against each question's current content (an out-of-date result does not count).
   const rows = verify
     ? allRows.filter((r) => {

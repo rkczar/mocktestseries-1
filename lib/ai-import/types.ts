@@ -78,6 +78,11 @@ export interface ExtractedQuestion {
   verification?: QuestionVerification | null;
   /** Full-paper verification (Review Exceptions → Verify 1 / Verify 2). Kept on the extraction; stale once the content changes. */
   paperVerify?: PaperVerification | null;
+  /**
+   * "Confirm text-only, no image needed" — an administrator's decision, kept on the extraction. It answers the
+   * figure-pointer flags only while the question's content is the one decided on (`content` = its content fingerprint).
+   */
+  imageDecision?: { textOnly: true; byId: string; at: string; content: string } | null;
   /** How the subject / topic / subtopic was chosen (or why not), written by every check run. Kept on the extraction. */
   classification?: ClassificationRecord | null;
 }
@@ -137,6 +142,14 @@ export interface VerifyFix {
   evidence: string;
 }
 
+/** Separate fingerprints of what a verification checked (lib/ai-import/verify-core.ts fingerprintParts). */
+export interface FingerprintParts {
+  content: string;
+  answer: string;
+  taxonomy: string;
+  figures: string;
+}
+
 export interface PaperVerification {
   /**
    * Verification passes this question has had (at most MAX_VERIFY_PASSES, lib/ai-import/verify-core.ts): 1 = Verify 1
@@ -146,6 +159,8 @@ export interface PaperVerification {
   /** Verify 1 — deterministic full-paper verification (no AI). */
   v1?: {
     fingerprint: string;
+    /** importer-reliability-2: content / answer / taxonomy / figure fingerprints (absent on older results). */
+    parts?: FingerprintParts | null;
     at: string;
     passed: boolean;
     problems: VerifyProblem[];
@@ -166,6 +181,11 @@ export interface PaperVerification {
   /** Verify 2 — independent second read by a separately selected model. */
   v2?: {
     fingerprint: string;
+    parts?: FingerprintParts | null;
+    /** An older result (single fingerprint) whose content was proven unchanged and given its parts (see paper-verify.ts rebuildLegacy). */
+    rebuilt?: { at: string; proof: string } | null;
+    /** A disagreement settled again from the recorded second read under a deterministic rule (never a new AI read). */
+    reassessed?: { at: string; rule: string; before: string } | null;
     at: string;
     model: string;
     /**

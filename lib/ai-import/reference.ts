@@ -14,6 +14,7 @@ import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
 import { blockToQuestion, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
 import { parseKeyText, sheetPairs } from "@/lib/ai-import/keys";
 import { readsAgree } from "@/lib/ai-import/process";
+import { stripAnnotationTail } from "@/lib/ai-import/local-parse";
 import { adoptFile, removeVaultDir, tmpDir, vaultPath, workDir } from "@/lib/ai-import/vault";
 import { ImportJobError, logEvent } from "@/lib/ai-import/jobs";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
@@ -69,6 +70,8 @@ export interface ReferencePaper {
   note: string | null;
   /** Pages without a text layer: stored, NOT compared (OCR / vision would be paid AI). Absent on older references. */
   scannedPages?: number;
+  /** OCR "questions" dropped as cover / instruction text. */
+  skippedInstructions?: number;
   /** The administrator-confirmed OCR / vision reading of the scanned pages (latest REFERENCE_READ event), if any. */
   ocr?: { model: string; at: string; pagesRead: number[]; failedPages: number[]; unreadable: number } | null;
 }
@@ -264,8 +267,21 @@ export async function listReferences(jobId: string): Promise<ReferencePaper[]> {
       const ref = e.data as unknown as ReferencePaper;
       const r = read.get(ref.refId);
       if (!r) return ref;
-      return { ...ref, questions: [...ref.questions, ...r.questions], ocr: { model: r.model, at: r.at, pagesRead: r.pagesRead, failedPages: r.failedPages, unreadable: r.questions.filter((q) => q.unreadable).length } };
+      // An OCR reading is evidence of WORDING only: cover / instruction pages are not questions, and a question booklet
+      // prints no answers — whatever the reader returned as an "answer" (a tick, a stray mark) is never used.
+      const questions = r.questions.filter((q) => !isInstructionText(q.stem, q.options)).map((q) => ({ ...q, answer: [] }));
+      return { ...ref, questions: [...ref.questions, ...questions], skippedInstructions: r.questions.length - questions.length, ocr: { model: r.model, at: r.at, pagesRead: r.pagesRead, failedPages: r.failedPages, unreadable: r.questions.filter((q) => q.unreadable).length } };
     });
+}
+
+/**
+ * Cover / instruction text of a question booklet read as if it were a question (2026-10-26: the OCR reader made the
+ * booklet's cover — "DO NOT OPEN THIS TEST BOOKLET…", "Time Allowed", "Maximum Marks" — into a "Q1" with four options).
+ */
+const INSTRUCTION_TEXT = /\b(?:test booklet|do not open|roll number|time allowed|maximum marks|instructions? (?:to|for) (?:the )?candidates|answer sheet|OMR|serial no\.?|penalty for wrong answers?|rough work)\b/i;
+export function isInstructionText(stem: string, options: string[] = []): boolean {
+  const hits = [stem, ...options].filter((t) => INSTRUCTION_TEXT.test(t)).length;
+  return hits >= 2 || (hits === 1 && INSTRUCTION_TEXT.test(stem) && stem.length > 300);
 }
 
 /** Data of a REFERENCE_READ event: what the confirmed OCR / vision reading of a scanned reference found. */
@@ -318,39 +334,46 @@ const refLabel = (r: { section: string; number: number | null }) => `${r.section
  */
 export function compareWithReference(q: ExtractedQuestion, answer: string[], ref: Pick<ReferencePaper, "questions" | "key">): ReferenceComparison {
   const out: ReferenceComparison = { matched: null, similarity: null, conflicts: [], suggestedAnswer: [] };
-  // By number first (an OCR-read reference has no sections: its number alone is matched), then by wording.
-  const sameNumber = (r: ReferenceQuestion) => r.number === q.number && (r.section === q.section || (r.confidence !== undefined && !r.section));
-  let twin = ref.questions.find((r) => sameNumber(r) && !r.unreadable && textSimilarity(r.stem, q.stem) >= 0.5) ?? null;
-  if (!twin) {
-    const unreadable = ref.questions.find((r) => sameNumber(r) && r.unreadable);
-    if (unreadable) return { ...out, matched: refLabel(unreadable), unreadable: true };
-  }
-  if (!twin && q.stem.trim()) {
+  const ocr = (r: ReferenceQuestion) => r.confidence !== undefined;
+  // By wording first (importer-reliability-2: an OCR reading repeats and skips numbers, so its number is the weakest
+  // evidence), then by section + number when the wording is at least similar.
+  let twin: ReferenceQuestion | null = null;
+  if (q.stem.trim()) {
     let best: { r: ReferenceQuestion; s: number } | null = null;
     for (const r of ref.questions) {
+      if (r.unreadable) continue;
       const s = textSimilarity(r.stem, q.stem);
       if (s >= 0.75 && (!best || s > best.s)) best = { r, s };
     }
     if (best) {
       twin = best.r;
-      if (best.r.number !== q.number || best.r.section !== q.section) out.conflicts.push(`The reference numbers this question ${refLabel(best.r)} (here ${refLabel(q)}) — check the question order.`);
+      if (!ocr(best.r) && (best.r.number !== q.number || best.r.section !== q.section)) out.conflicts.push(`The reference numbers this question ${refLabel(best.r)} (here ${refLabel(q)}) — check the question order.`);
     }
   }
+  const sameNumber = (r: ReferenceQuestion) => r.number === q.number && (r.section === q.section || (ocr(r) && !r.section));
+  twin ??= ref.questions.find((r) => sameNumber(r) && !r.unreadable && textSimilarity(r.stem, q.stem) >= 0.5) ?? null;
+  if (!twin) {
+    const unreadable = ref.questions.find((r) => sameNumber(r) && r.unreadable);
+    if (unreadable) return { ...out, matched: refLabel(unreadable), unreadable: true };
+  }
   const keyEntry = ref.key.find((k) => k.number === q.number && k.section === q.section) ?? null;
-  // Uncertain OCR is never presented as authoritative: shown as unreadable, compared with nothing.
-  if (twin?.unreadable) return { ...out, matched: refLabel(twin), unreadable: true, conflicts: [] };
   if (twin) {
     out.matched = refLabel(twin);
     out.similarity = Math.round(textSimilarity(twin.stem, q.stem) * 100) / 100;
-    const asQuestion: ExtractedQuestion = { ...q, stem: twin.stem, options: twin.options.map((t, i) => ({ label: String.fromCharCode(65 + i), printed: String.fromCharCode(65 + i), text: t })), printedAnswer: twin.answer, figures: q.figures };
-    const v = readsAgree(q, asQuestion);
+    const asQuestion: ExtractedQuestion = { ...q, stem: twin.stem, options: twin.options.map((t, i) => ({ label: String.fromCharCode(65 + i), printed: String.fromCharCode(65 + i), text: t })), printedAnswer: [], figures: q.figures };
+    const v = readsAgree({ ...q, stem: stripAnnotationTail(q.stem), options: q.options.map((o) => ({ ...o, text: stripAnnotationTail(o.text) })) }, asQuestion);
     if (!v.agree) {
-      for (const part of v.detail.split("; ")) if (!/printed answer|figure/.test(part)) out.conflicts.push(`Reference: ${part}.`);
+      // OCR wording is noisy: only a changed number / symbol or a different option count is evidence there.
+      for (const part of v.detail.split("; ")) if (!/printed answer|figure/.test(part) && (!ocr(twin) || /numbers \/ symbols|option count/.test(part))) out.conflicts.push(`Reference: ${part}.`);
     }
   }
-  const refAnswer = twin?.answer.length ? twin.answer : keyEntry ? [...new Set([...keyEntry.raw.toUpperCase().matchAll(/[A-D1-4]/g)].map((m) => (/\d/.test(m[0]) ? String.fromCharCode(64 + Number(m[0])) : m[0])))] : [];
+  // An answer only from what the reference PRINTS as text (an "Ans:" line read without AI) or its answer-key entries —
+  // never from an OCR reading of a scanned booklet, where a tick or stray mark can look like an answer (listReferences
+  // already empties those). It is evidence for a conflict, applied only by an administrator ("Use reference answers").
+  const printed = twin && !ocr(twin) ? twin.answer : [];
+  const refAnswer = printed.length ? printed : keyEntry ? [...new Set([...keyEntry.raw.toUpperCase().matchAll(/[A-D1-4]/g)].map((m) => (/\d/.test(m[0]) ? String.fromCharCode(64 + Number(m[0])) : m[0])))] : [];
   if (refAnswer.length) {
-    if (answer.length && [...answer].sort().join() !== [...refAnswer].sort().join()) out.conflicts.push(`The reference gives answer ${refAnswer.join(", ")}, this question has ${answer.join(", ")}.`);
+    if (answer.length && [...answer].sort().join() !== [...refAnswer].sort().join()) out.conflicts.push(`The reference ${printed.length ? "gives" : "answer key gives"} answer ${refAnswer.join(", ")}, this question has ${answer.join(", ")}.`);
     else if (!answer.length) out.suggestedAnswer = refAnswer;
   }
   return out;

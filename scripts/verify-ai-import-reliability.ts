@@ -84,7 +84,7 @@ async function errorOf(fn: () => Promise<unknown>): Promise<Error | null> {
 const TAG = "relfx";
 const jobs: string[] = [];
 
-type Stats = { chat: number; byModel: Record<string, number>; attempts: Record<string, number>; reasoning: ({ effort?: string; exclude?: boolean } | null)[] };
+type Stats = { chat: number; byModel: Record<string, number>; attempts: Record<string, number>; reasoning: ({ effort?: string; max_tokens?: number; exclude?: boolean } | null)[] };
 async function mockStats(): Promise<Stats> {
   return (await (await fetch(`${MOCK}/__mock/stats`)).json()) as Stats;
 }
@@ -225,7 +225,8 @@ async function main() {
     const jr = await runJob(actor, jR);
     const sR = await mockStats();
     const thinkCalls = await prisma.aiImportAiCall.findMany({ where: { jobId: jR, model: { startsWith: "mockreason/" } } });
-    check("the reasoning model was sent reasoning {effort: low, exclude: true}", sR.reasoning.length > 0 && sR.reasoning.every((r) => r?.effort === "low" && r?.exclude === true), sR.reasoning);
+    // importer-reliability-2: the thinking is bounded by a token budget (a share of the output limit), not an effort word.
+    check("the reasoning model was sent a bounded thinking budget {max_tokens ≤ 2000, exclude: true}", sR.reasoning.length > 0 && sR.reasoning.every((r) => typeof r?.max_tokens === "number" && r.max_tokens <= 2000 && r?.exclude === true), sR.reasoning);
     check("…and the page was read on the first attempt (no failed call), job finished", jr.status === "NEEDS_REVIEW" && thinkCalls.length >= 1 && thinkCalls.every((c) => c.ok), { s: jr.status, calls: thinkCalls.map((c) => [c.ok, c.errorSummary]) });
     check("…its 3 questions extracted", (await prisma.aiImportQuestion.count({ where: { jobId: jR } })) === 3);
 

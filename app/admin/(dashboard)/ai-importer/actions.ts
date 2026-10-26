@@ -13,6 +13,7 @@ import {
   applyRescan,
   approveAllClean,
   approveQuestions,
+  confirmTextOnly,
   discardRescan,
   editQuestion,
   markFigureUncertain,
@@ -37,7 +38,7 @@ import {
 } from "@/lib/ai-import/review";
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
 import { saveProfileFromJob, updateFormatProfile, type FormatProfile, type FormatRules } from "@/lib/ai-import/format-profile";
-import { addConfusion, addSynonym, removeMemoryEntry } from "@/lib/ai-import/taxonomy-memory";
+import { FORMAT_RULES, addConfusion, addFormatRule, addHeadingAlias, addSynonym, removeMemoryEntry, type FormatRuleCode } from "@/lib/ai-import/taxonomy-memory";
 import { settleJobStatus } from "@/lib/ai-import/summary";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { importerModelCatalog, importerSettingsProblems } from "@/lib/ai-import/models";
@@ -50,7 +51,7 @@ import { ReconfigureError, reconfigureJob, reconfigurePreview } from "@/lib/ai-i
 import type { AutoConfigApplied, AutoConfigPreview, ReconfigurePreview, ReconfigureResult } from "@/lib/ai-import/autoconfig-types";
 import { CLEANUP_CATEGORIES, executeCleanup, findCandidates, findDuplicates, scanStorage, type CleanupCategory, type CleanupItem, type CleanupResult, type StorageReport } from "@/lib/ai-import/storage";
 import type { ImportMode } from "@/lib/ai-import/adapter";
-import { applyReferenceAnswers, importAndPublishEligible, requestVerify2, runVerify1, verify2Preview, type Verify1Result, type Verify2Preview, type Verify2Request } from "@/lib/ai-import/paper-verify";
+import { applyReferenceAnswers, importAndPublishEligible, publishEligibleQuestion, requestVerify2, runVerify1, verify2Preview, type Verify1Result, type Verify2Preview, type Verify2Request } from "@/lib/ai-import/paper-verify";
 import { unlinkReference } from "@/lib/ai-import/reference";
 import { referenceOcrPreview, requestReferenceOcr, type ReferenceOcrPreview, type ReferenceOcrRequest } from "@/lib/ai-import/reference-ocr";
 
@@ -321,6 +322,34 @@ export async function approveQuestionsAction(ids: string[]): Promise<ImporterRes
     const result = await approveQuestions(ids.slice(0, 2000), actorId);
     if (jobId) await revalidateQuestions(jobId, ids);
     return result;
+  });
+}
+
+/** The Approve button of one LIST row: the question is not opened, so every unresolved conflict is refused (review.ts LIST_PROTECTED). */
+export async function approveFromListAction(id: string): Promise<ImporterResult<ApproveResult>> {
+  return run(await requireUse(), async (actorId) => {
+    if (typeof id !== "string" || !id) throw new ImportJobError("Choose the question to approve.");
+    const jobId = await jobOf([id]);
+    const result = await approveQuestions([id], actorId, { from: "list" });
+    if (jobId) await revalidateQuestions(jobId, [id]);
+    return result;
+  });
+}
+
+/** The Publish button of one LIST row (after an explicit confirmation): only an eligible question, checked again here. */
+export async function publishFromListAction(id: string): Promise<ImporterResult<{ requested: boolean; reason: string | null }>> {
+  return run(await requirePublish(), async (actorId) => {
+    if (typeof id !== "string" || !id) throw new ImportJobError("Choose the question to publish.");
+    return publishEligibleQuestion(id, actorId);
+  });
+}
+
+/** "Confirm text-only, no image needed" (or withdraw it) for one question. */
+export async function confirmTextOnlyAction(id: string, confirm: boolean): Promise<ImporterResult<null>> {
+  return run(await requireUse(), async (actorId) => {
+    if (typeof id !== "string" || !id) throw new ImportJobError("Choose the question.");
+    await confirmTextOnly(id, actorId, confirm !== false);
+    return null;
   });
 }
 
@@ -748,10 +777,28 @@ export async function addTaxonomyConfusionAction(examId: string, a: string, b: s
   });
 }
 
-/** Removes one entry of an exam's taxonomy reference (audited; Manage permission). */
-export async function removeTaxonomyMemoryAction(examId: string, kind: "synonym" | "confusion" | "correction", id: string): Promise<ImporterResult<null>> {
+/** Exam taxonomy reference: a printed section heading → one subject of the exam (administrator-confirmed; Manage permission). */
+export async function addHeadingAliasAction(examId: string, heading: string, subjectId: string, note: string): Promise<ImporterResult<null>> {
   return run(await requireManage(), async (actorId) => {
-    if (typeof examId !== "string" || !["synonym", "confusion", "correction"].includes(kind) || typeof id !== "string") throw new ImportJobError("Choose the entry to remove.");
+    if (typeof examId !== "string" || !examId) throw new ImportJobError("Choose an exam.");
+    await addHeadingAlias(examId, actorId, typeof heading === "string" ? heading : "", typeof subjectId === "string" ? subjectId : "", typeof note === "string" ? note : null);
+    return null;
+  });
+}
+
+/** Exam taxonomy reference: a confirmed format rule of the exam's papers (Manage permission). */
+export async function addFormatRuleAction(examId: string, rule: string, note: string): Promise<ImporterResult<null>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof examId !== "string" || !examId || typeof rule !== "string" || !(rule in FORMAT_RULES)) throw new ImportJobError("Choose an exam and a rule.");
+    await addFormatRule(examId, actorId, rule as FormatRuleCode, typeof note === "string" ? note : null);
+    return null;
+  });
+}
+
+/** Removes one entry of an exam's taxonomy reference (audited; Manage permission). */
+export async function removeTaxonomyMemoryAction(examId: string, kind: "synonym" | "confusion" | "correction" | "headingAlias" | "formatRule", id: string): Promise<ImporterResult<null>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof examId !== "string" || !["synonym", "confusion", "correction", "headingAlias", "formatRule"].includes(kind) || typeof id !== "string") throw new ImportJobError("Choose the entry to remove.");
     await removeMemoryEntry(examId, actorId, kind, id);
     return null;
   });

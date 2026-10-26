@@ -44,6 +44,32 @@ export interface NumberingState {
   sectionIdx: number;
 }
 
+/** Marks printed before a heading or an answer line ("■ SECTION: SURGERY", "✓ Correct Answer: (b)", "► Official Answer"). */
+const LEAD_MARK = "[►▶➤→•✓✔☑√■□▪●◆]";
+const HEADING = new RegExp(String.raw`^(?:${LEAD_MARK}+\s*)?(?:(?:[Ss]ection|SECTION|[Pp]art|PART|[Ss]ubject|SUBJECT)\b[\s\w.:&/-]{0,60}|[A-Z][A-Z &/-]{2,38})$`);
+
+/**
+ * A section / subject heading line between questions ("PHYSIOLOGY", "Section B: Anatomy", "■ SECTION: GYNAECOLOGY &
+ * OBSTETRICS" — seen 2026-10-26: the leading "■" hid three section headings, so the subjects were guessed and two
+ * headings were stored as the previous question's explanation). Never an answer / key / instruction / list line.
+ */
+export function isSectionHeading(text: string): boolean {
+  const t = text.trim();
+  return HEADING.test(t) && !/\b(ANSWER|KEY|INSTRUCTIONS?|LIST|COLUMN)\b/.test(t);
+}
+
+/** The subject name a heading carries ("■ SECTION: SURGERY" → "SURGERY", "Section B: Anatomy" → "Anatomy"). */
+export function headingName(text: string): string {
+  const t = text.trim().replace(new RegExp(String.raw`^${LEAD_MARK}+\s*`), "");
+  return t.replace(/^(section|part|subject)\s*(?:[A-Z0-9]{1,3}(?=\s*[:.-]))?\s*[:.-]?\s*/i, "").trim() || t;
+}
+
+/** Explanation text that is really a heading (or headings) printed after the answer: never kept as an explanation. */
+export function explanationIsHeading(text: string | null | undefined): boolean {
+  const lines = (text ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  return lines.length > 0 && lines.every(isSectionHeading);
+}
+
 /**
  * Splits reading-ordered lines into numbered question blocks. Lines before
  * the first question start go to `preamble` (instructions, or the tail of a
@@ -57,13 +83,12 @@ export function splitQuestions(lines: Line[], state: NumberingState = { last: 0,
   let last = state.last;
   let sectionIdx = state.sectionIdx;
   let heading: string | null = null;
-  const HEADING = /^(?:(?:section|part|subject)\b[\s\w.:-]{0,40}|[A-Z][A-Z &/-]{2,38})$/;
   for (const line of lines) {
     const t = line.text.trim();
     // A heading only between questions: never inside a question whose options are not complete yet.
     const blockComplete = !current || (chooseRun(markersOf(current.lines.map((l) => l.text).join("\n")))?.length ?? 0) >= 4;
-    if (blockComplete && HEADING.test(t) && !/\b(ANSWER|KEY|INSTRUCTIONS?|LIST|COLUMN)\b/.test(t)) {
-      heading = t.replace(/^(section|part|subject)\s*[\w]{0,3}\s*[:.-]?\s*/i, "").trim() || t;
+    if (blockComplete && isSectionHeading(t)) {
+      heading = headingName(t);
       continue;
     }
     const prefixed = Q_START_PREFIXED.exec(line.text);
@@ -197,16 +222,17 @@ function tidy(s: string): string {
 
 // ---- Printed answers, types -------------------------------------------------------------------
 
-const ANSWER_LINE = /(?:^|\n)\s*(?:[►▶➤→•]\s*)?(?:(?:Official|Final)\s+)?(?:(?:The\s+)?(?:Correct|Right)\s+(?:answer|option|choice)(?:\s+is)?|Ans(?:wer)?(?:\s+is)?|Key)\s*[:.\-–=]?\s*(?:option\s*)?((?:\(?[A-Da-d1-4]\)?\s*(?:,|&|and|\/)?\s*){1,4})\s*\.?\s*(?=\n|$)/i;
+const ANSWER_LINE = /(?:^|\n)\s*(?:[►▶➤→•✓✔☑√■]\s*)?(?:(?:Official|Final)\s+)?(?:(?:The\s+)?(?:Correct|Right)\s+(?:answer|option|choice)(?:\s+is)?|Ans(?:wer)?(?:\s+is)?|Key)\s*[:.\-–=]?\s*(?:option\s*)?((?:\(?[A-Da-d1-4]\)?\s*(?:,|&|and|\/)?\s*){1,4})\s*\.?\s*(?=\n|$)/i;
 
 /** One option label as printed in an answer ("(b)", "B", "2", "(3)"). */
 const ANS_LABEL = String.raw`(?:\(\s*[A-Da-d1-4]\s*\)|[A-Da-d](?![A-Za-z0-9])|[1-4](?![\d.]))`;
 const ANS_LABELS = String.raw`${ANS_LABEL}(?:\s*(?:,|&|and|\/)\s*${ANS_LABEL}){0,3}`;
 /**
  * "Ans", "Answer", "Correct answer is", "The right option is", "Key:" (key needs a separator: "key A" is often content),
- * also behind a bullet / arrow and "Official" / "Final" ("► Official Answer: Option (c) — III and IV", seen 2026-10-23).
+ * also behind a bullet / arrow / tick and "Official" / "Final" ("► Official Answer: Option (c) — III and IV", seen 2026-10-23;
+ * "✓ Correct Answer: (b) Raynaud's syndrome", seen 2026-10-26 — the tick stayed behind as option D's last line).
  */
-const ANS_MARK = String.raw`(?:[►▶➤→•]\s*)?(?:(?:official|final)\s+)?(?:(?:the\s+)?(?:correct|right)\s+(?:answer|option|choice|response)(?:\s+is)?|ans(?:wer)?(?:\s+is)?(?=[\s:.\-–=(])|key(?=\s*[:\-–=]))`;
+const ANS_MARK = String.raw`(?:[►▶➤→•✓✔☑√■]\s*)?(?:(?:official|final)\s+)?(?:(?:the\s+)?(?:correct|right)\s+(?:answer|option|choice|response)(?:\s+is)?|ans(?:wer)?(?:\s+is)?(?=[\s:.\-–=(])|key(?=\s*[:\-–=]))`;
 const EXPLANATION = /(?:^|\n|\s)(?:Explanation|Solution|Sol\.|Rationale)\s*[:.\-–]\s*([\s\S]*)$/i;
 /** An answer printed INSIDE the text (merged into an option, after the options, "Correct answer is (B)"), up to the end of its line. */
 const ANS_INLINE = new RegExp(String.raw`(^|[\s.;,|)\]])(${ANS_MARK})\s*(?:[:\-–=]|\.(?!\d))?\s*(?:option\s*)?(${ANS_LABELS})\s*[.)]?[ \t]*([^\n]*?)[ \t]*(?=\n|$)`, "gi");
@@ -273,6 +299,36 @@ export function mergedStatements(stem: string): string[] | null {
   return glued.length >= 2 || arabic.length >= 1 ? [...glued, ...arabic] : null;
 }
 
+/**
+ * A lone mark printed on its own line at the end of an option ("Takayasu disease\n✓"): the tick of the answer line that
+ * follows the options ("✓ Correct Answer: (b) …"), left behind by a reader that took the answer but not its mark. It is
+ * an annotation, never option text: content checks and fingerprints ignore it, and Verify 1 removes it when the source
+ * confirms it.
+ */
+export const ANNOTATION_TAIL = /(?:\n[ \t]*[✓✔☑√■][ \t]*)+$/;
+export function stripAnnotationTail(text: string): string {
+  return text.replace(ANNOTATION_TAIL, "");
+}
+
+/** A combination option of a statement-code question: "I, II and IV", "1 and 3 only", "Only III", "II & IV". */
+const CODE_TOKEN = String.raw`\(?(?:X|IX|IV|V?I{1,3}|V|VI{1,3}|[1-9]|[A-H])\)?`;
+const CODE_OPTION = new RegExp(String.raw`^\s*(?:only\s+)?${CODE_TOKEN}(?:\s*(?:,|and|&|\/)\s*${CODE_TOKEN})*(?:\s+only)?\s*\.?\s*$`, "i");
+const NONE_ALL = /^\s*(?:none|all|both|neither)\b.{0,40}$/i;
+
+/**
+ * "Which of the following statements are correct? I. … II. … Select the answer using the code given below:" with options
+ * that are combinations of the statements: ONE option is the answer (the code), so it is single-correct even though
+ * several statements are true. A reader that sees "statements are correct" may call it multiple-correct (2026-10-26:
+ * 11 false Verify 2 disagreements on one paper).
+ */
+export function statementCodeQuestion(q: Pick<ExtractedQuestion, "stem" | "options">): boolean {
+  const statements = statementsOf(q.stem).length >= 2 || !!mergedStatements(q.stem);
+  if (!statements || q.options.length < 3) return false;
+  const coded = q.options.filter((o) => CODE_OPTION.test(stripAnnotationTail(o.text))).length;
+  const rest = q.options.filter((o) => !CODE_OPTION.test(stripAnnotationTail(o.text)) && NONE_ALL.test(stripAnnotationTail(o.text))).length;
+  return coded >= 3 && coded + rest === q.options.length;
+}
+
 export function takePrintedAnswer(text: string): PrintedAnswerTake {
   const take = (start: number, end: number, labels: string[], raw: string, note: string | null = null): PrintedAnswerTake => {
     let rest = text.slice(end);
@@ -282,11 +338,15 @@ export function takePrintedAnswer(text: string): PrintedAnswerTake {
       explanation = ex[1].trim() || null;
       rest = "";
     } else if (rest.trim() && answerAfterOptions(text, start)) {
-      // Text printed after an answer that follows the options cannot be option text: it is the explanation.
-      explanation = rest.trim();
+      // Text printed after an answer that follows the options cannot be option text: it is the explanation — unless it
+      // is only a heading (the next section's title), which is never an explanation.
+      if (!explanationIsHeading(rest)) {
+        explanation = rest.trim();
+        note = [note, "The text printed after the answer was kept as its explanation — check it."].filter(Boolean).join(" ");
+      }
       rest = "";
-      note = [note, "The text printed after the answer was kept as its explanation — check it."].filter(Boolean).join(" ");
     }
+    if (explanation && explanationIsHeading(explanation)) explanation = null;
     return { text: (text.slice(0, start) + rest).replace(/[ \t]+\n/g, "\n").trim(), answer: labels, raw: raw.trim(), explanation, note };
   };
   const own = ANSWER_LINE.exec(text);

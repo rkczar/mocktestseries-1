@@ -436,8 +436,9 @@ async function main() {
     const badAfter = byLabel(qc, "1")!.figures.find((f) => f.id === bad.id)!;
     check("Verify 1: a crop that does not keep its box's aspect ratio → UNCERTAIN with the reason, question blocked", badAfter.mappingStatus === "UNCERTAIN" && /aspect ratio/.test((badAfter.box as { reason?: string }).reason ?? "") && byLabel(qc, "1")!.issueCodes.includes("IMAGE_MAPPING_UNCERTAIN"), [badAfter.mappingStatus, badAfter.box]);
     check("Verify 1: number read twice and missing Q4 reported", v1c.duplicateNumbers.some((x) => /Q3/.test(x)) && v1c.missing.includes("Q4"), v1c);
-    // Verify 2 with the checker model; its FIRST answer is unusable → one recorded fallback to a cheaper suitable model.
-    await mockConfig({ script: { "mockvision/checker": ["malformed"] } });
+    // Verify 2 with the checker model; its answer for page 1 is unusable → one recorded fallback to a cheaper suitable
+    // model (targeted at page 1: pages are read in parallel since importer-reliability-2, so "first" is not page 1).
+    await mockConfig({ scriptMarker: { "mockvision/checker": { "1": ["malformed"] } } });
     const pc = await verify2Preview(jC, "mockvision/checker");
     check("Verify 2 preview (scan): 2 page images, priced", pc.pages === 2 && pc.maxInr !== null && pc.model === "mockvision/checker", pc);
     const rc = await requestVerify2({ jobId: jC, actorId: actor, model: "mockvision/checker", confirmedMaxInr: pc.maxInr });

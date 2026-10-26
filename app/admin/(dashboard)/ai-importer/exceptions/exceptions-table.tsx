@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
-import { approveQuestionsAction, bulkTaxonomyAction, importAction, reclassifyQuestionsAction, rejectQuestionsAction, rescanQuestionsAction, unapproveQuestionsAction } from "../actions";
+import { approveFromListAction, approveQuestionsAction, bulkTaxonomyAction, publishFromListAction, importAction, reclassifyQuestionsAction, rejectQuestionsAction, rescanQuestionsAction, unapproveQuestionsAction } from "../actions";
 import { SelectNative } from "@/components/ui/select-native";
 import { statusVariant } from "@/lib/ai-import/config";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
@@ -151,6 +151,30 @@ function BulkTaxonomy({ taxonomy, disabled, labels, onApply }: { taxonomy: Taxon
       <Button size="sm" variant="outline" disabled={disabled || !s || !labels.length} onClick={() => setConfirming(true)} data-testid="bulk-taxonomy-apply">
         Set subject / topic…
       </Button>
+    </span>
+  );
+}
+
+/**
+ * Approve / Publish on one row without opening the question. The server decides: Approve from a row is refused for
+ * every unresolved answer / subject-topic / reference / Verify 2 conflict (decided on the question's page); Publish is
+ * shown only for a question the server found eligible (Verify 1 passed, Verify 2 agreed, no open flag), asks for an
+ * explicit confirmation, and is checked again on the server.
+ */
+function RowActions({ row: r, canUse, canPublish, pending, act }: { row: ExceptionRow; canUse: boolean; canPublish: boolean; pending: boolean; act: <T>(fn: () => Promise<{ ok: true; data: T } | { ok: false; error: string }>, ok: string | ((d: T) => string)) => void }) {
+  if (!canUse || r.questionId || r.status === "REJECTED") return null;
+  return (
+    <span className="mt-1 flex flex-wrap gap-1">
+      {!r.approved && (
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={pending} onClick={() => act(() => approveFromListAction(r.id), (d) => (d.approved ? `Q${r.label} approved.` : `Q${r.label} not approved — ${d.refused[0]?.reason ?? "refused"}.`))} data-testid="row-approve">
+          Approve
+        </Button>
+      )}
+      {canPublish && r.eligible && (
+        <Button size="sm" className="h-6 px-2 text-[11px]" disabled={pending} onClick={() => confirm(`Publish Q${r.label} now? It passed Verify 1 and Verify 2 and every check; students will see it once it is published.`) && act(() => publishFromListAction(r.id), `Publishing Q${r.label} — see the job page.`)} data-testid="row-publish">
+          Publish
+        </Button>
+      )}
     </span>
   );
 }
@@ -313,6 +337,7 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
               </td>
               <td className="py-1.5 pr-2 text-xs" data-testid="row-approval" data-approved={r.approved ? "true" : "false"}>
                 {r.questionId ? <span className="text-[var(--color-success)]">in Question Bank</span> : r.approved ? <Badge variant="success">Approved</Badge> : r.rescanPending ? <Badge variant="warning">Re-scan to decide</Badge> : <span className="text-[var(--color-muted-foreground)]">not approved</span>}
+                <RowActions row={r} canUse={canUse} canPublish={canPublish} pending={pending} act={act} />
               </td>
               <td className="py-1.5 pr-2">
                 <Badge variant={statusVariant(r.answerStatus)}>{ANSWER_STATUS_LABELS[r.answerStatus] ?? r.answerStatus}</Badge>

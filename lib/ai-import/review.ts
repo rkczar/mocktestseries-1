@@ -18,9 +18,9 @@ import { effective, runPostProcessing } from "@/lib/ai-import/post";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { planOf } from "@/lib/ai-import/select";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
-import { rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
+import { headingResolver, rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
-import { MAX_VERIFY_PASSES, passCount, withPass } from "@/lib/ai-import/verify-core";
+import { MAX_VERIFY_PASSES, contentPartOf, passCount, withPass } from "@/lib/ai-import/verify-core";
 
 /**
  * Admin decisions on extracted questions. Every change is recorded (event
@@ -165,8 +165,14 @@ export interface ApproveResult {
  */
 /** Findings a bulk approval never clears: each needs an administrator's look at that one question. */
 export const DECIDE_INDIVIDUALLY = ["VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "REFERENCE_CONFLICT"];
+/**
+ * An approval from a LIST row (Exceptions table, one-page list — the question is not opened) is refused for every
+ * unresolved conflict: the individual decisions above, and open answer / subject-topic / section conflicts. Those are
+ * decided on the question's own page.
+ */
+export const LIST_PROTECTED = [...DECIDE_INDIVIDUALLY, "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_TYPE_CONFLICT", "ANSWER_KEY_PAPER_MISMATCH", "POSSIBLE_WITHDRAWN", "TAXONOMY_DISAGREES", "SECTION_SUBJECT_DIFFERS"];
 
-export async function approveQuestions(ids: string[], actorId: string): Promise<ApproveResult> {
+export async function approveQuestions(ids: string[], actorId: string, opts: { from?: "list" } = {}): Promise<ApproveResult> {
   const settings = await getImporterSettings();
   // Decide on the current facts: changes made since the last check are re-checked first (no AI calls).
   const jobIds = [...new Set((await prisma.aiImportQuestion.findMany({ where: { id: { in: ids } }, select: { jobId: true } })).map((x) => x.jobId))];
@@ -184,7 +190,7 @@ export async function approveQuestions(ids: string[], actorId: string): Promise<
       continue;
     }
     // An unresolved disagreement is decided on its own question page, never cleared by a bulk approval.
-    const unresolved = ids.length > 1 ? q.issueCodes.filter((c) => DECIDE_INDIVIDUALLY.includes(c)) : [];
+    const unresolved = opts.from === "list" ? q.issueCodes.filter((c) => LIST_PROTECTED.includes(c)) : ids.length > 1 ? q.issueCodes.filter((c) => DECIDE_INDIVIDUALLY.includes(c)) : [];
     if (unresolved.length) {
       out.refused.push({ id, label: q.sourceLabel, reason: `unresolved ${unresolved.map((c) => ISSUE_DEFS[c]?.label ?? c).join(", ").toLowerCase()} — open the question and decide it on its own` });
       continue;
@@ -618,7 +624,7 @@ export async function discardRescan(versionId: string, actorId: string) {
  * these questions (an administrator's choice is never touched) and the job runs its checks again.
  */
 export async function reclassifyQuestions(ids: string[], actorId: string): Promise<number> {
-  const qs = await prisma.aiImportQuestion.findMany({ where: { id: { in: ids } }, select: { id: true, jobId: true, status: true, taxonomySource: true } });
+  const qs = await prisma.aiImportQuestion.findMany({ where: { id: { in: ids } }, select: { id: true, jobId: true, status: true, taxonomySource: true, approvedById: true, subjectId: true, topicId: true, subTopicId: true, data: true, editedData: true } });
   if (!qs.length) throw new ImportJobError("Select the questions to re-classify.");
   const jobId = qs[0].jobId;
   const job = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobId } });
@@ -627,11 +633,21 @@ export async function reclassifyQuestions(ids: string[], actorId: string): Promi
   // The free local classifier always runs; the AI classifier only for what it cannot settle, when paid AI is on and the
   // import's model plan has a classification model.
   const aiToo = settings.aiEnabled && !!planOf(job.config)?.tasks.classify.model;
-  const target = qs.filter((q) => !LOCKED.includes(q.status) && !q.taxonomySource?.startsWith("admin"));
-  if (!target.length) throw new ImportJobError("Every selected question has a subject/topic chosen by an administrator (or is already stored); nothing to re-classify.");
+  // Settled decisions are never re-opened (importer-reliability-2 — two re-classify runs flipped subjects back and
+  // forth): an administrator's choice, an approved question, and a subject / topic a check already AGREED with.
+  const agreed = (q: (typeof qs)[number]) => {
+    const pv = (q.data as unknown as ExtractedQuestion).paperVerify;
+    const same = (c: { status: string; stored: { subjectId: string | null; topicId: string | null; subTopicId: string | null } } | null | undefined) => c?.status === "AGREED" && c.stored.subjectId === q.subjectId && c.stored.topicId === q.topicId && c.stored.subTopicId === q.subTopicId;
+    return !!q.topicId && (same(pv?.v2?.classification) || same(pv?.v1?.classification));
+  };
+  const target = qs.filter((q) => !LOCKED.includes(q.status) && !q.taxonomySource?.startsWith("admin") && !q.approvedById && !agreed(q));
+  if (!target.length) throw new ImportJobError("Every selected question is settled — chosen by an administrator, approved, already stored, or its subject / topic was confirmed by a check; nothing to re-classify.");
   // An AI-chosen subject is cleared too (a wrong subject would otherwise survive and block every correct topic);
-  // a subject from the paper itself (selected subject, printed heading / column) is kept.
-  const aiChosen = target.filter((q) => !q.taxonomySource || q.taxonomySource.startsWith("AI") || q.taxonomySource === "local classifier" || q.taxonomySource === "confirmed example").map((q) => q.id);
+  // a subject from the paper itself (selected subject, printed section heading / column) is kept.
+  // A subject the paper's printed section heading names is kept whoever filled it first.
+  const resolveHeading = job.paperType === "SINGLE_SUBJECT" ? null : await headingResolver(job.examId);
+  const printedSubject = (q: (typeof qs)[number]) => !!q.subjectId && resolveHeading?.(effective(q).hints?.subject)?.subjectId === q.subjectId;
+  const aiChosen = target.filter((q) => (!q.taxonomySource || q.taxonomySource.startsWith("AI") || q.taxonomySource === "local classifier" || q.taxonomySource === "confirmed example") && !printedSubject(q)).map((q) => q.id);
   if (aiChosen.length) await prisma.aiImportQuestion.updateMany({ where: { id: { in: aiChosen } }, data: { subjectId: null } });
   await prisma.aiImportQuestion.updateMany({ where: { id: { in: target.map((q) => q.id) } }, data: { topicId: null, subTopicId: null, taxonomyConfidence: null, taxonomySource: null, ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED } });
   const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: job.status }, data: { status: AiImportJobStatus.QUEUED, finishedAt: null } });
@@ -712,4 +728,24 @@ export async function revalidateQuestions(jobId: string, ids: string[]) {
   const settings = await getImporterSettings();
   await runPostProcessing({ job, settings: { ...settings, aiEnabled: false }, examName: "", subjectName: null, stillRunning: async () => true }, new Set(ids));
   await settleJobStatus(jobId);
+}
+
+/**
+ * "Confirm text-only, no image needed": an administrator decides that a question whose text points at a figure needs
+ * none (2026-10-25: "Unusual bulge on chest X-ray"). Kept on the extraction with the content it was decided on — any
+ * later change of the wording lapses it. Refused when an embedded image of the question failed to extract (that image
+ * exists and must be restored, cropped or confirmed). `confirm = false` withdraws the decision.
+ */
+export async function confirmTextOnly(questionId: string, actorId: string, confirm = true): Promise<void> {
+  const q = await editable(questionId);
+  const figures = await prisma.aiImportFigure.findMany({ where: { questionId } });
+  if (confirm && figures.some((f) => f.mappingStatus === "MISSING")) throw new ImportJobError("An image of this question failed to extract from the source — restore or crop it; it cannot be confirmed as text-only.");
+  if (confirm && figures.some((f) => f.owner !== "UNASSIGNED")) throw new ImportJobError("This question has images; remove them first if it really is text-only.");
+  const d = q.data as unknown as ExtractedQuestion;
+  const decision = confirm ? { textOnly: true as const, byId: actorId, at: new Date().toISOString(), content: contentPartOf(effective(q)) } : null;
+  await prisma.aiImportQuestion.update({ where: { id: questionId }, data: { data: { ...d, imageDecision: decision } as unknown as Prisma.InputJsonValue } });
+  await adminCheck(questionId, confirm ? "Text-only confirmed" : "Text-only withdrawn", confirm ? "An administrator confirmed that this question needs no image." : "The text-only decision was withdrawn.");
+  await logEvent(q.jobId, confirm ? "TEXT_ONLY_CONFIRMED" : "TEXT_ONLY_WITHDRAWN", `Q${q.sourceLabel}: ${confirm ? "confirmed as text-only (no image needed)" : "text-only decision withdrawn"} by an administrator.`, { questionId }, actorId);
+  await prisma.auditLog.create({ data: { actorId, action: confirm ? "AI_IMPORT_TEXT_ONLY_CONFIRMED" : "AI_IMPORT_TEXT_ONLY_WITHDRAWN", entityType: "AiImportQuestion", entityId: questionId, metadata: { jobId: q.jobId } } });
+  await revalidateQuestions(q.jobId, [questionId]);
 }

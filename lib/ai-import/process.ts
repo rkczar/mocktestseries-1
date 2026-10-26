@@ -571,6 +571,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
         settings: ctx.settings,
         pageId: page.id,
         needsVision: true,
+        jsonSchema: "extract",
       },
       (text) => parsePage(text)
     );

@@ -12,12 +12,12 @@ import { logEvent } from "@/lib/ai-import/jobs";
 import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
 import { SUBJECT_MIN_CONFIDENCE, SUBJECT_MISMATCH_CONFIDENCE, classifyUserText, decideClassification, taxonomyCodes, type ClassifyDecision } from "@/lib/ai-import/taxonomy-check";
 import { classifyPaper, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
-import { classifierContext } from "@/lib/ai-import/taxonomy-memory";
+import { classifierContext, headingResolver } from "@/lib/ai-import/taxonomy-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
-import { mergedAnswerIn, mergedStatements } from "@/lib/ai-import/local-parse";
+import { mergedAnswerIn, mergedStatements, statementCodeQuestion } from "@/lib/ai-import/local-parse";
 import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem } from "@/lib/ai-import/fidelity";
 import type { StepContext } from "@/lib/ai-import/process";
-import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
+import { contentPartOf, fingerprintsOf, taxonomyCurrent, verifyState } from "@/lib/ai-import/verify-core";
 
 /**
  * After extraction: answer keys → answer status, optional independent AI
@@ -27,6 +27,15 @@ import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
  * DUPLICATE. Re-running is safe: imported, published, rejected or
  * admin-handled answers are never overwritten.
  */
+
+/** Verify 1 findings about the subject / topic (they lapse when the subject / topic changes). */
+const TAXONOMY_FINDINGS = ["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN", "TAXONOMY_DISAGREES"];
+
+/** An administrator's "Confirm text-only, no image needed" on exactly this content (kept on the extraction). */
+export function textOnlyConfirmed(q: Pick<AiImportQuestion, "data">, e: ExtractedQuestion): boolean {
+  const d = (q.data as unknown as ExtractedQuestion).imageDecision;
+  return !!d?.textOnly && d.content === contentPartOf(e);
+}
 
 const OPEN: AiImportQuestionStatus[] = [AiImportQuestionStatus.EXTRACTED, AiImportQuestionStatus.READY, AiImportQuestionStatus.NEEDS_CORRECTION, AiImportQuestionStatus.NOT_IMPORTABLE, AiImportQuestionStatus.DUPLICATE, AiImportQuestionStatus.IMPORT_FAILED];
 
@@ -246,7 +255,6 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const subjectById = new Map(taxonomy.map((s) => [s.id, s]));
   const topicById = new Map(taxonomy.flatMap((s) => s.topics.map((t) => [t.id, t] as const)));
   const subTopicById = new Map(taxonomy.flatMap((s) => s.topics.flatMap((t) => t.subTopics.map((u) => [u.id, u] as const))));
-  const subjectByName = new Map(taxonomy.map((s) => [taxonomyNameKey(s.name), s]));
 
   // ---- Existing questions for duplicate detection (this exam only) ----
   const existing = await prisma.question.findMany({ where: { examId: job.examId, status: { not: "ARCHIVED" } }, select: { id: true, code: true, text: true, options: { select: { text: true }, orderBy: { order: "asc" } } } });
@@ -275,7 +283,17 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     }
   }
 
-  const toClassify = open.filter((q) => (!only || only.has(q.id)) && !q.topicId && !q.taxonomySource?.startsWith("admin"));
+  // The paper's printed section heading names the subject (exam subject names, confirmed heading aliases, one unique
+  // subject); never for a subject an administrator chose or a question already approved (those are flagged instead).
+  const resolveHeading = await headingResolver(job.examId);
+  const sectionSubject = new Map<string, string>();
+  if (!(job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId))
+    for (const q of open) {
+      const r = resolveHeading(effective(q).hints?.subject);
+      if (r) sectionSubject.set(q.id, r.subjectId);
+    }
+  const settledByAdmin = (q: (typeof open)[number]) => !!q.taxonomySource?.startsWith("admin") || !!q.approvedById;
+  const toClassify = open.filter((q) => (!only || only.has(q.id)) && !settledByAdmin(q) && (!q.topicId || (sectionSubject.has(q.id) && sectionSubject.get(q.id) !== q.subjectId)));
   // ---- Free local classification against the selected exam's own taxonomy (no AI, also run by Verify 1) ----
   // The whole paper is classified together (its subject mix is context for each question); a question's subject from
   // the paper itself (selected subject / printed heading) limits it to that subject.
@@ -286,9 +304,9 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     evidenceQuestions = cc.evidenceQuestions;
     const allowedOf = (q: (typeof open)[number]): string[] | null => {
       if (job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId) return [job.subjectId];
+      if (sectionSubject.has(q.id) && !settledByAdmin(q)) return [sectionSubject.get(q.id)!];
       if (q.subjectId && !q.taxonomySource?.startsWith("AI") && q.taxonomySource !== "local classifier") return [q.subjectId];
-      const hint = effective(q).hints?.subject;
-      return hint && subjectByName.has(taxonomyNameKey(hint)) ? [subjectByName.get(taxonomyNameKey(hint))!.id] : null;
+      return null;
     };
     const { results } = classifyPaper(cc.index, open.map((q) => effective(q)), { allowedSubjects: open.map(allowedOf), topicMin: settings.verification.topicMinConfidence });
     open.forEach((q, i) => local.set(q.id, results[i]));
@@ -304,20 +322,28 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const aiOutcome = new Map<string, { status: "FAILED" | "NO_RESULT"; detail: string; model: string | null }>();
   const classifyResults = new Map<string, ClassifyDecision & { model: string }>();
   if (settings.aiEnabled && settings.models.classify && toAi.length && taxonomy.length) {
-    const subjectsAllowed = job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId ? taxonomy.filter((s) => s.id === job.subjectId) : taxonomy;
+    const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, misaligned: 0, unsure: 0, missing: 0, errors: [] as string[], models: new Set<string>() };
+    // Questions whose subject the paper prints (section heading) are classified only within that subject: the AI picks
+    // the topic, never another subject (2026-10-26: "cauda equina" in the Surgery section was filed under Neurology).
+    const groups = new Map<string, typeof toAi>();
+    for (const q of toAi) {
+      const g = job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId ? job.subjectId : (sectionSubject.get(q.id) ?? "");
+      groups.set(g, [...(groups.get(g) ?? []), q]);
+    }
+    for (const [groupSubject, members] of groups) {
+    const subjectsAllowed = groupSubject ? taxonomy.filter((s) => s.id === groupSubject) : taxonomy;
     // Short codes (S3, T41, U7, Q7) instead of database ids: a small model copies "T41" reliably, a 25-character id
     // often not. The codes are mapped back (lib/ai-import/taxonomy-check.ts); a code that is not on the list is
     // counted as invalid, never guessed, and a result whose key words are not in its question is not used.
     const codes = taxonomyCodes(subjectsAllowed);
-    const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, misaligned: 0, unsure: 0, missing: 0, errors: [] as string[], models: new Set<string>() };
-    for (let i = 0; i < toAi.length; i += CLASSIFY_BATCH) {
+    for (let i = 0; i < members.length; i += CLASSIFY_BATCH) {
       if (!(await ctx.stillRunning())) return;
-      const batch = toAi.slice(i, i + CLASSIFY_BATCH);
+      const batch = members.slice(i, i + CLASSIFY_BATCH);
       const qCode = new Map(batch.map((q, k) => [`Q${k + 1}`, q]));
       const text = classifyUserText(codes.list, batch.map((q) => effective(q)));
       tally.batches++;
       try {
-        const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false }, (out) => {
+        const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false, jsonSchema: "classify" }, (out) => {
           // Item by item: a malformed entry only leaves its own question without a result.
           const parsed = classifyAnswerOf(parseModelJson(out));
           if (!parsed) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format (no usable result list)"), "model_output");
@@ -354,6 +380,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         tally.errors.push(message);
         for (const q of batch) aiOutcome.set(q.id, { status: "FAILED", detail: `the classification request failed: ${message}`, model: settings.models.classify });
       }
+    }
     }
     // Never silent: what the classifier returned, and what could be used.
     await logEvent(job.id, "CLASSIFY_RESULT", `Subject / topic classification of ${toAi.length} question(s) in ${tally.batches} request(s)${tally.models.size ? ` (${[...tally.models].join(", ")})` : ""}: ${tally.subjects} subject(s) and ${tally.topics} topic(s) assigned${tally.missing ? `, ${tally.missing} question(s) got no answer from the model (engine failure, flagged as such)` : ""}${tally.misaligned ? `, ${tally.misaligned} answer(s) not used because their key words were not in the question (answers shifted to another question)` : ""}${tally.unsure ? `, ${tally.unsure} left unresolved (no subject fits, or confidence below ${Math.round(SUBJECT_MIN_CONFIDENCE * 100)}%)` : ""}${tally.invalid ? `, ${tally.invalid} answer(s) named a question, subject, topic or subtopic code that is not on the list (ignored — only this exam's own records are valid)` : ""}${tally.failedBatches ? `, ${tally.failedBatches} request(s) failed (${tally.errors[0]})` : ""}. Questions without a subject stay in Needs correction.`, { questions: toAi.length, ...tally, models: [...tally.models], errors: tally.errors.slice(0, 5) });
@@ -428,12 +455,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     }
     // Only an explicit pointer to a visual counts; it blocks only when the source could hold an uncaptured image —
     // a source without any embedded image gets a reviewable flag (an administrator decides), never a blocking one.
-    const pointsAtFigure = MENTIONS_FIGURE.test(e.stem) && figs.length === 0;
+    // "Confirm text-only, no image needed" (an administrator's decision on this exact content) answers a figure POINTER
+    // in the text; it never answers an embedded image that failed to extract (MISSING), which stays blocking.
+    const textOnly = textOnlyConfirmed(q, e) && !missingFig.length;
+    const pointsAtFigure = MENTIONS_FIGURE.test(e.stem) && figs.length === 0 && !textOnly;
     const mentionsFigure = pointsAtFigure && sourceMayHoldImage(fileFacts.get(q.fileId), q.pages);
     if (mentionsFigure) add("IMAGE_MISSING", "The question refers to a figure, but no figure was found.");
-    else if (pointsAtFigure) add("IMAGE_REFERENCE_UNCERTAIN", "The question text points at a figure, but its source file has no embedded image. Check whether an image is really needed: upload it, or approve the question as text-only.");
+    else if (pointsAtFigure) add("IMAGE_REFERENCE_UNCERTAIN", "The question text points at a figure, but its source file has no embedded image. Check whether an image is really needed: upload it, or confirm the question as text-only.");
     for (const o of e.options) if (!o.text.trim() && !figs.some((f) => f.owner === "OPTION" && f.optionLabel === o.label && f.mappingStatus !== "MISSING")) add("OPTIONS_INCOMPLETE", `Option ${o.label} has neither text nor an image.`);
-    checks.push({ stage: 1, name: "Figures", passed: !missingFig.length && !uncertainFig.length && !pointsAtFigure, severity: missingFig.length || mentionsFigure ? "ERROR" : uncertainFig.length || pointsAtFigure ? "WARNING" : "INFO", method: "DETERMINISTIC", detail: figs.length ? figs.map((f) => `${f.owner === "OPTION" ? `option ${f.optionLabel}` : f.owner.toLowerCase()} (${f.source.toLowerCase()}, ${f.mappingStatus.toLowerCase()})`).join(", ") : mentionsFigure ? "Refers to a figure; none found." : pointsAtFigure ? "Points at a figure; the source file has no embedded image (reviewable)." : "No figures." });
+    checks.push({ stage: 1, name: "Figures", passed: !missingFig.length && !uncertainFig.length && !pointsAtFigure, severity: missingFig.length || mentionsFigure ? "ERROR" : uncertainFig.length || pointsAtFigure ? "WARNING" : "INFO", method: textOnly ? "ADMIN_DECISION" : "DETERMINISTIC", detail: textOnly && !figs.length ? "Text-only: an administrator confirmed that no image is needed." : figs.length ? figs.map((f) => `${f.owner === "OPTION" ? `option ${f.optionLabel}` : f.owner.toLowerCase()} (${f.source.toLowerCase()}, ${f.mappingStatus.toLowerCase()})`).join(", ") : mentionsFigure ? "Refers to a figure; none found." : pointsAtFigure ? "Points at a figure; the source file has no embedded image (reviewable)." : "No figures." });
 
     // Stage 2 — structure & subject
     let type = e.type;
@@ -476,9 +506,16 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       if (job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId) {
         subjectId = job.subjectId;
         taxSource = "selected subject";
-      } else if (e.hints?.subject && subjectByName.has(taxonomyNameKey(e.hints.subject))) {
-        subjectId = subjectByName.get(taxonomyNameKey(e.hints.subject))!.id;
-        taxSource = "source column";
+      } else if (sectionSubject.has(q.id) && !q.approvedById) {
+        const sec = sectionSubject.get(q.id)!;
+        // A topic filed under another subject cannot stay with the printed section's subject.
+        if (subjectId !== sec) {
+          topicId = null;
+          subTopicId = null;
+          taxConf = null;
+        }
+        if (subjectId !== sec || !topicId) taxSource = e.method === "SHEET" ? "source column" : "printed section";
+        subjectId = sec;
       }
       if (e.hints?.topic && subjectId) {
         const t = subjectById.get(subjectId)?.topics.find((x) => taxonomyNameKey(x.name) === taxonomyNameKey(e.hints!.topic!));
@@ -502,11 +539,12 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           if (!subTopicId && loc.subTopicId) subTopicId = loc.subTopicId;
         }
       }
+      if (sectionSubject.has(q.id) && q.approvedById && subjectId && sectionSubject.get(q.id) !== subjectId) add("SECTION_SUBJECT_DIFFERS", `The paper prints this question under “${e.hints?.subject}” (${subjectById.get(sectionSubject.get(q.id)!)?.name ?? "another subject"}), but it was approved with ${subjectById.get(subjectId)?.name ?? "another subject"} — kept as approved; check it.`);
       if (loc) checks.push({ stage: 2, name: "Local classification", passed: loc.status === "CLASSIFIED", severity: loc.status === "CLASSIFIED" ? "INFO" : "WARNING", method: "DETERMINISTIC", detail: loc.reason.slice(0, 600) });
       const ai = classifyResults.get(q.id);
       if (ai) {
         // The paper's own subject (selected subject / printed heading) is kept; a confident classifier that disagrees is reported.
-        if (subjectId && ai.subject && ai.subject !== subjectId && ai.confidence >= SUBJECT_MISMATCH_CONFIDENCE) {
+        if (subjectId && ai.subject && ai.subject !== subjectId && ai.confidence >= SUBJECT_MISMATCH_CONFIDENCE && taxSource !== "printed section") {
           add("SUBJECT_MISMATCH", `The classifier (${ai.explanation}) files this question under ${subjectById.get(ai.subject)?.name ?? "another subject"}, not ${subjectById.get(subjectId)?.name ?? "the paper's subject"} — check the subject.`);
           checks.push({ stage: 2, name: "Subject check", passed: false, severity: "WARNING", method: "AI", model: ai.model, detail: `The classifier thinks this question belongs to ${subjectById.get(ai.subject)?.name ?? "another subject"}, not the selected subject.` });
         }
@@ -527,6 +565,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       }
       if (aiFail) checks.push({ stage: 2, name: "Classification evidence", passed: false, severity: "WARNING", method: "AI", model: aiFail.model, detail: `No result: ${aiFail.detail}`.slice(0, 600) });
     }
+    if (q.taxonomySource?.startsWith("admin") && sectionSubject.has(q.id) && subjectId && sectionSubject.get(q.id) !== subjectId) add("SECTION_SUBJECT_DIFFERS", `The paper prints this question under “${e.hints?.subject}” (${subjectById.get(sectionSubject.get(q.id)!)?.name ?? "another subject"}); an administrator chose ${subjectById.get(subjectId)?.name ?? "another subject"} — kept as chosen; check it.`);
     // Only records of this exam's own hierarchy are kept (Exam → Subject → Topic → Subtopic): an id that is not
     // (or no longer) part of it, or a topic outside its subject, is cleared and reported — never saved.
     const invalidTax: string[] = [];
@@ -640,6 +679,10 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           if (official.length > 1 && type !== "MULTIPLE_CORRECT") {
             answerStatus = AiImportAnswerStatus.AMBIGUOUS_MAPPING;
             add("ANSWER_AMBIGUOUS", `The key gives several answers (${official.join(", ")}) for a single-correct question.`);
+          } else if (official.length === 1 && type === "MULTIPLE_CORRECT" && statementCodeQuestion(e)) {
+            // "Select the answer using the code": one code option is the answer — single-correct, as the key says.
+            type = "SINGLE_CORRECT";
+            checks.push({ stage: 3, name: "Question type", passed: true, severity: "INFO", method: "DETERMINISTIC", detail: "Statement-code question: the official key gives one code option, so it is single-correct." });
           } else if (official.length === 1 && type === "MULTIPLE_CORRECT") {
             // Never silently stored as a multiple-correct answer, never changed: the type or the key needs a decision.
             answerStatus = AiImportAnswerStatus.AMBIGUOUS_MAPPING;
@@ -708,12 +751,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (batchTwin && batchTwin !== q.id && norm.length > 10) add("DUPLICATE_IN_BATCH", "The same question appears earlier in this import.");
     else seenInBatch.set(norm, q.id);
     // Full-paper verification (Verify 1 / Verify 2), counted only while it still describes this exact content.
-    const fingerprint = contentFingerprint({ e, finalAnswer, subjectId, topicId, subTopicId, figures: figs });
+    const fingerprint = fingerprintsOf({ e, finalAnswer, subjectId, topicId, subTopicId, figures: figs });
     const vs = verifyState(q.data, fingerprint);
+    // A check's subject / topic findings describe the ids it saw: after a re-classification they no longer apply.
+    const sameIds = (x: { subjectId: string | null; topicId: string | null; subTopicId: string | null } | null | undefined) => !!x && x.subjectId === subjectId && x.topicId === topicId && x.subTopicId === subTopicId;
+    const v1TaxCurrent = vs.pv?.v1 ? (vs.pv.v1.classification ? sameIds(vs.pv.v1.classification.stored) : taxonomyCurrent(vs.pv.v1, fingerprint)) : false;
     if (vs.pv?.v1) {
       if (vs.v1 === "stale") checks.push({ stage: 5, name: "Verify 1 — full paper", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: "Out of date: the question changed after Verify 1 ran. Run Verify 1 again." });
       else {
-        for (const p of vs.pv.v1.problems) addMore(p.code, p.detail);
+        for (const p of vs.pv.v1.problems) if (v1TaxCurrent || !TAXONOMY_FINDINGS.includes(p.code)) addMore(p.code, p.detail);
         checks.push({ stage: 5, name: "Verify 1 — full paper", passed: vs.v1 === "passed", severity: vs.v1 === "passed" ? "INFO" : "WARNING", method: "DETERMINISTIC", detail: `${vs.v1 === "passed" ? "Passed" : `${vs.pv.v1.problems.length} finding(s): ${vs.pv.v1.problems.map((p) => p.detail).join(" · ").slice(0, 400) || "see the flags"}`}${vs.pv.v1.fixes.length ? ` · corrected: ${vs.pv.v1.fixes.map((f) => `${f.field} (${f.evidence})`).join("; ").slice(0, 300)}` : ""}${vs.pv.v1.reference ? ` · reference “${vs.pv.v1.reference.name}”: ${vs.pv.v1.reference.matched ?? "no matching question"}` : ""}` });
       }
     }
@@ -726,7 +772,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         if (vs.v2 === "disagree" && v2.fields.includes("subject")) add("SUBJECT_MISMATCH", `Verify 2 (${v2.model}): ${v2.detail}`.slice(0, 600));
         // The independent subject / topic check is its own result: a disagreement is a taxonomy finding, a failed check
         // is shown (never agreement), and neither changes the text read's verdict.
-        const vc = v2.classification;
+        const vc = v2.classification && sameIds(v2.classification.stored) ? v2.classification : null;
         if (vc?.status === "DISAGREEMENT" && !q.taxonomySource?.startsWith("admin")) {
           add("TAXONOMY_DISAGREES", `Verify 2 (${vc.method}): ${vc.findings.join(" · ")}`.slice(0, 600));
           if (vc.found?.subjectId && vc.found.subjectId !== subjectId) add("SUBJECT_MISMATCH", `Verify 2 (${vc.method}): ${vc.findings[0] ?? "another subject"}`.slice(0, 600));

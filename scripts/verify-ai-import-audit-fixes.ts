@@ -86,7 +86,7 @@ async function errorOf(fn: () => Promise<unknown>): Promise<Error | null> {
 
 const TAG = "auditfx";
 const jobs: string[] = [];
-type Stats = { chat: number; byModel: Record<string, number>; attempts: Record<string, number>; reasoning: ({ effort?: string; exclude?: boolean } | null)[] };
+type Stats = { chat: number; byModel: Record<string, number>; attempts: Record<string, number>; reasoning: ({ effort?: string; max_tokens?: number; exclude?: boolean } | null)[] };
 const mockStats = async () => (await (await fetch(`${MOCK}/__mock/stats`)).json()) as Stats;
 const mockConfig = async (c: Record<string, unknown>) => void (await fetch(`${MOCK}/__mock/config`, { method: "POST", body: JSON.stringify(c) }));
 const MOCK_BASE = { extraModels: true, reasonModels: true, batchModels: true, keyLimitRemaining: 1000, script: {}, badRequest: {}, noEndpoint: [], failTask: {}, keyHeader: null, costMultiplier: 1, rateLimit: {} };
@@ -170,7 +170,9 @@ async function main() {
     check("low-confidence OCR → 'reference unreadable': no conflict, no suggested answer", unreadable.unreadable === true && c1.unreadable === true && !c1.conflicts.length && !c1.suggestedAnswer.length, c1);
     const readable = ocrQuestion({ section: "", number: 7, stem: prepared.stem, options: prepared.options.map((o) => ({ text: o.text })), printedAnswer: ["B"], pages: [3], confidence: 0.95 });
     const c2 = compareWithReference(prepared, ["A"], { questions: [readable], key: [] });
-    check("readable OCR is matched by question number first and its different answer is a conflict to decide", !readable.unreadable && c2.matched === "Q7" && c2.conflicts.some((c) => /answer B/.test(c)), c2);
+    // importer-reliability-2: an OCR reading is matched by its wording, and what it read as an "answer" in a scanned
+    // booklet (a tick, a stray mark) is never evidence — no conflict, no suggested answer.
+    check("readable OCR is matched by its wording; its \"answer\" from a scanned booklet is never a conflict or a suggestion", !readable.unreadable && c2.matched === "Q7" && !c2.conflicts.some((c) => /answer/.test(c)) && !c2.suggestedAnswer.length && readable.answer.length === 0, c2);
     check("the comparison never changes the prepared question", JSON.stringify(prepared) === before);
     check("a dropped connection is recognized ('terminated'), an ordinary provider error is not", DROPPED_CONNECTION.test("OpenRouter returned an error. (terminated)") && DROPPED_CONNECTION.test("terminated") && !DROPPED_CONNECTION.test("Provider returned error"));
 
@@ -215,7 +217,7 @@ async function main() {
     const rr = await importerAiCall({ jobId: jR, task: "extract", models: ["mockreason/think"], override: withFallback, noReplace: true, system: "Extract questions. OUTPUT (JSON only)", content: [{ type: "text", text: "Page 1 of 1" }], maxOutputTokens: 2000, settings: normalizeImporterSettings(await getImporterSettings()), needsVision: false }).catch((e) => e as Error);
     const sR1 = await mockStats();
     const sent = sR1.reasoning.slice(sR0.reasoning.length);
-    check("a reasoning model gets {effort: low, exclude: true} even with a fallback configured, and answers", sent.length >= 1 && sent.every((r) => r?.effort === "low" && r?.exclude === true) && !(rr instanceof Error), { sent, rr: rr instanceof Error ? rr.message : "ok" });
+    check("a reasoning model gets a bounded thinking budget {max_tokens, exclude: true} even with a fallback configured, and answers", sent.length >= 1 && sent.every((r) => typeof r?.max_tokens === "number" && r?.exclude === true) && !(rr instanceof Error), { sent, rr: rr instanceof Error ? rr.message : "ok" });
 
     await manual({ classify: "mocktext/cheap" }, ["mocktext/classifier", "mocktext/cheap"]);
     const s1 = normalizeImporterSettings(await getImporterSettings());

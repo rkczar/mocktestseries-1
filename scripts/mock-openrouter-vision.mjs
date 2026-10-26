@@ -36,8 +36,10 @@
  * requested parameters.") when the model's routes do not list every parameter the request sends.
  * Reliability fixtures (2026-10-20): config {reasonModels: true} adds mockreason/think — a vision model whose routes
  * accept `reasoning`; WITHOUT a `reasoning` setting it spends the whole max_tokens thinking and returns no text
- * (finish_reason "length"), with {effort} it answers normally. config {batchModels: true} adds
+ * (finish_reason "length"), with {effort} or {max_tokens} (a thinking budget) it answers normally. config {batchModels: true} adds
  * mockvision/cheap:batch — the cheapest vision model, refused on chat/completions like OpenRouter's batch variants.
+ * config {structModels: true} adds mockstruct/reader, whose routes accept response_format + structured_outputs;
+ * stats.responseFormat records each request's response_format type (null when absent) — importer-reliability-2.
  * config {script: {id: [mode, …]}} answers the next requests to a model with an unusable answer, one mode each:
  * "empty" | "length" | "malformed" (cut-off JSON) | "shape" (options as plain strings, null labels / list keys,
  * numbers as strings) | "latex" (unescaped LaTeX backslashes + trailing commas) | "badcodes" (classification codes
@@ -84,6 +86,10 @@ const EXTRA = {
 const REASON = {
   "mockreason/think": { p: 0.00000004, c: 0.00000028, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning"], thinks: true },
 };
+/** importer-reliability-2: a vision model whose routes accept structured outputs (json_schema / JSON mode). */
+const STRUCT = {
+  "mockstruct/reader": { p: 0.00000006, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "temperature", "response_format", "structured_outputs"] },
+};
 const BATCH = {
   "mockvision/cheap:batch": { p: 0.000000005, c: 0.00000005, vision: true, batch: true },
 };
@@ -91,7 +97,7 @@ const PARAM = {
   "mockparam/notemp": { p: 0.00000002, c: 0.0000001, vision: true, json: true, params: ["max_tokens"] },
   "mockparam/zeroout": { p: 0.00000003, c: 0, vision: true, json: true },
 };
-const M = () => ({ ...MODELS, ...(config.extraModels ? EXTRA : {}), ...(config.paramModels ? PARAM : {}), ...(config.reasonModels ? REASON : {}), ...(config.batchModels ? BATCH : {}) });
+const M = () => ({ ...MODELS, ...(config.extraModels ? EXTRA : {}), ...(config.paramModels ? PARAM : {}), ...(config.reasonModels ? REASON : {}), ...(config.batchModels ? BATCH : {}), ...(config.structModels ? STRUCT : {}) });
 const paramsOf = (m) => m.params ?? ["max_tokens", "temperature", ...(m.json ? ["response_format"] : [])];
 /** Provider routes of a model: [tag, price factor]; every model is ZDR unless `zdr: false`. */
 const routesOf = (id) => {
@@ -114,7 +120,7 @@ const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
 
-const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0 };
+const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0 };
 let seq = 0;
 
 function json(res, status, body) {
@@ -186,7 +192,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/__mock/stats") return json(res, 200, stats);
   if (url.pathname === "/__mock/reset") {
-    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0 });
+    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0 });
     Object.assign(config, structuredClone(DEFAULT_CONFIG));
     return json(res, 200, { ok: true });
   }
@@ -225,6 +231,7 @@ const server = http.createServer(async (req, res) => {
     stats.zdr.push(body.provider?.zdr === true);
     stats.requireParams.push(body.provider?.require_parameters === true);
     stats.reasoning.push(body.reasoning ?? null);
+    stats.responseFormat.push(body.response_format?.type ?? null);
     const system = String(body.messages?.find((m) => m.role === "system")?.content ?? "");
     const user = body.messages?.find((m) => m.role === "user")?.content;
     const parts = Array.isArray(user) ? user : [{ type: "text", text: String(user ?? "") }];
@@ -284,7 +291,13 @@ const server = http.createServer(async (req, res) => {
         continue;
       }
       if (id === "mockvision/slow") await new Promise((r) => setTimeout(r, 6000));
-      if (config.chatDelayMs) await new Promise((r) => setTimeout(r, config.chatDelayMs));
+      if (config.chatDelayMs) {
+        // stats.maxInflight: the most requests answered at the same time (parallel Verify 2 parts, importer-reliability-2).
+        stats.inflight = (stats.inflight ?? 0) + 1;
+        stats.maxInflight = Math.max(stats.maxInflight ?? 0, stats.inflight);
+        await new Promise((r) => setTimeout(r, config.chatDelayMs));
+        stats.inflight--;
+      }
       stats.byModel[id] = (stats.byModel[id] ?? 0) + 1;
       let out;
       if (task === "extract") {
@@ -309,7 +322,11 @@ const server = http.createServer(async (req, res) => {
       let content = JSON.stringify(out);
       let finish = "stop";
       let ctOverride = null;
-      const mode = m.thinks && !body.reasoning?.effort ? "length" : Array.isArray(config.script[id]) && config.script[id].length ? config.script[id].shift() : null;
+      // config {scriptMarker: {id: {marker: [mode, …]}}}: like `script`, but only for requests carrying that page image
+      // (deterministic when pages are read in parallel — importer-reliability-2).
+      const pageMarker = image && config.scriptMarker?.[id] ? await markerOf(image) : null;
+      const byMarker = pageMarker && Array.isArray(config.scriptMarker[id][pageMarker]) && config.scriptMarker[id][pageMarker].length ? config.scriptMarker[id][pageMarker].shift() : null;
+      const mode = m.thinks && !body.reasoning?.effort && !body.reasoning?.max_tokens ? "length" : byMarker ?? (Array.isArray(config.script[id]) && config.script[id].length ? config.script[id].shift() : null);
       // 2026-10-25: a connection the provider drops mid-request, and a classification list with one malformed entry.
       if (mode === "terminated") return err(res, 502, "terminated");
       if (mode === "baditem" && out.results) content = JSON.stringify({ results: [{ bogus: true }, ...out.results.slice(1)] });

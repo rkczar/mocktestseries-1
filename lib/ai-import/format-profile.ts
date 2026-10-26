@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { ImportJobError, logEvent } from "@/lib/ai-import/jobs";
 import { effective } from "@/lib/ai-import/post";
 import { statementsOf } from "@/lib/ai-import/local-parse";
-import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
+import { fingerprintsOf, verifyState } from "@/lib/ai-import/verify-core";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
 /**
@@ -77,7 +77,7 @@ async function saveProfiles(profiles: FormatProfile[], actorId: string, action: 
   await prisma.auditLog.create({ data: { actorId, action, entityType: "AiImportFormatProfile", entityId } });
 }
 
-const fpOf = (q: QRow) => contentFingerprint({ e: effective(q), finalAnswer: q.finalAnswer, subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, figures: q.figures });
+const fpOf = (q: QRow) => fingerprintsOf({ e: effective(q), finalAnswer: q.finalAnswer, subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, figures: q.figures });
 
 /** Verified = Verify 1 passed (current) and either Verify 2 agreed (current) or an administrator approved / stored it. */
 export function isVerifiedForProfile(q: QRow): boolean {

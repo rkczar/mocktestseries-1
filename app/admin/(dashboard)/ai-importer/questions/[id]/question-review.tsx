@@ -19,6 +19,7 @@ import {
   cropFigureAction,
   markFigureUncertainAction,
   markImageMissingAction,
+  confirmTextOnlyAction,
   reclassifyQuestionsAction,
   rejectQuestionsAction,
   rescanQuestionsAction,
@@ -52,6 +53,8 @@ export interface ReviewFigure {
 
 export interface ReviewQ {
   id: string;
+  /** "Confirm text-only, no image needed": confirmed (on this content), and whether it can be offered now. */
+  textOnly?: { confirmed: boolean; offer: boolean; refusal: string | null };
   status: string;
   type: string;
   contentFormat: "PLAIN" | "RICH_V1";
@@ -572,6 +575,17 @@ export function QuestionReview({
                   Crop another figure from the page
                 </Button>
               )}
+              {q.textOnly?.confirmed ? (
+                <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => confirmTextOnlyAction(q.id, false), "Text-only decision withdrawn.")} data-testid="rv-text-only-withdraw">
+                  Text-only confirmed — withdraw
+                </Button>
+              ) : q.textOnly?.offer ? (
+                <Button size="sm" variant="outline" disabled={pending} onClick={() => confirm("Confirm that this question needs no image? The image flag is cleared for this exact wording; any later change of the text asks again.") && act(() => confirmTextOnlyAction(q.id, true), "Confirmed as text-only — no image needed.")} data-testid="rv-text-only">
+                  Confirm text-only, no image needed
+                </Button>
+              ) : q.textOnly?.refusal ? (
+                <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="rv-text-only-refusal">{q.textOnly.refusal}</span>
+              ) : null}
               <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => markImageMissingAction(q.id, addImg.owner === "OPTION" ? "OPTION" : "STEM", addImg.owner === "OPTION" ? addImg.label : null, prompt("Describe the missing image (optional):") ?? ""), "Marked missing — upload the image or re-scan the page.")} data-testid="rv-mark-missing">
                 Mark an image missing
               </Button>

@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
-import { effective } from "@/lib/ai-import/post";
+import { effective, textOnlyConfirmed } from "@/lib/ai-import/post";
 import { statusVariant } from "@/lib/ai-import/config";
 import { QuestionReview, type RescanCompareView, type VersionView } from "./question-review";
 import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
@@ -325,6 +325,11 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
         <QuestionReview
           q={{
             id: q.id,
+            textOnly: (() => {
+              const pointer = q.issueCodes.includes("IMAGE_MISSING") || q.issueCodes.includes("IMAGE_REFERENCE_UNCERTAIN");
+              const failed = q.figures.some((f) => f.mappingStatus === "MISSING");
+              return { confirmed: textOnlyConfirmed(q, e), offer: pointer && !failed && !q.figures.length, refusal: pointer && failed ? "An image of this question failed to extract — restore or crop it (it cannot be confirmed as text-only)." : null };
+            })(),
             status: q.status,
             type: e.type,
             contentFormat: fmt,

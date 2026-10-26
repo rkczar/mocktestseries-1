@@ -12,6 +12,7 @@ import { executeBulkImport } from "@/lib/bulk-import-execute";
 import { mediaStorage } from "@/lib/media-storage";
 import { publishQuestions } from "@/lib/question-publish-policy";
 import { ISSUE_DEFS, issueLabel, type ImporterSettings } from "@/lib/ai-import/config";
+import { explanationIsHeading } from "@/lib/ai-import/local-parse";
 import { readVault } from "@/lib/ai-import/vault";
 import { effective, IMPORTABLE } from "@/lib/ai-import/post";
 import { logEvent } from "@/lib/ai-import/jobs";
@@ -156,7 +157,8 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
       correct: q.finalAnswer,
       difficulty: e.hints?.difficulty && ["EASY", "MEDIUM", "HARD"].includes(e.hints.difficulty.toUpperCase()) ? e.hints.difficulty.toUpperCase() : "MEDIUM",
       ...(job.previousYearPaperId ? { source: "PYQ" } : {}),
-      ...(e.hints?.explanation ? { explanation: e.hints.explanation } : {}),
+      // A section heading is never stored as a question's explanation (2026-10-26: two headings were read as explanations).
+      ...(e.hints?.explanation && !explanationIsHeading(e.hints.explanation) ? { explanation: e.hints.explanation } : {}),
       ...(flags.length ? { review: { required: true, reason: `AI importer: ${flags.join(", ")}`.slice(0, 480) } } : {}),
       ...(hasLists ? { matchLists: { listI: e.listI!.map((x) => ({ key: x.key, text: x.text })), listII: e.listII!.map((x) => ({ key: x.key, text: x.text })) } } : {}),
     });

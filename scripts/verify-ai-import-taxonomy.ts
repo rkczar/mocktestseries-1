@@ -30,7 +30,7 @@ import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/setti
 import { addFile, completeFile, confirmJob, createJob, putChunk, requestAnalysis } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
 import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
-import { requestVerify2, runVerify1, verify2Preview } from "@/lib/ai-import/paper-verify";
+import { fingerprintOf, requestVerify2, runVerify1, verify2Preview } from "@/lib/ai-import/paper-verify";
 import { bulkSetTaxonomy, reclassifyQuestions, setTaxonomy } from "@/lib/ai-import/review";
 import { refreshRoutes } from "@/lib/ai-import/routes";
 import { buildTaxonomyIndex, classifyLocally, classifyPaper, textSufficient, verifyStoredTaxonomy, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
@@ -469,7 +469,11 @@ async function main() {
     qs = await questionsOf(j1);
     const t7 = byLabel(qs, "7");
     check("admin correction: ids updated, source admin, approval withdrawn (not verified by it)", t7.subjectId === idOf("s-derm") && t7.topicId === idOf("t-pig") && t7.taxonomySource === "admin" && !t7.approvedById && set.remembered, [t7.subjectId, t7.taxonomySource, set]);
-    check("…its Verify 1 / Verify 2 results are out of date (ids are part of the fingerprint) — not 'verified'", vsOf(t7).v1 === "stale" && vsOf(t7).v2 === "stale", [vsOf(t7).v1, vsOf(t7).v2]);
+    // importer-reliability-2: subject / topic are fingerprinted apart from the content — the correction makes only the
+    // classification checks out of date (they described other ids); the content verification keeps its state.
+    const t7now = verifyState(t7.data, fingerprintOf(t7));
+    const t7pv = (t7.data as unknown as ExtractedQuestion).paperVerify;
+    check("…its content verification is NOT out of date; the classification checks no longer describe the stored ids", t7now.v1 !== "stale" && t7now.v2 !== "stale" && [t7pv?.v1?.classification?.stored, t7pv?.v2?.classification?.stored].every((x) => !x || x.subjectId !== t7.subjectId || x.topicId !== t7.topicId), [t7now.v1, t7now.v2, t7pv?.v2?.classification?.stored]);
     check("…audit log entry + TAXONOMY_SET event with from / to", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_TAXONOMY_SET", entityId: target.id } })) === auditBefore + 1 && /saved as an example/.test((await events(j1, "TAXONOMY_SET")).at(-1)?.message ?? ""));
     const memA = await loadExamMemory(A.exam.id);
     check("…saved as a confirmed example of THIS exam (ids, job, question, administrator, source)", memA?.corrections.length === 1 && memA.corrections[0].subjectId === idOf("s-derm") && memA.corrections[0].questionId === target.id && memA.corrections[0].byId === actor && memA.corrections[0].source === "admin correction" && !(await loadExamMemory(B.exam.id)), memA?.corrections);
@@ -507,9 +511,15 @@ async function main() {
     const off: ImporterSettings = { ...settings, aiEnabled: false };
     await saveImporterSettings(off, actor);
     const beforeOff = await mockStats();
-    await reclassifyQuestions([byLabel(qs, "4").id], actor);
+    // Settled subjects / topics (administrator, approved, agreed by a check) are never re-opened: Q4's checks are made
+    // "needs review" first, so it is a question a re-classification may touch.
+    const open4 = byLabel(qs, "4");
+    const pv4 = (open4.data as unknown as ExtractedQuestion).paperVerify ?? {};
+    const review = <T extends { status: string } | null | undefined>(c: T) => (c ? { ...c, status: "NEEDS_REVIEW" } : c);
+    await prisma.aiImportQuestion.update({ where: { id: open4.id }, data: { data: { ...(open4.data as object), paperVerify: { ...pv4, ...(pv4.v1 ? { v1: { ...pv4.v1, classification: review(pv4.v1.classification) } } : {}), ...(pv4.v2 ? { v2: { ...pv4.v2, classification: review(pv4.v2.classification) } } : {}) } } as never } });
+    await reclassifyQuestions([open4.id], actor);
     await runWorker(300_000);
-    check("Paid AI off: re-classification still works (free classifier) and sends no AI request", (await mockStats()).chat === beforeOff.chat && !!byLabel(await questionsOf(j1), "4").subjectId);
+    check("Paid AI off: re-classification still works (free classifier) and sends no AI request", (await mockStats()).chat === beforeOff.chat && !!byLabel(await questionsOf(j1), open4.sourceLabel).subjectId, [open4.sourceLabel, open4.taxonomySource, (open4.data as unknown as ExtractedQuestion).classification?.local?.status, byLabel(await questionsOf(j1), open4.sourceLabel).subjectId, (await mockStats()).chat - beforeOff.chat]);
     const pvOff = await verify2Preview(j1, "mockvision/checker");
     check("Paid AI off: the Verify 2 preview says it cannot run", pvOff.problems.some((x) => /Paid AI is switched off/.test(x)), pvOff.problems);
     await saveImporterSettings(settings, actor);

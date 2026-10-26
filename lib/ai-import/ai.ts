@@ -10,6 +10,7 @@ import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeC
 import { IMPORTER_SETTING_KEY, SELECTION_TASK_LABELS, importerFeature, normalizeImporterSettings, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
 import { FAILURE_ADVICE, failureMessage, kindOfCategory, type FailureKind } from "@/lib/ai-import/failure";
 import { computeModelPlan, evaluateModel, planOf, requestUsd } from "@/lib/ai-import/select";
+import { OUTPUT_SCHEMAS, type OutputSchemaName } from "@/lib/ai-import/output-schemas";
 import { freshRouteSnapshot } from "@/lib/ai-import/routes";
 import { importerModelHealth } from "@/lib/ai-import/health";
 import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
@@ -142,6 +143,8 @@ export interface AiCallInput {
   questionId?: string | null;
   actorId?: string | null;
   needsVision: boolean;
+  /** The answer's shape (lib/ai-import/output-schemas.ts): sent as a JSON Schema / JSON mode where the route supports it. */
+  jsonSchema?: OutputSchemaName;
 }
 
 export interface AiCallResult {
@@ -344,7 +347,7 @@ async function log(e: {
  * engine's own rules (serving route, ZDR when required, readable prices, output limit).
  * Route data that cannot be read means nothing is sent (fail closed).
  */
-async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"]; reasoning: boolean }> {
+async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"]; reasoning: boolean; structured: boolean; jsonMode: boolean }> {
   let snapshot;
   try {
     snapshot = await freshRouteSnapshot(settings.importerModels.includes(choice.model!) ? settings.importerModels : [...settings.importerModels, choice.model!]);
@@ -353,7 +356,7 @@ async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | 
   }
   const refusals = await importerModelHealth([choice.model!], Date.now(), jobId);
   const ev = evaluateModel(model, choice.model!, choice.task, { snapshot, settings, fxRate, refusals });
-  return ev.row.eligible || ev.price ? { problem: null, price: ev.price, reasoning: !!ev.reasoning } : { problem: ev.row.reason ?? "not usable", price: null, reasoning: false };
+  return ev.row.eligible || ev.price ? { problem: null, price: ev.price, reasoning: !!ev.reasoning, structured: !!ev.structured, jsonMode: !!ev.jsonMode } : { problem: ev.row.reason ?? "not usable", price: null, reasoning: false, structured: false, jsonMode: false };
 }
 
 const SELECTION_TASK_OF: Record<ImporterTask, SelectionTask> = { analyze: "extract", extract: "extract", verify: "verify", key: "key", classify: "classify" };
@@ -453,6 +456,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
 
   const tried: string[] = [];
   let reasoningRoutes = false;
+  let structuredRoutes = false;
+  let jsonModeRoutes = false;
   // The confirmed model, still approved and usable now? (An admin may have withdrawn it meanwhile.)
   // Then its provider route, price and privacy route, re-checked before this request (stored route data,
   // read again from OpenRouter when older than 6 h; free metadata, never an AI request).
@@ -468,6 +473,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
     const route = await recheckRoute(input.jobId, choice, catalog.get(choice.model!), input.settings, fx.rate);
     if (route.problem === null) {
       reasoningRoutes = route.reasoning;
+      structuredRoutes = route.structured;
+      jsonModeRoutes = route.jsonMode;
       // Never below the confirmed price: the higher of the confirmed and the current price is reserved.
       if (route.price && choice.price) choice = { ...choice, price: { prompt: Math.max(choice.price.prompt, route.price.prompt), completion: Math.max(choice.price.completion, route.price.completion), image: Math.max(choice.price.image, route.price.image), request: Math.max(choice.price.request, route.price.request) } };
       break;
@@ -511,7 +518,12 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         // 8,000 tokens, empty text). Low effort keeps room for the answer; sent whenever a route of the model accepts
         // the parameter (requests use require_parameters, so only such routes are used) — also when fallbacks are
         // configured (2026-10-25: Verify 2 had a fallback, so the bound was left out and 12 reads were cut off).
-        ...(reasoningRoutes ? { reasoning: { effort: "low" as const, exclude: true } } : {}),
+        // importer-reliability-2: the thinking is bounded by a token budget (a share of the output limit) rather than an
+        // effort word some models ignore (2026-10-26: gemma-4-26b spent all 8,000 tokens thinking in 23 of 27 requests).
+        ...(reasoningRoutes ? { reasoning: { max_tokens: reasoningBudget(input.maxOutputTokens), exclude: true } } : {}),
+        // Structured output where a route supports it: a JSON Schema of the expected answer, else JSON mode. The answer
+        // is parsed and validated exactly as before (require_parameters keeps only routes that honour it).
+        ...(input.jsonSchema && structuredRoutes ? { responseFormat: { type: "json_schema" as const, json_schema: { name: `importer_${input.jsonSchema}`, strict: false, schema: OUTPUT_SCHEMAS[input.jsonSchema] } } } : input.jsonSchema && jsonModeRoutes ? { responseFormat: { type: "json_object" as const } } : {}),
         provider: {
           // The highest prompt / completion price the plan was confirmed with: no route above it is used.
           max_price: { prompt: cost.price.prompt * 1e6 * PRICE_MARGIN, completion: cost.price.completion * 1e6 * PRICE_MARGIN },
@@ -579,6 +591,42 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   throw new ImporterAiFailure(failureMessage(kind, `OpenRouter failed: ${describeCategory(lastError!.category)}${lastError!.message !== describeCategory(lastError!.category) ? ` (${sanitize(lastError!.message).slice(0, 160)})` : ""}`), kind, choice.model);
 }
 
+/** Thinking tokens allowed for a JSON answer: a quarter of the output limit, at most 2,000 (the rest stays for the answer). */
+export function reasoningBudget(maxOutputTokens: number): number {
+  return Math.max(256, Math.min(2000, Math.floor(maxOutputTokens / 4)));
+}
+
+/**
+ * Models that used their whole output limit without an answer (or were cut off) at least OUTPUT_FAILURE_PERSIST times
+ * in this job: they are not sent this job's remaining requests while another suitable model exists (2026-10-26:
+ * gemma-4-26b failed 23 of 27 requests that way, each one paid and then repeated on the fallback).
+ */
+export async function exhaustedModels(jobId: string): Promise<Set<string>> {
+  const rows = await prisma.aiImportAiCall.groupBy({ by: ["model"], where: { jobId, ok: false, errorSummary: { contains: "output limit" } }, _count: { _all: true } });
+  return new Set(rows.filter((r) => r._count._all >= OUTPUT_FAILURE_PERSIST).map((r) => r.model));
+}
+
+/**
+ * Reliability of candidate models for a paid JSON read (Verify 2, reference OCR): a "thinking" model (its catalog entry
+ * accepts `reasoning`) can spend the output limit thinking; a model that ran out of output limit repeatedly in the last
+ * 14 days on any import is not trusted first. Candidates keep their price order otherwise.
+ */
+export async function preferReliable<T extends { id: string; eligible: boolean }>(candidates: T[]): Promise<T[]> {
+  const ids = candidates.map((c) => c.id);
+  const catalog = await loadModels(ids);
+  const since = new Date(Date.now() - 14 * 24 * 3600 * 1000);
+  const rows = await prisma.aiImportAiCall.groupBy({ by: ["model"], where: { model: { in: ids }, ok: false, errorSummary: { contains: "output limit" }, createdAt: { gte: since } }, _count: { _all: true } });
+  const exhausted = new Map(rows.map((r) => [r.model, r._count._all]));
+  const penalty = (c: T) => (catalog.get(c.id)?.supportedParameters.includes("reasoning") ? 1 : 0) + ((exhausted.get(c.id) ?? 0) >= OUTPUT_FAILURE_PERSIST ? 2 : 0);
+  return candidates.map((c, i) => ({ c, i })).sort((a, b) => Number(b.c.eligible) - Number(a.c.eligible) || penalty(a.c) - penalty(b.c) || a.i - b.i).map((x) => x.c);
+}
+
+/** A model family ("google/gemma-3-4b-it" → "google/gemma"): a fallback of another family fails differently. */
+export function modelFamily(id: string | null | undefined): string {
+  const [vendor, name = ""] = (id ?? "").split("/");
+  return `${vendor}/${name.split(/[-:._\d]/)[0] || name}`;
+}
+
 /** A connection the provider dropped mid-request (2026-10-23: "OpenRouter returned an error. (terminated)"): retried once. */
 export const DROPPED_CONNECTION = /\bterminated\b|ECONNRESET|socket hang up|other side closed/i;
 
@@ -605,7 +653,7 @@ export async function outputFallback(input: AiCallInput, plan: ModelPlan, failed
   if (!alt.model || alt.model === failed || alt.model === other) return { alt: null, reason: `no other approved model is suitable (${alt.reason.slice(0, 200)})`, pricier: false };
   // A model of ANOTHER family is preferred (the same family tends to fail the same way, e.g. malformed JSON): the
   // cheapest eligible one within the same price allowance, else the cheapest suitable model as before.
-  const family = (id: string) => id.split("/")[0];
+  const family = modelFamily;
   const cross = fresh.tasks[sel].candidates.find((c) => c.eligible && c.id !== failed && c.id !== other && family(c.id) !== family(failed));
   if (cross && family(alt.model) === family(failed) && (cross.maxInr ?? Infinity) <= (alt.maxInr ?? Infinity) * FALLBACK_SLACK.ratio + 1e-9) {
     const priced = await computeModelPlan({ ...input.settings, selection: { ...input.settings.selection, mode: "auto" } }, { refresh: false, jobId: input.jobId }, { [sel]: fresh.tasks[sel].candidates.filter((c) => c.id !== cross.id).map((c) => c.id) });

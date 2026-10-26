@@ -83,6 +83,9 @@ interface Evaluation {
   maxUsd: number | null;
   /** An eligible route accepts the `reasoning` parameter (the request bounds the thinking; require_parameters keeps only such routes). */
   reasoning?: boolean;
+  /** An eligible route accepts `structured_outputs` (json_schema) / `response_format` (JSON mode). */
+  structured?: boolean;
+  jsonMode?: boolean;
 }
 
 export interface EvalCtx {
@@ -161,7 +164,7 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   const row: CandidateRow = { id, eligible: true, reason: null, maxInr, typicalInr: usdToInr(typicalUsd, ctx.fxRate), routes: routes.map((r) => r.tag || r.provider), ...(zeroPrice ? { zeroPrice } : {}) };
   const refused = routeRefusal(ctx.refusals?.[id], ctx.now);
   if (refused) return { row: { ...row, eligible: false, reason: refused }, price: null, maxUsd: null };
-  return { row, price, maxUsd, reasoning: routes.some((r) => !!r.params?.includes("reasoning")) };
+  return { row, price, maxUsd, reasoning: routes.some((r) => !!r.params?.includes("reasoning")), structured: routes.some((r) => !!r.params?.includes("structured_outputs")), jsonMode: routes.some((r) => !!r.params?.includes("response_format")) };
 }
 
 const order = (a: CandidateRow, b: CandidateRow) => Number(b.eligible) - Number(a.eligible) || (a.maxInr ?? Infinity) - (b.maxInr ?? Infinity) || (a.typicalInr ?? Infinity) - (b.typicalInr ?? Infinity) || a.id.localeCompare(b.id);

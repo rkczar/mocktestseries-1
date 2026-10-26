@@ -5,7 +5,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { classifierContext } from "@/lib/ai-import/taxonomy-memory";
+import { FORMAT_RULES, classifierContext } from "@/lib/ai-import/taxonomy-memory";
 import { TaxonomyMemoryEditor } from "./taxonomy-memory-editor";
 
 export const metadata = { title: "Taxonomy Reference — AI Question Importer" };
@@ -77,6 +77,11 @@ export default async function TaxonomyReferencePage({ searchParams }: { searchPa
             synonyms={(mem?.synonyms ?? []).map((x) => ({ id: x.id, term: x.term, target: names.get(x.topicId ?? x.subjectId ?? "") ?? "?", at: x.at }))}
             confusions={[...ctx.index.confusions.filter((c) => !(mem?.confusions ?? []).some((m) => (m.a === c.a && m.b === c.b) || (m.a === c.b && m.b === c.a))).map((c) => ({ id: null, a: names.get(c.a) ?? "?", b: names.get(c.b) ?? "?", note: c.note, builtIn: true })), ...(mem?.confusions ?? []).map((c) => ({ id: c.id, a: names.get(c.a) ?? "?", b: names.get(c.b) ?? "?", note: c.note, builtIn: false }))]}
             corrections={[...(mem?.corrections ?? [])].reverse().slice(0, 200).map((c) => ({ id: c.id, text: c.text.slice(0, 200), target: names.get(c.subTopicId ?? c.topicId ?? c.subjectId) ?? "?", source: c.source, at: c.at, jobId: c.jobId }))}
+            headingAliases={(mem?.headingAliases ?? []).map((x) => ({ id: x.id, raw: x.raw, target: names.get(x.subjectId) ?? "? (subject no longer part of this exam)", at: x.at, version: x.version, note: x.note }))}
+            formatRules={(mem?.formatRules ?? []).map((x) => ({ id: x.id, rule: x.rule, label: FORMAT_RULES[x.rule] ?? x.rule, at: x.at, version: x.version, note: x.note }))}
+            ruleOptions={Object.entries(FORMAT_RULES).map(([code, label]) => ({ code, label }))}
+            history={[...(mem?.history ?? [])].reverse().slice(0, 50).map((h) => ({ version: h.version, at: h.at, action: h.action, detail: h.detail }))}
+            version={mem?.version ?? 0}
           />
         </>
       )}

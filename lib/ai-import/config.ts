@@ -369,6 +369,8 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   SUBJECT_UNKNOWN: { label: "Subject unknown", blocking: true, publishBlocking: true },
   CLASSIFICATION_FAILED: { label: "Classification failed (no classifier answer)", blocking: true, publishBlocking: true },
   TAXONOMY_DISAGREES: { label: "Subject / topic check disagrees", blocking: false, publishBlocking: true },
+  /** The stored subject differs from the paper's printed section heading (kept as chosen; for review — never changed silently). */
+  SECTION_SUBJECT_DIFFERS: { label: "Subject differs from the printed section", blocking: false, publishBlocking: false },
   ANSWER_MISSING: { label: "No answer available", blocking: true, publishBlocking: true },
   ANSWER_MISMATCH: { label: "Answer key mismatch", blocking: false, publishBlocking: true },
   ANSWER_AMBIGUOUS: { label: "Ambiguous answer-key mapping", blocking: false, publishBlocking: true },

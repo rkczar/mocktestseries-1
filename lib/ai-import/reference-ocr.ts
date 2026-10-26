@@ -10,10 +10,10 @@ import { kickWorker } from "@/lib/ai-import/kick";
 import { pageText, renderPage } from "@/lib/ai-import/pdf";
 import { visionImage } from "@/lib/ai-import/figures";
 import { parsePage, type StepContext } from "@/lib/ai-import/process";
-import { importerAiCall, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
+import { exhaustedModels, importerAiCall, modelFamily, preferReliable, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import { EXTRACT_SYSTEM, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
 import { computeModelPlan, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
-import { OCR_MIN_CONFIDENCE, listReferences, type ReferencePaper, type ReferenceQuestion, type ReferenceRead } from "@/lib/ai-import/reference";
+import { OCR_MIN_CONFIDENCE, isInstructionText, listReferences, type ReferencePaper, type ReferenceQuestion, type ReferenceRead } from "@/lib/ai-import/reference";
 import { vaultPath } from "@/lib/ai-import/vault";
 import type { TaskChoice } from "@/lib/ai-import/selection-types";
 
@@ -88,11 +88,21 @@ async function priceReferenceOcr(jobId: string, refId: string, refresh: boolean)
   if (ref.ocr) problems.push(`“${ref.name}” was already read with ${ref.ocr.model}.`);
   else if (!pages.length) problems.push(`“${ref.name}” has no scanned page to read — its text was read without AI.`);
   if (!settings.aiEnabled) problems.push("Paid AI is switched off in Import Settings — reference OCR cannot run.");
-  // The cheapest suitable image-reading model of the importer's list (the same selection rules as every request).
+  // The cheapest suitable image-reading model of the importer's list (the same selection rules as every request) —
+  // a reliable non-thinking one first (importer-reliability-2: a 4B model and a thinking model failed most pages).
   const plan = await computeModelPlan({ ...settings, selection: { ...settings.selection, mode: "auto" } }, { refresh, jobId });
-  const choice = plan.tasks.verify.model ? plan.tasks.verify : plan.tasks.extract;
-  // One fallback for a failed page: the cheapest other eligible image-reading model (any price; it is priced below).
-  const alt = choice.model ? (await computeModelPlan({ ...settings, selection: { ...settings.selection, mode: "auto" } }, { refresh: false, jobId }, { [choice.task]: [choice.model] })).tasks[choice.task] : null;
+  const base = plan.tasks.verify.model ? plan.tasks.verify : plan.tasks.extract;
+  const ranked = await preferReliable(base.candidates);
+  const pick = async (id: string): Promise<TaskChoice> => (await computeModelPlan({ ...settings, selection: { ...settings.selection, mode: "manual" }, models: { ...settings.models, [base.task]: id } }, { refresh: false, jobId })).tasks[base.task];
+  let choice = base;
+  const best = ranked.find((c) => c.eligible)?.id;
+  if (best && best !== base.model) {
+    const c = await pick(best);
+    if (c.model === best && c.price) choice = c;
+  }
+  // One fallback for a failed page: another eligible image-reading model, another model family first (any price; priced below).
+  const altId = ranked.filter((c) => c.eligible && c.id !== choice.model).sort((a, b) => Number(modelFamily(a.id) === modelFamily(choice.model)) - Number(modelFamily(b.id) === modelFamily(choice.model)))[0]?.id;
+  const alt = altId ? await pick(altId) : null;
   const fallback = alt?.model && alt.model !== choice.model && alt.price ? alt : null;
   const fx = refresh ? await getUsdInr() : await peekUsdInr();
   let maxInr: number | null = null;
@@ -137,7 +147,7 @@ export async function requestReferenceOcr(input: { jobId: string; refId: string;
 /** A reference question read by OCR: kept with its confidence; uncertain or textless reads are "unreadable". */
 export function ocrQuestion(q: { section: string; number: number | null; stem: string; options: { text: string }[]; printedAnswer: string[]; pages: number[]; confidence: number }): ReferenceQuestion {
   const stem = q.stem.trim().slice(0, 2000);
-  return { section: "", number: q.number, stem, options: q.options.map((o) => o.text.trim().slice(0, 500)), answer: q.printedAnswer, pages: q.pages, confidence: q.confidence, unreadable: q.confidence < OCR_MIN_CONFIDENCE || stem.replace(/\s+/g, "").length < 15 };
+  return { section: "", number: q.number, stem, options: q.options.map((o) => o.text.trim().slice(0, 500)), answer: [], pages: q.pages, confidence: q.confidence, unreadable: q.confidence < OCR_MIN_CONFIDENCE || stem.replace(/\s+/g, "").length < 15 };
 }
 
 /** The worker's part: reads the remaining pages one request each; a failed page is recorded and the rest continue. */
@@ -164,22 +174,26 @@ export async function runReferenceOcr(ctx: StepContext): Promise<ReferenceOcrSta
     try {
       const render = ref.kind === "pdf" ? await renderPage(full, page, ctx.settings.limits.renderDpi) : await readFile(full);
       const image = await visionImage(render);
-      const request = { jobId: ctx.job.id, task: "verify" as const, settings: ctx.settings, noReplace: true, system: EXTRACT_SYSTEM, content: [{ type: "text" as const, text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page, pages: ref.pageCount ?? 1, textLayer: null }) }, { type: "image_url" as const, image_url: { url: image, detail: "high" as const } }], maxOutputTokens: OUTPUT_TOKENS, needsVision: true };
+      const request = { jobId: ctx.job.id, task: "verify" as const, settings: ctx.settings, noReplace: true, system: EXTRACT_SYSTEM, content: [{ type: "text" as const, text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page, pages: ref.pageCount ?? 1, textLayer: null }) }, { type: "image_url" as const, image_url: { url: image, detail: "high" as const } }], maxOutputTokens: OUTPUT_TOKENS, needsVision: true, jsonSchema: "extract" as const };
       const read = async (c: TaskChoice) => {
         const r = await importerAiCall({ ...request, models: [c.model!], override: c });
         return toExtracted(parsePage(r.text, "the reference OCR answer"), page, r.model);
       };
       let qs;
+      let skipped = false;
       try {
-        qs = await read(state.choice);
+        // The model used up its output limit repeatedly in this job: the page goes straight to the confirmed fallback.
+        skipped = !!state.fallback?.model && (await exhaustedModels(ctx.job.id)).has(state.model);
+        qs = await read(skipped ? state.fallback! : state.choice);
       } catch (e) {
         // A failed page is sent ONCE to the fallback model (priced in the confirmed maximum); a provider stop is not.
         const fb = state.fallback;
-        if (!(e instanceof ImporterAiFailure) || !fb?.model) throw e;
+        if (!(e instanceof ImporterAiFailure) || !fb?.model || skipped) throw e;
         await logEvent(ctx.job.id, "MODEL_SWITCHED", `Reference OCR page ${page}: ${state.model} failed (${e.message.slice(0, 200)}); the same page is sent once to ${fb.model}.`, { refId: ref.refId, page, from: state.model, to: fb.model });
         qs = await read(fb);
       }
-      done.push({ page, questions: qs.map(ocrQuestion) });
+      // Cover / instruction text is not a question; a booklet's "answers" are never evidence (kept empty).
+      done.push({ page, questions: qs.map(ocrQuestion).filter((x) => !isInstructionText(x.stem, x.options)) });
       failed.delete(page);
     } catch (e) {
       // A stop (paid AI off, emergency stop, provider unavailable / credits exhausted) ends the reading with what was read so far.

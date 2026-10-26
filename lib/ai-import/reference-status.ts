@@ -20,10 +20,10 @@ export interface ReferenceStatus {
   reason: string | null;
 }
 
-export function referenceStatus(ref: { questions: number; key: number; scannedPages: number }, comparedQuestions: number): ReferenceStatus {
+export function referenceStatus(ref: { questions: number; key: number; scannedPages: number; readAfterVerify?: boolean }, comparedQuestions: number): ReferenceStatus {
   const extracted = ref.questions > 0 || ref.key > 0 ? { questions: ref.questions, key: ref.key } : null;
   if (!extracted) return { stored: true, extracted: null, comparedQuestions: 0, state: "not compared", reason: ref.scannedPages > 0 ? `${ref.scannedPages} scanned page(s) without a text layer — reading them needs OCR / vision (paid AI); its estimated cost is shown with Verify 2 and nothing is read without your confirmation` : "no question or answer-key entry could be read from it" };
-  if (!comparedQuestions) return { stored: true, extracted, comparedQuestions: 0, state: "text extracted", reason: "Verify 1 has not compared it yet — run Verify 1 (free)" };
+  if (!comparedQuestions) return { stored: true, extracted, comparedQuestions: 0, state: "text extracted", reason: ref.readAfterVerify ? "it was read again (or added) after the last Verify 1, so the earlier comparison no longer counts — run Verify 1 (free)" : "Verify 1 has not compared it yet — run Verify 1 (free)" };
   return { stored: true, extracted, comparedQuestions, state: "compared", reason: null };
 }
 

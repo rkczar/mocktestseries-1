@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { ExtractedQuestion, PaperVerification } from "@/lib/ai-import/types";
+import { stripAnnotationTail } from "@/lib/ai-import/local-parse";
+import type { ExtractedQuestion, FingerprintParts, PaperVerification } from "@/lib/ai-import/types";
 
 /**
  * Fingerprint of what the full-paper verification checked: the question's effective content, its answer,
@@ -30,16 +31,66 @@ export function contentFingerprint(input: {
   return createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 32);
 }
 
+type FpInput = Parameters<typeof contentFingerprint>[0];
+const hash = (body: unknown) => createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 32);
+
+/**
+ * The same facts, fingerprinted separately (importer-reliability-2): content (wording, options, lists, type, number —
+ * a lone printed tick left at the end of an option is an annotation and ignored), answer (printed + final), taxonomy
+ * (subject / topic / subtopic ids) and figures. A Verify 1 / Verify 2 result records all four: changing only the
+ * subject / topic makes only the taxonomy checks out of date, never the content verification.
+ */
+export function fingerprintParts(input: FpInput): FingerprintParts {
+  const e = input.e;
+  return {
+    content: hash({ n: [e.section ?? "", e.number ?? null], t: e.type, s: [e.instructions ?? "", e.passage ?? "", stripAnnotationTail(e.stem)], o: e.options.map((o) => [o.label, stripAnnotationTail(o.text)]), l: [(e.listI ?? []).map((x) => [x.key, x.text]), (e.listII ?? []).map((x) => [x.key, x.text])] }),
+    answer: hash({ p: [...e.printedAnswer].sort(), a: [...input.finalAnswer].sort() }),
+    taxonomy: hash([input.subjectId, input.topicId, input.subTopicId]),
+    figures: hash(input.figures.map((f) => [f.originalSha256, f.owner, f.optionLabel, f.mappingStatus, !!f.confirmedById]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))),
+  };
+}
+
+/** The content fingerprint alone (what a "text-only" decision or a content check was made on). */
+export const contentPartOf = (e: ExtractedQuestion): string => fingerprintParts({ e, finalAnswer: [], subjectId: null, topicId: null, subTopicId: null, figures: [] }).content;
+
+/** A question's current fingerprints: the combined one (results written before importer-reliability-2) and the parts. */
+export interface Fp {
+  legacy: string;
+  parts: FingerprintParts;
+}
+export function fingerprintsOf(input: FpInput): Fp {
+  return { legacy: contentFingerprint(input), parts: fingerprintParts(input) };
+}
+
+/** What a new verification result records about the question it checked. */
+export const stampOf = (fp: Fp) => ({ fingerprint: fp.legacy, parts: fp.parts });
+
+/** Content, answer and figures unchanged (the subject / topic may differ). Older results without parts: the combined fingerprint. */
+export function contentCurrent(r: { fingerprint: string; parts?: FingerprintParts | null }, fp: string | Fp): boolean {
+  if (typeof fp === "string") return r.fingerprint === fp;
+  if (!r.parts) return r.fingerprint === fp.legacy;
+  return r.parts.content === fp.parts.content && r.parts.answer === fp.parts.answer && r.parts.figures === fp.parts.figures;
+}
+
+/** Whether a result's subject / topic part still describes the stored subject / topic. */
+export function taxonomyCurrent(r: { fingerprint: string; parts?: FingerprintParts | null } | null | undefined, fp: string | Fp): boolean {
+  if (!r) return false;
+  if (typeof fp === "string") return r.fingerprint === fp;
+  return r.parts ? r.parts.taxonomy === fp.parts.taxonomy : r.fingerprint === fp.legacy;
+}
+
 export type V1State = "passed" | "problems" | "stale" | "none";
 /** "not_found" and "disagree" need a manual decision; "failed" / "unavailable" are NO result (never agreement). */
 export type V2State = "verified" | "disagree" | "not_found" | "failed" | "unavailable" | "stale" | "none";
 
 /** The full-paper verification state of one question, judged against its current fingerprint. */
-export function verifyState(data: unknown, fingerprint: string): { v1: V1State; v2: V2State; pv: PaperVerification | null } {
+export function verifyState(data: unknown, fingerprint: string | Fp): { v1: V1State; v2: V2State; pv: PaperVerification | null } {
   const pv = ((data as ExtractedQuestion | null)?.paperVerify ?? null) as PaperVerification | null;
-  const v1: V1State = !pv?.v1 ? "none" : pv.v1.fingerprint !== fingerprint ? "stale" : pv.v1.passed ? "passed" : "problems";
+  // Out of date only when the content, answer or figures changed; a changed subject / topic leaves the content checks
+  // valid (its own taxonomy findings are then out of date: taxonomyCurrent, used by post-processing).
+  const v1: V1State = !pv?.v1 ? "none" : !contentCurrent(pv.v1, fingerprint) ? "stale" : pv.v1.passed ? "passed" : "problems";
   const s = pv?.v2?.status;
-  const v2: V2State = !pv?.v2 ? "none" : pv.v2.fingerprint !== fingerprint ? "stale" : s === "VERIFIED" ? "verified" : s === "FAILED" ? "failed" : s === "UNAVAILABLE" ? "unavailable" : s === "NOT_FOUND" ? "not_found" : "disagree";
+  const v2: V2State = !pv?.v2 ? "none" : !contentCurrent(pv.v2, fingerprint) ? "stale" : s === "VERIFIED" ? "verified" : s === "FAILED" ? "failed" : s === "UNAVAILABLE" ? "unavailable" : s === "NOT_FOUND" ? "not_found" : "disagree";
   return { v1, v2, pv };
 }
 
@@ -88,7 +139,7 @@ export function withPass(pv: PaperVerification | null | undefined, kind: "v1" | 
  * when it already has an up-to-date agreeing result (a successful check is never re-run without a reason). No result,
  * a failed or unavailable read, an out-of-date result or an unresolved disagreement still needs it.
  */
-export function needsVerify2(q: { data: unknown }, fingerprint: string): boolean {
+export function needsVerify2(q: { data: unknown }, fingerprint: string | Fp): boolean {
   const s = verifyState(q.data, fingerprint);
   return passCount(s.pv) < MAX_VERIFY_PASSES && s.v2 !== "verified";
 }
