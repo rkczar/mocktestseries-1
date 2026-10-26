@@ -1,7 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { istDayMonth } from "@/lib/ai-engine/budget";
-import { PILOT_LIMITS, type ImporterSettings } from "@/lib/ai-import/config";
 
 /**
  * The AI Question Importer's cost ledger, read for the AI Cost Center. Two existing records, each
@@ -48,8 +47,8 @@ export interface ImporterLedger {
    * todayInr sums exactly the todayCalls calls (today's IST day, with an estimate); todayUnestimated are today's calls without one.
    */
   estimates: { todayInr: number | null; todayCalls: number; todayUnestimated: number; allInr: number | null; comparedEstimateInr: number | null; comparedActualInr: number | null; comparedRequests: number };
-  /** The importer has no job / monthly / all-time caps; only the per-request worst case is limited. */
-  limits: { maxRequestInr: number };
+  /** The importer has no spending cap at all (no per-request, job, monthly, all-time or key-reserve limit). */
+  limits: Record<string, never>;
   usage: {
     calls: number;
     ok: number;
@@ -103,7 +102,7 @@ export function actualState(p: { actualRequests: number; unknownRequests: number
 
 const FAMILY = (model: string) => (model.startsWith("google/") ? "Gemini models (google/*) via OpenRouter" : "Other models via OpenRouter");
 
-export async function importerLedger(settings: ImporterSettings, now = new Date()): Promise<ImporterLedger> {
+export async function importerLedger(now = new Date()): Promise<ImporterLedger> {
   const { istDay, istMonth } = istDayMonth(now);
   const since = new Date(now.getTime() - 13 * 86_400_000);
   const { istDay: firstDay } = istDayMonth(since);
@@ -182,7 +181,7 @@ export async function importerLedger(settings: ImporterSettings, now = new Date(
     .filter((j) => j.requests > 0)
     .sort((a, b) => b.committedInr - a.committedInr);
 
-  const limits = { maxRequestInr: Math.min(settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr) };
+  const limits: Record<string, never> = {};
   const c = calls[0] ?? { calls: 0, ok: 0, retries: 0, fallbacks: 0 };
   const e = est[0];
   return {

@@ -82,7 +82,7 @@ check("prices in rupees: FX rate shown", (await tone("fx")) === "success" && /95
 
 section("A2. Automatic model selection (default)");
 check("automatic selection is the default; the manual pickers are hidden", await page.locator("[data-testid=sel-auto]").isChecked() && (await page.locator("[data-testid=manual-models]").count()) === 0 && (await page.locator("[data-testid=m-extract-search]").count()) === 0);
-check("more expensive fallbacks: off by default", !(await page.locator("[data-testid=b-pricier]").isChecked()));
+check("no pricier-fallback switch any more (a configured fallback is always used; its cost is in the maximum)", (await page.locator("[data-testid=b-pricier]").count()) === 0);
 check("routes not read yet → status says so, no model chosen", (await tone("routes")) === "error" && /None — this task does not run/.test(await page.locator("[data-testid=sel-extract-model]").textContent()));
 check("Importer models card: empty, says it applies to the importer only", (await page.locator("[data-testid=importer-models-empty]").count()) === 1 && /does not approve it for student Ask AI, Instagram or any other AI feature/.test(await page.locator("[data-testid=importer-models]").textContent()));
 const addImporterModel = async (p, id) => {
@@ -108,14 +108,14 @@ check("image input requirement shown as supported", /Required — supported/.tes
 check("privacy route shown (ZDR routes listed)", /ZDR routes: mockprov\/zdr, mockprov\/zdr-eu/.test(await page.locator("[data-testid=sel-extract-privacy]").textContent()));
 await page.locator("[data-testid=sel-candidates-extract] summary").click();
 const cand = (id) => page.locator(`[data-testid=sel-candidates-extract] [data-model-id="${id}"]`);
-check("ineligible models listed with the reason (no ZDR route / unhealthy / over the ₹1 limit)", /no Zero-Data-Retention route/.test(await cand("mockvision/cheapnozdr").textContent()) && /serving normally/.test(await cand("mockvision/down").textContent()) && /above the per-request limit/.test(await cand("mockvision/pricey").textContent()));
+check("ineligible models listed with the reason (no ZDR route / unhealthy); a dear model is no longer refused for its price", /no Zero-Data-Retention route/.test(await cand("mockvision/cheapnozdr").textContent()) && /serving normally/.test(await cand("mockvision/down").textContent()) && !/per-request limit/.test(await cand("mockvision/pricey").textContent()));
 await page.locator("[data-testid=privacy-zdr]").uncheck();
 await page.locator("[data-testid=models-reload]").click();
 check("unsaved change (ZDR off) previewed: the cheaper non-ZDR model would be chosen", await until(async () => (await selModel("extract")) === "mockvision/cheapnozdr"));
 await page.locator("[data-testid=privacy-zdr]").check();
 await page.locator("[data-testid=models-reload]").click();
 await until(async () => (await selModel("extract")) === "mockvision/reader");
-check("per-request ceiling shown; no job / monthly / all-time cap", /Ceiling fixed in code: ₹1\./.test(await page.locator("body").textContent()) && /no importer job, monthly or all-time spending cap/.test(await page.locator("body").textContent()));
+check("no spending cap shown or editable (no per-request / Ask AI reserve fields)", /There is no importer spending cap/.test(await page.locator("body").textContent()) && !/Ceiling fixed in code/.test(await page.locator("body").textContent()) && (await page.locator("[data-testid=b-req], [data-testid=b-key]").count()) === 0);
 await page.locator("[data-testid=settings-save]").click();
 await page.locator("[data-testid=settings-msg]").waitFor();
 const va = await saved();
@@ -185,13 +185,11 @@ await page.locator("[data-testid=v-independent]").check();
 check("answer opinion switched on → its own verification cost row", (await page.locator("[data-testid=cost-solve]").count()) === 1);
 await page.locator("[data-testid=v-independent]").uncheck();
 await pick("extract", "mockvision/pricey");
-check("a model above the per-request limit is flagged as refused", (await page.locator("[data-testid=cost-over-cap]").count()) >= 1 && /would be refused/.test(await page.locator("[data-testid=m-extract-cost]").textContent()));
+check("a model above the old per-request limit is not flagged as refused", (await page.locator("[data-testid=cost-over-cap]").count()) === 0 && !/would be refused/.test(await page.locator("[data-testid=m-extract-cost]").textContent()));
 await pick("extract", "mockvision/reader");
 
 section("E. Save, persistence after refresh, limits");
 check("no job / monthly / all-time budget fields any more", (await page.locator("[data-testid=b-total], [data-testid=b-month], [data-testid=b-maxjob], [data-testid=b-job]").count()) === 0);
-await page.locator("[data-testid=b-req]").fill("1");
-await page.locator("[data-testid=b-key]").fill("5");
 await page.locator("[data-testid=privacy-zdr]").check();
 await page.locator("[data-testid=settings-save]").click();
 await page.locator("[data-testid=settings-msg]").waitFor();
@@ -200,8 +198,8 @@ check("save confirmation shown", /Settings saved at/.test(msg), msg);
 const v = await saved();
 check("persisted: manual override + models + pilot limits + ZDR; paid AI still OFF", v?.selection?.mode === "manual" && v?.models?.extract === "mockvision/reader" && v?.models?.verify === "mockvision/checker" && v?.budget?.maxRequestInr === 1 && v?.budget?.keyReserveUsd === 5 && v?.privacy?.zdr === true && v?.aiEnabled === false && v?.budget?.retryTransient === false && (v?.models?.extractFallbacks ?? []).length === 0, v);
 await page.reload();
-check("after refresh: selections shown again", /mockvision\/reader/.test(await page.locator("[data-testid=m-extract-current]").textContent()) && /mockvision\/checker/.test(await page.locator("[data-testid=m-verify-current]").textContent()) && (await page.locator("[data-testid=b-req]").inputValue()) === "1" && (await page.locator("[data-testid=b-key]").inputValue()) === "5");
-check("with the ₹1 request cap the reader's maximum fits (not flagged)", (await page.locator("[data-testid=cost-over-cap]").count()) === 0);
+check("after refresh: selections shown again", /mockvision\/reader/.test(await page.locator("[data-testid=m-extract-current]").textContent()) && /mockvision\/checker/.test(await page.locator("[data-testid=m-verify-current]").textContent()));
+check("no model is flagged against a spending cap", (await page.locator("[data-testid=cost-over-cap]").count()) === 0);
 check("manual override evaluated with the same checks: shown in the selection table with the reason", /Manual override by an administrator/.test(await page.locator("[data-testid=sel-extract-reason]").textContent()));
 
 section("F. Invalid model IDs are refused by the server");
@@ -318,8 +316,8 @@ try {
   await sx.locator("[data-testid=models-reload]").click();
   await sx.locator("[data-testid=models-error]").waitFor({ timeout: 10000 }).catch(() => {});
   check("permission denied: reload shows the permission error (not session expiry)", /Could not load the model list: You do not have permission/.test((await sxText("models-error")) ?? "") && (await sx.locator("[data-testid=session-login]").count()) === 0, await sxText("models-error"));
-  await sx.locator("[data-testid=b-key]").fill("4");
-  await sx.locator("[data-testid=b-key]").blur();
+  await sx.locator("[data-testid=l-file]").fill("19");
+  await sx.locator("[data-testid=l-file]").blur();
   await sx.locator("[data-testid=settings-save]").click();
   check("permission denied: save shows the permission error; nothing saved", (await shows("settings-msg", /do not have permission/)) && JSON.stringify(await saved()) === before1, await sxText("settings-msg"));
 } finally {
@@ -339,8 +337,8 @@ check("expired session: the sign-in link returns to Import Settings", (await exp
 await sx.locator("[data-testid=routes-refresh]").click();
 check("expired session: refresh says the session expired, with the sign-in link", (await shows("routes-refresh-msg", /^Provider routes were not refreshed\. Your admin session has expired\. Sign in again$/)) && (await sx.locator("[data-testid=routes-refresh-msg]").getAttribute("data-tone")) === "error" && (await sx.locator("[data-testid=routes-refresh-msg] [data-testid=session-login]").getAttribute("href")) === LOGIN_HREF, await sxText("routes-refresh-msg"));
 check("expired session: refresh saved nothing", (await routesRow()) === routes2);
-await sx.locator("[data-testid=b-key]").fill("4");
-await sx.locator("[data-testid=b-key]").blur();
+await sx.locator("[data-testid=l-file]").fill("19");
+await sx.locator("[data-testid=l-file]").blur();
 await sx.locator("[data-testid=settings-save]").click();
 check("expired session: save shows “Not saved. Your admin session has expired. Sign in again”, no success", (await shows("settings-msg", /^Not saved\. Your admin session has expired\. Sign in again$/)) && (await sx.locator("[data-testid=settings-msg] [data-testid=session-login]").getAttribute("href")) === LOGIN_HREF, await sxText("settings-msg"));
 check("expired session: save persisted nothing", JSON.stringify(await saved()) === before2);

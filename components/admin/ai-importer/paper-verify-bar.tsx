@@ -112,10 +112,8 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
           <ul className="grid gap-1 text-xs sm:grid-cols-2">
             <li>Requests: {preview.pages} page image(s), {preview.textParts} document part(s), {preview.classifyBatches} classification</li>
             <li>Questions to compare: {preview.questions} — a failed, refused, empty or unavailable answer is recorded as no result, never as agreement</li>
-            <li>Per request: up to {inr(preview.perRequestMaxInr)} (limit ₹1.00)</li>
             <li data-testid="verify2-estimate">Estimated cost: <b>{inr(preview.estimateInr)}</b></li>
-            <li data-testid="verify2-max">Maximum cost: <b>{inr(preview.maxInr)}</b></li>
-            <li>Spent on this import so far: {inr(preview.spentInr)} · confirmed maximum {inr(preview.confirmedMaxInr)}</li>
+            <li data-testid="verify2-max">Maximum cost: <b>{inr(preview.maxInr)}</b> (includes one retry and one fallback read per request)</li>
           </ul>
           {preview.referenceOcr.length > 0 && (
             <ul className="list-disc pl-5 text-xs text-[var(--color-warning)]" data-testid="verify2-reference-ocr">
@@ -148,7 +146,7 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
                 setNote(r.data.reason);
               }
             })} data-testid="verify2-confirm">
-              Confirm maximum {inr(preview.maxInr)} and start Verify 2
+              Confirm &amp; Continue
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>
               Cancel

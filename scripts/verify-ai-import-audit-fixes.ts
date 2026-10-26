@@ -30,7 +30,7 @@ import { prisma } from "@/lib/prisma";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
 import { runWorker } from "@/lib/ai-import/worker";
-import { DROPPED_CONNECTION, FALLBACK_SLACK, fallbackAllowance, importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, type AiCallInput } from "@/lib/ai-import/ai";
+import { DROPPED_CONNECTION, REQUEST_ATTEMPTS, fallbackAllowance, importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable, type AiCallInput } from "@/lib/ai-import/ai";
 import { CLASSIFY_BATCH, classifyAnswerOf } from "@/lib/ai-import/prompts";
 import { MENTIONS_FIGURE, runPostProcessing, sourceMayHoldImage } from "@/lib/ai-import/post";
 import { MAX_VERIFY_PASSES, needsVerify2, passCount, withPass } from "@/lib/ai-import/verify-core";
@@ -220,18 +220,17 @@ async function main() {
     await manual({ classify: "mocktext/cheap" }, ["mocktext/classifier", "mocktext/cheap"]);
     const s1 = normalizeImporterSettings(await getImporterSettings());
     const jF = await directJob(actor, exam.id, "Fallback allowance");
-    check("prod case: ₹0.0512 instead of ₹0.0458 is 'slightly more' → allowed within the cap and budget", (await fallbackAllowance(jF, 0.0458, 0.0512, s1)).ok);
-    check("more than slightly more (₹0.05 → ₹0.20) → refused without the setting", !(await fallbackAllowance(jF, 0.05, 0.2, s1)).ok && FALLBACK_SLACK.ratio === 1.5);
-    check("above the ₹1 per-request cap → refused", /per-request limit/.test((await fallbackAllowance(jF, 0.95, 1.05, s1)).reason));
-    const jTight = await directJob(actor, exam.id, "Fallback over budget", 0.0001);
-    check("over what is left of the job's confirmed maximum → refused", /left of this import's confirmed maximum/.test((await fallbackAllowance(jTight, 0.04, 0.05, s1)).reason));
+    // No application spending cap (owner decision 2026-10-26): a priced fallback is always allowed.
+    check("a priced fallback is allowed whatever its price (₹0.0458 → ₹0.0512, ₹0.05 → ₹0.20, ₹0.95 → ₹1.05 above the old ₹1 cap)", (await fallbackAllowance(0.0458, 0.0512)).ok && (await fallbackAllowance(0.05, 0.2)).ok && (await fallbackAllowance(0.95, 1.05)).ok && REQUEST_ATTEMPTS === 2);
+    check("…only an unknown price refuses it", !(await fallbackAllowance(0.05, null)).ok && /price is unknown/.test((await fallbackAllowance(null, 0.05)).reason));
+    const jTight = await directJob(actor, exam.id, "Over the recorded maximum", 0.0001);
     await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
     await mockConfig({ ...MOCK_BASE, script: { "mocktext/cheap": ["empty"] } });
-    // The mock's other text model costs twice as much per request: more than "slightly", so it is not sent.
+    // The mock's other text model costs twice as much per request: it is still the configured fallback, so it is used.
     const sF0 = await mockStats();
-    const eF = await errorOf(() => importerAiCallChecked(classifyInput(jF, s1), parseClassify));
+    const rF = await importerAiCallChecked(classifyInput(jF, s1), parseClassify).catch((e) => e as Error);
     const sF1 = await mockStats();
-    check("a fallback costing twice as much is not used without the setting (reason given, nothing sent to it)", eF instanceof ImporterAiFailure && /more than slightly more expensive/.test(eF.message) && (sF1.byModel["mocktext/classifier"] ?? 0) === (sF0.byModel["mocktext/classifier"] ?? 0), eF?.message);
+    check("an unusable answer goes once to the fallback even when it costs twice as much (no price allowance)", !(rF instanceof Error) && rF.result.model === "mocktext/classifier" && (sF1.byModel["mocktext/classifier"] ?? 0) - (sF0.byModel["mocktext/classifier"] ?? 0) === 1, rF instanceof Error ? rF.message : rF.result.model);
 
     await mockConfig({ ...MOCK_BASE, script: { "mocktext/cheap": ["baditem"] } });
     const jI = await directJob(actor, exam.id, "Bad item");
@@ -267,6 +266,23 @@ async function main() {
     const sT5 = await mockStats();
     check("…another transient error (rate limit) is not retried while retries are OFF", (sT5.attempts["mocktext/cheap"] ?? 0) - (sT4.attempts["mocktext/cheap"] ?? 0) === 1);
 
+    // No application cap stops or pauses a request: not the job's recorded maximum, nor a legacy per-request limit or Ask AI key reserve.
+    await mockConfig({ ...MOCK_BASE, keyLimitRemaining: 0.01 });
+    await manual({ classify: "mocktext/cheap" }, ["mocktext/classifier", "mocktext/cheap"], { maxRequestInr: 0.01, keyReserveUsd: 10_000, monthlyInr: 0, totalInr: 0, maxJobInr: 0 });
+    const sLegacy = normalizeImporterSettings(await getImporterSettings());
+    const resBefore = await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${jTight}:` } } });
+    const tight = await importerAiCall(classifyInput(jTight, sLegacy)).catch((e) => e as Error);
+    const jTightAfter = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jTight } });
+    const resAfter = await prisma.aiBudgetReservation.findMany({ where: { requestKey: { startsWith: `qi:${jTight}:` } } });
+    check("a request above the job's recorded maximum, a ₹0.01 legacy per-request limit, a $10,000 legacy key reserve and ₹0 legacy month / all-time caps is still sent and answers", !(tight instanceof Error) && jTightAfter.status === "PROCESSING" && !jTightAfter.pauseReason, tight instanceof Error ? tight.message : "ok");
+    check("…its cost is still tracked (reservation settled, job spend and AI call recorded)", resAfter.length === resBefore + 1 && resAfter.every((r) => r.status === "SETTLED") && jTightAfter.spentInr > 0 && (await prisma.aiImportAiCall.count({ where: { jobId: jTight } })) >= 1, { res: resAfter.map((r) => r.status), spent: jTightAfter.spentInr });
+    await mockConfig({ ...MOCK_BASE, failTask: { classify: [402, "Insufficient credits"] } });
+    await manual({ classify: "mocktext/cheap" }, ["mocktext/classifier", "mocktext/cheap"]);
+    const sCredit = normalizeImporterSettings(await getImporterSettings());
+    const eCredit = await errorOf(() => importerAiCallChecked(classifyInput(jTight, sCredit), parseClassify));
+    check("credits exhausted at OpenRouter → a clear provider stop (ImporterAiUnavailable: pause, pages kept), not a silent skip", eCredit instanceof ImporterAiUnavailable && /no credits left/.test(eCredit.message) && /Resume/.test(eCredit.message), eCredit?.message);
+    await mockConfig(MOCK_BASE);
+
     // ------------------------------------------------------------------ D
     section("D. Three verification passes per question");
     await manual({});
@@ -292,24 +308,31 @@ async function main() {
     const hash0 = await qHash(jE);
     const sE0 = await mockStats();
     const pv = await referenceOcrPreview(jE, ref.refId);
-    check("preview: pages, model, estimate, maximum and all four budgets shown — nothing sent", pv.pages.length === ref.scannedPages && !!pv.model && pv.maxInr !== null && pv.estimateInr !== null && pv.budgets.map((b) => b.label).join() === "Per request,This import,This month,All time" && (await mockStats()).chat === sE0.chat, pv);
+    check("preview: pages, model, fallback, estimate and maximum shown; no budget list — nothing sent", pv.pages.length === ref.scannedPages && !!pv.model && !!pv.fallbackModel && pv.fallbackModel !== pv.model && pv.maxInr !== null && pv.estimateInr !== null && !("budgets" in pv) && pv.canRun && (await mockStats()).chat === sE0.chat, pv);
     const noConfirm = await requestReferenceOcr({ jobId: jE, refId: ref.refId, actorId: actor, confirmedMaxInr: null });
     const jE1 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jE } });
     check("without an explicit confirmation nothing starts", !noConfirm.started && /Confirm the maximum/.test(noConfirm.reason) && jE1.status === "NEEDS_REVIEW" && !(jE1.config as { referenceOcr?: unknown }).referenceOcr, noConfirm);
     const low = await requestReferenceOcr({ jobId: jE, refId: ref.refId, actorId: actor, confirmedMaxInr: Math.max(0, (pv.maxInr ?? 0) / 2 - 0.01) });
     check("a confirmation below the current maximum does not start it", !low.started && /price changed|Confirm/.test(low.reason), low);
-    await saveImporterSettings({ ...base(savedSettings), selection: { mode: "auto" }, importerModels: mockIds, budget: { ...base(savedSettings).budget, totalInr: 0 } }, actor);
-    const over = await requestReferenceOcr({ jobId: jE, refId: ref.refId, actorId: actor, confirmedMaxInr: 5 });
-    check("over the all-time budget → reported with the estimate, not run", !over.started && /All time/.test(over.reason) && over.preview.maxInr !== null && (await mockStats()).chat === sE0.chat, over);
-    await saveImporterSettings({ ...base(savedSettings), selection: { mode: "auto" }, importerModels: mockIds }, actor);
-    const ok = await requestReferenceOcr({ jobId: jE, refId: ref.refId, actorId: actor, confirmedMaxInr: pv.maxInr });
-    check("confirmed maximum → queued (event + audit log)", ok.started && (await events(jE, "REFERENCE_OCR_REQUESTED")).length === 1 && (await prisma.auditLog.count({ where: { entityId: jE, action: "AI_IMPORT_REFERENCE_OCR_REQUESTED" } })) === 1, ok);
+    check("the maximum prices every send: REQUEST_ATTEMPTS per page to the model plus REQUEST_ATTEMPTS to the fallback", (pv.maxInr ?? 0) + 0.01 >= pv.pages.length * REQUEST_ATTEMPTS * (pv.perRequestMaxInr ?? Infinity), { max: pv.maxInr, pages: pv.pages.length, per: pv.perRequestMaxInr });
+    // Every legacy cap at its lowest and ₹20+ already spent (the production state of 2026-10-26): nothing blocks it.
+    await saveImporterSettings({ ...base(savedSettings), selection: { mode: "auto" }, importerModels: mockIds, budget: { ...base(savedSettings).budget, totalInr: 0, monthlyInr: 0, maxJobInr: 0, maxRequestInr: 0.01 } }, actor);
+    await prisma.aiImportJob.update({ where: { id: jE }, data: { spentInr: 20.1 } });
+    const capped = await referenceOcrPreview(jE, ref.refId);
+    check("with every legacy cap at 0 and ₹20.10 spent, the preview still runs and lists no cap problem", capped.canRun && !capped.problems.length, capped.problems);
+    // Page 1: a dropped connection, then an unusable answer → the retry and the one fallback read are sent automatically.
+    await mockConfig({ ...MOCK_BASE, script: { [pv.model!]: ["terminated", "malformed"] } });
+    const sE1 = await mockStats();
+    const ok = await requestReferenceOcr({ jobId: jE, refId: ref.refId, actorId: actor, confirmedMaxInr: capped.maxInr });
+    check("one Confirm & Continue → queued (event + audit log)", ok.started && (await events(jE, "REFERENCE_OCR_REQUESTED")).length === 1 && (await prisma.auditLog.count({ where: { entityId: jE, action: "AI_IMPORT_REFERENCE_OCR_REQUESTED" } })) === 1, ok);
     await runWorker(240_000);
     const read = await events(jE, "REFERENCE_READ");
     const refs = await listReferences(jE);
     const jE2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jE } });
     check("the worker read the scanned pages into one REFERENCE_READ event; the job is back in review", read.length === 1 && !!refs[0]?.ocr && refs[0].ocr.pagesRead.length + refs[0].ocr.failedPages.length === pv.pages.length && ["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(jE2.status), { read: read.map((e) => e.message), status: jE2.status, ocr: refs[0]?.ocr });
-    check("…its cost stayed within the confirmed maximum", jE2.spentInr <= (pv.maxInr ?? 0) + 0.005, { spent: jE2.spentInr, max: pv.maxInr });
+    const sE2 = await mockStats();
+    check("…the retry and the fallback read were sent without any new confirmation (no stop, no pause)", (sE2.attempts[pv.model!] ?? 0) - (sE1.attempts[pv.model!] ?? 0) >= 2 && (sE2.byModel[pv.fallbackModel!] ?? 0) - (sE1.byModel[pv.fallbackModel!] ?? 0) >= 1 && (await events(jE, "MODEL_SWITCHED")).length >= 1 && !(await events(jE, "REFERENCE_OCR_STOPPED")).length && !(await events(jE, "PAUSED_BUDGET")).length, { a: sE2.attempts, b: sE2.byModel });
+    check("…its cost stayed within the confirmed maximum", jE2.spentInr - 20.1 <= (capped.maxInr ?? 0) + 0.005, { spent: jE2.spentInr - 20.1, max: capped.maxInr });
     check("…and no question, answer, subject, status or approval changed", (await qHash(jE)) === hash0);
     const again = await referenceOcrPreview(jE, ref.refId);
     check("…a read reference is not offered for OCR again", !again.canRun && /already read/.test(again.problems.join(" ")), again.problems);

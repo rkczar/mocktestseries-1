@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { formatInr } from "@/lib/ai-engine/config";
-import { MAX_IMPORTER_MODELS, PILOT_LIMITS, SELECTION_TASK_LABELS, type ImporterSettings, type SelectionTask } from "@/lib/ai-import/config";
+import { MAX_IMPORTER_MODELS, SELECTION_TASK_LABELS, type ImporterSettings, type SelectionTask } from "@/lib/ai-import/config";
 import { importerModelCatalog } from "@/lib/ai-import/models";
 import { getRouteSnapshot, isStale, refreshRoutes, type RouteSnapshot } from "@/lib/ai-import/routes";
 import { importerModelHealth, rateLimitAvoidance } from "@/lib/ai-import/health";
@@ -90,7 +90,6 @@ function historyText(h: ModelHealth | undefined): string {
 /** Configuration checks of one model for one task, from stored data only (no AI request, no network). */
 export function modelConfigChecks(o: ImporterModelOption | undefined, id: string, task: SelectionTask, ctx: Ctx): ConfigCheck[] {
   const vision = VISION_TASK[task];
-  const cap = Math.min(ctx.settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
   if (!o) return [{ label: "In the synced model catalog", ok: false, detail: "Not in the catalog — sync it in AI → Models." }];
   const checks: ConfigCheck[] = [
     { label: "In the synced model catalog", ok: true, detail: `Synced ${o.synced}.` },
@@ -102,7 +101,7 @@ export function modelConfigChecks(o: ImporterModelOption | undefined, id: string
   checks.push(
     c?.maxInr === null || c?.maxInr === undefined
       ? { label: "Fixed published price", ok: false, detail: "No price in rupees — requests would be refused." }
-      : { label: "Fixed published price", ok: c.maxInr <= cap, detail: `${publishedZero(o) ? "Published price ₹0 (a known zero, not an unknown price). " : ""}Up to ${formatInr(c.maxInr, 4)} per ${SELECTION_TASK_LABELS[task].toLowerCase()} request; limit ${formatInr(cap)}.` }
+      : { label: "Fixed published price", ok: true, detail: `${publishedZero(o) ? "Published price ₹0 (a known zero, not an unknown price). " : ""}Up to ${formatInr(c.maxInr, 4)} per ${SELECTION_TASK_LABELS[task].toLowerCase()} request.` }
   );
   const r = routeState(id, ctx);
   checks.push({ label: "Provider route verified", ok: r.state === "verified", detail: r.text });
@@ -144,7 +143,6 @@ function candidateFor(o: ImporterModelOption, purpose: AssistantPurpose, ctx: Ct
 
 /** Pure: recommendations per purpose from the given data (`perPurpose` best candidates each). */
 export function recommend(ctx: Ctx, perPurpose = PER_PURPOSE): AssistantResult {
-  const cap = Math.min(ctx.settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
   const zdrModels = ctx.catalog.routes.zdrModels ? new Set(ctx.catalog.routes.zdrModels) : null;
   const purposes: PurposeRecommendation[] = [];
   let ocrPick: AssistantCandidate | null = null;
@@ -167,10 +165,6 @@ export function recommend(ctx: Ctx, perPurpose = PER_PURPOSE): AssistantResult {
       const c = costOf(o, task);
       if (c?.maxInr === null || c?.maxInr === undefined) {
         out("no price in rupees (unknown — never treated as ₹0)");
-        continue;
-      }
-      if (c.maxInr > cap) {
-        out(`above the ₹${cap} per-request limit`);
         continue;
       }
       if (ctx.settings.privacy.zdr && zdrModels && !zdrModels.has(o.id)) {
@@ -254,7 +248,7 @@ export async function testImporterModels(settings: ImporterSettings): Promise<Mo
   const p = ctx.catalog.provider;
   const global: ConfigCheck[] = [
     { label: "OpenRouter key", ok: p.keyInstalled && p.enabled, detail: !p.keyInstalled ? "Not installed (Admin → AI → Providers)." : p.enabled ? `Installed and enabled${p.lastTestAt ? `; last connection test ${p.lastTestOk ? "passed" : "failed"} ${p.lastTestAt.slice(0, 10)}` : "; connection not tested"}.` : "Installed but switched off." },
-    { label: "Shared key credit", ok: p.keyLimitUsd !== null && (p.keyRemainingUsd ?? 0) > Math.max(settings.budget.keyReserveUsd, PILOT_LIMITS.minKeyReserveUsd), detail: p.keyStatusAt ? (p.keyLimitUsd === null ? "No credit limit on the key: importer requests are refused (the Ask AI reserve cannot be guaranteed)." : `$${(p.keyRemainingUsd ?? 0).toFixed(2)} of $${p.keyLimitUsd.toFixed(2)} left as of ${p.keyStatusAt.slice(0, 10)}; $${Math.max(settings.budget.keyReserveUsd, PILOT_LIMITS.minKeyReserveUsd).toFixed(2)} is kept for student Ask AI.`) : "Not read yet (read before every importer request)." },
+    { label: "Shared key credit", ok: p.keyRemainingUsd === null || p.keyRemainingUsd > 0, detail: p.keyStatusAt ? (p.keyLimitUsd === null ? "No credit limit on the key (OpenRouter account credit applies)." : `$${(p.keyRemainingUsd ?? 0).toFixed(2)} of $${p.keyLimitUsd.toFixed(2)} left as of ${p.keyStatusAt.slice(0, 10)} (OpenRouter refuses requests when it runs out; the importer then pauses with that reason).`) : "Not read yet." },
     { label: "Prices in rupees", ok: ctx.catalog.fx.rate !== null, detail: ctx.catalog.fx.rate === null ? `No USD→INR rate (${ctx.catalog.fx.unavailableReason ?? "unavailable"}).` : `USD→INR ${ctx.catalog.fx.rate.toFixed(2)}${ctx.catalog.fx.stale ? " (stale)" : ""}.` },
     { label: "AI emergency stop", ok: !p.emergencyStop, detail: p.emergencyStop ? "ON — every AI request is refused." : "Off." },
     { label: "Provider routes", ok: !!ctx.snapshot && !isStale(ctx.snapshot, ctx.now), detail: ctx.snapshot ? `Read ${at(ctx.snapshot.fetchedAt)}${isStale(ctx.snapshot, ctx.now) ? " — older than 6 h; use Refresh provider routes" : ""}.` : "Not read yet — use Refresh provider routes." },

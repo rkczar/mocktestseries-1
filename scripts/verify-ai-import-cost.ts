@@ -255,7 +255,7 @@ async function main() {
     const pages1 = await prisma.aiImportPage.findMany({ where: { jobId: cr } });
     const failed1 = pages1.filter((p) => p.status === "FAILED");
     const rows1 = await prisma.aiBudgetReservation.findMany({ where: { requestKey: { startsWith: `qi:${cr}:` } } });
-    check("402 insufficient credit: the job stops without completing the refused pages", failed1.length >= 1 || c1.status === "PAUSED_BUDGET", { s: c1.status, failed: failed1.length, pages: pages1.map((p) => p.status) });
+    check("402 insufficient credit: the job pauses with the provider's reason; the refused pages stay pending (never marked read)", c1.status === "PAUSED" && pages1.some((p) => p.status === "PENDING"), { s: c1.status, failed: failed1.length, pages: pages1.map((p) => p.status) });
     const reason1 = [c1.pauseReason, c1.errorMessage, ...failed1.map((p) => p.errorMessage)].filter(Boolean).join(" | ");
     check("…the reason names the credit / cost limit (not a generic error)", /Cost or credit limit|credit/i.test(reason1), reason1);
     check("…nothing charged: refused requests are released, job spend ₹0", c1.spentInr === 0 && rows1.length >= 1 && rows1.every((r) => r.status === "RELEASED"), { spent: c1.spentInr, rows: rows1.map((r) => r.status) });

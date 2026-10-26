@@ -27,7 +27,7 @@ import { importerModelHealth, rateLimitAvoidance, routeRefusal, unusableAvoidanc
  *     for the request
  *   → conservative MAXIMUM cost of one request = the highest price over the
  *     model's catalog price and every eligible route (incl. long-prompt
- *     overrides) × PRICE_MARGIN, and it must fit the per-request limit; a price
+ *     overrides) × PRICE_MARGIN (no application per-request limit since 2026-10-26); a price
  *     that is ₹0 for input or output tokens but not both is incomplete, so no
  *     maximum can be trusted (ineligible)
  *   → for a job: not refused by OpenRouter as unservable in that job's latest
@@ -60,6 +60,16 @@ const VISION: Record<SelectionTask, boolean> = { extract: true, verify: true, ke
 export function profileInputTokens(task: SelectionTask): number {
   const p = PROFILES[task];
   return estimateInputTokens(p.system, [{ type: "text", text: "x".repeat(p.textChars) }, ...Array.from({ length: p.images }, () => ({ type: "image_url" as const, image_url: { url: "" } }))]);
+}
+
+/**
+ * The worst case of ONE fallback request for a task: the dearest eligible model of the task's candidates (the
+ * worker may send a failed request to any of them), or the task's own model when nothing else is eligible.
+ * Every confirmed maximum adds REQUEST_ATTEMPTS × this per request (lib/ai-import/estimate.ts).
+ */
+export function fallbackMaxInr(c: { maxInr: number | null; candidates?: { eligible: boolean; maxInr: number | null }[] } | null | undefined): number | null {
+  if (!c || c.maxInr === null) return null;
+  return Math.max(c.maxInr, ...(c.candidates ?? []).filter((x) => x.eligible && x.maxInr !== null).map((x) => x.maxInr!));
 }
 
 /** Worst-case USD of one request at these prices. */
@@ -151,9 +161,6 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   const row: CandidateRow = { id, eligible: true, reason: null, maxInr, typicalInr: usdToInr(typicalUsd, ctx.fxRate), routes: routes.map((r) => r.tag || r.provider), ...(zeroPrice ? { zeroPrice } : {}) };
   const refused = routeRefusal(ctx.refusals?.[id], ctx.now);
   if (refused) return { row: { ...row, eligible: false, reason: refused }, price: null, maxUsd: null };
-  if (maxInr > ctx.settings.budget.maxRequestInr) {
-    return { row: { ...row, eligible: false, reason: `one request could cost up to ${formatInr(maxInr)}, above the per-request limit of ${formatInr(ctx.settings.budget.maxRequestInr)}` }, price, maxUsd };
-  }
   return { row, price, maxUsd, reasoning: routes.some((r) => !!r.params?.includes("reasoning")) };
 }
 

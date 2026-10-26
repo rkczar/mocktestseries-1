@@ -47,9 +47,9 @@ export const SELECTION_TASK_LABELS: Record<SelectionTask, string> = {
 };
 
 /**
- * Ceilings fixed in code. Only maxRequestInr (one request's worst case) and minKeyReserveUsd (kept on the shared
- * key for student Ask AI) are enforced. totalInr / monthlyInr / maxJobInr are no longer enforced (owner decision
- * 2026-10-20: the administrator confirms each job's cost instead); they only bound the stored settings fields.
+ * Bounds of the stored (legacy) budget fields only. NONE is enforced: the importer has no application spending cap
+ * (owner decisions 2026-10-20 for job / monthly / all-time, 2026-10-26 for per-request and the Ask AI key reserve).
+ * The administrator confirms each operation's estimate and maximum once; provider limits still apply.
  */
 export const PILOT_LIMITS = { totalInr: 10, monthlyInr: 10, maxJobInr: 8, maxRequestInr: 1, minKeyReserveUsd: 5 } as const;
 
@@ -84,19 +84,13 @@ export interface ImporterSettings {
     maxJobInr: number;
     /** NOT ENFORCED since 2026-10-20: there is no all-time cap. */
     totalInr: number;
-    /** Hard ceiling for one AI request (INR). */
+    /** NOT ENFORCED since 2026-10-26: there is no per-request cap. */
     maxRequestInr: number;
-    /**
-     * The OpenRouter key is shared with student Ask AI: an importer request is refused
-     * unless at least this much (USD) of the key's limit would remain after its worst case.
-     */
+    /** NOT ENFORCED since 2026-10-26: no reserve is held back on the shared OpenRouter key (its own limit applies). */
     keyReserveUsd: number;
-    /** Retry once after a transient provider error (off = one attempt per request, never a retry). */
+    /** Retry once after ANY transient provider error (a dropped connection is always retried once; see REQUEST_ATTEMPTS). */
     retryTransient: boolean;
-    /**
-     * When the job's selected model becomes unavailable, a MORE EXPENSIVE suitable model may take over
-     * (still inside every budget). Off: processing stops and says why. A cheaper or equal one is always allowed.
-     */
+    /** NOT USED since 2026-10-26: a failed request always goes to the next suitable model, whatever its price. */
     allowPricierFallback: boolean;
   };
   limits: {

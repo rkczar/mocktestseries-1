@@ -21,13 +21,13 @@ export const PURPOSE_LABELS: Record<AssistantPurpose, string> = {
 
 /** What the purpose needs, as checked here (requirements only — never a quality judgement). */
 export const PURPOSE_REQUIREMENTS: Record<AssistantPurpose, string> = {
-  ocr: "Reads images (published input modality), returns text, fixed published price within the per-request limit.",
+  ocr: "Reads images (published input modality), returns text, fixed published price.",
   mathematics: "Formulas on scanned pages are read from the page image, so the requirements are the same as OCR. The catalog publishes no mathematics ability, so formula accuracy is Not tested.",
   chemistry: "Equations and structures are read from the page image: same requirements as OCR. The catalog publishes no chemistry ability, so accuracy is Not tested.",
   diagrams: "Figure positions are read from the page image: same requirements as OCR. Figure-box accuracy is Not tested.",
-  answer_key: "Reads images (scanned keys), fixed published price within the per-request limit.",
+  answer_key: "Reads images (scanned keys), fixed published price.",
   verification: "Same requirements as OCR, and a DIFFERENT model than page reading (a different vendor is preferred), so the second read is independent.",
-  classification: "Returns text (no image input needed), fixed published price within the per-request limit.",
+  classification: "Returns text (no image input needed), fixed published price.",
 };
 
 export type RouteState = "verified" | "stale" | "not_read" | "unavailable" | "no_zdr";

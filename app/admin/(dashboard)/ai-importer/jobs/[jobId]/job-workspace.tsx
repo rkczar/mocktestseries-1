@@ -58,7 +58,6 @@ export interface JobView {
   /** The model plan frozen when the job was confirmed (null: not confirmed, or confirmed before automatic selection). */
   plan: ModelPlan | null;
   /** Import Settings: may a fallback model cost more per request than the planned one? */
-  pricierFallback: boolean;
   /** Model switches / replacements / reconfigurations and cost re-confirmations during processing (newest first). */
   modelChanges: { id: string; at: string; type: string; message: string }[];
   /** Does each uploaded answer key belong to this paper (printed paper / series compared)? */
@@ -243,7 +242,7 @@ function RemoveFileDialog({ jobId, file, analyzed, onClose, onRemoved }: { jobId
 const CHANGE_LABELS: Record<string, string> = { MODEL_SWITCHED: "Switched for one request", MODEL_SWITCH_SKIPPED: "Not switched", MODEL_REPLACED: "Replaced for the job", MODEL_RECONFIGURED: "Reconfigured", COST_RECONFIRMED: "Cost re-confirmed" };
 
 /** The models a confirmed job uses (frozen at confirmation), with the reason for each, and every change made while it ran. */
-function PlanCard({ plan, pricierFallback, changes }: { plan: ModelPlan; pricierFallback: boolean; changes: JobView["modelChanges"] }) {
+function PlanCard({ plan, changes }: { plan: ModelPlan; changes: JobView["modelChanges"] }) {
   return (
     <Card data-testid="plan-card">
       <CardHeader>
@@ -267,7 +266,7 @@ function PlanCard({ plan, pricierFallback, changes }: { plan: ModelPlan; pricier
           })}
         </ul>
         <p className="mt-3 text-xs text-[var(--color-muted-foreground)]" data-testid="plan-fallback">
-          Mode: {plan.mode === "auto" ? "Automatic" : "Manual"} · Fallback: after an unusable answer (empty, cut off, malformed) or an image the model cannot read, the same request is sent once to another suitable model {pricierFallback ? "(more expensive fallbacks are allowed in Import Settings)" : "that costs the same or less per request"}; after two in a row the switch is kept for the job. Every switch is listed below with its reason.
+          Mode: {plan.mode === "auto" ? "Automatic" : "Manual"} · Fallback: after an unusable answer (empty, cut off, malformed) or an image the model cannot read, the same request is sent once to the next suitable model (its cost is included in the confirmed maximum); after two in a row the switch is kept for the job. Every switch is listed below with its reason.
         </p>
         <div className="mt-3" data-testid="model-changes">
           <p className="text-sm font-medium">Model changes during processing</p>
@@ -738,7 +737,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                 onClick={() => act(() => confirmJobAction(job.id, { title: job.title, ...ctx, year: ctx.year || null, subjectId: ctx.subjectId || null, previousYearPaperId: ctx.previousYearPaperId || null, paperCode: ctx.paperCode || null, confirmedMaxInr: paid ? (est?.maxInr ?? null) : null }), "Cost confirmed — processing queued.", "confirm")}
                 data-testid="confirm-start"
               >
-                Confirm Cost &amp; Start Processing
+                Confirm &amp; Continue
               </Button>
               {!job.aiEnabled && <p className="text-xs text-[var(--color-muted-foreground)]">Paid AI is off: only pages with a text layer are read (₹0).</p>}
               {inlineError?.at === "confirm" && (
@@ -751,7 +750,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
         </Card>
       )}
 
-      {job.plan && job.status !== "DRAFT" && job.status !== "AWAITING_CONFIRMATION" && <PlanCard plan={job.plan} pricierFallback={job.pricierFallback} changes={job.modelChanges} />}
+      {job.plan && job.status !== "DRAFT" && job.status !== "AWAITING_CONFIRMATION" && <PlanCard plan={job.plan} changes={job.modelChanges} />}
       {job.keyChecks.length > 0 && <KeyCheckCard checks={job.keyChecks} />}
 
       {job.reset && canUse && (
@@ -829,9 +828,9 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                       Resume
                     </Button>
                     <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="resume-note">
-                      Continues from the last finished page — finished pages are not read or charged again. The OpenRouter credit, rate limits and the amount kept for student Ask AI still apply.
+                      Continues from the last finished page — finished pages are not read or charged again. OpenRouter&apos;s own credit and rate limits still apply.
                     </p>
-                    {resumeCost && <ContinueCostConfirm cost={resumeCost.value} changed={resumeCost.changed} pending={pending} label="Confirm Cost & Resume" onConfirm={(v) => resume(v)} onCancel={() => setResumeCost(null)} />}
+                    {resumeCost && <ContinueCostConfirm cost={resumeCost.value} changed={resumeCost.changed} pending={pending} label="Confirm & Continue" onConfirm={(v) => resume(v)} onCancel={() => setResumeCost(null)} />}
                     {inlineError?.at === "resume" && (
                       <p className="text-sm text-[var(--color-error)]" role="alert" data-testid="resume-error">
                         {inlineError.text}

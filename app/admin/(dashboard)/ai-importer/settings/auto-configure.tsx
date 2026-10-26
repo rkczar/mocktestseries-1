@@ -167,7 +167,7 @@ export function AutoConfigure({ canManage, dirty, onApplied }: { canManage: bool
                 {changed.length} setting(s) change. Not changed: {preview.untouched.join(", ")}.
               </p>
             </section>
-            <p className="text-xs">Before saving, the server reads the provider routes and prices again and re-checks privacy and the per-request limit; if anything differs from this preview, nothing is saved.</p>
+            <p className="text-xs">Before saving, the server reads the provider routes and prices again and re-checks privacy; if anything differs from this preview, nothing is saved.</p>
             <div className="flex flex-wrap gap-2">
               <Button type="button" onClick={apply} disabled={pending || preview.blocking.length > 0} data-testid="autoconfig-apply">
                 {pending ? "Checking and saving…" : "Apply Configuration"}

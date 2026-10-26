@@ -6,18 +6,19 @@ import { formatInr } from "@/lib/ai-engine/config";
 import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { readRoutes } from "@/lib/ai-import/routes";
-import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
+import { computeModelPlan, fallbackMaxInr, modelsFromPlan, planOf } from "@/lib/ai-import/select";
+import { REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
 import { kickWorker } from "@/lib/ai-import/kick";
 import type { FileFacts, JobAnalysis } from "@/lib/ai-import/analyze";
-import type { ModelPlan } from "@/lib/ai-import/selection-types";
+import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
 import type { ReconfigurePreview, ReconfigureResult } from "@/lib/ai-import/autoconfig-types";
 import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
 
 /**
  * "Reconfigure Models for This Job" — an explicit action for a PAUSED import, never automatic. The job's
  * models are chosen again from the CURRENT Import Settings (its own model list, manual or automatic
- * selection, privacy, per-request limit) on provider routes read from OpenRouter now (free metadata,
+ * selection, privacy) on provider routes read from OpenRouter now (free metadata,
  * no AI request). The preview prices only the work still to do: finished pages are kept and never read
  * or charged again, only failed and pending pages (and answer keys whose reading failed) are read. It is
  * refused when a worker holds the job, when no page-reading model is suitable, or when the cost of the remaining
@@ -67,7 +68,7 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
   const failedKeys = job.files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY && f.status === AiImportFileStatus.ANALYZED && f.errorMessage);
   const est = remaining?.estimate ?? null;
   if (!unreadPages && !failedKeys.length) blocking.push("Nothing is left to read in this import (no failed or pending page), so there is nothing to reconfigure.");
-  const GUIDE = "Add an image-capable model with a verified route and a known price within the per-request limit to the importer's list (Import Settings → AI Auto-Configure shows what qualifies), then reconfigure again. Limits are never raised automatically.";
+  const GUIDE = "Add an image-capable model with a verified route and a known price to the importer's list (Import Settings → AI Auto-Configure shows what qualifies), then reconfigure again.";
   if (plan && !plan.tasks.extract.model && unreadPages) blocking.push(`No page-reading model is suitable now: ${plan.tasks.extract.reason} Nothing was changed. ${GUIDE}`);
   if (plan && failedKeys.length && !plan.tasks.key.model) blocking.push(`No answer-key model is suitable now: ${plan.tasks.key.reason} Nothing was changed.`);
   if (est && !blocking.length) {
@@ -193,7 +194,10 @@ export async function priceRemainingWork(job: { id: string; analysis: Prisma.Jso
   const open = await prisma.aiImportQuestion.findMany({ where: { jobId, status: { in: [AiImportQuestionStatus.EXTRACTED, AiImportQuestionStatus.READY, AiImportQuestionStatus.NEEDS_CORRECTION, AiImportQuestionStatus.NOT_IMPORTABLE, AiImportQuestionStatus.DUPLICATE] } }, select: { topicId: true, taxonomySource: true, aiAnswer: true } });
   const toClassify = open.filter((q) => !q.topicId && !q.taxonomySource?.startsWith("admin")).length;
   const toSolve = settings.verification.independentAnswer ? open.filter((q) => !q.aiAnswer.length).length : 0;
-  const perRequest = (c: { maxInr: number | null } | undefined) => (c?.maxInr == null ? null : (settings.budget.retryTransient ? 2 : 1) * c.maxInr + (settings.budget.allowPricierFallback ? Math.max(c.maxInr, settings.budget.maxRequestInr) : c.maxInr));
+  const perRequest = (c: TaskChoice | undefined) => {
+    const fb = fallbackMaxInr(c);
+    return c?.maxInr == null || fb === null ? null : REQUEST_ATTEMPTS * (c.maxInr + fb);
+  };
   const classifyEach = plan.tasks.classify.model ? perRequest(plan.tasks.classify) : 0;
   const solveEach = toSolve && plan.tasks.verify.model ? perRequest(plan.tasks.verify) : 0;
   const extra = classifyEach === null || solveEach === null ? null : Math.ceil(toClassify / CLASSIFY_BATCH) * classifyEach + toSolve * solveEach;

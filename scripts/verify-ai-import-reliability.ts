@@ -279,7 +279,7 @@ async function main() {
     const sD6 = await mockStats();
     const e6 = await errorOf(async () => importerAiCallChecked(await classifyInput(jD6), parseClassify));
     const sD6b = await mockStats();
-    check("only a more expensive model left and pricier fallbacks OFF → not sent to it", e6 instanceof ImporterAiFailure && /more expensive fallbacks are OFF/.test(e6.message) && (sD6b.byModel["mocktext/classifier"] ?? 0) === (sD6.byModel["mocktext/classifier"] ?? 0), e6?.message);
+    check("only a more expensive model left → it is still used as the fallback (no price allowance; the maximum prices it)", !e6 && (sD6b.byModel["mocktext/classifier"] ?? 0) === (sD6.byModel["mocktext/classifier"] ?? 0) + 1, e6?.message);
     await manual({ classify: "mocktext/cheap" }, TEXT2, { allowPricierFallback: true });
     await mockConfig({ script: { "mocktext/cheap": ["empty"] } });
     const jD7 = await directJob(actor, exam.id, "Pricier allowed");
@@ -298,7 +298,7 @@ async function main() {
     const jD9 = await directJob(actor, exam.id, "Over max", 0.000001);
     const sD9 = await mockStats();
     const e9 = await errorOf(async () => importerAiCallChecked(await classifyInput(jD9), parseClassify));
-    check("a request past the job's confirmed maximum is refused before sending", !!e9 && /exceed the confirmed maximum/.test(e9.message) && (await mockStats()).chat === sD9.chat, e9?.message);
+    check("a request past the job's recorded maximum is still sent (no application spending cap)", !e9 && (await mockStats()).chat > sD9.chat, e9?.message);
 
     // ------------------------------------------------------------------ E
     section("E. Page reading: malformed shapes, and the paid first read is never bought twice");

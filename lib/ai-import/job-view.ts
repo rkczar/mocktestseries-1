@@ -79,7 +79,7 @@ function nextAction(j: AiImportJob, c: JobCounts, stalled: boolean, pages: JobCa
     case "IMPORTING":
       return "Working — this page updates by itself. You can leave it and come back.";
     case "AWAITING_CONFIRMATION":
-      return "Check the exam, the Previous Year Paper, the expected number of questions and the estimated cost, then click Confirm Cost & Start Processing.";
+      return "Check the exam, the Previous Year Paper, the expected number of questions and the estimated cost, then click Confirm & Continue.";
     case "PAUSED":
     case "PAUSED_BUDGET":
       return j.pauseReason ? `${j.pauseReason} Then click Retry.` : "Click Retry to continue from the last finished page.";

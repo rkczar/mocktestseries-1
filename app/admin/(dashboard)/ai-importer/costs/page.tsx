@@ -59,7 +59,7 @@ export default async function CostsPage() {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="AI Cost Center" />;
   const settings = await getImporterSettings();
   const [ledger, byTask, byModel, calls] = await Promise.all([
-    importerLedger(settings),
+    importerLedger(),
     prisma.$queryRaw<{ task: string; n: number; inTok: number; outTok: number; actual: number | null; unknown: number }[]>`
       SELECT "task", COUNT(*)::int AS n, COALESCE(SUM("inputTokens"), 0)::int AS "inTok", COALESCE(SUM("outputTokens"), 0)::int AS "outTok",
              SUM("costInr") FILTER (WHERE "costStatus" = 'actual')::float8 AS actual, COUNT(*) FILTER (WHERE "costStatus" IN ('unknown', 'pending'))::int AS unknown
@@ -93,20 +93,16 @@ export default async function CostsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Limits</CardTitle>
-            <CardDescription>There is no importer job, monthly or all-time cap: each job&apos;s cost is shown and confirmed before processing. These are checked by the server immediately before every AI request.</CardDescription>
+            <CardDescription>There is no importer spending cap: each paid operation&apos;s estimated and maximum cost is shown and confirmed once (Confirm &amp; Continue). OpenRouter&apos;s own account and key limits still apply.</CardDescription>
           </CardHeader>
           <CardContent>
             <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm" data-testid="cost-limits">
               <dt>Paid AI for the importer</dt>
               <dd className="font-medium" data-testid="cost-paid">{settings.aiEnabled ? "On" : "Off"}</dd>
-              <dt>Per request (maximum)</dt>
-              <dd>{inr(ledger.limits.maxRequestInr)}</dd>
-              <dt>Kept on the shared OpenRouter key for student Ask AI</dt>
-              <dd>${settings.budget.keyReserveUsd.toFixed(2)}</dd>
-              <dt>Automatic retries</dt>
-              <dd>{settings.budget.retryTransient ? "On" : "Off"}</dd>
-              <dt>Pricier fallback model</dt>
-              <dd>{settings.budget.allowPricierFallback ? "Allowed" : "Never"}</dd>
+              <dt>Application spending caps</dt>
+              <dd data-testid="cost-caps">None (no per-request, job, monthly, all-time or key-reserve limit)</dd>
+              <dt>Retries and fallbacks</dt>
+              <dd>One retry per request{settings.budget.retryTransient ? " (any temporary error)" : " (dropped connection)"}, then one fallback model — all included in each confirmed maximum</dd>
               <dt>Privacy for importer requests</dt>
               <dd>
                 {settings.privacy.dataCollection === "deny" ? "No data collection" : "Data collection allowed"}; {settings.privacy.zdr ? "Zero-Data-Retention routes only" : "ZDR not required"}

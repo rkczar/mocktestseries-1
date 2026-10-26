@@ -131,7 +131,7 @@ function ProviderStatus({ catalog, aiEnabled, draftAiEnabled, problems }: { cata
         ? "—"
         : p.keyStatusAt
           ? p.keyLimitUsd === null
-            ? `No credit limit on the key (as of ${p.keyStatusAt.slice(0, 10)}): importer requests are refused while an Ask AI reserve is set, because the reserve cannot be guaranteed.`
+            ? `No credit limit on the key (as of ${p.keyStatusAt.slice(0, 10)}): the OpenRouter account credit applies.`
             : `Limit $${p.keyLimitUsd.toFixed(2)}, $${(p.keyRemainingUsd ?? 0).toFixed(2)} left as of ${p.keyStatusAt.slice(0, 10)}. Read again before every importer request.`
           : "Not read yet — it is read before every importer request.",
     },
@@ -170,7 +170,7 @@ function ProviderStatus({ catalog, aiEnabled, draftAiEnabled, problems }: { cata
 }
 
 /** Searchable model list (keyboard: type to filter, arrows + Enter, Escape closes). */
-function ModelPicker({ id, label, help, value, options, vision, cost, capInr, allowNone, onChange, disabled, staleRoutesAt }: {
+function ModelPicker({ id, label, help, value, options, vision, cost, allowNone, onChange, disabled, staleRoutesAt }: {
   id: string;
   label: string;
   help: string;
@@ -178,7 +178,6 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
   options: ImporterModelOption[];
   vision: boolean;
   cost: CostKey;
-  capInr: number;
   allowNone: string;
   onChange: (v: string | null) => void;
   disabled: boolean;
@@ -233,8 +232,7 @@ function ModelPicker({ id, label, help, value, options, vision, cost, capInr, al
       </div>
       {c && (
         <p className="text-xs text-[var(--color-muted-foreground)]" data-testid={`${id}-cost`}>
-          Estimate per request: about {inr(c.typicalInr)}; conservative maximum {inr(c.maxInr)}
-          {c.maxInr !== null && c.maxInr > capInr && <strong className="text-[var(--color-error)]"> — above the ₹{capInr} per-request limit, so these requests would be refused</strong>}.
+          Estimate per request: about {inr(c.typicalInr)}; conservative maximum {inr(c.maxInr)}.
         </p>
       )}
       {!disabled && (
@@ -392,7 +390,7 @@ function ImporterModelsCard({ options, value, onChange, disabled, capInr, zdrReq
             {tips.privacyUnknown ? (
               <p className="text-xs text-[var(--color-warning)]" data-testid="importer-suggestions-privacy">{tips.privacyUnknown}</p>
             ) : tips.suggested.length === 0 ? (
-              <p className="text-xs text-[var(--color-warning)]" data-testid="importer-suggestions-none">No catalog model meets all of these. Sync the catalog in AI → Models, or review the per-request limit and privacy settings below.</p>
+              <p className="text-xs text-[var(--color-warning)]" data-testid="importer-suggestions-none">No catalog model meets all of these. Sync the catalog in AI → Models, or review the privacy settings below.</p>
             ) : (
               <ul className="flex flex-col gap-1" data-testid="importer-suggestions-list">
                 {tips.suggested.map((o) => (
@@ -542,7 +540,6 @@ function CostTable({ catalog, s }: { catalog: ImporterCatalog; s: ImporterSettin
               <td className="py-1.5 pr-2">
                 {r.c ? inr(r.c.maxInr) : "—"}
                 {r.c && r.c.maxInr === null && <span className="block text-xs text-[var(--color-error)]">No exchange rate: requests are refused.</span>}
-                {r.c && r.c.maxInr !== null && r.c.maxInr > s.budget.maxRequestInr && <span className="block text-xs text-[var(--color-error)]" data-testid="cost-over-cap">Above the ₹{s.budget.maxRequestInr} per-request limit: refused.</span>}
               </td>
             </tr>
           ))}
@@ -638,7 +635,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       }
     });
   const picker = (slot: Slot, label: string, value: string | null, vision: boolean, cost: CostKey, onChange: (v: string | null) => void, help: string, allowNone: string) => (
-    <ModelPicker id={`m-${slot}`} label={label} value={value} options={options} vision={vision} cost={cost} capInr={s.budget.maxRequestInr} onChange={onChange} disabled={d} help={help} allowNone={allowNone} staleRoutesAt={catalog.plan.routesStale ? routesAt(catalog.plan.routesFetchedAt) : null} />
+    <ModelPicker id={`m-${slot}`} label={label} value={value} options={options} vision={vision} cost={cost} onChange={onChange} disabled={d} help={help} allowNone={allowNone} staleRoutesAt={catalog.plan.routesStale ? routesAt(catalog.plan.routesFetchedAt) : null} />
   );
   const sameModel = !!s.models.extract && s.models.verify === s.models.extract;
   return (
@@ -766,7 +763,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       <Card data-testid="selection-card">
         <CardHeader>
           <CardTitle>Model selection</CardTitle>
-          <CardDescription>Automatic (default): for each task the importer uses the cheapest model on its own list (Importer models) that can do it, is available on OpenRouter, meets the privacy settings and fits the per-request limit — judged by its conservative maximum cost, not the average. No model has to be picked per import.</CardDescription>
+          <CardDescription>Automatic (default): for each task the importer uses the cheapest model on its own list (Importer models) that can do it, is available on OpenRouter, meets the privacy settings and is cheapest by its conservative maximum cost, not the average. No model has to be picked per import.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2 text-sm" role="radiogroup" aria-label="Model selection">
@@ -779,10 +776,6 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
               <span><strong>Manual override</strong> — an administrator chooses each model (same checks; refused if unsuitable)</span>
             </label>
           </div>
-          <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-1" checked={s.budget.allowPricierFallback} onChange={(e) => set("budget", { allowPricierFallback: e.target.checked })} disabled={d} data-testid="b-pricier" />
-            <span>Allow a MORE EXPENSIVE model to take over when a job&apos;s selected model becomes unavailable (still within every limit). Off: the job stops and says why. A cheaper or equally priced replacement is always allowed and recorded.</span>
-          </label>
           <SelectionTable plan={catalog.plan} aiEnabled={s.aiEnabled} />
         </CardContent>
       </Card>
@@ -843,14 +836,12 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       <Card>
         <CardHeader>
           <CardTitle>Limits</CardTitle>
-          <CardDescription>There is no importer job, monthly or all-time spending cap: each job&apos;s estimated cost is shown and confirmed before processing, and actual spend is in the AI Cost Center. The limits below are checked by the server inside one lock before every AI request (parallel pages and other jobs included).</CardDescription>
+          <CardDescription>There is no importer spending cap — no per-request, job, monthly, all-time or Ask AI key-reserve limit. Each paid operation shows its estimated and maximum cost (retries and fallbacks included) and starts after one Confirm &amp; Continue; actual spend is in the AI Cost Center. OpenRouter&apos;s own account and key limits still apply.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-3">
-          {field("b-req", "Maximum per AI request (₹)", s.budget.maxRequestInr, (n) => set("budget", { maxRequestInr: n }), `A request whose conservative maximum is higher is refused. Ceiling fixed in code: ₹${catalog.pilot.maxRequestInr}.`)}
-          {field("b-key", "Keep on the shared OpenRouter key for Ask AI ($)", s.budget.keyReserveUsd, (n) => set("budget", { keyReserveUsd: n }), `An importer request is refused if it could leave less than this on the key. At least $${catalog.pilot.minKeyReserveUsd}.`)}
           <label className="flex items-center gap-2 self-end text-sm sm:col-span-3">
             <input type="checkbox" checked={s.budget.retryTransient} onChange={(e) => set("budget", { retryTransient: e.target.checked })} disabled={d} data-testid="b-retry" />
-            Retry a request once after a temporary provider error (each attempt is reserved and recorded on its own)
+            Retry a request once after any temporary provider error (a dropped connection is always retried once; every attempt is recorded and included in the maximum)
           </label>
           {field("l-file", "Maximum file size (MB)", s.limits.maxFileMb, (n) => set("limits", { maxFileMb: n }))}
           {field("l-pages", "Maximum pages per file", s.limits.maxPagesPerFile, (n) => set("limits", { maxPagesPerFile: n }))}

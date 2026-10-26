@@ -95,7 +95,6 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     aiEnabled: settings.aiEnabled,
     allowUnverified: settings.publish.allowUnverifiedAnswers,
     plan: planOf(job.config),
-    pricierFallback: settings.budget.allowPricierFallback,
     modelChanges: modelEvents.map((e) => ({ id: e.id, at: formatIst(e.createdAt), type: e.type, message: e.message })),
     keyChecks: keyChecks.map((c) => ({ keyFile: c.keyFile, state: c.state, detail: c.detail, key: c.key ? [c.key.paper && `Paper ${c.key.paper}`, c.key.series && `Series ${c.key.series}`, c.key.set && `Set ${c.key.set}`, c.key.totalQuestions && `${c.key.totalQuestions} questions`].filter(Boolean).join(", ") : null, paper: [c.paper.paper && `Paper ${c.paper.paper}`, c.paper.series && `Series ${c.paper.series}`].filter(Boolean).join(", ") || null, source: c.paper.source })),
     reset,

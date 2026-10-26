@@ -698,7 +698,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
                 </label>
                 <div className="flex flex-col gap-1">
                   <Button size="lg" className="w-full sm:w-auto sm:self-start" disabled={!v.canProcess || pending || clicked || !confirmed || !/^\d{1,4}$/.test(expected) || current.mapping.paperMissing} onClick={processNow} data-testid="process-import">
-                    {pending || clicked ? "Starting…" : "Confirm Cost & Start Processing"}
+                    {pending || clicked ? "Starting…" : "Confirm & Continue"}
                   </Button>
                   <p className="text-xs text-[var(--color-muted-foreground)]">Questions are extracted and checked. Nothing enters the Question Bank until you review and approve it; approved questions are added as Draft and are never published automatically.</p>
                 </div>

@@ -267,7 +267,7 @@ export function JobControls({ job, size = "sm", onDeleted, onMessage }: { job: J
           {local.text}
         </p>
       )}
-      {cost && <ContinueCostConfirm cost={cost.value} changed={cost.changed} pending={pending} label={job.status === "NEEDS_REVIEW" ? "Confirm Cost & Retry" : "Confirm Cost & Continue"} onConfirm={(v) => retry(v)} onCancel={() => setCost(null)} />}
+      {cost && <ContinueCostConfirm cost={cost.value} changed={cost.changed} pending={pending} label="Confirm & Continue" onConfirm={(v) => retry(v)} onCancel={() => setCost(null)} />}
       {reconfiguring && (
         <ReconfigureDialog
           job={job}

@@ -8,7 +8,7 @@ const inr = (v: number) => `₹${v.toFixed(2)}`;
 /**
  * Shown when Resume / Retry would need more than the import's confirmed maximum: nothing has started. The
  * administrator sees what was spent, what the remaining work could cost at most and the new maximum, and
- * confirms exactly that amount (the server prices it again and refuses a lower one).
+ * confirms it once with Confirm & Continue (the server prices it again and refuses a lower one).
  */
 export function ContinueCostConfirm({ cost, changed, pending, label, onConfirm, onCancel }: { cost: ContinueCost; changed?: boolean; pending: boolean; label: string; onConfirm: (neededMaxInr: number) => void; onCancel: () => void }) {
   const work = [`${cost.pages} page(s)`, cost.keyFiles ? `${cost.keyFiles} answer-key file(s)` : null, cost.questionsToClassify ? `subject / topic classification of ${cost.questionsToClassify} question(s)` : null].filter(Boolean).join(", ");
@@ -21,10 +21,6 @@ export function ContinueCostConfirm({ cost, changed, pending, label, onConfirm, 
           <dd data-testid="continue-cost-spent">{inr(cost.spentInr)}</dd>
         </div>
         <div className="flex justify-between gap-2">
-          <dt className="text-[var(--color-muted-foreground)]">Confirmed maximum until now</dt>
-          <dd data-testid="continue-cost-confirmed">{inr(cost.confirmedMaxInr)}</dd>
-        </div>
-        <div className="flex justify-between gap-2">
           <dt className="text-[var(--color-muted-foreground)]">Remaining work, estimated maximum</dt>
           <dd data-testid="continue-cost-remaining">{inr(cost.remainingMaxInr)}</dd>
         </div>
@@ -34,7 +30,7 @@ export function ContinueCostConfirm({ cost, changed, pending, label, onConfirm, 
         </div>
       </dl>
       <p className="text-xs text-[var(--color-muted-foreground)]">
-        Remaining work: {work}. The maximum assumes every request at its worst case, including one re-send to another model after an unusable answer; the actual spend is usually far lower. Finished pages are not read or charged again. Nothing has been sent yet.
+        Remaining work: {work}. The maximum assumes every request at its worst case, including one retry and one fallback model per request; the actual spend is usually far lower. Finished pages are not read or charged again. Nothing has been sent yet.
       </p>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={pending} onClick={() => onConfirm(cost.neededMaxInr)} data-testid="continue-cost-confirm">

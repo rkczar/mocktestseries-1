@@ -21,7 +21,7 @@ import { readDocx } from "@/lib/ai-import/docx";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
 import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
 import { assignSections, ensureRender, mergeContinuation, parsePage, readsAgree, type StepContext } from "@/lib/ai-import/process";
-import { importerAiCall, parseModelJson, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, FALLBACK_SLACK } from "@/lib/ai-import/ai";
+import { importerAiCall, parseModelJson, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
 import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, documentTextUserText, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
 import { computeModelPlan, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
@@ -32,7 +32,7 @@ import { jobQuality, settleJobStatus } from "@/lib/ai-import/summary";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { approveQuestions, requestImport } from "@/lib/ai-import/review";
 import { MAX_VERIFY_PASSES, V2_RESULT_STATUSES, contentFingerprint, needsVerify2, passCount, verifyState, withPass } from "@/lib/ai-import/verify-core";
-import type { CandidateRow, TaskChoice } from "@/lib/ai-import/selection-types";
+import type { CandidateRow, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
 import type { ExtractedQuestion, PaperVerification, VerifyFix, VerifyProblem } from "@/lib/ai-import/types";
 
 /**
@@ -543,6 +543,14 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
   const todo = units.filter((u) => !unitDone(u, rows, prior, model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
   const questions = new Set([...targets.read, ...targets.classify]).size;
   const classifyBatches = Math.ceil(targets.classify.size / CLASSIFY_BATCH);
+  // Fallbacks: any other eligible model (no price allowance or spending cap since 2026-10-26 — the maximum below
+  // prices the fallback), another model family first.
+  const family = (id: string | null) => (id ?? "").split("/")[0];
+  const alternates = candidates
+    .filter((c) => c.eligible && c.id !== model)
+    .sort((a, b) => Number(family(a.id) === family(model)) - Number(family(b.id) === family(model)))
+    .map((c) => c.id)
+    .slice(0, 3);
   let choice: TaskChoice | null = null;
   let estimateInr: number | null = null;
   let maxInr: number | null = null;
@@ -551,30 +559,42 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
     choice = await choiceFor(settings, model, used[0] ?? null, jobId, refresh);
     reason = choice.reason;
     const fx = refresh ? await getUsdInr() : { rate: auto.fxRate };
+    // The one fallback a failed read is sent to (verifyCall: the first alternate), priced exactly like the main model.
+    const fallback = alternates[0] ? await choiceFor(settings, alternates[0], used[0] ?? null, jobId, refresh) : null;
+    const fallbackPrice = fallback?.model === alternates[0] ? fallback?.price ?? null : null;
     if (choice.model === model && choice.price && fx.rate) {
       const pageTokens = profileInputTokens("verify");
       const classifyTokens = profileInputTokens("classify");
-      let maxUsd = 0;
+      // Worst case of every request: REQUEST_ATTEMPTS sends to the model and, after a failed read, REQUEST_ATTEMPTS to the fallback.
+      const worst = (price: PlanPrice) => {
+        let usd = 0;
+        for (const u of todo) {
+          if (u.kind === "page") usd += requestUsd(price, pageTokens, 8000, 1) * PRICE_MARGIN;
+          else
+            for (const part of u.parts ?? []) {
+              const t = estimateInputTokens(EXTRACT_SYSTEM, [{ type: "text", text: documentTextUserText({ exam: "", subject: null, part: 1, parts: 1, text: part }) }]);
+              usd += requestUsd({ ...price, image: 0 }, t, 8000, 0) * PRICE_MARGIN;
+            }
+        }
+        return usd + classifyBatches * requestUsd({ ...price, image: 0 }, classifyTokens, 2500, 0) * PRICE_MARGIN;
+      };
       let typUsd = 0;
       for (const u of todo) {
-        if (u.kind === "page") {
-          maxUsd += requestUsd(choice.price, pageTokens, 8000, 1) * PRICE_MARGIN;
-          typUsd += requestUsd(choice.price, pageTokens, 3200, 1);
-        } else
+        if (u.kind === "page") typUsd += requestUsd(choice.price, pageTokens, 3200, 1);
+        else
           for (const part of u.parts ?? []) {
             const t = estimateInputTokens(EXTRACT_SYSTEM, [{ type: "text", text: documentTextUserText({ exam: "", subject: null, part: 1, parts: 1, text: part }) }]);
-            maxUsd += requestUsd({ ...choice.price, image: 0 }, t, 8000, 0) * PRICE_MARGIN;
             typUsd += requestUsd({ ...choice.price, image: 0 }, t, 3200, 0);
           }
       }
-      maxUsd += classifyBatches * requestUsd({ ...choice.price, image: 0 }, classifyTokens, 2500, 0) * PRICE_MARGIN;
       typUsd += classifyBatches * requestUsd({ ...choice.price, image: 0 }, Math.round(classifyTokens / 3), 600, 0);
+      const maxUsd = REQUEST_ATTEMPTS * (worst(choice.price) + (fallbackPrice ? worst(fallbackPrice) : 0));
       maxInr = Math.ceil((usdToInr(maxUsd, fx.rate) ?? 0) * 100) / 100;
       estimateInr = Math.ceil((usdToInr(typUsd, fx.rate) ?? 0) * 100) / 100;
     } else problems.push(`${model} cannot be used for Verify 2: ${choice.reason}`);
   } else problems.push(`No suitable model for Verify 2: ${reason}`);
   const refs = await listReferences(jobId);
-  const pageMax = choice?.price && choice.model === model ? requestUsd(choice.price, profileInputTokens("verify"), 8000, 1) * PRICE_MARGIN : null;
+  const pageMax = choice?.price && choice.model === model ? REQUEST_ATTEMPTS * requestUsd(choice.price, profileInputTokens("verify"), 8000, 1) * PRICE_MARGIN : null;
   const pageTyp = choice?.price && choice.model === model ? requestUsd(choice.price, profileInputTokens("verify"), 3200, 1) : null;
   const fxRate = auto.fxRate;
   const referenceOcr = refs
@@ -585,16 +605,6 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
       return { name: r.name, pages, processing: `OCR / vision reading of ${pages} scanned page image(s)${model ? ` (e.g. with ${model})` : ""}`, estimateInr: inr(pageTyp), maxInr: inr(pageMax) };
     })
     .filter((r) => r.pages > 0);
-  // Fallbacks: up to the same "slightly more expensive" allowance as the main reader (FALLBACK_SLACK, never above the
-  // per-request limit; the job's confirmed maximum is checked again before each request), another model family first.
-  const primaryMax = choice?.maxInr ?? 0;
-  const slack = Math.min(Math.max(primaryMax * FALLBACK_SLACK.ratio, primaryMax + FALLBACK_SLACK.inr), settings.budget.maxRequestInr);
-  const family = (id: string | null) => (id ?? "").split("/")[0];
-  const alternates = candidates
-    .filter((c) => c.eligible && c.id !== model && (settings.budget.allowPricierFallback || (c.maxInr ?? Infinity) <= slack + 1e-9))
-    .sort((a, b) => Number(family(a.id) === family(model)) - Number(family(b.id) === family(model)))
-    .map((c) => c.id)
-    .slice(0, 3);
   return { job, settings, used, candidates, model, choice, reason, units: todo, allUnits: units, questions, classifyBatches, estimateInr, maxInr, problems, prior, alternates, referenceOcr };
 }
 

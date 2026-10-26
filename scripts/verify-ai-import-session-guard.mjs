@@ -95,7 +95,7 @@ check("summary: estimated today, actual today, total actual, actual this month (
 check("no NaN / undefined anywhere", !/NaN|undefined/.test(await page.locator("main").innerText()));
 check("direct Gemini API shown with 0 calls (not used by the importer)", /Gemini \(direct API\): 0 calls — not used by the importer/.test(await text("[data-testid=cost-gemini-direct]")));
 const limitsText = await text("[data-testid=cost-limits]");
-check("limits shown: ₹1 per request and the Ask AI reserve, no job / monthly / all-time cap; paid AI state shown", /₹1\.00/.test(limitsText) && /Ask AI/.test(limitsText) && !/All-time limit|Monthly limit|Per job/.test(limitsText) && /^(On|Off)$/.test(await text("[data-testid=cost-paid]")), limitsText);
+check("limits: no application spending cap (no per-request / job / monthly / all-time / Ask AI reserve figure); retries + fallbacks named; paid AI state shown", /None \(no per-request, job, monthly, all-time or key-reserve limit\)/.test(limitsText) && !/₹1\.00|Kept on the shared|All-time limit|Monthly limit|Per job/.test(limitsText) && /fallback/.test(limitsText) && /^(On|Off)$/.test(await text("[data-testid=cost-paid]")), limitsText);
 
 // Unreported / in-flight costs are never shown as ₹0.00 actual spend (synthetic ledger rows, removed below).
 const istNow = new Date(Date.now() + 5.5 * 3_600_000).toISOString();

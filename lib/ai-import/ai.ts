@@ -6,8 +6,8 @@ import { resolveOpenRouterKey, getEngineConfig, patchOpenRouterState } from "@/l
 import { getUsdInr, type FxRate } from "@/lib/ai-engine/fx";
 import { istDayMonth } from "@/lib/ai-engine/budget";
 import { formatInr, usdToInr } from "@/lib/ai-engine/config";
-import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, getKeyInfo, sanitize, type ChatContentPart } from "@/lib/ai-engine/openrouter";
-import { IMPORTER_SETTING_KEY, PILOT_LIMITS, SELECTION_TASK_LABELS, importerFeature, normalizeImporterSettings, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
+import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, sanitize, type ChatContentPart } from "@/lib/ai-engine/openrouter";
+import { IMPORTER_SETTING_KEY, SELECTION_TASK_LABELS, importerFeature, normalizeImporterSettings, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
 import { FAILURE_ADVICE, failureMessage, kindOfCategory, type FailureKind } from "@/lib/ai-import/failure";
 import { computeModelPlan, evaluateModel, planOf, requestUsd } from "@/lib/ai-import/select";
 import { freshRouteSnapshot } from "@/lib/ai-import/routes";
@@ -18,20 +18,20 @@ import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
  * Every paid AI request of the AI Question Importer goes through here:
  *
  *   the job's confirmed model plan (lib/ai-import/select.ts; an unavailable
- *     model is replaced only by an equal or cheaper one unless Import Settings
- *     allow a pricier fallback) → worst-case cost → per-request ceiling
- *   → RESERVE against the job cap AND the importer's monthly budget
- *     (one advisory lock, so parallel pages can never overshoot)
- *   → OpenRouter (privacy policy enforced per request) → SETTLE to the
- *     provider-reported cost (unknown cost = worst case kept)
+ *     model is replaced by the next suitable configured model) → worst-case cost
+ *   → RESERVE (records the worst case for cost tracking; one advisory lock)
+ *   → OpenRouter (privacy policy, max_price and route re-check enforced per
+ *     request) → SETTLE to the provider-reported cost (unknown cost = worst case kept)
  *   → logged in AiImportAiCall (per job) and AiGatewayCall (platform usage).
  *
- * The importer budget is separate from the platform / student AI budgets
- * (lib/ai-engine/budget.ts excludes "qimport_*"). The OpenRouter key's own
- * limit is shared with student Ask AI, so before every request the key's
- * remaining credit is read and the request is refused unless the configured
- * reserve (budget.keyReserveUsd) would remain after its worst case.
- * One attempt per request unless budget.retryTransient is on.
+ * No application spending cap stops a request (owner decision 2026-10-26: no
+ * per-request, job, monthly, all-time or key-reserve threshold). The administrator
+ * confirms each operation's estimate and maximum once; that maximum prices every
+ * send the operation can make (retries and fallbacks included). What still stops
+ * requests: Paid AI switched off, the AI emergency stop, provider refusals and
+ * errors (credits exhausted at OpenRouter pauses the job with the reason).
+ * At most REQUEST_ATTEMPTS sends per request: one retry after a dropped connection always, after any
+ * transient error only when budget.retryTransient is on. Every confirmed maximum prices both.
  *
  * Immediately before each request is sent, the reservation (one transaction)
  * re-reads the AUTHORITATIVE importer settings and the job's status from the
@@ -102,6 +102,12 @@ export const STALE_MS = 10 * 60_000;
 export const IMAGE_TOKENS = 3_500;
 /** OpenRouter max_price headroom over the catalog price; the worst-case reservation uses the same factor. */
 export const PRICE_MARGIN = 1.05;
+/**
+ * How many times one importer request can be sent (ai.ts importerAiCall: the first send plus at most ONE retry —
+ * always after a dropped connection). Every estimate / confirmed maximum prices this many sends per request, so a
+ * retry never pushes an operation past the maximum the administrator confirmed.
+ */
+export const REQUEST_ATTEMPTS = 2;
 /**
  * The request parameters every importer request sends (importerAiCall → chatCompletion: max_tokens bounds the
  * cost, temperature 0). Requests use require_parameters, so a provider route must support all of them; the
@@ -201,7 +207,7 @@ export function estimateInputTokens(system: string, content: ChatContentPart[]):
 
 const SPEND = `COALESCE(SUM(COALESCE("settledInr", "reservedInr")), 0)::float8`;
 
-async function reserve(input: { jobId: string; requestKey: string; feature: string; amountInr: number; settings: ImporterSettings; key: { remainingUsd: number | null; fxRate: number } }): Promise<void> {
+async function reserve(input: { jobId: string; requestKey: string; feature: string; amountInr: number }): Promise<void> {
   const { istDay, istMonth } = istDayMonth();
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_KEY}::bigint)`;
@@ -216,45 +222,13 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
     if (!job) throw new ImporterJobStopped("The import job no longer exists.");
     // Cancelled, paused or deleted meanwhile: no new request is ever reserved (or sent) for it.
     if (job.status !== "PROCESSING") throw new ImporterJobStopped(`The import is ${job.status.toLowerCase().replace(/_/g, " ")}, so no AI request was sent.`);
-    // The administrator's confirmed maximum for THIS job (budgetInr, set by Confirm / Reconfigure / a confirmed
-    // retry) is never exceeded: recorded spend + this job's requests in flight + this request's worst case.
-    // Not a fixed cap (owner decision 2026-10-20): going further only needs a renewed confirmation.
-    const inFlight = await tx.$queryRaw<{ v: number }[]>`SELECT COALESCE(SUM("reservedInr"), 0)::float8 AS v FROM "AiBudgetReservation" WHERE "status" = 'RESERVED' AND "requestKey" LIKE ${`qi:${input.jobId}:%`}`;
-    const committed = job.spentInr + (inFlight[0]?.v ?? 0);
-    if (committed + input.amountInr > job.budgetInr + 0.005) {
-      throw new ImporterBudgetError(
-        job.budgetInr > 0
-          ? `This request could cost up to ${formatInr(input.amountInr)}; with ${formatInr(committed)} already spent or in flight that would exceed the confirmed maximum of ${formatInr(job.budgetInr)} for this import. Nothing was sent. Review the cost and confirm a new maximum (Resume / Retry shows it) to continue.`
-          : "No paid AI cost was confirmed for this import, so nothing was sent. Resume / Retry shows the cost to confirm first.",
-        "job"
-      );
-    }
     // The authoritative settings, read now (not the copy the worker started with): an administrator who
     // switched Paid AI off or lowered a limit after the job started is obeyed before this request is sent.
     const row = await tx.setting.findUnique({ where: { key: IMPORTER_SETTING_KEY } });
     const current = normalizeImporterSettings(row?.value ?? {});
     if (!current.aiEnabled) throw new ImporterAiSwitchedOff(`${failureMessage("paid_ai_off", "it was switched off in Import Settings after this job started, so no further AI request was sent")} Pages not yet read stay pending. ${FAILURE_ADVICE.paid_ai_off}`);
-    // There are no importer job / monthly / all-time spending caps (owner decision 2026-10-20): the administrator
-    // confirms each job's cost. What remains is the per-request worst case and the shared key's Ask AI reserve.
-    const budget = {
-      maxRequestInr: Math.min(input.settings.budget.maxRequestInr, current.budget.maxRequestInr),
-      keyReserveUsd: Math.max(input.settings.budget.keyReserveUsd, current.budget.keyReserveUsd),
-    };
-    const requestCap = Math.min(budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
-    if (input.amountInr > requestCap) throw new ImporterBudgetError(`One request could cost up to ${formatInr(input.amountInr)}, above the per-request limit of ${formatInr(requestCap)}.`, "request");
-    // The key's limit is shared with student Ask AI. Requests of other importer jobs still in flight are not
-    // yet in the key's usage, so they are subtracted too (they hold this same lock while reserving).
-    if (input.key.remainingUsd !== null) {
-      const pending = await tx.$queryRawUnsafe<{ v: number }[]>(`SELECT COALESCE(SUM("reservedInr"), 0)::float8 AS v FROM "AiBudgetReservation" WHERE "status" = 'RESERVED' AND left("feature", 8) = 'qimport_'`);
-      const pendingUsd = (pending[0]?.v ?? 0) / input.key.fxRate;
-      const afterUsd = input.key.remainingUsd - pendingUsd - input.amountInr / input.key.fxRate;
-      if (afterUsd < Math.max(budget.keyReserveUsd, PILOT_LIMITS.minKeyReserveUsd)) {
-        throw new ImporterBudgetError(
-          `The shared OpenRouter key has $${input.key.remainingUsd.toFixed(2)} left${pendingUsd > 0 ? ` ($${pendingUsd.toFixed(4)} of it held by importer requests in flight)` : ""}; this request could use up to $${(input.amountInr / input.key.fxRate).toFixed(4)}, which would leave less than the $${budget.keyReserveUsd.toFixed(2)} kept for student Ask AI (Import Settings).`,
-          "key"
-        );
-      }
-    }
+    // No application spending cap (owner decision 2026-10-26): no per-request, job, monthly, all-time or key-reserve
+    // threshold stops a request. The reservation only records the request's worst case for cost tracking.
     await tx.aiBudgetReservation.create({ data: { requestKey: input.requestKey, feature: input.feature, reservedInr: input.amountInr, istDay, istMonth } });
   });
 }
@@ -367,7 +341,7 @@ async function log(e: {
 
 /**
  * The provider route, price and privacy route of the model about to be used, checked with the selection
- * engine's own rules (serving route, ZDR when required, readable prices, output limit, per-request limit).
+ * engine's own rules (serving route, ZDR when required, readable prices, output limit).
  * Route data that cannot be read means nothing is sent (fail closed).
  */
 async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"]; reasoning: boolean }> {
@@ -379,8 +353,6 @@ async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | 
   }
   const refusals = await importerModelHealth([choice.model!], Date.now(), jobId);
   const ev = evaluateModel(model, choice.model!, choice.task, { snapshot, settings, fxRate, refusals });
-  // A usable route over the per-request limit (the only refusal that still carries a price) is left to the
-  // reservation below, so it stops as a budget limit (page kept, questions capped) instead of "unavailable".
   return ev.row.eligible || ev.price ? { problem: null, price: ev.price, reasoning: !!ev.reasoning } : { problem: ev.row.reason ?? "not usable", price: null, reasoning: false };
 }
 
@@ -410,14 +382,13 @@ async function replaceModel(input: AiCallInput, plan: ModelPlan, choice: TaskCho
       // Guidance only (nothing is changed or sent): what Reconfigure Models for This Job would propose.
       // No run-time exclusions: the same proposal the Reconfigure preview computes (a refused model is excluded by the job's history).
       const sub = (await computeModelPlan(input.settings, { refresh: false, substitute: true, jobId: input.jobId })).tasks[sel];
-      advice = sub.model && sub.model !== failed ? ` Use Reconfigure Models for This Job: it would propose ${sub.model} (up to ${formatInr(sub.maxInr)} per request) and shows the cost before anything is saved.` : " No other model on the importer's list is suitable either: add an image-capable model with a verified route and a known price within the per-request limit (Import Settings → AI Auto-Configure), then use Reconfigure Models for This Job.";
+      advice = sub.model && sub.model !== failed ? ` Use Reconfigure Models for This Job: it would propose ${sub.model} (up to ${formatInr(sub.maxInr)} per request) and shows the cost before anything is saved.` : " No other model on the importer's list is suitable either: add an image-capable model with a verified route and a known price (Import Settings → AI Auto-Configure), then use Reconfigure Models for This Job.";
     }
     throw new ImporterAiUnavailable(`The selected ${label} model ${failed} is unavailable (${why}) and no other approved model is suitable: ${alt.reason} ${sent}${advice}`);
   }
+  // A configured fallback is used whatever its price (no application spending cap); the confirmed maximum already
+  // prices a fallback request (select.ts fallbackMaxInr) and the replacement is recorded with its price.
   const pricier = (alt.maxInr ?? Infinity) > (choice.maxInr ?? 0) + 1e-9;
-  if (pricier && !input.settings.budget.allowPricierFallback) {
-    throw new ImporterAiUnavailable(`The selected ${label} model ${failed} is unavailable (${why}). The next suitable model, ${alt.model}, could cost up to ${formatInr(alt.maxInr)} per request instead of ${formatInr(choice.maxInr)}; more expensive fallbacks are OFF in Import Settings, so processing stopped. ${sent} Use Reconfigure Models for This Job to review it with its cost.`);
-  }
   return persistReplacement(input.jobId, sel, failed, choice, alt, why, pricier);
 }
 
@@ -429,21 +400,12 @@ async function replaceModel(input: AiCallInput, plan: ModelPlan, choice: TaskCho
 export const FALLBACK_SLACK = { ratio: 1.5, inr: 0.1 } as const;
 
 /**
- * Whether a slightly more expensive fallback may be used: within FALLBACK_SLACK of the job's model, within the
- * per-request limit, and within what is left of the job's confirmed maximum (spent + in flight + this request).
- * The reservation before the request checks all of it again (key reserve included); this only decides whether to try.
+ * Whether a fallback model may be used for one failed request: only when its price is known (its worst case is then
+ * reserved and recorded). No price allowance, per-request, job or key-reserve threshold applies (owner decision
+ * 2026-10-26); the confirmed maximum of every operation already includes one fallback per request.
  */
-export async function fallbackAllowance(jobId: string, primaryMaxInr: number | null, altMaxInr: number | null, settings: ImporterSettings): Promise<{ ok: boolean; reason: string }> {
+export async function fallbackAllowance(primaryMaxInr: number | null, altMaxInr: number | null): Promise<{ ok: boolean; reason: string }> {
   if (altMaxInr === null || primaryMaxInr === null) return { ok: false, reason: "its price is unknown" };
-  const slack = Math.max(primaryMaxInr * FALLBACK_SLACK.ratio, primaryMaxInr + FALLBACK_SLACK.inr);
-  if (altMaxInr > slack + 1e-9) return { ok: false, reason: `more than slightly more expensive (allowed up to ${formatInr(slack)} without the setting)` };
-  const cap = Math.min(settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
-  if (altMaxInr > cap + 1e-9) return { ok: false, reason: `above the per-request limit of ${formatInr(cap)}` };
-  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { budgetInr: true, spentInr: true } });
-  if (!job) return { ok: false, reason: "the import no longer exists" };
-  const inFlight = await prisma.$queryRaw<{ v: number }[]>`SELECT COALESCE(SUM("reservedInr"), 0)::float8 AS v FROM "AiBudgetReservation" WHERE "status" = 'RESERVED' AND "requestKey" LIKE ${`qi:${jobId}:%`}`;
-  const left = job.budgetInr - job.spentInr - (inFlight[0]?.v ?? 0);
-  if (altMaxInr > left + 0.005) return { ok: false, reason: `only ${formatInr(Math.max(0, left))} is left of this import's confirmed maximum` };
   return { ok: true, reason: "" };
 }
 
@@ -470,9 +432,9 @@ async function persistReplacement(jobId: string, sel: SelectionTask, failed: str
 
 /**
  * One priced, budgeted, privacy-constrained OpenRouter request, made with the model the job's frozen
- * plan chose for this task (job.config.modelPlan). Throws ImporterBudgetError (job pauses, nothing
- * sent), ImporterAiUnavailable (configuration / no affordable model), or ImporterAiFailure (provider
- * failed after its retry).
+ * plan chose for this task (job.config.modelPlan). Throws ImporterAiUnavailable (configuration, no usable
+ * model, emergency stop, credits exhausted at OpenRouter — the job pauses, nothing more is sent) or
+ * ImporterAiFailure (provider failed after its retry). No application spending cap stops it.
  */
 export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> {
   if (!input.settings.aiEnabled) throw new ImporterAiUnavailable("Paid AI processing is switched off in Import Settings.");
@@ -523,29 +485,18 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
     return { price: c.price, worstUsd, worstInr: usdToInr(worstUsd, fx.rate)!, typicalUsd: requestUsd(c.price, inputTokens, Math.round(input.maxOutputTokens * 0.4), images) };
   };
   let cost = priced(choice);
-  // The key's limit is shared with student Ask AI: keep the configured reserve untouched (fail closed).
-  // A key without a credit limit gives no way to guarantee that reserve, so it is refused too.
-  const keyInfo = await getKeyInfo(apiKey).catch(() => null);
-  if (!keyInfo) throw new ImporterAiUnavailable("The OpenRouter key's remaining credit could not be read, so nothing was sent.");
-  if (keyInfo.limit_remaining === null) {
-    throw new ImporterBudgetError(`The shared OpenRouter key has no credit limit, so the $${input.settings.budget.keyReserveUsd.toFixed(2)} kept for student Ask AI cannot be guaranteed. Nothing was sent — set a limit on the key at OpenRouter.`, "key");
-  }
   const requestId = crypto.randomUUID();
   const feature = importerFeature(input.task);
 
   let lastError: OpenRouterError | null = null;
   // One attempt; at most ONE retry, only after a transient error (any, when enabled; a dropped connection —
   // "terminated" — always) — never a loop, never after a timeout.
-  const attempts = 2;
+  const attempts = REQUEST_ATTEMPTS;
   let replacements = 0;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const requestCap = Math.min(input.settings.budget.maxRequestInr, PILOT_LIMITS.maxRequestInr);
-    if (cost.worstInr > requestCap) {
-      throw new ImporterBudgetError(`One ${input.task} request could cost up to ${formatInr(cost.worstInr)}, above the per-request limit of ${formatInr(requestCap)}.`, "request");
-    }
     const requested = choice.model!;
     const requestKey = `qi:${input.jobId}:${requestId}:${attempt}${replacements ? `r${replacements}` : ""}`;
-    await reserve({ jobId: input.jobId, requestKey, feature, amountInr: cost.worstInr, settings: input.settings, key: { remainingUsd: keyInfo.limit_remaining, fxRate: fx.rate } });
+    await reserve({ jobId: input.jobId, requestKey, feature, amountInr: cost.worstInr });
     const started = Date.now();
     try {
       const r = await chatCompletion({
@@ -589,9 +540,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       await log({ input, requestId, attempt, model: r.model, requested, ok: !outputProblem, latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, generationId: r.generationId, fallbackUsed, errorCategory: truncated ? "truncated" : empty ? "empty_response" : null, errorSummary: outputProblem });
       await patchOpenRouterState({ lastSuccessAt: new Date().toISOString() });
       rateLimitStreak.delete(input.jobId);
-      if (overrunInr > 0) {
-        throw new ImporterBudgetError(`A ${input.task} request cost ${formatInr(charged)}, more than its reserved maximum of ${formatInr(cost.worstInr)} (the provider billed more than the conservative bound). The charge is recorded in full and the job is paused — review the Cost Center before resuming.`, "overrun");
-      }
+      // A charge above the reserved worst case is recorded in full (settle) and logged; it never pauses the job.
+      if (overrunInr > 0) console.warn(`[ai-import] job ${input.jobId}: a ${input.task} request cost ${formatInr(charged)}, above its reserved maximum of ${formatInr(cost.worstInr)}`);
       if (outputProblem) throw new ImporterAiFailure(failureMessage("model_output", outputProblem), "model_output", r.model, charged);
       return { text: r.text, model: r.model, costInr: charged, inputTokens: r.inputTokens, outputTokens: r.outputTokens, fallbackUsed };
     } catch (error) {
@@ -618,6 +568,9 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         attempt--;
         continue;
       }
+      // Credits exhausted / key spending limit reached at OpenRouter: every model is served through the same key, so no
+      // fallback can help. The job pauses with the provider's reason; pages not yet read stay pending for Resume.
+      if (e.category === "insufficient_credits") throw new ImporterAiUnavailable(`OpenRouter refused the request: ${describeCategory(e.category)} No other model can be used with this key, so processing paused. Pages not read yet stay pending — add credit at OpenRouter, then click Resume.`);
       if (!TRANSIENT_OPENROUTER_ERRORS.includes(e.category)) break;
       if (!input.settings.budget.retryTransient && !DROPPED_CONNECTION.test(e.message)) break;
     }
@@ -640,8 +593,8 @@ export function resetOutputFailures(jobId: string): void {
 
 /**
  * The model one failed request is sent to instead: chosen by the same selection engine (importer list, vision,
- * routes, privacy, per-request limit; not the failed model, and for page reading / verification not the other
- * one), never more expensive per request unless Import Settings allow pricier fallbacks. Null + reason when none.
+ * routes, privacy; not the failed model, and for page reading / verification not the other one), whatever its
+ * price — the confirmed maximum already includes one fallback per request. Null + reason when none.
  */
 export async function outputFallback(input: AiCallInput, plan: ModelPlan, failed: string): Promise<{ alt: TaskChoice | null; reason: string; pricier: boolean }> {
   const sel = SELECTION_TASK_OF[input.task];
@@ -659,10 +612,8 @@ export async function outputFallback(input: AiCallInput, plan: ModelPlan, failed
     if (priced.tasks[sel].model === cross.id) alt = priced.tasks[sel];
   }
   const pricier = (alt.maxInr ?? Infinity) > (choice.maxInr ?? 0) + 1e-9;
-  if (pricier && !input.settings.budget.allowPricierFallback) {
-    const allowance = await fallbackAllowance(input.jobId, choice.maxInr, alt.maxInr, input.settings);
-    if (!allowance.ok) return { alt: null, reason: `the next suitable model, ${alt.model}, could cost up to ${formatInr(alt.maxInr)} per request instead of ${formatInr(choice.maxInr)}; ${allowance.reason}, and more expensive fallbacks are OFF in Import Settings`, pricier };
-  }
+  const allowance = await fallbackAllowance(choice.maxInr, alt.maxInr);
+  if (!allowance.ok) return { alt: null, reason: `the next suitable model, ${alt.model}: ${allowance.reason}`, pricier };
   return { alt, reason: alt.reason, pricier };
 }
 

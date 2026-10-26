@@ -1,10 +1,11 @@
 import "server-only";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
-import { IMAGE_TOKENS } from "@/lib/ai-import/ai";
+import { IMAGE_TOKENS, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import type { ImporterSettings, ImporterTask, SelectionTask, VerifyMode } from "@/lib/ai-import/config";
 import type { FileFacts } from "@/lib/ai-import/analyze";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
+import { fallbackMaxInr } from "@/lib/ai-import/select";
 import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
 
 /**
@@ -12,9 +13,9 @@ import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
  * the highest current OpenRouter price over the routes each model may use) and
  * the plan's USD→INR rate. `totalInr` is the typical ESTIMATE; `maxInr` is the
  * conservative MAXIMUM — every possible request at the reserved worst case
- * (full output limit, second reads of every AI page, a retry when enabled, and
- * the one re-send to another model after an unusable answer — ai.ts
- * importerAiCallChecked).
+ * (full output limit, second reads of every AI page, REQUEST_ATTEMPTS sends per
+ * request, and REQUEST_ATTEMPTS sends to a fallback model priced at the dearest
+ * eligible one — ai.ts importerAiCall / importerAiCallChecked).
  * Actual cost is what the provider reports per call (Cost Center).
  */
 
@@ -97,7 +98,8 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
     if (f.kind === "DOCX" || f.kind === "XLSX" || f.kind === "CSV") expectedQuestions += f.localQuestionCount;
   }
   const keyPages = input.keyFacts.reduce((a, f) => a + f.scannedPages, 0);
-  const attemptsPerRequest = settings.budget.retryTransient ? 2 : 1;
+  // Every send a request can make (the always-on retry after a dropped connection included).
+  const attemptsPerRequest = REQUEST_ATTEMPTS;
 
   // Typical cost uses the plan's prices; the maximum uses each task's reserved worst case per request.
   const line = (task: ImporterTask, sel: SelectionTask, label: string, vision: boolean, calls: number, inTok: number, outTok: number, maxCalls: number): EstimateLine => {
@@ -106,10 +108,10 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
     const pr = c?.price ?? null;
     const problem = !plan ? "no model plan" : !model ? c?.reason ?? "no model" : !pr ? "no price" : null;
     const usd = pr && model ? inTok * pr.prompt + outTok * pr.completion + calls * (pr.request + (vision ? IMAGE_TOKENS * pr.image : 0)) : null;
-    // Each request may be sent once more to another model after an unusable answer: at most the same per-request
-    // maximum (or the per-request limit when pricier fallbacks are allowed).
-    const fallbackInr = c?.maxInr === null || c?.maxInr === undefined ? null : settings.budget.allowPricierFallback ? Math.max(c.maxInr, settings.budget.maxRequestInr) : c.maxInr;
-    const maxInr = model && c?.maxInr !== null && c?.maxInr !== undefined && fallbackInr !== null ? maxCalls * (attemptsPerRequest * c.maxInr + fallbackInr) : null;
+    // Every send one request can make: REQUEST_ATTEMPTS to the job's model, and — after an unusable answer or an
+    // unavailable model — REQUEST_ATTEMPTS to a fallback, priced at the dearest eligible model of the task.
+    const fallbackInr = fallbackMaxInr(c);
+    const maxInr = model && c?.maxInr !== null && c?.maxInr !== undefined && fallbackInr !== null ? maxCalls * attemptsPerRequest * (c.maxInr + fallbackInr) : null;
     return { task, label, model, calls, inputTokens: inTok, outputTokens: outTok, usd, inr: usdToInr(usd, fx.rate), pricePerM: pr ? { prompt: pr.prompt * 1e6, completion: pr.completion * 1e6 } : null, problem: calls ? problem : null, maxCalls, maxInr: calls ? maxInr : 0 };
   };
 

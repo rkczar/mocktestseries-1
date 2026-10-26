@@ -8,7 +8,6 @@
 import "dotenv/config";
 import { prisma } from "@/lib/prisma";
 import { istDayMonth } from "@/lib/ai-engine/budget";
-import { DEFAULT_IMPORTER_SETTINGS } from "@/lib/ai-import/config";
 import { actualState, importerLedger, toPeriod } from "@/lib/ai-import/ledger";
 import { suggestModels, type ImporterModelOption } from "@/lib/ai-import/model-options";
 
@@ -35,7 +34,6 @@ async function cleanup(jobId: string | null) {
 }
 
 async function main() {
-  const settings = DEFAULT_IMPORTER_SETTINGS;
   const now = new Date();
   const { istDay, istMonth } = istDayMonth(now);
   const old = new Date(now.getTime() - 40 * 86_400_000);
@@ -63,7 +61,7 @@ async function main() {
   check("requests exist but no cost reported → unknown, even though actualInr is 0", actualState(toPeriod([{ status: "SETTLED", known: false, n: 2, reserved: 0.4, settled: 0.4 }])) === "unknown");
   check("released only (refused before any charge) → none", actualState(toPeriod([{ status: "RELEASED", known: true, n: 2, reserved: 0.4, settled: 0 }])) === "none");
 
-  const baseline = await importerLedger(settings, now);
+  const baseline = await importerLedger(now);
   const exam = await prisma.exam.findFirst({ select: { id: true } });
   const admin = await prisma.adminUser.findFirst({ select: { id: true } });
   if (!exam || !admin) throw new Error("scratch DB needs an exam and an admin");
@@ -104,7 +102,7 @@ async function main() {
     await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: "mockvision/fx-est", ok: true, latencyMs: 10, estCostInr: 1.5, costStatus: "unknown", actualCostInr: null, requestId: `${TAG}-11`, createdAt: new Date(dayStart.getTime() - 60_000) } });
     await prisma.aiGatewayCall.create({ data: { feature: "qimport_extract", provider: "openrouter", model: "mockvision/fx-est", ok: true, latencyMs: 10, estCostInr: 2.5, costStatus: "unknown", actualCostInr: null, requestId: `${TAG}-12`, createdAt: new Date(dayStart.getTime() + 86_400_000 + 60_000) } });
 
-    const L = await importerLedger(settings, now);
+    const L = await importerLedger(now);
     const d = (a: number, b: number) => a - b;
     check("today: actual ₹0.25 from the one reported cost", near(d(L.periods.today.actualInr, baseline.periods.today.actualInr), 0.25), L.periods.today);
     check("today: 3 unknown-cost requests with ₹1.20 held (not in actual)", L.periods.today.unknownRequests - baseline.periods.today.unknownRequests === 3 && near(d(L.periods.today.unknownHeldInr, baseline.periods.today.unknownHeldInr), 1.2));
@@ -112,7 +110,7 @@ async function main() {
     check("all time includes the deleted job's older spend (₹0.05)", near(d(L.periods.all.actualInr, baseline.periods.all.actualInr), 0.3));
     check("this month excludes the 40-day-old request", near(d(L.periods.month.actualInr, baseline.periods.month.actualInr), 0.25));
     check("another feature's ₹4 is not in any importer total", near(d(L.periods.all.committedInr, baseline.periods.all.committedInr), 0.25 + 0.6 + 0.7 + 0.05 + 0.3 + 0.6));
-    check("no job / monthly / all-time caps are reported, only the per-request limit (₹1)", JSON.stringify(L.limits) === JSON.stringify({ maxRequestInr: 1 }) && !("remaining" in L), L.limits);
+    check("no spending cap is reported (no per-request, job, monthly or all-time limit, no remaining balance)", JSON.stringify(L.limits) === "{}" && !("remaining" in L), L.limits);
 
     const job = L.jobs.find((j) => j.jobId === liveJob.id);
     check("per job: actual, unknown held, in flight and job estimate kept apart", !!job && near(job.actualInr, 0.25) && job.unknownRequests === 1 && near(job.heldInr, 0.6) && near(job.inflightInr, 0.7) && near(job.jobEstimateInr ?? NaN, 0.9) && job.requests === 3, job);
@@ -143,12 +141,12 @@ async function main() {
     check("estimated today: the total (₹0.50) covers exactly the 2 estimated importer calls of today", dCalls === 2 && near((L.estimates.todayInr ?? 0) - (baseline.estimates.todayInr ?? 0), 0.5), { dCalls, L: L.estimates, b: baseline.estimates });
     check("estimated today: the call without an estimate is counted apart, not in the total", dUnest === 1, { dUnest });
     check("estimated today: yesterday's and tomorrow's calls (IST) and the other feature's call are outside the window", near((L.estimates.todayInr ?? 0) - (baseline.estimates.todayInr ?? 0), 0.5) && dCalls === 2);
-    const empty = await importerLedger(settings, new Date(now.getTime() + 400 * 86_400_000));
+    const empty = await importerLedger(new Date(now.getTime() + 400 * 86_400_000));
     check("a day with no recorded call: no estimated calls, actual state none", empty.estimates.todayCalls === 0 && empty.estimates.todayInr === null && actualState(empty.periods.today) === "none", { e: empty.estimates, t: empty.periods.today });
   } finally {
     await cleanup(liveJob.id);
   }
-  const after = await importerLedger(settings, now);
+  const after = await importerLedger(now);
   check("fixture removed: ledger back to the baseline", near(after.periods.all.committedInr, baseline.periods.all.committedInr) && after.usage.calls === baseline.usage.calls);
 
   section("C. Model suggestions (empty importer list recovery)");

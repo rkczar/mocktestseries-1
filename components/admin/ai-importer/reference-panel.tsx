@@ -41,15 +41,8 @@ function ReferenceOcr({ jobId, refId, onDone }: { jobId: string; refId: string; 
   return (
     <div className="flex w-full flex-col gap-1 rounded border border-[var(--color-border)] p-2 text-xs" data-testid="reference-ocr-panel">
       <p>
-        {preview.pages.length} scanned page(s) with {preview.model ?? "no suitable model"} — estimated <b data-testid="reference-ocr-estimate">{inr(preview.estimateInr)}</b>, maximum <b data-testid="reference-ocr-max">{inr(preview.maxInr)}</b> (up to {inr(preview.perRequestMaxInr)} per page). The reading is evidence only: it never changes a question, an answer, a subject or an image.
+        {preview.pages.length} scanned page(s) with {preview.model ?? "no suitable model"} — estimated cost <b data-testid="reference-ocr-estimate">{inr(preview.estimateInr)}</b>, maximum cost <b data-testid="reference-ocr-max">{inr(preview.maxInr)}</b> (includes one retry per page{preview.fallbackModel ? ` and one fallback read with ${preview.fallbackModel}` : ""}). The reading is evidence only: it never changes a question, an answer, a subject or an image.
       </p>
-      <ul className="grid gap-0.5 sm:grid-cols-2" data-testid="reference-ocr-budgets">
-        {preview.budgets.map((b) => (
-          <li key={b.label} className={b.afterInr !== null && b.afterInr < -0.005 ? "text-[var(--color-error)]" : ""}>
-            {b.label}: limit {inr(b.limitInr)}{b.label === "Per request" ? "" : `, used ${inr(b.usedInr)}`}, left after this {inr(b.afterInr)}
-          </li>
-        ))}
-      </ul>
       {preview.problems.length > 0 && (
         <ul className="list-disc pl-5 text-[var(--color-error)]" data-testid="reference-ocr-problems">
           {preview.problems.map((p) => (
@@ -59,7 +52,7 @@ function ReferenceOcr({ jobId, refId, onDone }: { jobId: string; refId: string; 
       )}
       {note && <p className="text-[var(--color-warning)]" role="alert">{note}</p>}
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={pending || !preview.canRun || preview.maxInr === null} onClick={() => confirm(`Read ${preview.pages.length} scanned page(s) with paid OCR for at most ${inr(preview.maxInr)}?`) && start(async () => {
+        <Button size="sm" disabled={pending || !preview.canRun || preview.maxInr === null} onClick={() => start(async () => {
           const x = await callImporter(() => referenceOcrStartAction(jobId, refId, preview.maxInr));
           if (!x.ok) return onDone(x.error ?? "Failed", false);
           if (x.data.started) {
@@ -71,7 +64,7 @@ function ReferenceOcr({ jobId, refId, onDone }: { jobId: string; refId: string; 
             setNote(x.data.reason);
           }
         })} data-testid="reference-ocr-confirm">
-          Confirm maximum {inr(preview.maxInr)} and read
+          Confirm &amp; Continue
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>
           Cancel

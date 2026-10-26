@@ -23,7 +23,7 @@ import { AUTO_TASKS, AUTO_TASK_ENGINE, AUTO_TASK_LABELS, type AutoChange, type A
  * routes are read from OpenRouter now (free public metadata, kept in memory —
  * a preview saves nothing), and the selection engine's own checks
  * (lib/ai-import/select.ts evaluateModel/choose: serving route, ZDR, readable
- * prices, output limit, conservative maximum within the per-request limit)
+ * prices, output limit, conservative maximum)
  * decide. No AI request is ever sent, whether Paid AI is on or off, and
  * capability is never inferred from a model's name. Quality is "Not tested".
  *
@@ -175,7 +175,7 @@ async function build(saved: ImporterSettings): Promise<Built> {
     eligibleOf[t].sort((a, b) => (t === "verify" && pick.extract ? Number(vendor(a) === vendor(pick.extract)) - Number(vendor(b) === vendor(pick.extract)) : 0) || maxOf.get(a)! - maxOf.get(b)! || a.localeCompare(b));
     pick[t] = eligibleOf[t][0] ?? null;
   }
-  if (!pick.extract && !blocking.length) blocking.push(`No model is suitable for page reading (scanned pages and formulas need a model that reads images, has a verified route accepting the importer's request parameters, a known non-zero price within the per-request limit and meets the privacy settings). Checked: ${why.extract.slice(0, 4).join("; ") || "no candidate"}. Nothing can be applied — add such a model to the catalog's importer candidates, or review the per-request limit yourself; limits are never raised automatically.`);
+  if (!pick.extract && !blocking.length) blocking.push(`No model is suitable for page reading (scanned pages and formulas need a model that reads images, has a verified route accepting the importer's request parameters, a known non-zero price and meets the privacy settings). Checked: ${why.extract.slice(0, 4).join("; ") || "no candidate"}. Nothing can be applied — add such a model to the catalog's importer candidates.`);
 
   // 5. The proposed settings. Budgets, Paid AI and privacy are copied unchanged.
   const picks = [...new Set(PICK_ORDER.map((t) => pick[t]).filter((x): x is string => !!x))];
@@ -213,7 +213,7 @@ async function build(saved: ImporterSettings): Promise<Built> {
     const o = option(c.model);
     if (c.maxInr === null) return { state: "unknown", maxInr: null, text: "Unknown — not priced (never treated as ₹0.00)." };
     if (o && publishedZero(o) && c.maxInr === 0) return { state: "zero", maxInr: 0, text: "₹0.00 per request — a published free price (known zero); free routes have tight shared rate limits." };
-    return { state: "published", maxInr: c.maxInr, text: `Up to ${formatInr(c.maxInr, 4)} per request (conservative maximum over its verified routes, incl. the price margin; limit ${formatInr(proposed.budget.maxRequestInr)}).` };
+    return { state: "published", maxInr: c.maxInr, text: `Up to ${formatInr(c.maxInr, 4)} per request (conservative maximum over its verified routes, incl. the price margin).` };
   };
   const privacyOf = (c: TaskChoice | undefined): AutoTaskRow["privacy"] =>
     !c?.model
@@ -300,14 +300,14 @@ async function build(saved: ImporterSettings): Promise<Built> {
     change("models.verify", "Independent verification", m(saved.models.verify), m(proposed.models.verify), "See the task table."),
     change("models.classify", "Topic and subject classification", m(saved.models.classify), m(proposed.models.classify), "See the task table."),
     change("models.extractFallbacks", "Fallback page-reading models", saved.models.extractFallbacks.join(", ") || "none", "none", "No fallback is added automatically."),
-    change("budget.allowPricierFallback", "More expensive fallback", yes(saved.budget.allowPricierFallback), "Off", "Never enabled automatically: when a model becomes unavailable, processing stops and says why instead of switching to a pricier model."),
+    change("budget.allowPricierFallback", "More expensive fallback", yes(saved.budget.allowPricierFallback), "Off", "Not used since 2026-10-26: a failed request is always sent once to the next suitable model, whatever its price — each operation's confirmed maximum already includes that fallback."),
     change("limits.concurrency", "Parallel AI requests per job", String(saved.limits.concurrency), String(proposed.limits.concurrency), proposed.limits.concurrency < saved.limits.concurrency ? "A chosen model was rate-limited recently: one request at a time." : "Unchanged (never increased automatically)."),
     change("limits.renderDpi", "Page render resolution (OCR)", `${saved.limits.renderDpi} DPI`, `${proposed.limits.renderDpi} DPI`, proposed.limits.renderDpi > saved.limits.renderDpi ? `Scanned pages are read more reliably at ${OCR_MIN_DPI} DPI; page images stay capped at 1600 px, so the cost per page does not change.` : "Unchanged."),
     change("verification.independentAnswer", "Independent answer opinion", yes(saved.verification.independentAnswer), yes(proposed.verification.independentAnswer), proposed.verification.independentAnswer !== saved.verification.independentAnswer ? "No verification model qualified, so it cannot run." : "Unchanged (it adds a request per question, so it is never switched on automatically)."),
     change("verification.secondReadBelow", "Second read below confidence", String(saved.verification.secondReadBelow), String(proposed.verification.secondReadBelow), "Unchanged."),
     change("budget.retryTransient", "Retry after a transient provider error", yes(saved.budget.retryTransient), yes(proposed.budget.retryTransient), "Unchanged. Failed pages are recovered with Retry failed pages (an explicit action); the rate-limit circuit breaker stays on."),
     change("aiEnabled", "Paid AI", yes(saved.aiEnabled), yes(proposed.aiEnabled), "Never changed here: Paid AI is switched separately by an administrator."),
-    change("budget", "Budgets", `₹${saved.budget.maxRequestInr}/request, $${saved.budget.keyReserveUsd} Ask AI reserve`, "unchanged", "Never raised automatically."),
+    change("budget", "Spending caps", "none", "none", "The importer has no application spending cap; each operation's estimate and maximum are confirmed once."),
     change("privacy", "Privacy", `ZDR ${saved.privacy.zdr ? "required" : "not required"}, data collection ${saved.privacy.dataCollection}`, "unchanged", "Never changed automatically; every chosen model meets it."),
   ];
 
@@ -330,7 +330,7 @@ async function build(saved: ImporterSettings): Promise<Built> {
     baselineKey: "",
     proposalKey: hash(proposed),
     blocking,
-    untouched: ["Paid AI switch", "the per-request limit, the Ask AI reserve and the spending so far", "privacy settings", "student Ask AI", "Instagram AI", "AI → Models approvals", "payments and Premium", "existing import jobs (each keeps its confirmed models)"],
+    untouched: ["Paid AI switch", "the spending so far", "privacy settings", "student Ask AI", "Instagram AI", "AI → Models approvals", "payments and Premium", "existing import jobs (each keeps its confirmed models)"],
   };
   return { preview, snapshot: keep(fresh) };
 }
