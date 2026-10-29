@@ -20,6 +20,7 @@ export const AI_FEATURES = [
   { key: "ig_carousel", label: "Instagram Carousel Content", group: "Instagram" },
   { key: "ig_trap", label: "Examiner Trap Generation", group: "Instagram" },
   { key: "ig_diagram", label: "Medical Diagram Planning", group: "Instagram" },
+  { key: "ig_topic", label: "Topic / Custom Post Generation", group: "Instagram" },
   { key: "ig_caption", label: "Caption Generation", group: "Instagram" },
   { key: "ig_hashtags", label: "Hashtag Generation", group: "Instagram" },
   { key: "ig_keywords", label: "Keyword Research", group: "Instagram" },

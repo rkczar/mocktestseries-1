@@ -108,7 +108,7 @@ export async function featurePreview(): Promise<Record<string, FeaturePreview>> 
       out[key] = { model: cfg.mode === "manual" ? cfg.model : (pick?.model.id ?? null), candidates: c.map((x) => x.model.id), note: c.length ? null : "no approved image model", typicalUsd: pick?.maxUsd ?? null, maxUsd: pick?.maxUsd ?? null };
     } else {
       const maxOut = cfg.maxOutputTokens ?? def.defaultMaxOutputTokens;
-      const c = await textCandidates(key as AiFeature, def.typicalInputTokens, maxOut, Math.round(maxOut / 2));
+      const c = await textCandidates(key as AiFeature, def.typicalInputTokens, maxOut, Math.round(maxOut / 2), { mode: cfg.mode });
       const pick = cfg.mode === "manual" ? c.find((x) => x.model.id === cfg.model) : cfg.mode === "auto" ? c.reduce<(typeof c)[number] | undefined>((a, x) => (!a || x.maxUsd > a.maxUsd ? x : a), undefined) : c[0];
       out[key] = {
         model: cfg.mode === "manual" ? cfg.model : cfg.mode === "auto" ? "openrouter/auto" : (pick?.model.id ?? null),

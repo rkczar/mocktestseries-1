@@ -13,6 +13,7 @@ import {
   type SeriesStats,
   type SourceSnapshot,
 } from "@/lib/instagram/types";
+import { extractJsonObject } from "@/lib/ai-engine/structured";
 
 /**
  * Pure prompt builder + response validator for the Instagram AI generator
@@ -129,16 +130,10 @@ export interface ParsedAiResult {
   fatal?: string;
 }
 
-function extractJson(text: string): unknown {
-  const cleaned = text.replace(/```(?:json)?/gi, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1));
-  } catch {
-    return null;
-  }
+function extractJson(text: string): Record<string, unknown> | null {
+  // Shared structural reader (lib/ai-engine/structured.ts): one object, fences/chatter tolerated, never two objects glued.
+  const r = extractJsonObject(text);
+  return r.ok ? r.value : null;
 }
 
 function capCheck(value: string, max: number): string | null {

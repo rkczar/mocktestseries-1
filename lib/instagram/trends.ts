@@ -7,6 +7,7 @@ import { listPublishedPerformance } from "@/lib/instagram/metrics";
 import { EXCLUDED_TERMS } from "@/lib/instagram/exam-scope";
 import { StudioError } from "@/lib/instagram/posts";
 import type { TrendEvidence } from "@/lib/instagram/ai-studio-core";
+import { extractJsonObject } from "@/lib/ai-engine/structured";
 
 /**
  * Trends & Competitors — evidence only.
@@ -195,15 +196,9 @@ export interface TrendReportResult {
 }
 
 function extractJson(text: string): Record<string, unknown> | null {
-  const cleaned = text.replace(/```(?:json)?/gi, "").trim();
-  const a = cleaned.indexOf("{");
-  const b = cleaned.lastIndexOf("}");
-  if (a < 0 || b <= a) return null;
-  try {
-    return JSON.parse(cleaned.slice(a, b + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  // Shared structural reader (lib/ai-engine/structured.ts): one object, fences/chatter tolerated, never two objects glued.
+  const r = extractJsonObject(text);
+  return r.ok ? r.value : null;
 }
 
 /** Keeps only items that cite at least one real evidence id. */
@@ -239,7 +234,7 @@ export async function runTrendAnalysis(params: { actorId: string; examId: string
     'Return ONLY JSON: {"evidenceBacked": [{"topic":"...","why":"...","evidence":["id"]}], "emerging": [...], "evergreen": [...], "examSeason": [...], "note": "one sentence on evidence limits"}',
     "Definitions: evidenceBacked = topics with strong current evidence; emerging = rising in recent evidence; evergreen = consistently high-yield (e.g. many stored PYQs); examSeason = tied to an upcoming exam only if the evidence says so.",
   ].join("\n");
-  const r = await generateForFeature("ig_trends", prompt, { temperature: 0.2, maxOutputTokens: 2000 }, { actorId: params.actorId, providerOverride: params.provider ?? null, quoteId: params.quoteId, modelOverride: params.modelOverride });
+  const r = await generateForFeature("ig_trends", prompt, { temperature: 0.2, maxOutputTokens: 2000, json: true, check: (t) => (parseTrendReport(t, evidence) ? { ok: true } : { ok: false, category: "schema_invalid", message: "The trend report had no usable items citing the evidence." }) }, { actorId: params.actorId, providerOverride: params.provider ?? null, quoteId: params.quoteId, modelOverride: params.modelOverride });
   const parsed = parseTrendReport(r.text, evidence);
   if (!parsed) throw new StudioError("The AI response was not valid JSON. Nothing was saved.");
   return prisma.instagramInsightReport.create({
@@ -264,7 +259,7 @@ export async function runCompetitorAnalysis(params: { actorId: string; provider?
     "",
     'Return ONLY JSON: {"patterns": [{"observation":"...","evidence":["ref:..."]}], "contentGaps": [{"idea":"...","evidence":["ref:..."]}], "captionStyles": [{"style":"...","evidence":["ref:..."]}], "note": "limits of this evidence"}',
   ].join("\n");
-  const r = await generateForFeature("ig_competitors", prompt, { temperature: 0.2, maxOutputTokens: 2000 }, { actorId: params.actorId, providerOverride: params.provider ?? null, quoteId: params.quoteId, modelOverride: params.modelOverride });
+  const r = await generateForFeature("ig_competitors", prompt, { temperature: 0.2, maxOutputTokens: 2000, json: true }, { actorId: params.actorId, providerOverride: params.provider ?? null, quoteId: params.quoteId, modelOverride: params.modelOverride });
   const d = extractJson(r.text);
   if (!d) throw new StudioError("The AI response was not valid JSON. Nothing was saved.");
   const ids = new Set(refs.map((x) => `ref:${x.id}`));

@@ -8,7 +8,7 @@ import { synthesizeSpeech, transcribeAudio } from "@/lib/ai-engine/speech";
 import { audioHash, workerKit } from "@/lib/video-studio/pipeline";
 import { composeSkillInstructions } from "@/lib/video-studio/skills";
 import { getVideoSettings } from "@/lib/video-studio/settings";
-import { extractJson } from "@/lib/video-studio/script";
+import { extractJson, throwingCheck } from "@/lib/video-studio/script";
 import { RENDER_FONT_BASE, RENDER_FONT_ORIGIN } from "@/lib/video-studio/render-manifest";
 import { runRenderTask } from "@/lib/video-studio/render-runner";
 import { imageDataUri, readAssets } from "@/lib/video-studio/assets";
@@ -86,7 +86,8 @@ async function runMotionScript(job: VideoJob) {
   const prompt = buildMotionPrompt(cfg, style, questions, composeSkillInstructions(cfg.skillKeys).text, settings.brand.cta);
   const quoteId = job.quoteIds[job.quoteIds.length - 1] ?? null;
   await addEvent(job.id, null, "script_started", `Writing the script and storyboard (${style.name}).`);
-  const r = await generateTextViaOpenRouter("video_script", prompt, { temperature: 0.5, maxOutputTokens: ENGINE_FEATURE_MAP.video_script.defaultMaxOutputTokens }, { actorId: job.confirmedById, quoteId });
+  const imageAssets = readAssets(job).filter((a) => a.kind === "image" && a.state === "ready");
+  const r = await generateTextViaOpenRouter("video_script", prompt, { temperature: 0.5, maxOutputTokens: ENGINE_FEATURE_MAP.video_script.defaultMaxOutputTokens, json: true, check: throwingCheck((t) => parseMotionAnswer(extractJson(t), cfg, questions, imageAssets, strip)) }, { actorId: job.confirmedById, quoteId });
   await recomputeJobCost(job.id);
   let parsed;
   try {

@@ -1,4 +1,5 @@
 import "server-only";
+import type { OutputCheck } from "@/lib/ai-engine/structured";
 import { getAiSettings, type AiProviderName } from "@/lib/ai-settings";
 import { getGeminiApiKey, getGeminiConfig, getGeminiModelCandidates, recordGeminiModelResult } from "@/lib/gemini-config";
 import { getOpenAiApiKey, getOpenAiConfig } from "@/lib/openai-config";
@@ -39,6 +40,11 @@ export interface AiGenerationResult {
   model: string;
   /** Token usage when the provider reported it (used for the AI Gateway usage/cost log). */
   usage?: { inputTokens: number | null; outputTokens: number | null };
+  /** Correlation id shared by every AiGatewayCall row of this request (AI Engine). */
+  requestId?: string;
+  /** Provider attempts made (AI Engine), and whether a model other than the first choice answered. */
+  attempts?: number;
+  fallbackUsed?: boolean;
 }
 
 type Usage = NonNullable<AiGenerationResult["usage"]>;
@@ -46,6 +52,13 @@ type Usage = NonNullable<AiGenerationResult["usage"]>;
 export interface AiGenerationOptions {
   temperature: number;
   maxOutputTokens: number;
+  /** The caller expects one JSON object: JSON mode is requested on models that support it (AI Engine). */
+  json?: boolean;
+  /**
+   * Output check (lib/ai-engine/structured.ts). An answer that fails it is a failed attempt — logged with its
+   * category, never returned — and the AI Engine tries the next compatible model.
+   */
+  check?: OutputCheck;
 }
 
 interface ResolvedProvider {
@@ -192,13 +205,20 @@ async function callGeminiWithModelFallback(
   apiKey: string,
   models: string[],
   opts: AiGenerationOptions,
-  timeoutMs?: number
+  timeoutMs?: number,
+  deadlineAt?: number
 ): Promise<{ text: string; model: string; usage?: Usage }> {
   let lastError: Error | null = null;
   for (const model of models) {
     const startedAt = Date.now();
+    // Whole-request deadline (OpenRouter → Gemini fallback): no model is started without a few seconds left.
+    const left = deadlineAt === undefined ? null : deadlineAt - startedAt;
+    if (left !== null && left < 4_000) {
+      lastError ??= new GeminiModelError("timeout", "No time left for Gemini within this request's limit.");
+      break;
+    }
     try {
-      const { text, usage } = await callGeminiModel(prompt, apiKey, model, opts, timeoutMs);
+      const { text, usage } = await callGeminiModel(prompt, apiKey, model, opts, left === null ? timeoutMs : Math.min(timeoutMs ?? REQUEST_TIMEOUT_MS, left));
       await recordGeminiModelResult(model, { ok: true, latencyMs: Date.now() - startedAt });
       return { text, model, usage };
     } catch (error) {
@@ -250,9 +270,9 @@ async function callOpenAi(prompt: string, apiKey: string, model: string, opts: A
   return { text: data.choices?.[0]?.message?.content ?? "", usage: { inputTokens: data.usage?.prompt_tokens ?? null, outputTokens: data.usage?.completion_tokens ?? null } };
 }
 
-async function callProvider(resolved: ResolvedProvider, prompt: string, opts: AiGenerationOptions, timeoutMs?: number): Promise<{ text: string; model: string; usage?: Usage }> {
+async function callProvider(resolved: ResolvedProvider, prompt: string, opts: AiGenerationOptions, timeoutMs?: number, deadlineAt?: number): Promise<{ text: string; model: string; usage?: Usage }> {
   if (resolved.name === "gemini") {
-    return callGeminiWithModelFallback(prompt, resolved.apiKey, resolved.models, opts, timeoutMs);
+    return callGeminiWithModelFallback(prompt, resolved.apiKey, resolved.models, opts, timeoutMs, deadlineAt);
   }
   const { text, usage } = await callOpenAi(prompt, resolved.apiKey, resolved.models[0], opts, timeoutMs);
   return { text, model: resolved.models[0], usage };
@@ -273,13 +293,13 @@ export async function generateWithSingleProvider(
   name: AiProviderName,
   prompt: string,
   opts: AiGenerationOptions,
-  o: { model?: string; timeoutMs?: number } = {}
+  o: { model?: string; timeoutMs?: number; deadlineAt?: number } = {}
 ): Promise<AiGenerationResult> {
   await assertAiGenerationOpen();
   const resolved = await resolveProvider(name);
   if (!resolved) throw new AiNotConfiguredError(`${name === "gemini" ? "Gemini" : "OpenAI"} is not configured or is disabled.`);
   const target = o.model ? { ...resolved, models: [o.model] } : resolved;
-  const { text, model, usage } = await callProvider(target, prompt, opts, o.timeoutMs);
+  const { text, model, usage } = await callProvider(target, prompt, opts, o.timeoutMs, o.deadlineAt);
   return { text, provider: name, model, usage };
 }
 

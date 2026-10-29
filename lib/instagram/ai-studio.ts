@@ -7,6 +7,7 @@ import { examProfile } from "@/lib/instagram/exam-scope";
 import { StudioError } from "@/lib/instagram/posts";
 import { TRAP_PROMPT_VERSION, buildSolvePrompt, buildTrapPrompt, checkTrap, parseSolve, parseTrap, trapChecks } from "@/lib/instagram/trap";
 import type { ContentOrigin, DiagramKind, PostContent, SourceSnapshot, TrapVariant } from "@/lib/instagram/types";
+import { STRUCTURED_MESSAGES, extractJsonObject, type OutputCheck } from "@/lib/ai-engine/structured";
 
 /**
  * AI Studio generation (diagram, examiner trap, caption versions). Every call
@@ -16,7 +17,16 @@ import type { ContentOrigin, DiagramKind, PostContent, SourceSnapshot, TrapVaria
  * The provider call is injectable for tests.
  */
 
-export type StudioGenerator = (feature: AiFeature, prompt: string, opts: { temperature: number; maxOutputTokens: number }) => Promise<AiGenerationResult>;
+export type StudioGenerator = (feature: AiFeature, prompt: string, opts: { temperature: number; maxOutputTokens: number; json?: boolean; check?: OutputCheck }) => Promise<AiGenerationResult>;
+
+/** Engine output check from a parser: the answer is usable when the parser accepts it (verdicts, prose, cut-off JSON move to the next model). */
+function parsedBy(ok: (text: string) => boolean, what: string): OutputCheck {
+  return (text) => {
+    const j = extractJsonObject(text);
+    if (!j.ok) return { ok: false, category: j.category, message: j.message };
+    return ok(text) ? { ok: true } : { ok: false, category: "schema_invalid", message: `${STRUCTURED_MESSAGES.schema_invalid} (${what})` };
+  };
+}
 
 export function gatewayGenerator(ctx: { actorId?: string | null; provider?: GatewayProvider | null; quoteId?: string | null; modelOverride?: string | null; instagramPostId?: string | null }): StudioGenerator {
   return (feature, prompt, opts) =>
@@ -28,7 +38,7 @@ const origin = (r: AiGenerationResult, promptVersion: string): ContentOrigin => 
 export async function generateDiagram(params: { snapshot: SourceSnapshot; content: PostContent; kind: DiagramKind | "auto"; instruction?: string; gen: StudioGenerator }): Promise<{ content: PostContent; summary: string }> {
   const profile = examProfile(params.snapshot.examName, params.snapshot.examCode);
   const prompt = buildDiagramPrompt({ snapshot: params.snapshot, explanation: params.content.explanation, kind: params.kind, profile, instruction: params.instruction });
-  const r = await params.gen("ig_diagram", prompt, { temperature: 0.3, maxOutputTokens: 1800 });
+  const r = await params.gen("ig_diagram", prompt, { temperature: 0.3, maxOutputTokens: 1800, json: true, check: parsedBy((t) => parseDiagram(t, params.snapshot, params.kind).ok, "diagram") });
   const parsed = parseDiagram(r.text, params.snapshot, params.kind);
   if (!parsed.ok) throw new StudioError(`${parsed.error} Nothing was changed.`);
   const content: PostContent = {
@@ -42,7 +52,7 @@ export async function generateDiagram(params: { snapshot: SourceSnapshot; conten
 export async function generateTrap(params: { snapshot: SourceSnapshot; content: PostContent; instruction?: string; gen: StudioGenerator }): Promise<{ content: PostContent; summary: string }> {
   const s = params.snapshot;
   const profile = examProfile(s.examName, s.examCode);
-  const r = await params.gen("ig_trap", buildTrapPrompt({ snapshot: s, explanation: params.content.explanation, profile, instruction: params.instruction }), { temperature: 0.7, maxOutputTokens: 1600 });
+  const r = await params.gen("ig_trap", buildTrapPrompt({ snapshot: s, explanation: params.content.explanation, profile, instruction: params.instruction }), { temperature: 0.7, maxOutputTokens: 1600, json: true, check: parsedBy((t) => parseTrap(t).ok, "four options, one correct") });
   const parsed = parseTrap(r.text);
   if (!parsed.ok) throw new StudioError(`${parsed.error} Nothing was changed.`);
   const structural = checkTrap({ ...parsed.trap, status: "draft", checks: [] });
@@ -51,7 +61,7 @@ export async function generateTrap(params: { snapshot: SourceSnapshot; content: 
   // Independent blind re-solve (no key shown) — a disagreement is flagged, never silently accepted.
   let solve: ReturnType<typeof parseSolve> = null;
   try {
-    const sr = await params.gen("ig_trap", buildSolvePrompt(parsed.trap), { temperature: 0, maxOutputTokens: 300 });
+    const sr = await params.gen("ig_trap", buildSolvePrompt(parsed.trap), { temperature: 0, maxOutputTokens: 300, json: true, check: parsedBy((t) => parseSolve(t) !== null, "answer letter") });
     solve = parseSolve(sr.text);
   } catch {
     solve = null;
@@ -80,7 +90,7 @@ export async function generateCaptions(params: {
 }): Promise<{ content: PostContent; summary: string; evidenceUsed: string[] }> {
   const profile = examProfile(params.snapshot.examName, params.snapshot.examCode);
   const prompt = buildCaptionPrompt({ snapshot: params.snapshot, content: params.content, profile, evidence: params.evidence, instruction: params.instruction, websiteLabel: params.websiteLabel });
-  const r = await params.gen("ig_caption", prompt, { temperature: 0.7, maxOutputTokens: 2600 });
+  const r = await params.gen("ig_caption", prompt, { temperature: 0.7, maxOutputTokens: 2600, json: true, check: parsedBy((t) => !("error" in parseCaptions(t, params.snapshot, params.allowedDomains, params.evidence)), "caption versions") });
   const parsed = parseCaptions(r.text, params.snapshot, params.allowedDomains, params.evidence);
   if ("error" in parsed) throw new StudioError(`${parsed.error} Nothing was changed.`);
   if (!parsed.variants.length) throw new StudioError(`All three caption versions were rejected (${parsed.rejected.map((x) => `${x.style}: ${x.reason}`).join("; ")}). Nothing was changed.`);

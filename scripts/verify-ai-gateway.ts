@@ -50,6 +50,8 @@ const thrown = async (fn: () => Promise<unknown>) => {
 
 async function resetSettings() {
   await prisma.setting.deleteMany({ where: { key: { in: ["api.anthropic", "ai.gateway"] } } });
+  // These checks cover the direct Claude / OpenAI routes (rollback path): since 2026-10-29 they are off at runtime by default.
+  await (await import("@/lib/ai-engine/settings")).saveRuntime({ geminiFallback: true, directClaudeOpenAi: true });
   await prisma.aiGatewayCall.deleteMany({});
 }
 

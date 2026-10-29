@@ -19,6 +19,7 @@ import {
   type SourceSnapshot,
 } from "@/lib/instagram/types";
 import { normalizeEquivalent } from "@/lib/instagram/text-normalize";
+import { extractJsonObject } from "@/lib/ai-engine/structured";
 
 /**
  * Pure prompt builders + response validators for the AI Studio features that
@@ -31,15 +32,9 @@ export const DIAGRAM_PROMPT_VERSION = "ig-diagram-v1";
 export const CAPTION_PROMPT_VERSION = "ig-captions-v1";
 
 function extractJson(text: string): Record<string, unknown> | null {
-  const cleaned = text.replace(/```(?:json)?/gi, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  // Shared structural reader (lib/ai-engine/structured.ts): one object, fences/chatter tolerated, never two objects glued.
+  const r = extractJsonObject(text);
+  return r.ok ? r.value : null;
 }
 
 function sourceBlock(s: SourceSnapshot, explanation: string): string[] {

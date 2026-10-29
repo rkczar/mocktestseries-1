@@ -5,7 +5,7 @@ import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { assertAiGenerationOpen, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
 import { generateForFeature, isFeatureConfigured } from "@/lib/ai-gateway";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
-import { AiGenerationInProgressError, STALE_GENERATION_MS, validateExplanationContent, isTruncatedOrMalformedJson, type ExplanationContent, type QuestionForExplanation } from "@/lib/ai-explanation";
+import { AiGenerationInProgressError, STALE_GENERATION_MS, validateExplanationContent, isTruncatedOrMalformedJson, explanationCheck, type ExplanationContent, type QuestionForExplanation } from "@/lib/ai-explanation";
 import { EXPLANATION_VARIANTS, getVariantDef, type ExplanationVariantDef } from "@/lib/ai-explanation-variants-catalog";
 
 export { EXPLANATION_VARIANTS, getVariantDef, type ExplanationVariantDef };
@@ -77,8 +77,8 @@ async function loadCanonicalQuestion(questionId: string): Promise<QuestionForExp
 async function runAndPersist(questionId: string, variant: ExplanationVariantDef, question: QuestionForExplanation, settings: AiSettings) {
   const key = { questionId_variantId: { questionId, variantId: variant.id } };
   try {
-    const result: AiGenerationResult = await generateForFeature("explanation", buildVariantPrompt(question, settings, variant), { temperature: 0.4, maxOutputTokens: 1400 });
-    if (isTruncatedOrMalformedJson(result.text)) {
+    const result: AiGenerationResult = await generateForFeature("explanation", buildVariantPrompt(question, settings, variant), { temperature: 0.4, maxOutputTokens: 1400, json: true, check: explanationCheck });
+    if (isTruncatedOrMalformedJson(result.text) || !explanationCheck(result.text).ok) {
       throw new Error("AI returned truncated or malformed JSON (likely hit the output token limit) — please retry.");
     }
     const content = validateExplanationContent(result.text);

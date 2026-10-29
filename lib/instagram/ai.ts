@@ -6,6 +6,7 @@ import { checkText } from "@/lib/instagram/content-safety";
 import { IG_PROMPT_VERSION, buildPrompt, correctLabels, parseAiResponse } from "@/lib/instagram/ai-core";
 import type { AiReference } from "@/lib/instagram/snapshot";
 import { CONTENT_FIELD_LABELS, LIMITS, type ContentField, type PostContent, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
+import { jsonCheck, nonEmptyString, type OutputCheck } from "@/lib/ai-engine/structured";
 
 /**
  * Instagram content generation through the AI Gateway (lib/ai-gateway.ts,
@@ -16,7 +17,14 @@ import { CONTENT_FIELD_LABELS, LIMITS, type ContentField, type PostContent, type
  * AI explanation cache.
  */
 
-export type Generator = (prompt: string, opts: { temperature: number; maxOutputTokens: number }) => Promise<AiGenerationResult>;
+export type Generator = (prompt: string, opts: { temperature: number; maxOutputTokens: number; json?: boolean; check?: OutputCheck }) => Promise<AiGenerationResult>;
+
+/**
+ * Output check for carousel content: one JSON object that echoes an answer label. An unusable answer (verdict,
+ * prose, cut off) moves the AI Engine to the next compatible model. A model that DISAGREES with the stored key is
+ * not retried elsewhere — that is reported to the admin by parseAiResponse with nothing changed.
+ */
+export const carouselCheck: OutputCheck = jsonCheck((obj) => (nonEmptyString(obj.answerLabel, 20) ? null : 'The "answerLabel" field is missing.'));
 
 export interface GenerationOutcome {
   content: PostContent;
@@ -51,7 +59,7 @@ export async function generateContent(params: {
     reference: params.reference,
   });
   const gen: Generator = params.generator ?? ((prompt, opts) => generateForFeature("ig_carousel", prompt, opts, { actorId: params.actorId, providerOverride: params.provider ?? null, ...params.engine }));
-  const result = await gen(prompt, { temperature: params.instruction ? 0.6 : 0.5, maxOutputTokens: 3000 });
+  const result = await gen(prompt, { temperature: params.instruction ? 0.6 : 0.5, maxOutputTokens: 3000, json: true, check: carouselCheck });
   const parsed = parseAiResponse(result.text, params.snapshot, params.targets, params.allowedDomains);
   if (parsed.fatal) throw new Error(parsed.fatal);
 

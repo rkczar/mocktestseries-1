@@ -40,7 +40,11 @@ export type OpenRouterErrorCategory =
   | "network"
   | "bad_request"
   | "empty_response"
-  | "truncated";
+  | "truncated"
+  // Output checks (lib/ai-engine/structured.ts): the call worked but the answer is unusable.
+  | "invalid_json"
+  | "non_answer"
+  | "schema_invalid";
 
 export const TRANSIENT_OPENROUTER_ERRORS: OpenRouterErrorCategory[] = ["rate_limited", "provider_error", "network"];
 
@@ -50,10 +54,21 @@ export class OpenRouterError extends Error {
     message: string,
     public status: number | null = null,
     /** Set when the provider reported a generation id even though the call failed (cost may exist). */
-    public generationId: string | null = null
+    public generationId: string | null = null,
+    /** Provider's Retry-After (429 / 503), in ms; null when not sent. */
+    public retryAfterMs: number | null = null
   ) {
     super(message);
   }
+}
+
+/** Retry-After header: delta-seconds or an HTTP date. Bounded to 5 minutes; null when absent or unreadable. */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | null {
+  if (!value) return null;
+  const v = value.trim();
+  if (/^\d+(\.\d+)?$/.test(v)) return Math.min(300_000, Math.round(Number(v) * 1000));
+  const at = Date.parse(v);
+  return Number.isFinite(at) ? Math.min(300_000, Math.max(0, at - now)) : null;
 }
 
 export function sanitize(message: string): string {
@@ -111,15 +126,22 @@ export function describeCategory(c: OpenRouterErrorCategory): string {
       return "The model returned an empty response.";
     case "truncated":
       return "The model's output was cut off at the token limit.";
+    case "invalid_json":
+      return "The model's answer was not valid JSON.";
+    case "non_answer":
+      return "The model returned a classification verdict instead of an answer.";
+    case "schema_invalid":
+      return "The model's JSON did not have the required fields.";
     default:
       return "OpenRouter returned an error.";
   }
 }
 
-async function request<T>(apiKey: string | null, path: string, init: { method?: "GET" | "POST"; body?: unknown; timeoutMs: number }): Promise<{ data: T; status: number }> {
+async function request<T>(apiKey: string | null, path: string, init: { method?: "GET" | "POST"; body?: unknown; timeoutMs: number; totalDeadline?: boolean }): Promise<{ data: T; status: number }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs);
   let res: Response;
+  let text: string;
   try {
     res = await fetch(`${openRouterBase()}${path}`, {
       method: init.method ?? "GET",
@@ -128,13 +150,16 @@ async function request<T>(apiKey: string | null, path: string, init: { method?: 
       signal: controller.signal,
       cache: "no-store",
     });
+    // totalDeadline: the timer also bounds the body read (a slow model can stream for minutes after the headers;
+    // seen 2026-10-22…28: calls of up to 735 s behind a 60 s timeout). Without it only the headers are bounded.
+    if (!init.totalDeadline) clearTimeout(timer);
+    text = await res.text();
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw new OpenRouterError("timeout", `OpenRouter did not answer within ${Math.round(init.timeoutMs / 1000)} s.`);
     throw new OpenRouterError("network", "Could not reach OpenRouter.");
   } finally {
     clearTimeout(timer);
   }
-  const text = await res.text();
   let body: unknown = null;
   try {
     body = text ? JSON.parse(text) : null;
@@ -146,7 +171,7 @@ async function request<T>(apiKey: string | null, path: string, init: { method?: 
     const message = sanitize(err?.message ?? `OpenRouter request failed (${res.status}).`);
     const status = !res.ok ? res.status : typeof err?.code === "number" ? err.code : 500;
     const genId = (body as { id?: unknown } | null)?.id;
-    throw new OpenRouterError(categorize(status, message), message, status, typeof genId === "string" ? genId : null);
+    throw new OpenRouterError(categorize(status, message), message, status, typeof genId === "string" ? genId : null, parseRetryAfter(res.headers.get("retry-after")));
   }
   if (body === null) throw new OpenRouterError("provider_error", "OpenRouter returned a response that is not JSON.", res.status);
   return { data: body as T, status: res.status };
@@ -186,6 +211,8 @@ export interface ChatParams {
   reasoning?: { effort: "low" | "medium" | "high"; exclude?: boolean } | { max_tokens: number; exclude?: boolean };
   /** Optional structured output (AI Question Importer only): JSON mode or a JSON Schema, sent only to routes that accept it. */
   responseFormat?: { type: "json_object" } | { type: "json_schema"; json_schema: { name: string; strict: boolean; schema: unknown } };
+  /** The timeout also covers reading the answer body (AI Engine features). The importer keeps headers-only. */
+  totalDeadline?: boolean;
 }
 
 export interface ChatResult {
@@ -197,12 +224,14 @@ export interface ChatResult {
   outputTokens: number | null;
   /** USD; null when OpenRouter did not report a cost. */
   costUsd: number | null;
+  /** True when the model returned reasoning text but no answer (thinking used the output limit). */
+  reasoningOnly?: boolean;
 }
 
 interface ChatResponse {
   id?: string;
   model?: string;
-  choices?: { message?: { content?: string | null }; finish_reason?: string | null }[];
+  choices?: { message?: { content?: string | null; reasoning?: string | null }; finish_reason?: string | null }[];
   usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
 }
 
@@ -225,7 +254,7 @@ export async function chatCompletion(p: ChatParams): Promise<ChatResult> {
     delete body.models;
     body.plugins = [{ id: "auto-router", cost_tier: p.autoRouter.costTier, ...(p.autoRouter.allowedModels?.length ? { allowed_models: p.autoRouter.allowedModels } : {}) }];
   }
-  const { data } = await request<ChatResponse>(p.apiKey, "/chat/completions", { method: "POST", body, timeoutMs: p.timeoutMs });
+  const { data } = await request<ChatResponse>(p.apiKey, "/chat/completions", { method: "POST", body, timeoutMs: p.timeoutMs, totalDeadline: p.totalDeadline });
   const choice = data.choices?.[0];
   const text = choice?.message?.content ?? "";
   const result: ChatResult = {
@@ -236,6 +265,7 @@ export async function chatCompletion(p: ChatParams): Promise<ChatResult> {
     inputTokens: typeof data.usage?.prompt_tokens === "number" ? data.usage.prompt_tokens : null,
     outputTokens: typeof data.usage?.completion_tokens === "number" ? data.usage.completion_tokens : null,
     costUsd: typeof data.usage?.cost === "number" && Number.isFinite(data.usage.cost) && data.usage.cost >= 0 ? data.usage.cost : null,
+    reasoningOnly: !text.trim() && typeof choice?.message?.reasoning === "string" && choice.message.reasoning.trim().length > 0,
   };
   return result;
 }
@@ -265,6 +295,7 @@ export async function generateImage(p: ImageParams): Promise<ImageResult> {
     method: "POST",
     body: { model: p.model, prompt: p.prompt, aspect_ratio: p.aspectRatio, resolution: p.resolution, n: 1, provider: p.provider },
     timeoutMs: p.timeoutMs,
+    totalDeadline: true,
   });
   const item = data.data?.find((d) => typeof d.b64_json === "string" && d.b64_json.length > 0);
   if (!item?.b64_json) throw new OpenRouterError("empty_response", "OpenRouter returned no image.", 200, typeof data.id === "string" ? data.id : null);

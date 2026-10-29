@@ -8,9 +8,11 @@ import {
   normalizeBudgets,
   normalizeFeatureConfig,
   normalizePrivacy,
+  normalizeRuntime,
   type BudgetConfig,
   type FeatureEngineConfig,
   type PrivacyConfig,
+  type RuntimeConfig,
 } from "@/lib/ai-engine/config";
 
 /**
@@ -177,6 +179,7 @@ interface StoredEngine {
   features?: Partial<Record<AiFeature, unknown>>;
   budgets?: unknown;
   privacy?: unknown;
+  runtime?: unknown;
   updatedAt?: string;
 }
 
@@ -184,6 +187,7 @@ export interface EngineConfig {
   features: Record<AiFeature, FeatureEngineConfig>;
   budgets: BudgetConfig;
   privacy: PrivacyConfig;
+  runtime: RuntimeConfig;
   updatedAt: string | null;
 }
 
@@ -192,7 +196,7 @@ export async function getEngineConfig(): Promise<EngineConfig> {
   const features = Object.fromEntries(
     AI_FEATURE_KEYS.map((f) => [f, raw.features?.[f] ? normalizeFeatureConfig(raw.features[f]) : { ...DEFAULT_FEATURE_CONFIG }])
   ) as Record<AiFeature, FeatureEngineConfig>;
-  return { features, budgets: normalizeBudgets(raw.budgets), privacy: normalizePrivacy(raw.privacy), updatedAt: raw.updatedAt ?? null };
+  return { features, budgets: normalizeBudgets(raw.budgets), privacy: normalizePrivacy(raw.privacy), runtime: normalizeRuntime(raw.runtime), updatedAt: raw.updatedAt ?? null };
 }
 
 export async function saveFeatureConfig(feature: AiFeature, cfg: FeatureEngineConfig): Promise<void> {
@@ -207,4 +211,8 @@ export async function saveBudgets(b: BudgetConfig): Promise<void> {
 
 export async function savePrivacy(p: PrivacyConfig): Promise<void> {
   await patchRow(ENGINE_SETTING_KEY, { privacy: normalizePrivacy(p) });
+}
+
+export async function saveRuntime(r: RuntimeConfig): Promise<void> {
+  await patchRow(ENGINE_SETTING_KEY, { runtime: normalizeRuntime(r) });
 }

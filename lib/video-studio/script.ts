@@ -1,6 +1,7 @@
 import { estimateSpeechSec, graphemeCount } from "@/lib/video-studio/text";
 import { ASPECT_MAP, type Language, type VideoConfig } from "@/lib/video-studio/types";
 import type { SceneVisual } from "@/lib/video-studio/template";
+import { extractJsonObject, type OutputCheck } from "@/lib/ai-engine/structured";
 
 /**
  * AI Video Studio — the script stage's prompt and the strict parser for the
@@ -116,27 +117,25 @@ const clip = (v: unknown, max: number): string =>
         .slice(0, max)
     : "";
 
-/** First top-level JSON object in a model answer (handles ```json fences and chatter around it). */
+/** The JSON object of a model answer (shared structural reader: fences and chatter tolerated); throws the reason when unusable. */
 export function extractJson(text: string): unknown {
-  const t = text.replace(/```(?:json)?/gi, "");
-  const start = t.indexOf("{");
-  if (start < 0) throw new Error("The model answer contains no JSON object.");
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < t.length; i++) {
-    const c = t[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-      continue;
+  const r = extractJsonObject(text);
+  if (!r.ok) throw new Error(r.category === "truncated" ? "The model answer's JSON is incomplete (cut off)." : r.category === "invalid_json" && !text.includes("{") ? "The model answer contains no JSON object." : r.message);
+  return r.value;
+}
+
+/** AI Engine output check from a parser that throws on an unusable answer. */
+export function throwingCheck(parse: (text: string) => unknown): OutputCheck {
+  return (text) => {
+    const j = extractJsonObject(text);
+    if (!j.ok) return { ok: false, category: j.category, message: j.message };
+    try {
+      parse(text);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, category: "schema_invalid", message: e instanceof Error ? e.message.slice(0, 200) : "invalid answer" };
     }
-    if (c === '"') inStr = true;
-    else if (c === "{") depth++;
-    else if (c === "}" && --depth === 0) return JSON.parse(t.slice(start, i + 1));
-  }
-  throw new Error("The model answer's JSON is incomplete (cut off).");
+  };
 }
 
 const LABELS = ["A", "B", "C", "D", "E"];

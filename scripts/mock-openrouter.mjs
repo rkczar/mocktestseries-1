@@ -38,6 +38,14 @@ export const TEXT_MODELS = {
   "mockai/empty": { p: 0.0000031, c: 0.0000031, ctx: 128000 },
   "mockai/nocost": { p: 0.0000032, c: 0.0000032, ctx: 128000 },
   "mockai/collector": { p: 0.00000003, c: 0.00000003, ctx: 128000 },
+  // AI reliability suite (scripts/verify-ai-reliability.ts) — answer-shape failures seen in production 2026-10:
+  "mockai/verdict": { p: 0.00000004, c: 0.00000004, ctx: 128000 }, //    "User Safety: safe" (a classifier, id not recognisable)
+  "mockai/prose": { p: 0.00000005, c: 0.00000005, ctx: 128000 }, //      chatty prose, no JSON
+  "mockai/cutoff": { p: 0.00000006, c: 0.00000006, ctx: 128000 }, //     JSON cut off, finish_reason "length"
+  "mockai/thinker": { p: 0.00000007, c: 0.00000007, ctx: 128000 }, //    reasoning only, empty content, "length"
+  "mockai/drip": { p: 0.00000008, c: 0.00000008, ctx: 128000 }, //       headers at once, body over 8 s
+  "mockai/retry429": { p: 0.00000009, c: 0.00000009, ctx: 128000 }, //   429 + Retry-After: 1 on every 1st call, then answers
+  "mockai/x-content-safety": { p: 0.00000001, c: 0.00000001, ctx: 128000 }, // excluded by id (never called)
 };
 export const IMAGE_MODELS = { "mockimg/perimage": { unit: "image", cost: 0.02 }, "mockimg/pertoken": { unit: "token", cost: 0.00003 }, "mockimg/fail": { unit: "image", cost: 0.01 } };
 // 8x8 PNG (valid for sharp).
@@ -162,6 +170,7 @@ export function startMockOpenRouter(port) {
   const fx = { rate: 95.5, status: 200 };
   const generations = new Map();
   let seq = 0;
+  let retry429Calls = 0;
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
     let raw = "";
@@ -175,6 +184,7 @@ export function startMockOpenRouter(port) {
     if (url.pathname === "/__mock/stats") return json(res, 200, { ...stats, bodies: stats.bodies.slice(-20) });
     if (url.pathname === "/__mock/reset") {
       Object.assign(stats, { chat: 0, images: 0, speech: 0, transcriptions: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], authHeaders: 0 });
+      retry429Calls = 0;
       return json(res, 200, { ok: true });
     }
     if (url.pathname === "/__mock/fx") {
@@ -202,7 +212,7 @@ export function startMockOpenRouter(port) {
         architecture: { input_modalities: ["text"], output_modalities: ["text"] },
         pricing: { prompt: String(m.p), completion: String(m.c) },
         top_provider: { max_completion_tokens: 16000 },
-        supported_parameters: ["max_tokens", "temperature", "response_format"],
+        supported_parameters: id === "mockai/thinker" ? ["max_tokens", "temperature", "response_format", "reasoning"] : ["max_tokens", "temperature", "response_format"],
       }));
       data.push({ id: "openrouter/auto", name: "Auto Router", context_length: 2000000, architecture: { input_modalities: ["text"], output_modalities: ["text"] }, pricing: { prompt: "-1", completion: "-1" }, top_provider: {}, supported_parameters: [] });
       return json(res, 200, { data });
@@ -232,7 +242,7 @@ export function startMockOpenRouter(port) {
     }
     if (req.method === "POST" && p === "/chat/completions") {
       stats.chat++;
-      stats.bodies.push({ model: body.model, models: body.models, provider: body.provider, plugins: body.plugins, max_tokens: body.max_tokens });
+      stats.bodies.push({ model: body.model, models: body.models, provider: body.provider, plugins: body.plugins, max_tokens: body.max_tokens, response_format: body.response_format, reasoning: body.reasoning });
       if (scenario === "nocredit") return err(res, 402, "Insufficient credits. Add more using https://openrouter.ai/credits");
       const c0 = body.messages?.[0]?.content;
       const prompt = Array.isArray(c0) ? c0.filter((x) => x?.type === "text").map((x) => x.text).join("\n") : String(c0 ?? "");
@@ -266,6 +276,26 @@ export function startMockOpenRouter(port) {
           continue;
         }
         if (id === "mockai/slow") await new Promise((r) => setTimeout(r, 7000));
+        if (id === "mockai/retry429" && (retry429Calls++ % 2 === 0)) {
+          res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+          return res.end(JSON.stringify({ error: { code: 429, message: "Rate limit exceeded (retry after 1 s)" } }));
+        }
+        const shaped = { "mockai/verdict": "User Safety: safe", "mockai/prose": "Sure! Here is a helpful explanation of the topic without any JSON at all.", "mockai/cutoff": '{"concept": "Acute angle-closure glaucoma presents with a painful red eye and', "mockai/thinker": "" }[id];
+        if (shaped !== undefined) {
+          const gid = `gen-mock-${Date.now()}-${++seq}`;
+          generations.set(gid, { cost: 0, model: id, pt: 10, ct: 10 });
+          const finish = id === "mockai/cutoff" || id === "mockai/thinker" ? "length" : "stop";
+          return json(res, 200, { id: gid, model: id, choices: [{ message: { role: "assistant", content: shaped, ...(id === "mockai/thinker" ? { reasoning: "Let me think step by step about every option..." } : {}) }, finish_reason: finish }], usage: { prompt_tokens: 10, completion_tokens: 10, cost: 0.000001 } });
+        }
+        if (id === "mockai/drip") {
+          const answer = JSON.stringify({ id: `gen-mock-drip-${++seq}`, model: id, choices: [{ message: { role: "assistant", content: evalAnswer(prompt) ?? answerFor(prompt, "valid") }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, cost: 0.000001 } });
+          res.writeHead(200, { "content-type": "application/json" });
+          for (let i = 0; i < answer.length; i += Math.ceil(answer.length / 8)) {
+            res.write(answer.slice(i, i + Math.ceil(answer.length / 8)));
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+          return res.end();
+        }
         let text = id === "mockai/empty" ? "" : (evalAnswer(prompt) ?? answerFor(prompt, "valid"));
         const pt = Math.ceil(prompt.length / 4);
         let ct = Math.ceil(text.length / 4);

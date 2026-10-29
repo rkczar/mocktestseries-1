@@ -99,8 +99,9 @@ async function main() {
   const other = await prisma.adminUser.findFirstOrThrow({ where: { username: "igfull" } });
 
   console.log("\nA. Config & cost arithmetic");
-  await check("default budgets are ₹100/day, ₹1,500/month, ₹2 text, ₹10 image, stop off", () => {
-    assert.deepEqual(cfg.normalizeBudgets(undefined), { dailyInr: 100, monthlyInr: 1500, maxTextRequestInr: 2, maxImageRequestInr: 10, alertPercent: 80, emergencyStop: false });
+  // 2026-10-29 (AI reliability): budgets warn by default and the per-request ceilings fit one quality-model request.
+  await check("default budgets are ₹100/day, ₹1,500/month, ₹10 text, ₹25 image, stop off, enforcement warn", () => {
+    assert.deepEqual(cfg.normalizeBudgets(undefined), { dailyInr: 100, monthlyInr: 1500, maxTextRequestInr: 10, maxImageRequestInr: 25, alertPercent: 80, emergencyStop: false, enforcement: "warn" });
   });
   await check("every feature defaults to the legacy route, enabled, Cheapest Approved", () => {
     const d = cfg.normalizeFeatureConfig(undefined);
@@ -185,7 +186,7 @@ async function main() {
   console.log("\nC. Model catalog sync");
   await check("sync copies ids + prices from the Models API; auto router price stays null (variable)", async () => {
     const r = await catalog.syncCatalog();
-    assert.equal(r.text, 11);
+    assert.equal(r.text, 18); // 11 + the 7 answer-shape models of scripts/verify-ai-reliability.ts
     assert.equal(r.image, 3);
     const cheap = await prisma.aiModel.findUniqueOrThrow({ where: { id: "mockai/cheap" } });
     assert.equal(cheap.promptPrice, 0.0000001);
@@ -294,7 +295,8 @@ async function main() {
   });
 
   console.log("\nF. Budgets (concurrency-safe reservations)");
-  const B = cfg.normalizeBudgets({ dailyInr: 10, monthlyInr: 100 });
+  // These checks cover the "stop" enforcement (warn is the default and is covered by verify-ai-reliability.ts).
+  const B = cfg.normalizeBudgets({ dailyInr: 10, monthlyInr: 100, enforcement: "stop" });
   await check("20 simultaneous ₹1 reservations against a ₹10 daily budget → exactly 10 succeed", async () => {
     const rs = await Promise.allSettled(Array.from({ length: 20 }, (_, i) => budget.reserveBudget({ requestKey: `par-${i}`, feature: "ig_caption", featureLabel: "x", reservedInr: 1, budgets: B, featureDailyInr: null })));
     assert.equal(rs.filter((r) => r.status === "fulfilled").length, 10);
@@ -450,7 +452,7 @@ async function main() {
   });
   await check("daily budget exhausted → refused before any provider call", async () => {
     const calls = mock.stats.chat;
-    await settings.saveBudgets(cfg.normalizeBudgets({ dailyInr: 0.000001, monthlyInr: 1500 }));
+    await settings.saveBudgets(cfg.normalizeBudgets({ dailyInr: 0.000001, monthlyInr: 1500, enforcement: "stop" }));
     await setFeature("ig_caption", { mode: "manual", model: "mockai/cheap" });
     const e = await thrown(() => gateway.generateForFeature("ig_caption", "THREE editable caption versions", { temperature: 0.7, maxOutputTokens: 800 }));
     assert.match(e?.message ?? "", /daily AI budget/);
@@ -498,7 +500,7 @@ async function main() {
     assert.equal(q1.model, "mockai/cheap");
     assert.ok(q1.textInr! > 0 && q1.textMaxInr! >= q1.textInr!);
     assert.equal(q1.fxRate, RATE);
-    assert.equal(q1.capInr, 2);
+    assert.equal(q1.capInr, 10);
     assert.equal(q1.runnable, true);
     assert.ok(q1.alternatives.length >= 2);
     assert.ok(q1.notes.some((n) => /not a guaranteed final price/.test(n)));

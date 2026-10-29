@@ -16,7 +16,10 @@ import { recordClaudeOutcome, resolveClaude } from "@/lib/anthropic-config";
 import { istStartOfDay } from "@/lib/ist-time";
 import { getEngineConfig, resolveOpenRouterKey } from "@/lib/ai-engine/settings";
 import { ENGINE_FEATURE_MAP } from "@/lib/ai-engine/config";
-import { AiEngineFailure, generateTextViaOpenRouter } from "@/lib/ai-engine/engine";
+import { AiEngineFailure, checkOutput, generateTextViaOpenRouter } from "@/lib/ai-engine/engine";
+import { AiBudgetError } from "@/lib/ai-engine/budget";
+import { profileFor } from "@/lib/ai-engine/profiles";
+import type { RuntimeConfig } from "@/lib/ai-engine/config";
 import {
   AI_FEATURE_KEYS,
   DEFAULT_PRICES,
@@ -53,7 +56,16 @@ import {
 export const GATEWAY_SETTING_KEY = "ai.gateway";
 
 /** Every configured provider failed. The message is sanitized and safe to show an admin. */
-export class AiProviderFailure extends Error {}
+export class AiProviderFailure extends Error {
+  constructor(
+    message: string,
+    /** Last failure category (lib/ai-engine/errors.ts → normalized code), when known. */
+    public category: string | null = null,
+    public requestId: string | null = null
+  ) {
+    super(message);
+  }
+}
 
 interface StoredGateway {
   routes?: Partial<Record<AiFeature, unknown>>;
@@ -97,7 +109,13 @@ export async function saveGatewayConfig(update: { routes?: Partial<Record<AiFeat
 
 // ---- Provider availability ---------------------------------------------------------
 
+/** Direct Claude / OpenAI REST calls are refused at runtime unless the (rollback-only) switch is on. */
+export function isDirectProviderBlocked(p: GatewayProvider, runtime: RuntimeConfig): boolean {
+  return (p === "anthropic" || p === "openai") && !runtime.directClaudeOpenAi;
+}
+
 export async function isGatewayProviderUsable(p: GatewayProvider): Promise<boolean> {
+  if (isDirectProviderBlocked(p, (await getEngineConfig()).runtime)) return false;
   if (p === "anthropic") return (await resolveClaude()) !== null;
   return isProviderUsable(p);
 }
@@ -109,7 +127,7 @@ export async function isFeatureConfigured(feature: AiFeature): Promise<boolean> 
   if (!fc.enabled || engine.budgets.emergencyStop) return false;
   if (fc.provider === "openrouter") {
     if (isStudentFeature(feature) && !(await getAiSettings()).askAiEnabled) return false;
-    return (await resolveOpenRouterKey()) !== null;
+    return (await resolveOpenRouterKey()) !== null || (engine.runtime.geminiFallback && (await isProviderUsable("gemini")));
   }
   const { routes } = await getGatewayConfig();
   const route = routes[feature];
@@ -171,6 +189,8 @@ async function logCall(entry: {
   requestId?: string;
   quoteId?: string | null;
   instagramPostId?: string | null;
+  /** "legacy" (direct route) or "gemini_fallback" (OpenRouter failed, Gemini asked). */
+  routingMode?: string;
 }) {
   try {
     await prisma.aiGatewayCall.create({
@@ -189,7 +209,7 @@ async function logCall(entry: {
         actorId: entry.actorId ?? null,
         // Legacy providers report no billed cost: only the price-table estimate above (if any).
         kind: "text",
-        routingMode: "legacy",
+        routingMode: entry.routingMode ?? "legacy",
         costStatus: entry.ok ? "unknown" : null,
         requestId: entry.requestId ?? null,
         quoteId: entry.quoteId ?? null,
@@ -255,20 +275,43 @@ function errorInfo(p: GatewayProvider, error: unknown): { category: string; mess
 export async function generateForFeature(feature: AiFeature, prompt: string, opts: AiGenerationOptions, ctx: GatewayContext = {}): Promise<AiGenerationResult> {
   await assertAiGenerationOpen();
   const fc = await assertEngineAllows(feature);
-  // AI Engine: OpenRouter (priced, budgeted, logged with actual cost). An explicit legacy provider choice wins.
+  // Provider policy (lib/ai-engine/config.ts RuntimeConfig): direct Claude / OpenAI calls are refused; Claude and
+  // OpenAI models run through OpenRouter. Gemini stays available (fallback, or an explicit admin choice).
+  const runtime = (await getEngineConfig()).runtime;
+  if (ctx.providerOverride && isDirectProviderBlocked(ctx.providerOverride, runtime)) {
+    throw new AiNotConfiguredError(`Direct ${PROVIDER_LABELS[ctx.providerOverride]} calls are switched off: ${PROVIDER_LABELS[ctx.providerOverride]} models run through OpenRouter. Choose "Default (OpenRouter)" or Google Gemini.`);
+  }
+  // AI Engine: OpenRouter (priced, budgeted, logged with actual cost). An explicit Gemini choice wins.
   if (fc.provider === "openrouter" && !ctx.providerOverride) {
     if (isStudentFeature(feature) && !(await getAiSettings()).askAiEnabled) throw new AiNotConfiguredError("Ask AI is currently disabled by an admin.");
+    // Gemini fallback keeps GEMINI_RESERVE_MS of the feature's deadline, so both fit under the page timeout.
+    const profileMs = profileFor(feature).deadlineMs;
+    const deadline = Date.now() + profileMs;
+    const fallback = runtime.geminiFallback && (await isProviderUsable("gemini"));
+    let error: unknown;
     try {
-      return await generateTextViaOpenRouter(feature, prompt, opts, { actorId: ctx.actorId, quoteId: ctx.quoteId, modelOverride: ctx.modelOverride, instagramPostId: ctx.instagramPostId });
-    } catch (error) {
-      // Students never see admin wording (budgets, model approval, provider errors); the details are in AI → History.
-      if (ENGINE_FEATURE_MAP[feature]?.trigger === "student") {
-        if (error instanceof AiNotConfiguredError) throw new AiNotConfiguredError("AI explanations are temporarily unavailable. Please try again later.");
-        throw new Error("The AI service could not answer right now. Please try again in a moment.");
-      }
-      if (error instanceof AiEngineFailure) throw new AiProviderFailure(error.message);
-      throw error;
+      return await generateTextViaOpenRouter(feature, prompt, opts, { actorId: ctx.actorId, quoteId: ctx.quoteId, modelOverride: ctx.modelOverride, instagramPostId: ctx.instagramPostId, ...(fallback ? { deadlineMs: profileMs - GEMINI_RESERVE_MS } : {}) });
+    } catch (e) {
+      error = e;
     }
+    let geminiMessage: string | null = null;
+    if (fallback && geminiMayRescue(error)) {
+      const requestId = error instanceof AiEngineFailure && error.requestId ? error.requestId : crypto.randomUUID();
+      try {
+        return await geminiFallback(feature, prompt, opts, ctx, deadline, requestId);
+      } catch (g) {
+        geminiMessage = sanitizeProviderMessage(g instanceof Error ? g.message : "Gemini request failed.");
+      }
+    }
+    // Students never see admin wording (budgets, model approval, provider errors); the details are in AI → History.
+    if (ENGINE_FEATURE_MAP[feature]?.trigger === "student") {
+      if (error instanceof AiNotConfiguredError && geminiMessage === null) throw new AiNotConfiguredError("AI explanations are temporarily unavailable. Please try again later.");
+      throw new Error("The AI service could not answer right now. Please try again in a moment.");
+    }
+    const also = geminiMessage === null ? "" : ` Gemini fallback also failed: ${geminiMessage.slice(0, 200)}`;
+    if (error instanceof AiEngineFailure) throw new AiProviderFailure(`${error.message}${also}`, error.category, error.requestId);
+    if (also && error instanceof AiNotConfiguredError) throw new AiProviderFailure(`${error.message}${also}`);
+    throw error;
   }
   const { routes, prices } = await getGatewayConfig();
   const route = routes[feature];
@@ -278,7 +321,10 @@ export async function generateForFeature(feature: AiFeature, prompt: string, opt
   if (route.mode === "inherit" && !ctx.providerOverride) {
     const started = Date.now();
     try {
-      const r = await generateWithAi(prompt, opts);
+      // The old default path may pick OpenAI (AI Settings active / fallback provider): Gemini only while direct OpenAI is off.
+      if (!runtime.directClaudeOpenAi && !(await getAiSettings()).askAiEnabled) throw new AiNotConfiguredError("Ask AI is currently disabled by an admin.");
+      const r = runtime.directClaudeOpenAi ? await generateWithAi(prompt, opts) : await generateWithSingleProvider("gemini", prompt, opts);
+      assertLegacyOutput(r, opts);
       await logCall({ feature, provider: r.provider, model: r.model, ok: true, latencyMs: Date.now() - started, usage: r.usage, attempt: 1, actorId: ctx.actorId, prices, quoteId: ctx.quoteId, instagramPostId: ctx.instagramPostId });
       return r;
     } catch (error) {
@@ -303,6 +349,10 @@ export async function generateForFeature(feature: AiFeature, prompt: string, opt
     const rest = route.mode === "custom" ? routeChain(route) : [];
     chain = [ctx.providerOverride, ...rest.filter((p) => p !== ctx.providerOverride)];
   } else chain = routeChain(route);
+  chain = chain.filter((p) => !isDirectProviderBlocked(p, runtime));
+  if (chain.length === 0) {
+    throw new AiNotConfiguredError(`${FEATURE_LABELS[feature]} is routed only to direct Claude / OpenAI, which are switched off. Set it to OpenRouter in AI → Features (Claude and OpenAI models run through OpenRouter).`);
+  }
 
   const usable: GatewayProvider[] = [];
   for (const p of chain) if (await isGatewayProviderUsable(p)) usable.push(p);
@@ -316,6 +366,7 @@ export async function generateForFeature(feature: AiFeature, prompt: string, opt
       const started = Date.now();
       try {
         const r = await callOne(p, route, prompt, opts);
+        assertLegacyOutput(r, opts);
         await logCall({ feature, provider: p, model: r.model, ok: true, latencyMs: Date.now() - started, usage: r.usage, attempt, actorId: ctx.actorId, prices, quoteId: ctx.quoteId, instagramPostId: ctx.instagramPostId });
         if (p === "anthropic") await recordClaudeOutcome({ ok: true });
         return r;
@@ -331,6 +382,39 @@ export async function generateForFeature(feature: AiFeature, prompt: string, opt
   const lastProvider = usable[usable.length - 1];
   const message = last instanceof Error ? last.message : "AI request failed.";
   throw new AiProviderFailure(`${PROVIDER_LABELS[lastProvider]} failed${usable.length > 1 ? " (after trying every configured provider)" : ""}: ${sanitizeProviderMessage(message)}`);
+}
+
+/** Time kept for the Gemini fallback out of the feature's deadline (OpenRouter gets the rest). */
+export const GEMINI_RESERVE_MS = 20_000;
+
+/**
+ * OpenRouter failures Gemini may fix: every engine failure (provider errors, timeouts, unusable answers, credits,
+ * auth) and "not configured" (no key, no eligible model). Never a budget refusal — that is the owner's limit.
+ */
+function geminiMayRescue(error: unknown): boolean {
+  if (error instanceof AiBudgetError) return false;
+  return error instanceof AiEngineFailure || error instanceof AiNotConfiguredError;
+}
+
+/** One Gemini request after OpenRouter failed: same output check, logged under the OpenRouter request id. */
+async function geminiFallback(feature: AiFeature, prompt: string, opts: AiGenerationOptions, ctx: GatewayContext, deadline: number, requestId: string): Promise<AiGenerationResult> {
+  const { prices } = await getGatewayConfig();
+  const started = Date.now();
+  try {
+    const r = await generateWithSingleProvider("gemini", prompt, opts, { deadlineAt: deadline });
+    assertLegacyOutput(r, opts);
+    await logCall({ feature, provider: "gemini", model: r.model, ok: true, latencyMs: Date.now() - started, usage: r.usage, attempt: 1, actorId: ctx.actorId, prices, requestId, quoteId: ctx.quoteId, instagramPostId: ctx.instagramPostId, routingMode: "gemini_fallback" });
+    return { ...r, requestId, fallbackUsed: true };
+  } catch (error) {
+    await logCall({ feature, provider: "gemini", model: "gemini", ok: false, errorCategory: categorizeLegacyError(error), errorSummary: error instanceof Error ? error.message : "", latencyMs: Date.now() - started, attempt: 1, actorId: ctx.actorId, prices, requestId, quoteId: ctx.quoteId, instagramPostId: ctx.instagramPostId, routingMode: "gemini_fallback" });
+    throw error;
+  }
+}
+
+/** Legacy providers get the same output check as the AI Engine; an unusable answer is an error, never a result. */
+function assertLegacyOutput(r: AiGenerationResult, opts: AiGenerationOptions) {
+  const bad = checkOutput(r.text, null, false, opts);
+  if (bad) throw new Error(`${bad.category === "truncated" ? "truncated" : "malformed"} response: ${bad.message}`);
 }
 
 // ---- Usage summary (admin) ------------------------------------------------------------------

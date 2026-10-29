@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { assertAiGenerationOpen, AiNotConfiguredError, type AiGenerationResult } from "@/lib/ai-provider";
 import { generateForFeature, isFeatureConfigured, type GatewayContext } from "@/lib/ai-gateway";
+import { jsonCheck, nonEmptyString } from "@/lib/ai-engine/structured";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 
 /**
@@ -126,6 +127,18 @@ export function isTruncatedOrMalformedJson(raw: string): boolean {
   }
 }
 
+/**
+ * Output check for every explanation request (AI Engine `opts.check`): one JSON object with a non-empty
+ * "concept". An answer that fails it is never stored — the engine asks the next compatible model instead.
+ * (2026-10-29: 65 explanations were stored as a safety classifier's "User Safety: safe" through the text
+ * fallback in validateExplanationContent.)
+ */
+export const explanationCheck = jsonCheck((obj) => {
+  if (!nonEmptyString(obj.concept)) return 'The "concept" field is missing or empty.';
+  if (/^\s*(user|response|prompt)\s+safety\b/i.test(String(obj.concept))) return 'The "concept" field holds a safety verdict, not an explanation.';
+  return null;
+});
+
 /** Validates/repairs a provider response into ExplanationContent — never throws, always returns a usable (possibly sparse) object. Exported for scripts/tests. */
 export function validateExplanationContent(text: string): ExplanationContent {
   const fallback: ExplanationContent = {
@@ -174,8 +187,8 @@ export interface ExplanationCaller {
 
 async function runAndPersist(questionId: string, question: QuestionForExplanation, settings: AiSettings, caller: ExplanationCaller = {}) {
   try {
-    const result: AiGenerationResult = await generateForFeature(caller.feature ?? "explanation", buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 1400 }, caller.ctx ?? {});
-    if (isTruncatedOrMalformedJson(result.text)) {
+    const result: AiGenerationResult = await generateForFeature(caller.feature ?? "explanation", buildPrompt(question, settings), { temperature: 0.4, maxOutputTokens: 1400, json: true, check: explanationCheck }, caller.ctx ?? {});
+    if (isTruncatedOrMalformedJson(result.text) || !explanationCheck(result.text).ok) {
       throw new Error("AI returned truncated or malformed JSON (likely hit the output token limit) — please retry.");
     }
     const content = validateExplanationContent(result.text);

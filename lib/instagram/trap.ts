@@ -5,6 +5,7 @@ import type { ExamProfile } from "@/lib/instagram/exam-scope";
 import { plainText } from "@/lib/instagram/layout";
 import { TRAP_LABELS, TRAP_LIMITS, TRAP_MAX, type SourceSnapshot, type TrapVariant } from "@/lib/instagram/types";
 import { normalizeEquivalent } from "@/lib/instagram/text-normalize";
+import { extractJsonObject } from "@/lib/ai-engine/structured";
 
 /**
  * "How the Examiner Traps You" — an AI variant question for the TRAP slide.
@@ -99,15 +100,9 @@ export function buildTrapPrompt(params: { snapshot: SourceSnapshot; explanation:
 export type TrapParse = { ok: true; trap: Omit<TrapVariant, "status" | "checks" | "origin">; confidence: string; concerns: string[] } | { ok: false; error: string };
 
 function extractJson(text: string): Record<string, unknown> | null {
-  const cleaned = text.replace(/```(?:json)?/gi, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  // Shared structural reader (lib/ai-engine/structured.ts): one object, fences/chatter tolerated, never two objects glued.
+  const r = extractJsonObject(text);
+  return r.ok ? r.value : null;
 }
 
 export function parseTrap(text: string): TrapParse {

@@ -11,13 +11,14 @@
 
 import type { AiFeature } from "@/lib/ai-gateway-config";
 
-export const ROUTING_MODES = ["cheapest", "manual", "auto"] as const;
+export const ROUTING_MODES = ["cheapest", "manual", "auto", "task"] as const;
 export type RoutingMode = (typeof ROUTING_MODES)[number];
 
 export const ROUTING_MODE_LABELS: Record<RoutingMode, string> = {
   cheapest: "Cheapest Approved",
   manual: "Manual",
   auto: "OpenRouter Auto",
+  task: "Task-aware (recommended)",
 };
 
 export const AUTO_COST_TIERS = ["low", "medium", "high"] as const;
@@ -49,6 +50,7 @@ export const ENGINE_FEATURES: EngineFeatureDef[] = [
   { key: "explanation_admin", label: "AI Explanations (admin regenerate)", group: "Admin AI", kind: "text", trigger: "admin", medical: true, callsPerAction: 1, defaultMaxOutputTokens: 1400, typicalInputTokens: 450, inUse: true },
   { key: "variant_admin", label: "Admin AI Variants", group: "Admin AI", kind: "text", trigger: "admin", medical: true, callsPerAction: 1, defaultMaxOutputTokens: 6000, typicalInputTokens: 400, inUse: true },
   { key: "ig_carousel", label: "Instagram Carousel", group: "Instagram", kind: "text", trigger: "admin", medical: true, callsPerAction: 1, defaultMaxOutputTokens: 3000, typicalInputTokens: 950, inUse: true },
+  { key: "ig_topic", label: "Instagram Topic / Custom Posts", group: "Instagram", kind: "text", trigger: "admin", medical: true, callsPerAction: 1, defaultMaxOutputTokens: 3500, typicalInputTokens: 900, inUse: true },
   { key: "ig_caption", label: "Instagram Captions", group: "Instagram", kind: "text", trigger: "admin", medical: false, callsPerAction: 1, defaultMaxOutputTokens: 2600, typicalInputTokens: 1450, inUse: true },
   { key: "ig_trap", label: "Instagram Examiner Traps", group: "Instagram", kind: "text", trigger: "admin", medical: true, callsPerAction: 2, defaultMaxOutputTokens: 1900, typicalInputTokens: 700, inUse: true },
   { key: "ig_diagram", label: "Instagram Diagram Planning", group: "Instagram", kind: "text", trigger: "admin", medical: true, callsPerAction: 1, defaultMaxOutputTokens: 1800, typicalInputTokens: 650, inUse: true },
@@ -112,15 +114,24 @@ export interface BudgetConfig {
   alertPercent: number;
   /** Stops every NEW provider request (OpenRouter and legacy). Cached content is still served. */
   emergencyStop: boolean;
+  /**
+   * What the daily / monthly / per-feature budgets do when reached:
+   * "warn" (default since 2026-10-29) = the request runs, the overrun is shown as a warning in AI → Budgets;
+   * "stop" = new requests are refused until the next IST day / month.
+   * Per-request ceilings, bounded retries and the emergency stop always apply.
+   */
+  enforcement: "warn" | "stop";
 }
 
 export const DEFAULT_BUDGETS: BudgetConfig = {
   dailyInr: 100,
   monthlyInr: 1500,
-  maxTextRequestInr: 2,
-  maxImageRequestInr: 10,
+  // One quality-model carousel (~3,000 output tokens) can cost ~₹3; the old ₹2 ceiling refused it outright.
+  maxTextRequestInr: 10,
+  maxImageRequestInr: 25,
   alertPercent: 80,
   emergencyStop: false,
+  enforcement: "warn",
 };
 
 export interface PrivacyConfig {
@@ -128,6 +139,27 @@ export interface PrivacyConfig {
   dataCollection: "deny" | "allow";
   /** OpenRouter provider.zdr — only Zero Data Retention endpoints. */
   zdr: boolean;
+}
+
+/**
+ * Runtime provider policy (owner, 2026-10-29):
+ *  - OpenRouter is the primary provider for every AI Engine feature;
+ *  - Google Gemini (direct) is the secondary fallback: when an OpenRouter text request fails, the gateway asks
+ *    Gemini once (`geminiFallback`, default on). An explicit admin choice of Gemini keeps working;
+ *  - direct Claude and OpenAI REST calls are refused (`directClaudeOpenAi`, default off) — Claude and OpenAI
+ *    models are still used through OpenRouter. Their keys and routes are kept (rollback, regression suites).
+ * Keys and settings are never deleted by these switches.
+ */
+export interface RuntimeConfig {
+  geminiFallback: boolean;
+  directClaudeOpenAi: boolean;
+}
+
+export const DEFAULT_RUNTIME: RuntimeConfig = { geminiFallback: true, directClaudeOpenAi: false };
+
+export function normalizeRuntime(raw: unknown): RuntimeConfig {
+  const r = (raw as Partial<RuntimeConfig> | null) ?? {};
+  return { geminiFallback: r.geminiFallback !== false, directClaudeOpenAi: r.directClaudeOpenAi === true };
 }
 
 export const DEFAULT_PRIVACY: PrivacyConfig = { dataCollection: "deny", zdr: false };
@@ -175,6 +207,7 @@ export function normalizeBudgets(raw: unknown): BudgetConfig {
     maxImageRequestInr: num(r.maxImageRequestInr, 0.01, 100_000, DEFAULT_BUDGETS.maxImageRequestInr),
     alertPercent: Math.round(num(r.alertPercent, 1, 100, DEFAULT_BUDGETS.alertPercent)),
     emergencyStop: r.emergencyStop === true,
+    enforcement: r.enforcement === "stop" ? "stop" : "warn",
   };
 }
 

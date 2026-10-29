@@ -179,7 +179,7 @@ async function estimateQuote(req: QuoteRequest): Promise<{ view: Omit<QuoteView,
     const perCallIn = Math.round(estIn / (def.callsPerAction * units));
     const perCallMaxOut = cfg.maxOutputTokens ?? def.defaultMaxOutputTokens;
     const perCallTypOut = Math.max(1, Math.round(estOut / (def.callsPerAction * units)));
-    const cands = await textCandidates(req.feature, perCallIn, perCallMaxOut, perCallTypOut, { ignoreMedical: req.evaluation });
+    const cands = await textCandidates(req.feature, perCallIn, perCallMaxOut, perCallTypOut, { ignoreMedical: req.evaluation, mode: cfg.mode });
     const n = def.callsPerAction * units;
     const want = req.pick === "cheapest" ? null : (req.model ?? (cfg.mode === "manual" ? cfg.model : null));
     const pick = want ? cands.find((c) => c.model.id === want) : cands[0];
@@ -215,8 +215,10 @@ async function estimateQuote(req: QuoteRequest): Promise<{ view: Omit<QuoteView,
   const totalInr = provider === "legacy" || (textInr === null && imageInr === null) ? null : (textInr ?? 0) + (imageInr ?? 0);
   const totalMaxInr = provider === "legacy" ? null : textMaxInr === null && imageInr === null ? null : (textMaxInr ?? 0) + (imageInr ?? 0);
   if (runnable && totalMaxInr !== null && totalMaxInr > base.budgetDayLeftInr) {
-    runnable = false;
-    blockReason = `The maximum cost (₹${totalMaxInr.toFixed(2)}) is more than today's remaining AI budget (₹${base.budgetDayLeftInr.toFixed(2)}).`;
+    if (engine.budgets.enforcement === "stop") {
+      runnable = false;
+      blockReason = `The maximum cost (₹${totalMaxInr.toFixed(2)}) is more than today's remaining AI budget (₹${base.budgetDayLeftInr.toFixed(2)}).`;
+    } else notes.push(`Warning: the maximum cost (₹${totalMaxInr.toFixed(2)}) is more than today's remaining AI budget (₹${base.budgetDayLeftInr.toFixed(2)}). Budgets are set to warn, so the request will still run.`);
   }
   provider = cfg.provider;
 

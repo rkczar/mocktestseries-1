@@ -7,9 +7,17 @@ import { generateForFeature, isFeatureConfigured, type GatewayContext } from "@/
 import { isPlatformOpen } from "@/lib/platform-controls";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, type ExplanationContent } from "@/lib/ai-explanation";
 import { getAiSettings } from "@/lib/ai-settings";
+import { STRUCTURED_MESSAGES, isClassifierVerdict, type OutputCheck } from "@/lib/ai-engine/structured";
 import { parseCandidateBatch, screenCandidates, validateCandidate, type ComparableQuestion, type GeneratedVariant } from "@/lib/ai-variant-validation";
 
 export { validateGenerated } from "@/lib/ai-variant-validation";
+
+/** Output check (AI Engine): the answer must hold at least one candidate object; a verdict or prose is a failed attempt. */
+const variantBatchCheck: OutputCheck = (text) => {
+  if (!text.trim()) return { ok: false, category: "empty_response", message: STRUCTURED_MESSAGES.empty_response };
+  if (isClassifierVerdict(text)) return { ok: false, category: "non_answer", message: STRUCTURED_MESSAGES.non_answer };
+  return parseCandidateBatch(text).some((c) => c && typeof c === "object") ? { ok: true } : { ok: false, category: "invalid_json", message: STRUCTURED_MESSAGES.invalid_json };
+};
 
 /**
  * AI Question Variants (AI01–AI05) — generated automatically from Ask AI and
@@ -360,6 +368,7 @@ export async function ensureQuestionVariants(
         result = await generate(buildPrompt(source, missing, [...pool.slice(1), ...accepted]), {
           temperature: 0.8,
           maxOutputTokens: Math.min(6000, 900 * missing + 600),
+          check: variantBatchCheck,
         });
       } catch (error) {
         if (accepted.length > 0) break; // keep what we already have

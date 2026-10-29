@@ -54,13 +54,15 @@ export async function reserveBudget(input: { requestKey: string; feature: string
         (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istMonth" = ${istMonth} AND "status" <> 'RELEASED' AND ${PLATFORM}) AS month,
         (SELECT ${SPEND} FROM "AiBudgetReservation" WHERE "istDay" = ${istDay} AND "feature" = ${input.feature} AND "status" <> 'RELEASED') AS feature`;
     const amt = input.reservedInr;
-    if (row.day + amt > budgets.dailyInr) {
+    // "warn" (default): the spend is still reserved, settled and shown in AI → Budgets, but reaching a budget never
+    // refuses a request (2026-10-29: legitimate admin and student work stopped at the ₹100/day default).
+    if (budgets.enforcement === "stop" && row.day + amt > budgets.dailyInr) {
       throw new AiBudgetError(`The daily AI budget is reached (${formatInr(row.day)} of ${formatInr(budgets.dailyInr)} used; this request may cost up to ${formatInr(amt)}). A Master Admin can raise it in AI → Budgets.`);
     }
-    if (row.month + amt > budgets.monthlyInr) {
+    if (budgets.enforcement === "stop" && row.month + amt > budgets.monthlyInr) {
       throw new AiBudgetError(`The monthly AI budget is reached (${formatInr(row.month)} of ${formatInr(budgets.monthlyInr)} used). A Master Admin can raise it in AI → Budgets.`);
     }
-    if (input.featureDailyInr !== null && row.feature + amt > input.featureDailyInr) {
+    if (budgets.enforcement === "stop" && input.featureDailyInr !== null && row.feature + amt > input.featureDailyInr) {
       throw new AiBudgetError(`The daily budget for ${input.featureLabel} is reached (${formatInr(row.feature)} of ${formatInr(input.featureDailyInr)}).`);
     }
     await tx.aiBudgetReservation.create({ data: { requestKey: input.requestKey, feature: input.feature, reservedInr: amt, istDay, istMonth } });

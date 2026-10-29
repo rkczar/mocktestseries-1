@@ -341,6 +341,8 @@ async function main() {
   await saveStudioSettings({ instagramHandle: "mocktestseries.in", telegramUrl: "https://t.me/mocktestseries_fixture" });
   await saveAiSettings({ askAiEnabled: true });
   await prisma.setting.deleteMany({ where: { key: { in: ["api.anthropic", "ai.gateway", "instagram.scope", "instagram.designPresets"] } } });
+  // These checks cover the direct Claude / OpenAI routes (rollback path): since 2026-10-29 they are off at runtime by default.
+  await (await import("@/lib/ai-engine/settings")).saveRuntime({ geminiFallback: true, directClaudeOpenAi: true });
   await prisma.instagramBatch.deleteMany({});
   await prisma.instagramReference.deleteMany({});
   await prisma.instagramInsightReport.deleteMany({});
@@ -720,6 +722,8 @@ async function main() {
   await prisma.previousYearPaper.deleteMany({ where: { examId: ug.id } });
   await prisma.exam.delete({ where: { id: ug.id } });
   await prisma.setting.deleteMany({ where: { key: { in: ["api.anthropic", "ai.gateway", "instagram.scope", "instagram.designPresets"] } } });
+  // These checks cover the direct Claude / OpenAI routes (rollback path): since 2026-10-29 they are off at runtime by default.
+  await (await import("@/lib/ai-engine/settings")).saveRuntime({ geminiFallback: true, directClaudeOpenAi: true });
   await setPublishingSwitch(false, actorId);
   anth.close();
   graph.close();

@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { Prisma, type VideoJob, type VideoJobStatus, type VideoScene } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateTextViaOpenRouter } from "@/lib/ai-engine/engine";
+import { AiEngineFailure, generateTextViaOpenRouter } from "@/lib/ai-engine/engine";
+import { aiErrorCode } from "@/lib/ai-engine/errors";
 import { ENGINE_FEATURE_MAP } from "@/lib/ai-engine/config";
 import { textCandidates } from "@/lib/ai-engine/router";
 import { synthesizeSpeech, transcribeAudio } from "@/lib/ai-engine/speech";
@@ -17,7 +18,7 @@ import { unsupportedVideoChars } from "@/lib/video-studio/glyphs";
 import { sceneDocument, type SceneVisual } from "@/lib/video-studio/template";
 import { overlayDocument, subtitleDocument } from "@/lib/video-studio/editor-docs";
 import { cuesFromSegments, cuesFromWords, defaultProject, outputCues, outputDuration, parseEditProject, type EditAsset, type EditProject } from "@/lib/video-studio/editor-model";
-import { buildScriptPrompt, extractJson, parseScene, parseScript, plainQuestionText, type ScriptMaterial, type SourceQuestion } from "@/lib/video-studio/script";
+import { buildScriptPrompt, extractJson, parseScene, parseScript, plainQuestionText, throwingCheck, type ScriptMaterial, type SourceQuestion } from "@/lib/video-studio/script";
 import { RENDER_FONT_BASE, RENDER_FONT_ORIGIN } from "@/lib/video-studio/render-manifest";
 import { RenderError, killStrayContainers, renderImageId, renderToolchain, runRenderTask } from "@/lib/video-studio/render-runner";
 import { addAsset, imageDataUri, patchAsset, readAssets, staleUploadParts, type JobAsset } from "@/lib/video-studio/assets";
@@ -231,7 +232,8 @@ async function runScript(job: VideoJob) {
   const r = await generateTextViaOpenRouter(
     "video_script",
     prompt,
-    { temperature: 0.5, maxOutputTokens: ENGINE_FEATURE_MAP.video_script.defaultMaxOutputTokens },
+    // Checked inside the engine: an unusable script (verdict, prose, cut off, no scenes) moves to the next model.
+    { temperature: 0.5, maxOutputTokens: ENGINE_FEATURE_MAP.video_script.defaultMaxOutputTokens, json: true, check: throwingCheck((t) => parseScript(t, cfg, material, strip)) },
     { actorId: job.confirmedById, quoteId, modelOverride },
     content ? { content: [{ type: "text", text: prompt }, ...content] } : {}
   );
@@ -265,7 +267,7 @@ async function runSceneRegen(job: VideoJob, scene: VideoScene) {
   const settings = await getVideoSettings();
   const base = buildScriptPrompt(cfg, material, composeSkillInstructions(cfg.skillKeys).text, { brandCta: settings.brand.cta, designName: DESIGN_MAP[cfg.designKey]?.name ?? cfg.designKey });
   const prompt = `${base}\n\nThe script already exists. Rewrite ONLY scene ${scene.index + 1} of ${all.length}.\nCurrent scenes:\n${all.map((s) => `${s.index + 1}. ${s.narration}`).join("\n")}\nAdmin's note for scene ${scene.index + 1}: ${scene.regenNote || "(improve it)"}\nAnswer with ONE JSON object: {"scenes":[{…the rewritten scene…}]}`;
-  const r = await generateTextViaOpenRouter("video_script", prompt, { temperature: 0.5, maxOutputTokens: 1200 }, { actorId: job.confirmedById, quoteId });
+  const r = await generateTextViaOpenRouter("video_script", prompt, { temperature: 0.5, maxOutputTokens: 1200, json: true, check: throwingCheck((t) => { const root = extractJson(t) as { scenes?: unknown[] }; if (!Array.isArray(root.scenes) || !root.scenes.length) throw new Error('No "scenes" array.'); }) }, { actorId: job.confirmedById, quoteId });
   await recomputeJobCost(job.id);
   const root = extractJson(r.text) as { scenes?: unknown[] };
   const warnings: string[] = [];
@@ -635,8 +637,10 @@ async function handle(job: VideoJob): Promise<void> {
       if (e.message === "live") await addEvent(job.id, null, "paused", "Paused: a Live CBT is running or about to start. The job continues afterwards.");
       return;
     }
-    const message = (e instanceof Error ? e.message : "unexpected error").slice(0, 500);
     const failedStage = e instanceof StageFailure ? e.stage : stage;
+    // Normalized category in front of the message (lib/ai-engine/errors.ts): AI call vs voice/asset vs render.
+    const code = e instanceof AiEngineFailure ? aiErrorCode(e.category) : failedStage === "render" || failedStage === "export" ? "RENDERING_FAILED" : failedStage === "voice" || failedStage === "transcribe" || failedStage === "ingest" ? "ASSET_GENERATION_FAILED" : null;
+    const message = `${code ? `[${code}] ` : ""}${e instanceof Error ? e.message : "unexpected error"}`.slice(0, 500);
     const back = FAIL_BACK[failedStage] ?? "FAILED";
     if (failedStage === "regen") await prisma.videoScene.updateMany({ where: { jobId: job.id, regenQuoteId: { not: null } }, data: { regenQuoteId: null, regenNote: null } });
     const from: VideoJobStatus[] = ["QUEUED", "GENERATING_SCRIPT", "GENERATING_AUDIO", "RENDERING", "REVIEW_REQUIRED"];
