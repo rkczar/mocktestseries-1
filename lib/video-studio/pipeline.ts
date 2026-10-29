@@ -392,21 +392,31 @@ async function runGenerateRender(job: VideoJob) {
   await runInContainer(job, "render", { type: "generate", width, height, fps: 25, transition: "fade", transitionSec: 0.35, scenes: list, music, output: "out/video.mp4" }, settings);
 }
 
-/** Measured by the render container after an editor export (ffmpeg ebur128 + stream durations). */
+/**
+ * Measured by the render container after an editor export (ffmpeg ebur128 + stream durations). null =
+ * not measured (never a stand-in 0); `silent` = measured, no signal (true peak −∞); `errors` = why a
+ * measurement is missing. The export itself is valid either way.
+ */
 export interface AudioReport {
   lufs: number | null;
   truePeakDb: number | null;
-  audioSec: number;
-  videoSec: number;
+  silent?: boolean;
+  audioSec: number | null;
+  videoSec: number | null;
+  errors?: string[];
 }
+
+const sec = (n: number | null) => (n === null ? "not measured" : `${n.toFixed(2)} s`);
 
 /** One line for the job log: the measurements, then any warning (loudness for phone playback, peak, A/V length). */
 export function audioReportText(a: AudioReport): string {
-  const parts = [`Audio: ${a.lufs === null ? "loudness not measured" : `${a.lufs.toFixed(1)} LUFS`}, true peak ${a.truePeakDb === null ? "n/a" : `${a.truePeakDb.toFixed(1)} dBTP`}, audio ${a.audioSec.toFixed(2)} s / video ${a.videoSec.toFixed(2)} s.`];
+  const peak = a.truePeakDb !== null ? `${a.truePeakDb.toFixed(1)} dBTP` : a.silent ? "−∞ (silent)" : "n/a";
+  const parts = [`Audio: ${a.lufs === null ? "loudness not measured" : `${a.lufs.toFixed(1)} LUFS`}, true peak ${peak}, audio ${sec(a.audioSec)} / video ${sec(a.videoSec)}.`];
   if (a.truePeakDb !== null && a.truePeakDb > -0.5) parts.push("Warning: the peak is close to clipping.");
   if (a.lufs !== null && a.lufs < -24) parts.push("Warning: quiet for phone playback (aim for about −16 to −14 LUFS).");
   if (a.lufs !== null && a.lufs > -9) parts.push("Warning: very loud (aim for about −16 to −14 LUFS).");
-  if (Math.abs(a.audioSec - a.videoSec) > 0.1) parts.push(`Warning: audio and video lengths differ by ${Math.abs(a.audioSec - a.videoSec).toFixed(2)} s.`);
+  if (a.audioSec !== null && a.videoSec !== null && Math.abs(a.audioSec - a.videoSec) > 0.1) parts.push(`Warning: audio and video lengths differ by ${Math.abs(a.audioSec - a.videoSec).toFixed(2)} s.`);
+  if (a.errors?.length) parts.push(`Measurement unavailable (the MP4 is fine): ${a.errors.join("; ")}.`);
   return parts.join(" ");
 }
 

@@ -397,6 +397,8 @@ async function partD() {
     near(Number(a.duration), Number(v.duration), 0.025, "audio vs video stream length");
     const rep = res.r.audioReport;
     assert.ok(rep, "audio report returned");
+    assert.deepEqual(rep.errors ?? [], [], "every measurement available");
+    assert.ok(rep.audioSec !== null && rep.videoSec !== null, "both stream lengths measured");
     near(rep.audioSec, Number(a.duration), 0.01, "report audio length");
     near(rep.videoSec, Number(v.duration), 0.01, "report video length");
     assert.equal(res.r.sfxCount, sfxRenderList(p).length);
@@ -444,7 +446,7 @@ async function partD() {
     const p: EditProject = { ...base(), transition: "none", segments: [{ id: "segaaaa1", src: SRC2, in: 0, out: 3, volume: 1 }, { id: "segbbbb2", src: SRC2, in: 4, out: 8, volume: 1 }], sfx: [clip("text_pop", { start: 1 }), clip("transition_whoosh", { anchor: { kind: "cut", id: "segbbbb2" }, offsetSec: -SFX_MAP.transition_whoosh.peakAtSec })] };
     const res = await exportEdit("sfx-hardcut", p);
     const { rep, file } = await validate("sfx-hardcut", p, res);
-    near(rep.audioSec, rep.videoSec, 0.025, "report: audio vs video length");
+    near(rep.audioSec!, rep.videoSec!, 0.025, "report: audio vs video length");
     near(maxDb(dir, file, outputDuration(p) - 0.06, 0.05), maxDb(dir, SRC2, 1, 2), 1, "tone level in the last 50 ms vs source");
   });
 

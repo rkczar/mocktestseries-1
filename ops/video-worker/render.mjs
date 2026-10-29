@@ -328,7 +328,9 @@ async function doGenerate(t) {
     f.push(`[narr]asplit=2[nm][sc]`);
     f.push(`[${musicIdx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${vol},atrim=duration=${total.toFixed(3)},afade=t=out:st=${Math.max(0, total - 2).toFixed(3)}:d=2[mus]`);
     f.push(`[mus][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=400[duck]`);
-    f.push(`[nm][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[mix]`);
+    // latency=1: the limiter's 5 ms look-ahead otherwise delays the whole soundtrack behind the picture. Its
+    // level is unchanged (default auto-level: about +0.45 dB of make-up gain, as before).
+    f.push(`[nm][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95:latency=1[mix]`);
     aout = "mix";
   }
   const output = rel(t.output);
@@ -543,10 +545,14 @@ async function doEdit(t) {
   if (au.music?.file) {
     const idx = addInput(rel(au.music.file), ["-stream_loop", "-1"]);
     const vol = num(au.music.volume ?? 0.12, 0, 1, "music volume");
-    f.push(`[${alast}]asplit=2[nm][sc]`);
+    // The bed is padded and cut to exactly the video's length first: when the last segment runs to the end of
+    // its source, the mix otherwise lost the soundtrack's last ~53 ms (audio 19.946 s vs video 20.000 s).
+    f.push(`[${alast}]apad,atrim=duration=${total.toFixed(3)},asplit=2[nm][sc]`);
     f.push(`[${idx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${vol},atrim=duration=${total.toFixed(3)},afade=t=out:st=${Math.max(0, total - 2).toFixed(3)}:d=2[mus]`);
     f.push(`[mus][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=400[duck]`);
-    f.push(`[nm][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[mix]`);
+    // latency=1: the limiter's 5 ms look-ahead otherwise delays the whole soundtrack behind the picture. Its
+    // level is unchanged (default auto-level: about +0.45 dB of make-up gain, as before).
+    f.push(`[nm][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95:latency=1[mix]`);
     alast = "mix";
   }
   // Sound effects: each clip trimmed, levelled, faded and delayed to its output second, then summed
@@ -612,22 +618,61 @@ async function doEdit(t) {
   return { output: t.output, durationSec: probe.durationSec, sizeBytes: probe.sizeBytes, width: W, height: H, sfxCount: clips.length, audioReport };
 }
 
+/** Stream lengths from ffprobe JSON: a missing or non-numeric duration is null (unknown), never 0. */
+export function parseStreamLengths(json) {
+  const j = JSON.parse(json);
+  if (!j || !Array.isArray(j.streams)) throw new Error("no streams in ffprobe output");
+  const len = (type) => {
+    const raw = j.streams.find((x) => x?.codec_type === type)?.duration;
+    const n = typeof raw === "string" || typeof raw === "number" ? Number(raw) : NaN;
+    return Number.isFinite(n) && n >= 0 ? r3(n) : null;
+  };
+  return { audioSec: len("audio"), videoSec: len("video") };
+}
+
+/**
+ * The ebur128 summary: integrated loudness and true peak. A silent track measures "-inf" peak: that is a
+ * valid result (silent: true, truePeakDb null), not a failure. No summary at all → null + an error.
+ */
+export function parseEbur128(log) {
+  const at = log.lastIndexOf("Summary:");
+  if (at < 0) return { lufs: null, truePeakDb: null, silent: false, error: "no ebur128 summary" };
+  const s = log.slice(at);
+  const lufs = /I:\s+(-?[\d.]+) LUFS/.exec(s);
+  const peak = /True peak:\s+Peak:\s+(-?inf|-?[\d.]+) dBFS/.exec(s);
+  const silent = peak?.[1] === "-inf";
+  return {
+    lufs: lufs ? Number(lufs[1]) : null,
+    truePeakDb: peak && !silent ? Number(peak[1]) : null,
+    silent,
+    error: !lufs || !peak ? "ebur128 summary incomplete" : null,
+  };
+}
+
 /**
  * Loudness (EBU R128 integrated, true peak) and the audio vs video stream lengths of a finished MP4.
- * Reported, never fatal: a failed measurement leaves the numbers null.
+ * Reported, never fatal: the export has already been validated, so a failed or garbled measurement only
+ * leaves its numbers null (unknown — distinct from a measured 0) and lists why in `errors` (also logged).
  */
-async function measureAudio(abs) {
-  const j = JSON.parse((await run("ffprobe", ["-v", "error", "-print_format", "json", "-show_entries", "stream=codec_type,duration", abs], { timeoutMs: 60_000 })).toString());
-  const len = (type) => r3(Number((j.streams ?? []).find((x) => x.codec_type === type)?.duration ?? 0) || 0);
+export async function measureAudio(abs, exec = run) {
+  const report = { lufs: null, truePeakDb: null, silent: false, audioSec: null, videoSec: null, errors: [] };
+  try {
+    Object.assign(report, parseStreamLengths(String(await exec("ffprobe", ["-v", "error", "-print_format", "json", "-show_entries", "stream=codec_type,duration", abs], { timeoutMs: 60_000 }))));
+    if (report.audioSec === null || report.videoSec === null) report.errors.push("stream length missing in ffprobe output");
+  } catch (e) {
+    report.errors.push(`stream lengths: ${String(e?.message ?? e).slice(0, 200)}`);
+  }
   let log = "";
   try {
-    await run("ffmpeg", ["-hide_banner", "-nostdin", "-i", abs, "-map", "0:a:0", "-af", "ebur128=peak=true:framelog=verbose", "-f", "null", "-"], { timeoutMs: 10 * 60_000, onStderr: (x) => (log = (log + x).slice(-6000)) });
-  } catch {
-    log = "";
+    await exec("ffmpeg", ["-hide_banner", "-nostdin", "-i", abs, "-map", "0:a:0", "-af", "ebur128=peak=true:framelog=verbose", "-f", "null", "-"], { timeoutMs: 10 * 60_000, onStderr: (x) => (log = (log + x).slice(-6000)) });
+    const m = parseEbur128(log);
+    Object.assign(report, { lufs: m.lufs, truePeakDb: m.truePeakDb, silent: m.silent });
+    if (m.error) report.errors.push(`loudness: ${m.error}`);
+  } catch (e) {
+    report.errors.push(`loudness: ${String(e?.message ?? e).slice(0, 200)}`);
   }
-  const lufs = /I:\s+(-?[\d.]+) LUFS/.exec(log.slice(log.lastIndexOf("Summary:")));
-  const peak = /True peak:\s+Peak:\s+(-?[\d.]+) dBFS/.exec(log.slice(log.lastIndexOf("Summary:")));
-  return { lufs: lufs ? Number(lufs[1]) : null, truePeakDb: peak ? Number(peak[1]) : null, audioSec: len("audio"), videoSec: len("video") };
+  if (report.errors.length) console.error(`audio-check unavailable (export kept): ${report.errors.join("; ")}`);
+  return report;
 }
 
 async function captureDocTransparent(page, htmlRel, durationSec, fps, outDir) {
@@ -671,4 +716,5 @@ async function main() {
   }
 }
 
-await main();
+// The container always runs main(); a unit test sets RENDER_MJS_NO_MAIN to import the pure helpers only.
+if (process.env.RENDER_MJS_NO_MAIN !== "1") await main();
