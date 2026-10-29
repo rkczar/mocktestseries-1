@@ -78,6 +78,54 @@ function countable(v: string): number | null {
   return /^\d{1,6}$/.test(v) ? Number(v) : null;
 }
 
+/**
+ * Whiteboard: the headline is "written" left to right — each word is revealed by a clip-path wipe whose
+ * start and length follow its share of the characters, over ~35 % of the frame (0.8–1.8 s). The highlight
+ * word is underlined after it has been written (or when it is spoken, if later).
+ */
+function boardHeadline(text: string, highlight: string, spoken: number, dur: number): string {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const total = tokens.reduce((n, t) => n + graphemeCount(t), 0) || 1;
+  const writeSec = Math.min(1.8, Math.max(0.8, dur * 0.35));
+  // A short word still takes a visible stroke (≥ 0.12 s); the lengths are then scaled back to the writing window, one word after another.
+  const raw = tokens.map((t) => Math.max(0.12, (writeSec * graphemeCount(t)) / total));
+  const scale = writeSec / (raw.reduce((a, b) => a + b, 0) || 1);
+  const h = norm(highlight);
+  let at = 0.1;
+  let marked = false;
+  return tokens
+    .map((tok, i) => {
+      const start = at;
+      const sec = raw[i] * scale;
+      at += sec;
+      const inner = !marked && h && norm(tok) === h ? ((marked = true), `<mark style="--h:${s2(Math.max(spoken, start + sec))}">${esc(tok)}</mark>`) : esc(tok);
+      return `<span class="wr" style="--d:${s2(start)};--w:${s2(sec)}">${inner}</span>`;
+    })
+    .join(" ");
+}
+
+/**
+ * Kinetic typography: each on-screen word lands at the second it is spoken (or on a steady beat when it is
+ * not in the narration), never earlier than the previous word, all within the first 60 % of the frame. The
+ * entrance rotates slam / from-left / from-right / drop by position; the highlight word is the largest.
+ */
+function kineticHeadline(text: string, highlight: string, words: MotionDocOptions["words"], dur: number): string {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const h = norm(highlight);
+  const last = Math.max(0.3, dur * 0.6);
+  let prev = 0;
+  let marked = false;
+  return tokens
+    .map((tok, i) => {
+      const at = Math.min(last, Math.max(i === 0 ? 0.05 : prev + 0.08, spokenAt(words, tok) ?? 0.15 + i * 0.22));
+      prev = at;
+      const hi = !marked && h !== "" && norm(tok) === h;
+      if (hi) marked = true;
+      return `<span class="kw k${i % 4}${hi ? " hi" : ""}" style="--d:${s2(at)}">${esc(tok)}</span>`;
+    })
+    .join(" ");
+}
+
 export function motionFrameDocument(frame: MotionFrameInput, o: MotionDocOptions): string {
   const style: MotionStyle = MOTION_STYLE_MAP[o.styleKey] ?? MOTION_STYLE_MAP.big_sentence;
   const p = style.palette;
@@ -156,7 +204,12 @@ export function motionFrameDocument(frame: MotionFrameInput, o: MotionDocOptions
   const tag = v.tag ? `<div class="tag">${esc(v.tag)}</div>` : "";
   let chrome = "";
   let body = "";
-  const headline = `<h1 class="main">${marked(frame.onScreen, v.highlight, hiAt)}</h1>`;
+  const headline =
+    style.layout === "board"
+      ? `<h1 class="main board-h">${boardHeadline(frame.onScreen, v.highlight, hiAt, dur)}</h1>`
+      : style.layout === "kinetic"
+        ? `<h1 class="main kin">${kineticHeadline(frame.onScreen, v.highlight, o.words, dur)}</h1>`
+        : `<h1 class="main">${marked(frame.onScreen, v.highlight, hiAt)}</h1>`;
   if (style.layout === "map") {
     // The map has its own viewport (upper part of the content box); the frame's visual sits below it, never under the map.
     const mvW = W - z.side * 2;
@@ -199,6 +252,10 @@ export function motionFrameDocument(frame: MotionFrameInput, o: MotionDocOptions
   } else if (style.layout === "calendar") {
     chrome = `<div class="cal"><div class="rings"><i></i><i></i></div><div class="page"><span>${esc(v.tag ?? `Step ${o.index + 1}`)}</span></div></div>`;
     body = `${headline}${visual}`;
+  } else if (style.layout === "board") {
+    // Whiteboard: the visual sits on the board itself (outlines drawn in marker), no card.
+    chrome = `<div class="boardframe"></div>`;
+    body = `${tag}${headline}${visual}`;
   } else if (style.layout === "photo") {
     chrome = o.imageSrc ? `<div class="kb"><img src="${esc(o.imageSrc)}" alt=""></div><div class="shade"></div>` : `<div class="shade"></div>`;
     body = `<div class="spacer"></div>${headline}`;
@@ -210,6 +267,44 @@ export function motionFrameDocument(frame: MotionFrameInput, o: MotionDocOptions
   const caption = o.subtitles && o.words.length ? `<div class="cap">${o.words.map((w) => `<span class="w${norm(w.text) === norm(v.highlight) ? " hw" : ""}" style="--d:${s2(w.start)}">${esc(w.text)}</span>`).join(" ")}</div>` : "";
   const grain = style.grain ? `<div class="grain"></div>` : "";
   const brandLine = o.brand.showBranding && v.type !== "cta" ? `<div class="brand">${esc(o.brand.wordmark)}</div>` : "";
+
+  // Layout-only CSS for the 2026-10-29 styles; empty for every other style, so their documents are unchanged.
+  // Kinetic words animate one registered number (--kp, 0 → 1) that their transform and opacity are computed
+  // from, never transform/opacity themselves: Chromium rasterizes an animated transform at a timing-dependent
+  // scale, so seeked frames of a transform animation are not bit-identical between renders.
+  const extraCss =
+    style.layout === "board"
+      ? `
+body{font-family:MTSKalam,MTSDev,MTSFallback}
+.cap{font-family:MTSLatin,${dev},MTSFallback}
+.boardframe{position:absolute;inset:${Math.round(18 * u)}px;border-radius:${Math.round(18 * u)}px;box-shadow:inset 0 0 0 ${Math.round(6 * u)}px #e5e7eb,inset 0 0 ${Math.round(60 * u)}px rgba(31,41,55,.05)}
+h1.board-h{animation:none;color:${cssVal(p.text)}}
+.wr{display:inline-block;clip-path:inset(0 100% 0 0);animation:write var(--w) linear var(--d) both}
+mark{background-size:0 .16em}
+.in{animation:fadeIn .45s ease-out var(--d) both}
+.node,.steps li,.cmp div,.q li{position:relative;border-color:transparent;background:transparent}
+.node::before,.steps li::before,.cmp div::before,.q li::before{content:"";position:absolute;inset:0;border:${Math.round(4 * u)}px solid ${cssVal(p.line)};border-radius:inherit;-webkit-mask:conic-gradient(from -45deg,#000 var(--a),#0000 0);mask:conic-gradient(from -45deg,#000 var(--a),#0000 0);animation:ink .8s ease-out var(--d,.25s) both}
+.node::before{border-color:${cssVal(p.accent)}}
+.steps b{background:${cssVal(p.accent)};color:#fff}
+.arr{background:${cssVal(p.accent)}}
+@property --a{syntax:'<angle>';initial-value:0deg;inherits:false}
+@keyframes write{to{clip-path:inset(0 0 0 0)}}
+@keyframes ink{from{--a:0deg}to{--a:360deg}}
+`
+      : style.layout === "kinetic"
+        ? `
+h1.kin{animation:none;font-size:${Math.round(big * 1.12)}px;line-height:1.08;letter-spacing:-.02em;text-align:center;display:flex;flex-wrap:wrap;justify-content:center;gap:0 .28em}
+.kw{display:inline-block;opacity:var(--kp);transform:scale(calc(1.8 - .8 * var(--kp)));animation:kp .38s cubic-bezier(.2,1.3,.4,1) var(--d) both}
+.kw.k1{transform:translateX(calc(${Math.round(-90 * u)}px * (1 - var(--kp))))}
+.kw.k2{transform:translateX(calc(${Math.round(90 * u)}px * (1 - var(--kp))))}
+.kw.k3{transform:translateY(calc(${Math.round(-70 * u)}px * (1 - var(--kp))))}
+.kw.hi{font-size:1.28em;background:${cssVal(p.highlight)};color:${cssVal(p.highlightText)};padding:0 .14em;border-radius:.12em;transform:scale(calc(1.8 - .8 * var(--kp)))}
+.card{background:${cssVal(p.surface)};border-color:${cssVal(p.line)};box-shadow:none}
+.content{text-align:center}
+@property --kp{syntax:'<number>';initial-value:1;inherits:false}
+@keyframes kp{from{--kp:0}to{--kp:1}}
+`
+        : "";
 
   const css = `
 @font-face{font-family:MTSLatin;src:url(${fb}${FONT_FILES.latinMedium});font-weight:500}
@@ -303,7 +398,7 @@ mark{background:transparent;color:inherit;padding:0 .08em;border-radius:.12em;${
 @keyframes bar{from{width:var(--from)}to{width:var(--to)}}
 @keyframes tear{from{opacity:0;transform:rotateX(70deg)}to{opacity:1;transform:none}}
 @keyframes kb{from{transform:scale(1.02) translate(0,0)}to{transform:scale(1.12) translate(-2%,-1.5%)}}
-`;
+${extraCss}`;
   return `<!doctype html><html lang="hi"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${esc(csp)}">
 <style>${css}</style></head><body>

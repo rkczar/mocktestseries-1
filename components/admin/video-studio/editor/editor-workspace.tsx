@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
 import { JobStatusBadge } from "@/components/admin/video-studio/status-badge";
 import { AssetsPanel } from "@/components/admin/video-studio/assets-panel";
+import { SfxPanel } from "@/components/admin/video-studio/editor/sfx-panel";
 import { mediaUrl } from "@/components/admin/video-studio/upload";
 import {
   confirmTranscriptionAction,
@@ -643,6 +644,8 @@ function EditorBody({
           </ol>
         </CardContent>
       </Card>
+
+      <SfxPanel p={p} change={change} editable={editable} playhead={outT} seek={seek} sequencePlaying={seq !== null} />
 
       <Card>
         <CardHeader>

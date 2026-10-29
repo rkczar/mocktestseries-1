@@ -423,6 +423,30 @@ async function main() {
     await writeFile(path.join(SHOTS, "F-edit-2s.png"), frameAt(file, 2));
     await writeFile(path.join(SHOTS, "F-edit-6s.png"), frameAt(file, 6));
   });
+  await check("export with sound effects: an effect anchored to the cut + a fixed one → mixed MP4, audio_checked event with measured loudness", async () => {
+    const em = await import("@/lib/video-studio/editor-model");
+    const p = (await reload(editId)).edit as unknown as import("@/lib/video-studio/editor-model").EditProject;
+    assert.deepEqual(p.sfx ?? [], [], "no effect was ever added automatically");
+    p.sfx = [
+      { id: "sfxwhoosh1", key: "transition_whoosh", start: 0, anchor: { kind: "cut", id: p.segments[1].id }, offsetSec: -0.136, trimIn: 0, trimOut: 1.056, volume: 0.8, fadeInSec: 0, fadeOutSec: 0.1 },
+      { id: "sfxpop0001", key: "text_pop", start: 1, anchor: null, offsetSec: 0, trimIn: 0, trimOut: 0.172, volume: 0.8, fadeInSec: 0, fadeOutSec: 0 },
+    ];
+    await stages.exportEdit(editId, p, admin.id);
+    await worker();
+    const r = await reload(editId);
+    assert.equal(r.status, "COMPLETED", `${r.failedStage}: ${r.errorMessage}`);
+    const saved = r.edit as unknown as import("@/lib/video-studio/editor-model").EditProject;
+    assert.equal(saved.sfx.length, 2);
+    const ev = await prisma.videoJobEvent.findMany({ where: { jobId: editId }, orderBy: { createdAt: "desc" }, take: 10 });
+    assert.ok(ev.some((e) => e.type === "export_started" && /2 sound effect\(s\)/.test(e.message)), ev.map((e) => e.message).join(" | "));
+    const ac = ev.find((e) => e.type === "audio_checked");
+    assert.ok(ac && /LUFS, true peak -?[\d.]+ dBTP/.test(ac.message), ac?.message ?? "no audio_checked event");
+    const d = ac.data as { lufs: number; audioSec: number; videoSec: number };
+    assert.ok(Math.abs(d.audioSec - d.videoSec) < 0.1, JSON.stringify(d));
+    const pr = ffprobe(await outFile(editId));
+    assert.ok(Math.abs(Number(pr.format.duration) - em.outputDuration(saved)) < 0.6);
+    await writeFile(path.join(SHOTS, "F-edit-sfx.mp4"), await readFile(await outFile(editId)));
+  });
 
   console.log("\nI. Live CBT protection (scratch LiveTest rows, removed afterwards)");
   const liveRow = (status: "LIVE" | "SCHEDULED", startInMin: number) =>

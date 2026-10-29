@@ -16,7 +16,7 @@ import { ensureJobDir, JOB_ID } from "@/lib/video-studio/storage";
  *   --cap-drop ALL, --security-opt no-new-privileges, non-root uid
  *   --cpus / --cpu-shares / --memory / --pids-limit   bounded resources; the
  *                         web app wins CPU contention (low cpu-shares)
- *   mounts: the job folder (rw), the fonts (ro), render.mjs (ro) — nothing else.
+ *   mounts: the job folder (rw), the fonts (ro), the bundled sound effects (ro), render.mjs (ro) — nothing else.
  *
  * Arguments are an array (no shell). The task file, its progress and result
  * files live inside the job folder; paths in a task are relative to it and
@@ -75,6 +75,7 @@ function dockerArgs(name: string, dir: string, taskRel: string, limits: RenderLi
     "--label", RENDER_LABEL,
     "-v", `${dir}:/work:rw`,
     "-v", `${path.join(/* turbopackIgnore: true */ root, "public/video-studio/fonts")}:/fonts:ro`,
+    "-v", `${path.join(/* turbopackIgnore: true */ root, "public/video-studio/sfx")}:/sfx:ro`,
     "-v", `${path.join(/* turbopackIgnore: true */ root, "ops/video-worker/render.mjs")}:/opt/render/render.mjs:ro`,
     RENDER_IMAGE,
     taskRel,

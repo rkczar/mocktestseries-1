@@ -73,8 +73,8 @@ try {
   await page.screenshot({ path: `${SHOTS}/m01-dashboard.png`, fullPage: true });
   await page.goto(`${BASE}/admin/video-studio/motion/styles`);
   // Previews mount after hydration (they need the page origin for their CSP).
-  await page.waitForFunction(() => document.querySelectorAll("[data-testid=motion-preview]").length >= 18, null, { timeout: 15000 }).catch(() => undefined);
-  check("style library: 6 styles × 3 live previews", (await page.locator("[data-style]").count()) === 6 && (await page.getByTestId("motion-preview").count()) === 18);
+  await page.waitForFunction(() => document.querySelectorAll("[data-testid=motion-preview]").length >= 24, null, { timeout: 15000 }).catch(() => undefined);
+  check("style library: 8 styles × 3 live previews (incl. Whiteboard Draw + Kinetic Typography)", (await page.locator("[data-style]").count()) === 8 && (await page.getByTestId("motion-preview").count()) === 24);
   const f0 = await (await page.getByTestId("motion-preview").first().elementHandle()).contentFrame();
   await f0.waitForFunction(() => document.fonts.status === "loaded", null, { timeout: 15000 });
   check("preview: no scripts, Devanagari font loaded", (await f0.evaluate(() => document.scripts.length)) === 0 && (await f0.evaluate(() => [...document.fonts].some((f) => f.family === "MTSDev" && f.status === "loaded"))));

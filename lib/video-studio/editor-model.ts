@@ -1,5 +1,6 @@
 import { ASPECT_KEYS, type AspectRatio } from "@/lib/video-studio/types";
 import { subtitleLines } from "@/lib/video-studio/text";
+import { SFX_MAP } from "@/lib/video-studio/sfx";
 
 /**
  * AI Video Editor — the project model (client-safe, pure, unit-tested).
@@ -12,6 +13,9 @@ import { subtitleLines } from "@/lib/video-studio/text";
  *    timeline for preview and export.
  *  - overlays: text / diagram / image / picture-in-picture / B-roll, in OUTPUT time.
  *  - audio: level, fades, clean-up, optional music bed.
+ *  - sfx: optional sound-effect clips (lib/video-studio/sfx.ts) in OUTPUT time; a clip may be anchored
+ *    to a cut (the start of a segment) or an overlay's start, so it follows that event when the edit
+ *    changes. Never added automatically.
  */
 
 export const FITS = ["blur", "crop", "pad"] as const;
@@ -62,6 +66,26 @@ export interface EditOverlay {
   srcIn?: number;
 }
 
+/**
+ * One sound-effect clip. `start` is the output second the clip's (trimmed) sound begins. When `anchor`
+ * is set, the start is recomputed from the anchored event + `offsetSec` (negative = before it, e.g. to
+ * land a whoosh's peak on the cut) and `start` is only the fallback if that event is deleted.
+ */
+export interface EditSfx {
+  id: string;
+  key: string;
+  start: number;
+  anchor: { kind: "cut" | "overlay"; id: string } | null;
+  offsetSec: number;
+  /** Trim inside the sound file (seconds). */
+  trimIn: number;
+  trimOut: number;
+  /** Linear gain, 0–1.5 (1 = the file's level, peak −3 dBFS). */
+  volume: number;
+  fadeInSec: number;
+  fadeOutSec: number;
+}
+
 export interface EditProject {
   version: 1;
   primary: string;
@@ -72,6 +96,8 @@ export interface EditProject {
   subtitles: { on: boolean; style: SubStyle; cues: EditCue[] };
   overlays: EditOverlay[];
   audio: { volume: number; fadeInSec: number; fadeOutSec: number; clean: boolean; musicKey: string | null; musicVolumePct: number };
+  /** Optional sound effects (absent in projects saved before they existed = none). */
+  sfx: EditSfx[];
   branding: boolean;
   designKey: string;
 }
@@ -84,7 +110,7 @@ export interface EditAsset {
 }
 
 export const FADE_SEC = 0.5;
-export const LIMITS = { segments: 200, cues: 1500, overlays: 60, text: 160 } as const;
+export const LIMITS = { segments: 200, cues: 1500, overlays: 60, text: 160, sfx: 40 } as const;
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const ID = /^[a-z0-9]{4,24}$/;
@@ -209,6 +235,7 @@ export function defaultProject(primary: EditAsset, aspect: AspectRatio, designKe
     subtitles: { on: true, style: "boxed", cues: [] },
     overlays: [],
     audio: { volume: 1, fadeInSec: 0, fadeOutSec: 0, clean: false, musicKey: null, musicVolumePct },
+    sfx: [],
     branding: true,
     designKey,
   };
@@ -287,6 +314,29 @@ export function parseEditProject(raw: unknown, assets: EditAsset[]): EditProject
     }
     overlays.push(ov);
   }
+  const sfx: EditSfx[] = [];
+  for (const x of Array.isArray(r.sfx) ? r.sfx.slice(0, LIMITS.sfx) : []) {
+    const o = x && typeof x === "object" ? (x as Record<string, unknown>) : {};
+    const sound = typeof o.key === "string" ? SFX_MAP[o.key] : undefined;
+    if (!sound) throw new EditValidationError("A sound effect refers to an unknown sound.");
+    const trimIn = r3(n(o.trimIn, 0, sound.durationSec - 0.05, 0));
+    const trimOut = r3(n(o.trimOut, trimIn + 0.05, sound.durationSec, sound.durationSec));
+    const len = trimOut - trimIn;
+    const a = o.anchor && typeof o.anchor === "object" ? (o.anchor as Record<string, unknown>) : null;
+    const anchor: EditSfx["anchor"] = a && (a.kind === "cut" || a.kind === "overlay") && typeof a.id === "string" && ID.test(a.id) ? { kind: a.kind, id: a.id } : null;
+    sfx.push({
+      id: typeof o.id === "string" && ID.test(o.id) ? o.id : newId(),
+      key: sound.key,
+      start: r3(n(o.start, 0, Math.max(0, total - 0.05), 0)),
+      anchor,
+      offsetSec: r3(n(o.offsetSec, -5, 5, 0)),
+      trimIn,
+      trimOut,
+      volume: r3(n(o.volume, 0, 1.5, 1)),
+      fadeInSec: r3(n(o.fadeInSec, 0, len / 2, 0)),
+      fadeOutSec: r3(n(o.fadeOutSec, 0, len / 2, 0)),
+    });
+  }
   const au = r.audio && typeof r.audio === "object" ? (r.audio as Record<string, unknown>) : {};
   const music = typeof au.musicKey === "string" ? byKey.get(au.musicKey) : undefined;
   if (au.musicKey && (!music || music.kind !== "music")) throw new EditValidationError("Unknown music file.");
@@ -307,7 +357,95 @@ export function parseEditProject(raw: unknown, assets: EditAsset[]): EditProject
       musicKey: music?.key ?? null,
       musicVolumePct: Math.round(n(au.musicVolumePct, 0, 60, 12)),
     },
+    sfx,
     branding: r.branding !== false,
     designKey: typeof r.designKey === "string" && /^[a-z_]{2,40}$/.test(r.designKey) ? r.designKey : "minimal_professional",
   };
+}
+
+/** Output time of a timeline event a sound effect can follow (null when the event no longer exists). */
+export function anchorTime(p: Pick<EditProject, "transition" | "segments" | "overlays">, anchor: EditSfx["anchor"]): number | null {
+  if (!anchor) return null;
+  if (anchor.kind === "cut") {
+    const i = p.segments.findIndex((x) => x.id === anchor.id);
+    return i < 0 ? null : segmentOffsets(p)[i];
+  }
+  const ov = p.overlays.find((x) => x.id === anchor.id);
+  return ov ? ov.start : null;
+}
+
+export interface ResolvedSfx {
+  id: string;
+  key: string;
+  file: string;
+  /** Output second the clip starts (after anchoring and clamping). */
+  start: number;
+  /** Seconds of the clip that play (trimmed, and cut at the end of the video). */
+  duration: number;
+  trimIn: number;
+  volume: number;
+  fadeInSec: number;
+  fadeOutSec: number;
+  /** The anchored event was deleted, so the stored start is used. */
+  orphaned: boolean;
+}
+
+/** Sound effects on the output timeline, sorted; clips that would start after the video ends are dropped. */
+export function sfxTimeline(p: EditProject): ResolvedSfx[] {
+  const total = outputDuration(p);
+  const out: ResolvedSfx[] = [];
+  for (const c of p.sfx ?? []) {
+    const sound = SFX_MAP[c.key];
+    if (!sound) continue;
+    const at = anchorTime(p, c.anchor);
+    const start = r3(Math.max(0, at === null ? c.start : at + c.offsetSec));
+    const duration = r3(Math.min(c.trimOut - c.trimIn, total - start));
+    if (duration < 0.05) continue;
+    out.push({ id: c.id, key: c.key, file: sound.file, start, duration, trimIn: c.trimIn, volume: c.volume, fadeInSec: Math.min(c.fadeInSec, duration / 2), fadeOutSec: Math.min(c.fadeOutSec, duration / 2), orphaned: c.anchor !== null && at === null });
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** The export task's `sfx` list (render.mjs doEdit): files under the container's read-only /sfx mount. */
+export function sfxRenderList(p: EditProject): { file: string; start: number; duration: number; trimIn: number; volume: number; fadeInSec: number; fadeOutSec: number }[] {
+  return sfxTimeline(p).map((c) => ({ file: c.file, start: c.start, duration: c.duration, trimIn: c.trimIn, volume: c.volume, fadeInSec: c.fadeInSec, fadeOutSec: c.fadeOutSec }));
+}
+
+export interface AudioCheck {
+  code: string;
+  severity: "warn" | "info";
+  message: string;
+}
+
+/**
+ * Pre-render audio checks for the sound effects (pure; the measured loudness of the export is reported
+ * after rendering). The export always ends in a limiter, so these warn about audible squashing, never
+ * about digital clipping in the file.
+ */
+export function sfxChecks(p: EditProject): AudioCheck[] {
+  const out: AudioCheck[] = [];
+  const total = outputDuration(p);
+  const list = sfxTimeline(p);
+  const dropped = (p.sfx ?? []).length - list.length;
+  if (dropped > 0) out.push({ code: "SFX_AFTER_END", severity: "warn", message: `${dropped} sound effect(s) start after the video ends and will not play.` });
+  for (const c of list) {
+    const sound = SFX_MAP[c.key];
+    if (c.orphaned) out.push({ code: `SFX_ORPHANED:${c.id}`, severity: "warn", message: `"${sound.label}" was attached to a cut or overlay that no longer exists; it now plays at ${c.start.toFixed(2)} s.` });
+    if (c.start + c.duration > total - 0.01 && c.duration < (SFX_MAP[c.key].durationSec - c.trimIn) - 0.05) out.push({ code: `SFX_CUT_OFF:${c.id}`, severity: "info", message: `"${sound.label}" is cut off by the end of the video.` });
+  }
+  // Worst-case peak where clips overlap: their peaks add (linear), on top of the voice track's level.
+  const peakLin = (c: ResolvedSfx) => 10 ** (SFX_MAP[c.key].peakDbfs / 20) * c.volume;
+  let worst = 0;
+  let worstAt = 0;
+  for (const c of list) {
+    const t = c.start + Math.min(c.duration, SFX_MAP[c.key].peakAtSec);
+    const sum = list.filter((o) => o.start <= t && t < o.start + o.duration).reduce((a, o) => a + peakLin(o), 0);
+    if (sum > worst) [worst, worstAt] = [sum, t];
+  }
+  const voice = Math.min(1, 0.9 * p.audio.volume);
+  if (worst + voice > 1.4) {
+    out.push({ code: "SFX_LOUD", severity: "warn", message: `Around ${worstAt.toFixed(1)} s, overlapping sound effects plus the voice could peak at ${(20 * Math.log10(worst + voice)).toFixed(1)} dBFS — the limiter will squash it. Lower their volume or move one.` });
+  }
+  if (list.length > Math.max(6, total / 2)) out.push({ code: "SFX_DENSE", severity: "info", message: `${list.length} sound effects in ${total.toFixed(0)} s — fewer usually sounds more professional.` });
+  return out;
 }

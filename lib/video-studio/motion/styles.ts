@@ -31,7 +31,7 @@ export const MOTION_LABELS: Record<MotionKey, { label: string; detail: string }>
 export const TRANSITIONS = ["none", "fade", "slideleft", "slideup", "smoothup", "circleopen", "fadeblack"] as const;
 export type Transition = (typeof TRANSITIONS)[number];
 
-export type MotionLayout = "map" | "levels" | "case" | "calendar" | "cards" | "photo";
+export type MotionLayout = "map" | "levels" | "case" | "calendar" | "cards" | "photo" | "board" | "kinetic";
 
 export interface MotionPalette {
   background: string;
@@ -171,6 +171,46 @@ export const MOTION_STYLES: MotionStyle[] = [
     highlight: "underline",
     tagHint: null,
     grain: true,
+  },
+  /**
+   * Styles added 2026-10-29 (Media Studio Phase 3). Original CSS only (no GSAP, no copied artwork): the
+   * whiteboard "writes" its headline and draws each box's outline with a marker; kinetic typography lands
+   * each on-screen word at the second it is spoken. Both are plain CSS keyframes, so the render container
+   * seeks them frame by frame like every other style.
+   */
+  {
+    key: "whiteboard",
+    name: "Whiteboard Draw",
+    inspiredBy: "Classroom whiteboard teaching",
+    job: "Teaching a concept the way a teacher explains it on a board",
+    description: "A clean whiteboard: the headline is written in marker as it is spoken, boxes and arrows draw themselves, and the key word is underlined in red.",
+    bestFor: ["Concept explainers", "Pathways and mechanisms", "Step-by-step teaching"],
+    layout: "board",
+    status: "ready",
+    palette: { background: "#fbfbf8", surface: "#ffffff", text: "#1f2937", muted: "#4b5563", accent: "#1d4ed8", highlight: "#dc2626", highlightText: "#ffffff", line: "#1f2937" },
+    devanagari: "kalam",
+    motions: ["draw", "stagger", "count"],
+    transition: { type: "fade", sec: 0.35 },
+    highlight: "underline",
+    tagHint: null,
+    grain: false,
+  },
+  {
+    key: "kinetic_type",
+    name: "Kinetic Typography",
+    inspiredBy: "Kinetic type reels",
+    job: "High-energy revision lines where the words themselves are the visual",
+    description: "Big bold words land one by one in time with the voice — slam, slide and drop — with the key word largest in colour. Best for short, punchy facts.",
+    bestFor: ["Revision reels", "Mnemonics", "One-line high-yield facts"],
+    layout: "kinetic",
+    status: "ready",
+    palette: { background: "#0b0b12", surface: "#171723", text: "#f8f8f2", muted: "#a1a1b5", accent: "#7cf0c5", highlight: "#ffd23f", highlightText: "#0b0b12", line: "#34344a" },
+    devanagari: "noto",
+    motions: ["pop", "slide_up", "stagger", "count"],
+    transition: { type: "slideup", sec: 0.3 },
+    highlight: "box",
+    tagHint: null,
+    grain: false,
   },
 ];
 

@@ -80,8 +80,9 @@ async function main() {
   const skills = await import("@/lib/video-studio/skills");
 
   console.log("\nA. Styles, skills");
-  await check("six styles, each with a motion set, a transition and readable contrast", () => {
-    assert.equal(styles.MOTION_STYLES.length, 6);
+  await check("eight styles (the original six + Whiteboard Draw + Kinetic Typography), each with a motion set, a transition and readable contrast", () => {
+    assert.equal(styles.MOTION_STYLES.length, 8);
+    for (const k of ["big_sentence", "concept_map", "level_up", "case_story", "time_course", "photo_story", "whiteboard", "kinetic_type"]) assert.ok(styles.MOTION_STYLE_MAP[k], k);
     for (const s of styles.MOTION_STYLES) {
       assert.ok(s.motions.length >= 2, s.key);
       assert.ok((styles.TRANSITIONS as readonly string[]).includes(s.transition.type), s.key);

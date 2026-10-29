@@ -36,6 +36,8 @@ import path from "node:path";
 
 const WORK = "/work";
 const FONTS = "/fonts";
+const SFX = "/sfx";
+const SFX_FILE = /^[a-z0-9_]{1,60}\.wav$/;
 const ORIGIN = "http://render.local";
 const REL = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}$/;
 
@@ -403,7 +405,10 @@ async function doAudio(t) {
  *     Chromium on a transparent page the size of the video (text, diagrams, subtitles);
  *     image / video overlays (B-roll, picture-in-picture) are scaled into their box,
  *   subtitles: { html } — one transparent document whose cues are timed like a scene,
- *   audio: { volume, fadeInSec, fadeOutSec, clean, music?: { file, volume } }.
+ *   audio: { volume, fadeInSec, fadeOutSec, clean, music?: { file, volume } },
+ *   sfx: [{ file, start, duration, trimIn, volume, fadeInSec, fadeOutSec }] — optional bundled sound
+ *     effects (read-only at /sfx), already resolved to output seconds; mixed over the finished audio.
+ * The result carries an audio report: integrated loudness + true peak (EBU R128) and stream lengths.
  */
 async function doEdit(t) {
   const W = num(t.width, 240, 3840, "width");
@@ -544,6 +549,47 @@ async function doEdit(t) {
     f.push(`[nm][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[mix]`);
     alast = "mix";
   }
+  // Sound effects: each clip trimmed, levelled, faded and delayed to its output second, then summed
+  // over the finished audio (duration = the video's) and limited to −1 dBFS, so overlaps cannot clip the
+  // file even after AAC's inter-sample overshoot. level=0: alimiter's default auto-level adds make-up gain
+  // back to 0 dBFS (measured +0.1 dBTP on stacked effects and +0.5 dB on every clip with it on).
+  const sfx = Array.isArray(t.sfx) ? t.sfx : [];
+  if (sfx.length > 40) throw new Error("At most 40 sound effects.");
+  const clips = [];
+  for (const c of sfx) {
+    if (typeof c?.file !== "string" || !SFX_FILE.test(c.file)) throw new Error(`Invalid sound effect: ${String(c?.file).slice(0, 60)}`);
+    const start = num(c.start, 0, total, "sound effect start");
+    const duration = Math.min(num(c.duration, 0.05, 30, "sound effect duration"), total - start);
+    if (duration < 0.05) continue;
+    const fi = Math.min(num(c.fadeInSec ?? 0, 0, 15, "sound effect fade in"), duration / 2);
+    const fo = Math.min(num(c.fadeOutSec ?? 0, 0, 15, "sound effect fade out"), duration / 2);
+    clips.push({ file: c.file, start, duration, trimIn: num(c.trimIn ?? 0, 0, 30, "sound effect trim"), volume: num(c.volume ?? 1, 0, 1.5, "sound effect volume"), fi, fo });
+  }
+  if (clips.length) {
+    const byFile = new Map();
+    for (const c of clips) byFile.set(c.file, [...(byFile.get(c.file) ?? []), c]);
+    const labels = [];
+    for (const [file, list] of byFile) {
+      const idx = addInput(path.join(SFX, file));
+      const ins = list.map((_, k) => `sfi${labels.length + k}`);
+      f.push(list.length > 1 ? `[${idx}:a]asplit=${list.length}${ins.map((x) => `[${x}]`).join("")}` : `[${idx}:a]anull[${ins[0]}]`);
+      list.forEach((c, k) => {
+        const chain = [`atrim=start=${c.trimIn.toFixed(3)}:duration=${c.duration.toFixed(3)}`, "asetpts=PTS-STARTPTS", "aresample=48000", "aformat=sample_fmts=fltp:channel_layouts=stereo", `volume=${c.volume}`];
+        if (c.fi > 0) chain.push(`afade=t=in:st=0:d=${c.fi.toFixed(3)}`);
+        if (c.fo > 0) chain.push(`afade=t=out:st=${(c.duration - c.fo).toFixed(3)}:d=${c.fo.toFixed(3)}`);
+        chain.push(`adelay=${Math.round(c.start * 1000)}:all=1`);
+        const out = `sfx${labels.length}`;
+        f.push(`[${ins[k]}]${chain.join(",")}[${out}]`);
+        labels.push(out);
+      });
+    }
+    // The bed is padded and cut to exactly the video's length first: fed straight from a multi-segment
+    // concat, amix dropped its last ~53 ms (audio 19.946 s vs video 20.000 s; one segment was exact).
+    f.push(`[${alast}]apad,atrim=duration=${total.toFixed(3)}[sfxbed]`);
+    // latency=1: without it the limiter's 5 ms look-ahead delays the whole soundtrack (voice included) behind the picture.
+    f.push(`[sfxbed]${labels.map((l) => `[${l}]`).join("")}amix=inputs=${labels.length + 1}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.891:level=0:latency=1[sfxmix]`);
+    alast = "sfxmix";
+  }
   const output = rel(t.output);
   await fs.mkdir(path.dirname(output), { recursive: true });
   const tmp = `${output}.part.mp4`;
@@ -559,9 +605,29 @@ async function doEdit(t) {
     },
   });
   const probe = await validateOutput(tmp, { width: W, height: H, audio: true, durationSec: total });
+  await progress("audio-check", 99, {}, true);
+  const audioReport = await measureAudio(tmp);
   await fs.rename(tmp, output);
   await fs.rm(work, { recursive: true, force: true });
-  return { output: t.output, durationSec: probe.durationSec, sizeBytes: probe.sizeBytes, width: W, height: H };
+  return { output: t.output, durationSec: probe.durationSec, sizeBytes: probe.sizeBytes, width: W, height: H, sfxCount: clips.length, audioReport };
+}
+
+/**
+ * Loudness (EBU R128 integrated, true peak) and the audio vs video stream lengths of a finished MP4.
+ * Reported, never fatal: a failed measurement leaves the numbers null.
+ */
+async function measureAudio(abs) {
+  const j = JSON.parse((await run("ffprobe", ["-v", "error", "-print_format", "json", "-show_entries", "stream=codec_type,duration", abs], { timeoutMs: 60_000 })).toString());
+  const len = (type) => r3(Number((j.streams ?? []).find((x) => x.codec_type === type)?.duration ?? 0) || 0);
+  let log = "";
+  try {
+    await run("ffmpeg", ["-hide_banner", "-nostdin", "-i", abs, "-map", "0:a:0", "-af", "ebur128=peak=true:framelog=verbose", "-f", "null", "-"], { timeoutMs: 10 * 60_000, onStderr: (x) => (log = (log + x).slice(-6000)) });
+  } catch {
+    log = "";
+  }
+  const lufs = /I:\s+(-?[\d.]+) LUFS/.exec(log.slice(log.lastIndexOf("Summary:")));
+  const peak = /True peak:\s+Peak:\s+(-?[\d.]+) dBFS/.exec(log.slice(log.lastIndexOf("Summary:")));
+  return { lufs: lufs ? Number(lufs[1]) : null, truePeakDb: peak ? Number(peak[1]) : null, audioSec: len("audio"), videoSec: len("video") };
 }
 
 async function captureDocTransparent(page, htmlRel, durationSec, fps, outDir) {

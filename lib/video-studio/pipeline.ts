@@ -17,7 +17,7 @@ import { getVoiceCatalog, speechCostUsd } from "@/lib/video-studio/voices";
 import { unsupportedVideoChars } from "@/lib/video-studio/glyphs";
 import { sceneDocument, type SceneVisual } from "@/lib/video-studio/template";
 import { overlayDocument, subtitleDocument } from "@/lib/video-studio/editor-docs";
-import { cuesFromSegments, cuesFromWords, defaultProject, outputCues, outputDuration, parseEditProject, type EditAsset, type EditProject } from "@/lib/video-studio/editor-model";
+import { cuesFromSegments, cuesFromWords, defaultProject, outputCues, outputDuration, parseEditProject, sfxRenderList, type EditAsset, type EditProject } from "@/lib/video-studio/editor-model";
 import { buildScriptPrompt, extractJson, parseScene, parseScript, plainQuestionText, throwingCheck, type ScriptMaterial, type SourceQuestion } from "@/lib/video-studio/script";
 import { RENDER_FONT_BASE, RENDER_FONT_ORIGIN } from "@/lib/video-studio/render-manifest";
 import { RenderError, killStrayContainers, renderImageId, renderToolchain, runRenderTask } from "@/lib/video-studio/render-runner";
@@ -392,12 +392,30 @@ async function runGenerateRender(job: VideoJob) {
   await runInContainer(job, "render", { type: "generate", width, height, fps: 25, transition: "fade", transitionSec: 0.35, scenes: list, music, output: "out/video.mp4" }, settings);
 }
 
+/** Measured by the render container after an editor export (ffmpeg ebur128 + stream durations). */
+export interface AudioReport {
+  lufs: number | null;
+  truePeakDb: number | null;
+  audioSec: number;
+  videoSec: number;
+}
+
+/** One line for the job log: the measurements, then any warning (loudness for phone playback, peak, A/V length). */
+export function audioReportText(a: AudioReport): string {
+  const parts = [`Audio: ${a.lufs === null ? "loudness not measured" : `${a.lufs.toFixed(1)} LUFS`}, true peak ${a.truePeakDb === null ? "n/a" : `${a.truePeakDb.toFixed(1)} dBTP`}, audio ${a.audioSec.toFixed(2)} s / video ${a.videoSec.toFixed(2)} s.`];
+  if (a.truePeakDb !== null && a.truePeakDb > -0.5) parts.push("Warning: the peak is close to clipping.");
+  if (a.lufs !== null && a.lufs < -24) parts.push("Warning: quiet for phone playback (aim for about −16 to −14 LUFS).");
+  if (a.lufs !== null && a.lufs > -9) parts.push("Warning: very loud (aim for about −16 to −14 LUFS).");
+  if (Math.abs(a.audioSec - a.videoSec) > 0.1) parts.push(`Warning: audio and video lengths differ by ${Math.abs(a.audioSec - a.videoSec).toFixed(2)} s.`);
+  return parts.join(" ");
+}
+
 /** Runs a render/export task with progress, cancellation and the Live CBT stop; records the validated output. */
 async function runInContainer(job: VideoJob, name: "render" | "export", task: Record<string, unknown>, settings: VideoStudioSettings) {
   let liveStop = false;
   const started = Date.now();
   try {
-    const r = await runRenderTask<{ output: string; durationSec: number; sizeBytes: number }>(job.id, name, task, {
+    const r = await runRenderTask<{ output: string; durationSec: number; sizeBytes: number; audioReport?: AudioReport }>(job.id, name, task, {
       limits: renderLimits(settings),
       timeoutSec: settings.renderTimeoutMin * 60,
       onProgress: (p) => progress(job.id, name, p.pct),
@@ -423,6 +441,7 @@ async function runInContainer(job: VideoJob, name: "render" | "export", task: Re
       errorMessage: null,
     });
     if (ok) await addEvent(job.id, null, "completed", `MP4 ready: ${r.durationSec.toFixed(1)} s, ${(r.sizeBytes / 1024 / 1024).toFixed(1)} MB, rendered in ${Math.round((Date.now() - started) / 1000)} s.`);
+    if (ok && r.audioReport) await addEvent(job.id, null, "audio_checked", audioReportText(r.audioReport), { ...r.audioReport });
     await refreshStorageBytes(job.id);
   } catch (e) {
     if (e instanceof RenderError && e.kind === "cancelled") throw new Paused(liveStop ? "live" : "cancelled");
@@ -549,11 +568,13 @@ async function runExport(job: VideoJob) {
   const primary = assets.find((a) => a.key === p.primary);
   const fps = Math.min(30, Math.max(24, Math.round(primary?.video?.fps ?? 25)));
   const music = p.audio.musicKey ? { file: p.audio.musicKey, volume: p.audio.musicVolumePct / 100 } : null;
-  await addEvent(job.id, null, "export_started", `Export: ${outputDuration(p).toFixed(1)} s, ${p.segments.length} segment(s), ${p.overlays.length} overlay(s), ${cues.length} subtitle cue(s).`);
+  // Optional sound effects: bundled WAVs (mounted read-only at /sfx), already resolved to output time.
+  const sfx = sfxRenderList(p);
+  await addEvent(job.id, null, "export_started", `Export: ${outputDuration(p).toFixed(1)} s, ${p.segments.length} segment(s), ${p.overlays.length} overlay(s), ${cues.length} subtitle cue(s)${sfx.length ? `, ${sfx.length} sound effect(s)` : ""}.`);
   await runInContainer(
     job,
     "export",
-    { type: "edit", width, height, fps, fit: p.fit, transition: p.transition, segments: p.segments.map((s) => ({ src: s.src, in: s.in, out: s.out, volume: s.volume })), overlays, subtitles, audio: { volume: p.audio.volume, fadeInSec: p.audio.fadeInSec, fadeOutSec: p.audio.fadeOutSec, clean: p.audio.clean, music }, output: "out/edit.mp4" },
+    { type: "edit", width, height, fps, fit: p.fit, transition: p.transition, segments: p.segments.map((s) => ({ src: s.src, in: s.in, out: s.out, volume: s.volume })), overlays, subtitles, audio: { volume: p.audio.volume, fadeInSec: p.audio.fadeInSec, fadeOutSec: p.audio.fadeOutSec, clean: p.audio.clean, music }, sfx, output: "out/edit.mp4" },
     settings
   );
 }
