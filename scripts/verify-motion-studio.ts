@@ -34,6 +34,8 @@ const PORT = Number(process.env.MOCK_OPENROUTER_PORT ?? 3197);
 process.env.OPENROUTER_TEST_BASE_URL = `http://127.0.0.1:${PORT}`;
 process.env.FX_TEST_BASE_URL = `http://127.0.0.1:${PORT}`;
 process.env.VIDEO_STUDIO_DISABLE_KICK = "1";
+// Own container label: this run never sweeps production renders, and production never sweeps these.
+if (!process.env.VIDEO_RENDER_INSTANCE || process.env.VIDEO_RENDER_INSTANCE === "1") process.env.VIDEO_RENDER_INSTANCE = "scratch-test";
 
 const outbound: string[] = [];
 const realFetch = globalThis.fetch;

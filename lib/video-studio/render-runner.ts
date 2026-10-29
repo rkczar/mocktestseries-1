@@ -28,6 +28,15 @@ const DOCKER = "/usr/bin/docker";
 /** Unprivileged uid/gid the container runs as; the job folder is handed to it before a task. */
 export const RENDER_UID = 10001;
 
+/**
+ * Which worker owns a render container. Production keeps the original label value "1"; a scratch/test
+ * worker sets VIDEO_RENDER_INSTANCE (e.g. "scratch-media") so neither environment's stray-container sweep
+ * kills the other's renders. (2026-10-29: the production cron's sweep killed every scratch render within
+ * a minute — exit 137, reported as "ran out of memory" although Docker recorded no OOM.)
+ */
+export const RENDER_INSTANCE = /^[a-z0-9-]{1,40}$/.test(process.env.VIDEO_RENDER_INSTANCE ?? "") ? process.env.VIDEO_RENDER_INSTANCE! : "1";
+export const RENDER_LABEL = `mts.video=${RENDER_INSTANCE}`;
+
 export class RenderError extends Error {
   constructor(
     message: string,
@@ -63,7 +72,7 @@ function dockerArgs(name: string, dir: string, taskRel: string, limits: RenderLi
     "--user", `${RENDER_UID}:${RENDER_UID}`,
     "--cpus", String(limits.cpus), "--cpu-shares", "256",
     "--memory", `${limits.memoryMb}m`, "--memory-swap", `${limits.memoryMb}m`, "--pids-limit", "512",
-    "--label", "mts.video=1",
+    "--label", RENDER_LABEL,
     "-v", `${dir}:/work:rw`,
     "-v", `${path.join(/* turbopackIgnore: true */ root, "public/video-studio/fonts")}:/fonts:ro`,
     "-v", `${path.join(/* turbopackIgnore: true */ root, "ops/video-worker/render.mjs")}:/opt/render/render.mjs:ro`,
@@ -178,9 +187,9 @@ export async function runRenderTask<T = Record<string, unknown>>(jobId: string, 
   return result;
 }
 
-/** Containers left by a crashed worker (label mts.video=1) — killed by the next worker run. */
+/** Containers left by a crashed worker of THIS instance (RENDER_LABEL) — killed by the next worker run. */
 export async function killStrayContainers(): Promise<number> {
-  const r = await exec(["ps", "-q", "--filter", "label=mts.video=1"], 20_000);
+  const r = await exec(["ps", "-q", "--filter", `label=${RENDER_LABEL}`], 20_000);
   const ids = r.stdout.split("\n").map((s) => s.trim()).filter((s) => /^[a-f0-9]{6,64}$/.test(s));
   for (const id of ids) await exec(["kill", id], 20_000);
   return ids.length;

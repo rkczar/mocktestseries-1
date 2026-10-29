@@ -40,6 +40,8 @@ const PORT = Number(process.env.MOCK_OPENROUTER_PORT ?? 3196);
 process.env.OPENROUTER_TEST_BASE_URL = `http://127.0.0.1:${PORT}`;
 process.env.FX_TEST_BASE_URL = `http://127.0.0.1:${PORT}`;
 process.env.VIDEO_STUDIO_DISABLE_KICK = "1";
+// Own container label: this run never sweeps production renders, and production never sweeps these.
+if (!process.env.VIDEO_RENDER_INSTANCE || process.env.VIDEO_RENDER_INSTANCE === "1") process.env.VIDEO_RENDER_INSTANCE = "scratch-test";
 
 const outbound: string[] = [];
 const realFetch = globalThis.fetch;
@@ -459,7 +461,7 @@ async function main() {
       const j = await reload(mcqId);
       assert.equal(j.status, "RENDERING", `${j.status} ${j.errorMessage}`);
       assert.ok((await prisma.videoJobEvent.findMany({ where: { jobId: mcqId, type: "paused" } })).length > 0, "paused event");
-      const containers = execFileSync("/usr/bin/docker", ["ps", "-q", "--filter", "label=mts.video=1"], { encoding: "utf8" }).trim();
+      const containers = execFileSync("/usr/bin/docker", ["ps", "-q", "--filter", `label=mts.video=${process.env.VIDEO_RENDER_INSTANCE}`], { encoding: "utf8" }).trim();
       assert.equal(containers, "", "no render container left running");
     } finally {
       await prisma.liveTest.delete({ where: { id: lt.id } });
