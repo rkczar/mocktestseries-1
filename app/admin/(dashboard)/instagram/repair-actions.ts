@@ -150,7 +150,7 @@ export async function proposeAiAction(input: { postId: string; expectedRevision:
         current: base,
         targets: fields,
         instruction: instruction || undefined,
-        reference: await getAiReference(post.questionId),
+        reference: post.questionId ? await getAiReference(post.questionId) : null,
         allowedDomains: allowedCaptionDomains(settings),
         actorId,
         provider,

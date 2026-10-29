@@ -19,6 +19,7 @@ import {
   createPyqDraftAction,
   deleteDraftAction,
   loadQuestionPostAction,
+  loadTopicPostAction,
   prefillFromExplanationAction,
   refreshSnapshotAction,
   restoreRevisionAction,
@@ -39,6 +40,9 @@ import { ChecksPanel } from "@/components/admin/instagram/checks-panel";
 import {
   CONTENT_FIELD_LABELS,
   DEFAULT_LAYOUTS,
+  QUESTION_ONLY_MODULES,
+  layoutKindOf,
+  topicLayout,
   HOOK_STYLE_LABELS,
   LIMITS,
   MAX_SLIDES,
@@ -56,11 +60,13 @@ import {
 
 
 export interface EditorTarget {
+  /** "" for a TOPIC post (topicKey set instead). */
   questionId: string;
+  topicKey?: string;
   code: string;
   preview: string;
-  /** Which series a NEW draft belongs to. */
-  series: "PYQ" | "MOST_MISSED";
+  /** Which series a NEW draft belongs to (TOPIC drafts are created on Instagram → Topics). */
+  series: "PYQ" | "MOST_MISSED" | "TOPIC";
   /** Most Missed: the list's query string — the server recomputes the numbers from it. */
   filterQuery?: string;
   /** Open straight into the "Publish to Instagram?" confirmation (Drafts / Bulk Studio "Publish" buttons). */
@@ -191,7 +197,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
   useEffect(() => {
     if (!target) return;
     let cancelled = false;
-    loadQuestionPostAction(target.questionId).then((r) => {
+    (target.topicKey ? loadTopicPostAction(target.topicKey) : loadQuestionPostAction(target.questionId)).then((r) => {
       if (cancelled) return;
       setLoading(false);
       if (!r.ok) return setMessage({ tone: "error", text: r.error });
@@ -205,7 +211,8 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
 
   const dirty = Boolean(post && draft && !sameDraft(draft, post));
   const editable = Boolean(post && post.isCurrent && (post.status === "DRAFT" || post.status === "FAILED"));
-  const moduleError = draft ? validateModules(draft.design.modules) : null;
+  const isTopic = post?.series === "TOPIC";
+  const moduleError = draft ? validateModules(draft.design.modules, layoutKindOf(post?.series)) : null;
 
   // Server-rendered preview of the current slide (debounced).
   useEffect(() => {
@@ -276,7 +283,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
     setDraft((d) => (d ? { ...d, design: { ...d.design, ...p } } : d));
   }
   function setSlideCount(n: SlideCount) {
-    patchDesign({ slideCount: n, modules: [...DEFAULT_LAYOUTS[n]] });
+    patchDesign({ slideCount: n, modules: isTopic ? topicLayout(n) : [...DEFAULT_LAYOUTS[n]] });
     setSlide((s) => Math.min(s, n - 1));
   }
   function setModules(modules: SlideModule[]) {
@@ -402,7 +409,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
               </DialogPrimitive.Title>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
                 {post ? <InstagramStatusBadge status={post.status} posted={state?.posted} /> : state ? <InstagramStatusBadge status="NOT_CREATED" /> : null}
-                {post ? <span>{`${post.series === "PYQ" ? "PYQ Series" : "Most Missed MCQ"} · v${post.version} · revision ${post.revision}`}</span> : null}
+                {post ? <span>{`${post.series === "PYQ" ? "PYQ Series" : post.series === "TOPIC" ? "Topic Post" : "Most Missed MCQ"} · v${post.version} · revision ${post.revision}`}</span> : null}
                 {dirty ? <Badge variant="warning">Unsaved changes</Badge> : null}
               </div>
             </div>
@@ -434,7 +441,12 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
             ) : null}
 
             {/* No post yet */}
-            {showCreate && target ? (
+            {showCreate && target?.topicKey ? (
+              <div className="mx-auto flex max-w-xl flex-col gap-4 p-6" data-testid="topic-missing-panel">
+                <p className="text-sm text-[var(--color-muted-foreground)]">This topic has no current post (the draft was deleted). Create it again from Instagram → Topics.</p>
+              </div>
+            ) : null}
+            {showCreate && target && !target.topicKey ? (
               <div className="mx-auto flex max-w-xl flex-col gap-4 p-6" data-testid="create-draft-panel">
                 <p className="text-sm text-[var(--color-muted-foreground)]">No Instagram post exists for this question yet.</p>
                 <p className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-4 text-sm">{target.preview}</p>
@@ -518,13 +530,14 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                   </div>
                   {/* Original question (read-only) */}
                   <details className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-sm" open>
-                    <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">Original question (read-only snapshot)</summary>
+                    <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-[var(--color-muted-foreground)]">{isTopic ? "Topic and source notes (read-only)" : "Original question (read-only snapshot)"}</summary>
                     <div className="mt-2 flex flex-col gap-2" data-testid="snapshot">
                       <p className="text-xs text-[var(--color-muted-foreground)]">
                         {`${snapshot.examName}${snapshot.paperYear ? ` · ${snapshot.paperYear}` : ""}${snapshot.paperTitle ? ` · ${snapshot.paperTitle}` : ""} · ${snapshot.subjectName}${snapshot.topicName ? ` / ${snapshot.topicName}` : ""}`}
                         {snapshot.importPosition ? ` · stored position ${snapshot.importPosition} (not the printed number)` : ""}
                       </p>
                       <p>{snapshot.text.replace(/<[^>]+>/g, " ")}</p>
+                      {isTopic ? <p className="whitespace-pre-wrap text-xs" data-testid="topic-notes">{snapshot.notes || "No source notes were given for this topic."}</p> : null}
                       <ul className="flex flex-col gap-1">
                         {snapshot.options.map((o) => (
                           <li key={o.label} className={cn(o.isCorrect && "font-semibold text-[var(--color-success)]")}>
@@ -688,7 +701,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                             <Sparkles className="h-4 w-4" aria-hidden /> Smart layout
                           </Button>
                         </div>
-                        <p className="text-[11px] text-[var(--color-muted-foreground)]">{`${MIN_SLIDES}–${MAX_SLIDES} slides. 7 = Question → Answer → Diagram → Pearls → Mistakes → Examiner Trap → Follow. Smart layout uses only the sections this post has.`}</p>
+                        <p className="text-[11px] text-[var(--color-muted-foreground)]">{isTopic ? `${MIN_SLIDES}–${MAX_SLIDES} slides. Topic posts start with the Hook (cover) and have no Question, Answer or Examiner Trap slide.` : `${MIN_SLIDES}–${MAX_SLIDES} slides. 7 = Question → Answer → Diagram → Pearls → Mistakes → Examiner Trap → Follow. Smart layout uses only the sections this post has.`}</p>
                       </div>
                       <div className="flex flex-col gap-2">
                         <span className="text-xs font-medium text-[var(--color-muted-foreground)]">Slide order</span>
@@ -698,7 +711,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                             <div key={i} className="flex items-center gap-1.5" data-testid={`module-row-${i}`}>
                               <span className="w-6 text-sm tabular-nums">{i + 1}.</span>
                               <SelectNative value={m} onChange={(e) => setModuleAt(i, e.target.value as SlideModule)} disabled={last}>
-                                {SLIDE_MODULES.map((x) => (
+                                {SLIDE_MODULES.filter((x) => !isTopic || !QUESTION_ONLY_MODULES.includes(x)).map((x) => (
                                   <option key={x} value={x}>
                                     {MODULE_LABELS[x]}
                                   </option>
@@ -837,7 +850,7 @@ export function CarouselEditor({ target, onClose }: { target: EditorTarget | nul
                             <li key={h.id} className="flex flex-wrap items-center gap-2">
                               <span className="font-mono text-xs">{`v${h.version}`}</span>
                               <InstagramStatusBadge status={h.status} />
-                              <span className="text-xs text-[var(--color-muted-foreground)]">{`${h.series === "PYQ" ? "PYQ" : "Most Missed"} · created ${fmt(h.createdAt)}${h.publishedAt ? ` · posted ${fmt(h.publishedAt)}` : ""}${h.supersededAt ? " · superseded" : ""}`}</span>
+                              <span className="text-xs text-[var(--color-muted-foreground)]">{`${h.series === "PYQ" ? "PYQ" : h.series === "TOPIC" ? "Topic" : "Most Missed"} · created ${fmt(h.createdAt)}${h.publishedAt ? ` · posted ${fmt(h.publishedAt)}` : ""}${h.supersededAt ? " · superseded" : ""}`}</span>
                               {h.igPermalink ? (
                                 <a href={h.igPermalink} target="_blank" rel="noreferrer" className="text-xs underline">
                                   View on Instagram

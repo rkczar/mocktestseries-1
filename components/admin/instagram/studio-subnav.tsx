@@ -9,6 +9,7 @@ export const STUDIO_SECTIONS = [
   { label: "Bulk Studio", href: "/admin/instagram/bulk" },
   { label: "PYQ Series", href: "/admin/instagram/pyq" },
   { label: "Most Missed MCQ", href: "/admin/instagram/most-missed" },
+  { label: "Topic Posts", href: "/admin/instagram/topics" },
   { label: "Drafts", href: "/admin/instagram/drafts" },
   { label: "Published History", href: "/admin/instagram/history" },
   { label: "Trends & Competitors", href: "/admin/instagram/trends" },

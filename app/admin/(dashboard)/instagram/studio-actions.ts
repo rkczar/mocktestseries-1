@@ -119,7 +119,7 @@ async function editorBase(input: EditorInput) {
   const current = await getPostDto(postId);
   const content = checkContentInput(input.content, current.content);
   if (!content.ok) throw new StudioError(content.error);
-  const design = checkDesignInput(input.design);
+  const design = checkDesignInput(input.design, current.series);
   if (!design.ok) throw new StudioError(design.error);
   return { postId, current, content: content.value, design: design.value, expectedRevision: checkRevision(input.expectedRevision) };
 }

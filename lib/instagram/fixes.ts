@@ -150,7 +150,7 @@ export interface FixContext {
   snapshot: SourceSnapshot;
   content: PostContent;
   design: PostDesign;
-  series: "PYQ" | "MOST_MISSED";
+  series: "PYQ" | "MOST_MISSED" | "TOPIC";
   normalize: Normalizer;
   questionEditHref: string;
 }

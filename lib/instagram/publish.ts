@@ -8,8 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { storageRootDir } from "@/lib/question-images";
 import { WEBSITE_URL_DEFAULT, getStudioSettings } from "@/lib/instagram/config";
 import { blockingIssues, checklistFor, type QualityIssue } from "@/lib/instagram/quality";
-import { StudioError, issuesFor } from "@/lib/instagram/posts";
-import { currentSourceHash } from "@/lib/instagram/snapshot";
+import { StudioError, issuesFor, sourceHashNow } from "@/lib/instagram/posts";
 import { renderSlideJpeg } from "@/lib/instagram/render";
 import { EXPECTED_INSTAGRAM_USERNAME, isExpired, isPermissionError, isRateLimit, isTokenError, publishingApi, type GraphFail, type GraphOk, type PublishingApi } from "@/lib/instagram/meta";
 import { isStale, publishView, readJob, type PublishErrorCategory, type PublishFormat, type PublishJob, type PublishView } from "@/lib/instagram/publish-view";
@@ -308,7 +307,7 @@ export async function checkPublishable(post: InstagramPost, expectedRevision: nu
   if (post.status !== "DRAFT" && post.status !== "READY" && post.status !== "FAILED") throw new StudioError("This post can't be published in its current state.", "blocked");
   if (post.revision !== expectedRevision) throw new StudioError("This post was changed in another window. Reload it first.", "conflict");
   const settings = await getStudioSettings();
-  const issues = issuesFor(post, await currentSourceHash(post.questionId), settings);
+  const issues = issuesFor(post, await sourceHashNow(post), settings);
   const blocked = blockingIssues(issues);
   if (blocked.length) throw new StudioError(`Publishing blocked: ${blocked[0].message}`, "blocked");
 
@@ -317,7 +316,7 @@ export async function checkPublishable(post: InstagramPost, expectedRevision: nu
   if (format === "CAROUSEL" && (slideCount < CAROUSEL_MIN || slideCount > CAROUSEL_MAX)) throw new StudioError(`A carousel needs ${CAROUSEL_MIN}–${CAROUSEL_MAX} slides.`);
   const caption = composeCaption(normalizeContent(post.content));
   captionChecks(caption);
-  const checklist = checklistFor(design).map((c) => ({ key: c.key, label: c.label }));
+  const checklist = checklistFor(design, post.series).map((c) => ({ key: c.key, label: c.label }));
   return { caption, slideCount, username: EXPECTED_INSTAGRAM_USERNAME, warnings: issues.filter((i) => i.severity === "warning"), checklist };
 }
 

@@ -4,7 +4,7 @@ import { planSlides, plainText, slideSequence } from "@/lib/instagram/layout";
 import { checkDiagram, diagramLayout, diagramTexts, diagramTitleOverflows } from "@/lib/instagram/diagram";
 import { checkTrap, trapLengthNotes, trapTexts } from "@/lib/instagram/trap";
 import { EXCLUDED_TERMS, isExcludedExam } from "@/lib/instagram/exam-scope";
-import { MAX_SLIDES, MODULE_LABELS, type PostContent, type PostDesign, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
+import { MAX_SLIDES, MODULE_LABELS, QUESTION_ONLY_MODULES, TOPIC_LIMITS, isTopicSnapshot, type PostContent, type PostDesign, type SeriesStats, type SourceSnapshot } from "@/lib/instagram/types";
 import { describeChar } from "@/lib/instagram/text-normalize";
 import { DIFFICULTY_LABELS, legacyDifficultyNote } from "@/lib/question-difficulty";
 
@@ -34,7 +34,7 @@ export interface QualityInput {
   snapshot: SourceSnapshot;
   content: PostContent;
   design: PostDesign;
-  series: "PYQ" | "MOST_MISSED";
+  series: "PYQ" | "MOST_MISSED" | "TOPIC";
   seriesStats: SeriesStats | null;
   questionNumber: number | null;
   questionNumberVerified: boolean;
@@ -60,10 +60,13 @@ export type ChecklistKey = (typeof REVIEW_CHECKLIST)[number]["key"];
 
 const EXTRA_MODULES = ["DIAGRAM", "TRAP", "PEARLS", "MISTAKES"];
 
+/** Checklist items about a source question (paper text, answer key, PYQ attribution) — not asked for TOPIC posts. */
+const QUESTION_CHECKLIST: ChecklistKey[] = ["textMatchesPaper", "answerVerified", "attributionVerified"];
+
 /** The checklist for one post: the extras item applies only when the carousel has a Diagram / Trap / Pearls / Mistakes slide. */
-export function checklistFor(design: Pick<PostDesign, "modules">) {
+export function checklistFor(design: Pick<PostDesign, "modules">, series?: QualityInput["series"]) {
   const extras = design.modules.some((m) => EXTRA_MODULES.includes(m));
-  return REVIEW_CHECKLIST.filter((c) => c.key !== "extrasReviewed" || extras);
+  return REVIEW_CHECKLIST.filter((c) => (c.key !== "extrasReviewed" || extras) && (series !== "TOPIC" || !QUESTION_CHECKLIST.includes(c.key)));
 }
 
 /** Common correct-lowercase stem openings (units, gene/drug names) that are not OCR damage. */
@@ -91,30 +94,44 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
     err("SOURCE_CHANGED", "The question was edited in the Question Bank after this draft was created. Refresh the snapshot, then review again.");
   }
 
+  // --- Topic posts: no source question, so the question/attribution checks below don't apply ----------
+  const topic = input.series === "TOPIC";
+  if (topic !== isTopicSnapshot(s)) err("SOURCE_KIND", "This post's series and its source don't match (topic vs question). Create a new draft.");
+  if (topic) {
+    const title = plainText(s.text);
+    if (title.length < 3) err("TOPIC_EMPTY", "The topic is empty.");
+    else if (title.length > TOPIC_LIMITS.title) err("TOPIC_LONG", `The topic is too long (${title.length}/${TOPIC_LIMITS.title} characters).`);
+    const bad = d.modules.filter((m) => QUESTION_ONLY_MODULES.includes(m));
+    if (bad.length) err("TOPIC_MODULES", `A topic post has no question, so it can't use ${bad.map((m) => MODULE_LABELS[m]).join(", ")}. Remove ${bad.length > 1 ? "these slides" : "this slide"}.`);
+    if (!c.hookText.trim()) err("TOPIC_NO_COVER", "The cover (Hook) text is empty.");
+  }
+
   // --- Question completeness -------------------------------------------------
-  const stem = plainText(s.text);
-  if (!stem) err("STEM_EMPTY", "The question text is empty.");
-  else if (stemLooksTruncated(s.text)) {
-    warn("STEM_TRUNCATED", `The question text starts with "${stem.slice(0, 24)}…" — it may be cut off (scan/OCR damage). Compare with the original paper; fix it in the Question Bank if damaged.`);
-  }
-  if (stem && stem.length < 12) warn("STEM_SHORT", "The question text is very short — check it is complete.");
-  if (s.options.length < 2) err("OPTIONS_FEW", "The question has fewer than two options.");
-  const emptyOpt = s.options.filter((o) => !plainText(o.text));
-  if (emptyOpt.length) err("OPTION_EMPTY", `Option ${emptyOpt.map((o) => o.label).join(", ")} has no text.`);
-  const seen = new Map<string, string>();
-  for (const o of s.options) {
-    const k = plainText(o.text).toLowerCase();
-    if (!k) continue;
-    if (seen.has(k)) err("OPTION_DUPLICATE", `Options ${seen.get(k)} and ${o.label} have the same text.`);
-    seen.set(k, o.label);
-  }
-  const keyIssue = answerKeyIssue(s.options, s.questionType);
-  if (keyIssue === "NO_CORRECT_OPTION") err("ANSWER_KEY", "No option is marked correct in the Question Bank.");
-  else if (keyIssue) err("ANSWER_KEY", "The answer key is invalid for this question type (check the correct options in the Question Bank).");
-  if (s.questionType === "MATCH_THE_FOLLOWING") err("TYPE_UNSUPPORTED", "Match the Following questions can't be laid out on slides yet.");
-  if (s.hasImages) err("IMAGES_UNSUPPORTED", "This question has images — slides can't show question or option images yet.");
-  if (s.contentFormat === "RICH_V1" && (MATH.test(s.text) || s.options.some((o) => MATH.test(o.text)))) {
-    err("EQUATIONS_UNSUPPORTED", "This question uses equations/chemistry markup, which the slide renderer can't draw yet.");
+  if (!topic) {
+    const stem = plainText(s.text);
+    if (!stem) err("STEM_EMPTY", "The question text is empty.");
+    else if (stemLooksTruncated(s.text)) {
+      warn("STEM_TRUNCATED", `The question text starts with "${stem.slice(0, 24)}…" — it may be cut off (scan/OCR damage). Compare with the original paper; fix it in the Question Bank if damaged.`);
+    }
+    if (stem && stem.length < 12) warn("STEM_SHORT", "The question text is very short — check it is complete.");
+    if (s.options.length < 2) err("OPTIONS_FEW", "The question has fewer than two options.");
+    const emptyOpt = s.options.filter((o) => !plainText(o.text));
+    if (emptyOpt.length) err("OPTION_EMPTY", `Option ${emptyOpt.map((o) => o.label).join(", ")} has no text.`);
+    const seen = new Map<string, string>();
+    for (const o of s.options) {
+      const k = plainText(o.text).toLowerCase();
+      if (!k) continue;
+      if (seen.has(k)) err("OPTION_DUPLICATE", `Options ${seen.get(k)} and ${o.label} have the same text.`);
+      seen.set(k, o.label);
+    }
+    const keyIssue = answerKeyIssue(s.options, s.questionType);
+    if (keyIssue === "NO_CORRECT_OPTION") err("ANSWER_KEY", "No option is marked correct in the Question Bank.");
+    else if (keyIssue) err("ANSWER_KEY", "The answer key is invalid for this question type (check the correct options in the Question Bank).");
+    if (s.questionType === "MATCH_THE_FOLLOWING") err("TYPE_UNSUPPORTED", "Match the Following questions can't be laid out on slides yet.");
+    if (s.hasImages) err("IMAGES_UNSUPPORTED", "This question has images — slides can't show question or option images yet.");
+    if (s.contentFormat === "RICH_V1" && (MATH.test(s.text) || s.options.some((o) => MATH.test(o.text)))) {
+      err("EQUATIONS_UNSUPPORTED", "This question uses equations/chemistry markup, which the slide renderer can't draw yet.");
+    }
   }
 
   if (isExcludedExam(s.examName, s.examCode)) {
@@ -146,6 +163,10 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
   if (input.series === "MOST_MISSED") {
     if (!input.seriesStats) err("STATS_MISSING", "Most Missed numbers were not captured for this draft.");
     else if (input.seriesStats.attempts < 20) warn("STATS_SMALL_SAMPLE", `Only ${input.seriesStats.attempts} answered attempts — the percentage may not be meaningful.`);
+  }
+
+  if (topic && !s.notes && (c.origin.kind === "ai" || medicalTexts(c).length)) {
+    warn("TOPIC_NO_SOURCE", "No source notes were given for this topic, so every medical statement comes from the writer (or the AI) alone. Check each one against a standard textbook.");
   }
 
   // A medical review recorded for exactly this text (see currentMedicalReview) covers the "check it medically" warnings.
@@ -232,7 +253,7 @@ export function runQualityGate(input: QualityInput): QualityIssue[] {
   if (input.unsupportedChars) {
     // The caption is not drawn on a slide (Instagram shows emoji there natively), so it is not checked.
     const drawn: { name: string; text: string }[] = [
-      { name: "Question", text: s.text },
+      { name: topic ? "Topic" : "Question", text: s.text },
       ...s.options.map((o) => ({ name: `Option ${o.label}`, text: o.text })),
       ...fields.filter((f) => f.name !== "Caption"),
       ...(trapIdx >= 0 && c.trap ? [{ name: "Examiner Trap", text: trapTexts(c.trap).join(" ") }] : []),

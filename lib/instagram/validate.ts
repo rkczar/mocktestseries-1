@@ -9,7 +9,7 @@ import {
   normalizeContent,
   normalizeDesign,
   normalizeHashtags,
-  validateModules,
+  layoutKindOf, validateModules,
   type PostContent,
   type PostDesign,
 } from "@/lib/instagram/types";
@@ -117,10 +117,11 @@ function sameTrap(a: TrapVariant, b: TrapVariant): boolean {
   return k(a) === k(b);
 }
 
-export function checkDesignInput(raw: unknown): Checked<PostDesign> {
+/** `series` = the post's series: a TOPIC post gets the topic layout rules, every other post the question rules. */
+export function checkDesignInput(raw: unknown, series?: string): Checked<PostDesign> {
   const r = (raw ?? {}) as { modules?: unknown };
   if (Array.isArray(r.modules)) {
-    const problem = validateModules(r.modules.filter((m): m is string => typeof m === "string"));
+    const problem = validateModules(r.modules.filter((m): m is string => typeof m === "string"), layoutKindOf(series));
     if (problem) return { ok: false, error: problem };
   }
   return { ok: true, value: normalizeDesign(raw) };

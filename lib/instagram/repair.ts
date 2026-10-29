@@ -6,10 +6,9 @@ import { prisma } from "@/lib/prisma";
 import { getStudioSettings } from "@/lib/instagram/config";
 import { normalizeForSlides } from "@/lib/instagram/glyphs";
 import { adviseIssue, planFixes, type FixChange, type FixContext, type IssueAdvice } from "@/lib/instagram/fixes";
-import { StudioError, issuesFor, toDto, writeRevisionFor, type PostDto } from "@/lib/instagram/posts";
+import { StudioError, issuesFor, questionEditHref, sourceHashNow, toDto, writeRevisionFor, type PostDto } from "@/lib/instagram/posts";
 import { medicalTextHash, type QualityIssue } from "@/lib/instagram/quality";
 import { renderSlideJpeg } from "@/lib/instagram/render";
-import { currentSourceHash } from "@/lib/instagram/snapshot";
 import { slideSequence } from "@/lib/instagram/layout";
 import { FLAG_DECISIONS, SLIDE_HEIGHT, SLIDE_WIDTH, normalizeContent, normalizeDesign, type FlagDecision, type MedicalReview, type PostContent, type PostDesign, type SourceSnapshot } from "@/lib/instagram/types";
 
@@ -48,7 +47,6 @@ export interface RepairResult {
   rendered: { slide: number; width: number; height: number }[];
 }
 
-const questionEditHref = (questionId: string) => `/admin/questions?tab=add&id=${questionId}`;
 
 async function loadPost(postId: string): Promise<InstagramPost> {
   const post = await prisma.instagramPost.findUnique({ where: { id: postId } });
@@ -57,7 +55,7 @@ async function loadPost(postId: string): Promise<InstagramPost> {
 }
 
 async function contextFor(post: InstagramPost): Promise<{ ctx: FixContext; issues: QualityIssue[]; currentHash: string | null; settings: Awaited<ReturnType<typeof getStudioSettings>> }> {
-  const [settings, currentHash] = await Promise.all([getStudioSettings(), currentSourceHash(post.questionId)]);
+  const [settings, currentHash] = await Promise.all([getStudioSettings(), sourceHashNow(post)]);
   const ctx: FixContext = {
     snapshot: post.sourceSnapshot as unknown as SourceSnapshot,
     content: normalizeContent(post.content),

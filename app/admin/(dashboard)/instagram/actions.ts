@@ -15,9 +15,11 @@ import {
   applyChange,
   createDraft,
   createNewVersion,
+  createTopicDraft,
   deleteDraft,
   getPostDto,
   getQuestionPostState,
+  getTopicPostState,
   refreshSnapshot,
   restoreRevision,
   setQuestionNumber,
@@ -136,6 +138,16 @@ export async function loadQuestionPostAction(questionId: string): Promise<Result
   return run(await requireStudio(), async () => getQuestionPostState(checkId(questionId)));
 }
 
+/** Topic keys are "<examId>:<24 hex>" (lib/instagram/topic.ts topicKeyFor). */
+const TOPIC_KEY = /^[a-z0-9]{10,40}:[0-9a-f]{24}$/i;
+
+export async function loadTopicPostAction(topicKey: string): Promise<Result<QuestionPostState>> {
+  return run(await requireStudio(), async () => {
+    if (typeof topicKey !== "string" || !TOPIC_KEY.test(topicKey)) throw new StudioError("Invalid topic.");
+    return getTopicPostState(topicKey);
+  });
+}
+
 export async function loadPostAction(postId: string): Promise<Result<PostDto>> {
   return run(await requireStudio(), async () => getPostDto(checkId(postId)));
 }
@@ -145,6 +157,16 @@ export async function loadPostAction(postId: string): Promise<Result<PostDto>> {
 export async function createPyqDraftAction(questionId: string): Promise<Result<{ post: PostDto; existed: boolean }>> {
   return run(await requireStudio(), async (actorId) => {
     const r = await createDraft({ questionId: checkId(questionId), series: "PYQ", stats: null, actorId });
+    touch();
+    return r;
+  });
+}
+
+/** Topic carousel: the admin types the topic (+ optional source notes); an existing current post for it opens instead. */
+export async function createTopicDraftAction(input: { title: unknown; examId: unknown; subjectName?: unknown; notes?: unknown }): Promise<Result<{ post: PostDto; existed: boolean }>> {
+  return run(await requireStudio(), async (actorId) => {
+    const str = (v: unknown) => (typeof v === "string" ? v : "");
+    const r = await createTopicDraft({ title: str(input.title), examId: checkId(input.examId), subjectName: str(input.subjectName), notes: str(input.notes), actorId });
     touch();
     return r;
   });
@@ -179,7 +201,7 @@ export async function saveDraftAction(input: { postId: string; expectedRevision:
     const current = await getPostDto(postId);
     const content = checkContentInput(input.content, current.content);
     if (!content.ok) throw new StudioError(content.error);
-    const design = checkDesignInput(input.design);
+    const design = checkDesignInput(input.design, current.series);
     if (!design.ok) throw new StudioError(design.error);
     const r = await applyChange({
       postId,
@@ -227,7 +249,7 @@ export async function aiEditAction(input: {
     const current = await getPostDto(postId);
     const content = checkContentInput(input.content, current.content);
     if (!content.ok) throw new StudioError(content.error);
-    const design = checkDesignInput(input.design);
+    const design = checkDesignInput(input.design, current.series);
     if (!design.ok) throw new StudioError(design.error);
     const instruction = typeof input.instruction === "string" ? input.instruction.trim().slice(0, 500) : "";
     const selected = (SLIDE_MODULES as readonly string[]).includes(input.selectedModule ?? "") ? (input.selectedModule as SlideModule) : null;
@@ -251,7 +273,7 @@ export async function aiEditAction(input: {
       current: content.value,
       targets,
       instruction: instruction || undefined,
-      reference: await getAiReference(current.questionId),
+      reference: current.questionId ? await getAiReference(current.questionId) : null,
       allowedDomains: allowedCaptionDomains(settings),
       actorId,
       provider: parseProvider(input.provider),
@@ -274,10 +296,10 @@ export async function prefillFromExplanationAction(input: { postId: string; expe
     const current = await getPostDto(postId);
     const content = checkContentInput(input.content, current.content);
     if (!content.ok) throw new StudioError(content.error);
-    const design = checkDesignInput(input.design);
+    const design = checkDesignInput(input.design, current.series);
     if (!design.ok) throw new StudioError(design.error);
-    const ref = await getAiReference(current.questionId);
-    if (!ref) throw new StudioError("This question has no completed AI explanation to copy from.");
+    const ref = current.questionId ? await getAiReference(current.questionId) : null;
+    if (!ref) throw new StudioError(current.questionId ? "This question has no completed AI explanation to copy from." : "A topic post has no question explanation to copy from.");
     const filled = prefillFromReference(current.snapshot, content.value, ref);
     if (!filled.used.length) throw new StudioError(`Nothing could be copied${filled.skipped.length ? ` — ${filled.skipped.join(", ")} failed the length or safety checks` : ""}.`);
     const post = await applyChange({

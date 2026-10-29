@@ -302,7 +302,7 @@ export function BulkBatch({ initial, publishingEnabled, connected, isMaster, spa
                     </SelectNative>
                   ) : null}
                   {p ? (
-                    <OpenInEditor target={{ questionId: p.questionId, code: p.questionCode, preview: p.snapshot.text.replace(/<[^>]+>/g, " ").slice(0, 160), series: p.series }} className="inline-flex h-8 items-center rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 text-xs" testId="open-editor">
+                    <OpenInEditor target={{ questionId: p.questionId ?? "", topicKey: p.topicKey ?? undefined, code: p.questionCode, preview: p.snapshot.text.replace(/<[^>]+>/g, " ").slice(0, 160), series: p.series }} className="inline-flex h-8 items-center rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 text-xs" testId="open-editor">
                       Preview · Edit
                     </OpenInEditor>
                   ) : null}

@@ -12,7 +12,7 @@ export function EditorHost({ children }: { children: React.ReactNode }) {
   return (
     <OpenContext.Provider value={setTarget}>
       {children}
-      <CarouselEditor key={target?.questionId ?? "closed"} target={target} onClose={() => setTarget(null)} />
+      <CarouselEditor key={target ? (target.topicKey ?? target.questionId) : "closed"} target={target} onClose={() => setTarget(null)} />
     </OpenContext.Provider>
   );
 }
@@ -21,8 +21,13 @@ export function EditorHost({ children }: { children: React.ReactNode }) {
 export function OpenInEditor({ target, children, className, testId }: { target: EditorTarget; children: React.ReactNode; className?: string; testId?: string }) {
   const open = useContext(OpenContext);
   return (
-    <button type="button" onClick={() => open(target)} className={cn("text-left", className)} data-testid={testId} data-question-id={target.questionId}>
+    <button type="button" onClick={() => open(target)} className={cn("text-left", className)} data-testid={testId} data-question-id={target.questionId} data-topic-key={target.topicKey}>
       {children}
     </button>
   );
+}
+
+/** Opens the host's editor from client code (e.g. right after creating a topic draft). */
+export function useOpenEditor(): (t: EditorTarget) => void {
+  return useContext(OpenContext);
 }

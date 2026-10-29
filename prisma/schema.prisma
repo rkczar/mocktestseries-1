@@ -3215,11 +3215,16 @@ enum InstagramPostStatus {
 enum InstagramPostSeries {
   PYQ
   MOST_MISSED
+  /// Topic carousel: no source question (questionId NULL, topicKey set). Enforced by a CHECK constraint in the migration SQL.
+  TOPIC
 }
 
 model InstagramPost {
   id                     String              @id @default(cuid())
-  questionId             String
+  /// NULL only for TOPIC posts.
+  questionId             String?
+  /// TOPIC only: stable key of the topic (exam + normalized title); versions and the one-current rule are per topic.
+  topicKey               String?
   questionCode           String
   series                 InstagramPostSeries
   /// 1 for the first post of a question; "Create New Version" adds version+1 and supersedes the old row.
@@ -3256,6 +3261,7 @@ model InstagramPost {
   revisions InstagramPostRevision[]
 
   @@unique([questionId, version])
+  @@unique([topicKey, version])
   @@index([status])
   @@index([series, status])
   @@index([updatedAt])

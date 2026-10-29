@@ -27,7 +27,7 @@ export const IG_PROMPT_VERSION = "ig-studio-v2";
 
 export interface PromptInput {
   snapshot: SourceSnapshot;
-  series: "PYQ" | "MOST_MISSED";
+  series: "PYQ" | "MOST_MISSED" | "TOPIC";
   stats: SeriesStats | null;
   targets: ContentField[];
   current: PostContent;
@@ -58,7 +58,71 @@ export function correctLabels(s: SourceSnapshot): string[] {
   return s.options.filter((o) => o.isCorrect).map((o) => o.label);
 }
 
+/** TOPIC posts: the same fields, worded for a topic instead of a question (no options, no answer key). */
+const TOPIC_FIELD_SPEC: Partial<Record<ContentField, string>> = {
+  hooks: `"hooks": exactly 3 objects {"style","text"} with styles "curiosity", "challenge", "memory"; each text at most ${LIMITS.hook} characters, a short cover headline that makes a medical exam aspirant want to revise this topic (e.g. "Revise This Topic in 60 Seconds", "Can You List All 5?", "Remember This Forever")`,
+  explanation: `"explanation": the core concept of the topic in plain English — what to know for the exam, at most ${LIMITS.explanation} characters`,
+  memoryTrick: `"memoryTrick": one short mnemonic or memory aid for the most testable fact of this topic, at most ${LIMITS.memoryTrick} characters`,
+  clinicalPearl: `"clinicalPearl": one high-yield, textbook-standard clinical/exam pearl about this topic, at most ${LIMITS.clinicalPearl} characters`,
+  mistakes: `"mistakes": 2 to ${LIMITS.mistakes} common mistakes or confusions students make on this topic and the differentiating feature, each at most ${LIMITS.mistake} characters`,
+  caption: `"caption": the Instagram caption, 3 to 6 short lines, at most ${LIMITS.caption} characters, no hashtags inside it; end by inviting people to save the post and comment one more fact they remember`,
+};
+
+/** The token a topic response must echo in "answerLabel" (there is no answer key; this confirms the model followed the topic instructions). */
+export const TOPIC_ECHO = "TOPIC";
+
+function buildTopicPrompt(input: PromptInput): string {
+  const { snapshot: s } = input;
+  const profile = examProfile(s.examName, s.examCode);
+  const lines: string[] = [
+    "You write Instagram carousel content for MockTestSeries.in, a medical exam preparation website.",
+    "This post teaches ONE topic (there is no question). Stay strictly on the topic below.",
+    "",
+    `Topic: ${plainText(s.text)}`,
+    s.topicName ? `Subject: ${s.subjectName}` : "",
+    `Exam (for level and style only — never claim this topic was asked in it): ${s.examName}`,
+    `Exam style (${profile.label}): ${profile.style}`,
+    "Audience: MBBS graduates preparing for this exam. Never mention NEET UG, school or board exams.",
+  ];
+  if (s.notes) {
+    lines.push("", "Source notes from the admin (use them as the basis; correct nothing silently — if a note looks medically wrong, leave it out and say so in concerns):", s.notes.slice(0, 4000));
+  }
+  const current = input.current;
+  const hasCurrent = input.targets.some((t) => {
+    const v = current[t as keyof PostContent];
+    return Array.isArray(v) ? v.length > 0 : typeof v === "string" && v.trim() !== "";
+  });
+  if (input.instruction && hasCurrent) {
+    lines.push("", "Current content to revise:");
+    for (const t of input.targets) {
+      const v = t === "hooks" ? current.hooks.map((h) => `${h.style}: ${h.text}`).join(" | ") : current[t as keyof PostContent];
+      lines.push(`- ${t}: ${Array.isArray(v) ? v.join(" | ") : String(v ?? "")}`);
+    }
+  }
+  if (input.instruction) {
+    lines.push("", `Admin instruction (may be written in Hindi or English — follow it, but always WRITE the output in English): ${input.instruction.trim().slice(0, 500)}`);
+  }
+  lines.push(
+    "",
+    "Hard rules:",
+    "- English only. No Hindi/Devanagari script.",
+    "- Never say a topic is repeated, frequently/commonly asked, asked every year, guaranteed or 'sure-shot'.",
+    "- Never invent statistics, percentages about students, pass rates or exam facts.",
+    "- Do not mention any year in hooks or the caption.",
+    "- No book titles, page numbers, editions or references. No links except mocktestseries.in.",
+    "- Only state medically standard, textbook-level facts. If anything is uncertain or debated, set confidence to \"low\" and describe it in concerns.",
+    "",
+    "Return ONLY one JSON object, no markdown, with these keys:",
+    `"answerLabel": exactly "${TOPIC_ECHO}"`,
+    ...input.targets.map((t) => TOPIC_FIELD_SPEC[t] ?? FIELD_SPEC[t]),
+    `"confidence": "high", "medium" or "low" — how sure you are that everything you wrote is medically accurate`,
+    `"concerns": array of short strings (empty if none) — anything a medical reviewer should double-check`
+  );
+  return lines.filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
+}
+
 export function buildPrompt(input: PromptInput): string {
+  if (input.snapshot.kind === "topic") return buildTopicPrompt(input);
   const { snapshot: s } = input;
   const answer = correctLabels(s);
   const attribution = s.paperYear
@@ -149,8 +213,10 @@ export function parseAiResponse(text: string, snapshot: SourceSnapshot, targets:
 
   const labels = correctLabels(snapshot);
   const echoed = typeof data.answerLabel === "string" ? data.answerLabel.trim().toUpperCase().replace(/[^A-Z,]/g, "") : "";
-  if (!echoed) return { ...out, fatal: "The AI did not confirm the stored correct answer. Nothing was changed." };
-  if (echoed.split(",").filter(Boolean).sort().join(",") !== [...labels].sort().join(",")) {
+  if (snapshot.kind === "topic") {
+    if (echoed !== TOPIC_ECHO) return { ...out, fatal: "The AI did not follow the topic instructions. Nothing was changed." };
+  } else if (!echoed) return { ...out, fatal: "The AI did not confirm the stored correct answer. Nothing was changed." };
+  else if (echoed.split(",").filter(Boolean).sort().join(",") !== [...labels].sort().join(",")) {
     return { ...out, fatal: `The AI disagreed with the stored answer key (it said ${echoed}, the key is ${labels.join(", ")}). Nothing was changed — review this question manually.` };
   }
 

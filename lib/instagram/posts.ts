@@ -7,10 +7,12 @@ import { runQualityGate, type QualityIssue } from "@/lib/instagram/quality";
 import { normalizeForSlides, unsupportedChars } from "@/lib/instagram/glyphs";
 import { adviseIssue, type IssueAdvice } from "@/lib/instagram/fixes";
 import { buildSnapshot, currentSourceHash } from "@/lib/instagram/snapshot";
+import { buildTopicSnapshot, validateTopicInput, type TopicInput } from "@/lib/instagram/topic";
 import { publishView, type PublishView } from "@/lib/instagram/publish-view";
 import {
   defaultDesign,
   emptyContent,
+  TOPIC_DEFAULT_MODULES,
   normalizeContent,
   normalizeDesign,
   studioStatus,
@@ -50,7 +52,10 @@ export interface RevisionSummary {
 
 export interface PostDto {
   id: string;
-  questionId: string;
+  /** null for TOPIC posts. */
+  questionId: string | null;
+  /** TOPIC posts only. */
+  topicKey: string | null;
   questionCode: string;
   series: InstagramPostSeries;
   version: number;
@@ -94,7 +99,9 @@ export interface HistoryEntry {
 }
 
 export interface QuestionPostState {
-  questionId: string;
+  /** null when the state is a topic's (getTopicPostState). */
+  questionId: string | null;
+  topicKey?: string;
   current: PostDto | null;
   history: HistoryEntry[];
   posted: boolean;
@@ -129,10 +136,23 @@ export function issuesFor(post: Pick<InstagramPost, "sourceSnapshot" | "content"
   });
 }
 
+/**
+ * Hash of the post's source as it is NOW (null = the source question was deleted). A TOPIC post's source
+ * is its own frozen topic snapshot, so it can never change or disappear.
+ */
+export function sourceHashNow(post: Pick<InstagramPost, "questionId" | "sourceHash">): Promise<string | null> {
+  return post.questionId === null ? Promise.resolve(post.sourceHash) : currentSourceHash(post.questionId);
+}
+
+/** Where "fix it in the Question Bank" advice points (topic posts have no question). */
+export function questionEditHref(questionId: string | null): string {
+  return questionId ? `/admin/questions?tab=add&id=${questionId}` : "";
+}
+
 export async function toDto(post: InstagramPost, settings?: StudioSettings): Promise<PostDto> {
   const [revisions, currentHash, s] = await Promise.all([
     prisma.instagramPostRevision.findMany({ where: { postId: post.id }, orderBy: { revision: "desc" }, take: 40 }),
-    currentSourceHash(post.questionId),
+    sourceHashNow(post),
     settings ? Promise.resolve(settings) : getStudioSettings(),
   ]);
   const issues = issuesFor(post, currentHash, s);
@@ -142,7 +162,7 @@ export async function toDto(post: InstagramPost, settings?: StudioSettings): Pro
     design: normalizeDesign(post.design),
     series: post.series,
     normalize: normalizeForSlides,
-    questionEditHref: `/admin/questions?tab=add&id=${post.questionId}`,
+    questionEditHref: questionEditHref(post.questionId),
   };
   const names = await adminNames([...revisions.map((r) => r.createdById), post.reviewedById]);
   const head = revisions.find((r) => r.revision === post.revision);
@@ -150,6 +170,7 @@ export async function toDto(post: InstagramPost, settings?: StudioSettings): Pro
   return {
     id: post.id,
     questionId: post.questionId,
+    topicKey: post.topicKey,
     questionCode: post.questionCode,
     series: post.series,
     version: post.version,
@@ -188,9 +209,19 @@ export async function toDto(post: InstagramPost, settings?: StudioSettings): Pro
 
 export async function getQuestionPostState(questionId: string): Promise<QuestionPostState> {
   const posts = await prisma.instagramPost.findMany({ where: { questionId }, orderBy: { version: "desc" } });
+  return postState(posts, { questionId });
+}
+
+/** The same state for a TOPIC post (the editor opens topics exactly like questions). */
+export async function getTopicPostState(topicKey: string): Promise<QuestionPostState> {
+  const posts = await prisma.instagramPost.findMany({ where: { topicKey }, orderBy: { version: "desc" } });
+  return postState(posts, { questionId: null, topicKey });
+}
+
+async function postState(posts: InstagramPost[], key: { questionId: string | null; topicKey?: string }): Promise<QuestionPostState> {
   const current = posts.find((p) => p.supersededAt === null) ?? null;
   return {
-    questionId,
+    ...key,
     current: current ? await toDto(current) : null,
     history: posts.map((p) => ({
       id: p.id,
@@ -229,7 +260,7 @@ export async function statusesFor(questionIds: string[]): Promise<Map<string, Qu
   });
   for (const qid of questionIds) map.set(qid, { status: "NOT_CREATED", postId: null, posted: false, publishedAt: null });
   for (const p of posts) {
-    const cur = map.get(p.questionId)!;
+    const cur = map.get(p.questionId!)!;
     if (p.status === "PUBLISHED") {
       cur.posted = true;
       if (!cur.publishedAt || (p.publishedAt && p.publishedAt.toISOString() > cur.publishedAt)) cur.publishedAt = p.publishedAt?.toISOString() ?? null;
@@ -311,15 +342,74 @@ export async function createDraft(params: {
   }
 }
 
+/**
+ * TOPIC draft: same lifecycle as a question draft, keyed by the topic instead of a question. Typing a topic
+ * that already has a current post opens that post (existed: true) — the partial unique index on current
+ * topic posts is the backstop for double clicks and two admins.
+ */
+export async function createTopicDraft(params: TopicInput & { actorId: string; design?: PostDesign }): Promise<{ post: PostDto; existed: boolean }> {
+  const invalid = validateTopicInput(params);
+  if (invalid) throw new StudioError(invalid);
+  const built = await buildTopicSnapshot(params);
+  if (!built) throw new StudioError("That exam no longer exists.", "not-found");
+  if (!(await isExamInScope(built.snapshot.examId))) {
+    throw new StudioError(`${built.snapshot.examName} is not in Instagram Studio's exam scope (MBBS-level and post-MBBS exams only; NEET UG is excluded). A Master Admin can change the scope in Instagram → Settings.`);
+  }
+  const { topicKey } = built;
+  const existing = await prisma.instagramPost.findFirst({ where: { topicKey, supersededAt: null } });
+  if (existing) return { post: await toDto(existing), existed: true };
+
+  const settings = await getStudioSettings();
+  const base = params.design ?? defaultDesign(settings.defaultTemplate, settings.defaultSlideCount);
+  const design: PostDesign = { ...base, modules: [...TOPIC_DEFAULT_MODULES], slideCount: TOPIC_DEFAULT_MODULES.length };
+  const content: PostContent = { ...emptyContent(), hookText: built.snapshot.text, hashtags: settings.defaultHashtags };
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`instagram-topic:${topicKey}`}))`;
+      const winner = await tx.instagramPost.findFirst({ where: { topicKey, supersededAt: null } });
+      if (winner) return { post: winner, existed: true };
+      const max = await tx.instagramPost.aggregate({ where: { topicKey }, _max: { version: true } });
+      const created = await tx.instagramPost.create({
+        data: {
+          questionId: null,
+          topicKey,
+          questionCode: built.snapshot.code,
+          series: "TOPIC",
+          version: (max._max.version ?? 0) + 1,
+          content: json(content),
+          design: json(design),
+          sourceSnapshot: json(built.snapshot),
+          sourceHash: built.hash,
+          seriesStats: Prisma.DbNull,
+          createdById: params.actorId,
+        },
+      });
+      await tx.instagramPostRevision.create({
+        data: { postId: created.id, revision: 1, baseRevision: null, content: json(content), design: json(design), note: "Topic draft created", createdById: params.actorId },
+      });
+      return { post: created, existed: false };
+    });
+    if (!result.existed) await audit(params.actorId, "INSTAGRAM_TOPIC_DRAFT_CREATED", result.post.id, { topicKey, title: built.snapshot.text, examId: built.snapshot.examId });
+    return { post: await toDto(result.post, settings), existed: result.existed };
+  } catch (e) {
+    if (!isUniqueViolation(e)) throw e;
+    const winner = await prisma.instagramPost.findFirst({ where: { topicKey, supersededAt: null } });
+    if (!winner) throw e;
+    return { post: await toDto(winner, settings), existed: true };
+  }
+}
+
 /** "Create New Version" of a published question: the published row is kept (superseded), a fresh DRAFT starts from its content. */
 export async function createNewVersion(postId: string, actorId: string): Promise<PostDto> {
   const old = await prisma.instagramPost.findUnique({ where: { id: postId } });
   if (!old) throw new StudioError("This post no longer exists.", "not-found");
   if (old.supersededAt) throw new StudioError("A newer version already exists for this question.", "conflict");
   if (old.status !== "PUBLISHED") throw new StudioError("Only a published post gets a new version — keep editing the current draft instead.");
-  const built = await buildSnapshot(old.questionId);
+  // A topic keeps its frozen topic snapshot; a question post re-reads the question.
+  const built = old.questionId === null ? { snapshot: old.sourceSnapshot as unknown as SourceSnapshot, hash: old.sourceHash } : await buildSnapshot(old.questionId);
   if (!built) throw new StudioError("This question no longer exists.", "not-found");
-  const max = await prisma.instagramPost.aggregate({ where: { questionId: old.questionId }, _max: { version: true } });
+  const sameSource = old.questionId === null ? { topicKey: old.topicKey } : { questionId: old.questionId };
+  const max = await prisma.instagramPost.aggregate({ where: sameSource, _max: { version: true } });
   try {
     const post = await prisma.$transaction(async (tx) => {
       const res = await tx.instagramPost.updateMany({ where: { id: old.id, supersededAt: null }, data: { supersededAt: new Date() } });
@@ -329,6 +419,7 @@ export async function createNewVersion(postId: string, actorId: string): Promise
       const created = await tx.instagramPost.create({
         data: {
           questionId: old.questionId,
+          topicKey: old.topicKey,
           questionCode: built.snapshot.code,
           series: old.series,
           version: (max._max.version ?? old.version) + 1,
@@ -347,7 +438,7 @@ export async function createNewVersion(postId: string, actorId: string): Promise
       });
       return created;
     });
-    await audit(actorId, "INSTAGRAM_NEW_VERSION", post.id, { questionId: old.questionId, fromPostId: old.id, version: post.version });
+    await audit(actorId, "INSTAGRAM_NEW_VERSION", post.id, { questionId: old.questionId, topicKey: old.topicKey, fromPostId: old.id, version: post.version });
     return toDto(post);
   } catch (e) {
     if (isUniqueViolation(e)) throw new StudioError("Someone else already created a new version.", "conflict");
@@ -475,6 +566,7 @@ export async function setQuestionNumber(postId: string, expectedRevision: number
 
 export async function refreshSnapshot(postId: string, expectedRevision: number, actorId: string): Promise<PostDto> {
   const post = await loadEditable(postId, expectedRevision);
+  if (post.questionId === null) throw new StudioError("A topic post has no Question Bank source to refresh.");
   const built = await buildSnapshot(post.questionId);
   if (!built) throw new StudioError("This question no longer exists in the Question Bank.", "not-found");
   const updated = await writeRevision(
@@ -497,8 +589,8 @@ export async function deleteDraft(postId: string, actorId: string): Promise<void
   if (post.supersededAt) throw new StudioError("Older versions are kept as history.");
   await prisma.$transaction(async (tx) => {
     await tx.instagramPost.delete({ where: { id: post.id } });
-    const prev = await tx.instagramPost.findFirst({ where: { questionId: post.questionId }, orderBy: { version: "desc" } });
+    const prev = await tx.instagramPost.findFirst({ where: post.questionId === null ? { topicKey: post.topicKey } : { questionId: post.questionId }, orderBy: { version: "desc" } });
     if (prev) await tx.instagramPost.update({ where: { id: prev.id }, data: { supersededAt: null } });
   });
-  await audit(actorId, "INSTAGRAM_DRAFT_DELETED", postId, { questionId: post.questionId, version: post.version });
+  await audit(actorId, "INSTAGRAM_DRAFT_DELETED", postId, { questionId: post.questionId, topicKey: post.topicKey, version: post.version });
 }

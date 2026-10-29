@@ -36,7 +36,7 @@ export interface GenerationOutcome {
 
 export async function generateContent(params: {
   snapshot: SourceSnapshot;
-  series: "PYQ" | "MOST_MISSED";
+  series: "PYQ" | "MOST_MISSED" | "TOPIC";
   stats: SeriesStats | null;
   current: PostContent;
   targets: ContentField[];

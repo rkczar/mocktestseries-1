@@ -38,6 +38,9 @@ function extractJson(text: string): Record<string, unknown> | null {
 }
 
 function sourceBlock(s: SourceSnapshot, explanation: string): string[] {
+  if (s.kind === "topic") {
+    return [`Topic: ${plainText(s.text)}`, s.notes ? `Source notes: ${s.notes.slice(0, 2000)}` : "", explanation ? `Reviewed explanation: ${explanation}` : ""].filter(Boolean);
+  }
   return [
     `Question: ${plainText(s.text)}`,
     ...s.options.map((o) => `${o.label}. ${plainText(o.text)}`),

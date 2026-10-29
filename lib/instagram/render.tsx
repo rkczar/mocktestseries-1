@@ -42,7 +42,7 @@ export interface RenderInput {
   snapshot: SourceSnapshot;
   content: PostContent;
   design: PostDesign;
-  series: "PYQ" | "MOST_MISSED";
+  series: "PYQ" | "MOST_MISSED" | "TOPIC";
   seriesStats: SeriesStats | null;
   /** Shown only when verified. */
   questionNumber: number | null;
@@ -151,10 +151,11 @@ export function examBadge(input: Pick<RenderInput, "snapshot" | "settings">): st
   return input.settings.examBadges[input.snapshot.examId]?.trim() || input.snapshot.examName;
 }
 
-/** "PYQ 2021", "PYQ 2021 · Paper II", or "MOST MISSED · TODAY". */
+/** "PYQ 2021", "PYQ 2021 · Paper II", "MOST MISSED · TODAY" or "HIGH-YIELD TOPIC". */
 export function seriesTag(input: Pick<RenderInput, "snapshot" | "series" | "seriesStats">): string {
   const s = input.snapshot;
   if (input.series === "MOST_MISSED") return `MOST MISSED · ${input.seriesStats?.headlineSuffix.replace(/[()]/g, "") ?? ""}`.replace(/ · $/, "");
+  if (input.series === "TOPIC") return "HIGH-YIELD TOPIC";
   if (!s.paperYear) return "PRACTICE MCQ";
   return `PYQ ${s.paperYear}${s.paperSharesYear && s.paperTitle ? ` · ${s.paperTitle}` : ""}`;
 }

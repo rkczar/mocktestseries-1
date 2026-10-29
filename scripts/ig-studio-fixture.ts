@@ -40,6 +40,8 @@ async function cleanup() {
   const questions = await prisma.question.findMany({ where: { examId: { in: examIds } }, select: { id: true } });
   const qids = questions.map((q) => q.id);
   await prisma.instagramPost.deleteMany({ where: { questionId: { in: qids } } });
+  // Topic posts (no question) belong to the exam through their topicKey ("<examId>:…").
+  for (const id of examIds) await prisma.instagramPost.deleteMany({ where: { topicKey: { startsWith: `${id}:` } } });
   const students = await prisma.student.findMany({ where: { studentId: { startsWith: IGFIX.studentPrefix } }, select: { id: true } });
   const sids = students.map((s) => s.id);
   await prisma.answer.deleteMany({ where: { studentId: { in: sids } } });

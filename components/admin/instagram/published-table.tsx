@@ -28,14 +28,14 @@ export function PublishedTable({ rows, empty, testId }: { rows: PostListRow[]; e
                 <img src={`/api/admin/instagram/slide?postId=${r.id}&i=0`} alt={`${r.questionCode} slide 1`} loading="lazy" className="h-20 w-16 rounded border border-[var(--color-border)] object-cover" />
               </td>
               <td className="max-w-xs py-2 pr-3">
-                <OpenInEditor target={{ questionId: r.questionId, code: r.questionCode, preview: r.preview, series: r.series }} className="hover:underline" testId="open-question">
+                <OpenInEditor target={{ questionId: r.questionId ?? "", topicKey: r.topicKey ?? undefined, code: r.questionCode, preview: r.preview, series: r.series }} className="hover:underline" testId="open-question">
                   <span className="block font-mono text-xs text-[var(--color-muted-foreground)]">{`${r.questionCode} · v${r.version}`}</span>
                   <span className="line-clamp-2">{r.preview}</span>
                 </OpenInEditor>
               </td>
               <td className="py-2 pr-3">
                 <div>{r.examName}</div>
-                <div className="text-xs text-[var(--color-muted-foreground)]">{r.series === "PYQ" ? (r.paperLabel ? `PYQ ${r.paperLabel}` : "PYQ") : "Most Missed"}</div>
+                <div className="text-xs text-[var(--color-muted-foreground)]">{r.series === "PYQ" ? (r.paperLabel ? `PYQ ${r.paperLabel}` : "PYQ") : r.series === "TOPIC" ? "Topic" : "Most Missed"}</div>
               </td>
               <td className="py-2 pr-3 text-xs" data-testid="row-published-at">{r.publishedAt ? fmt(r.publishedAt) : "—"}</td>
               <td className="py-2 pr-3 text-xs">

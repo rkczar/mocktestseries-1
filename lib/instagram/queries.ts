@@ -169,9 +169,11 @@ export async function getPaperDetail(paperId: string): Promise<PaperDetail | nul
 
 export interface PostListRow {
   id: string;
-  questionId: string;
+  /** null for TOPIC posts (topicKey set instead). */
+  questionId: string | null;
+  topicKey: string | null;
   questionCode: string;
-  series: "PYQ" | "MOST_MISSED";
+  series: "PYQ" | "MOST_MISSED" | "TOPIC";
   version: number;
   /** Legacy READY rows are listed as DRAFT. */
   status: StudioPostStatus;
@@ -187,11 +189,12 @@ export interface PostListRow {
   isCurrent: boolean;
 }
 
-function toListRow(p: { id: string; questionId: string; questionCode: string; series: "PYQ" | "MOST_MISSED"; version: number; status: InstagramPostStatus; sourceSnapshot: unknown; updatedAt: Date; reviewedAt: Date | null; publishedAt: Date | null; igPermalink: string | null; igMediaId: string | null; publishError: string | null; supersededAt: Date | null }): PostListRow {
+function toListRow(p: { id: string; questionId: string | null; topicKey: string | null; questionCode: string; series: "PYQ" | "MOST_MISSED" | "TOPIC"; version: number; status: InstagramPostStatus; sourceSnapshot: unknown; updatedAt: Date; reviewedAt: Date | null; publishedAt: Date | null; igPermalink: string | null; igMediaId: string | null; publishError: string | null; supersededAt: Date | null }): PostListRow {
   const s = p.sourceSnapshot as SourceSnapshot;
   return {
     id: p.id,
     questionId: p.questionId,
+    topicKey: p.topicKey,
     questionCode: p.questionCode,
     series: p.series,
     version: p.version,
@@ -212,6 +215,7 @@ function toListRow(p: { id: string; questionId: string; questionCode: string; se
 const listSelect = {
   id: true,
   questionId: true,
+  topicKey: true,
   questionCode: true,
   series: true,
   version: true,
@@ -233,6 +237,12 @@ export async function listDrafts(): Promise<PostListRow[]> {
     take: 200,
     select: listSelect,
   });
+  return rows.map(toListRow);
+}
+
+/** Current TOPIC posts (any status), newest first. */
+export async function listTopicPosts(): Promise<PostListRow[]> {
+  const rows = await prisma.instagramPost.findMany({ where: { series: "TOPIC", supersededAt: null }, orderBy: { updatedAt: "desc" }, take: 200, select: listSelect });
   return rows.map(toListRow);
 }
 

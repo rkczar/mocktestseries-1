@@ -12,7 +12,7 @@ export function PostTable({ rows, empty, testId, showPublished = false, showPubl
       <table className="w-full text-sm" data-testid={testId}>
         <thead className="text-left text-xs text-[var(--color-muted-foreground)]">
           <tr>
-            <th className="py-2 pr-3">Question</th>
+            <th className="py-2 pr-3">Question / Topic</th>
             <th className="py-2 pr-3">Series</th>
             <th className="py-2 pr-3">Exam / Paper</th>
             <th className="py-2 pr-3">Status</th>
@@ -24,12 +24,12 @@ export function PostTable({ rows, empty, testId, showPublished = false, showPubl
           {rows.map((r) => (
             <tr key={r.id} className="border-t border-[var(--color-border)] align-top" data-row={r.questionCode}>
               <td className="max-w-md py-2 pr-3">
-                <OpenInEditor target={{ questionId: r.questionId, code: r.questionCode, preview: r.preview, series: r.series }} className="hover:underline" testId="open-question">
+                <OpenInEditor target={{ questionId: r.questionId ?? "", topicKey: r.topicKey ?? undefined, code: r.questionCode, preview: r.preview, series: r.series }} className="hover:underline" testId="open-question">
                   <span className="block font-mono text-xs text-[var(--color-muted-foreground)]">{`${r.questionCode} · v${r.version}${r.isCurrent ? "" : " (superseded)"}`}</span>
                   {r.preview}
                 </OpenInEditor>
               </td>
-              <td className="py-2 pr-3">{r.series === "PYQ" ? "PYQ Series" : "Most Missed"}</td>
+              <td className="py-2 pr-3">{r.series === "PYQ" ? "PYQ Series" : r.series === "TOPIC" ? "Topic" : "Most Missed"}</td>
               <td className="py-2 pr-3">
                 <div>{r.examName}</div>
                 {r.paperLabel ? <div className="text-xs text-[var(--color-muted-foreground)]">{r.paperLabel}</div> : null}
@@ -49,7 +49,7 @@ export function PostTable({ rows, empty, testId, showPublished = false, showPubl
                 <td className="py-2 pr-3">
                   {r.isCurrent && (r.status === "DRAFT" || r.status === "FAILED") ? (
                     <OpenInEditor
-                      target={{ questionId: r.questionId, code: r.questionCode, preview: r.preview, series: r.series, publish: true }}
+                      target={{ questionId: r.questionId ?? "", topicKey: r.topicKey ?? undefined, code: r.questionCode, preview: r.preview, series: r.series, publish: true }}
                       className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-[var(--radius-button)] bg-[var(--color-success)] px-3 text-xs font-semibold text-white"
                       testId="row-publish"
                     >

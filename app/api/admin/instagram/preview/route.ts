@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     const [post, settings] = await Promise.all([getPostDto(body.postId), getStudioSettings()]);
     const content = checkContentInput(body.content ?? post.content, post.content);
     if (!content.ok) return NextResponse.json({ error: content.error }, { status: 422 });
-    const design = checkDesignInput(body.design ?? post.design);
+    const design = checkDesignInput(body.design ?? post.design, post.series);
     if (!design.ok) return NextResponse.json({ error: design.error }, { status: 422 });
     if (index >= slideSequence(content.value, design.value).length) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
     const jpeg = await renderSlideJpegCached(

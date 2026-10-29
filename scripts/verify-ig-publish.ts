@@ -228,12 +228,12 @@ async function main() {
 
     await check("Question Bank edited after the draft was made → publishing blocked (source changed)", async () => {
       const p = await draftPost();
-      const before = await prisma.question.findUniqueOrThrow({ where: { id: p.questionId }, select: { text: true } });
-      await prisma.question.update({ where: { id: p.questionId }, data: { text: before.text + " (edited)" } });
+      const before = await prisma.question.findUniqueOrThrow({ where: { id: p.questionId! }, select: { text: true } });
+      await prisma.question.update({ where: { id: p.questionId! }, data: { text: before.text + " (edited)" } });
       try {
         await assert.rejects(sp({ postId: p.id, expectedRevision: p.revision, requestKey: key(), format: "CAROUSEL", actorId }), /Publishing blocked/);
       } finally {
-        await prisma.question.update({ where: { id: p.questionId }, data: { text: before.text } });
+        await prisma.question.update({ where: { id: p.questionId! }, data: { text: before.text } });
       }
     });
 

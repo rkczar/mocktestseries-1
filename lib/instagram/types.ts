@@ -48,6 +48,23 @@ export const MIN_SLIDES = 3;
 /** Instagram's carousel limit used by the publisher (lib/instagram/publish.ts CAROUSEL_MAX). */
 export const MAX_SLIDES = 10;
 
+/** Slides that need a source question; a TOPIC post can't use them. */
+export const QUESTION_ONLY_MODULES: SlideModule[] = ["QUESTION", "ANSWER", "TRAP"];
+/** Default TOPIC carousel: cover (hook), teaching slides, follow. */
+export const TOPIC_DEFAULT_MODULES: SlideModule[] = ["HOOK", "EXPLANATION_TRICK", "PEARLS", "MISTAKES", "PEARL_REVISION", "FOLLOW"];
+export const TOPIC_LIMITS = { title: 90, notes: 4000 } as const;
+
+/** Preset TOPIC layout for a slide count: the cover, the first n − 2 teaching slides, Follow. */
+export function topicLayout(n: number): SlideModule[] {
+  const teach = TOPIC_DEFAULT_MODULES.filter((m) => m !== "HOOK" && m !== "FOLLOW");
+  const extra: SlideModule[] = ["DIAGRAM", "MEDICAL_IMAGE"];
+  return ["HOOK", ...[...teach, ...extra].slice(0, Math.max(1, n - 2)), "FOLLOW"];
+}
+
+export function isTopicSnapshot(s: Pick<SourceSnapshot, "kind">): boolean {
+  return s.kind === "topic";
+}
+
 /** Recommended order per slide count. The Follow slide is always last. */
 export const DEFAULT_LAYOUTS: Record<SlideCount, SlideModule[]> = {
   3: ["QUESTION", "ANSWER", "FOLLOW"],
@@ -336,8 +353,16 @@ export interface SnapshotOption {
   isCorrect: boolean;
 }
 
-/** The question exactly as it was in the Question Bank when the draft was created. Read-only. */
+/**
+ * The question exactly as it was in the Question Bank when the draft was created. Read-only.
+ * TOPIC posts carry a topic snapshot in the same shape (lib/instagram/topic.ts): kind "topic", no
+ * question (questionId "", options []), text = the topic title, notes = the admin's source notes.
+ */
 export interface SourceSnapshot {
+  /** Absent on question snapshots written before topic posts existed. */
+  kind?: "question" | "topic";
+  /** TOPIC only: the admin's source notes / key points the AI writes from (optional). */
+  notes?: string;
   questionId: string;
   code: string;
   text: string;
@@ -405,15 +430,32 @@ const clampNum = (n: unknown, min: number, max: number, fallback: number) => {
 };
 
 /** Returns an error message, or null when the module order is valid. */
-export function validateModules(modules: readonly string[]): string | null {
+/**
+ * Layout rules. "question" (default — every question post): Question + Answer required, in that order.
+ * "topic": no Question / Answer / Examiner Trap slide (there is no question), a Hook cover first.
+ * "any": valid as either — only for reading stored designs (normalizeDesign), never for saving.
+ */
+export type LayoutKind = "question" | "topic" | "any";
+export function layoutKindOf(series: string | null | undefined): LayoutKind {
+  return series === "TOPIC" ? "topic" : "question";
+}
+
+export function validateModules(modules: readonly string[], kind: LayoutKind = "question"): string | null {
+  if (kind === "any") return validateModules(modules, "question") === null ? null : validateModules(modules, "topic");
   if (modules.length < MIN_SLIDES || modules.length > MAX_SLIDES) return `A carousel has ${MIN_SLIDES} to ${MAX_SLIDES} slides.`;
   if (modules.some((m) => !(SLIDE_MODULES as readonly string[]).includes(m))) return "Unknown slide type.";
   if (new Set(modules).size !== modules.length) return "Each slide type can be used once.";
   if (modules[modules.length - 1] !== "FOLLOW") return "The Follow / Join slide must be the last slide.";
-  const q = modules.indexOf("QUESTION");
-  const a = modules.indexOf("ANSWER");
-  if (q < 0 || a < 0) return "The Question and Answer slides are required.";
-  if (a < q) return "The Answer slide must come after the Question slide.";
+  if (kind === "topic") {
+    const bad = modules.filter((m) => (QUESTION_ONLY_MODULES as string[]).includes(m));
+    if (bad.length) return `A topic post has no question, so it can't use ${bad.map((m) => MODULE_LABELS[m as SlideModule]).join(", ")}.`;
+    if (modules[0] !== "HOOK") return "A topic post starts with the Hook (cover) slide.";
+  } else {
+    const q = modules.indexOf("QUESTION");
+    const a = modules.indexOf("ANSWER");
+    if (q < 0 || a < 0) return "The Question and Answer slides are required.";
+    if (a < q) return "The Answer slide must come after the Question slide.";
+  }
   if (modules.includes("EXPLANATION_TRICK") && (modules.includes("EXPLANATION") || modules.includes("MEMORY_TRICK"))) {
     return "Use either the combined Explanation + Memory Trick slide or the separate slides, not both.";
   }
@@ -428,7 +470,7 @@ export function normalizeDesign(raw: unknown): PostDesign {
   const r = (raw ?? {}) as Partial<PostDesign>;
   const template = (TEMPLATE_KEYS as readonly string[]).includes(r.template as string) ? (r.template as TemplateKey) : DEFAULT_TEMPLATE;
   const modules = Array.isArray(r.modules) ? (r.modules.filter((m) => typeof m === "string") as SlideModule[]) : [];
-  const validModules = validateModules(modules) === null ? modules : null;
+  const validModules = validateModules(modules, "any") === null ? modules : null;
   const presetCount = ((SLIDE_COUNTS as readonly number[]).includes(r.slideCount as number) ? r.slideCount : DEFAULT_SLIDE_COUNT) as SlideCount;
   const finalModules = validModules ?? [...DEFAULT_LAYOUTS[presetCount]];
   const overrides = normalizeOverrides(r.overrides);
