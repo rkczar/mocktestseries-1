@@ -16,6 +16,7 @@ import {
   type ClaudeTestResult,
 } from "@/lib/anthropic-config";
 import { GATEWAY_SETTING_KEY, getGatewayConfig, saveGatewayConfig, type GatewayConfig } from "@/lib/ai-gateway";
+import { getEngineConfig } from "@/lib/ai-engine/settings";
 import { AI_FEATURE_KEYS, type ModelPrice } from "@/lib/ai-gateway-config";
 import type { ClaudeEffort } from "@/lib/anthropic-client";
 
@@ -98,7 +99,10 @@ export async function saveClaudeSettingsAction(input: { enabled?: boolean; model
 
 export async function testClaudeConnectionAction(): Promise<ProviderResult<{ result: ClaudeTestResult; config: ClaudePublicConfig }>> {
   return run(await requireMaster(), async (actorId) => {
-    const result = await testClaudeConnection();
+    // While direct Claude calls are off (lib/ai-engine/config.ts RuntimeConfig), the test checks the key and model
+    // list only and sends no generation request.
+    const { runtime } = await getEngineConfig();
+    const result = await testClaudeConnection({ skipGeneration: !runtime.directClaudeOpenAi });
     await audit(actorId, "API_ANTHROPIC_TESTED", { ok: result.ok, category: result.category, model: result.model });
     touch();
     return { result, config: await getClaudeConfig() };

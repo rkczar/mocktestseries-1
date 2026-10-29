@@ -93,3 +93,76 @@ Provider failures (true provider side): `rate_limited` 114 (importer, free model
 
 Not available / not examined: PM2 stdout logs were not mined for prompts (by design). Meta publish failures:
 none recorded (`publishError` empty, 28 STARTED = 28 PUBLISHED in 14 days).
+
+## 4. Provider policy enforcement (final check, 2026-10-29)
+
+| Path | Provider | Gate |
+|---|---|---|
+| Student / admin explanations, variants, IG carousel, caption, trap, diagram, trends (`lib/ai-gateway.ts generateForFeature`) | OpenRouter → Gemini once on failure | `runtime.geminiFallback` (default ON) |
+| Explicit per-feature or per-request choice of Claude / OpenAI | refused with a clear message | `runtime.directClaudeOpenAi` (default OFF) |
+| Video script / storyboard, motion (`lib/video-studio/*`) | OpenRouter only (no Gemini fallback) | engine budgets + confirmed quote |
+| AI Importer (`lib/ai-import/ai.ts`) | OpenRouter only (own ledger + confirmed price) | importer confirm flow |
+| IG medical image (`lib/instagram/medical-image.ts`) | the feature's provider: OpenRouter, or Gemini when chosen | `assertAiGenerationOpen` |
+| Admin "Test connection" Claude | key + model list only while direct calls are off (no generation request) | `runtime.directClaudeOpenAi` |
+| Admin "Test connection" OpenAI / Gemini | `GET /models` (read-only, no generation) | admin click |
+
+Claude and OpenAI models stay selectable as OpenRouter model ids (`anthropic/…`, `openai/…`); they never reach
+`api.anthropic.com` / `api.openai.com`. A static check in `scripts/verify-ai-reliability.ts` fails when a new file
+calls a direct provider endpoint.
+
+**Re-enabling direct providers.** There is no admin UI control for `runtime`; it changes only through
+`saveRuntime()` (code/script) or a manual edit of the AI Engine `Setting` row. Admin saves of features, budgets and
+privacy patch only their own keys, so they cannot flip it. Intended rollback, in order:
+1. Code rollback to `4939034` (`ops/deploy/mocktestseries-deploy.sh` / atomic switch) restores the old routing completely.
+2. Emergency only, owner-approved: a one-off `saveRuntime({ geminiFallback: true, directClaudeOpenAi: true })` script on
+   production, recorded in the deploy log, reverted the same way.
+
+## 5. Invalid explanations already stored (read-only, production, 2026-10-29 ~04:00 UTC)
+
+The 65 counted earlier had grown to **68**, because production still runs the old routing: 5 of them are from the last
+24 hours. Identification criteria (SQL, read-only):
+
+```sql
+-- A. classifier verdicts (68 rows, 68 questions, all model nvidia/nemotron-3.5-content-safety:free, 2026-10-20 → 2026-10-29)
+SELECT id, "questionId", model, "generatedAt" FROM "AIExplanation"
+ WHERE status = 'COMPLETED' AND content::text ~* '(user|response) safety';
+-- B. empty answers (5 rows, model liquid/lfm-2.5-2.6b:free): no concept and no option analysis
+SELECT id, "questionId", model FROM "AIExplanation"
+ WHERE status = 'COMPLETED' AND NOT content::text ~* '(user|response) safety'
+   AND coalesce(content->>'concept','') = '' AND coalesce(content->'optionAnalysis','{}'::jsonb) = '{}'::jsonb;
+-- C. explanation variants with the same verdict (15 rows)
+SELECT id, "questionId", "variantId" FROM "AIExplanationVariant"
+ WHERE status = 'COMPLETED' AND content::text ~* '(user|response) safety';
+```
+
+None is marked stale or admin-reviewed; `AIExplanationVersion` contains no verdicts.
+
+**Recovery plan (not executed; each step needs owner approval):**
+1. Deploy this release first, so no new invalid rows are written (the structured check rejects verdicts and empty answers).
+2. Re-run queries A–C read-only right after the deploy and save the id lists (CSV) with the deploy backup.
+3. Regenerate set A + B with the existing admin action "Regenerate" (`regenerateExplanation`): it snapshots the old
+   content into `AIExplanationVersion` before overwriting, so nothing is lost. Cost is about 73 explanation calls; price
+   shown and confirmed once in AI → Explanations before running. Do it in small batches (10) and spot-check output.
+4. Set C (variants) has no admin regenerate. Proposed: mark these 15 rows `status = 'FAILED'` (one `UPDATE … WHERE id IN
+   (<listed ids>)`, after a row backup) — the next student request then regenerates them through the fixed path.
+5. Verify: queries A–C return 0 rows; open 3 regenerated questions as a student.
+
+## 6. Instagram Content Studio and Video Studio (final check, 2026-10-29)
+
+**IG coverage.** PYQ / Most-Missed carousel generation, caption, trap, diagram and medical image paths now pass an
+output check: a verdict, prose, cut-off or schema-invalid answer counts as a failed attempt and the engine moves to
+the next compatible model (bounded retries, one deadline); a model that disagrees with the stored answer key is
+reported to the admin and nothing is changed. Draft saving (revisioned, conflict-checked), preview, regeneration and
+the single Confirm & Publish approval are unchanged and covered by `verify-ig-studio` (33), `verify-ig-ai-studio`
+(54), `verify-ig-image-trap` (36) and `verify-ig-repair` (29).
+**Not built:** the "Create from Topic / Custom Prompt" workflow (F12) is NOT part of this release: it needs a schema
+change (`InstagramPost.questionId` optional, series `TOPIC` / `CUSTOM`) and a separate approval.
+**Error separation today:** AI failures surface as their own messages (`AiNotConfiguredError` / `AiProviderFailure`,
+"Nothing was changed"); Instagram publishing failures keep their Meta category/code (`lib/instagram/publish.ts`).
+Image rendering and storage errors still fall into the generic "Something went wrong" result (logged server-side) —
+a labelled category for those is a follow-up.
+
+**Video.** AI script/storyboard failures are now labelled by category (`[SCHEMA_VALIDATION_FAILED]`, `[REQUEST_TIMEOUT]`, `[NON_ANSWER_MODEL]`, …)
+apart from `[RENDERING_FAILED]` (render/export) and `[ASSET_GENERATION_FAILED]` (voice/transcribe/ingest). The
+render container itself is unchanged; its out-of-memory kills (exit 137) on this server are environmental and also
+reproduce on production code 4939034.
