@@ -28,7 +28,7 @@ export type AutoCostTier = (typeof AUTO_COST_TIERS)[number];
 export interface EngineFeatureDef {
   key: AiFeature;
   label: string;
-  group: "Student AI" | "Admin AI" | "Instagram" | "Video Studio";
+  group: "Student AI" | "Admin AI" | "Instagram";
   kind: "text" | "image";
   /** Admin-triggered features need a one-time cost quote; student features never do. */
   trigger: "admin" | "student";
@@ -59,7 +59,6 @@ export const ENGINE_FEATURES: EngineFeatureDef[] = [
   { key: "ig_competitors", label: "Instagram Competitor Analysis", group: "Instagram", kind: "text", trigger: "admin", medical: false, callsPerAction: 1, defaultMaxOutputTokens: 2000, typicalInputTokens: 1500, inUse: true },
   { key: "ig_hashtags", label: "Instagram Hashtags (reserved)", group: "Instagram", kind: "text", trigger: "admin", medical: false, callsPerAction: 1, defaultMaxOutputTokens: 1000, typicalInputTokens: 500, inUse: false },
   { key: "ig_keywords", label: "Instagram Keyword Research (reserved)", group: "Instagram", kind: "text", trigger: "admin", medical: false, callsPerAction: 1, defaultMaxOutputTokens: 1000, typicalInputTokens: 500, inUse: false },
-  { key: "video_script", label: "AI Video Studio Script", group: "Video Studio", kind: "text", trigger: "admin", medical: true, callsPerAction: 1, defaultMaxOutputTokens: 4000, typicalInputTokens: 1800, inUse: true },
 ];
 
 export const ENGINE_FEATURE_MAP = Object.fromEntries(ENGINE_FEATURES.map((f) => [f.key, f])) as Record<AiFeature, EngineFeatureDef>;

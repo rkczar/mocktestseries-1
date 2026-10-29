@@ -4026,10 +4026,10 @@ model AiImportCleanup {
   @@index([createdAt])
 }
 
-// ---- AI Video Studio (Admin -> AI Video Studio) -------------------------------------------
-// Additive only. Media bytes never live in the database: they sit in the job's temporary
-// folder under VIDEO_STUDIO_DIR and are removed by the retention/cleanup policy. These rows
-// keep only the metadata needed for history and cost accounting.
+// ---- AI Video Studio (RETIRED 2026-10-29) ---------------------------------------------------
+// The feature, its worker and renderer were removed (ops/VIDEO-STUDIO-DECOMMISSION.md). These
+// models and their tables are kept unchanged as history only: no application code reads or
+// writes them. Dropping them needs a separate, reviewed migration.
 
 enum VideoJobKind {
   GENERATE

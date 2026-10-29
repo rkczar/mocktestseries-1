@@ -114,13 +114,6 @@ async function partA() {
     assert.equal(carouselCheck('{"explanation":"x"}').ok, false);
     assert.equal(carouselCheck("User Safety: safe").ok, false);
   });
-  const { extractJson: videoExtract } = await import("@/lib/video-studio/script");
-  await check("video reader keeps its job messages (no JSON object / cut off)", () => {
-    assert.throws(() => videoExtract("User Safety: safe"));
-    assert.throws(() => videoExtract("no json here"), /contains no JSON object/);
-    assert.throws(() => videoExtract('{"scenes":[{"narration":"a'), /incomplete \(cut off\)/);
-    assert.deepEqual(videoExtract('```json\n{"title":"t"}\n```'), { title: "t" });
-  });
 
   console.log("\nA3. Task profiles and model exclusions");
   await check("every feature has a task profile; interactive deadlines stay under the 60 s proxy timeout", () => {

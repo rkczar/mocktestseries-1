@@ -92,7 +92,7 @@ async function main() {
   } as Model;
 
   console.log("\nA. Text routing excludes image-generation models");
-  for (const feature of ["ig_carousel", "ig_trap", "ig_diagram", "ig_caption", "explanation", "video_script"] as const) {
+  for (const feature of ["ig_carousel", "ig_trap", "ig_diagram", "ig_caption", "explanation"] as const) {
     await check(`${feature}: image-preview model is not a text candidate; a normal text model is`, () => {
       const e = textEligibility(imagePreview, feature, 2000, 3000);
       assert.equal(e.ok, false);

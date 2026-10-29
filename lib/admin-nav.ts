@@ -19,7 +19,6 @@ import {
   Settings,
   GalleryHorizontal,
   ScanText,
-  Clapperboard,
 } from "lucide-react";
 
 export interface AdminNavItem {
@@ -42,7 +41,6 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { label: "Analytics", href: "/admin/analytics", icon: BarChart3 },
   { label: "Communications", href: "/admin/communications", icon: MessageSquare },
   { label: "Instagram", href: "/admin/instagram", icon: GalleryHorizontal },
-  { label: "AI Video Studio", href: "/admin/video-studio", icon: Clapperboard },
   { label: "Reviews", href: "/admin/reviews", icon: MessageSquareQuote },
   { label: "SEO", href: "/admin/seo", icon: Search },
   { label: "Security", href: "/admin/security", icon: Lock },

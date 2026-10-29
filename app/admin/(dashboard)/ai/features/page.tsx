@@ -51,7 +51,7 @@ export default async function AiFeaturesPage() {
     featureUsage30(),
   ]);
   const used = usage30;
-  const groups = ["Student AI", "Admin AI", "Instagram", "Video Studio"] as const;
+  const groups = ["Student AI", "Admin AI", "Instagram"] as const;
   return (
     <div className="flex flex-col gap-4">
       <div>

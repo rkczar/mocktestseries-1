@@ -149,6 +149,8 @@ None is marked stale or admin-reviewed; `AIExplanationVersion` contains no verdi
 
 ## 6. Instagram Content Studio and Video Studio (final check, 2026-10-29)
 
+> Later the same day AI Video Studio was removed (ops/VIDEO-STUDIO-DECOMMISSION.md). The Video Studio rows in this audit are history.
+
 **IG coverage.** PYQ / Most-Missed carousel generation, caption, trap, diagram and medical image paths now pass an
 output check: a verdict, prose, cut-off or schema-invalid answer counts as a failed attempt and the engine moves to
 the next compatible model (bounded retries, one deadline); a model that disagrees with the stored answer key is

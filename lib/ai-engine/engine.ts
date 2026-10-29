@@ -184,7 +184,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  - model-specific errors (model / route unavailable) move to the next planned model;
  *  - auth, credits, bad requests and moderation stop at once (no other model can fix them);
  *  - at most MAX_ATTEMPTS provider calls, each logged with the same requestId.
- * `extra.content`: optional multimodal parts (AI Video Studio image sources); sent instead of `prompt` when set.
+ * `extra.content`: optional multimodal parts; sent instead of `prompt` when set.
  */
 export async function generateTextViaOpenRouter(feature: AiFeature, prompt: string, opts: AiGenerationOptions, ctx: EngineContext = {}, extra: { content?: ChatContentPart[] } = {}): Promise<AiGenerationResult> {
   const { apiKey, engine, fx, cfg } = await prepare(feature, "text");

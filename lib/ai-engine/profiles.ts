@@ -19,7 +19,7 @@ import type { AiFeature } from "@/lib/ai-gateway-config";
 
 export const REGISTRY_VERIFIED_AT = "2026-10-29";
 
-export const TASK_PROFILE_KEYS = ["medical_explanation", "medical_content", "structured_json", "video_planning", "image_generation"] as const;
+export const TASK_PROFILE_KEYS = ["medical_explanation", "medical_content", "structured_json", "image_generation"] as const;
 export type TaskProfileKey = (typeof TASK_PROFILE_KEYS)[number];
 
 export interface TaskProfile {
@@ -35,7 +35,7 @@ export interface TaskProfile {
   /**
    * Whole-request deadline (every attempt, retry wait and fallback), in ms.
    * Interactive features stay below nginx's 60 s proxy timeout so the browser
-   * gets a clear error instead of a 504; background jobs (Video Studio worker) may run longer.
+   * gets a clear error instead of a 504.
    */
   deadlineMs: number;
   /** Free (":free") routes are slow and rate-limited: Task-aware routing uses them only when nothing else is approved. */
@@ -78,17 +78,6 @@ export const TASK_PROFILES: Record<TaskProfileKey, TaskProfile> = {
     freeLastResort: true,
     preferred: ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite", "openai/gpt-5.6-luna"],
   },
-  video_planning: {
-    key: "video_planning",
-    label: "Video scripts and storyboards",
-    description: "Background Video Studio planning: long structured JSON (script, scenes, motion), runs in the worker, may take longer.",
-    output: "text",
-    inputModalities: ["text"],
-    json: true,
-    deadlineMs: 240_000,
-    freeLastResort: true,
-    preferred: ["anthropic/claude-sonnet-5.5", "google/gemini-3.6-flash", "anthropic/claude-haiku-5.5"],
-  },
   image_generation: {
     key: "image_generation",
     label: "Medical image generation",
@@ -117,7 +106,6 @@ export const FEATURE_PROFILE: Record<AiFeature, TaskProfileKey> = {
   ig_trends: "structured_json",
   ig_competitors: "structured_json",
   ig_image: "image_generation",
-  video_script: "video_planning",
 };
 
 export function profileFor(feature: AiFeature): TaskProfile {

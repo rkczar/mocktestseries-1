@@ -1,9 +1,9 @@
 /**
- * Shared text-quality findings (Instagram captions, video scripts). Pure and client-safe.
+ * Shared text-quality findings (Instagram captions). Pure and client-safe.
  *
  * These are heuristics about form — length, formatting, repetition, filler, stock phrasing, numbers that do not
  * appear in the source. They are NOT a fact check: medical correctness has its own review (Instagram medical
- * review, Video Studio fact-check). Nothing here rewrites text by itself; a `suggestion` is shown to the admin.
+ * review). Nothing here rewrites text by itself; a `suggestion` is shown to the admin.
  */
 
 export type LintSeverity = "error" | "warning" | "info";
@@ -17,8 +17,6 @@ export interface LintFinding {
   suggestion?: string;
   /** The text the finding is about (a phrase, a hashtag, a character name). */
   excerpt?: string;
-  /** Video scripts: 1-based scene number. */
-  scene?: number;
 }
 
 export function finding(code: string, severity: LintSeverity, message: string, extra: Omit<LintFinding, "code" | "severity" | "message"> = {}): LintFinding {

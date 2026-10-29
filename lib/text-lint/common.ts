@@ -1,9 +1,11 @@
 import { finding, type LintFinding } from "@/lib/text-lint/types";
 
 /**
- * Checks shared by captions and scripts: invisible / formatting characters, stock "AI-sounding" phrasing,
- * repeated phrases. The phrase list was written for this project (idea credited in
- * docs/ai-video-studio/THIRD-PARTY.md); edit it here.
+ * Caption checks: invisible / formatting characters, stock "AI-sounding" phrasing, repeated phrases.
+ * The phrase list and all code were written for this project; the idea of a caption linter (feed-preview cut,
+ * one ask, no caption links, invisible characters, stock phrasing) comes from Jakeschincariol/instagram-agent-skill
+ * (ig-caption / ig-human, MIT, commit d03c56b, read 2026-10-29) — nothing from its slop.json or Python tools was
+ * copied. Edit the list here.
  */
 
 /** Characters a keyboard does not type and that survive copy-paste invisibly. */
@@ -92,11 +94,11 @@ export const STOCK_PHRASES: { re: RegExp; label: string; instead: string }[] = [
   { re: /\b(hello|hi|hey) (everyone|guys|friends|doctors)\b/i, label: "greeting", instead: "start with the hook" },
 ];
 
-export function checkStockPhrases(text: string, opts: { scene?: number } = {}): LintFinding[] {
+export function checkStockPhrases(text: string): LintFinding[] {
   const out: LintFinding[] = [];
   for (const p of STOCK_PHRASES) {
     const m = p.re.exec(text);
-    if (m) out.push(finding("STOCK_PHRASE", "info", `Generic phrasing: "${m[0]}".`, { suggestion: p.instead, excerpt: m[0], ...(opts.scene ? { scene: opts.scene } : {}) }));
+    if (m) out.push(finding("STOCK_PHRASE", "info", `Generic phrasing: "${m[0]}".`, { suggestion: p.instead, excerpt: m[0] }));
   }
   return out;
 }

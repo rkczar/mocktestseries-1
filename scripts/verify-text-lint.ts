@@ -1,11 +1,11 @@
 /**
- * Shared text lint (lib/text-lint) — pure regression: Instagram caption checks, video-script checks.
+ * Shared text lint (lib/text-lint) — pure regression: Instagram caption checks.
  * No database, no network.
  *
  *   npx tsx scripts/verify-text-lint.ts
  */
 import assert from "node:assert/strict";
-import { cleanCaption, feedPreview, hashtagsOf, invisibleCharacters, lintCaption, lintScript, worst } from "@/lib/text-lint";
+import { cleanCaption, feedPreview, hashtagsOf, invisibleCharacters, lintCaption, worst } from "@/lib/text-lint";
 
 let passes = 0;
 let failures = 0;
@@ -99,58 +99,6 @@ check("stock phrasing and repetition are info (suggestions), never errors", () =
 check("worst() ranks error > warning > info", () => {
   assert.equal(worst([{ code: "a", severity: "info", message: "" }, { code: "b", severity: "warning", message: "" }]), "warning");
   assert.equal(worst([]), null);
-});
-
-console.log("\nB. Video scripts");
-const SOURCE = "Adrenaline 0.5 mg IM (1:1000) in anaphylaxis; repeat after 5 minutes if needed. Adult dose.";
-check("a clean, sourced script has no warnings", () => {
-  const f = lintScript(
-    [
-      { narration: "Anaphylaxis kills in minutes, so the first drug matters.", onScreenText: "Anaphylaxis: first drug" },
-      { narration: "Give adrenaline 0.5 mg intramuscularly, one in one thousand.", onScreenText: "Adrenaline 0.5 mg IM" },
-      { narration: "Repeat after 5 minutes if needed. Practice more questions on MockTestSeries.", onScreenText: "Repeat after 5 min" },
-    ],
-    { sourceText: SOURCE }
-  );
-  assert.ok(!f.some((x) => x.severity !== "info"), JSON.stringify(f));
-});
-check("greeting / 'in this video' opening is flagged on scene 1", () => {
-  for (const o of ["Hello everyone, today we learn anaphylaxis.", "In this video we will see anaphylaxis.", "Namaste doston, aaj hum anaphylaxis padhenge."]) {
-    const f = lintScript([{ narration: o }, { narration: "Content." }]);
-    assert.ok(f.some((x) => x.code === "SCRIPT_INTRO_FILLER" && x.scene === 1), o);
-  }
-});
-check("a changed dose or an invented number is flagged against the source", () => {
-  const f = lintScript([{ narration: "Give adrenaline 5 mg IM." }, { narration: "Repeat every 15 minutes." }], { sourceText: SOURCE });
-  const n = f.filter((x) => x.code === "SCRIPT_NUMBER_NOT_IN_SOURCE");
-  assert.equal(n.length, 2);
-  assert.match(n[0].message, /5mg/);
-});
-check("no source → no number check (cannot compare)", () => {
-  assert.ok(!lintScript([{ narration: "Give 5 mg." }]).some((x) => x.code === "SCRIPT_NUMBER_NOT_IN_SOURCE"));
-});
-check("an ask before the content is delivered is flagged; one at the end is fine", () => {
-  const early = lintScript([{ narration: "Follow us for more." }, { narration: "Point one." }, { narration: "Point two." }, { narration: "Point three." }]);
-  assert.ok(early.some((x) => x.code === "SCRIPT_EARLY_CTA" && x.scene === 1));
-  const late = lintScript([{ narration: "Point one." }, { narration: "Point two." }, { narration: "Point three." }, { narration: "Comment your answer below." }]);
-  assert.ok(!late.some((x) => x.code === "SCRIPT_EARLY_CTA"));
-});
-check("guarantee / absolute claims are warnings; pronunciation hints are info", () => {
-  const f = lintScript([{ narration: "This drug cures all infections, guaranteed. Dose 10 mg/kg IV with ECG monitoring." }]);
-  assert.ok(f.some((x) => x.code === "SCRIPT_ABSOLUTE_CLAIM" && x.severity === "warning"));
-  const p = f.find((x) => x.code === "SCRIPT_PRONUNCIATION");
-  assert.ok(p && p.severity === "info" && /ECG/.test(p.excerpt ?? "") && /mg\/kg/.test(p.excerpt ?? ""));
-});
-check("exam names are not pronunciation noise", () => {
-  assert.ok(!lintScript([{ narration: "This NEET PG and RUHS MO MCQ is common." }]).some((x) => x.code === "SCRIPT_PRONUNCIATION"));
-});
-check("on-screen text unrelated to the narration is flagged", () => {
-  const f = lintScript([{ narration: "Adrenaline is the first drug in anaphylaxis.", onScreenText: "Thyroid storm management protocol" }]);
-  assert.ok(f.some((x) => x.code === "SCRIPT_SCREEN_MISMATCH"));
-});
-check("repetition across scenes is reported", () => {
-  const f = lintScript([{ narration: "The first line of treatment is adrenaline." }, { narration: "Remember, the first line of treatment is adrenaline." }]);
-  assert.ok(f.some((x) => x.code === "SCRIPT_REPEATED_PHRASE"));
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

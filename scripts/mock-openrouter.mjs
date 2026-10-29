@@ -18,10 +18,7 @@
  *   mockai/collector     unavailable when provider.data_collection = "deny"
  *   openrouter/auto      pricing -1 (variable)
  * Image API models: mockimg/perimage ($0.02 / image), mockimg/pertoken ($0.00003 / token), mockimg/fail.
- * Text answers reuse scripts/mock-anthropic.mjs#answerFor (the app's real prompts); AI Video Studio
- * script prompts get a valid scene plan (videoScript below).
- * POST /audio/speech → a WAV tone (length follows the text); POST /audio/transcriptions → verbose_json
- * with word timestamps and usage.cost.
+ * Text answers reuse scripts/mock-anthropic.mjs#answerFor (the app's real prompts).
  * GET /__mock/stats, POST /__mock/reset, GET /__mock/fx?rate=…|status=500
  */
 import http from "node:http";
@@ -64,109 +61,11 @@ const err = (res, status, message) => json(res, status, { error: { code: status,
 
 function evalAnswer(prompt) {
   if (prompt.includes("Answer this single-best-answer MCQ")) return JSON.stringify({ answer: "A", confidence: 0.9, reason: "Mock reason." });
-  if (prompt.startsWith("You write short educational videos for MockTestSeries.in")) return videoScript(prompt);
-  if (prompt.startsWith("You plan short motion-graphics teaching videos for MockTestSeries.in")) return motionScript(prompt);
   return null;
 }
 
-/** A scene plan for the AI Video Studio script prompt: uses the listed questionIds / assets, flags one claim for review. */
-function videoScript(prompt) {
-  const regen = /Rewrite ONLY scene (\d+)/.exec(prompt);
-  const qids = [...prompt.matchAll(/- questionId ([a-z0-9]{20,40}) \(/g)].map((m) => m[1]);
-  const assetBlock = /Assets you may show on screen[^\n]*\n((?:\d+: [^\n]*\n?)+)/.exec(prompt);
-  const assets = assetBlock ? assetBlock[1].trim().split("\n").length : 0;
-  const n = Math.max(3, Math.min(8, Number(/ in (\d+) scenes/.exec(prompt)?.[1] ?? 5)));
-  const scene = (narration, onScreenText, visual, needsReview = false, reviewNote = "") => ({ narration, onScreenText, visual, needsReview, reviewNote });
-  const middle = [
-    scene("Troponin I सबसे specific cardiac marker है। यह myocardial injury के तीन से छह घंटे बाद बढ़ता है।", "Troponin I: most specific", { kind: "bullets", title: "Cardiac markers", items: ["Troponin I — most specific", "CK-MB — reinfarction", "Myoglobin — earliest"] }),
-    scene("Mechanism समझिए: plaque rupture, फिर thrombus, फिर ischemia और अंत में necrosis।", "Plaque → Thrombus → Necrosis", { kind: "diagram", title: "MI pathway", nodes: ["Plaque rupture", "Thrombus", "Ischemia", "Necrosis"] }),
-    scene("CK-MB दो से तीन दिन में normal हो जाता है, इसलिए reinfarction पकड़ने में useful है।", "CK-MB: reinfarction", { kind: "title", title: "CK-MB", subtitle: "Normal in 2–3 days" }, true, "Check the CK-MB normalisation window against the current textbook."),
-  ];
-  const scenes = [scene("क्या आप जानते हैं कि heart attack के बाद सबसे पहले कौन सा marker बढ़ता है?", "Which marker rises first?", { kind: "title", title: "Cardiac markers", subtitle: "NEET PG high-yield" })];
-  for (const id of qids) scenes.push(scene("अब यह question देखिए और answer सोचिए।", "Your turn", { kind: "question", questionId: id, revealAtSec: 4 }));
-  for (let i = 0; i < Math.min(assets, 2); i++) scenes.push(scene("इस image में key finding को ध्यान से देखिए।", "Look closely", { kind: "image", assetIndex: i, title: "Key finding", caption: "From your upload" }));
-  for (const m of middle) if (scenes.length < n - 1) scenes.push(m);
-  scenes.push(scene("ऐसे और high-yield revision videos के लिए MockTestSeries.in पर practice कीजिए।", "Practice on MockTestSeries.in", { kind: "cta", title: "Practice now", subtitle: "MockTestSeries.in" }));
-  if (regen) return JSON.stringify({ scenes: [scene("यह scene दोबारा लिखा गया है: Troponin I और T दोनों specific हैं।", "Troponin I and T", { kind: "title", title: "Troponins", subtitle: "Rewritten scene" })] });
-  return JSON.stringify({ title: "Cardiac markers in 60 seconds", caption: "Troponin, CK-MB and myoglobin — the high-yield timeline. #NEETPG", scenes });
-}
-
-/** A script + storyboard for the Motion Workflow Studio prompt (uses the listed questionId; one flagged frame; motions from the style list). */
-function motionScript(prompt) {
-  const motions = (/exactly one of ([a-z_, ]+), \(4\)/.exec(prompt)?.[1] ?? "pop").split(",").map((s) => s.trim()).filter(Boolean);
-  const qid = /- questionId ([a-z0-9]{20,40}) \(/.exec(prompt)?.[1];
-  const m = (i) => motions[i % motions.length];
-  const frames = [
-    { sentence: "Heart attack के बाद सबसे पहले कौन सा marker बढ़ता है?", onScreen: "Which marker rises first?", highlight: "first", motion: m(0), tag: "Level 1", visual: { type: "statement" } },
-    { sentence: "Myoglobin सबसे पहले बढ़ता है, लेकिन यह specific नहीं है।", onScreen: "Myoglobin: earliest", highlight: "Myoglobin", motion: m(1), tag: "Level 2", visual: { type: "compare", left: "Myoglobin", right: "Troponin I" } },
-    { sentence: "Plaque rupture, फिर thrombus, और फिर myocardial necrosis होता है।", onScreen: "MI pathway", highlight: "pathway", motion: m(2), tag: "Level 3", visual: { type: "diagram", nodes: ["Plaque rupture", "Thrombus", "Necrosis"] } },
-    { sentence: "Troponin I 6 घंटे में बढ़ता है और दस दिन तक high रहता है।", onScreen: "Troponin I rises by 6 hours", highlight: "Troponin", motion: m(3), tag: "Level 4", visual: { type: "stat", value: "6", unit: "hours" }, needsReview: true, reviewNote: "Check the 10-day persistence against the current textbook." },
-  ];
-  if (qid) frames.push({ sentence: "अब boss question का answer सोचिए।", onScreen: "Boss question", highlight: "Boss", motion: m(4), tag: "Boss", visual: { type: "question", questionId: qid, revealAtSec: 3 } });
-  frames.push({ sentence: "ऐसे और high-yield videos के लिए MockTestSeries.in पर practice कीजिए।", onScreen: "Practice on MockTestSeries.in", highlight: "Practice", motion: m(5), tag: "Done", visual: { type: "cta" } });
-  return JSON.stringify({ title: "Cardiac markers, frame by frame", caption: "Myoglobin first, Troponin I most specific. #NEETPG", frames });
-}
-
-/**
- * 16 kHz mono 16-bit PCM WAV with a soft tone (stands in for narration audio).
- * The spoken text rides along in a private "mtsx" chunk (decoders skip unknown
- * chunks), so the transcription mock can return the words that were "spoken"
- * with times spread over the real audio length.
- */
-function wavTone(sec, text = "") {
-  const rate = 16000;
-  const n = Math.round(sec * rate);
-  const tb = Buffer.from(text, "utf8");
-  const tl = tb.length + (tb.length % 2);
-  const extra = tb.length ? 8 + tl : 0;
-  const b = Buffer.alloc(44 + extra + n * 2);
-  b.write("RIFF", 0);
-  b.writeUInt32LE(36 + extra + n * 2, 4);
-  b.write("WAVEfmt ", 8);
-  b.writeUInt32LE(16, 16);
-  b.writeUInt16LE(1, 20);
-  b.writeUInt16LE(1, 22);
-  b.writeUInt32LE(rate, 24);
-  b.writeUInt32LE(rate * 2, 28);
-  b.writeUInt16LE(2, 32);
-  b.writeUInt16LE(16, 34);
-  let o = 36;
-  if (tb.length) {
-    b.write("mtsx", o);
-    b.writeUInt32LE(tb.length, o + 4);
-    tb.copy(b, o + 8);
-    o += 8 + tl;
-  }
-  b.write("data", o);
-  b.writeUInt32LE(n * 2, o + 4);
-  for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 220 * i) / rate) * 2500 * Math.min(1, i / 800, (n - i) / 800)), o + 8 + i * 2);
-  return b;
-}
-
-/** Words "heard" in a mock WAV: its mtsx text spread over its data length; null when the audio carries no text. */
-function heardWords(buf) {
-  if (buf.subarray(0, 4).toString("latin1") !== "RIFF") return null;
-  let o = 12;
-  let text = null;
-  let dataBytes = 0;
-  while (o + 8 <= buf.length) {
-    const id = buf.subarray(o, o + 4).toString("latin1");
-    const len = buf.readUInt32LE(o + 4);
-    if (id === "mtsx") text = buf.subarray(o + 8, o + 8 + len).toString("utf8");
-    if (id === "data") dataBytes = len;
-    o += 8 + len + (len % 2);
-  }
-  if (!text) return null;
-  const sec = dataBytes / 32000;
-  const ws = text.split(/\s+/).filter(Boolean);
-  const per = (sec - 0.4) / Math.max(1, ws.length);
-  return { sec, words: ws.map((w, i) => ({ word: w, start: Math.round((0.2 + i * per) * 1000) / 1000, end: Math.round((0.2 + (i + 0.85) * per) * 1000) / 1000 })) };
-}
-
-const SPOKEN = "नमस्ते students आज हम cardiac markers पढ़ेंगे Troponin I सबसे specific marker है CK-MB reinfarction में useful है".split(" ");
-
 export function startMockOpenRouter(port) {
-  const stats = { chat: 0, images: 0, speech: 0, transcriptions: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], authHeaders: 0 };
+  const stats = { chat: 0, images: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], authHeaders: 0 };
   const fx = { rate: 95.5, status: 200 };
   const generations = new Map();
   let seq = 0;
@@ -183,7 +82,7 @@ export function startMockOpenRouter(port) {
     }
     if (url.pathname === "/__mock/stats") return json(res, 200, { ...stats, bodies: stats.bodies.slice(-20) });
     if (url.pathname === "/__mock/reset") {
-      Object.assign(stats, { chat: 0, images: 0, speech: 0, transcriptions: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], authHeaders: 0 });
+      Object.assign(stats, { chat: 0, images: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], authHeaders: 0 });
       retry429Calls = 0;
       return json(res, 200, { ok: true });
     }
@@ -325,25 +224,6 @@ export function startMockOpenRouter(port) {
       const gid = `img-mock-${++seq}`;
       generations.set(gid, { cost, model: body.model, pt: 0, ct: 0 });
       return json(res, 200, { id: gid, model: body.model, created: Date.now(), data: [{ b64_json: PNG, media_type: "image/png" }], usage: { cost } });
-    }
-    if (req.method === "POST" && p === "/audio/speech") {
-      stats.speech++;
-      stats.bodies.push({ speech: true, model: body.model, voice: body.voice, chars: [...String(body.input ?? "")].length, provider: body.provider });
-      if (scenario === "nocredit") return err(res, 402, "Insufficient credits");
-      if (!body.model || !body.voice || !body.input) return err(res, 400, "model, voice and input are required");
-      const wav = wavTone(Math.min(120, Math.max(1.5, [...String(body.input)].length / 14)), String(body.input));
-      res.writeHead(200, { "content-type": "audio/wav", "x-generation-id": `tts-mock-${Date.now()}-${++seq}` });
-      return res.end(wav);
-    }
-    if (req.method === "POST" && p === "/audio/transcriptions") {
-      stats.transcriptions++;
-      stats.bodies.push({ transcription: true, model: body.model, language: body.language, bytes: String(body.input_audio?.data ?? "").length, provider: body.provider });
-      if (scenario === "nocredit") return err(res, 402, "Insufficient credits");
-      if (!body.input_audio?.data) return err(res, 400, "input_audio is required");
-      const heard = heardWords(Buffer.from(String(body.input_audio.data), "base64"));
-      const words = heard ? heard.words : SPOKEN.map((w, i) => ({ word: w + (i === 7 || i === SPOKEN.length - 1 ? "।" : ""), start: 0.3 + i * 0.42, end: 0.3 + i * 0.42 + 0.36 }));
-      const seconds = heard ? Math.round(heard.sec) : 8;
-      return json(res, 200, { id: `stt-mock-${Date.now()}-${++seq}`, text: words.map((w) => w.word).join(" "), language: body.language ?? "hi", words, segments: [], usage: { cost: Math.max(0.00042, Math.round(seconds * 0.0001 * 1e6) / 1e6), seconds } });
     }
     return err(res, 404, `mock: no route ${req.method} ${p}`);
   });
