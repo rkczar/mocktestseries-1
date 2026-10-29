@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { AI_FEATURE_KEYS, type AiFeature } from "@/lib/ai-gateway-config";
-import { MODEL_ID, normalizeBudgets, normalizeFeatureConfig, normalizePrivacy, type BudgetConfig, type FeatureEngineConfig, type PrivacyConfig } from "@/lib/ai-engine/config";
+import { MIN_IMAGE_TOKENS_PER_IMAGE, MODEL_ID, minUnitsPerImage, normalizeBudgets, normalizeFeatureConfig, normalizePrivacy, type BudgetConfig, type FeatureEngineConfig, type PrivacyConfig } from "@/lib/ai-engine/config";
 import {
   EngineConfigError,
   getEngineConfig,
@@ -140,6 +140,9 @@ export async function updateModelAction(input: {
     if (input.imageUnitsPerImage !== undefined) {
       const n = input.imageUnitsPerImage === null ? null : Number(input.imageUnitsPerImage);
       if (n !== null && (!Number.isFinite(n) || n <= 0 || n > 1_000_000)) throw new EngineConfigError("Units per image must be a positive number.");
+      if (n !== null && n < minUnitsPerImage(row.imageUnit)) {
+        throw new EngineConfigError(`This model is billed per output-image token: enter how many TOKENS one image uses (a 1K image is about 1,100–1,300), not a price. At least ${MIN_IMAGE_TOKENS_PER_IMAGE}.`);
+      }
       data.imageUnitsPerImage = n;
     }
     await prisma.aiModel.update({ where: { id: input.id }, data });

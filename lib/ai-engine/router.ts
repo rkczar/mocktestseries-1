@@ -102,6 +102,9 @@ export function textEligibility(m: AiModel, feature: AiFeature, tokensNeeded: nu
   if (m.missingSince) return { ok: false, reason: "no longer listed by OpenRouter" };
   if (m.expirationDate && m.expirationDate <= today()) return { ok: false, reason: `expired ${m.expirationDate}` };
   if (!m.outputModalities.includes("text") || (m.inputModalities.length && !m.inputModalities.includes("text"))) return { ok: false, reason: "not a text model" };
+  // Image-generation models also list "text" as an output, but as a text writer they truncate or answer empty
+  // (2026-10: google/gemini-3.1-flash-image-preview served 248 Instagram text calls). They stay usable for images.
+  if (m.isImageModel || m.outputModalities.includes("image")) return { ok: false, reason: "an image-generation model (used for images only)" };
   const unfit = nonGenerativeReason(m.id, m.outputModalities);
   if (unfit) return { ok: false, reason: unfit };
   const needs = profileFor(feature).inputModalities.filter((x) => !m.inputModalities.includes(x));

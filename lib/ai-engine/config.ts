@@ -256,8 +256,18 @@ export function imageMaxUsd(m: PricedModel, megapixels: number): number | null {
   if (m.imageUnitCostUsd === null || m.imageUnitCostUsd < 0) return null;
   if (m.imageUnit === "image") return m.imageUnitCostUsd + (m.requestPrice ?? 0);
   if (m.imageUnit === "megapixel") return m.imageUnitCostUsd * megapixels + (m.requestPrice ?? 0);
-  if (m.imageUnitsPerImage && m.imageUnitsPerImage > 0) return m.imageUnitCostUsd * m.imageUnitsPerImage + (m.requestPrice ?? 0);
+  if (m.imageUnitsPerImage && m.imageUnitsPerImage >= minUnitsPerImage(m.imageUnit)) return m.imageUnitCostUsd * m.imageUnitsPerImage + (m.requestPrice ?? 0);
   return null;
+}
+
+/**
+ * Smallest believable "units per image". Token-priced image models bill output-image TOKENS (a 1K image is
+ * ~1,100–1,300); a value below this is a price typed into the wrong field (2026-10: 0.0006 made every image
+ * quote ₹0 while each image cost ~₹6.5), so the estimate becomes unknown instead of zero.
+ */
+export const MIN_IMAGE_TOKENS_PER_IMAGE = 16;
+export function minUnitsPerImage(unit: string | null): number {
+  return unit === "token" ? MIN_IMAGE_TOKENS_PER_IMAGE : Number.MIN_VALUE;
 }
 
 /** Conservative token estimate from text length (English/medical text averages ~4 chars per token; 3 over-counts on purpose). */

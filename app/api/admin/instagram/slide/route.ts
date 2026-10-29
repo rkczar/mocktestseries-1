@@ -3,7 +3,7 @@ import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getStudioSettings } from "@/lib/instagram/config";
 import { StudioError, getPostDto } from "@/lib/instagram/posts";
-import { renderSlideJpeg } from "@/lib/instagram/render";
+import { renderSlideJpegCached } from "@/lib/instagram/render-cache";
 import { MAX_SLIDES } from "@/lib/instagram/types";
 import { slideSequence } from "@/lib/instagram/layout";
 
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     // (Checks → Fix This Error). In-app thumbnails still render, with "□" marking the problem.
     const glyphs = post.issues.filter((i) => i.code.startsWith("GLYPHS:"));
     if (glyphs.length && params.get("download") === "1") return NextResponse.json({ error: `Fix the unsupported characters first (Checks tab): ${glyphs.map((g) => g.message).join(" ")}` }, { status: 409 });
-    const jpeg = await renderSlideJpeg(
+    const jpeg = await renderSlideJpegCached(
       {
         snapshot: post.snapshot,
         content: post.content,

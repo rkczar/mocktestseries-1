@@ -3,7 +3,7 @@ import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getStudioSettings } from "@/lib/instagram/config";
 import { StudioError, getPostDto } from "@/lib/instagram/posts";
-import { renderSlideJpeg } from "@/lib/instagram/render";
+import { renderSlideJpegCached } from "@/lib/instagram/render-cache";
 import { MAX_SLIDES } from "@/lib/instagram/types";
 import { checkContentInput, checkDesignInput } from "@/lib/instagram/validate";
 import { slideSequence } from "@/lib/instagram/layout";
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     const design = checkDesignInput(body.design ?? post.design);
     if (!design.ok) return NextResponse.json({ error: design.error }, { status: 422 });
     if (index >= slideSequence(content.value, design.value).length) return NextResponse.json({ error: "Invalid slide." }, { status: 400 });
-    const jpeg = await renderSlideJpeg(
+    const jpeg = await renderSlideJpegCached(
       {
         snapshot: post.snapshot,
         content: content.value,
