@@ -7,7 +7,7 @@ import { getExamTaxonomy, type ExamTaxonomySubject } from "@/lib/exam-taxonomy";
 import { buildTaxonomyIndex, classificationText, type ClassifierMemory, type TaxonomyIndex } from "@/lib/ai-import/taxonomy-classify";
 import { headingKey, resolveHeadingSubject } from "@/lib/ai-import/section-subject";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
-import { mergePaperRules, type PaperRule, type PaperRuleProposal } from "@/lib/ai-import/paper-memory";
+import { memoryBrief, mergePaperRules, paperOf, type MemoryPurpose, type PaperRule, type PaperRuleProposal } from "@/lib/ai-import/paper-memory";
 
 /**
  * Exam-specific taxonomy reference of the AI Question Importer ("taxonomy memory"), one Setting row per exam
@@ -332,6 +332,23 @@ export async function addFormatRule(examId: string, actorId: string, rule: Forma
 }
 
 // ---- Paper-format memory (lib/ai-import/paper-memory.ts) ------------------------------------------------------------
+
+/** The paper this import is ("PAPER II"), from its Previous Year Paper, else its title. */
+export async function paperIdentity(job: { title: string; previousYearPaperId: string | null }): Promise<string | null> {
+  const pyp = job.previousYearPaperId ? await prisma.previousYearPaper.findUnique({ where: { id: job.previousYearPaperId }, select: { title: true } }) : null;
+  return paperOf(pyp?.title) ?? paperOf(job.title);
+}
+
+/** One import's paper and its exam's paper rules (callers use only the confirmed ones that apply — paper-memory.ts). */
+export async function jobPaperMemory(job: { examId: string; title: string; previousYearPaperId: string | null }): Promise<{ paper: string | null; rules: PaperRule[] }> {
+  return { paper: await paperIdentity(job), rules: await examPaperRules(job.examId) };
+}
+
+/** The confirmed-memory text for one kind of AI request of this import ("" when nothing confirmed applies). */
+export async function jobMemoryBrief(job: { examId: string; title: string; previousYearPaperId: string | null }, purpose: MemoryPurpose): Promise<string> {
+  const { paper, rules } = await jobPaperMemory(job);
+  return memoryBrief(rules, paper, purpose);
+}
 
 /** All paper-format rules of the exam (proposed, confirmed and rejected). */
 export async function examPaperRules(examId: string): Promise<PaperRule[]> {

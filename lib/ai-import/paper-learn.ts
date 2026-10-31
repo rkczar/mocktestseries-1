@@ -6,8 +6,10 @@ import { readDocx } from "@/lib/ai-import/docx";
 import { vaultPath } from "@/lib/ai-import/vault";
 import { docxQuestions } from "@/lib/ai-import/process";
 import { KEY_MIN_COVERAGE } from "@/lib/ai-import/keys";
-import { learnPaperRules, ocrPairs, paperOf, type LearnInput, type PaperRuleProposal } from "@/lib/ai-import/paper-memory";
-import { savePaperRuleProposals } from "@/lib/ai-import/taxonomy-memory";
+import { correctionProposals, learnPaperRules, type CorrectionItem, type LearnInput, type PaperRuleProposal } from "@/lib/ai-import/paper-memory";
+import { effective } from "@/lib/ai-import/post";
+import type { AiImportFile, AiImportJob, AiImportQuestion } from "@prisma/client";
+import { paperIdentity, savePaperRuleProposals } from "@/lib/ai-import/taxonomy-memory";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
@@ -18,11 +20,7 @@ import type { ExtractedQuestion } from "@/lib/ai-import/types";
  * questions. Everything is stored as PROPOSED; an administrator confirms each rule before it is used.
  */
 
-/** The paper this import is ("PAPER II"), from its Previous Year Paper, else its title. */
-export async function paperIdentity(job: { title: string; previousYearPaperId: string | null }): Promise<string | null> {
-  const pyp = job.previousYearPaperId ? await prisma.previousYearPaper.findUnique({ where: { id: job.previousYearPaperId }, select: { title: true } }) : null;
-  return paperOf(pyp?.title) ?? paperOf(job.title);
-}
+export { paperIdentity } from "@/lib/ai-import/taxonomy-memory";
 
 const APPROVED = (q: { approvedById: string | null; status: AiImportQuestionStatus }) => !!q.approvedById || q.status === AiImportQuestionStatus.IMPORTED || q.status === AiImportQuestionStatus.PUBLISHED;
 
@@ -54,21 +52,6 @@ export async function proposalsForJob(jobId: string): Promise<{ proposals: Paper
   const at = new Date().toISOString();
   const proposals: PaperRuleProposal[] = [];
 
-  // Admin corrections of AI-read text (a text edit of a question an AI read), word by word.
-  const edits = await prisma.aiImportQuestionVersion.findMany({ where: { jobId, kind: "ADMIN_EDIT" }, select: { questionId: true, changes: true } });
-  const aiRead = new Set(questions.filter((q) => /^AI/.test(((q.data as unknown as ExtractedQuestion).method ?? ""))).map((q) => q.id));
-  const counts = new Map<string, { wrong: string; right: string; count: number }>();
-  for (const v of edits) {
-    if (!aiRead.has(v.questionId) || !Array.isArray(v.changes)) continue;
-    for (const c of v.changes as { field?: string; before?: string; after?: string }[]) {
-      if (!/text|option/i.test(c.field ?? "") || typeof c.before !== "string" || typeof c.after !== "string") continue;
-      for (const p of ocrPairs(c.before, c.after)) {
-        const k = `${p.wrong}→${p.right}`;
-        counts.set(k, { ...p, count: (counts.get(k)?.count ?? 0) + 1 });
-      }
-    }
-  }
-
   const keyFiles = files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY);
   for (const file of files.filter((f) => f.role === AiImportFileRole.PAPER && f.storageKey && !f.purgedAt)) {
     const kind = (file.detected as { kind?: string } | null)?.kind ?? file.ext;
@@ -93,9 +76,10 @@ export async function proposalsForJob(jobId: string): Promise<{ proposals: Paper
     }
     const subjects = new Map<string, number>();
     for (const q of approved.filter((x) => x.fileId === file.id && x.subjectId)) subjects.set(subjectName.get(q.subjectId!) ?? q.subjectId!, (subjects.get(subjectName.get(q.subjectId!) ?? q.subjectId!) ?? 0) + 1);
-    proposals.push(...learnPaperRules({ jobId, jobTitle: job.title, paper, fileName: file.originalName, fileSha256: file.sha256, at, source, approvedKey, approvedSubjects: subjects.size ? subjects : null, ocrCorrections: [...counts.values()] }));
-    counts.clear();
+    proposals.push(...learnPaperRules({ jobId, jobTitle: job.title, paper, fileName: file.originalName, fileSha256: file.sha256, at, source, approvedKey, approvedSubjects: subjects.size ? subjects : null, ocrCorrections: [] }));
   }
+  // Corrections an administrator confirmed (approved edits, rejected non-questions): extraction errors and OCR confusions.
+  proposals.push(...(await correctionProposalsForJob(job, paper, files, questions, at)));
   return { proposals, paper, examId: job.examId };
 }
 
@@ -106,4 +90,49 @@ export async function learnPaperMemory(jobId: string, actorId: string): Promise<
   const r = await savePaperRuleProposals(examId, actorId, jobId, proposals);
   await logEvent(jobId, "PAPER_MEMORY_LEARNED", `Paper-format memory (${paper ?? "paper not identified"}): ${proposals.length} fact(s) measured from the source / approved data — ${r.added} new proposal(s), ${r.updated} with new evidence, ${r.contradicted} contradiction(s). Nothing is used until an administrator confirms it.`, { paper, ...r }, actorId);
   return { paper, proposals: proposals.length, ...r };
+}
+
+/**
+ * The corrections an administrator CONFIRMED in one import, as learning input: an approved (or imported) question with
+ * an admin edit — its text before the first edit against the approved text — and a question an administrator rejected.
+ * An edit of a question that is not approved, and every AI suggestion nobody applied and approved, is left out.
+ */
+async function correctionProposalsForJob(job: AiImportJob, paper: string | null, files: AiImportFile[], questions: AiImportQuestion[], at: string): Promise<PaperRuleProposal[]> {
+  const approved = questions.filter(APPROVED);
+  const rejected = questions.filter((q) => q.status === AiImportQuestionStatus.REJECTED && !!q.reviewedById);
+  if (!approved.length && !rejected.length) return [];
+  const versions = await prisma.aiImportQuestionVersion.findMany({ where: { jobId: job.id, kind: "ADMIN_EDIT", questionId: { in: approved.map((q) => q.id) } }, orderBy: { createdAt: "asc" }, select: { questionId: true, data: true, note: true } });
+  const items: CorrectionItem[] = [];
+  for (const q of approved) {
+    const mine = versions.filter((v) => v.questionId === q.id);
+    if (!mine.length) continue;
+    const before = mine[0].data as unknown as ExtractedQuestion;
+    if (!before?.stem && !before?.options) continue;
+    items.push({ fileId: q.fileId, label: q.sourceLabel, kind: "EDIT", before, after: effective(q), aiRead: /^AI/.test(before.method ?? ""), acceptedSuggestion: mine.some((v) => /Verify [12] suggestion/i.test(v.note ?? "")) });
+  }
+  for (const q of rejected) items.push({ fileId: q.fileId, label: q.sourceLabel, kind: "REJECT", before: effective(q), after: null, aiRead: /^AI/.test(effective(q).method ?? ""), acceptedSuggestion: false });
+  return correctionProposals({ jobId: job.id, jobTitle: job.title, paper, at, files: new Map(files.map((f) => [f.id, { name: f.originalName, sha: f.sha256 }])), items });
+}
+
+/**
+ * Learns from the corrections an administrator confirmed in this import (called after an approval or rejection; also
+ * part of "Learn paper memory"). Re-derived from the whole import each time, so evidence is never counted twice.
+ * Stored as PROPOSED — nothing is used until an administrator confirms the rule. Never throws into the caller's action.
+ */
+export async function learnFromCorrections(jobId: string, actorId: string): Promise<{ proposals: number; added: number; updated: number } | null> {
+  try {
+    const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
+    if (!job) return null;
+    const paper = await paperIdentity(job);
+    const files = await prisma.aiImportFile.findMany({ where: { jobId } });
+    const questions = await prisma.aiImportQuestion.findMany({ where: { jobId } });
+    const proposals = await correctionProposalsForJob(job, paper, files, questions, new Date().toISOString());
+    if (!proposals.length) return null;
+    const r = await savePaperRuleProposals(job.examId, actorId, jobId, proposals);
+    if (r.added || r.contradicted) await logEvent(jobId, "PAPER_MEMORY_LEARNED", `Paper memory (${paper ?? "paper not identified"}) from corrections an administrator confirmed: ${proposals.length} pattern(s) — ${r.added} new proposal(s), ${r.updated} with new evidence. Nothing is used until an administrator confirms it (Taxonomy Reference → Paper-format memory).`, { paper, from: "corrections", ...r }, actorId);
+    return { proposals: proposals.length, added: r.added, updated: r.updated };
+  } catch (e) {
+    console.error("[ai-import] learning from corrections failed", e);
+    return null;
+  }
 }

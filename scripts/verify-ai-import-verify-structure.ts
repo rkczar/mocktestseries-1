@@ -41,6 +41,7 @@ import { importAndPublishEligible, paperSummary, requestVerify2, runVerify1, ver
 import { approveQuestions, reclassifyQuestions, setTaxonomy } from "@/lib/ai-import/review";
 import { referenceStatus } from "@/lib/ai-import/reference-status";
 import { decideClassification, echoMatches, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
+import { decidePaperRule, examPaperRules, removeMemoryEntry, savePaperRuleProposals } from "@/lib/ai-import/taxonomy-memory";
 import { FORMAT_PROFILES_KEY, deriveRules, listFormatProfiles, profileDeviations, saveProfileFromJob, updateFormatProfile } from "@/lib/ai-import/format-profile";
 import { refreshRoutes } from "@/lib/ai-import/routes";
 import { buildZip } from "@/lib/rich-import/zip-writer";
@@ -411,6 +412,10 @@ async function main() {
     check("summary: each reference identifiable — clean copy compared, scanned copy NOT compared (1 page)", sum.references.length === 2 && sum.references.find((r) => r.name === "Clean copy.docx")?.compared === true && sum.references.find((r) => r.name === "Scanned copy.pdf")?.compared === false && sum.references.find((r) => r.name === "Scanned copy.pdf")?.scannedPages === 1, sum.references);
 
     section("B3. Verify 2: cost confirmation, parts, a failed part, retry, disagreement, subject mismatch");
+    // Confirmed paper memory (an exam-wide option-label rule that every question here satisfies): given to Verify 2.
+    await savePaperRuleProposals(exam.id, actor, jB, [{ scope: "EXAM", paper: null, kind: "OPTION_LABELS", key: "OPTION_LABELS:(a)", statement: "Options are labelled “(a)” … (four options per question).", value: { label: "(a)" }, evidence: { jobId: jB, jobTitle: "suite", fileName: "vs-paper.docx", fileSha256: null, source: "SOURCE_DOCUMENT", detail: "suite", supporting: 20, observed: 20, at: new Date().toISOString() } }]);
+    const memRule = (await examPaperRules(exam.id)).find((r) => r.key === "OPTION_LABELS:(a)" && r.scope === "EXAM")!;
+    await decidePaperRule(exam.id, actor, memRule.id, "CONFIRMED", "suite");
     const s0 = await mockStats();
     const pv = await verify2Preview(jB, "mockvision/checker");
     check("preview: 3 document parts + classification, estimate ≤ maximum, nothing sent", pv.textParts === 3 && pv.pages === 0 && pv.estimateInr !== null && pv.maxInr !== null && pv.estimateInr <= pv.maxInr && (await mockStats()).chat === s0.chat, pv);
@@ -434,6 +439,14 @@ async function main() {
     check("Q11: option C read differently, but the Word text contains the stored wording → agrees, settled by the source (shown)", vs(byLabel(qs, "11")).v2 === "verified" && v2Of(byLabel(qs, "11"))!.fields.includes("option C") && !!v2Of(byLabel(qs, "11"))!.resolvedBySource, v2Of(byLabel(qs, "11")));
     check("Q12: not found by the second read → its own state (a disagreement to decide), not agreement", vs(byLabel(qs, "12")).v2 === "not_found" && byLabel(qs, "12").issueCodes.includes("VERIFY2_DISAGREES"));
     // The subject / topic check is its own result (v2.classification); the text read keeps its own verdict.
+    const memStats = (await mockStats()) as unknown as { memory: Record<string, number> };
+    check("Verify 2 sent the confirmed paper memory with its document reads — and not with classification (an option-label rule is not classification memory)", (memStats.memory.extract ?? 0) >= 3 && !memStats.memory.classify, memStats.memory);
+    const withResult = qs.filter((q) => ["verified", "disagree", "not_found"].includes(vs(q).v2));
+    check("Verify 2 results record that memory was used and carry field-by-field checks", withResult.length === 12 && withResult.every((q) => v2Of(q)?.memoryUsed === true && (v2Of(q)?.fieldChecks?.length ?? 0) >= (vs(q).v2 === "not_found" ? 1 : 8)), withResult.map((q) => [q.sourceLabel, v2Of(q)?.memoryUsed, v2Of(q)?.fieldChecks?.length]));
+    const fc = (q: QRow, field: string) => v2Of(q)?.fieldChecks?.find((c) => c.field === field);
+    check("field checks: Q12 not found → NUMBER problem; Q11 option C settled by the source → OK; Q3 every field OK", fc(byLabel(qs, "12"), "number")?.status === "PROBLEM" && fc(byLabel(qs, "11"), "option C")?.status === "OK" && (v2Of(byLabel(qs, "3"))?.fieldChecks ?? []).every((c) => c.status !== "PROBLEM"), [fc(byLabel(qs, "12"), "number"), fc(byLabel(qs, "11"), "option C"), v2Of(byLabel(qs, "3"))?.fieldChecks]);
+    check("field checks: Q10 answer matches the official key → OK (a printed mark read differently is not an answer)", fc(byLabel(qs, "10"), "answer")?.status === "OK" && /official answer key/.test(fc(byLabel(qs, "10"), "answer")?.evidence ?? ""), fc(byLabel(qs, "10"), "answer"));
+    await removeMemoryEntry(exam.id, actor, "paperRule", memRule.id);
     check("Q9: the independent classification files it under Anatomy, not the stored Biochemistry → DISAGREEMENT + Subject mismatch", v2Of(byLabel(qs, "9"))?.classification?.status === "DISAGREEMENT" && v2Of(byLabel(qs, "9"))?.classification?.found?.subjectId === subjectOf("Anatomy").id && byLabel(qs, "9").issueCodes.includes("SUBJECT_MISMATCH") && byLabel(qs, "9").issueCodes.includes("TAXONOMY_DISAGREES"), [v2Of(byLabel(qs, "9")), byLabel(qs, "9").issueCodes]);
     sum = (await paperSummary(jB))!;
     const b2 = sum.v2;

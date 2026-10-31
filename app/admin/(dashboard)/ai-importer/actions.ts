@@ -16,6 +16,7 @@ import {
   confirmTextOnly,
   discardRescan,
   editQuestion,
+  applyVerifySuggestion,
   markFigureUncertain,
   markImageMissing,
   cropFigureFromPage,
@@ -312,6 +313,17 @@ async function jobOf(questionIds: string[]): Promise<string | null> {
 export async function editQuestionAction(questionId: string, edit: QuestionEdit): Promise<ImporterResult<null>> {
   return run(await requireUse(), async (actorId) => {
     await editQuestion(questionId, actorId, edit);
+    const jobId = await jobOf([questionId]);
+    if (jobId) await revalidateQuestions(jobId, [questionId]);
+    return null;
+  });
+}
+
+/** Takes ONE question-text / option suggestion of a current Verify 1 / Verify 2 result (a normal, recorded correction). */
+export async function applyVerifySuggestionAction(questionId: string, field: string, by: "V1" | "V2"): Promise<ImporterResult<null>> {
+  return run(await requireUse(), async (actorId) => {
+    if (typeof questionId !== "string" || !questionId || typeof field !== "string" || (by !== "V1" && by !== "V2")) throw new ImportJobError("Choose the suggestion.");
+    await applyVerifySuggestion(questionId, actorId, field, by);
     const jobId = await jobOf([questionId]);
     if (jobId) await revalidateQuestions(jobId, [questionId]);
     return null;

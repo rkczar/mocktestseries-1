@@ -43,6 +43,8 @@ export interface ExceptionRow {
   /** Why Verify 2 agrees / disagrees, or the provider's / importer's reason for no result. */
   v2Detail: string | null;
   v2Fields: string[];
+  /** Fields with a problem in the current Verify 1 / Verify 2 results (by: V1 / V2 / MEMORY). */
+  fieldProblems: { field: string; notes: { by: "V1" | "V2" | "MEMORY"; problem: string; suggestion: string | null }[] }[];
   references: { name: string; compared: boolean; matched: string | null; similarity: number | null; conflicts: string[]; note: string | null }[];
   fullStem: string;
   options: { label: string; text: string; contaminated: boolean }[];
@@ -334,6 +336,22 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                   {r.v2Model && r.v2 !== "none" && <span className="text-[var(--color-muted-foreground)]"> · {r.v2Model}</span>}
                 </p>
                 {r.v2Detail && <p className={r.v2 === "verified" ? "text-[var(--color-muted-foreground)]" : "text-[var(--color-warning)]"} data-testid="row-v2-detail">{r.v2Fields.length ? `${r.v2Fields.join(", ")}: ` : ""}{r.v2Detail}</p>}
+                {r.fieldProblems.length > 0 && (
+                  <div className="mt-1 flex flex-col gap-0.5" data-testid="row-field-problems" data-count={r.fieldProblems.length}>
+                    <span className="text-[var(--color-muted-foreground)]">Fields:</span>
+                    {r.fieldProblems.map((f) => (
+                      <p key={f.field} className="text-[var(--color-error)]" data-testid="row-field-problem" data-field={f.field}>
+                        · <span className="font-medium">{f.field}</span>
+                        {f.notes.map((n, k) => (
+                          <span key={k}>
+                            {" "}— {n.by === "MEMORY" ? "paper memory" : n.by === "V1" ? "Verify 1" : "Verify 2"}: {n.problem.slice(0, 140)}
+                            {n.suggestion ? <span className="text-[var(--color-muted-foreground)]"> (suggests “{n.suggestion.slice(0, 80)}”)</span> : null}
+                          </span>
+                        ))}
+                      </p>
+                    ))}
+                  </div>
+                )}
               </td>
               <td className="py-1.5 pr-2 text-xs" data-testid="row-approval" data-approved={r.approved ? "true" : "false"}>
                 {r.questionId ? <span className="text-[var(--color-success)]">in Question Bank</span> : r.approved ? <Badge variant="success">Approved</Badge> : r.rescanPending ? <Badge variant="warning">Re-scan to decide</Badge> : <span className="text-[var(--color-muted-foreground)]">not approved</span>}

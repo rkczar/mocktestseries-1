@@ -234,7 +234,7 @@ async function main() {
   await runVerify1(j4.id, admin.id);
   const after4 = await prisma.aiImportQuestion.findFirstOrThrow({ where: { jobId: j4.id } });
   const v1 = (after4.data as unknown as ExtractedQuestion).paperVerify?.v1;
-  check("a CONFIRMED scope flags a subject outside it (FORMAT_DEVIATION), the subject is not changed", JSON.stringify(v1?.problems ?? []).includes("Paper memory: PAPER II covers") && after4.subjectId === ids.get("Pediatrics") && after4.issueCodes.includes("FORMAT_DEVIATION"), v1?.problems);
+  check("a CONFIRMED scope flags a subject outside it (FORMAT_DEVIATION), the subject is not changed", JSON.stringify(v1?.problems ?? []).includes("Paper memory (PAPER II, confirmed): PAPER II covers") && after4.subjectId === ids.get("Pediatrics") && after4.issueCodes.includes("FORMAT_DEVIATION"), v1?.problems);
   await decidePaperRule(exam.id, admin.id, scope.id, "REJECTED", "test");
   await runVerify1(j4.id, admin.id);
   const v1b = ((await prisma.aiImportQuestion.findFirstOrThrow({ where: { jobId: j4.id } })).data as unknown as ExtractedQuestion).paperVerify?.v1;

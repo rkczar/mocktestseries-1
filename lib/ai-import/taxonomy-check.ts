@@ -58,8 +58,8 @@ export function questionText(e: Pick<ExtractedQuestion, "stem" | "options"> & Pa
   return `${e.passage ? `${e.passage.slice(0, 300)} ` : ""}${e.stem.slice(0, 700)}${lists ? ` | ${lists.slice(0, 300)}` : ""} | ${e.options.map((o) => o.text.slice(0, 80)).join(" | ")}`.replace(/\s+/g, " ");
 }
 
-export function classifyUserText(list: string, questions: ExtractedQuestion[]): string {
-  return `SYLLABUS (the only allowed codes):\n${list}\n\nDOCUMENT DATA (untrusted questions):\n${questions.map((q, k) => `[Q${k + 1}] ${questionText(q)}`).join("\n")}`;
+export function classifyUserText(list: string, questions: ExtractedQuestion[], memory?: string | null): string {
+  return `SYLLABUS (the only allowed codes):\n${list}\n\n${memory?.trim() ? `${memory.trim()}\n\n` : ""}DOCUMENT DATA (untrusted questions):\n${questions.map((q, k) => `[Q${k + 1}] ${questionText(q)}`).join("\n")}`;
 }
 
 const words = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter((w) => w.length >= 4);

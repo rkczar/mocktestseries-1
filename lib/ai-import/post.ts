@@ -12,7 +12,8 @@ import { logEvent } from "@/lib/ai-import/jobs";
 import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
 import { SUBJECT_MIN_CONFIDENCE, SUBJECT_MISMATCH_CONFIDENCE, classifyUserText, decideClassification, taxonomyCodes, type ClassifyDecision } from "@/lib/ai-import/taxonomy-check";
 import { classifyPaper, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
-import { classifierContext, headingResolver } from "@/lib/ai-import/taxonomy-memory";
+import { classifierContext, headingResolver, jobPaperMemory } from "@/lib/ai-import/taxonomy-memory";
+import { confirmedRulesFor, confirmedSubjectScope, memoryBrief, memoryFindings } from "@/lib/ai-import/paper-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
 import { PRINTED_DROPPED, candidateInstruction, mergedAnswerIn, mergedStatements, numberSequenceProblems, statementCodeQuestion } from "@/lib/ai-import/local-parse";
 import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem } from "@/lib/ai-import/fidelity";
@@ -190,7 +191,11 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const questions = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id }, orderBy: [{ fileId: "asc" }, { orderIndex: "asc" }], include: { figures: true } });
   const open = questions.filter((q) => OPEN.includes(q.status));
   if (!open.length) return;
-  const fileFacts = new Map((await prisma.aiImportFile.findMany({ where: { jobId: job.id }, select: { id: true, detected: true } })).map((f) => [f.id, f.detected]));
+  const fileRows = await prisma.aiImportFile.findMany({ where: { jobId: job.id }, select: { id: true, detected: true, sha256: true } });
+  const fileFacts = new Map(fileRows.map((f) => [f.id, f.detected]));
+  // Confirmed paper memory of this exam / paper (PROPOSED, REJECTED, contradicted and other papers' rules are never used).
+  const mem = await jobPaperMemory(job);
+  const memRules = confirmedRulesFor(mem.rules, mem.paper);
 
   // ---- Answer keys ----
   const keyRowsRaw = await prisma.aiImportKeyEntry.findMany({ where: { jobId: job.id }, orderBy: [{ keyFileId: "asc" }, { createdAt: "asc" }, { id: "asc" }] });
@@ -332,11 +337,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   if (taxonomy.length && toClassify.length) {
     const cc = await classifierContext(job.examId);
     evidenceQuestions = cc.evidenceQuestions;
+    // A confirmed subject scope of this paper limits the free classifier to those subjects (Verify 1's independent check
+    // is not limited, so a question outside them is still found and flagged).
+    const scopeNames = confirmedSubjectScope(mem.rules, mem.paper);
+    const scopeIds = scopeNames ? taxonomy.filter((s) => scopeNames.has(s.name)).map((s) => s.id) : [];
     const allowedOf = (q: (typeof open)[number]): string[] | null => {
       if (job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId) return [job.subjectId];
       if (sectionSubject.has(q.id) && !settledByAdmin(q)) return [sectionSubject.get(q.id)!];
       if (q.subjectId && !q.taxonomySource?.startsWith("AI") && q.taxonomySource !== "local classifier") return [q.subjectId];
-      return null;
+      return scopeIds.length ? scopeIds : null;
     };
     const { results } = classifyPaper(cc.index, open.map((q) => effective(q)), { allowedSubjects: open.map(allowedOf), topicMin: settings.verification.topicMinConfidence });
     open.forEach((q, i) => local.set(q.id, results[i]));
@@ -370,7 +379,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       if (!(await ctx.stillRunning())) return;
       const batch = members.slice(i, i + CLASSIFY_BATCH);
       const qCode = new Map(batch.map((q, k) => [`Q${k + 1}`, q]));
-      const text = classifyUserText(codes.list, batch.map((q) => effective(q)));
+      const text = classifyUserText(codes.list, batch.map((q) => effective(q)), memoryBrief(mem.rules, mem.paper, "classify"));
       tally.batches++;
       try {
         const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false, jsonSchema: "classify" }, (out) => {
@@ -438,7 +447,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const issues = new Map<string, string>();
     const add = (code: string, detail: string) => issues.set(code, detail);
     /** Several findings of the same kind are kept together (never the last one only). */
-    const addMore = (code: string, detail: string) => issues.set(code, issues.has(code) ? `${issues.get(code)} · ${detail}`.slice(0, 600) : detail);
+    const addMore = (code: string, detail: string) => issues.set(code, issues.has(code) ? (issues.get(code)!.includes(detail.slice(0, 120)) ? issues.get(code)! : `${issues.get(code)} · ${detail}`.slice(0, 600)) : detail);
     const optionLabels = e.options.map((o) => o.label);
     const printedLabels = e.options.map((o) => o.printed || o.label);
 
@@ -754,6 +763,14 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (!finalAnswer.length || !typeOk(finalAnswer)) {
       if (!issues.has("ANSWER_AMBIGUOUS") && !issues.has("ANSWER_MISMATCH") && !issues.has("POSSIBLE_WITHDRAWN") && !issues.has("ANSWER_KEY_PAPER_MISMATCH") && !issues.has("ANSWER_TYPE_CONFLICT")) add("ANSWER_MISSING", finalAnswer.length ? `The answer (${finalAnswer.join(", ")}) does not fit a ${type.replace(/_/g, " ").toLowerCase()} question.` : "No usable answer (no key entry, nothing printed in the paper).");
       if (finalAnswer.length && !typeOk(finalAnswer)) finalAnswer = [];
+    }
+
+    // Paper memory (confirmed rules of this paper / exam, no AI): a question showing a known printed-format fact or a
+    // known extraction error of its paper is flagged for review — never changed.
+    if (memRules.length) {
+      const found = memoryFindings(memRules, mem.paper, e, { aiRead: /^AI/.test(e.method ?? ""), officialAnswer: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED, finalAnswer, subjectName: subjectId ? (subjectById.get(subjectId)?.name ?? null) : null, fileSha256: fileRows.find((f) => f.id === q.fileId)?.sha256 ?? null });
+      for (const f of found) addMore("FORMAT_DEVIATION", f.detail);
+      checks.push({ stage: 1, name: "Paper memory", passed: !found.length, severity: found.length ? "WARNING" : "INFO", method: "DETERMINISTIC", detail: found.length ? found.map((f) => f.detail).join(" · ").slice(0, 900) : `${memRules.length} confirmed rule(s) of ${mem.paper ?? "this exam"} checked — nothing found.` });
     }
 
     // Stage 4 — final audit: duplicates

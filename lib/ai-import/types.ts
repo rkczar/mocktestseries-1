@@ -150,6 +150,24 @@ export interface FingerprintParts {
   figures: string;
 }
 
+/** The fields Verify 1 / Verify 2 check one by one (field-level result, lib/ai-import/field-checks.ts). */
+export type VerifyFieldName = "number" | "text" | "option A" | "option B" | "option C" | "option D" | "options" | "answer" | "type" | "subject" | "topic" | "source";
+export const VERIFY_FIELDS: VerifyFieldName[] = ["number", "text", "option A", "option B", "option C", "option D", "options", "answer", "type", "subject", "topic", "source"];
+
+/**
+ * One field's result: OK, a PROBLEM (the exact problem, and a suggestion only when a source / second read / key actually
+ * shows another value — never invented), or NOT_CHECKED (with why). A suggestion is never applied automatically.
+ */
+export interface FieldCheck {
+  field: VerifyFieldName;
+  status: "OK" | "PROBLEM" | "NOT_CHECKED";
+  problem?: string | null;
+  suggestion?: string | null;
+  evidence?: string | null;
+  /** Which check produced it: Verify 1, Verify 2, or a confirmed paper-memory rule. */
+  by: "V1" | "V2" | "MEMORY";
+}
+
 export interface PaperVerification {
   /**
    * Verification passes this question has had (at most MAX_VERIFY_PASSES, lib/ai-import/verify-core.ts): 1 = Verify 1
@@ -177,6 +195,10 @@ export interface PaperVerification {
     profile?: { id: string; version: number; findings: string[] } | null;
     /** Subject / topic / subtopic check (free local classifier + exam-taxonomy validity). */
     classification?: TaxonomyVerification | null;
+    /** Field-by-field result (absent on results of earlier releases). */
+    fieldChecks?: FieldCheck[];
+    /** Confirmed paper-memory rules that applied to this question (ids), for the record. */
+    memoryRules?: string[];
   };
   /** Verify 2 — independent second read by a separately selected model. */
   v2?: {
@@ -205,6 +227,10 @@ export interface PaperVerification {
     resolvedBySource?: string | null;
     /** What the second read gave for the fields that differ (shown to the administrator, never applied). */
     second?: { stem?: string; options?: string[]; printedAnswer?: string[]; topic?: string | null; subject?: string | null; subTopic?: string | null; statements?: number } | null;
+    /** Field-by-field result of the second read (absent on results of earlier releases). */
+    fieldChecks?: FieldCheck[];
+    /** Whether confirmed paper memory was given to the Verify 2 model with this read. */
+    memoryUsed?: boolean;
     /** Independent subject / topic / subtopic classification by the Verify 2 model, compared with the stored one and Verify 1's. */
     classification?: TaxonomyVerification & { comparedWithV1: "AGREES" | "DIFFERS" | "NO_V1" } | null;
   };

@@ -8,7 +8,8 @@ import { readDocx } from "@/lib/ai-import/docx";
 import { vaultPath } from "@/lib/ai-import/vault";
 import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
-import { KEY_SYSTEM, keySchema } from "@/lib/ai-import/prompts";
+import { KEY_SYSTEM, keySchema, keyUserText } from "@/lib/ai-import/prompts";
+import { jobMemoryBrief } from "@/lib/ai-import/taxonomy-memory";
 import { visionImage } from "@/lib/ai-import/figures";
 import { ensureRender, saveKeyEntries, type StepContext } from "@/lib/ai-import/process";
 import { logEvent } from "@/lib/ai-import/jobs";
@@ -134,7 +135,7 @@ async function aiKeyPage(ctx: StepContext, file: AiImportFile, page: number): Pr
       models: [model!],
       system: KEY_SYSTEM,
       content: [
-        { type: "text", text: `Answer key page ${page}. DOCUMENT DATA (untrusted): see the image.` },
+        { type: "text", text: keyUserText(page, await jobMemoryBrief(ctx.job, "key")) },
         { type: "image_url", image_url: { url: await visionImage(render), detail: "high" } },
       ],
       maxOutputTokens: 4000,

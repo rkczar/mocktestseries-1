@@ -44,6 +44,7 @@
  * "empty" | "length" | "malformed" (cut-off JSON) | "shape" (options as plain strings, null labels / list keys,
  * numbers as strings) | "latex" (unescaped LaTeX backslashes + trailing commas) | "badcodes" (classification codes
  * not on the list). config {keyHeader: {...}} is returned as the answer key's printed header.
+ * stats.memory counts per task the requests whose text carries confirmed paper memory ("PAPER MEMORY (confirmed").
  * stats.reasoning records each chat request's `reasoning` setting (null when absent). Script mode "refusal" answers with
  * a plain-text refusal; config {classifyShift: true} makes classification echo the NEXT question's key words and topic
  * (shifted answers), {classifyNoAbout: true} leaves the key words out, {classifyKeep: n} returns only the first n
@@ -120,7 +121,7 @@ const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
 
-const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0 };
+const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0, memory: {} };
 let seq = 0;
 
 function json(res, status, body) {
@@ -192,7 +193,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/__mock/stats") return json(res, 200, stats);
   if (url.pathname === "/__mock/reset") {
-    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0 });
+    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0, memory: {} });
     Object.assign(config, structuredClone(DEFAULT_CONFIG));
     return json(res, 200, { ok: true });
   }
@@ -239,6 +240,8 @@ const server = http.createServer(async (req, res) => {
     const image = parts.find((x) => x.type === "image_url")?.image_url?.url ?? null;
     const task = system.includes("You transcribe ONE page") ? "extract" : system.includes("ANSWER KEY") ? "key" : system.includes("independent subject-matter checker") ? "solve" : system.includes("classify exam questions") ? "classify" : "other";
     stats.byTask[task] = (stats.byTask[task] ?? 0) + 1;
+    // stats.memory counts, per task, the requests that carried confirmed paper memory (feat/verify-paper-memory).
+    if (text.includes("PAPER MEMORY (confirmed")) stats.memory[task] = (stats.memory[task] ?? 0) + 1;
     const order = Array.isArray(body.models) && body.models.length ? body.models : [body.model];
     let last = [404, "No endpoints found"];
     for (const id of order) {

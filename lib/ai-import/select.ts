@@ -4,6 +4,7 @@ import { getUsdInr, peekUsdInr } from "@/lib/ai-engine/fx";
 import { formatInr, usdToInr } from "@/lib/ai-engine/config";
 import { IMAGE_TOKENS, IMPORTER_REQUEST_PARAMS, PRICE_MARGIN, estimateInputTokens, inputImagePriceUsd, modelProblem } from "@/lib/ai-import/ai";
 import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, KEY_SYSTEM } from "@/lib/ai-import/prompts";
+import { MEMORY_BRIEF_MAX } from "@/lib/ai-import/paper-memory";
 import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings, type SelectionTask } from "@/lib/ai-import/config";
 import { candidateModels, freshRouteSnapshot, getRouteSnapshot, isStale, type Route, type RouteSnapshot } from "@/lib/ai-import/routes";
 import type { CandidateRow, ModelHealth, ModelPlan, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
@@ -47,12 +48,13 @@ import { importerModelHealth, rateLimitAvoidance, routeRefusal, unusableAvoidanc
  */
 
 /** The largest request of each task, as the worker sends it (output limits from process.ts / keys.ts / post.ts). */
+// Each request may also carry the confirmed paper memory of its paper (at most MEMORY_BRIEF_MAX characters): priced in.
 export const PROFILES: Record<SelectionTask, { system: string; textChars: number; images: number; maxOut: number }> = {
-  extract: { system: EXTRACT_SYSTEM, textChars: 12_600, images: 1, maxOut: 8_000 },
+  extract: { system: EXTRACT_SYSTEM, textChars: 12_600 + MEMORY_BRIEF_MAX, images: 1, maxOut: 8_000 },
   // Second reads send the same page request as extraction (the text-only independent answer is far smaller).
-  verify: { system: EXTRACT_SYSTEM, textChars: 12_600, images: 1, maxOut: 8_000 },
-  key: { system: KEY_SYSTEM, textChars: 100, images: 1, maxOut: 4_000 },
-  classify: { system: CLASSIFY_SYSTEM, textChars: 30_000, images: 0, maxOut: 2_500 },
+  verify: { system: EXTRACT_SYSTEM, textChars: 12_600 + MEMORY_BRIEF_MAX, images: 1, maxOut: 8_000 },
+  key: { system: KEY_SYSTEM, textChars: 100 + MEMORY_BRIEF_MAX, images: 1, maxOut: 4_000 },
+  classify: { system: CLASSIFY_SYSTEM, textChars: 30_000 + MEMORY_BRIEF_MAX, images: 0, maxOut: 2_500 },
 };
 
 const VISION: Record<SelectionTask, boolean> = { extract: true, verify: true, key: true, classify: false };

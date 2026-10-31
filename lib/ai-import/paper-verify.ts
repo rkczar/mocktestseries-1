@@ -16,9 +16,9 @@ import { applyFormatProfile } from "@/lib/ai-import/format-profile";
 import { referenceStatus, type ReferenceStatus } from "@/lib/ai-import/reference-status";
 import { classifyUserText, decideClassification, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
 import { classifyPaper, textSufficient, verifyStoredTaxonomy, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
-import { classifierContext, examFormatRules, examPaperRules, type FormatRuleCode } from "@/lib/ai-import/taxonomy-memory";
-import { confirmedSubjectScope } from "@/lib/ai-import/paper-memory";
-import { paperIdentity } from "@/lib/ai-import/paper-learn";
+import { classifierContext, examFormatRules, jobMemoryBrief, jobPaperMemory, type FormatRuleCode } from "@/lib/ai-import/taxonomy-memory";
+import { confirmedRulesFor, memoryBrief, memoryFindings, type PaperRule } from "@/lib/ai-import/paper-memory";
+import { v1FieldChecks, v2FieldChecks, type AnswerFacts } from "@/lib/ai-import/field-checks";
 import { readDocx } from "@/lib/ai-import/docx";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
 import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
@@ -68,6 +68,10 @@ export function fingerprintOf(q: QRow): Fp {
 }
 /** What a new result records: the combined fingerprint (older readers) and the parts. */
 const stamp = (q: QRow) => stampOf(fingerprintOf(q));
+/** The answer facts a field check judges (the official key outranks everything; an admin's choice is recorded as such). */
+const answerFacts = (q: Pick<QRow, "finalAnswer" | "officialAnswer" | "answerStatus" | "answerConfirmedById">): AnswerFacts => ({ final: q.finalAnswer, official: q.officialAnswer, status: q.answerStatus, adminConfirmed: !!q.answerConfirmedById });
+/** A confirmed rule of this paper says its printed answer marks contradicted the official key. */
+const marksUnreliable = (rules: PaperRule[]) => rules.some((r) => r.kind === "ANNOTATION_RELIABILITY" && Number(r.value.agree ?? 0) < Number(r.value.total ?? 0));
 /** The subject / topic a classification check saw is the one stored now. */
 const sameTaxonomy = (q: Pick<QRow, "subjectId" | "topicId" | "subTopicId">, c: { stored: { subjectId: string | null; topicId: string | null; subTopicId: string | null } } | null | undefined) => !!c && c.stored.subjectId === q.subjectId && c.stored.topicId === q.topicId && c.stored.subTopicId === q.subTopicId;
 
@@ -338,10 +342,13 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     }
   }
   const taxTally = { AGREED: 0, DISAGREEMENT: 0, NEEDS_REVIEW: 0, VERIFICATION_FAILED: 0, NOT_VERIFIED: 0 };
-  // Paper memory: subjects an administrator confirmed this paper covers — a subject outside them is flagged, never changed.
-  const paper = await paperIdentity(job);
-  const subjectScope = confirmedSubjectScope(await examPaperRules(job.examId), paper);
+  // Paper memory: the confirmed rules of this paper / exam (format, printed-mark reliability, known extraction errors,
+  // OCR confusions, subject scope) are checked on every question — a finding is flagged, never changed.
+  const { paper, rules: paperRules } = await jobPaperMemory(job);
+  const memRules = confirmedRulesFor(paperRules, paper);
   const subjectNames = new Map(examTaxonomy.map((s) => [s.id, s.name]));
+  const taxName = new Map([...examTaxonomy.map((s) => [s.id, s.name] as const), ...examTaxonomy.flatMap((s) => s.topics.map((t) => [t.id, t.name] as const))]);
+  const fileSha = new Map((await prisma.aiImportFile.findMany({ where: { jobId }, select: { id: true, sha256: true } })).map((f) => [f.id, f.sha256]));
 
   // 3. Full-paper checks + reference papers.
   const refs = await listReferences(jobId);
@@ -358,8 +365,8 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     const tax = verifyStoredTaxonomy({ subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource }, independent.get(q.id), examTaxonomy);
     taxTally[tax.verification.status]++;
     problems.push(...tax.problems);
-    const subjectNow = q.subjectId ? subjectNames.get(q.subjectId) : undefined;
-    if (subjectScope && subjectNow && !subjectScope.has(subjectNow)) problems.push({ code: "FORMAT_DEVIATION", detail: `Paper memory: ${paper} covers ${[...subjectScope].join(", ")} (confirmed); this question's subject “${subjectNow}” is outside them — check the subject.` });
+    const memory = memRules.length ? memoryFindings(memRules, paper, e, { aiRead: /^AI/.test(e.method ?? ""), officialAnswer: q.answerStatus === "OFFICIAL_MATCHED", finalAnswer: q.finalAnswer, subjectName: q.subjectId ? (subjectNames.get(q.subjectId) ?? null) : null, fileSha256: fileSha.get(q.fileId) ?? null }) : [];
+    for (const m of memory) problems.push({ code: "FORMAT_DEVIATION", detail: m.detail });
     if (e.continuesOnNextPage && e.pages.length === 1 && e.pages[0] < (lastPage.get(q.fileId) ?? 1)) problems.push({ code: "QUESTION_TEXT_SUSPECT", detail: `Marked as continuing on page ${e.pages[0] + 1}, but no continuation was joined to it — check both pages.` });
     const texts = [e.stem, ...e.options.map((o) => o.text)];
     if (texts.some((t) => /�|[-]/.test(t))) problems.push({ code: "FORMULA_ISSUE", detail: "Unreadable characters (font encoding / OCR) in the text — compare with the source page." });
@@ -415,7 +422,9 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     const ok = !problems.length && !blockingNow.length && q.status !== AiImportQuestionStatus.NOT_IMPORTABLE && q.status !== AiImportQuestionStatus.DUPLICATE;
     if (ok) passed++;
     else withProblems++;
-    await savePaperVerify(q, { v1: { ...stamp(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference, references, profile: profileFindings.get(q.id) ?? null, classification: tax.verification }, passes: withPass((q.data as unknown as ExtractedQuestion).paperVerify, "v1") });
+    const kind = (files.find((f) => f.id === q.fileId)?.detected as { kind?: string } | null)?.kind;
+    const fieldChecks = v1FieldChecks({ e, problems, fixes: fixesBy.get(q.id) ?? [], issueCodes: q.issueCodes, issueLabel: (c) => ISSUE_DEFS[c]?.label ?? c, memory, answer: answerFacts(q), classification: tax.verification, name: (id) => (id ? (taxName.get(id) ?? null) : null), documentText: kind === "docx" || kind === "xlsx" || kind === "csv" || e.method === "LOCAL_PDF" || e.method === "DOCX" });
+    await savePaperVerify(q, { v1: { ...stamp(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference, references, profile: profileFindings.get(q.id) ?? null, classification: tax.verification, fieldChecks, memoryRules: [...new Set(memory.map((m) => m.ruleId))] }, passes: withPass((q.data as unknown as ExtractedQuestion).paperVerify, "v1") });
   }
 
   // 4. The findings become the questions' flags (still no AI), then the job's status follows its quality.
@@ -713,6 +722,8 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
     const fallback = alternates[0] ? await choiceFor(settings, alternates[0], used[0] ?? null, jobId, refresh) : null;
     const fallbackPrice = fallback?.model === alternates[0] ? fallback?.price ?? null : null;
     if (choice.model === model && choice.price && fx.rate) {
+      // Every read carries the confirmed paper memory (when there is any): priced in.
+      const memory = await jobMemoryBrief(job, "extract");
       const pageTokens = profileInputTokens("verify");
       const classifyTokens = profileInputTokens("classify");
       // Worst case of every request: REQUEST_ATTEMPTS sends to the model and, after a failed read, REQUEST_ATTEMPTS to the fallback.
@@ -722,7 +733,7 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
           if (u.kind === "page") usd += requestUsd(price, pageTokens, 8000, 1) * PRICE_MARGIN;
           else
             for (const part of u.parts ?? []) {
-              const t = estimateInputTokens(EXTRACT_SYSTEM, [{ type: "text", text: documentTextUserText({ exam: "", subject: null, part: 1, parts: 1, text: part }) }]);
+              const t = estimateInputTokens(EXTRACT_SYSTEM, [{ type: "text", text: documentTextUserText({ exam: "", subject: null, part: 1, parts: 1, text: part, memory }) }]);
               usd += requestUsd({ ...price, image: 0 }, t, 8000, 0) * PRICE_MARGIN;
             }
         }
@@ -733,7 +744,7 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
         if (u.kind === "page") typUsd += requestUsd(choice.price, pageTokens, 3200, 1);
         else
           for (const part of u.parts ?? []) {
-            const t = estimateInputTokens(EXTRACT_SYSTEM, [{ type: "text", text: documentTextUserText({ exam: "", subject: null, part: 1, parts: 1, text: part }) }]);
+            const t = estimateInputTokens(EXTRACT_SYSTEM, [{ type: "text", text: documentTextUserText({ exam: "", subject: null, part: 1, parts: 1, text: part, memory }) }]);
             typUsd += requestUsd({ ...choice.price, image: 0 }, t, 3200, 0);
           }
       }
@@ -868,7 +879,16 @@ interface SecondRead {
   sourceText: string | null;
 }
 
-function compareSecond(q: QRow, twin: SecondRead | undefined, v1: NonNullable<PaperVerification["v1"]> | undefined, rules: Set<FormatRuleCode> = new Set()): NonNullable<PaperVerification["v2"]> {
+function compareSecond(q: QRow, twin: SecondRead | undefined, v1: NonNullable<PaperVerification["v1"]> | undefined, rules: Set<FormatRuleCode> = new Set(), memo: { used: boolean; unreliableMarks: boolean; model?: string; part?: string | null } = { used: false, unreliableMarks: false }): NonNullable<PaperVerification["v2"]> {
+  const r = compareSecondRead(q, twin, v1, rules);
+  const e = effective(q);
+  const typeDiffers = r.fields.includes("type");
+  const missingNumbers = twin?.sourceText ? numbersMissingFromSource([e.stem, ...e.options.map((o) => o.text)], twin.sourceText) : [];
+  const fieldChecks = v2FieldChecks({ e, twin: twin?.q ?? null, model: twin?.model || memo.model || r.model || "the Verify 2 model", part: memo.part ?? null, sourceText: twin?.sourceText ?? null, fields: r.fields, resolvedBySource: !!r.resolvedBySource, answer: answerFacts(q), typeDiffers, missingNumbers, memoryUsed: memo.used, unreliableMarks: memo.unreliableMarks });
+  return { ...r, fieldChecks, memoryUsed: memo.used };
+}
+
+function compareSecondRead(q: QRow, twin: SecondRead | undefined, v1: NonNullable<PaperVerification["v1"]> | undefined, rules: Set<FormatRuleCode> = new Set()): NonNullable<PaperVerification["v2"]> {
   const fp = stamp(q);
   const now = new Date().toISOString();
   const e = effective(q);
@@ -929,6 +949,10 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   const units = (await verify2Units(ctx.job.id)).filter((u) => !unitDone(u, rows, state!, state!.model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
   const exam = await prisma.exam.findUnique({ where: { id: ctx.job.examId }, select: { name: true } });
   const rules = await examFormatRules(ctx.job.examId);
+  // Confirmed paper memory given to the Verify 2 model with every read (how this paper is printed — never content).
+  const { paper, rules: paperRules } = await jobPaperMemory(ctx.job);
+  const memory = memoryBrief(paperRules, paper, "extract");
+  const memo = { used: !!memory, unreliableMarks: marksUnreliable(confirmedRulesFor(paperRules, paper)) };
   const counts: Record<string, number> = { VERIFIED: 0, DISAGREE: 0, NOT_FOUND: 0, FAILED: 0, UNAVAILABLE: 0, attempted: 0, units: 0, failedUnits: 0, extra: 0 };
   const done = [...state.doneUnits];
   // The second read's last question of the previous page when it continues on the next page (joined there).
@@ -959,13 +983,13 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
       if (u.kind === "page") {
         const render = await ensureRender(ctx.job, u.file, u.pageNumber!, ctx.settings.limits.renderDpi);
         const image = await visionImage(render);
-        const { value, model } = await verifyCall(ctx, state!, { task: "verify", system: EXTRACT_SYSTEM, content: [{ type: "text", text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page: u.pageNumber!, pages: u.file.pageCount ?? 1, textLayer: u.textLayer ?? null }) }, { type: "image_url", image_url: { url: image, detail: "high" } }], maxOutputTokens: 8000, pageId: u.pageId, needsVision: true, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
+        const { value, model } = await verifyCall(ctx, state!, { task: "verify", system: EXTRACT_SYSTEM, content: [{ type: "text", text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page: u.pageNumber!, pages: u.file.pageCount ?? 1, textLayer: u.textLayer ?? null, memory }) }, { type: "image_url", image_url: { url: image, detail: "high" } }], maxOutputTokens: 8000, pageId: u.pageId, needsVision: true, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
         const qs = toExtracted(value, u.pageNumber!, model);
         assignSections(qs, u.startState as never);
         return { qs, model, text: u.textLayer ?? null };
       }
       const text = u.parts?.[0] ?? "";
-      const r = await verifyCall(ctx, state!, { task: "verify", system: EXTRACT_SYSTEM, content: [{ type: "text", text: documentTextUserText({ exam: exam?.name ?? "Exam", subject: null, part: (u.partIndex ?? 0) + 1, parts: u.partCount ?? 1, text }) }], maxOutputTokens: 8000, needsVision: false, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
+      const r = await verifyCall(ctx, state!, { task: "verify", system: EXTRACT_SYSTEM, content: [{ type: "text", text: documentTextUserText({ exam: exam?.name ?? "Exam", subject: null, part: (u.partIndex ?? 0) + 1, parts: u.partCount ?? 1, text, memory }) }], maxOutputTokens: 8000, needsVision: false, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
       const qs = toExtracted(r.value, 1, r.model);
       // Sections (numbering restarts) as the local reader numbered this part's questions.
       if (u.qkeys?.length) sectionsFromKeys(qs, u.qkeys);
@@ -1022,7 +1046,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
       const find = (list: SecondRead[]) => list.find((x) => x.q.number === e.number && x.q.section === e.section) ?? (e.number === null ? list.find((x) => textSimilarity(x.q.stem, e.stem) >= 0.85) : undefined);
       const result: V2Result = failed
         ? { ...stamp(q), at: new Date().toISOString(), model: failed.error.model ?? state.model, status: failed.status, fields: [], detail: `no independent result (${failed.status === "UNAVAILABLE" ? "unavailable" : "failed"}): ${failed.error.message}`.slice(0, 600), error: failed.error, part: unitLabel(u) }
-        : { ...compareSecond(q, find(second) ?? (placed ? undefined : find(pool)), v1, rules), part: unitLabel(u) };
+        : { ...compareSecond(q, find(second) ?? (placed ? undefined : find(pool)), v1, rules, { ...memo, model: state.model, part: unitLabel(u) }), part: unitLabel(u) };
       if (!result.model) result.model = state.model;
       counts[result.status]++;
       counts.attempted++;
@@ -1087,7 +1111,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
     for (let i = 0; i < checkable.length; i += CLASSIFY_BATCH) {
       if (!(await ctx.stillRunning())) return counts;
       const batch = checkable.slice(i, i + CLASSIFY_BATCH);
-      const text = classifyUserText(codes.list, batch.map((q) => effective(q)));
+      const text = classifyUserText(codes.list, batch.map((q) => effective(q)), memoryBrief(paperRules, paper, "classify"));
       let value: { results: { q: string; subject: string | null; topic: string | null; subtopic: string | null; confidence: number; about: string | string[] | null; reason: string | null }[] } | null = null;
       let model = state.model;
       let failure: string | null = null;

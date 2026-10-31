@@ -8,6 +8,7 @@ import { pageLayout, renderPage, type PageLayout } from "@/lib/ai-import/pdf";
 import { readDocx, IMG_TOKEN, type DocxContent } from "@/lib/ai-import/docx";
 import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
 import { blockToQuestion, candidateInstruction, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
+import { jobMemoryBrief } from "@/lib/ai-import/taxonomy-memory";
 import { cropFromRender, cropFromScan, iou, storeOriginalFigure, visionImage, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
 import { checkFigureMapping, overlappingRegions } from "@/lib/ai-import/figure-map";
 import { formulaDiff } from "@/lib/ai-import/fidelity";
@@ -555,7 +556,9 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   const meta = await sharp(render).metadata();
   await prisma.aiImportPage.update({ where: { id: page.id }, data: { renderKey: renderKey(ctx.job.id, file.id, page.pageNumber), renderWidth: meta.width ?? null, renderHeight: meta.height ?? null } });
   const image = await visionImage(render);
-  const userText = extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: total, textLayer: page.textLayer });
+  // Confirmed paper memory of this exam / paper (empty when none applies): how the paper is printed, never content.
+  const memory = await jobMemoryBrief(ctx.job, "extract");
+  const userText = extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: total, textLayer: page.textLayer, memory });
   const call = async (models: string[], task: "extract" | "verify") => {
     const { value, result: r } = await importerAiCallChecked(
       {
@@ -723,7 +726,7 @@ async function verifyLocalPage(ctx: StepContext, file: AiImportFile, pageId: str
       models: [model],
       system: EXTRACT_SYSTEM,
       content: [
-        { type: "text", text: extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: file.pageCount ?? 1, textLayer: page.textLayer }) },
+        { type: "text", text: extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: file.pageCount ?? 1, textLayer: page.textLayer, memory: await jobMemoryBrief(ctx.job, "extract") }) },
         { type: "image_url", image_url: { url: image, detail: "high" } },
       ],
       maxOutputTokens: 8000,

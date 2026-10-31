@@ -25,6 +25,8 @@ import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { fingerprintOf } from "@/lib/ai-import/paper-verify";
 import { verifyState } from "@/lib/ai-import/verify-core";
 import { listReferences } from "@/lib/ai-import/reference";
+import { fieldBoard, v2TaxonomyChecks } from "@/lib/ai-import/field-checks";
+import { FieldVerification } from "@/components/admin/ai-importer/field-verification";
 
 export const metadata = { title: "Review Question — AI Question Importer" };
 export const dynamic = "force-dynamic";
@@ -113,6 +115,17 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     return { ...r, twin, ocr: !!paper?.ocr };
   });
   const v1Stale = !!refEntries.length && verifyState(q.data, fingerprintOf(q)).v1 === "stale";
+  // Field-by-field verification: only results that still describe this exact question count.
+  const vsNow = verifyState(q.data, fingerprintOf(q));
+  const taxNames = new Map([...taxonomy.map((s) => [s.id, s.name] as const), ...taxonomy.flatMap((s) => s.topics.map((t) => [t.id, t.name] as const))]);
+  const v2Class = vsNow.pv?.v2?.classification;
+  const v2ClassCurrent = !!v2Class && v2Class.stored.subjectId === q.subjectId && v2Class.stored.topicId === q.topicId && v2Class.stored.subTopicId === q.subTopicId;
+  const board = fieldBoard(
+    vsNow.v1 === "passed" || vsNow.v1 === "problems" ? vsNow.pv?.v1?.fieldChecks : null,
+    vsNow.v2 === "verified" || vsNow.v2 === "disagree" || vsNow.v2 === "not_found" ? vsNow.pv?.v2?.fieldChecks : null,
+    v2ClassCurrent ? v2TaxonomyChecks(v2Class, (x) => (x ? (taxNames.get(x) ?? null) : null)) : null,
+  );
+  const boardStale = vsNow.v1 === "stale" || vsNow.v2 === "stale" ? `The question changed after ${vsNow.v1 === "stale" && vsNow.v2 === "stale" ? "Verify 1 and Verify 2" : vsNow.v1 === "stale" ? "Verify 1" : "Verify 2"} ran — run it again; out-of-date results are not shown.` : null;
   const blockerImport = importBlocker(q, settings);
   const blockerPublish = q.questionId ? publishBlocker(q, settings) : blockerImport ?? publishBlocker(q, settings);
   // Complete figure at its stored aspect ratio (never cropped to a box), tap to zoom.
@@ -168,6 +181,15 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             ))}
         </div>
       </div>
+      <Card data-testid="field-verification-card">
+        <CardHeader>
+          <CardTitle>Field verification</CardTitle>
+          <CardDescription>Verify 1, Verify 2 and confirmed paper memory, field by field. Suggestions are never applied automatically.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldVerification questionId={q.id} rows={board} canUse={canUse && !q.questionId} stale={boardStale} />
+        </CardContent>
+      </Card>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card>
           <CardHeader>

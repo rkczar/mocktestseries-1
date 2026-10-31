@@ -20,7 +20,8 @@ import { planOf } from "@/lib/ai-import/select";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { headingResolver, rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
-import { MAX_VERIFY_PASSES, contentPartOf, passCount, withPass } from "@/lib/ai-import/verify-core";
+import { MAX_VERIFY_PASSES, contentCurrent, contentPartOf, fingerprintsOf, passCount, withPass } from "@/lib/ai-import/verify-core";
+import { learnFromCorrections } from "@/lib/ai-import/paper-learn";
 
 /**
  * Admin decisions on extracted questions. Every change is recorded (event
@@ -114,7 +115,7 @@ function changedFields(before: ExtractedQuestion, after: ExtractedQuestion): { f
 }
 
 /** Saves an admin's correction as editedData (the extraction itself is never overwritten) and records what changed. */
-export async function editQuestion(questionId: string, actorId: string, edit: QuestionEdit) {
+export async function editQuestion(questionId: string, actorId: string, edit: QuestionEdit, opts: { note?: string } = {}) {
   const q = await editable(questionId);
   const base = effective(q);
   const figs = await prisma.aiImportFigure.findMany({ where: { questionId }, select: { owner: true, optionLabel: true, mappingStatus: true } });
@@ -144,7 +145,7 @@ export async function editQuestion(questionId: string, actorId: string, edit: Qu
   if (!changes.length) throw new ImportJobError("Nothing changed — the question is exactly as before.");
   await prisma.$transaction([
     prisma.aiImportQuestion.update({ where: { id: q.id }, data: { editedData: next as unknown as Prisma.InputJsonValue, sourceLabel: next.label, pages: next.pages, reviewedById: actorId, reviewedAt: new Date(), ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED, questionType: next.type, optionCount: next.options.length, contentFormat: next.contentFormat } }),
-    prisma.aiImportQuestionVersion.create({ data: { questionId: q.id, jobId: q.jobId, kind: "ADMIN_EDIT", data: base as unknown as Prisma.InputJsonValue, changes: changes as unknown as Prisma.InputJsonValue, actorId, note: `Changed: ${changes.map((c) => c.field).join(", ")}`.slice(0, 500) } }),
+    prisma.aiImportQuestionVersion.create({ data: { questionId: q.id, jobId: q.jobId, kind: "ADMIN_EDIT", data: base as unknown as Prisma.InputJsonValue, changes: changes as unknown as Prisma.InputJsonValue, actorId, note: `Changed: ${changes.map((c) => c.field).join(", ")}${opts.note ? ` — ${opts.note}` : ""}`.slice(0, 500) } }),
   ]);
   await adminCheck(q.id, "Edited", `Corrected by an administrator: ${changes.map((c) => c.field).join(", ")}.`);
   await logEvent(q.jobId, "QUESTION_EDITED", `Q${base.label} corrected (${changes.map((c) => c.field).join(", ")})`, { questionId: q.id, fields: changes.map((c) => c.field) }, actorId);
@@ -211,6 +212,8 @@ export async function approveQuestions(ids: string[], actorId: string, opts: { f
     await logEvent(jobId, "QUESTIONS_APPROVED", `${out.approved} question(s) approved${out.refused.length ? `; ${out.refused.length} refused (${out.refused.slice(0, 5).map((r) => `Q${r.label}: ${r.reason}`).join("; ")})` : ""}`, { ids: done, refused: out.refused }, actorId);
     if (out.approved) await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_QUESTIONS_APPROVED", entityType: "AiImportJob", entityId: jobId, metadata: { questionIds: done } } });
   }
+  // The corrections just confirmed may establish a reusable paper-format rule (stored PROPOSED; never used unconfirmed).
+  for (const j of jobIds) if (out.approved) await learnFromCorrections(j, actorId);
   return out;
 }
 
@@ -247,6 +250,7 @@ export async function rejectQuestions(ids: string[], actorId: string, reason: st
   if (first) {
     await logEvent(first.jobId, "QUESTIONS_REJECTED", `${ids.length} question(s) rejected`, { ids, reason }, actorId);
     await settleJobStatus(first.jobId);
+    await learnFromCorrections(first.jobId, actorId);
   }
 }
 
@@ -748,4 +752,27 @@ export async function confirmTextOnly(questionId: string, actorId: string, confi
   await logEvent(q.jobId, confirm ? "TEXT_ONLY_CONFIRMED" : "TEXT_ONLY_WITHDRAWN", `Q${q.sourceLabel}: ${confirm ? "confirmed as text-only (no image needed)" : "text-only decision withdrawn"} by an administrator.`, { questionId }, actorId);
   await prisma.auditLog.create({ data: { actorId, action: confirm ? "AI_IMPORT_TEXT_ONLY_CONFIRMED" : "AI_IMPORT_TEXT_ONLY_WITHDRAWN", entityType: "AiImportQuestion", entityId: questionId, metadata: { jobId: q.jobId } } });
   await revalidateQuestions(q.jobId, [questionId]);
+}
+
+/**
+ * The administrator takes ONE field suggestion of a current Verify 1 / Verify 2 result (question text or one option) —
+ * through the normal correction (editQuestion: the extraction is kept, the change is in the history, the approval is
+ * withdrawn). Answers, subjects and topics are never taken this way (they have their own controls), and a suggestion
+ * of an out-of-date result (the question changed since) is refused.
+ */
+export async function applyVerifySuggestion(questionId: string, actorId: string, field: string, by: "V1" | "V2") {
+  if (!/^(text|option [A-D])$/.test(field)) throw new ImportJobError("Only a question-text or option suggestion can be applied here — set answers, subjects and topics with their own controls.");
+  const q = await editable(questionId);
+  const figures = await prisma.aiImportFigure.findMany({ where: { questionId } });
+  const e = effective(q);
+  const fp = fingerprintsOf({ e, finalAnswer: q.finalAnswer, subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, figures });
+  const pv = (q.data as unknown as ExtractedQuestion).paperVerify;
+  const result = by === "V2" ? pv?.v2 : pv?.v1;
+  if (!result || !contentCurrent(result, fp)) throw new ImportJobError("That verification result is out of date (the question changed since) — run the verification again.");
+  const check = (result.fieldChecks ?? []).find((c) => c.field === field && c.status === "PROBLEM" && c.suggestion);
+  if (!check?.suggestion) throw new ImportJobError("There is no suggestion for that field.");
+  const label = field.startsWith("option ") ? field.slice(7) : null;
+  if (label && !e.options.some((o) => o.label === label)) throw new ImportJobError(`The question has no option ${label}.`);
+  const edit: QuestionEdit = { stem: label ? e.stem : check.suggestion, options: e.options.map((o) => ({ label: o.label, text: o.label === label ? check.suggestion! : o.text })), type: e.type, contentFormat: e.contentFormat, listI: e.listI ?? null, listII: e.listII ?? null };
+  await editQuestion(questionId, actorId, edit, { note: `accepted Verify ${by === "V2" ? 2 : 1} suggestion for ${field} (${(check.evidence ?? "").slice(0, 160)})` });
 }

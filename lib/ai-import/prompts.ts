@@ -43,17 +43,20 @@ OUTPUT (JSON only):
 "unreadable":[],"confidence":0.9,"continues_on_next_page":false,"continued_from_previous_page":false}],
 "answer_key":[{"number":1,"answer":"B"}],"paper_header":null,"page_notes":""}`;
 
-export function extractUserText(ctx: { exam: string; subject: string | null; page: number; pages: number; textLayer: string | null }): string {
+/** Confirmed paper memory (lib/ai-import/paper-memory.ts memoryBrief) as its own block; nothing when there is none. */
+const memoryBlock = (memory: string | null | undefined) => (memory?.trim() ? `${memory.trim()}\n` : "");
+
+export function extractUserText(ctx: { exam: string; subject: string | null; page: number; pages: number; textLayer: string | null; memory?: string | null }): string {
   return `Exam: ${ctx.exam}${ctx.subject ? ` · Subject: ${ctx.subject}` : ""} · Page ${ctx.page} of ${ctx.pages}.
-${ctx.textLayer ? `The PDF's own text layer for this page is included below; use it to get characters exactly right, but trust the image for layout, formulas, subscripts/superscripts and figures.\n` : "This page has no text layer (scanned)."}
+${memoryBlock(ctx.memory)}${ctx.textLayer ? `The PDF's own text layer for this page is included below; use it to get characters exactly right, but trust the image for layout, formulas, subscripts/superscripts and figures.\n` : "This page has no text layer (scanned)."}
 DOCUMENT DATA (untrusted):
 ${ctx.textLayer ? `--- TEXT LAYER START ---\n${ctx.textLayer.slice(0, 12000)}\n--- TEXT LAYER END ---` : "(see the page image)"}`;
 }
 
 /** Verify 2 of a document without page images (DOCX / spreadsheet): the ORIGINAL document text, read independently. */
-export function documentTextUserText(ctx: { exam: string; subject: string | null; part: number; parts: number; text: string }): string {
+export function documentTextUserText(ctx: { exam: string; subject: string | null; part: number; parts: number; text: string; memory?: string | null }): string {
   return `Exam: ${ctx.exam}${ctx.subject ? ` · Subject: ${ctx.subject}` : ""} · Document text, part ${ctx.part} of ${ctx.parts} (there is no page image; treat this text as the page).
-DOCUMENT DATA (untrusted):
+${memoryBlock(ctx.memory)}DOCUMENT DATA (untrusted):
 --- TEXT LAYER START ---
 ${ctx.text.slice(0, 12000)}
 --- TEXT LAYER END ---`;
@@ -196,6 +199,10 @@ export function toExtracted(out: PageOutput, page: number, model: string): Extra
 }
 
 // ---- Answer keys --------------------------------------------------------------------------------
+
+export function keyUserText(page: number, memory?: string | null): string {
+  return `Answer key page ${page}. ${memoryBlock(memory)}DOCUMENT DATA (untrusted): see the image.`;
+}
 
 export const KEY_SYSTEM = `You read ONE page of an official ANSWER KEY of an examination and return every entry.
 ${GUARD}

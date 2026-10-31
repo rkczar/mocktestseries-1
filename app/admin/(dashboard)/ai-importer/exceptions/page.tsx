@@ -17,6 +17,7 @@ import { SourceRereadPanel } from "@/components/admin/ai-importer/source-reread-
 import { ReferencePanel } from "@/components/admin/ai-importer/reference-panel";
 import { STRUCTURE_CODES, TAXONOMY_CODES, fingerprintOf, paperSummary, scannedPagesOf } from "@/lib/ai-import/paper-verify";
 import { mergedAnswerIn, statementsOf } from "@/lib/ai-import/local-parse";
+import { fieldBoard } from "@/lib/ai-import/field-checks";
 import { listReferences } from "@/lib/ai-import/reference";
 import { V1_DISPLAY, v2Display, verifyState } from "@/lib/ai-import/verify-core";
 import { DRAFT_IMPORT_STATUSES, approvedReadyCounts } from "@/lib/ai-import/summary";
@@ -44,7 +45,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const jobId = sp.job && jobs.some((j) => j.id === sp.job) ? sp.job : undefined;
   const status = sp.status === "all" ? null : sp.status === "approval" ? "approval" : sp.status && sp.status in QUESTION_STATUS_LABELS ? sp.status : "exceptions";
   const issue = sp.issue && sp.issue in ISSUE_DEFS ? sp.issue : undefined;
-  const VERIFY_FILTERS = { verified: "Verified (1 + 2)", eligible: "Eligible to publish", "v1-problems": "Verify 1 findings", "v2-disagree": "Verify 2 disagreements", "v2-noresult": "Verify 2 failed / unavailable", "v2-notrun": "Verify 2 not run / out of date", unverified: "Not verified yet" } as const;
+  const VERIFY_FILTERS = { verified: "Verified (1 + 2)", eligible: "Eligible to publish", "v1-problems": "Verify 1 findings", "v2-disagree": "Verify 2 disagreements", "v2-noresult": "Verify 2 failed / unavailable", "v2-notrun": "Verify 2 not run / out of date", unverified: "Not verified yet", "field-problems": "Field problems (any check)", memory: "Paper-memory findings" } as const;
   const verify = sp.verify && sp.verify in VERIFY_FILTERS ? (sp.verify as keyof typeof VERIFY_FILTERS) : undefined;
   const PROBLEM_FILTERS = { structure: "Structure errors (stem / option / answer boundaries)", taxonomy: "Subject / topic errors", "subject-mismatch": "Subject mismatch", "taxonomy-disagree": "Subject / topic check disagrees (Verify 1 / 2)", "classifier-failed": "Classifier failed (no answer)", answer: "Answer-key / type", reference: "Reference differences" } as const;
   const PROBLEM_CODES: Record<keyof typeof PROBLEM_FILTERS, string[]> = { structure: STRUCTURE_CODES, taxonomy: TAXONOMY_CODES, "subject-mismatch": ["SUBJECT_MISMATCH"], "taxonomy-disagree": ["TAXONOMY_DISAGREES"], "classifier-failed": ["CLASSIFICATION_FAILED"], answer: ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"], reference: ["REFERENCE_CONFLICT"] };
@@ -65,6 +66,10 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const rows = verify
     ? allRows.filter((r) => {
         const s = verifyState(r.data, fingerprintOf(r));
+        if (verify === "field-problems" || verify === "memory") {
+          const checks = [...(s.v1 === "passed" || s.v1 === "problems" ? (s.pv?.v1?.fieldChecks ?? []) : []), ...(s.v2 === "verified" || s.v2 === "disagree" || s.v2 === "not_found" ? (s.pv?.v2?.fieldChecks ?? []) : [])];
+          return checks.some((c) => c.status === "PROBLEM" && (verify === "field-problems" || c.by === "MEMORY"));
+        }
         return verify === "verified" ? s.v1 === "passed" && s.v2 === "verified" : verify === "eligible" ? eligible.has(r.id) : verify === "v1-problems" ? s.v1 === "problems" : verify === "v2-disagree" ? s.v2 === "disagree" || s.v2 === "not_found" : verify === "v2-noresult" ? s.v2 === "failed" || s.v2 === "unavailable" : verify === "v2-notrun" ? s.v2 === "none" || s.v2 === "stale" : s.v1 !== "passed" || s.v2 !== "verified";
       })
     : allRows;
@@ -131,6 +136,10 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       v1Fixes: vs.v1 !== "stale" ? (vs.pv?.v1?.fixes ?? []).map((f) => `${f.field} (${f.evidence})`).slice(0, 4) : [],
       v2Detail: vs.pv?.v2 && vs.v2 !== "stale" ? `${vs.pv.v2.part ? `${vs.pv.v2.part}: ` : ""}${vs.pv.v2.error ? `${vs.pv.v2.error.message}` : vs.pv.v2.detail}`.slice(0, 400) : vs.v2 === "stale" ? "the question changed after Verify 2 ran" : null,
       v2Fields: vs.v2 === "disagree" || vs.v2 === "not_found" ? (vs.pv?.v2?.fields ?? []) : [],
+      // Field-by-field problems of the CURRENT Verify 1 / Verify 2 results (and confirmed paper memory).
+      fieldProblems: fieldBoard(vs.v1 === "passed" || vs.v1 === "problems" ? vs.pv?.v1?.fieldChecks : null, vs.v2 === "verified" || vs.v2 === "disagree" || vs.v2 === "not_found" ? vs.pv?.v2?.fieldChecks : null)
+        .filter((f) => f.status === "PROBLEM")
+        .map((f) => ({ field: f.field, notes: f.notes.filter((n) => n.status === "PROBLEM").map((n) => ({ by: n.by, problem: (n.problem ?? "").slice(0, 300), suggestion: n.suggestion ? n.suggestion.slice(0, 160) : null })).slice(0, 3) })),
       references: (vs.v1 !== "stale" ? (vs.pv?.v1?.references ?? []) : []).map((x) => ({ name: x.name, compared: x.compared, matched: x.matched, similarity: x.similarity, conflicts: x.conflicts.slice(0, 3), note: x.note ?? null })),
       fullStem: [e.instructions, e.passage, e.stem].filter(Boolean).join("\n").slice(0, 1500),
       options: e.options.map((o) => ({ label: o.label, text: o.text.slice(0, 200), contaminated: contaminated?.where === `option ${o.label}` })),
