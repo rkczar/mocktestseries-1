@@ -345,6 +345,9 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
       </Card>
       {canUse && q.status !== "IMPORTED" && q.status !== "PUBLISHED" && (
         <QuestionReview
+          // Remount when the stored question changes outside this form (e.g. a suggestion taken in Field verification),
+          // so the editor never holds — and could save back — the text from before that change.
+          key={q.updatedAt.toISOString()}
           q={{
             id: q.id,
             textOnly: (() => {
