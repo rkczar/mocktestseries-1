@@ -357,6 +357,9 @@ export const ANSWER_STATUS_LABELS: Record<string, string> = {
 };
 
 /** Issue codes stored on AiImportQuestion.issueCodes. `blocking` = cannot be imported until fixed. */
+/** Share of the paper's questions an answer key read by AI vision must cover to be used (a partial grid reading is not). */
+export const KEY_MIN_COVERAGE = 0.9;
+
 export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publishBlocking: boolean }> = {
   EXTRACTION_UNCERTAIN: { label: "Extraction needs correction", blocking: false, publishBlocking: true },
   OPTIONS_INCOMPLETE: { label: "Options missing or unreadable", blocking: true, publishBlocking: true },

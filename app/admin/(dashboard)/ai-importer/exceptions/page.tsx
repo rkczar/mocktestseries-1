@@ -13,6 +13,7 @@ import { ExceptionsTable, type ExceptionRow } from "./exceptions-table";
 import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { jobMapping } from "@/lib/ai-import/job-view";
 import { PaperVerifyBar } from "@/components/admin/ai-importer/paper-verify-bar";
+import { SourceRereadPanel } from "@/components/admin/ai-importer/source-reread-panel";
 import { ReferencePanel } from "@/components/admin/ai-importer/reference-panel";
 import { STRUCTURE_CODES, TAXONOMY_CODES, fingerprintOf, paperSummary, scannedPagesOf } from "@/lib/ai-import/paper-verify";
 import { mergedAnswerIn, statementsOf } from "@/lib/ai-import/local-parse";
@@ -38,6 +39,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const sp = await searchParams;
   const [canUse, canPublish, settings, session] = await Promise.all([hasPermission(PERMISSIONS.AI_IMPORTER_USE), hasPermission(PERMISSIONS.QUESTIONS_MANAGE), getImporterSettings(), getAdminSession()]);
   const canManage = session?.user?.role === "MASTER_ADMIN";
+  const canManageImporter = await hasPermission(PERMISSIONS.AI_IMPORTER_MANAGE);
   const jobs = await prisma.aiImportJob.findMany({ orderBy: { updatedAt: "desc" }, take: 100, select: { id: true, title: true, status: true, examId: true } });
   const jobId = sp.job && jobs.some((j) => j.id === sp.job) ? sp.job : undefined;
   const status = sp.status === "all" ? null : sp.status === "approval" ? "approval" : sp.status && sp.status in QUESTION_STATUS_LABELS ? sp.status : "exceptions";
@@ -169,6 +171,9 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       </div>
       {jobId && summary && job && (
         <PaperVerifyBar jobId={jobId} jobStatus={job.status} summary={summary} canUse={canUse} canPublish={canPublish && canUse} canManage={canManage} hrefs={{ verified: link({ status: "all", verify: "verified" }), v1Problems: link({ status: "all", verify: "v1-problems" }), v2Disagree: link({ status: "all", verify: "v2-disagree" }), v2NoResult: link({ status: "all", verify: "v2-noresult" }), structure: link({ status: "all", problem: "structure", issue: undefined }), taxonomy: link({ status: "all", problem: "taxonomy", issue: undefined }), answers: link({ status: "all", problem: "answer", issue: undefined }) }} />
+      )}
+      {jobId && job && (
+        <SourceRereadPanel jobId={jobId} canUse={canUse} canLearn={canManageImporter} finished={["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(job.status)} />
       )}
       {jobId && (
         <Card>

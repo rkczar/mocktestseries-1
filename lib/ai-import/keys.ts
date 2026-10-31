@@ -12,6 +12,7 @@ import { KEY_SYSTEM, keySchema } from "@/lib/ai-import/prompts";
 import { visionImage } from "@/lib/ai-import/figures";
 import { ensureRender, saveKeyEntries, type StepContext } from "@/lib/ai-import/process";
 import { logEvent } from "@/lib/ai-import/jobs";
+import { KEY_MIN_COVERAGE } from "@/lib/ai-import/config";
 
 /**
  * Answer-key files: the key is read as printed (number + value), never
@@ -55,7 +56,8 @@ function headerOf(h: { paper?: string | null; series?: string | null; set?: stri
 }
 
 // A–E / 1–5 are read as printed: a value that is not one of the question's options becomes a KEY MISMATCH, never dropped.
-const VALUE = String.raw`(?:[A-Ea-e1-5](?:\s*[,&/]\s*[A-Ea-e1-5]){0,3}|Bonus|BONUS|Dropped|DROPPED|Deleted|DELETED|Withdrawn|WITHDRAWN|\*)`;
+// "X" / "×" is how UPSC keys print a dropped item (CMS 2013, 2024).
+const VALUE = String.raw`(?:[A-Ea-e1-5](?:\s*[,&/]\s*[A-Ea-e1-5]){0,3}|Bonus|BONUS|Dropped|DROPPED|Deleted|DELETED|Withdrawn|WITHDRAWN|X|×|\*)`;
 const PAIR = new RegExp(String.raw`(?:^|[\s|])Q?\.?\s*(\d{1,3})\s*[.):\-–=]?\s*\(?\s*(${VALUE})\s*\)?(?=[\s|,;]|$)`, "g");
 const TOKEN_VALUE = new RegExp(`^\\(?(${VALUE})\\)?$`);
 
@@ -82,6 +84,22 @@ export function parseKeyText(text: string): KeyPair[] {
     for (const m of lines[i].matchAll(PAIR)) out.push({ number: Number(m[1]), section: "", raw: m[2].replace(/\s+/g, "") });
   }
   return out;
+}
+
+export { KEY_MIN_COVERAGE };
+
+/**
+ * How many entries the key should have: the administrator's confirmed question count. The key's own printed total is
+ * not used — it may belong to another paper (a wrong key is the paper check's business, not a coverage question).
+ */
+export function keyExpected(expectedQuestions: number | null | undefined): number | null {
+  return expectedQuestions ?? null;
+}
+
+/** An AI reading of a key that covers fewer than KEY_MIN_COVERAGE of the expected questions: not used (null = complete or unknown). */
+export function keyReadingIncomplete(method: string, pairs: KeyPair[], expected: number | null): { read: number; expected: number } | null {
+  const read = new Set(pairs.map((x) => x.number)).size;
+  return method === "ai" && pairs.length && expected && read < Math.ceil(expected * KEY_MIN_COVERAGE) ? { read, expected } : null;
 }
 
 /** Sanity of a parsed key: enough entries, mostly increasing numbers. */
@@ -184,6 +202,17 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
       const why = e instanceof ImporterAiFailure ? e.message.slice(0, 260) : `The answer key could not be read: ${e instanceof Error ? e.message.slice(0, 200) : "error"}`;
       await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.ANALYZED, errorMessage: `${why} The answer key was not read — use Retry to read it again.`.slice(0, 500) } });
       await logEvent(ctx.job.id, "KEY_FAILED", `${file.originalName}: the answer key could not be read — ${why.slice(0, 200)}`, { fileId: file.id, kind: e instanceof ImporterAiFailure ? e.kind : null });
+      continue;
+    }
+    // An AI reading of a key that covers far fewer questions than the paper has is an incomplete reading (seen 2026-10-31:
+    // 15 of a 120-cell grid, 9 of them wrong): its values are not used as official answers. The file stays readable again
+    // (Retry), and the partial reading is kept in the event for review.
+    const incomplete = keyReadingIncomplete(method, pairs, keyExpected(ctx.job.expectedQuestions));
+    if (incomplete) {
+      const { read, expected } = incomplete;
+      const why = `Only ${read} of ${expected} answer-key entries could be read (the key looks like a grid the reading did not cover). The entries were not used as official answers — use Retry with a stronger key model, or enter the answers by hand.`;
+      await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.ANALYZED, errorMessage: why } });
+      await logEvent(ctx.job.id, "KEY_INCOMPLETE", `${file.originalName}: ${why}`, { fileId: file.id, read, expected, entries: pairs.slice(0, 200), header });
       continue;
     }
     await prisma.aiImportKeyEntry.deleteMany({ where: { keyFileId: file.id } });

@@ -326,7 +326,11 @@ const server = http.createServer(async (req, res) => {
       // (deterministic when pages are read in parallel — importer-reliability-2).
       const pageMarker = image && config.scriptMarker?.[id] ? await markerOf(image) : null;
       const byMarker = pageMarker && Array.isArray(config.scriptMarker[id][pageMarker]) && config.scriptMarker[id][pageMarker].length ? config.scriptMarker[id][pageMarker].shift() : null;
-      const mode = m.thinks && !body.reasoning?.effort && !body.reasoning?.max_tokens ? "length" : byMarker ?? (Array.isArray(config.script[id]) && config.script[id].length ? config.script[id].shift() : null);
+      // config {scriptPart: {id: {n: [mode, …]}}}: the same for document parts ("part n of m" in the request text), which
+      // Verify 2 also reads in parallel — a plain `script` answers whichever part arrives first (2026-10-31).
+      const partNo = config.scriptPart?.[id] ? /\bpart (\d+) of \d+/.exec(text)?.[1] : null;
+      const byPart = partNo && Array.isArray(config.scriptPart[id][partNo]) && config.scriptPart[id][partNo].length ? config.scriptPart[id][partNo].shift() : null;
+      const mode = m.thinks && !body.reasoning?.effort && !body.reasoning?.max_tokens ? "length" : byMarker ?? byPart ?? (Array.isArray(config.script[id]) && config.script[id].length ? config.script[id].shift() : null);
       // 2026-10-25: a connection the provider drops mid-request, and a classification list with one malformed entry.
       if (mode === "terminated") return err(res, 502, "terminated");
       if (mode === "baditem" && out.results) content = JSON.stringify({ results: [{ bogus: true }, ...out.results.slice(1)] });

@@ -7,6 +7,7 @@ import { getExamTaxonomy, type ExamTaxonomySubject } from "@/lib/exam-taxonomy";
 import { buildTaxonomyIndex, classificationText, type ClassifierMemory, type TaxonomyIndex } from "@/lib/ai-import/taxonomy-classify";
 import { headingKey, resolveHeadingSubject } from "@/lib/ai-import/section-subject";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
+import { mergePaperRules, type PaperRule, type PaperRuleProposal } from "@/lib/ai-import/paper-memory";
 
 /**
  * Exam-specific taxonomy reference of the AI Question Importer ("taxonomy memory"), one Setting row per exam
@@ -112,6 +113,8 @@ export interface ExamTaxonomyMemory {
   corrections: MemoryCorrection[];
   headingAliases?: MemoryHeadingAlias[];
   formatRules?: MemoryFormatRule[];
+  /** Paper-format memory (lib/ai-import/paper-memory.ts): evidence-backed rules, PROPOSED until an administrator confirms. */
+  paperRules?: PaperRule[];
   history?: MemoryHistoryEntry[];
   /** Entries dropped by the last refresh because their ids left the exam's taxonomy. */
   lastRefresh: { at: string; dropped: number; fingerprint: string } | null;
@@ -124,13 +127,13 @@ export function taxonomyFingerprint(taxonomy: ExamTaxonomySubject[]): string {
   return createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 24);
 }
 
-const emptyMemory = (examId: string, fingerprint: string): ExamTaxonomyMemory => ({ examId, version: 0, taxonomyFingerprint: fingerprint, synonyms: [], confusions: [], corrections: [], headingAliases: [], formatRules: [], history: [], lastRefresh: null, updatedAt: new Date(0).toISOString() });
+const emptyMemory = (examId: string, fingerprint: string): ExamTaxonomyMemory => ({ examId, version: 0, taxonomyFingerprint: fingerprint, synonyms: [], confusions: [], corrections: [], headingAliases: [], formatRules: [], paperRules: [], history: [], lastRefresh: null, updatedAt: new Date(0).toISOString() });
 
 export async function loadExamMemory(examId: string): Promise<ExamTaxonomyMemory | null> {
   const row = await prisma.setting.findUnique({ where: { key: `${TAXONOMY_MEMORY_PREFIX}${examId}` } });
   const v = row?.value as Partial<ExamTaxonomyMemory> | null | undefined;
   if (!v || typeof v !== "object" || v.examId !== examId) return null;
-  return { ...emptyMemory(examId, v.taxonomyFingerprint ?? ""), ...v, synonyms: Array.isArray(v.synonyms) ? v.synonyms : [], confusions: Array.isArray(v.confusions) ? v.confusions : [], corrections: Array.isArray(v.corrections) ? v.corrections : [], headingAliases: Array.isArray(v.headingAliases) ? v.headingAliases : [], formatRules: Array.isArray(v.formatRules) ? v.formatRules : [], history: Array.isArray(v.history) ? v.history : [] } as ExamTaxonomyMemory;
+  return { ...emptyMemory(examId, v.taxonomyFingerprint ?? ""), ...v, synonyms: Array.isArray(v.synonyms) ? v.synonyms : [], confusions: Array.isArray(v.confusions) ? v.confusions : [], corrections: Array.isArray(v.corrections) ? v.corrections : [], headingAliases: Array.isArray(v.headingAliases) ? v.headingAliases : [], formatRules: Array.isArray(v.formatRules) ? v.formatRules : [], paperRules: Array.isArray(v.paperRules) ? v.paperRules : [], history: Array.isArray(v.history) ? v.history : [] } as ExamTaxonomyMemory;
 }
 
 async function saveExamMemory(mem: ExamTaxonomyMemory, actorId: string | null, action: string, metadata: Record<string, unknown>): Promise<ExamTaxonomyMemory> {
@@ -272,15 +275,16 @@ export async function addConfusion(examId: string, actorId: string, a: string, b
 }
 
 /** Removes one synonym / confusion / stored example (the audit log keeps what was removed). */
-export async function removeMemoryEntry(examId: string, actorId: string, kind: "synonym" | "confusion" | "correction" | "headingAlias" | "formatRule", id: string): Promise<void> {
+export async function removeMemoryEntry(examId: string, actorId: string, kind: "synonym" | "confusion" | "correction" | "headingAlias" | "formatRule" | "paperRule", id: string): Promise<void> {
   const mem = await loadExamMemory(examId);
   if (!mem) throw new ImportJobError("Nothing is stored for this exam.");
   const aliases = mem.headingAliases ?? [];
   const rules = mem.formatRules ?? [];
-  const list = kind === "synonym" ? mem.synonyms : kind === "confusion" ? mem.confusions : kind === "correction" ? mem.corrections : kind === "headingAlias" ? aliases : rules;
+  const paperRules = mem.paperRules ?? [];
+  const list = kind === "synonym" ? mem.synonyms : kind === "confusion" ? mem.confusions : kind === "correction" ? mem.corrections : kind === "headingAlias" ? aliases : kind === "paperRule" ? paperRules : rules;
   const gone = (list as { id: string }[]).find((x) => x.id === id);
   if (!gone) throw new ImportJobError("That entry no longer exists.");
-  const next = { ...mem, synonyms: kind === "synonym" ? mem.synonyms.filter((x) => x.id !== id) : mem.synonyms, confusions: kind === "confusion" ? mem.confusions.filter((x) => x.id !== id) : mem.confusions, corrections: kind === "correction" ? mem.corrections.filter((x) => x.id !== id) : mem.corrections, headingAliases: kind === "headingAlias" ? aliases.filter((x) => x.id !== id) : aliases, formatRules: kind === "formatRule" ? rules.filter((x) => x.id !== id) : rules };
+  const next = { ...mem, synonyms: kind === "synonym" ? mem.synonyms.filter((x) => x.id !== id) : mem.synonyms, confusions: kind === "confusion" ? mem.confusions.filter((x) => x.id !== id) : mem.confusions, corrections: kind === "correction" ? mem.corrections.filter((x) => x.id !== id) : mem.corrections, headingAliases: kind === "headingAlias" ? aliases.filter((x) => x.id !== id) : aliases, formatRules: kind === "formatRule" ? rules.filter((x) => x.id !== id) : rules, paperRules: kind === "paperRule" ? paperRules.filter((x) => x.id !== id) : paperRules };
   await saveExamMemory(next, actorId, "AI_IMPORT_TAXONOMY_MEMORY_REMOVED", { kind, entry: gone as unknown as Prisma.InputJsonValue });
 }
 
@@ -325,4 +329,32 @@ export async function addFormatRule(examId: string, actorId: string, rule: Forma
   if (mem.formatRules.some((x) => x.rule === rule)) throw new ImportJobError("That rule is already confirmed for this exam.");
   const entry: MemoryFormatRule = { id: randomBytes(6).toString("hex"), rule, byId: actorId, at: new Date().toISOString(), version: mem.version + 1, note: note?.trim().slice(0, 200) || null };
   await saveExamMemory({ ...mem, formatRules: [...mem.formatRules, entry] }, actorId, "AI_IMPORT_TAXONOMY_FORMAT_RULE_ADDED", { rule });
+}
+
+// ---- Paper-format memory (lib/ai-import/paper-memory.ts) ------------------------------------------------------------
+
+/** All paper-format rules of the exam (proposed, confirmed and rejected). */
+export async function examPaperRules(examId: string): Promise<PaperRule[]> {
+  return (await loadExamMemory(examId))?.paperRules ?? [];
+}
+
+/** Stores rules learned from one import as PROPOSED (or as new evidence of a rule already stored). Nothing is applied. */
+export async function savePaperRuleProposals(examId: string, actorId: string, jobId: string, proposals: PaperRuleProposal[]): Promise<{ added: number; updated: number; contradicted: number }> {
+  const { mem } = await current(examId);
+  const r = mergePaperRules(mem.paperRules ?? [], proposals, new Date().toISOString(), () => randomBytes(6).toString("hex"));
+  await saveExamMemory({ ...mem, paperRules: r.rules }, actorId, "AI_IMPORT_PAPER_MEMORY_LEARNED", { jobId, proposals: proposals.length, added: r.added, updated: r.updated, contradicted: r.contradicted });
+  return { added: r.added, updated: r.updated, contradicted: r.contradicted };
+}
+
+/** An administrator confirms or rejects one rule (a confirmed rule is used as a check; a rejected one never). */
+export async function decidePaperRule(examId: string, actorId: string, id: string, decision: "CONFIRMED" | "REJECTED", note: string | null): Promise<PaperRule> {
+  const { mem } = await current(examId);
+  const rule = (mem.paperRules ?? []).find((x) => x.id === id);
+  if (!rule) throw new ImportJobError("That rule no longer exists.");
+  if (decision === "CONFIRMED" && rule.contradictedBy) throw new ImportJobError("Newer evidence contradicts this rule — review both versions and reject the wrong one first.");
+  const next: PaperRule = { ...rule, status: decision, decidedById: actorId, decidedAt: new Date().toISOString(), note: note?.trim().slice(0, 300) || null };
+  // A rejected value no longer contradicts the other rules of its kind and paper.
+  const rules = (mem.paperRules ?? []).map((x) => (x.id === id ? next : decision === "REJECTED" && x.contradictedBy === rule.key && x.paper === rule.paper && x.kind === rule.kind ? { ...x, contradictedBy: null } : x));
+  await saveExamMemory({ ...mem, paperRules: rules }, actorId, decision === "CONFIRMED" ? "AI_IMPORT_PAPER_RULE_CONFIRMED" : "AI_IMPORT_PAPER_RULE_REJECTED", { id, kind: rule.kind, scope: rule.scope, paper: rule.paper, key: rule.key });
+  return next;
 }

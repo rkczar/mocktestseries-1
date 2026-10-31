@@ -5,8 +5,10 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FORMAT_RULES, classifierContext } from "@/lib/ai-import/taxonomy-memory";
+import { FORMAT_RULES, classifierContext, examPaperRules } from "@/lib/ai-import/taxonomy-memory";
+import { PAPER_RULE_KINDS } from "@/lib/ai-import/paper-memory";
 import { TaxonomyMemoryEditor } from "./taxonomy-memory-editor";
+import { PaperMemoryRules } from "./paper-memory-rules";
 
 export const metadata = { title: "Taxonomy Reference — AI Question Importer" };
 export const dynamic = "force-dynamic";
@@ -26,6 +28,7 @@ export default async function TaxonomyReferencePage({ searchParams }: { searchPa
   const ctx = exam ? await classifierContext(exam.id) : null;
   const names = new Map(ctx ? ctx.taxonomy.flatMap((s) => [[s.id, s.name] as const, ...s.topics.map((t) => [t.id, `${s.name} › ${t.name}`] as const), ...s.topics.flatMap((t) => t.subTopics.map((u) => [u.id, `${s.name} › ${t.name} › ${u.name}`] as const))]) : []);
   const mem = ctx?.memory ?? null;
+  const paperRules = exam ? await examPaperRules(exam.id) : [];
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -83,6 +86,7 @@ export default async function TaxonomyReferencePage({ searchParams }: { searchPa
             history={[...(mem?.history ?? [])].reverse().slice(0, 50).map((h) => ({ version: h.version, at: h.at, action: h.action, detail: h.detail }))}
             version={mem?.version ?? 0}
           />
+          <PaperMemoryRules examId={exam.id} canEdit={canEdit} rules={paperRules} kinds={PAPER_RULE_KINDS} />
         </>
       )}
     </div>

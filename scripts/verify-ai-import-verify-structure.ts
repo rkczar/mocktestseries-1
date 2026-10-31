@@ -420,7 +420,7 @@ async function main() {
     check("no confirmation / a lower confirmation → not started, nothing sent", !r0.started && !r1.started && (await mockStats()).chat === s0.chat, [r0, r1]);
     const spentBefore = (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jB } })).spentInr;
     // Part 1: the checker's answer is cut off, the one fallback (mid) refuses — that part has no result.
-    await mockConfig({ script: { "mockvision/checker": ["length"], "mockvision/mid": ["refusal"] } });
+    await mockConfig({ scriptPart: { "mockvision/checker": { "1": ["length"] }, "mockvision/mid": { "1": ["refusal"] } } });
     const r2 = await requestVerify2({ jobId: jB, actorId: actor, model: "mockvision/checker", confirmedMaxInr: pv.maxInr });
     await runWorker(300_000);
     let jobV = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jB } });

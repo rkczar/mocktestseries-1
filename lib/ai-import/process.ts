@@ -5,9 +5,9 @@ import { AiImportFileRole, AiImportFileStatus, AiImportPageStatus, AiImportQuest
 import { prisma } from "@/lib/prisma";
 import { parseImportFile } from "@/lib/bulk-import";
 import { pageLayout, renderPage, type PageLayout } from "@/lib/ai-import/pdf";
-import { readDocx, IMG_TOKEN } from "@/lib/ai-import/docx";
+import { readDocx, IMG_TOKEN, type DocxContent } from "@/lib/ai-import/docx";
 import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
-import { blockToQuestion, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
+import { blockToQuestion, candidateInstruction, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
 import { cropFromRender, cropFromScan, iou, storeOriginalFigure, visionImage, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
 import { checkFigureMapping, overlappingRegions } from "@/lib/ai-import/figure-map";
 import { formulaDiff } from "@/lib/ai-import/fidelity";
@@ -80,7 +80,7 @@ export function aiUsable(s: ImporterSettings): boolean {
 
 /** Where a crop was cut: the original embedded scan or the page render, and its pixel rectangle there. */
 type CropProvenance = { from: "scan" | "render"; width: number; height: number };
-type FigureBytes = (f: ExtractedQuestion["figures"][number]) => Promise<{ bytes: Buffer; ext: string; source: string; crop?: CropProvenance } | null>;
+export type FigureBytes = (f: ExtractedQuestion["figures"][number]) => Promise<{ bytes: Buffer; ext: string; source: string; crop?: CropProvenance } | null>;
 
 /**
  * Figure bytes for one page: exact embedded image when the box matches one, otherwise a crop of the box
@@ -165,7 +165,7 @@ export type RescanOutcome = "applied" | "pending" | "new" | "stored" | "skipped"
  * untouched question is replaced after its previous extraction is kept as a version; a manually
  * corrected one is left as it is and the new read waits as a PENDING version for the administrator.
  */
-async function saveQuestion(ctx: StepContext, file: AiImportFile, q: ExtractedQuestion, orderIndex: number, figureBytes: FigureBytes, pageNumber: number, rescan?: { model: string | null } | null): Promise<RescanOutcome> {
+export async function saveQuestion(ctx: StepContext, file: AiImportFile, q: ExtractedQuestion, orderIndex: number, figureBytes: FigureBytes, pageNumber: number, rescan?: { model: string | null } | null): Promise<RescanOutcome> {
   const key = sourceKeyOf(q);
   const existing = await prisma.aiImportQuestion.findUnique({ where: { fileId_sourceKey: { fileId: file.id, sourceKey: key } }, include: { figures: true } });
   // The same printed number read on a DIFFERENT page (a misread number, or a repeated one) never replaces the
@@ -581,7 +581,11 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   const cached = !state.rescan && state.primaryCache ? state.primaryCache : null;
   const primary = cached ? { out: cached.out, model: cached.model, cost: 0 } : await call([ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks], "extract");
   if (!cached) await prisma.aiImportPage.update({ where: { id: page.id }, data: { rawOutput: { ...state, primaryCache: { model: primary.model, out: primary.out, at: new Date().toISOString() } } as unknown as Prisma.InputJsonValue } });
-  const qs = toExtracted(primary.out, page.pageNumber, primary.model);
+  const read = toExtracted(primary.out, page.pageNumber, primary.model);
+  // Numbered instructions to candidates are never questions: kept in the page's reading, not saved, so they cannot take
+  // the numbers of the real questions on the next page.
+  const qs = read.filter((q) => !candidateInstruction(q));
+  if (qs.length < read.length) await logEvent(ctx.job.id, "INSTRUCTIONS_SKIPPED", `${file.originalName} page ${page.pageNumber}: ${read.length - qs.length} numbered instruction(s) to candidates (${read.filter((q) => candidateInstruction(q)).map((q) => q.number ?? "?").join(", ")}) were not taken as questions — they have no option list and instruction wording. Check the page if a real question is missing.`, { pageId: page.id });
   assignSections(qs, state.startState);
   checkPageStructure(qs, page.pageNumber);
 
@@ -609,7 +613,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     try {
       const v = await call([verifyModel], "verify");
       secondModel = v.model;
-      second = toExtracted(v.out, page.pageNumber, v.model);
+      second = toExtracted(v.out, page.pageNumber, v.model).filter((q) => !candidateInstruction(q));
       assignSections(second, state.startState);
     } catch (e) {
       // The page's first read is already paid for: a stop that only says "send nothing more" (rate-limit
@@ -691,9 +695,13 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     const count = (o: string) => outcomes.filter((x) => x.outcome === o).length;
     await logEvent(ctx.job.id, "RESCAN_DONE", `Re-scan of ${file.originalName} page ${page.pageNumber} (${primary.model}): ${count("applied")} replaced (previous extraction kept), ${count("pending")} waiting for your choice (manually corrected), ${count("new")} new, ${count("not_found")} not found again, ${count("stored")} already in the Question Bank.`, { pageId: page.id, outcomes, requestedById: rescan.requestedById });
   }
-  // Answer-key tables printed on question-paper pages are kept for the key matcher.
-  if (primary.out.answer_key.length) {
+  // Answer-key tables printed on question-paper pages are kept for the key matcher — only from a page that holds no
+  // questions (a key page). On a question page a "key" is a table or list of the questions themselves (seen 2026-10-31:
+  // CMS 2024 page 6, Q25's "A: Myoglobinuria … 1, 2, 3" table became official answers for Q22–26 and displaced the real key).
+  if (primary.out.answer_key.length && !qs.length) {
     await saveKeyEntries(ctx, file.id, file.id, page.pageNumber, primary.out.answer_key.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: "", raw: e.answer })));
+  } else if (primary.out.answer_key.length) {
+    await logEvent(ctx.job.id, "PAGE_KEY_IGNORED", `${file.originalName} page ${page.pageNumber}: the reading returned ${primary.out.answer_key.length} answer-key entr(ies) on a page with questions — not used as official answers (kept in the page's reading for review). Upload the answer key as its own file.`, { pageId: page.id, entries: primary.out.answer_key.slice(0, 50) });
   }
   if (budgetStop) throw budgetStop;
 }
@@ -725,7 +733,7 @@ async function verifyLocalPage(ctx: StepContext, file: AiImportFile, pageId: str
     },
     (text) => parsePage(text, "the verification model's answer")
   );
-  const second = toExtracted(out, page.pageNumber, r.model);
+  const second = toExtracted(out, page.pageNumber, r.model).filter((q) => !candidateInstruction(q));
   assignSections(second, state.startState);
   const stored = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id, pages: { has: page.pageNumber } }, select: { id: true, data: true, pages: true } });
   const mine = stored.filter((q) => q.pages[0] === page.pageNumber);
@@ -766,12 +774,10 @@ export async function runVerifyPages(ctx: StepContext): Promise<{ verified: numb
 
 // ---- DOCX / sheets / images -----------------------------------------------------------------------
 
-async function localDocxPass(ctx: StepContext, file: AiImportFile): Promise<void> {
-  const doc = await readDocx(vaultPath(file.storageKey!));
-  const { blocks } = splitQuestions(doc.lines);
-  const media = new Map(doc.media.map((m) => [m.token, m]));
-  let order = await nextOrderIndex(file.id);
-  for (const b of blocks) {
+/** The questions of a Word file as the importer reads them (local, no AI) — shared by extraction and the source re-read. */
+export function docxQuestions(doc: DocxContent): ExtractedQuestion[] {
+  const out: ExtractedQuestion[] = [];
+  for (const b of splitQuestions(doc.lines).blocks) {
     const { q, split, text } = blockToQuestion(b, 1, "DOCX");
     // Images: the token's position decides stem vs option — exact, no guessing.
     for (const m of text.matchAll(IMG_TOKEN)) {
@@ -799,11 +805,25 @@ async function localDocxPass(ctx: StepContext, file: AiImportFile): Promise<void
       q.notes = q.notes.filter((n) => !n.startsWith("Text layer may have lost notation"));
       if (q.options.length >= 4 && q.options.every((o) => o.text || q.figures.some((f) => f.owner === "OPTION" && f.optionLabel === o.label)) && q.notes.every((n) => n.startsWith("The printed answer"))) q.confidence = 0.95;
     }
-    await saveQuestion(ctx, file, q, order++, async (f) => {
-      const mm = f.mediaPart ? media.get(f.mediaPart) : undefined;
-      return mm ? { bytes: mm.bytes, ext: mm.ext, source: "EMBEDDED" } : null;
-    }, 1);
+    out.push(q);
   }
+  return out;
+}
+
+/** Figure bytes of a Word file's embedded images (exact originals). */
+export const docxFigureBytes = (doc: DocxContent): FigureBytes => {
+  const media = new Map(doc.media.map((m) => [m.token, m]));
+  return async (f) => {
+    const mm = f.mediaPart ? media.get(f.mediaPart) : undefined;
+    return mm ? { bytes: mm.bytes, ext: mm.ext, source: "EMBEDDED" } : null;
+  };
+};
+
+async function localDocxPass(ctx: StepContext, file: AiImportFile): Promise<void> {
+  const doc = await readDocx(vaultPath(file.storageKey!));
+  let order = await nextOrderIndex(file.id);
+  const bytes = docxFigureBytes(doc);
+  for (const q of docxQuestions(doc)) await saveQuestion(ctx, file, q, order++, bytes, 1);
   await prisma.aiImportPage.upsert({
     where: { fileId_pageNumber: { fileId: file.id, pageNumber: 1 } },
     create: { jobId: ctx.job.id, fileId: file.id, pageNumber: 1, status: AiImportPageStatus.DONE, kind: "DOCUMENT", textChars: doc.lines.reduce((a, l) => a + l.text.length, 0), imageCount: doc.media.length, model: "local", processedAt: new Date() },

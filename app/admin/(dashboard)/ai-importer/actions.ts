@@ -54,6 +54,9 @@ import type { ImportMode } from "@/lib/ai-import/adapter";
 import { applyReferenceAnswers, importAndPublishEligible, publishEligibleQuestion, requestVerify2, runVerify1, verify2Preview, type Verify1Result, type Verify2Preview, type Verify2Request } from "@/lib/ai-import/paper-verify";
 import { unlinkReference } from "@/lib/ai-import/reference";
 import { referenceOcrPreview, requestReferenceOcr, type ReferenceOcrPreview, type ReferenceOcrRequest } from "@/lib/ai-import/reference-ocr";
+import { applySourceReread, sourceRereadPreview, type RereadChoice, type RereadPreview } from "@/lib/ai-import/source-reread";
+import { learnPaperMemory } from "@/lib/ai-import/paper-learn";
+import { decidePaperRule } from "@/lib/ai-import/taxonomy-memory";
 
 /**
  * AI Question Importer Server Actions. USE (upload, process, review, import,
@@ -796,10 +799,44 @@ export async function addFormatRuleAction(examId: string, rule: string, note: st
 }
 
 /** Removes one entry of an exam's taxonomy reference (audited; Manage permission). */
-export async function removeTaxonomyMemoryAction(examId: string, kind: "synonym" | "confusion" | "correction" | "headingAlias" | "formatRule", id: string): Promise<ImporterResult<null>> {
+export async function removeTaxonomyMemoryAction(examId: string, kind: "synonym" | "confusion" | "correction" | "headingAlias" | "formatRule" | "paperRule", id: string): Promise<ImporterResult<null>> {
   return run(await requireManage(), async (actorId) => {
-    if (typeof examId !== "string" || !["synonym", "confusion", "correction", "headingAlias", "formatRule"].includes(kind) || typeof id !== "string") throw new ImportJobError("Choose the entry to remove.");
+    if (typeof examId !== "string" || !["synonym", "confusion", "correction", "headingAlias", "formatRule", "paperRule"].includes(kind) || typeof id !== "string") throw new ImportJobError("Choose the entry to remove.");
     await removeMemoryEntry(examId, actorId, kind, id);
+    return null;
+  });
+}
+
+/** Source re-read — the dry run: the original paper read again locally and compared question by question; nothing is written. */
+export async function sourceRereadPreviewAction(jobId: string): Promise<ImporterResult<RereadPreview>> {
+  return run(await requireUse(), async () => {
+    if (typeof jobId !== "string" || !jobId) throw new ImportJobError("Choose an import.");
+    return sourceRereadPreview(jobId);
+  });
+}
+
+/** Source re-read — the administrator's per-question choice, applied only if the preview it saw is still current. */
+export async function sourceRereadApplyAction(jobId: string, hash: string, choice: RereadChoice): Promise<ImporterResult<{ pending: number; added: number; rejected: number }>> {
+  return run(await requireUse(), async (actorId) => {
+    const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 2000) : []);
+    if (typeof jobId !== "string" || !jobId || typeof hash !== "string" || !hash) throw new ImportJobError("Open the preview first.");
+    return applySourceReread({ jobId, actorId, hash, choice: { pending: list(choice?.pending), add: list(choice?.add), reject: list(choice?.reject) } });
+  });
+}
+
+/** Paper memory: learns this import's paper-format facts as PROPOSED rules (Manage permission; nothing is applied). */
+export async function learnPaperMemoryAction(jobId: string): Promise<ImporterResult<Awaited<ReturnType<typeof learnPaperMemory>>>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof jobId !== "string" || !jobId) throw new ImportJobError("Choose an import.");
+    return learnPaperMemory(jobId, actorId);
+  });
+}
+
+/** Paper memory: confirm (used as a check from now on) or reject one rule (Manage permission, audited). */
+export async function decidePaperRuleAction(examId: string, id: string, decision: "CONFIRMED" | "REJECTED", note: string): Promise<ImporterResult<null>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof examId !== "string" || !examId || typeof id !== "string" || !id || (decision !== "CONFIRMED" && decision !== "REJECTED")) throw new ImportJobError("Choose the rule and a decision.");
+    await decidePaperRule(examId, actorId, id, decision, typeof note === "string" ? note : null);
     return null;
   });
 }

@@ -1,0 +1,3957 @@
+{
+ "_about": "Truth for scripts/verify-ai-import-paper-formats.ts. officialKey: transcribed column by column from the original key files in the Original Paper Vault (X = dropped, A/B = both accepted). index: printed number, page and opening words read from the original scanned pages. storedReads: the reading order / page / number of the AI extraction stored for that paper on 2026-10-30 and the source question its text really is (audit 2026-10-31) — numbers only, no question text. The paper files themselves are not committed: set AI_IMPORT_PAPER_FIXTURES to a folder holding them under the names in 'file'. sourceMarks: the answer mark printed in each Word source (read with an independent line rule, not the importer's parser); sourceMarkContradictsKey: numbers where that mark differs from the official key (spot-checked on content: e.g. 2013 Paper II Q15 jugular foramen, Q29 claw sign).",
+ "papers": {
+  "cms-2013-p1": {
+   "file": "CMSE_2013_Paper_I_with_Answers.docx",
+   "sha256": "06c523c4fb0c60299af41b2e6b1b514452333bcec9a52ed044da095c49841fa9",
+   "job": "cmvvr0tdv00gq0gkzo6148o5o",
+   "kind": "docx",
+   "paper": "PAPER I",
+   "year": 2013,
+   "officialKey": {
+    "1": "C",
+    "2": "B",
+    "3": "D",
+    "4": "B",
+    "5": "B",
+    "6": "A",
+    "7": "D",
+    "8": "B",
+    "9": "B",
+    "10": "B",
+    "11": "C",
+    "12": "D",
+    "13": "B",
+    "14": "D",
+    "15": "C",
+    "16": "C",
+    "17": "A",
+    "18": "B",
+    "19": "B",
+    "20": "A",
+    "21": "D",
+    "22": "D",
+    "23": "D",
+    "24": "C",
+    "25": "A",
+    "26": "C",
+    "27": "C",
+    "28": "B",
+    "29": "B",
+    "30": "C",
+    "31": "A",
+    "32": "C",
+    "33": "C",
+    "34": "A",
+    "35": "C",
+    "36": "C",
+    "37": "D",
+    "38": "C",
+    "39": "D",
+    "40": "B",
+    "41": "B",
+    "42": "A",
+    "43": "B",
+    "44": "D",
+    "45": "D",
+    "46": "D",
+    "47": "A",
+    "48": "D",
+    "49": "A",
+    "50": "B",
+    "51": "C",
+    "52": "D",
+    "53": "B",
+    "54": "D",
+    "55": "C",
+    "56": "A",
+    "57": "B",
+    "58": "A",
+    "59": "A",
+    "60": "B",
+    "61": "D",
+    "62": "B",
+    "63": "B",
+    "64": "B",
+    "65": "A",
+    "66": "D",
+    "67": "D",
+    "68": "D",
+    "69": "A",
+    "70": "A",
+    "71": "B",
+    "72": "C",
+    "73": "B",
+    "74": "C",
+    "75": "C",
+    "76": "B",
+    "77": "B",
+    "78": "C",
+    "79": "D",
+    "80": "D",
+    "81": "B",
+    "82": "B",
+    "83": "D",
+    "84": "B",
+    "85": "B",
+    "86": "A",
+    "87": "C",
+    "88": "A",
+    "89": "B",
+    "90": "B",
+    "91": "B",
+    "92": "A",
+    "93": "D",
+    "94": "C",
+    "95": "D",
+    "96": "C",
+    "97": "A",
+    "98": "D",
+    "99": "B",
+    "100": "C",
+    "101": "A",
+    "102": "B",
+    "103": "A",
+    "104": "A",
+    "105": "B",
+    "106": "C",
+    "107": "C",
+    "108": "X",
+    "109": "A",
+    "110": "D",
+    "111": "D",
+    "112": "C",
+    "113": "C",
+    "114": "D",
+    "115": "D",
+    "116": "D",
+    "117": "C",
+    "118": "C",
+    "119": "D",
+    "120": "B"
+   },
+   "officialKeySource": "upsc-cms-2013-…-paper-1-answer-key.pdf (sha daf9f567)",
+   "sourceMarks": {
+    "1": "C",
+    "2": "B",
+    "3": "D",
+    "4": "B",
+    "5": "B",
+    "6": "A",
+    "7": "D",
+    "8": "B",
+    "9": "B",
+    "10": "B",
+    "11": "C",
+    "12": "D",
+    "13": "B",
+    "14": "D",
+    "15": "C",
+    "16": "C",
+    "17": "A",
+    "18": "B",
+    "19": "B",
+    "20": "A",
+    "21": "D",
+    "22": "D",
+    "23": "D",
+    "24": "C",
+    "25": "A",
+    "26": "D",
+    "27": "B",
+    "28": "C",
+    "29": "B",
+    "30": "D",
+    "31": "A",
+    "32": "C",
+    "33": "C",
+    "34": "A",
+    "35": "C",
+    "36": "C",
+    "37": "D",
+    "38": "C",
+    "39": "D",
+    "40": "A",
+    "41": "D",
+    "42": "B",
+    "43": "D",
+    "44": "A",
+    "45": "C",
+    "46": "D",
+    "47": "A",
+    "48": "D",
+    "49": "A",
+    "50": "B",
+    "51": "C",
+    "52": "D",
+    "53": "B",
+    "54": "D",
+    "55": "B",
+    "56": "A",
+    "57": "B",
+    "58": "A",
+    "59": "B",
+    "60": "B",
+    "61": "D",
+    "62": "B",
+    "63": "B",
+    "64": "B",
+    "65": "A",
+    "66": "D",
+    "67": "D",
+    "68": "D",
+    "69": "A",
+    "70": "A",
+    "71": "B",
+    "72": "C",
+    "73": "B",
+    "74": "C",
+    "75": "B",
+    "76": "B",
+    "77": "B",
+    "78": "C",
+    "79": "D",
+    "80": "D",
+    "81": "B",
+    "82": "B",
+    "83": "D",
+    "84": "B",
+    "85": "D",
+    "86": "A",
+    "87": "C",
+    "88": "A",
+    "89": "B",
+    "90": "B",
+    "91": "B",
+    "92": "A",
+    "93": "D",
+    "94": "C",
+    "95": "D",
+    "96": "C",
+    "97": "A",
+    "98": "D",
+    "99": "B",
+    "100": "C",
+    "101": "A",
+    "102": "B",
+    "103": "A",
+    "104": "C",
+    "105": "D",
+    "106": "C",
+    "107": "C",
+    "108": null,
+    "109": "A",
+    "110": "D",
+    "111": "D",
+    "112": "C",
+    "113": "C",
+    "114": "D",
+    "115": "D",
+    "116": "D",
+    "117": "C",
+    "118": "C",
+    "119": "D",
+    "120": "B"
+   },
+   "sourceMarkContradictsKey": [
+    26,
+    27,
+    28,
+    30,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    55,
+    59,
+    75,
+    85,
+    104,
+    105
+   ]
+  },
+  "cms-2013-p2": {
+   "file": "CMSE_2013_Paper_II_with_Answers.docx",
+   "sha256": "799832f85127b5bfb43af80881081b11552e90f9d5b23b30cc369d7f2f5660e3",
+   "job": "cmvvr34e900gv0gkz13dtwl5y",
+   "kind": "docx",
+   "paper": "PAPER II",
+   "year": 2013,
+   "officialKey": {
+    "1": "B",
+    "2": "C",
+    "3": "D",
+    "4": "A",
+    "5": "A",
+    "6": "C",
+    "7": "D",
+    "8": "D",
+    "9": "B",
+    "10": "C",
+    "11": "B",
+    "12": "A",
+    "13": "B",
+    "14": "A",
+    "15": "D",
+    "16": "A",
+    "17": "C",
+    "18": "C",
+    "19": "C",
+    "20": "A",
+    "21": "D",
+    "22": "B",
+    "23": "B",
+    "24": "D",
+    "25": "C",
+    "26": "D",
+    "27": "B",
+    "28": "B",
+    "29": "A",
+    "30": "D",
+    "31": "C",
+    "32": "C",
+    "33": "C",
+    "34": "B",
+    "35": "A",
+    "36": "D",
+    "37": "A",
+    "38": "A",
+    "39": "B",
+    "40": "B",
+    "41": "C",
+    "42": "D",
+    "43": "C",
+    "44": "C",
+    "45": "B",
+    "46": "A",
+    "47": "C",
+    "48": "A",
+    "49": "D",
+    "50": "D",
+    "51": "D",
+    "52": "D",
+    "53": "A",
+    "54": "C",
+    "55": "C",
+    "56": "C",
+    "57": "C",
+    "58": "B",
+    "59": "B",
+    "60": "D",
+    "61": "B",
+    "62": "D",
+    "63": "A",
+    "64": "B",
+    "65": "D",
+    "66": "D",
+    "67": "A",
+    "68": "D",
+    "69": "X",
+    "70": "A",
+    "71": "C",
+    "72": "C",
+    "73": "B",
+    "74": "B",
+    "75": "D",
+    "76": "A",
+    "77": "A",
+    "78": "B",
+    "79": "A",
+    "80": "B",
+    "81": "C",
+    "82": "B",
+    "83": "B",
+    "84": "D",
+    "85": "C",
+    "86": "D",
+    "87": "D",
+    "88": "B",
+    "89": "A",
+    "90": "B",
+    "91": "A",
+    "92": "D",
+    "93": "C",
+    "94": "D",
+    "95": "D",
+    "96": "D",
+    "97": "D",
+    "98": "B",
+    "99": "C",
+    "100": "D",
+    "101": "C",
+    "102": "D",
+    "103": "B",
+    "104": "B",
+    "105": "C",
+    "106": "B",
+    "107": "C",
+    "108": "B",
+    "109": "D",
+    "110": "B",
+    "111": "C",
+    "112": "D",
+    "113": "B",
+    "114": "D",
+    "115": "D",
+    "116": "D",
+    "117": "C",
+    "118": "C",
+    "119": "A",
+    "120": "C"
+   },
+   "officialKeySource": "upsc-cms-2013-paper-2-answer-key.pdf (sha b8c6ea39)",
+   "sourceMarks": {
+    "1": "B",
+    "2": "C",
+    "3": "D",
+    "4": "A",
+    "5": "A",
+    "6": "C",
+    "7": "D",
+    "8": "D",
+    "9": "B",
+    "10": "C",
+    "11": "B",
+    "12": "A",
+    "13": "B",
+    "14": "A",
+    "15": "B",
+    "16": "A",
+    "17": "C",
+    "18": "C",
+    "19": "C",
+    "20": "A",
+    "21": "C",
+    "22": "C",
+    "23": "C",
+    "24": "B",
+    "25": "A",
+    "26": "D",
+    "27": "B",
+    "28": "B",
+    "29": "D",
+    "30": "D",
+    "31": "C",
+    "32": "D",
+    "33": "C",
+    "34": "C",
+    "35": "A",
+    "36": "D",
+    "37": "A",
+    "38": "B",
+    "39": "B",
+    "40": "B",
+    "41": "C",
+    "42": "D",
+    "43": "C",
+    "44": "C",
+    "45": "B",
+    "46": "A",
+    "47": "C",
+    "48": "B",
+    "49": "D",
+    "50": "D",
+    "51": "D",
+    "52": "C",
+    "53": "C",
+    "54": "D",
+    "55": "C",
+    "56": "D",
+    "57": "D",
+    "58": "B",
+    "59": "B",
+    "60": "D",
+    "61": "B",
+    "62": "D",
+    "63": "A",
+    "64": "D",
+    "65": "D",
+    "66": "C",
+    "67": "A",
+    "68": "B",
+    "69": null,
+    "70": "A",
+    "71": "C",
+    "72": "D",
+    "73": "B",
+    "74": "B",
+    "75": "D",
+    "76": "C",
+    "77": "D",
+    "78": "B",
+    "79": "A",
+    "80": "D",
+    "81": "C",
+    "82": "D",
+    "83": "A",
+    "84": "D",
+    "85": "C",
+    "86": "D",
+    "87": "C",
+    "88": "C",
+    "89": "D",
+    "90": "D",
+    "91": "A",
+    "92": "D",
+    "93": "C",
+    "94": "D",
+    "95": "D",
+    "96": "D",
+    "97": "B",
+    "98": "D",
+    "99": "C",
+    "100": "D",
+    "101": "C",
+    "102": "A",
+    "103": "D",
+    "104": "B",
+    "105": "D",
+    "106": "B",
+    "107": "D",
+    "108": "B",
+    "109": "D",
+    "110": "B",
+    "111": "C",
+    "112": "D",
+    "113": "C",
+    "114": "D",
+    "115": "A",
+    "116": "B",
+    "117": "C",
+    "118": "C",
+    "119": "A",
+    "120": "C"
+   },
+   "sourceMarkContradictsKey": [
+    15,
+    21,
+    22,
+    23,
+    24,
+    25,
+    29,
+    32,
+    34,
+    38,
+    48,
+    52,
+    53,
+    54,
+    56,
+    57,
+    64,
+    66,
+    68,
+    72,
+    76,
+    77,
+    80,
+    82,
+    83,
+    87,
+    88,
+    89,
+    90,
+    97,
+    98,
+    102,
+    103,
+    105,
+    107,
+    113,
+    115,
+    116
+   ]
+  },
+  "cms-2025-p1": {
+   "file": "cms 2025 1.docx",
+   "sha256": "af0fca5e5bb63f65de0fe418cbdf9dbf76055779bb1ab49974880443221dd22d",
+   "job": "cmvoliwef002copkz8nfb9nm6",
+   "kind": "docx",
+   "paper": "PAPER I",
+   "year": 2025,
+   "sourceMarks": {
+    "1": "C",
+    "2": "C",
+    "3": "D",
+    "4": "B",
+    "5": "C",
+    "6": "B",
+    "7": "C",
+    "8": "A",
+    "9": "B",
+    "10": "B",
+    "11": "B",
+    "12": "B",
+    "13": "B",
+    "14": "B",
+    "15": "D",
+    "16": "A",
+    "17": "C",
+    "18": "D",
+    "19": "A",
+    "20": "D",
+    "21": "C",
+    "22": "C",
+    "23": "B",
+    "24": "D",
+    "25": "D",
+    "26": "B",
+    "27": "D",
+    "28": "A",
+    "29": "C",
+    "30": "C",
+    "31": "D",
+    "32": "A",
+    "33": "B",
+    "34": "A",
+    "35": "D",
+    "36": "D",
+    "37": "D",
+    "38": "A",
+    "39": "D",
+    "40": "D",
+    "41": "C",
+    "42": "C",
+    "43": "B",
+    "44": "D",
+    "45": "C",
+    "46": "C",
+    "47": "B",
+    "48": "B",
+    "49": "B",
+    "50": "A",
+    "51": "A",
+    "52": "B",
+    "53": "D",
+    "54": "C",
+    "55": "B",
+    "56": "B",
+    "57": "A",
+    "58": "A",
+    "59": "D",
+    "60": "C",
+    "61": "C",
+    "62": "B",
+    "63": "A",
+    "64": "D",
+    "65": "A",
+    "66": "D",
+    "67": "C",
+    "68": "D",
+    "69": "A",
+    "70": "B",
+    "71": "B",
+    "72": "A",
+    "73": "B",
+    "74": "B",
+    "75": "A",
+    "76": "B",
+    "77": "B",
+    "78": "C",
+    "79": "C",
+    "80": "B",
+    "81": "D",
+    "82": "A",
+    "83": "C",
+    "84": "A",
+    "85": "A",
+    "86": "A",
+    "87": "B",
+    "88": "C",
+    "89": "B",
+    "90": "A",
+    "91": "C",
+    "92": "B",
+    "93": "B",
+    "94": "B",
+    "95": "D",
+    "96": "C",
+    "97": "B",
+    "98": "C",
+    "99": "D",
+    "100": "B",
+    "101": null,
+    "102": "B",
+    "103": "B",
+    "104": "C",
+    "105": "A",
+    "106": "B",
+    "107": "D",
+    "108": "B",
+    "109": "D",
+    "110": "D",
+    "111": "C",
+    "112": "C",
+    "113": "B",
+    "114": "D",
+    "115": "D",
+    "116": "B",
+    "117": "A",
+    "118": "C",
+    "119": "B",
+    "120": "D"
+   }
+  },
+  "cms-2025-p2": {
+   "file": "cms_2025_2_.docx",
+   "sha256": "d4891feb3e544dedaf0f2407eef8bf7625e5e7fe5732e780fdedb97576000f52",
+   "job": "cmvq10ofi02a1tvkz6drvwa1m",
+   "kind": "docx",
+   "paper": "PAPER II",
+   "year": 2025,
+   "sourceMarks": {
+    "1": "B",
+    "2": "B",
+    "3": "B",
+    "4": "C",
+    "5": "B",
+    "6": "A",
+    "7": "C",
+    "8": "B",
+    "9": "D",
+    "10": "B",
+    "11": "C",
+    "12": "B",
+    "13": "C",
+    "14": "A",
+    "15": "C",
+    "16": "D",
+    "17": "B",
+    "18": "C",
+    "19": "C",
+    "20": "B",
+    "21": "A",
+    "22": "D",
+    "23": "A",
+    "24": "A",
+    "25": "A",
+    "26": "C",
+    "27": "B",
+    "28": "C",
+    "29": "A",
+    "30": "D",
+    "31": "A",
+    "32": "C",
+    "33": "A",
+    "34": "C",
+    "35": "D",
+    "36": "C",
+    "37": "D",
+    "38": "A",
+    "39": "C",
+    "40": "A",
+    "41": "A",
+    "42": "C",
+    "43": "B",
+    "44": "A",
+    "45": "A",
+    "46": "A",
+    "47": "A",
+    "48": "D",
+    "49": "B",
+    "50": "C",
+    "51": "A",
+    "52": "A",
+    "53": "B",
+    "54": "D",
+    "55": "D",
+    "56": "A",
+    "57": "B",
+    "58": "A",
+    "59": "A",
+    "60": "D",
+    "61": "C",
+    "62": "D",
+    "63": "D",
+    "64": "A",
+    "65": "C",
+    "66": "A",
+    "67": "A",
+    "68": "D",
+    "69": "D",
+    "70": "C",
+    "71": "A",
+    "72": "C",
+    "73": "A",
+    "74": "A",
+    "75": "D",
+    "76": "A",
+    "77": "A",
+    "78": "D",
+    "79": "A",
+    "80": "A",
+    "81": "A",
+    "82": "C",
+    "83": "C",
+    "84": "C",
+    "85": "B",
+    "86": "B",
+    "87": "C",
+    "88": "C",
+    "89": "C",
+    "90": "B",
+    "91": "B",
+    "92": "A",
+    "93": "A",
+    "94": "D",
+    "95": "C",
+    "96": "C",
+    "97": "C",
+    "98": "C",
+    "99": "C",
+    "100": "D",
+    "101": "B",
+    "102": "D",
+    "103": "B",
+    "104": "B",
+    "105": "C",
+    "106": "C",
+    "107": "B",
+    "108": "B",
+    "109": "C",
+    "110": "A",
+    "111": "C",
+    "112": "A",
+    "113": "A",
+    "114": "C",
+    "115": "B",
+    "116": "B",
+    "117": "D",
+    "118": "C",
+    "119": "B",
+    "120": "D"
+   }
+  },
+  "cms-2024-p1": {
+   "file": "CMS_GS_paper1.pdf",
+   "sha256": "bf4d2c14de8d3ec34a0dfa6a51d803981628bc946220cb1f6c6cbce6192196c2",
+   "job": "cmvv2rcnr00un0vkzqb7qz9vt",
+   "kind": "pdf-scanned",
+   "paper": "PAPER I",
+   "year": 2024,
+   "officialKey": {
+    "1": "A",
+    "2": "A",
+    "3": "D",
+    "4": "C",
+    "5": "X",
+    "6": "C",
+    "7": "D",
+    "8": "A",
+    "9": "D",
+    "10": "B",
+    "11": "D",
+    "12": "A",
+    "13": "D",
+    "14": "B",
+    "15": "B",
+    "16": "A",
+    "17": "B",
+    "18": "D",
+    "19": "B",
+    "20": "A",
+    "21": "D",
+    "22": "D",
+    "23": "B",
+    "24": "C",
+    "25": "A",
+    "26": "A",
+    "27": "C",
+    "28": "B",
+    "29": "A",
+    "30": "A",
+    "31": "C",
+    "32": "D",
+    "33": "A",
+    "34": "A",
+    "35": "B",
+    "36": "C",
+    "37": "A",
+    "38": "D",
+    "39": "C",
+    "40": "B",
+    "41": "A",
+    "42": "D",
+    "43": "A",
+    "44": "A",
+    "45": "A",
+    "46": "D",
+    "47": "D",
+    "48": "A/B",
+    "49": "A",
+    "50": "A",
+    "51": "C",
+    "52": "A",
+    "53": "D",
+    "54": "B",
+    "55": "A",
+    "56": "D",
+    "57": "C",
+    "58": "B",
+    "59": "D",
+    "60": "B",
+    "61": "A",
+    "62": "D",
+    "63": "B",
+    "64": "C",
+    "65": "D",
+    "66": "C",
+    "67": "B",
+    "68": "C",
+    "69": "D",
+    "70": "D",
+    "71": "B",
+    "72": "C",
+    "73": "D",
+    "74": "C",
+    "75": "D",
+    "76": "B",
+    "77": "C",
+    "78": "C",
+    "79": "C",
+    "80": "B/D",
+    "81": "A",
+    "82": "C",
+    "83": "D",
+    "84": "B",
+    "85": "C",
+    "86": "A",
+    "87": "B",
+    "88": "A",
+    "89": "D",
+    "90": "D",
+    "91": "D",
+    "92": "B",
+    "93": "C",
+    "94": "X",
+    "95": "C",
+    "96": "D",
+    "97": "B",
+    "98": "B",
+    "99": "C",
+    "100": "C",
+    "101": "B",
+    "102": "B",
+    "103": "B",
+    "104": "A",
+    "105": "B",
+    "106": "B",
+    "107": "C",
+    "108": "C",
+    "109": "D",
+    "110": "A",
+    "111": "B",
+    "112": "B",
+    "113": "B",
+    "114": "B",
+    "115": "B",
+    "116": "D",
+    "117": "B",
+    "118": "B",
+    "119": "D",
+    "120": "A"
+   },
+   "officialKeySource": "Screenshot_20261027_074359_Chrome.jpg (sha 4258a001)",
+   "index": {
+    "1": {
+     "page": 2,
+     "opening": "The height of the Jugular Venous Pulse is determined by"
+    },
+    "2": {
+     "page": 2,
+     "opening": "The SA node is situated at the junction of"
+    },
+    "3": {
+     "page": 2,
+     "opening": "High output cardiac failure is caused by which of the following diseases"
+    },
+    "4": {
+     "page": 2,
+     "opening": "Reverse splitting of second heart sound is most commonly seen in"
+    },
+    "5": {
+     "page": 2,
+     "opening": "Which of the following are major criteria under the Jones Criteria for Acute Rheumatic Fever"
+    },
+    "6": {
+     "page": 2,
+     "opening": "A 70-year-old man with dyspnoea on exertion has been found to have a single second heart sound"
+    },
+    "7": {
+     "page": 3,
+     "opening": "Which one of the following is the appropriate scoring system used to assess the risk of stroke"
+    },
+    "8": {
+     "page": 3,
+     "opening": "Consider the following statements with regard to pulmonary embolism"
+    },
+    "9": {
+     "page": 3,
+     "opening": "Consider the following criteria Pleural fluid protein"
+    },
+    "10": {
+     "page": 3,
+     "opening": "Which of the following statements are correct with regard to clubbing"
+    },
+    "11": {
+     "page": 4,
+     "opening": "Consider the following statements regarding Lofgren syndrome"
+    },
+    "12": {
+     "page": 4,
+     "opening": "Which of the following investigations may be used for the diagnosis of pulmonary tuberculosis"
+    },
+    "13": {
+     "page": 4,
+     "opening": "The distance walked in 6 minutes is an indirect measure of which of the following variables of the BODE Index"
+    },
+    "14": {
+     "page": 4,
+     "opening": "A 65-year-old female a stone-cutter by occupation had multiple well circumscribed nodular opacities"
+    },
+    "15": {
+     "page": 4,
+     "opening": "Which of the following are complications of acute pancreatitis"
+    },
+    "16": {
+     "page": 5,
+     "opening": "The Gold Standard for diagnosis of Celiac disease is"
+    },
+    "17": {
+     "page": 5,
+     "opening": "With regard to Helicobacter pylori eradication in peptic ulcer disease consider the following statements"
+    },
+    "18": {
+     "page": 5,
+     "opening": "Which of the following are precipitating factors for hepatic encephalopathy"
+    },
+    "19": {
+     "page": 5,
+     "opening": "Which one of the following statements is correct regarding Upper Gastro Intestinal Bleeding"
+    },
+    "20": {
+     "page": 5,
+     "opening": "Crigler-Najjar syndrome Type-I is inherited as an"
+    },
+    "21": {
+     "page": 5,
+     "opening": "Whipple's disease is characterized by the infiltration of small intestinal mucosa by foamy macrophages"
+    },
+    "22": {
+     "page": 6,
+     "opening": "Poorly absorbed antibiotics are often used as adjunctive therapies in patients with hepatic encephalopathy"
+    },
+    "23": {
+     "page": 6,
+     "opening": "When the serum ascites to albumin gradient SAAG is less than 1.1 g/dL"
+    },
+    "24": {
+     "page": 6,
+     "opening": "A sigmoid configuration along with tapering beak-like deformity at the lower esophageal sphincter"
+    },
+    "25": {
+     "page": 6,
+     "opening": "Consider the following findings in urine examination of suspected haematuria"
+    },
+    "26": {
+     "page": 6,
+     "opening": "Which of the following statements are correct regarding anti-glomerular basement membrane disease"
+    },
+    "27": {
+     "page": 7,
+     "opening": "Which of the following are poor prognostic indicators in glomerular disease"
+    },
+    "28": {
+     "page": 7,
+     "opening": "Which of the following are indications for a renal biopsy"
+    },
+    "29": {
+     "page": 7,
+     "opening": "Which of the following is the correct range of Glomerular Filtration Rate GFR for Stage 2 chronic kidney disease"
+    },
+    "30": {
+     "page": 7,
+     "opening": "A diagnosis of polycystic ovary syndrome requires the presence of which of the following clinical features"
+    },
+    "31": {
+     "page": 7,
+     "opening": "A young male presented with recent onset urethral discharge and dysuria"
+    },
+    "32": {
+     "page": 8,
+     "opening": "A 40-year-old female with nephritic range proteinuria is found to have low serum complement levels"
+    },
+    "33": {
+     "page": 8,
+     "opening": "Consider the following clinical features Hypomimia Dysphonia Festination gait"
+    },
+    "34": {
+     "page": 8,
+     "opening": "Circuits between the basal ganglia and the motor cortex constitute the extra pyramidal system"
+    },
+    "35": {
+     "page": 8,
+     "opening": "Consider the following statements regarding Transient Global Amnesia"
+    },
+    "36": {
+     "page": 8,
+     "opening": "Contralateral homonymous lower quadrantanopia is the type of visual loss"
+    },
+    "37": {
+     "page": 9,
+     "opening": "Which of the following correctly describes the primary position of the right eye in right 3rd cranial nerve palsy"
+    },
+    "38": {
+     "page": 9,
+     "opening": "Consider the following statements regarding cluster headache"
+    },
+    "39": {
+     "page": 9,
+     "opening": "A 22-year-old lady presented with complaint of chronic daily headache"
+    },
+    "40": {
+     "page": 9,
+     "opening": "Consider the following with regard to trigger factors for seizures"
+    },
+    "41": {
+     "page": 9,
+     "opening": "A 75-year-old man presented with temporal headache jaw pain exacerbated by chewing and talking"
+    },
+    "42": {
+     "page": 10,
+     "opening": "The Rai staging system and Binet staging system are the two widely used staging systems"
+    },
+    "43": {
+     "page": 10,
+     "opening": "Patients suffering from which of the following conditions commonly present for several years in the dermatology OPD"
+    },
+    "44": {
+     "page": 10,
+     "opening": "Which of the following is an oral anticoagulant"
+    },
+    "45": {
+     "page": 10,
+     "opening": "A 39-year-old female presents with severe autoimmune hemolytic anemia"
+    },
+    "46": {
+     "page": 10,
+     "opening": "Which one of the following is a cause of Secondary Hyperaldosteronism"
+    },
+    "47": {
+     "page": 10,
+     "opening": "Which one of the following diseases is characterized by destructive lymphoid infiltration of the thyroid gland"
+    },
+    "48": {
+     "page": 10,
+     "opening": "A 52-year-old male diabetic presents with recurrent episodes of hypoglycemia"
+    },
+    "49": {
+     "page": 11,
+     "opening": "Which of the following are correct regarding Cortisol"
+    },
+    "50": {
+     "page": 11,
+     "opening": "A patient presents with history of bones stones and abdominal groans"
+    },
+    "51": {
+     "page": 11,
+     "opening": "With regards to treatment of thyrotoxicosis of Graves' disease consider the following statements"
+    },
+    "52": {
+     "page": 11,
+     "opening": "With regard to management of hypothyroidism consider the following statements"
+    },
+    "53": {
+     "page": 11,
+     "opening": "Which of the following glucose lowering agent can be given as an injectable drug"
+    },
+    "54": {
+     "page": 12,
+     "opening": "Which of the following findings are seen in Diabetic Retinopathy on fundus examination"
+    },
+    "55": {
+     "page": 12,
+     "opening": "Which one of the following disorders are caused by enzymatic defects in the heme biosynthesis pathway"
+    },
+    "56": {
+     "page": 12,
+     "opening": "Which of the following is an inhibitor of the intestinal mucosal transporter NPC1L1"
+    },
+    "57": {
+     "page": 12,
+     "opening": "Which one of the following is the most appropriate initial treatment for management of severe hypercalcemia"
+    },
+    "58": {
+     "page": 12,
+     "opening": "Which of the following are used in calculating the serum osmolality"
+    },
+    "59": {
+     "page": 12,
+     "opening": "A slapped cheek rash is characteristically seen in which of the following infections"
+    },
+    "60": {
+     "page": 12,
+     "opening": "Which of the following pharmacological agents can be used for the treatment of visceral Leishmaniasis"
+    },
+    "61": {
+     "page": 13,
+     "opening": "The Sabin-Feldman dye test is an indirect fluorescent antibody test"
+    },
+    "62": {
+     "page": 13,
+     "opening": "Cat-scratch disease is caused by infection of which of the following organisms"
+    },
+    "63": {
+     "page": 13,
+     "opening": "Which among the following is the first intermediate host for the parasitic fluke Clonorchis sinensis"
+    },
+    "64": {
+     "page": 13,
+     "opening": "A calabar swelling which is a short-lived inflammatory oedematous swelling"
+    },
+    "65": {
+     "page": 13,
+     "opening": "An ophthalmologist may observe Snowflake deposits on the edges of the cornea"
+    },
+    "66": {
+     "page": 13,
+     "opening": "Which among the following are hepatobiliary flukes trematodes"
+    },
+    "67": {
+     "page": 13,
+     "opening": "Which among the following parasitic helminths is a nematode and has zoonotic transmission"
+    },
+    "68": {
+     "page": 14,
+     "opening": "Which of the following are correct with regard to BCG vaccination"
+    },
+    "69": {
+     "page": 14,
+     "opening": "Which of the following immunizations are recommended for persons infected with HIV"
+    },
+    "70": {
+     "page": 14,
+     "opening": "Consider the following statements with regard to Vitamin D deficiency"
+    },
+    "71": {
+     "page": 14,
+     "opening": "Which one of the following statements is characteristic of Purpura fulminans"
+    },
+    "72": {
+     "page": 14,
+     "opening": "An elderly male presents with papular lesions on his face"
+    },
+    "73": {
+     "page": 15,
+     "opening": "Allergic contact dermatitis is a manifestation of"
+    },
+    "74": {
+     "page": 15,
+     "opening": "Which one of the following is an example of non-scarring alopecia"
+    },
+    "75": {
+     "page": 15,
+     "opening": "Which of the following statements are correct in respect of scabies"
+    },
+    "76": {
+     "page": 15,
+     "opening": "Heberden's nodes are present mainly in"
+    },
+    "77": {
+     "page": 15,
+     "opening": "A patient developed difficulty in standing from a seated position walking up steps"
+    },
+    "78": {
+     "page": 15,
+     "opening": "Hemorrhagic cystitis is a serious side effect of"
+    },
+    "79": {
+     "page": 16,
+     "opening": "Schober's test is used in the assessment of which one of the following clinical conditions"
+    },
+    "80": {
+     "page": 16,
+     "opening": "Urate crystals are described as having the following shape"
+    },
+    "81": {
+     "page": 16,
+     "opening": "Anti-citrullinated peptide antibody is useful in diagnosis of"
+    },
+    "82": {
+     "page": 16,
+     "opening": "Which one of the following antibodies is commonly associated with Drug-induced Lupus"
+    },
+    "83": {
+     "page": 16,
+     "opening": "Long term treatment of bipolar disorder with lithium carbonate can cause which of the following adverse effects"
+    },
+    "84": {
+     "page": 16,
+     "opening": "Which of the following antidepressant drugs act by inhibition of monoamine oxidase"
+    },
+    "85": {
+     "page": 17,
+     "opening": "Which of the following are selective serotonin re-uptake inhibitors"
+    },
+    "86": {
+     "page": 17,
+     "opening": "Which of the following are First Rank Symptoms of acute schizophrenia"
+    },
+    "87": {
+     "page": 17,
+     "opening": "Consider the following statements regarding Wernicke-Korsakoff syndrome"
+    },
+    "88": {
+     "page": 17,
+     "opening": "Which of the following are inherited causes of dementia"
+    },
+    "89": {
+     "page": 18,
+     "opening": "Which of the following are classified as mood-stabilising psychotropic drugs"
+    },
+    "90": {
+     "page": 18,
+     "opening": "Which of the following are correct regarding acetaminophen"
+    },
+    "91": {
+     "page": 18,
+     "opening": "Which of the following are causes of acquired systemic amyloidosis"
+    },
+    "92": {
+     "page": 18,
+     "opening": "Which of the following statements are correct with regard to glucose homeostasis"
+    },
+    "93": {
+     "page": 19,
+     "opening": "Consider the following pancreatic hormones"
+    },
+    "94": {
+     "page": 19,
+     "opening": "Consider the following statements regarding Acute Respiratory Distress Syndrome"
+    },
+    "95": {
+     "page": 19,
+     "opening": "Consider the following statements regarding organophosphate-induced delayed polyneuropathy"
+    },
+    "96": {
+     "page": 19,
+     "opening": "Consider the following statements regarding paracetamol toxicity"
+    },
+    "97": {
+     "page": 20,
+     "opening": "Which one of the following statements is correct regarding physiology of breastfeeding"
+    },
+    "98": {
+     "page": 20,
+     "opening": "Which one of the following fine motor milestones will appear ahead of others"
+    },
+    "99": {
+     "page": 20,
+     "opening": "In case of hypertensive emergency in a child blood pressure should be reduced by up to"
+    },
+    "100": {
+     "page": 20,
+     "opening": "At what cut-off respiratory rate will you consider fast breathing in a 2-year-old child"
+    },
+    "101": {
+     "page": 20,
+     "opening": "Which of the following are used in the management of hyperkalemia"
+    },
+    "102": {
+     "page": 20,
+     "opening": "Nebulized salbutamol is used in the management of which of the following electrolyte abnormality"
+    },
+    "103": {
+     "page": 21,
+     "opening": "Which of the following are correct regarding activities under the Weekly Iron and Folic Acid Supplementation"
+    },
+    "104": {
+     "page": 21,
+     "opening": "Under the Integrated Management of Neonatal and Childhood Illness caretakers are advised to return immediately"
+    },
+    "105": {
+     "page": 21,
+     "opening": "Which of the following statements are correct regarding the fluid management of pediatric inpatients with burn injuries"
+    },
+    "106": {
+     "page": 21,
+     "opening": "Whole Bowel Irrigation WBI as a method of gastrointestinal decontamination is useful for poisoning with"
+    },
+    "107": {
+     "page": 22,
+     "opening": "To prevent recurrence expectant mothers with a previous fetus with neural tube defect should receive folic acid"
+    },
+    "108": {
+     "page": 22,
+     "opening": "Consider the following statements regarding non-invasive prenatal screening"
+    },
+    "109": {
+     "page": 22,
+     "opening": "The risk of Down syndrome is 100% in the offspring if"
+    },
+    "110": {
+     "page": 22,
+     "opening": "Which of the following are examples of genomic imprinting"
+    },
+    "111": {
+     "page": 22,
+     "opening": "Poisoning with which of the following drugs causes hypothermia"
+    },
+    "112": {
+     "page": 23,
+     "opening": "Consider the following pairs Urine colour Possible causative agent"
+    },
+    "113": {
+     "page": 23,
+     "opening": "Consider the following agents and the cardiac effects in case of overdose or poisoning"
+    },
+    "114": {
+     "page": 23,
+     "opening": "If a baby does not begin breathing in response to tactile stimulation"
+    },
+    "115": {
+     "page": 23,
+     "opening": "Consider the following conditions Response to tactile stimulation Heart Rate Blood Pressure Tone"
+    },
+    "116": {
+     "page": 23,
+     "opening": "Consider the following statements about human breast milk"
+    },
+    "117": {
+     "page": 24,
+     "opening": "Which of the following are signs of good attachment during breastfeeding"
+    },
+    "118": {
+     "page": 24,
+     "opening": "A 6-year-old boy has recently started telling his full name"
+    },
+    "119": {
+     "page": 24,
+     "opening": "Consider the following statements Hepatitis B vaccine has reduced efficacy"
+    },
+    "120": {
+     "page": 24,
+     "opening": "Rotavirus vaccination is avoided during an episode of diarrhoea because"
+    }
+   },
+   "storedReads": [
+    {
+     "page": 1,
+     "number": 1,
+     "options": 1,
+     "method": "AI_VISION",
+     "sourceNumber": null,
+     "printedNumber": null
+    },
+    {
+     "page": 1,
+     "number": 2,
+     "options": 1,
+     "method": "AI_VISION",
+     "sourceNumber": null,
+     "printedNumber": null
+    },
+    {
+     "page": 1,
+     "number": 3,
+     "options": 1,
+     "method": "AI_VISION",
+     "sourceNumber": null,
+     "printedNumber": null
+    },
+    {
+     "page": 1,
+     "number": 4,
+     "options": 1,
+     "method": "AI_VISION",
+     "sourceNumber": null,
+     "printedNumber": null
+    },
+    {
+     "page": 2,
+     "number": null,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 1,
+     "printedNumber": 1,
+     "note": "real question kept without a number: its number was taken by a cover-page instruction"
+    },
+    {
+     "page": 2,
+     "number": null,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 2,
+     "printedNumber": 2,
+     "note": "real question kept without a number: its number was taken by a cover-page instruction"
+    },
+    {
+     "page": 2,
+     "number": null,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 3,
+     "printedNumber": 3,
+     "note": "real question kept without a number: its number was taken by a cover-page instruction"
+    },
+    {
+     "page": 2,
+     "number": null,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 4,
+     "printedNumber": 4,
+     "note": "real question kept without a number: its number was taken by a cover-page instruction"
+    },
+    {
+     "page": 2,
+     "number": 5,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 5,
+     "printedNumber": null
+    },
+    {
+     "page": 2,
+     "number": 6,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 6,
+     "printedNumber": null
+    },
+    {
+     "page": 3,
+     "number": 9,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 7,
+     "printedNumber": null
+    },
+    {
+     "page": 3,
+     "number": 10,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 9,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 11,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 11,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 12,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 12,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 13,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 13,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 14,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 14,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 15,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 15,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 16,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 16,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 17,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 17,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 18,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 18,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 19,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 19,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 20,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 20,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 21,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 21,
+     "printedNumber": null
+    },
+    {
+     "page": 6,
+     "number": 22,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 22,
+     "printedNumber": null
+    },
+    {
+     "page": 6,
+     "number": 23,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 23,
+     "printedNumber": null
+    },
+    {
+     "page": 6,
+     "number": 24,
+     "options": 3,
+     "method": "AI_VISION",
+     "sourceNumber": 24,
+     "printedNumber": null
+    },
+    {
+     "page": 6,
+     "number": 25,
+     "options": 0,
+     "method": "AI_VISION",
+     "sourceNumber": 25,
+     "printedNumber": null
+    },
+    {
+     "page": 6,
+     "number": 26,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 26,
+     "printedNumber": null
+    },
+    {
+     "page": 7,
+     "number": 29,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 29,
+     "printedNumber": null
+    },
+    {
+     "page": 7,
+     "number": 30,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 30,
+     "printedNumber": null
+    },
+    {
+     "page": 7,
+     "number": 31,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 31,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 32,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 32,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 33,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 33,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 34,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 34,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 35,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 35,
+     "note": "text altered by the reading (verified on the page image)",
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 36,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 36,
+     "printedNumber": null
+    },
+    {
+     "page": 9,
+     "number": 39,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 39,
+     "printedNumber": null
+    },
+    {
+     "page": 9,
+     "number": 40,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 40,
+     "printedNumber": null
+    },
+    {
+     "page": 9,
+     "number": 41,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 41,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 42,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 42,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 43,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 43,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 44,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 44,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 45,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 45,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 46,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 46,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 47,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 47,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 48,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 48,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 49,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 49,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 51,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 51,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 52,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 52,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 50,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 50,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 53,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 53,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 54,
+     "options": 3,
+     "method": "AI_VISION",
+     "sourceNumber": 54,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 57,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 57,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 58,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 58,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 55,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 55,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 59,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 59,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 60,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 60,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 61,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 61,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 62,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 62,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 63,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 63,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 64,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 64,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 65,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 65,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 67,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 67,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 68,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 68,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 69,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 69,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 70,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 70,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 71,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 71,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 72,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 72,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 73,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 73,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 74,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 74,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 75,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 75,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 76,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 76,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 77,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 77,
+     "note": "text altered by the reading (verified on the page image)",
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 78,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 78,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 79,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 79,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 80,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 80,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 81,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 81,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 82,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 82,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 83,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 83,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 84,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 84,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 85,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 85,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 87,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 87,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 86,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 86,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 88,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 88,
+     "printedNumber": null
+    },
+    {
+     "page": 18,
+     "number": 89,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 89,
+     "printedNumber": null
+    },
+    {
+     "page": 18,
+     "number": 91,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 91,
+     "printedNumber": null
+    },
+    {
+     "page": 18,
+     "number": 90,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 90,
+     "printedNumber": null
+    },
+    {
+     "page": 18,
+     "number": 92,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 92,
+     "printedNumber": null
+    },
+    {
+     "page": 19,
+     "number": 93,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 93,
+     "printedNumber": null
+    },
+    {
+     "page": 19,
+     "number": 95,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 95,
+     "printedNumber": null
+    },
+    {
+     "page": 19,
+     "number": 94,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 94,
+     "printedNumber": null
+    },
+    {
+     "page": 19,
+     "number": 96,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 96,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 97,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 97,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 98,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 98,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 99,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 99,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 100,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 100,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 101,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 101,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 102,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 102,
+     "printedNumber": null
+    },
+    {
+     "page": 21,
+     "number": 103,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 105,
+     "printedNumber": null
+    },
+    {
+     "page": 21,
+     "number": 104,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 104,
+     "printedNumber": null
+    },
+    {
+     "page": 21,
+     "number": 106,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 106,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 107,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 107,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 109,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 109,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 108,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 108,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 110,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 110,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 111,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 111,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 112,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 112,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 115,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 115,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 113,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 113,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 114,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 114,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 116,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 116,
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 117,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 117,
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 118,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 118,
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 119,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 119,
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 120,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 120,
+     "printedNumber": null
+    },
+    {
+     "page": 28,
+     "number": null,
+     "options": 0,
+     "method": "AI_VISION",
+     "sourceNumber": null,
+     "printedNumber": null
+    }
+   ]
+  },
+  "cms-2024-p2": {
+   "file": "UPSc_CMS_Paper2.pdf",
+   "sha256": "415ee46dca4a6008b310d7a03e380d1541593b044cc0067b421880ebf339fcf7",
+   "job": "cmvv531fr00fp0gkz825m0wrb",
+   "kind": "pdf-scanned",
+   "paper": "PAPER II",
+   "year": 2024,
+   "officialKey": {
+    "1": "B",
+    "2": "C",
+    "3": "B",
+    "4": "C",
+    "5": "D",
+    "6": "C",
+    "7": "C",
+    "8": "C",
+    "9": "B",
+    "10": "A",
+    "11": "C",
+    "12": "B",
+    "13": "C",
+    "14": "C",
+    "15": "B",
+    "16": "C",
+    "17": "B",
+    "18": "A",
+    "19": "A",
+    "20": "C",
+    "21": "C",
+    "22": "B",
+    "23": "A",
+    "24": "A",
+    "25": "D",
+    "26": "C",
+    "27": "B",
+    "28": "A",
+    "29": "B",
+    "30": "C",
+    "31": "D",
+    "32": "C",
+    "33": "C",
+    "34": "B",
+    "35": "C",
+    "36": "D",
+    "37": "B",
+    "38": "C",
+    "39": "D",
+    "40": "C",
+    "41": "A",
+    "42": "D",
+    "43": "B",
+    "44": "D",
+    "45": "A",
+    "46": "C",
+    "47": "A",
+    "48": "B",
+    "49": "C",
+    "50": "D",
+    "51": "A",
+    "52": "B",
+    "53": "C",
+    "54": "C",
+    "55": "B",
+    "56": "A",
+    "57": "B",
+    "58": "C",
+    "59": "B",
+    "60": "C",
+    "61": "D",
+    "62": "C",
+    "63": "B",
+    "64": "A",
+    "65": "D",
+    "66": "B",
+    "67": "D",
+    "68": "A",
+    "69": "D",
+    "70": "B",
+    "71": "B",
+    "72": "D",
+    "73": "D",
+    "74": "C",
+    "75": "C",
+    "76": "B",
+    "77": "C",
+    "78": "C",
+    "79": "B",
+    "80": "D",
+    "81": "B",
+    "82": "B",
+    "83": "D",
+    "84": "D",
+    "85": "C",
+    "86": "C",
+    "87": "D",
+    "88": "A",
+    "89": "D",
+    "90": "A",
+    "91": "D",
+    "92": "B",
+    "93": "C",
+    "94": "B",
+    "95": "C",
+    "96": "C",
+    "97": "D",
+    "98": "C",
+    "99": "D",
+    "100": "A",
+    "101": "D",
+    "102": "D",
+    "103": "C",
+    "104": "B",
+    "105": "A",
+    "106": "A",
+    "107": "A",
+    "108": "C",
+    "109": "C",
+    "110": "A",
+    "111": "D",
+    "112": "B",
+    "113": "B",
+    "114": "B",
+    "115": "A",
+    "116": "A",
+    "117": "C",
+    "118": "C",
+    "119": "B",
+    "120": "C"
+   },
+   "officialKeySource": "Screenshot_20261027_074429_Chrome.jpg (sha b82dfa8e)",
+   "index": {
+    "1": {
+     "page": 2,
+     "opening": "Which of the following are risk factors for wound infection"
+    },
+    "2": {
+     "page": 2,
+     "opening": "Which types of cancer are associated with exposure to ionizing radiation"
+    },
+    "3": {
+     "page": 2,
+     "opening": "Which of the following are correct regarding Li-Fraumeni syndrome"
+    },
+    "4": {
+     "page": 2,
+     "opening": "A 48-year-old smoker presents to the OPD with complaints of cramping pain in both the calves"
+    },
+    "5": {
+     "page": 3,
+     "opening": "A midline neck swelling just below the hyoid bone and managed by Sistrunk's operation"
+    },
+    "6": {
+     "page": 3,
+     "opening": "A 40-year-old smoker presents with soreness of tongue since last 2 months"
+    },
+    "7": {
+     "page": 3,
+     "opening": "Consider the following causes of visual loss"
+    },
+    "8": {
+     "page": 3,
+     "opening": "A 60-year-old lady presents with a recent onset increase in a long standing swelling on the front of the neck"
+    },
+    "9": {
+     "page": 3,
+     "opening": "Which of the following chromosomal abnormalities are associated with brain tumours"
+    },
+    "10": {
+     "page": 3,
+     "opening": "Which one of the following is correct regarding witch's milk"
+    },
+    "11": {
+     "page": 4,
+     "opening": "Which of the following statements are correct regarding Barrett's oesophagus"
+    },
+    "12": {
+     "page": 4,
+     "opening": "Which among the following are complications of liver trauma"
+    },
+    "13": {
+     "page": 4,
+     "opening": "Which of the following are local complications of acute pancreatitis"
+    },
+    "14": {
+     "page": 4,
+     "opening": "Which of the following are risk factors for the development of pancreatic cancer"
+    },
+    "15": {
+     "page": 4,
+     "opening": "Which of the following are metabolic causes of splenic enlargement"
+    },
+    "16": {
+     "page": 5,
+     "opening": "Which one of the following statements is correct about mesenteric cysts"
+    },
+    "17": {
+     "page": 5,
+     "opening": "Which of the following are features of umbilical hernia in adults"
+    },
+    "18": {
+     "page": 5,
+     "opening": "What is the most common cause of perforation of the oesophagus"
+    },
+    "19": {
+     "page": 5,
+     "opening": "Which of the following are stages of damage control surgery"
+    },
+    "20": {
+     "page": 5,
+     "opening": "Which of the following statements are correct regarding renal cell carcinoma"
+    },
+    "21": {
+     "page": 6,
+     "opening": "Which of the following are features of autosomal dominant polycystic kidney disease"
+    },
+    "22": {
+     "page": 6,
+     "opening": "Extracorporeal Shock Wave Lithotripsy ESWL is most commonly used for the treatment of"
+    },
+    "23": {
+     "page": 6,
+     "opening": "Consider the following clinical features Raised ICP Seizures Focal deficit Headache"
+    },
+    "24": {
+     "page": 6,
+     "opening": "The most common type of brain tumours associated with neurofibromatosis type 1"
+    },
+    "25": {
+     "page": 6,
+     "opening": "Which of the following are correct for herniation via foramen of Morgagni"
+    },
+    "26": {
+     "page": 7,
+     "opening": "A 40-year-old lady complains of progressive deformities of her hands and fingers"
+    },
+    "27": {
+     "page": 7,
+     "opening": "A 52-year-old female complains of increasing pain in the right shoulder"
+    },
+    "28": {
+     "page": 7,
+     "opening": "A 20-year-old girl presents to the OPD with complaints of a progressively increasing swelling on the dorsum of the left wrist"
+    },
+    "29": {
+     "page": 7,
+     "opening": "Upper motor neuron lesions are characterized by which of the following"
+    },
+    "30": {
+     "page": 7,
+     "opening": "A 56-year-old female has been diagnosed with gallstones and is undergoing a preanaesthesia checkup"
+    },
+    "31": {
+     "page": 8,
+     "opening": "A 30-year-old road traffic accident victim is being taken up for emergency laparotomy"
+    },
+    "32": {
+     "page": 8,
+     "opening": "Consider the following Pain relief Prevention of infection Anaesthesia Restoration of anatomy"
+    },
+    "33": {
+     "page": 8,
+     "opening": "A 30-year-old motorbike rider is brought to the emergency with history of a road traffic accident"
+    },
+    "34": {
+     "page": 8,
+     "opening": "Hangman's fracture is"
+    },
+    "35": {
+     "page": 8,
+     "opening": "Which of the following are correct in respect of Systemic Inflammatory Response Syndrome"
+    },
+    "36": {
+     "page": 9,
+     "opening": "A surgeon is about to start a laparoscopic procedure on a patient"
+    },
+    "37": {
+     "page": 9,
+     "opening": "Which of the following are correct for managing hypertrophic scars"
+    },
+    "38": {
+     "page": 9,
+     "opening": "Which of the following are approximate daily requirements of the common electrolytes in an adult"
+    },
+    "39": {
+     "page": 9,
+     "opening": "Distributive shock is described by which of the following patterns of cardio-vascular responses"
+    },
+    "40": {
+     "page": 9,
+     "opening": "The best measure of organ perfusion and the best monitor of adequacy of shock therapy is"
+    },
+    "41": {
+     "page": 10,
+     "opening": "Which one of the following statements is correct regarding foetal physiology"
+    },
+    "42": {
+     "page": 10,
+     "opening": "Which of the following are advantages of state of haemodilution during pregnancy"
+    },
+    "43": {
+     "page": 10,
+     "opening": "Consider the following statements regarding oligohydramnios"
+    },
+    "44": {
+     "page": 10,
+     "opening": "Which of the following are correct about endocrine changes in normal pregnancy"
+    },
+    "45": {
+     "page": 10,
+     "opening": "Which of the following features are correct regarding onset of true labour"
+    },
+    "46": {
+     "page": 11,
+     "opening": "According to the WHO Intrapartum Care Guidelines 2018 the active phase of labour starts from what dilation of cervix"
+    },
+    "47": {
+     "page": 11,
+     "opening": "The diameter of engagement of foetal skull in marked deflexion is"
+    },
+    "48": {
+     "page": 11,
+     "opening": "Onset of labour is initiated by which of the following"
+    },
+    "49": {
+     "page": 11,
+     "opening": "A 30-year-old female P2L2 had a forceps delivery 2 days back"
+    },
+    "50": {
+     "page": 11,
+     "opening": "Which of the following are correct regarding pathological findings of placenta accreta"
+    },
+    "51": {
+     "page": 12,
+     "opening": "Which of the following statements are correct regarding peripartum cardiomyopathy"
+    },
+    "52": {
+     "page": 12,
+     "opening": "Mrs. A who is 9 months pregnant presents to the labour room with complaints of severe pain in abdomen"
+    },
+    "53": {
+     "page": 12,
+     "opening": "A 28-year-old female G2P1L1 with history of previous caesarean presents to the gynaecology emergency in labour"
+    },
+    "54": {
+     "page": 12,
+     "opening": "A 24-year-old primigravida comes to ANC clinic at 8 months amenorrhoea"
+    },
+    "55": {
+     "page": 12,
+     "opening": "A patient who is 2 months pregnant reports to a hospital with complaints of increased vaginal bleeding"
+    },
+    "56": {
+     "page": 13,
+     "opening": "Which one of the following is a common pathology associated with ureteric injury while performing surgical procedure of abdominal hysterectomy"
+    },
+    "57": {
+     "page": 13,
+     "opening": "Which of the following are correct regarding pathology of stress urinary incontinence"
+    },
+    "58": {
+     "page": 13,
+     "opening": "Which of the following operative procedures is/are conformity for the diagnosis of bicornuate uterus"
+    },
+    "59": {
+     "page": 13,
+     "opening": "Which of the following are correct regarding pelvic cellular tissue"
+    },
+    "60": {
+     "page": 13,
+     "opening": "Which of the following are correct regarding androgen insensitivity syndrome"
+    },
+    "61": {
+     "page": 14,
+     "opening": "Which of the following are useful investigations for diagnosis of unresponsive endometrium as a cause of primary amenorrhoea"
+    },
+    "62": {
+     "page": 14,
+     "opening": "A 16-year-old girl with primary amenorrhoea presents to the gynaecology OPD for evaluation"
+    },
+    "63": {
+     "page": 14,
+     "opening": "A 25-year-old female comes to the gynaecology OPD for evaluation of secondary amenorrhoea"
+    },
+    "64": {
+     "page": 14,
+     "opening": "Which of the following criteria are required to be fulfilled for hospitalization in a case of pelvic inflammatory disease"
+    },
+    "65": {
+     "page": 14,
+     "opening": "A young female presented with complaints of lower abdominal pain vaginal discharge history of IUD use"
+    },
+    "66": {
+     "page": 15,
+     "opening": "Which of the following are risk factors for Pelvic Inflammatory Disease"
+    },
+    "67": {
+     "page": 15,
+     "opening": "Which of the following are symptoms of genital tuberculosis"
+    },
+    "68": {
+     "page": 15,
+     "opening": "Which one of the following is correct regarding choriocarcinoma"
+    },
+    "69": {
+     "page": 15,
+     "opening": "Which of the following are favourable factors in prognosis of ovarian malignancy"
+    },
+    "70": {
+     "page": 15,
+     "opening": "Which one of the following drugs is most effective in the treatment of gestational trophoblastic neoplasia"
+    },
+    "71": {
+     "page": 16,
+     "opening": "A 48-year-old female underwent total hysterectomy with bilateral salpingo-oophorectomy thecoma-fibroma"
+    },
+    "72": {
+     "page": 16,
+     "opening": "In POPQ classification for uterovaginal prolapse the only measurement done after reducing the prolapse is"
+    },
+    "73": {
+     "page": 16,
+     "opening": "Which of the following are essential steps of Fothergill's operation"
+    },
+    "74": {
+     "page": 16,
+     "opening": "Which of the following are indications of cold knife conization"
+    },
+    "75": {
+     "page": 16,
+     "opening": "Which of the following are factors for poor outcome following tuboplasty"
+    },
+    "76": {
+     "page": 17,
+     "opening": "Ulipristal acetate progesterone receptor modulator should not be prescribed as emergency contraceptive in women with"
+    },
+    "77": {
+     "page": 17,
+     "opening": "Injectable medroxyprogesterone IP 150 mg/mL contraceptive injection is available in Family Health Programme"
+    },
+    "78": {
+     "page": 17,
+     "opening": "Which of the following are major complications of oral pills"
+    },
+    "79": {
+     "page": 17,
+     "opening": "Which of the following conditions are indications of removal of intrauterine device"
+    },
+    "80": {
+     "page": 17,
+     "opening": "A 25-year-old newly married female on liver enzyme inducers is requesting contraceptive advice"
+    },
+    "81": {
+     "page": 18,
+     "opening": "As per the Open Vial Policy partially used multidose vials of which of the following vaccines"
+    },
+    "82": {
+     "page": 18,
+     "opening": "The statement Health is a dynamic equilibrium between man and environment"
+    },
+    "83": {
+     "page": 18,
+     "opening": "The following table shows three broad components under which the objectives of the National Health Policy 2017"
+    },
+    "84": {
+     "page": 19,
+     "opening": "Consider the following management methods/techniques"
+    },
+    "85": {
+     "page": 19,
+     "opening": "In the following table the end results of planning are qualified by brief characteristics"
+    },
+    "86": {
+     "page": 19,
+     "opening": "Consider the following steps of a planning cycle"
+    },
+    "87": {
+     "page": 19,
+     "opening": "Which of the following statements are correct for incidence rate"
+    },
+    "88": {
+     "page": 20,
+     "opening": "Consider the following definition A high level of infection beginning early in life"
+    },
+    "89": {
+     "page": 20,
+     "opening": "Consider the following statements regarding dengue virus"
+    },
+    "90": {
+     "page": 20,
+     "opening": "Consider the following statements regarding dengue The mosquito becomes infective"
+    },
+    "91": {
+     "page": 21,
+     "opening": "A researcher has obtained the country-level data on the average Body Mass Index"
+    },
+    "92": {
+     "page": 21,
+     "opening": "Frontline health workers are employed to record the births and deaths in countries"
+    },
+    "93": {
+     "page": 21,
+     "opening": "While calculating the total dependency ratio which one of the following is used in the denominator"
+    },
+    "94": {
+     "page": 21,
+     "opening": "As per the United Nations definition of a vital events registration system"
+    },
+    "95": {
+     "page": 21,
+     "opening": "Consider the following statements about Kyasanur Forest Disease"
+    },
+    "96": {
+     "page": 22,
+     "opening": "In countries with low levels of measles transmission what should be the appropriate age"
+    },
+    "97": {
+     "page": 22,
+     "opening": "Monkeypox a viral zoonotic disease is caused by"
+    },
+    "98": {
+     "page": 22,
+     "opening": "Raju a 6-year-old boy was returning home from school"
+    },
+    "99": {
+     "page": 22,
+     "opening": "The method of combined disposal of refuse and night soil is known as"
+    },
+    "100": {
+     "page": 22,
+     "opening": "Consider the following statements about working of septic tanks"
+    },
+    "101": {
+     "page": 23,
+     "opening": "Of the following amino acids which is categorized as a nonessential amino acid"
+    },
+    "102": {
+     "page": 23,
+     "opening": "Consider the following milks Buffalo milk Cow milk Goat milk Human milk"
+    },
+    "103": {
+     "page": 23,
+     "opening": "Which of the following are unsaturated fatty acids"
+    },
+    "104": {
+     "page": 23,
+     "opening": "In India the most widely prevalent stage of iron deficiency is"
+    },
+    "105": {
+     "page": 23,
+     "opening": "Consider the following statements Statement I Waist circumference and waist to hip ratio"
+    },
+    "106": {
+     "page": 24,
+     "opening": "Consider the following statement The people should seek to preserve their traditional eating patterns"
+    },
+    "107": {
+     "page": 24,
+     "opening": "Raju is 30 years of age He has been working in the ceramic and pottery industry"
+    },
+    "108": {
+     "page": 24,
+     "opening": "An industrial worker was brought to a medical facility basophilic stippling"
+    },
+    "109": {
+     "page": 24,
+     "opening": "Consider the following pairs of genetic diseases that show Mendelian inheritance"
+    },
+    "110": {
+     "page": 24,
+     "opening": "Consider the following statements Statement I Signs of thalassemia major usually develop after 6 months"
+    },
+    "111": {
+     "page": 25,
+     "opening": "Which of the following publications is/are brought out by the World Health Organization"
+    },
+    "112": {
+     "page": 25,
+     "opening": "As per the basic model of a nuclear family life cycle consider the following phases"
+    },
+    "113": {
+     "page": 25,
+     "opening": "Which among the following are characteristics of health education rather than propaganda"
+    },
+    "114": {
+     "page": 26,
+     "opening": "Consider the following statements regarding LNG-20 Mirena"
+    },
+    "115": {
+     "page": 26,
+     "opening": "The most common cause of maternal mortality in India is"
+    },
+    "116": {
+     "page": 26,
+     "opening": "In the National Malaria Control Programme Indoor Residual Spray IRS is the primary method of vector control"
+    },
+    "117": {
+     "page": 26,
+     "opening": "Consider the following statements with regard to selection of Accredited Social Health Activist"
+    },
+    "118": {
+     "page": 27,
+     "opening": "Consider the following statements regarding the Central Drugs Standard Control Organization"
+    },
+    "119": {
+     "page": 27,
+     "opening": "The National AIDS Control Organization provides prepacked colour-coded STI/RTI kits"
+    },
+    "120": {
+     "page": 27,
+     "opening": "The table below shows the results of ELISA test for HIV infection"
+    }
+   },
+   "storedReads": [
+    {
+     "page": 2,
+     "number": 1,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 1,
+     "printedNumber": null
+    },
+    {
+     "page": 2,
+     "number": 2,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 2,
+     "printedNumber": null
+    },
+    {
+     "page": 2,
+     "number": 3,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 3,
+     "printedNumber": null
+    },
+    {
+     "page": 2,
+     "number": 4,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 4,
+     "printedNumber": null
+    },
+    {
+     "page": 3,
+     "number": 5,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 5,
+     "printedNumber": null
+    },
+    {
+     "page": 3,
+     "number": 6,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 6,
+     "printedNumber": null
+    },
+    {
+     "page": 3,
+     "number": 7,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 7,
+     "printedNumber": null
+    },
+    {
+     "page": 3,
+     "number": 8,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 8,
+     "printedNumber": null
+    },
+    {
+     "page": 3,
+     "number": 9,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 9,
+     "printedNumber": null
+    },
+    {
+     "page": 3,
+     "number": 10,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 10,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 11,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 11,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 12,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 12,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 13,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 13,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 14,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 14,
+     "printedNumber": null
+    },
+    {
+     "page": 4,
+     "number": 15,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 15,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 16,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 16,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 17,
+     "options": 3,
+     "method": "AI_VISION",
+     "sourceNumber": 17,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 18,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 18,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 19,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 19,
+     "printedNumber": null
+    },
+    {
+     "page": 5,
+     "number": 20,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 20,
+     "printedNumber": null
+    },
+    {
+     "page": 6,
+     "number": 24,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": null,
+     "printedNumber": null,
+     "note": "fused: Q24's opening words with Q21's text and options (verified on the page image)"
+    },
+    {
+     "page": 6,
+     "number": 23,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 23,
+     "printedNumber": null
+    },
+    {
+     "page": 6,
+     "number": 25,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 25,
+     "printedNumber": null
+    },
+    {
+     "page": 6,
+     "number": 22,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 22,
+     "printedNumber": null
+    },
+    {
+     "page": 7,
+     "number": 26,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 26,
+     "printedNumber": null
+    },
+    {
+     "page": 7,
+     "number": 27,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 27,
+     "printedNumber": null
+    },
+    {
+     "page": 7,
+     "number": 28,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 28,
+     "printedNumber": null
+    },
+    {
+     "page": 7,
+     "number": 29,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 29,
+     "printedNumber": null
+    },
+    {
+     "page": 7,
+     "number": 30,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 30,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 31,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 31,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 32,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 32,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 33,
+     "options": 3,
+     "method": "AI_VISION",
+     "sourceNumber": 33,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 34,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 34,
+     "printedNumber": null
+    },
+    {
+     "page": 8,
+     "number": 35,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 35,
+     "printedNumber": null
+    },
+    {
+     "page": 9,
+     "number": 36,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 36,
+     "printedNumber": null
+    },
+    {
+     "page": 9,
+     "number": 37,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 37,
+     "printedNumber": null
+    },
+    {
+     "page": 9,
+     "number": 38,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 38,
+     "printedNumber": null
+    },
+    {
+     "page": 9,
+     "number": 39,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 39,
+     "printedNumber": null
+    },
+    {
+     "page": 9,
+     "number": 40,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 40,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 41,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 41,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 42,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 42,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 43,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 43,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 44,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 45,
+     "printedNumber": null
+    },
+    {
+     "page": 10,
+     "number": 45,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": null,
+     "printedNumber": null,
+     "note": "not a question: the options of Q43 read as a question"
+    },
+    {
+     "page": 11,
+     "number": 46,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 46,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 47,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 47,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 48,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 48,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 49,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 49,
+     "printedNumber": null
+    },
+    {
+     "page": 11,
+     "number": 50,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 50,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 51,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 51,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 52,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 52,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 53,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 53,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 54,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 54,
+     "printedNumber": null
+    },
+    {
+     "page": 12,
+     "number": 55,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 55,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 56,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 56,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 57,
+     "options": 3,
+     "method": "AI_VISION",
+     "sourceNumber": 57,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 58,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 58,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 59,
+     "options": 3,
+     "method": "AI_VISION",
+     "sourceNumber": 59,
+     "printedNumber": null
+    },
+    {
+     "page": 13,
+     "number": 60,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 60,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 61,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 61,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 62,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 62,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 63,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 63,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 64,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 64,
+     "printedNumber": null
+    },
+    {
+     "page": 14,
+     "number": 65,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 65,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 66,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 66,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 67,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 67,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 68,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 68,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 69,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 69,
+     "printedNumber": null
+    },
+    {
+     "page": 15,
+     "number": 70,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 70,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 71,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 71,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 72,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 72,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 73,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 73,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 74,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 74,
+     "printedNumber": null
+    },
+    {
+     "page": 16,
+     "number": 75,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 75,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 76,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 76,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 77,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 77,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 78,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 78,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 79,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 79,
+     "printedNumber": null
+    },
+    {
+     "page": 17,
+     "number": 80,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 80,
+     "printedNumber": null
+    },
+    {
+     "page": 18,
+     "number": 81,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 81,
+     "printedNumber": null
+    },
+    {
+     "page": 18,
+     "number": 82,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 82,
+     "printedNumber": null
+    },
+    {
+     "page": 18,
+     "number": 83,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 83,
+     "printedNumber": null
+    },
+    {
+     "page": 19,
+     "number": 84,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 84,
+     "printedNumber": null
+    },
+    {
+     "page": 19,
+     "number": 85,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 85,
+     "printedNumber": null
+    },
+    {
+     "page": 19,
+     "number": 86,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 86,
+     "printedNumber": null
+    },
+    {
+     "page": 19,
+     "number": 87,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 87,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 88,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 88,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 89,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 89,
+     "printedNumber": null
+    },
+    {
+     "page": 20,
+     "number": 90,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 90,
+     "printedNumber": null
+    },
+    {
+     "page": 21,
+     "number": 91,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 91,
+     "printedNumber": null
+    },
+    {
+     "page": 21,
+     "number": 92,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 92,
+     "printedNumber": null
+    },
+    {
+     "page": 21,
+     "number": 93,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 93,
+     "printedNumber": null
+    },
+    {
+     "page": 21,
+     "number": 94,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 94,
+     "printedNumber": null
+    },
+    {
+     "page": 21,
+     "number": 95,
+     "options": 3,
+     "method": "AI_VISION",
+     "sourceNumber": 95,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 96,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 96,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 97,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 97,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 98,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 98,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 99,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 99,
+     "printedNumber": null
+    },
+    {
+     "page": 22,
+     "number": 100,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 100,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 101,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 101,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 102,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 102,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 103,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 103,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 104,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 104,
+     "printedNumber": null
+    },
+    {
+     "page": 23,
+     "number": 105,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 105,
+     "note": "text altered by the reading (verified on the page image)",
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 106,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 106,
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 109,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 109,
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 107,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 107,
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 108,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 108,
+     "printedNumber": null
+    },
+    {
+     "page": 24,
+     "number": 110,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 110,
+     "printedNumber": null
+    },
+    {
+     "page": 25,
+     "number": 111,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 111,
+     "printedNumber": null
+    },
+    {
+     "page": 25,
+     "number": 112,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 112,
+     "printedNumber": null
+    },
+    {
+     "page": 25,
+     "number": 113,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 113,
+     "printedNumber": null
+    },
+    {
+     "page": 26,
+     "number": 114,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 114,
+     "printedNumber": null,
+     "note": "text altered by the reading (verified on the page image)"
+    },
+    {
+     "page": 26,
+     "number": 116,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 116,
+     "printedNumber": null
+    },
+    {
+     "page": 26,
+     "number": 117,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 117,
+     "printedNumber": null
+    },
+    {
+     "page": 26,
+     "number": 115,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 115,
+     "printedNumber": null
+    },
+    {
+     "page": 27,
+     "number": 118,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 118,
+     "printedNumber": null
+    },
+    {
+     "page": 27,
+     "number": 119,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 119,
+     "printedNumber": null
+    },
+    {
+     "page": 27,
+     "number": 120,
+     "options": 4,
+     "method": "AI_VISION",
+     "sourceNumber": 120,
+     "printedNumber": null
+    },
+    {
+     "page": 30,
+     "number": null,
+     "options": 0,
+     "method": "AI_VISION",
+     "sourceNumber": null,
+     "printedNumber": null
+    }
+   ]
+  }
+ }
+}

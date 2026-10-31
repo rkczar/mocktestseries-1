@@ -1,10 +1,10 @@
 import "server-only";
-import { AiImportAnswerStatus, AiImportPaperType, AiImportQuestionStatus, type AiImportQuestion, type Prisma } from "@prisma/client";
+import { AiImportAnswerStatus, AiImportFileRole, AiImportPaperType, AiImportQuestionStatus, type AiImportQuestion, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { taxonomyNameKey } from "@/lib/exam-taxonomy";
 import { lintRichSource, looksRich } from "@/lib/rich-import/manifest";
-import { ISSUE_DEFS } from "@/lib/ai-import/config";
+import { ISSUE_DEFS, KEY_MIN_COVERAGE } from "@/lib/ai-import/config";
 import { importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
 import { keyPaperChecks } from "@/lib/ai-import/key-check";
@@ -14,7 +14,7 @@ import { SUBJECT_MIN_CONFIDENCE, SUBJECT_MISMATCH_CONFIDENCE, classifyUserText, 
 import { classifyPaper, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
 import { classifierContext, headingResolver } from "@/lib/ai-import/taxonomy-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
-import { mergedAnswerIn, mergedStatements, statementCodeQuestion } from "@/lib/ai-import/local-parse";
+import { PRINTED_DROPPED, candidateInstruction, mergedAnswerIn, mergedStatements, numberSequenceProblems, statementCodeQuestion } from "@/lib/ai-import/local-parse";
 import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem } from "@/lib/ai-import/fidelity";
 import type { StepContext } from "@/lib/ai-import/process";
 import { contentPartOf, fingerprintsOf, taxonomyCurrent, verifyState } from "@/lib/ai-import/verify-core";
@@ -45,7 +45,7 @@ export function effective(q: Pick<AiImportQuestion, "data" | "editedData">): Ext
 
 export const IMPORTABLE = new Set(["SINGLE_CORRECT", "MULTIPLE_CORRECT", "MATCH_THE_FOLLOWING", "ASSERTION_REASON"]);
 
-const WITHDRAWN = /^(bonus|dropped|deleted|withdrawn|\*|x)$/i;
+const WITHDRAWN = /^(bonus|dropped|deleted|withdrawn|\*|x|×)$/i;
 /** Words for a visual a question can point at (a bare mention is not a pointer: "seen on chest X-ray" is text). */
 const VISUAL = String.raw`(?:figure|fig\.?|diagram|graph|image|picture|photo(?:graph|micrograph)?|radiograph|x-ray|xray|ecg|ekg|chart|illustration|circuit|structure|specimen)`;
 /**
@@ -145,14 +145,27 @@ interface KeyRow {
   rawValue: string;
   page: number | null;
   paperFileId: string | null;
+  /** The file the entry was read from (a separate key file, or the question paper's own key page). */
+  keyFileId?: string;
 }
 
-/** Assigns sections to key entries whose numbering restarts (1..n, 1..m) — the same rule as the paper. */
+/**
+ * Assigns sections to key entries whose numbering restarts (1..n, 1..m) — the same rule as the paper — within ONE key
+ * source: a second source starting again at 1 is not a new section (seen 2026-10-31: five entries read from a question
+ * page, then the real key's 1–120, became "S2#1…S2#120" and the real key matched nothing).
+ */
 function sectionKeys(rows: KeyRow[]): KeyRow[] {
   const out: KeyRow[] = [];
   let last = 0;
   let idx = 1;
+  let source = rows[0]?.keyFileId;
   for (const r of rows) {
+    // Rows come grouped by key file: each source numbers on its own.
+    if (r.keyFileId !== source) {
+      source = r.keyFileId;
+      last = 0;
+      idx = 1;
+    }
     if (r.section) {
       out.push(r);
       continue;
@@ -181,22 +194,39 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
 
   // ---- Answer keys ----
   const keyRowsRaw = await prisma.aiImportKeyEntry.findMany({ where: { jobId: job.id }, orderBy: [{ keyFileId: "asc" }, { createdAt: "asc" }, { id: "asc" }] });
+  // A key file that only AI vision can read (image / scanned) and whose reading covers far fewer questions than the paper
+  // has is a partial reading (seen 2026-10-31: 15 cells of a 120-cell grid, 9 of them wrong): its values are not used.
+  const incompleteKeys = new Map<string, string>();
+  for (const f of await prisma.aiImportFile.findMany({ where: { jobId: job.id, role: AiImportFileRole.ANSWER_KEY }, select: { id: true, originalName: true, detected: true } })) {
+    const d = f.detected as { kind?: string; facts?: { textPages?: number } } | null;
+    const visionOnly = ["jpeg", "jpg", "png", "webp"].includes(d?.kind ?? "") || d?.facts?.textPages === 0;
+    const read = new Set(keyRowsRaw.filter((r) => r.keyFileId === f.id).map((r) => r.sourceNumber)).size;
+    if (visionOnly && read && job.expectedQuestions && read < Math.ceil(job.expectedQuestions * KEY_MIN_COVERAGE)) incompleteKeys.set(f.id, `The answer key “${f.originalName}” was read only partly (${read} of ${job.expectedQuestions} entries), so it is not used — read it again (Retry) or enter the answers by hand.`);
+  }
   const byPaper = new Map<string, KeyRow[]>();
   const papers = [...new Set(questions.map((q) => q.fileId))];
   for (const r of keyRowsRaw) {
+    if (incompleteKeys.has(r.keyFileId)) continue;
     const paper = r.paperFileId ?? (papers.length === 1 ? papers[0] : null);
     if (!paper) continue;
     const list = byPaper.get(paper) ?? [];
-    list.push({ id: r.id, sourceNumber: r.sourceNumber, section: r.section, rawValue: r.rawValue, page: r.page, paperFileId: paper });
+    list.push({ id: r.id, sourceNumber: r.sourceNumber, section: r.section, rawValue: r.rawValue, page: r.page, paperFileId: paper, keyFileId: r.keyFileId });
     byPaper.set(paper, list);
   }
   const keyFor = new Map<string, { rows: KeyRow[]; method: string }>();
   /** Papers whose key could not be matched by number safely (the reason is shown on each question). */
   const unsafeKeyPapers = new Map<string, string>();
+  /** Single questions whose printed number cannot be trusted for key matching (AI-read page out of sequence, an instruction). */
+  const unsafeKeyQuestions = new Map<string, string>();
   for (const paper of papers) {
     const rows = byPaper.get(paper);
     if (!rows?.length) continue;
-    const qs = questions.filter((q) => q.fileId === paper).sort((a, b) => a.orderIndex - b.orderIndex);
+    // A rejected question (e.g. a statement line read as a question) never shapes the paper's sections or takes a key entry.
+    const qs = questions.filter((q) => q.fileId === paper && q.status !== AiImportQuestionStatus.REJECTED).sort((a, b) => a.orderIndex - b.orderIndex);
+    for (const [id, why] of numberSequenceProblems(qs.filter((q) => /^AI/.test(effective(q).method ?? "") && !candidateInstruction(effective(q))).map((q) => ({ id: q.id, page: effective(q).pages[0] ?? 0, section: effective(q).section, number: effective(q).number }))))
+      unsafeKeyQuestions.set(id, `${why} The official key is not matched to it by number until the numbers on that page are checked (correct the number, or re-scan the page).`);
+    for (const q of qs) if (candidateInstruction(effective(q))) unsafeKeyQuestions.set(q.id, "This looks like an instruction to candidates (instruction wording, no option list), not a question — the official key is not matched to it. Reject it if it is not a question.");
+    const matchable = (q: (typeof qs)[number]) => !unsafeKeyQuestions.has(q.id);
     const paperSections = new Set(qs.map((q) => effective(q).section));
     const sectioned = sectionKeys(rows);
     const keyHasSections = new Set(sectioned.map((r) => r.section)).size > 1;
@@ -228,7 +258,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         }
         for (const q of qs) {
           const e = effective(q);
-          if (e.number === null || !offsetOf.has(e.section)) continue;
+          if (e.number === null || !offsetOf.has(e.section) || !matchable(q)) continue;
           const hit = byNumber.get(offsetOf.get(e.section)! + e.number);
           if (hit) keyFor.set(q.id, { rows: hit, method: `by number (key entry ${offsetOf.get(e.section)! + e.number} = ${e.section || "first section"} Q${e.number})` });
         }
@@ -237,7 +267,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       for (const q of qs) {
         const e = effective(q);
         const hit = direct.get(`${e.section}#${e.number}`);
-        if (hit) keyFor.set(q.id, { rows: hit, method: "by question number" });
+        if (hit && matchable(q)) keyFor.set(q.id, { rows: hit, method: "by question number" });
       }
     }
     // Record matches + unmatched / duplicate key rows.
@@ -696,18 +726,22 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       checks.push({ stage: 3, name: "Official answer key", passed: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED, severity: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED ? "INFO" : "ERROR", method: "DETERMINISTIC", detail: `Key "${officialRaw}"${officialPage ? ` (key page ${officialPage})` : ""}, matched ${key.method}.` });
       if (!q.answerConfirmedById && answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED) finalAnswer = official;
     } else if (!wrongKey) {
-      const unsafe = unsafeKeyPapers.get(q.fileId);
+      const unsafe = unsafeKeyPapers.get(q.fileId) ?? (anyKey ? unsafeKeyQuestions.get(q.id) : undefined);
       if (unsafe) {
         answerStatus = AiImportAnswerStatus.AMBIGUOUS_MAPPING;
         add("ANSWER_AMBIGUOUS", unsafe);
       }
-      checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: unsafe ?? (anyKey ? "The answer key has no entry for this question." : "No answer key uploaded for this paper.") });
+      checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: unsafe ?? ([...incompleteKeys.values()][0] ?? (anyKey ? "The answer key has no entry for this question." : "No answer key uploaded for this paper.")) });
       const printed = e.printedAnswer;
       const aiAgrees = q.aiAnswer.length > 0 && (q.aiAnswerConfidence ?? 0) >= 0.7;
       if (printed.length) {
         if (aiAgrees && sameSet(printed, q.aiAnswer)) answerStatus = AiImportAnswerStatus.INDEPENDENTLY_VERIFIED;
         else answerStatus = AiImportAnswerStatus.UNVERIFIED;
         if (!q.answerConfirmedById) finalAnswer = printed;
+      } else if (e.printedAnswerRaw && PRINTED_DROPPED.test(e.printedAnswerRaw)) {
+        // The paper itself prints the question as dropped ("► Official Answer: Question Dropped (X)"): never answered.
+        answerStatus = AiImportAnswerStatus.WITHDRAWN;
+        add("POSSIBLE_WITHDRAWN", `The paper prints “${e.printedAnswerRaw.trim().slice(0, 80)}” for this question (dropped / bonus).`);
       } else if (q.aiAnswer.length) {
         answerStatus = AiImportAnswerStatus.UNVERIFIED;
         if (!q.answerConfirmedById) finalAnswer = settings.publish.allowUnverifiedAnswers ? q.aiAnswer : [];

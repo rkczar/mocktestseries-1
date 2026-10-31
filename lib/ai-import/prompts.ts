@@ -199,7 +199,8 @@ export function toExtracted(out: PageOutput, page: number, model: string): Extra
 
 export const KEY_SYSTEM = `You read ONE page of an official ANSWER KEY of an examination and return every entry.
 ${GUARD}
-RULES: copy each question number and its answer exactly as printed (e.g. "B", "(3)", "A,C", "Bonus", "Dropped", "*"). Do not solve anything. If a number or answer is unreadable, put it in "unreadable".
+RULES: copy each question number and its answer exactly as printed (e.g. "B", "(3)", "A,C", "A/B", "X", "Bonus", "Dropped", "*"). Do not solve anything. If a number or answer is unreadable, put it in "unreadable".
+Keys are often a GRID of several "Q. No. | Key" column pairs side by side (e.g. 8 pairs × 15 rows = 120): read EVERY column pair, left to right, each from top to bottom, and return one entry per printed number — never only the first column. The number of entries should equal the total printed in the header. Pair each answer with the number printed in the SAME row of the SAME column pair.
 Also copy the key's own identifiers exactly as printed in its header (paper number, series / set / booklet code, total questions, exam name) into "header"; use null for any that are not printed.
 OUTPUT (JSON only): {"header":{"exam":null,"paper":null,"series":null,"set":null,"total_questions":null},"entries":[{"number":1,"answer":"B","section":""}],"unreadable":[]}`;
 

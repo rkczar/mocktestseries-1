@@ -16,7 +16,9 @@ import { applyFormatProfile } from "@/lib/ai-import/format-profile";
 import { referenceStatus, type ReferenceStatus } from "@/lib/ai-import/reference-status";
 import { classifyUserText, decideClassification, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
 import { classifyPaper, textSufficient, verifyStoredTaxonomy, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
-import { classifierContext, examFormatRules, type FormatRuleCode } from "@/lib/ai-import/taxonomy-memory";
+import { classifierContext, examFormatRules, examPaperRules, type FormatRuleCode } from "@/lib/ai-import/taxonomy-memory";
+import { confirmedSubjectScope } from "@/lib/ai-import/paper-memory";
+import { paperIdentity } from "@/lib/ai-import/paper-learn";
 import { readDocx } from "@/lib/ai-import/docx";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
 import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
@@ -336,6 +338,10 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     }
   }
   const taxTally = { AGREED: 0, DISAGREEMENT: 0, NEEDS_REVIEW: 0, VERIFICATION_FAILED: 0, NOT_VERIFIED: 0 };
+  // Paper memory: subjects an administrator confirmed this paper covers — a subject outside them is flagged, never changed.
+  const paper = await paperIdentity(job);
+  const subjectScope = confirmedSubjectScope(await examPaperRules(job.examId), paper);
+  const subjectNames = new Map(examTaxonomy.map((s) => [s.id, s.name]));
 
   // 3. Full-paper checks + reference papers.
   const refs = await listReferences(jobId);
@@ -352,6 +358,8 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     const tax = verifyStoredTaxonomy({ subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource }, independent.get(q.id), examTaxonomy);
     taxTally[tax.verification.status]++;
     problems.push(...tax.problems);
+    const subjectNow = q.subjectId ? subjectNames.get(q.subjectId) : undefined;
+    if (subjectScope && subjectNow && !subjectScope.has(subjectNow)) problems.push({ code: "FORMAT_DEVIATION", detail: `Paper memory: ${paper} covers ${[...subjectScope].join(", ")} (confirmed); this question's subject “${subjectNow}” is outside them — check the subject.` });
     if (e.continuesOnNextPage && e.pages.length === 1 && e.pages[0] < (lastPage.get(q.fileId) ?? 1)) problems.push({ code: "QUESTION_TEXT_SUSPECT", detail: `Marked as continuing on page ${e.pages[0] + 1}, but no continuation was joined to it — check both pages.` });
     const texts = [e.stem, ...e.options.map((o) => o.text)];
     if (texts.some((t) => /�|[-]/.test(t))) problems.push({ code: "FORMULA_ISSUE", detail: "Unreadable characters (font encoding / OCR) in the text — compare with the source page." });
