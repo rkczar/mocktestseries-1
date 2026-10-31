@@ -65,7 +65,7 @@ export function FieldVerification({ questionId, rows, canUse, stale }: { questio
                       </p>
                       {n.evidence && <p className="text-[var(--color-muted-foreground)]">Evidence: {n.evidence}</p>}
                       {(n.by === "V1" || n.by === "V2") && /^(text|option [A-D])$/.test(r.field) ? (
-                        <Button size="sm" variant="outline" className="mt-1" disabled={!canUse || pending || !!stale} onClick={() => apply(r.field, n.by as "V1" | "V2")} data-testid="field-apply">
+                        <Button size="sm" variant="outline" className="mt-1" disabled={!canUse || pending} onClick={() => apply(r.field, n.by as "V1" | "V2")} data-testid="field-apply">
                           Use this suggestion
                         </Button>
                       ) : (

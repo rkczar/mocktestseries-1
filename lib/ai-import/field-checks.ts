@@ -107,7 +107,6 @@ function merge(list: FieldCheck[]): FieldCheck[] {
       cur.problem = [cur.problem, c.problem].filter(Boolean).join(" · ").slice(0, 900);
       cur.suggestion ??= c.suggestion ?? null;
       cur.evidence = [cur.evidence, c.evidence].filter(Boolean).join(" · ").slice(0, 600) || null;
-      if (c.by === "MEMORY") cur.by = "MEMORY";
     }
   }
   return [...out.values()];
@@ -141,12 +140,12 @@ export function v1FieldChecks(i: { e: ExtractedQuestion; problems: VerifyProblem
     const f = fieldOf(code, "");
     if (f && f !== "source") list.push({ field: f, status: "PROBLEM", problem: i.issueLabel(code), by: "V1" });
   }
-  for (const m of i.memory) list.push({ field: m.field, status: "PROBLEM", problem: m.detail.slice(0, 600), by: "MEMORY" });
-  const checks = merge(list);
+  // Paper-memory findings stay their own entries (one per field), so each note keeps its source.
+  const checks = [...merge(list), ...merge(i.memory.map((m): FieldCheck => ({ field: m.field, status: "PROBLEM", problem: m.detail.slice(0, 600), by: "MEMORY" })))];
   // Corrections Verify 1 already made from the source are recorded as the evidence of the corrected field.
   for (const f of i.fixes) {
     const field = (f.field === "question text" ? "text" : /^option [A-D]$/.test(f.field) ? f.field : f.field === "printed answer" ? "answer" : null) as Field | null;
-    const c = field && checks.find((x) => x.field === field);
+    const c = field && checks.find((x) => x.field === field && x.by === "V1");
     if (c) c.evidence = [c.evidence, `corrected by Verify 1 from the source (${f.evidence})`].filter(Boolean).join(" · ").slice(0, 600);
   }
   return order(checks);
