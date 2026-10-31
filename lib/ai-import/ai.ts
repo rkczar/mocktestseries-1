@@ -111,10 +111,12 @@ export const PRICE_MARGIN = 1.05;
 export const REQUEST_ATTEMPTS = 2;
 /**
  * The request parameters every importer request sends (importerAiCall → chatCompletion: max_tokens bounds the
- * cost, temperature 0). Requests use require_parameters, so a provider route must support all of them; the
- * selection engine (select.ts evaluateModel) only accepts routes that publish every one.
+ * cost). Requests use require_parameters, so a provider route must support all of them; the selection engine
+ * (select.ts evaluateModel) only accepts routes that publish every one. `temperature` (0) is optional: it is sent
+ * only when EVERY eligible route of the model accepts it (so it never removes a route), and left out otherwise —
+ * some models (e.g. anthropic/claude-haiku-5.5) publish no route that accepts it (2026-10-31).
  */
-export const IMPORTER_REQUEST_PARAMS = ["max_tokens", "temperature"] as const;
+export const IMPORTER_REQUEST_PARAMS = ["max_tokens"] as const;
 
 /** Fallbacks may never cost more than the preferred model (per prompt, completion, request and input-image price). */
 export function notPricier(m: AiModel, preferred: AiModel): boolean {
@@ -347,7 +349,7 @@ async function log(e: {
  * engine's own rules (serving route, ZDR when required, readable prices, output limit).
  * Route data that cannot be read means nothing is sent (fail closed).
  */
-async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"]; reasoning: boolean; structured: boolean; jsonMode: boolean }> {
+async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | undefined, settings: ImporterSettings, fxRate: number): Promise<{ problem: string | null; price: TaskChoice["price"]; reasoning: boolean; structured: boolean; jsonMode: boolean; temperature: boolean }> {
   let snapshot;
   try {
     snapshot = await freshRouteSnapshot(settings.importerModels.includes(choice.model!) ? settings.importerModels : [...settings.importerModels, choice.model!]);
@@ -356,7 +358,7 @@ async function recheckRoute(jobId: string, choice: TaskChoice, model: AiModel | 
   }
   const refusals = await importerModelHealth([choice.model!], Date.now(), jobId);
   const ev = evaluateModel(model, choice.model!, choice.task, { snapshot, settings, fxRate, refusals });
-  return ev.row.eligible || ev.price ? { problem: null, price: ev.price, reasoning: !!ev.reasoning, structured: !!ev.structured, jsonMode: !!ev.jsonMode } : { problem: ev.row.reason ?? "not usable", price: null, reasoning: false, structured: false, jsonMode: false };
+  return ev.row.eligible || ev.price ? { problem: null, price: ev.price, reasoning: !!ev.reasoning, structured: !!ev.structured, jsonMode: !!ev.jsonMode, temperature: !!ev.temperature } : { problem: ev.row.reason ?? "not usable", price: null, reasoning: false, structured: false, jsonMode: false, temperature: false };
 }
 
 const SELECTION_TASK_OF: Record<ImporterTask, SelectionTask> = { analyze: "extract", extract: "extract", verify: "verify", key: "key", classify: "classify" };
@@ -458,6 +460,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   let reasoningRoutes = false;
   let structuredRoutes = false;
   let jsonModeRoutes = false;
+  let temperatureRoutes = false;
   // The confirmed model, still approved and usable now? (An admin may have withdrawn it meanwhile.)
   // Then its provider route, price and privacy route, re-checked before this request (stored route data,
   // read again from OpenRouter when older than 6 h; free metadata, never an AI request).
@@ -475,6 +478,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       reasoningRoutes = route.reasoning;
       structuredRoutes = route.structured;
       jsonModeRoutes = route.jsonMode;
+      temperatureRoutes = route.temperature;
       // Never below the confirmed price: the higher of the confirmed and the current price is reserved.
       if (route.price && choice.price) choice = { ...choice, price: { prompt: Math.max(choice.price.prompt, route.price.prompt), completion: Math.max(choice.price.completion, route.price.completion), image: Math.max(choice.price.image, route.price.image), request: Math.max(choice.price.request, route.price.request) } };
       break;
@@ -513,7 +517,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         system: input.system,
         content: input.content,
         maxTokens: input.maxOutputTokens,
-        temperature: 0,
+        // temperature 0 only when every eligible route accepts it (require_parameters would otherwise drop routes).
+        ...(temperatureRoutes ? { temperature: 0 } : {}),
         // A reasoning model can spend the whole output limit thinking and return no answer (seen 2026-10-20:
         // 8,000 tokens, empty text). Low effort keeps room for the answer; sent whenever a route of the model accepts
         // the parameter (requests use require_parameters, so only such routes are used) — also when fallbacks are

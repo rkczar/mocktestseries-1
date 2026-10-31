@@ -31,7 +31,8 @@
  * stats.attempts counts every chat attempt per model (rate-limited ones included).
  * Request-parameter / price-integrity fixtures (config {paramModels: true}; off by default): mockparam/notemp — the
  * cheapest priced vision model, but its only route accepts max_tokens only (no temperature), like a route OpenRouter
- * refuses under require_parameters; mockparam/zeroout — vision, ₹0 output price but a non-zero input price.
+ * refuses under require_parameters (the importer leaves temperature out for it); mockparam/nomax — vision, routes
+ * accept no max_tokens (always ineligible); mockparam/zeroout — vision, ₹0 output price but a non-zero input price.
  * Every chat request with provider.require_parameters is refused (404 "No endpoints found that can handle the
  * requested parameters.") when the model's routes do not list every parameter the request sends.
  * Reliability fixtures (2026-10-20): config {reasonModels: true} adds mockreason/think — a vision model whose routes
@@ -96,6 +97,7 @@ const BATCH = {
 };
 const PARAM = {
   "mockparam/notemp": { p: 0.00000002, c: 0.0000001, vision: true, json: true, params: ["max_tokens"] },
+  "mockparam/nomax": { p: 0.00000002, c: 0.0000001, vision: true, json: true, params: ["temperature"] },
   "mockparam/zeroout": { p: 0.00000003, c: 0, vision: true, json: true },
 };
 const M = () => ({ ...MODELS, ...(config.extraModels ? EXTRA : {}), ...(config.paramModels ? PARAM : {}), ...(config.reasonModels ? REASON : {}), ...(config.batchModels ? BATCH : {}), ...(config.structModels ? STRUCT : {}) });
@@ -121,7 +123,7 @@ const config = structuredClone(DEFAULT_CONFIG);
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
 
-const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0, memory: {} };
+const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0, memory: {}, temperature: {} };
 let seq = 0;
 
 function json(res, status, body) {
@@ -193,7 +195,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === "/__mock/stats") return json(res, 200, stats);
   if (url.pathname === "/__mock/reset") {
-    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0, memory: {} });
+    Object.assign(stats, { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0, memory: {}, temperature: {} });
     Object.assign(config, structuredClone(DEFAULT_CONFIG));
     return json(res, 200, { ok: true });
   }
@@ -233,6 +235,8 @@ const server = http.createServer(async (req, res) => {
     stats.requireParams.push(body.provider?.require_parameters === true);
     stats.reasoning.push(body.reasoning ?? null);
     stats.responseFormat.push(body.response_format?.type ?? null);
+    // stats.temperature[model] = { sent, omitted }: whether the request carried `temperature` (optional-temperature fix).
+    { const t = (stats.temperature[body.model] ??= { sent: 0, omitted: 0 }); if (body.temperature !== undefined) t.sent++; else t.omitted++; }
     const system = String(body.messages?.find((m) => m.role === "system")?.content ?? "");
     const user = body.messages?.find((m) => m.role === "user")?.content;
     const parts = Array.isArray(user) ? user : [{ type: "text", text: String(user ?? "") }];

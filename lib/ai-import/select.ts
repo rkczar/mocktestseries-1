@@ -23,7 +23,7 @@ import { importerModelHealth, rateLimitAvoidance, routeRefusal, unusableAvoidanc
  *   → provider routes read from OpenRouter, serving normally (status 0)
  *   → Zero-Data-Retention routes only, when ZDR is required
  *   → a route that publishes and accepts EVERY parameter the importer sends
- *     (IMPORTER_REQUEST_PARAMS: max_tokens, temperature — requests go out with
+ *     (IMPORTER_REQUEST_PARAMS: max_tokens; temperature only when every route accepts it — requests go out with
  *     require_parameters, so OpenRouter refuses a route without one), with room
  *     for the request
  *   → conservative MAXIMUM cost of one request = the highest price over the
@@ -88,6 +88,8 @@ interface Evaluation {
   /** An eligible route accepts `structured_outputs` (json_schema) / `response_format` (JSON mode). */
   structured?: boolean;
   jsonMode?: boolean;
+  /** EVERY eligible route accepts `temperature` (then 0 is sent; otherwise it is left out so no route is lost). */
+  temperature?: boolean;
 }
 
 export interface EvalCtx {
@@ -166,7 +168,7 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   const row: CandidateRow = { id, eligible: true, reason: null, maxInr, typicalInr: usdToInr(typicalUsd, ctx.fxRate), routes: routes.map((r) => r.tag || r.provider), ...(zeroPrice ? { zeroPrice } : {}) };
   const refused = routeRefusal(ctx.refusals?.[id], ctx.now);
   if (refused) return { row: { ...row, eligible: false, reason: refused }, price: null, maxUsd: null };
-  return { row, price, maxUsd, reasoning: routes.some((r) => !!r.params?.includes("reasoning")), structured: routes.some((r) => !!r.params?.includes("structured_outputs")), jsonMode: routes.some((r) => !!r.params?.includes("response_format")) };
+  return { row, price, maxUsd, reasoning: routes.some((r) => !!r.params?.includes("reasoning")), structured: routes.some((r) => !!r.params?.includes("structured_outputs")), jsonMode: routes.some((r) => !!r.params?.includes("response_format")), temperature: routes.every((r) => !!r.params?.includes("temperature")) };
 }
 
 const order = (a: CandidateRow, b: CandidateRow) => Number(b.eligible) - Number(a.eligible) || (a.maxInr ?? Infinity) - (b.maxInr ?? Infinity) || (a.typicalInr ?? Infinity) - (b.typicalInr ?? Infinity) || a.id.localeCompare(b.id);

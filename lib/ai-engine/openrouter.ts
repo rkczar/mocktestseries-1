@@ -202,7 +202,8 @@ export interface ChatParams {
   /** Optional system message (the importer's fixed rules; document text never goes here). */
   system?: string;
   maxTokens: number;
-  temperature: number;
+  /** Left out of the request when undefined (AI Question Importer: models whose routes do not accept it). */
+  temperature?: number;
   provider: ProviderPreferences;
   timeoutMs: number;
   /** OpenRouter Auto: plugin settings. */
@@ -239,9 +240,9 @@ export async function chatCompletion(p: ChatParams): Promise<ChatResult> {
   const body: Record<string, unknown> = {
     messages: p.content || p.system ? [...(p.system ? [{ role: "system", content: p.system }] : []), { role: "user", content: p.content ?? p.prompt }] : [{ role: "user", content: p.prompt }],
     max_tokens: p.maxTokens,
-    temperature: p.temperature,
     provider: p.provider,
   };
+  if (p.temperature !== undefined) body.temperature = p.temperature;
   if (p.reasoning) body.reasoning = p.reasoning;
   if (p.responseFormat) body.response_format = p.responseFormat;
   if (p.models.length === 1) body.model = p.models[0];

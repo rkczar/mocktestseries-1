@@ -2362,7 +2362,7 @@ async function sectionY(actor: string, examId: string) {
   }
 }
 
-const Z_PARAM = ["mockparam/notemp", "mockparam/zeroout"];
+const Z_PARAM = ["mockparam/notemp", "mockparam/nomax", "mockparam/zeroout"];
 
 async function sectionZ(actor: string, examId: string) {
   section("Z. One eligibility authority: request parameters, partly-zero prices, OpenRouter refusals, Auto-Configure = Reconfigure = execution");
@@ -2374,7 +2374,7 @@ async function sectionZ(actor: string, examId: string) {
   const { RATE_LIMIT_STOP, importerAiCall, ImporterAiUnavailable } = await import("@/lib/ai-import/ai");
   const { chatCompletion, OpenRouterError } = await import("@/lib/ai-engine/openrouter");
   const { resolveOpenRouterKey } = await import("@/lib/ai-engine/settings");
-  type ZStats = { chat: number; attempts: Record<string, number>; byModel: Record<string, number> };
+  type ZStats = { chat: number; attempts: Record<string, number>; byModel: Record<string, number>; temperature: Record<string, { sent: number; omitted: number }> };
   const zStats = async () => (await (await fetch(`${MOCK}/__mock/stats`)).json()) as ZStats;
   const tries = (st: ZStats, id: string) => st.attempts[id] ?? 0;
   const current = async () => normalizeImporterSettings(await getImporterSettings());
@@ -2399,12 +2399,15 @@ async function sectionZ(actor: string, examId: string) {
   const clearHistory = () => prisma.aiGatewayCall.deleteMany({ where: { model: { startsWith: "mock" } } });
   // The mock merges config: every knob this section uses is reset explicitly.
   const CLEAN = { extraModels: true, paramModels: true, routeStatus: {}, zdrStatus: null, rateLimit: {}, chatDelayMs: 0, noEndpoint: [], zdrRemoved: [] };
-  // Like production: priced and free vision models, a route without `temperature`, a partly-zero price, a text model.
-  const LIST = ["mockparam/notemp", "mockparam/zeroout", "mockfree/reader", "mockpaid/ocr", "mockpaid/verify", "mockvision/checker", "mocktext/cheap"];
+  // Like production: priced and free vision models, a route without `temperature` (usable: it is left out), a route
+  // without `max_tokens` (never usable), a partly-zero price, a text model. LIST3 (sections Z3–Z5) leaves the
+  // cheapest model (notemp) out so those sections keep testing refusals and substitutions with mockpaid/ocr.
+  const LIST = ["mockparam/notemp", "mockparam/nomax", "mockparam/zeroout", "mockfree/reader", "mockpaid/ocr", "mockpaid/verify", "mockvision/checker", "mocktext/cheap"];
+  const LIST3 = LIST.filter((id) => id !== "mockparam/notemp");
   const base = (x: ImporterSettings): ImporterSettings => ({
     ...x,
     aiEnabled: true,
-    importerModels: LIST,
+    importerModels: LIST3,
     selection: { mode: "auto" },
     models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
     privacy: { dataCollection: "deny", zdr: false },
@@ -2426,15 +2429,16 @@ async function sectionZ(actor: string, examId: string) {
 
   try {
     // Z1 — the selection engine itself (the one function every path uses).
-    await setSettings(base, actor);
+    await setSettings((x) => ({ ...base(x), importerModels: LIST }), actor);
     await refreshRoutes(LIST);
     const plan1 = await computeModelPlan(await current(), { refresh: false });
     const cand = (t: "extract" | "verify" | "key" | "classify", id: string) => plan1.tasks[t].candidates.find((c) => c.id === id);
-    check("Z1 setup: the param fixtures are in the catalog (the notemp model is the cheapest priced vision model)", (await prisma.aiModel.count({ where: { id: { in: Z_PARAM } } })) === 2);
-    check("Z1 a route without `temperature` is ineligible for every task, with the precise reason (require_parameters)", (["extract", "verify", "key", "classify"] as const).every((t) => cand(t, "mockparam/notemp")?.eligible === false && /missing: temperature/.test(cand(t, "mockparam/notemp")?.reason ?? "")), cand("extract", "mockparam/notemp"));
+    check("Z1 setup: the param fixtures are in the catalog (the notemp model is the cheapest priced vision model)", (await prisma.aiModel.count({ where: { id: { in: Z_PARAM } } })) === 3);
+    check("Z1 a route without `temperature` is now eligible (temperature is optional and left out); for verification only the different-model rule excludes it", (["extract", "key", "classify"] as const).every((t) => cand(t, "mockparam/notemp")?.eligible === true) && !/temperature/.test(cand("verify", "mockparam/notemp")?.reason ?? "") && /already reads the pages/.test(cand("verify", "mockparam/notemp")?.reason ?? ""), (["extract", "verify", "key", "classify"] as const).map((t) => cand(t, "mockparam/notemp")));
+    check("Z1 a route without `max_tokens` stays ineligible for every task, with the precise reason (require_parameters)", (["extract", "verify", "key", "classify"] as const).every((t) => cand(t, "mockparam/nomax")?.eligible === false && /missing: max_tokens/.test(cand(t, "mockparam/nomax")?.reason ?? "")), cand("extract", "mockparam/nomax"));
     check("Z1 a partly-zero price (₹0 output, priced input) is not a verified cost → ineligible", cand("extract", "mockparam/zeroout")?.eligible === false && /partly-zero price/.test(cand("extract", "mockparam/zeroout")?.reason ?? ""), cand("extract", "mockparam/zeroout"));
     check("Z1 a published-₹0 model is never chosen automatically because of its zero price", cand("extract", "mockfree/reader")?.eligible === false && /published price is ₹0/.test(cand("extract", "mockfree/reader")?.reason ?? "") && Object.values(plan1.tasks).every((t) => t.model !== "mockfree/reader"));
-    check("Z1 a suitable image-capable alternative is selected: mockpaid/ocr reads pages, a different model verifies", plan1.tasks.extract.model === "mockpaid/ocr" && plan1.tasks.extract.vision && !!plan1.tasks.verify.model && plan1.tasks.verify.model !== "mockpaid/ocr" && (plan1.tasks.extract.maxInr ?? 2) <= 1, Object.values(plan1.tasks).map((t) => [t.task, t.model, t.maxInr]));
+    check("Z1 the cheapest priced image model (notemp, no temperature route) reads pages, a different model verifies", plan1.tasks.extract.model === "mockparam/notemp" && plan1.tasks.extract.vision && !!plan1.tasks.verify.model && plan1.tasks.verify.model !== plan1.tasks.extract.model && (plan1.tasks.extract.maxInr ?? 2) <= 1, Object.values(plan1.tasks).map((t) => [t.task, t.model, t.maxInr]));
     // Mock fidelity: OpenRouter's own refusal of that route (what production saw).
     let refused = "";
     try {
@@ -2450,7 +2454,7 @@ async function sectionZ(actor: string, examId: string) {
     const p2 = await previewAutoConfig();
     const row2 = (t: string) => p2.tasks.find((x) => x.task === t)!;
     const E2 = row2("scanned").model ?? "";
-    check("Z2 Auto-Configure: no blocking; an image-reading, priced page reader — never the notemp / partly-zero / ₹0 models", p2.blocking.length === 0 && !!E2 && row2("scanned").imageInput === true && row2("scanned").price.state === "published" && p2.tasks.every((t) => !["mockparam/notemp", "mockparam/zeroout", "mockfree/reader", "mockfree/checker"].includes(t.model ?? "")), [p2.blocking, p2.tasks.map((t) => [t.task, t.model])]);
+    check("Z2 Auto-Configure: no blocking; an image-reading, priced page reader — never the nomax / partly-zero / ₹0 models", p2.blocking.length === 0 && !!E2 && row2("scanned").imageInput === true && row2("scanned").price.state === "published" && p2.tasks.every((t) => !["mockparam/nomax", "mockparam/zeroout", "mockfree/reader", "mockfree/checker"].includes(t.model ?? "")), [p2.blocking, p2.tasks.map((t) => [t.task, t.model])]);
     check("Z2 …quality “Not tested” on every task; no AI request for the preview", p2.tasks.every((t) => t.quality === "not_tested") && (await zStats()).chat === st2.chat);
     await applyAutoConfig({ baselineKey: p2.baselineKey, proposalKey: p2.proposalKey, actorId: actor });
     const s2 = await current();
@@ -2460,42 +2464,47 @@ async function sectionZ(actor: string, examId: string) {
     const plan2 = planOf((await job(j2)).config)!;
     check("Z2 the job confirmed with those settings uses exactly the previewed models", (["extract", "verify", "classify"] as const).every((t) => plan2.tasks[t].model === p2.tasks.find((r) => r.engineTask === t)!.model), Object.values(plan2.tasks).map((t) => t.model));
     check("Z2 the preview's maximum per request equals the server's (same engine, same routes and rate)", Math.abs((row2("scanned").price.maxInr ?? -1) - (plan2.tasks.extract.maxInr ?? -2)) < 1e-9, [row2("scanned").price.maxInr, plan2.tasks.extract.maxInr]);
-    const notemp2 = tries(await zStats(), "mockparam/notemp");
+    const nomax2 = tries(await zStats(), "mockparam/nomax");
+    const temp2 = (await zStats()).temperature;
     await runWorker(300_000);
     const r2 = await job(j2);
     const calls2 = await prisma.aiImportAiCall.findMany({ where: { jobId: j2, task: "extract" }, select: { model: true } });
-    check("Z2 execution: the job finishes; every page read with the previewed model; the notemp model never contacted", r2.status === "NEEDS_REVIEW" && calls2.length === 4 && calls2.every((c) => c.model === E2) && tries(await zStats(), "mockparam/notemp") === notemp2, { s: r2.status, r: r2.pauseReason, calls2 });
+    check("Z2 execution: the job finishes; every page read with the previewed model; the nomax model never contacted", r2.status === "NEEDS_REVIEW" && calls2.length === 4 && calls2.every((c) => c.model === E2) && tries(await zStats(), "mockparam/nomax") === nomax2, { s: r2.status, r: r2.pauseReason, calls2 });
+    const temp2b = (await zStats()).temperature;
+    const d2 = (id: string, k: "sent" | "omitted") => (temp2b[id]?.[k] ?? 0) - (temp2[id]?.[k] ?? 0);
+    check("Z2 page reading with notemp: every request left temperature out (and was accepted under require_parameters)", E2 !== "mockparam/notemp" || (d2(E2, "omitted") >= 4 && d2(E2, "sent") === 0), [E2, temp2b[E2]]);
+    check("Z2 …models whose routes accept temperature still get it (0)", d2("mockpaid/verify", "omitted") === 0 && Object.keys(temp2b).filter((id) => id !== "mockparam/notemp").every((id) => d2(id, "omitted") === 0), temp2b);
     const resv2 = await prisma.aiBudgetReservation.findMany({ where: { requestKey: { startsWith: `qi:${j2}:` } } });
     const ext2 = await prisma.aiBudgetReservation.findMany({ where: { requestKey: { startsWith: `qi:${j2}:` }, feature: "qimport_extract" } });
     check("Z2 server validation: every page-reading reservation ≤ the previewed maximum per request", ext2.length === 4 && ext2.every((r) => r.reservedInr <= (plan2.tasks.extract.maxInr ?? 0) + 1e-9), ext2.map((r) => r.reservedInr));
     check("Z2 cost accounting: the job's spending equals its settled reservations", Math.abs(r2.spentInr - resv2.reduce((a, r) => a + (r.settledInr ?? 0), 0)) < 1e-9 && resv2.every((r) => r.status === "SETTLED"));
 
-    // Z3 — production replica: a job frozen (before the fix) with the notemp model; manual settings like production.
-    await setSettings((x) => ({ ...base(x), selection: { mode: "manual" }, models: { extract: "mockparam/notemp", extractFallbacks: [], verify: "mockpaid/verify", classify: "mocktext/cheap", key: "mockparam/notemp" } }), actor);
+    // Z3 — production replica: a job frozen (before the fix) with the nomax model; manual settings like production.
+    await setSettings((x) => ({ ...base(x), selection: { mode: "manual" }, models: { extract: "mockparam/nomax", extractFallbacks: [], verify: "mockpaid/verify", classify: "mocktext/cheap", key: "mockparam/nomax" } }), actor);
     const j3 = await analyzed("FZ production replica");
-    await expectError("Z3 confirmation now refuses the manual choice before anything is sent (the reason names the parameter)", () => confirm(j3), /notemp cannot be used: .*missing: temperature/);
+    await expectError("Z3 confirmation now refuses the manual choice before anything is sent (the reason names the parameter)", () => confirm(j3), /nomax cannot be used: .*missing: max_tokens/);
     await setSettings((x) => ({ ...base(x), selection: { mode: "manual" }, models: { extract: "mockpaid/ocr", extractFallbacks: [], verify: "mockpaid/verify", classify: "mocktext/cheap", key: null } }), actor);
     await confirm(j3);
     await pauseJob(j3, actor);
-    // What 9f1f7cc froze: the notemp model for page reading and the key, with its (understated) price.
+    // What 9f1f7cc froze: the nomax model for page reading and the key, with its (understated) price.
     const c3 = (await job(j3)).config as Record<string, unknown>;
     const pl3 = planOf(c3)!;
-    const frozen = { ...pl3.tasks.extract, model: "mockparam/notemp", reason: "Manual override by an administrator: mockparam/notemp." };
-    await prisma.aiImportJob.update({ where: { id: j3 }, data: { status: "QUEUED", pauseReason: null, config: { ...c3, models: { ...(c3.models as object), extract: "mockparam/notemp", key: "mockparam/notemp" }, modelPlan: { ...pl3, tasks: { ...pl3.tasks, extract: frozen, key: { ...pl3.tasks.key, model: "mockparam/notemp" } } } } as never } });
-    await setSettings((x) => ({ ...base(x), selection: { mode: "manual" }, models: { extract: "mockparam/notemp", extractFallbacks: [], verify: "mockpaid/verify", classify: "mocktext/cheap", key: "mockparam/notemp" } }), actor);
+    const frozen = { ...pl3.tasks.extract, model: "mockparam/nomax", reason: "Manual override by an administrator: mockparam/nomax." };
+    await prisma.aiImportJob.update({ where: { id: j3 }, data: { status: "QUEUED", pauseReason: null, config: { ...c3, models: { ...(c3.models as object), extract: "mockparam/nomax", key: "mockparam/nomax" }, modelPlan: { ...pl3, tasks: { ...pl3.tasks, extract: frozen, key: { ...pl3.tasks.key, model: "mockparam/nomax" } } } } as never } });
+    await setSettings((x) => ({ ...base(x), selection: { mode: "manual" }, models: { extract: "mockparam/nomax", extractFallbacks: [], verify: "mockpaid/verify", classify: "mocktext/cheap", key: "mockparam/nomax" } }), actor);
     const other0 = JSON.stringify(await job(j2));
     const st3 = await zStats();
     await runWorker(300_000);
     const r3 = await job(j3);
-    check("Z3 the re-check before the request stops it: nothing is sent to the notemp model, the job pauses, ₹0 spent", r3.status === "PAUSED" && tries(await zStats(), "mockparam/notemp") === tries(st3, "mockparam/notemp") && r3.spentInr === 0, { s: r3.status, r: r3.pauseReason });
-    check("Z3 …the pause names the exact cause (temperature) and says nothing was sent", /missing: temperature/.test(r3.pauseReason ?? "") && /Nothing was sent/.test(r3.pauseReason ?? ""), r3.pauseReason);
+    check("Z3 the re-check before the request stops it: nothing is sent to the nomax model, the job pauses, ₹0 spent", r3.status === "PAUSED" && tries(await zStats(), "mockparam/nomax") === tries(st3, "mockparam/nomax") && r3.spentInr === 0, { s: r3.status, r: r3.pauseReason });
+    check("Z3 …the pause names the exact cause (max_tokens) and says nothing was sent", /missing: max_tokens/.test(r3.pauseReason ?? "") && /Nothing was sent/.test(r3.pauseReason ?? ""), r3.pauseReason);
     check("Z3 …and gives safe guidance instead of retrying: Reconfigure would propose mockpaid/ocr", /Use Reconfigure Models for This Job: it would propose mockpaid\/ocr/.test(r3.pauseReason ?? ""), r3.pauseReason);
     check("Z3 …no automatic replacement (manual mode), no more expensive fallback", (await prisma.aiImportEvent.count({ where: { jobId: j3, type: "MODEL_REPLACED" } })) === 0);
     const st3b = await zStats();
     const rp3 = await reconfigurePreview(j3);
     const t3 = (t: string) => rp3.tasks.find((x) => x.task === t)!;
-    check("Z3 Reconfigure preview: page reading notemp → mockpaid/ocr, substitution explained (cause + price + Not tested)", t3("extract").current === "mockparam/notemp" && t3("extract").proposed === "mockpaid/ocr" && t3("extract").substituted?.from === "mockparam/notemp" && /missing: temperature/.test(t3("extract").reason) && /Proposed instead: mockpaid\/ocr/.test(t3("extract").reason) && /Not tested/.test(t3("extract").reason) && t3("extract").quality === "not_tested", t3("extract"));
-    check("Z3 …answer-key reading substituted too; verification keeps the administrator's model", t3("key").proposed !== "mockparam/notemp" && !!t3("key").proposed && t3("verify").proposed === "mockpaid/verify" && !t3("verify").substituted, rp3.tasks);
+    check("Z3 Reconfigure preview: page reading nomax → mockpaid/ocr, substitution explained (cause + price + Not tested)", t3("extract").current === "mockparam/nomax" && t3("extract").proposed === "mockpaid/ocr" && t3("extract").substituted?.from === "mockparam/nomax" && /missing: max_tokens/.test(t3("extract").reason) && /Proposed instead: mockpaid\/ocr/.test(t3("extract").reason) && /Not tested/.test(t3("extract").reason) && t3("extract").quality === "not_tested", t3("extract"));
+    check("Z3 …answer-key reading substituted too; verification keeps the administrator's model", t3("key").proposed !== "mockparam/nomax" && !!t3("key").proposed && t3("verify").proposed === "mockpaid/verify" && !t3("verify").substituted, rp3.tasks);
     check("Z3 …estimate and conservative maximum known; nothing blocks; no AI request for the preview", rp3.estimateInr !== null && rp3.maxInr !== null && rp3.blocking.length === 0 && rp3.aiRequestsSent === 0 && (await zStats()).chat === st3b.chat, rp3);
     await reconfigureJob({ jobId: j3, proposalKey: rp3.proposalKey, actorId: actor });
     const pl3b = planOf((await job(j3)).config)!;
@@ -2503,7 +2512,7 @@ async function sectionZ(actor: string, examId: string) {
     check("Z3 …an unrelated import job was not changed", JSON.stringify(await job(j2)) === other0);
     await runWorker(300_000);
     const r3b = await job(j3);
-    check("Z3 resumed: all pages read with the substitute; the notemp model never contacted", r3b.status === "NEEDS_REVIEW" && (await pages(j3)).done === 4 && (await prisma.aiImportAiCall.count({ where: { jobId: j3, task: "extract", model: { not: "mockpaid/ocr" } } })) === 0 && tries(await zStats(), "mockparam/notemp") === tries(st3, "mockparam/notemp"), { s: r3b.status, r: r3b.pauseReason, p: await pages(j3) });
+    check("Z3 resumed: all pages read with the substitute; the nomax model never contacted", r3b.status === "NEEDS_REVIEW" && (await pages(j3)).done === 4 && (await prisma.aiImportAiCall.count({ where: { jobId: j3, task: "extract", model: { not: "mockpaid/ocr" } } })) === 0 && tries(await zStats(), "mockparam/nomax") === tries(st3, "mockparam/nomax"), { s: r3b.status, r: r3b.pauseReason, p: await pages(j3) });
 
     // Z4 — privacy refusal by OpenRouter mid-job: no pricier fallback, refusal history respected, finished pages kept.
     await freshPilotBudget();
@@ -2545,12 +2554,12 @@ async function sectionZ(actor: string, examId: string) {
     await setSettings((x) => ({ ...base(x), importerModels: ["mockpaid/ocr", "mocktext/cheap"] }), actor);
     await confirm(j5);
     await pauseJob(j5, actor);
-    const BAD = ["mockparam/notemp", "mockparam/zeroout", "mockfree/reader", "mocktext/cheap"];
+    const BAD = ["mockparam/nomax", "mockparam/zeroout", "mockfree/reader", "mocktext/cheap"];
     await setSettings((x) => ({ ...base(x), importerModels: BAD }), actor);
     await refreshRoutes(BAD);
     const st5 = await zStats();
     const plan5 = await computeModelPlan(await current(), { refresh: false });
-    check("Z5 no eligible page-reading model: none chosen, every reason given (temperature, partly-zero, ₹0, no image input)", plan5.tasks.extract.model === null && /temperature/.test(plan5.tasks.extract.reason) && /partly-zero/.test(plan5.tasks.extract.reason) && /₹0/.test(plan5.tasks.extract.reason), plan5.tasks.extract.reason);
+    check("Z5 no eligible page-reading model: none chosen, every reason given (max_tokens, partly-zero, ₹0, no image input)", plan5.tasks.extract.model === null && /max_tokens/.test(plan5.tasks.extract.reason) && /partly-zero/.test(plan5.tasks.extract.reason) && /₹0/.test(plan5.tasks.extract.reason), plan5.tasks.extract.reason);
     const p5 = await previewAutoConfig();
     check("Z5 Auto-Configure never proposes one of those models (it may add an eligible catalog model instead)", p5.tasks.every((t) => !BAD.slice(0, 3).includes(t.model ?? "")), p5.tasks.map((t) => t.model));
     const rp5 = await reconfigurePreview(j5);
