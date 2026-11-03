@@ -1,4 +1,5 @@
 import "server-only";
+import { applyPaperNumberIssues, paperNumberIssues } from "@/lib/paper-question-numbers";
 import { prisma } from "@/lib/prisma";
 import {
   parseImportFile,
@@ -271,6 +272,7 @@ export async function validateImportRun(runId: string): Promise<ValidateImportRe
   const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(prisma), getImageFilenameIndex()]);
   const runExamContext = runExamContextFor(lookups.exams, run);
   const richCtx = await loadRichContext(runId);
+  const numberIssues = await paperNumberIssues(prisma, runId, run.previousYearPaperId);
 
   let validCount = 0;
   let invalidCount = 0;
@@ -280,7 +282,7 @@ export async function validateImportRun(runId: string): Promise<ValidateImportRe
 
   await mapWithConcurrency(rows, CONCURRENCY, async (row) => {
     const merged = mergeRowData(row.rawData, row.editedData) as BulkImportRow;
-    const resolved = await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx);
+    const resolved = applyPaperNumberIssues(await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx), numberIssues.get(row.id));
 
     if (resolved.severity === ImportRowSeverity.ERROR) invalidCount++;
     else validCount++;

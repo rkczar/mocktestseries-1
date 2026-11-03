@@ -1,7 +1,10 @@
 import "server-only";
 import { Prisma, QuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { reviewTriggerWarnings } from "@/lib/bulk-import";
+import { buildTaxonomyLookups, mergeRowData, reviewTriggerWarnings, runExamContextFor, type BulkImportRow as ParsedRowShape } from "@/lib/bulk-import";
+import { getImageFilenameIndex } from "@/lib/bulk-import-images";
+import { applyPaperNumberIssues, paperNumberIssues } from "@/lib/paper-question-numbers";
+import { loadRichContext, resolveImportRow } from "@/lib/rich-import/validate";
 import { evaluatePublishEligibility } from "@/lib/question-publish-policy";
 import { QUESTION_TYPES } from "@/lib/question-types";
 import {
@@ -80,6 +83,109 @@ async function reviewTriggersFor(db: Db, questionIds: string[]): Promise<Map<str
 function reviewDetail(triggers: string[] | undefined, stored: string | null): string {
   if (triggers?.length) return `Flagged at import: ${triggers.join(" · ")}`;
   return stored ? `Flagged for review: ${stored}` : "Flagged for review — review it, then mark it reviewed.";
+}
+
+// ---------------------------------------------------------------------------
+// Review-flag re-check: is the reason a question was flagged still true today?
+// ---------------------------------------------------------------------------
+
+export type ReviewCheckStatus = "RESOLVED" | "STILL_PRESENT" | "NO_IMPORT_RECORD" | "NOT_FLAGGED";
+
+export interface ReviewCheck {
+  id: string;
+  code: string;
+  number: number | null;
+  /** What the import recorded (the warning(s) that set the flag). */
+  originalWarning: string;
+  /** Why that warning fired, in plain words. */
+  rootCause: string;
+  /** How the current rules now map the same row (non-flagging notes), if any. */
+  correctedMapping: string[];
+  /** The same row re-validated with today's rules. */
+  status: ReviewCheckStatus;
+  remaining: string[];
+}
+
+function rootCauseOf(warning: string): string {
+  if (/does not match any existing Exam/.test(warning) || /^File specifies Exam /.test(warning))
+    return "The file's Exam name was not the site's exam name. The importer had no rule for the same exam written without its year label, so it treated the row as substituted into another exam.";
+  if (/not found in the master taxonomy|needs mapping|could not be checked because/.test(warning))
+    return "A Subject / Topic / Sub-topic name in the file did not match the taxonomy exactly.";
+  if (/^Correct Answer /.test(warning)) return "The file gave no valid correct answer (A–D).";
+  if (/^Possible duplicate:/.test(warning)) return "The importer found an existing question that looked the same.";
+  if (/ image ".*" not found/.test(warning)) return "A referenced image file was missing at import time.";
+  if (/^Paper Question Number /.test(warning)) return "The printed question number was missing, invalid or already used.";
+  return "Flagged at import.";
+}
+
+const MAPPING_NOTE = /recognised as the selected import Exam|matched existing (Subject|Topic|Sub-topic)/;
+
+/**
+ * Re-validates the import row behind every flagged question with TODAY's
+ * import rules (the same resolveImportRow + Paper Question Number checks the
+ * importer runs) and reports whether each flag's cause is gone. Read-only.
+ * A "Possible duplicate" that points at the question itself is not a cause.
+ */
+export async function recheckReviewFlags(input: { paperId: string; batchKey: string; ids: unknown }, db: Db = prisma): Promise<ReviewCheck[]> {
+  const ids = checkIds(input.ids);
+  await assertBatchExists(db, input.paperId, input.batchKey);
+  const questions = await db.question.findMany({
+    where: { id: { in: ids }, ...batchWhere(input.paperId, input.batchKey), retiredAt: null },
+    select: { id: true, code: true, paperQuestionNumber: true, reviewRequired: true, reviewReason: true },
+  });
+  const rows = await db.bulkImportRow.findMany({
+    where: { questionId: { in: questions.map((q) => q.id) }, status: { in: ["SUCCESS", "REPLACED"] } },
+    select: { id: true, runId: true, questionId: true, rawData: true, editedData: true, warnings: true, createdAt: true },
+    orderBy: { createdAt: "desc" },
+  });
+  const rowByQuestion = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) if (r.questionId && !rowByQuestion.has(r.questionId)) rowByQuestion.set(r.questionId, r);
+
+  const [lookups, imageIndex] = await Promise.all([buildTaxonomyLookups(db as typeof prisma), getImageFilenameIndex()]);
+  const runCache = new Map<string, { ctx: ReturnType<typeof runExamContextFor>; rich: Awaited<ReturnType<typeof loadRichContext>>; numbers: Map<string, string[]> }>();
+  const runInfo = async (runId: string) => {
+    if (!runCache.has(runId)) {
+      const run = await db.bulkImportRun.findUnique({ where: { id: runId }, select: { examId: true, mockTestId: true, previousYearPaperId: true } });
+      runCache.set(runId, {
+        ctx: runExamContextFor(lookups.exams, run),
+        rich: await loadRichContext(runId, db as typeof prisma),
+        numbers: await paperNumberIssues(db, runId, run?.previousYearPaperId),
+      });
+    }
+    return runCache.get(runId)!;
+  };
+
+  const out: ReviewCheck[] = [];
+  for (const q of questions) {
+    const row = rowByQuestion.get(q.id);
+    const stored = row && Array.isArray(row.warnings) ? (row.warnings as unknown[]).filter((w): w is string => typeof w === "string") : [];
+    const original = reviewTriggerWarnings(stored);
+    const originalWarning = original.join(" · ") || q.reviewReason || "Flagged for review";
+    const base = { id: q.id, code: q.code, number: q.paperQuestionNumber, originalWarning, rootCause: original.length ? rootCauseOf(original[0]) : "Flagged for review by hand or by another workflow.", correctedMapping: [] as string[], remaining: [] as string[] };
+    if (!q.reviewRequired) {
+      out.push({ ...base, status: "NOT_FLAGGED" });
+      continue;
+    }
+    if (!row) {
+      out.push({ ...base, status: "NO_IMPORT_RECORD", remaining: ["No import record to re-check — review it in the Question Bank."] });
+      continue;
+    }
+    const info = await runInfo(row.runId);
+    const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
+    const resolved = applyPaperNumberIssues(await resolveImportRow(db as typeof prisma, lookups, merged, imageIndex, info.ctx, info.rich), info.numbers.get(row.id));
+    const selfDuplicate = resolved.resolvedData?.duplicateQuestionId === q.id;
+    const remaining = [
+      ...resolved.errors,
+      ...reviewTriggerWarnings(resolved.warnings).filter((w) => !(selfDuplicate && /^Possible duplicate:/.test(w))),
+    ];
+    out.push({
+      ...base,
+      correctedMapping: resolved.warnings.filter((w) => MAPPING_NOTE.test(w)),
+      status: remaining.length ? "STILL_PRESENT" : "RESOLVED",
+      remaining,
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +556,7 @@ export async function evaluateBatchPublish(input: { paperId: string; batchKey: s
   const publishedByText = new Map(published.map((p) => [normText(p.text), p.code]));
   const publishedByNumber = new Map(published.filter((p) => p.paperQuestionNumber != null).map((p) => [p.paperQuestionNumber!, p.code]));
   const seenText = new Map<string, string>();
+  const seenNumber = new Map<number, string>();
 
   const triggers = await reviewTriggersFor(db, rows.filter((r) => r.reviewRequired).map((r) => r.id));
 
@@ -518,6 +625,10 @@ export async function evaluateBatchPublish(input: { paperId: string; batchKey: s
       add("DUPLICATE", `Question number ${q.paperQuestionNumber} is already used by published question ${publishedByNumber.get(q.paperQuestionNumber)}.`);
     }
     if (t && !seenText.has(t)) seenText.set(t, q.code);
+    // A paper question keeps its printed position; never published without one.
+    if (q.paperQuestionNumber == null) add("NUMBER", "Paper question number missing — its printed position in the paper is not established.");
+    else if (seenNumber.has(q.paperQuestionNumber)) add("DUPLICATE", `Question number ${q.paperQuestionNumber} is also used by ${seenNumber.get(q.paperQuestionNumber)} in this selection.`);
+    else seenNumber.set(q.paperQuestionNumber, q.code);
 
     if (item.reasons.length) out.blocked.push(item);
     else out.eligible.push(item);
@@ -639,6 +750,9 @@ export async function markBatchQuestionsReviewed(input: { paperId: string; batch
       });
       const byId = new Map(rows.map((r) => [r.id, r]));
       const triggers = await reviewTriggersFor(tx, rows.map((r) => r.id));
+      // Only flags whose cause is verifiably gone may be cleared here.
+      const flagged = rows.filter((r) => r.reviewRequired && !r.retiredAt && r.previousYearPaperId === input.paperId && (r.importBatchId ?? MANUAL_BATCH) === input.batchKey).map((r) => r.id);
+      const checks = new Map((flagged.length ? await recheckReviewFlags({ paperId: input.paperId, batchKey: input.batchKey, ids: flagged }, tx) : []).map((c) => [c.id, c]));
       const marked: MarkReviewedResult["marked"] = [];
       const skipped: MarkReviewedResult["skipped"] = [];
       for (const id of ids) {
@@ -649,6 +763,8 @@ export async function markBatchQuestionsReviewed(input: { paperId: string; batch
         else if (q.retiredAt) skipped.push({ id, code: q.code, reason: "Retired questions are read-only." });
         else if (q.status !== QuestionStatus.DRAFT) skipped.push({ id, code: q.code, reason: `Only Draft questions are reviewed here (this one is ${q.status}).` });
         else if (!q.reviewRequired) skipped.push({ id, code: q.code, reason: "Not flagged for review." });
+        else if (checks.get(id)?.status !== "RESOLVED")
+          skipped.push({ id, code: q.code, reason: `Still needs review: ${(checks.get(id)?.remaining ?? ["could not be re-checked"]).join(" · ")}` });
         else marked.push({ id, code: q.code, previousReason: triggers.get(id)?.join(" · ") ?? q.reviewReason });
       }
       if (marked.length) {
@@ -671,11 +787,12 @@ export async function markBatchQuestionsReviewed(input: { paperId: string; batch
             blockedCount: skipped.length,
             marked,
             skipped,
+            recheck: [...checks.values()].map((c) => ({ id: c.id, status: c.status, rootCause: c.rootCause, correctedMapping: c.correctedMapping, remaining: c.remaining })),
           } as unknown as Prisma.InputJsonValue,
         },
       });
       return { markedCount: marked.length, marked, skipped };
     },
-    { timeout: 60_000, maxWait: 30_000 }
+    { timeout: 120_000, maxWait: 30_000 }
   );
 }

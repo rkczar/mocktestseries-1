@@ -516,6 +516,7 @@ export const REVIEW_TRIGGER_PATTERNS: readonly RegExp[] = [
   /^Correct Answer /,
   /^Possible duplicate:/,
   / image ".*" not found/,
+  /^Paper Question Number /,
 ];
 
 /** The warnings among `warnings` that flagged the row for review (in order). */
@@ -637,6 +638,37 @@ export type ValidationDb = Pick<
   "exam" | "subject" | "topic" | "subTopic" | "examSubject" | "examTopic" | "examSubTopic" | "previousYearPaper" | "question" | "bulkImportRow"
 >;
 
+/**
+ * Exam name without a trailing year label: "RUHS MEDICAL OFFICER EXAM 2026"
+ * and "RUHS Medical Officer Exam" (or "… Exam 2016") share the base
+ * "ruhs medical officer exam". Used ONLY to recognise the run's own selected
+ * Exam under its yearless name — never to pick some other exam.
+ */
+export function examBaseKey(name: string): string {
+  return name
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*[-–(]?\s*(19|20)\d{2}\s*\)?$/, "")
+    .trim();
+}
+
+/**
+ * Taxonomy key that also ignores spacing around punctuation:
+ * "Radiodiagnosis/Radiology" and "Radiodiagnosis / Radiology" collide. A
+ * fallback only — accepted when exactly ONE record has the key.
+ */
+export function looseTaxonomyKey(name: string): string {
+  return taxonomyNameKey(name).replace(/\s*([/&,+().:;-])\s*/g, "$1");
+}
+
+/** The single record whose loose key matches `name`, or undefined when none / several do. */
+function uniqueLooseMatch<T extends { name: string }>(records: T[], name: string): T | undefined {
+  const key = looseTaxonomyKey(name);
+  const hits = records.filter((r) => looseTaxonomyKey(r.name) === key);
+  return hits.length === 1 ? hits[0] : undefined;
+}
+
 interface TaxonomyLookups {
   exams: { id: string; name: string; code: string; year: number | null }[];
   examsByName: Map<string, TaxonomyLookups["exams"][number]>;
@@ -734,6 +766,19 @@ export async function resolveRow(
     );
     exam = runExamContext;
     reviewRequired = true;
+  } else if (
+    data.exam &&
+    !fileExam &&
+    runExamContext &&
+    examBaseKey(data.exam) !== "" &&
+    examBaseKey(data.exam) === examBaseKey(runExamContext.name) &&
+    !lookups.exams.some((e) => e.id !== runExamContext.id && examBaseKey(e.name) === examBaseKey(data.exam!))
+  ) {
+    // The file names the selected Exam without its year label (e.g. "RUHS
+    // Medical Officer Exam" for "RUHS MEDICAL OFFICER EXAM 2026") and no other
+    // exam shares that name: the same exam, not a substitution — no review flag.
+    warnings.push(`Exam "${data.exam}" recognised as the selected import Exam "${runExamContext.name}" (same exam name without the year label).`);
+    exam = runExamContext;
   } else if (data.exam && !fileExam && runExamContext) {
     warnings.push(
       `Exam "${data.exam}" does not match any existing Exam — using the selected import Exam "${runExamContext.name}" instead.`
@@ -770,7 +815,11 @@ export async function resolveRow(
   const notLinked: string[] = [];
 
   // Subject: required data, but an unresolved name is a WARNING (needs mapping), not an ERROR.
-  const subject = data.subject ? subjectsByKey.get(taxonomyNameKey(data.subject)) : undefined;
+  let subject = data.subject ? subjectsByKey.get(taxonomyNameKey(data.subject)) : undefined;
+  if (data.subject && !subject) {
+    subject = uniqueLooseMatch(lookups.subjects, data.subject);
+    if (subject) warnings.push(`Subject "${data.subject}" matched existing Subject "${subject.name}" (only the spacing around punctuation differs).`);
+  }
   if (data.subject && !subject) {
     unmapped.push({ field: "subject", value: data.subject });
     warnings.push(`Subject "${data.subject}" not found in the master taxonomy — needs mapping before import`);
@@ -787,6 +836,10 @@ export async function resolveRow(
     const topicKey = taxonomyNameKey(data.topic);
     if (subject) {
       topic = topicsBySubjectAndKey.get(`${subject.id}:${topicKey}`);
+      if (!topic) {
+        topic = uniqueLooseMatch(topics.filter((t) => t.subjectId === subject!.id), data.topic);
+        if (topic) warnings.push(`Topic "${data.topic}" matched existing Topic "${topic.name}" (only the spacing around punctuation differs).`);
+      }
       if (!topic) {
         const existsElsewhere = topics.some((t) => t.nameKey === topicKey && t.subjectId !== subject.id);
         if (existsElsewhere) {
@@ -812,6 +865,10 @@ export async function resolveRow(
     const subTopicKey = taxonomyNameKey(data.subTopic);
     if (topic) {
       subTopic = subTopicsByTopicAndKey.get(`${topic.id}:${subTopicKey}`);
+      if (!subTopic) {
+        subTopic = uniqueLooseMatch(subTopics.filter((st) => st.topicId === topic!.id), data.subTopic);
+        if (subTopic) warnings.push(`Sub-topic "${data.subTopic}" matched existing Sub-topic "${subTopic.name}" (only the spacing around punctuation differs).`);
+      }
       if (!subTopic) {
         const existsElsewhere = subTopics.some((st) => st.nameKey === subTopicKey && st.topicId !== topic!.id);
         if (existsElsewhere) {

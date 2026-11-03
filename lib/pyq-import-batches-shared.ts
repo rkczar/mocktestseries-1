@@ -99,6 +99,7 @@ export const BATCH_BLOCK_REASONS = {
   REVIEW_REQUIRED: "Review required",
   IMAGE_MISSING: "Image file missing",
   DUPLICATE: "Duplicate / invalid publishing state",
+  NUMBER: "Paper question number missing",
 } as const;
 export type BatchBlockCode = keyof typeof BATCH_BLOCK_REASONS;
 

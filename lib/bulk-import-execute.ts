@@ -18,6 +18,7 @@ import {
   type BulkImportRow as ParsedRowShape,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
+import { applyPaperNumberIssues, paperNumberIssues, paperQuestionNumberOf } from "@/lib/paper-question-numbers";
 import { linkSubjectToExam, linkSubTopicToExam, linkTopicToExam } from "@/lib/exam-taxonomy";
 import { loadRichContext, resolveImportRow, type RichContext } from "@/lib/rich-import/validate";
 import { allImageRefs, composeQuestionText, fallbackAlt, manifestMatchSpec, matchIdentityText, type ManifestQuestion } from "@/lib/rich-import/manifest";
@@ -300,9 +301,12 @@ async function executeLeased(
   const seenInRun = new Map<string, { id: string; code: string }>();
   const runKey = (examId: string, subjectId: string, text: string) => `${examId}:${subjectId}:${text}`;
 
+  // Paper Question Number checks see the WHOLE file (duplicates across rows), not just this invocation's rows.
+  const numberIssues = await paperNumberIssues(prisma, runId, run.previousYearPaperId);
+
   for (const row of rows) {
     const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
-    const resolved = await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx);
+    const resolved = applyPaperNumberIssues(await resolveImportRow(prisma, lookups, merged, imageIndex, runExamContext, richCtx), numberIssues.get(row.id));
     const manifest = richCtx ? resolved.manifest ?? null : null;
 
     if (resolved.severity === ImportRowSeverity.ERROR) {
@@ -698,10 +702,4 @@ export async function richFormatCounts(runId: string) {
   return { PLAIN: fmt("PLAIN"), RICH_V1: fmt("RICH_V1"), withImages, questionImages: role("QUESTION"), optionImages: role("OPTION"), explanationImages: role("EXPLANATION") };
 }
 
-/** "38" → 38; anything that is not a plain positive whole number (Q38a, 2.1, blank) → null. */
-export function paperQuestionNumberOf(raw: string | number | null | undefined): number | null {
-  const v = typeof raw === "number" ? String(raw) : (raw ?? "").trim();
-  if (!/^\d{1,4}$/.test(v)) return null;
-  const n = Number(v);
-  return n >= 1 && n <= 5000 ? n : null;
-}
+export { paperQuestionNumberOf } from "@/lib/paper-question-numbers";
