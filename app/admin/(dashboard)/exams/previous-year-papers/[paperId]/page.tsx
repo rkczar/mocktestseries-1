@@ -4,23 +4,17 @@ import { prisma } from "@/lib/prisma";
 import { PAPER_PUBLISHED_QUESTION_COUNT } from "@/lib/pyq-membership";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PaperToggle } from "../paper-toggle";
 import { QuestionBankPicker } from "./question-bank-picker";
-import { RetireReplaceLink } from "./remove-from-paper-button";
+import { PaperBatches } from "./paper-batches";
+import { loadPaperBatchOverview } from "@/lib/pyq-import-batches";
 import { RankingSettingsForm } from "@/components/admin/ranking-settings-form";
 import { getRankingConfig } from "@/lib/leaderboard";
 import { hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 
 export const metadata = { title: "Previous Year Paper — Mock Test Series.in Admin" };
-
-const STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = {
-  PUBLISHED: "success",
-  DRAFT: "neutral",
-  ARCHIVED: "warning",
-};
 
 export default async function PaperDetailPage({ params }: { params: Promise<{ paperId: string }> }) {
   const { paperId } = await params;
@@ -39,9 +33,11 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
   });
 
   if (!paper) notFound();
-  const [ranking, canManageRanking] = await Promise.all([
+  const [ranking, canManageRanking, canManageQuestions, overview] = await Promise.all([
     getRankingConfig({ kind: "PREVIOUS_YEAR_PAPER", id: paper.id }),
     hasPermission(PERMISSIONS.TEST_SERIES_MANAGE),
+    hasPermission(PERMISSIONS.QUESTIONS_MANAGE),
+    loadPaperBatchOverview(paper.id),
   ]);
 
   const subjects = (await getExamTaxonomy(prisma, paper.examId)).map((s) => ({
@@ -109,64 +105,7 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
 
       <QuestionBankPicker paperId={paper.id} subjects={subjects} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Questions in This Paper</CardTitle>
-          <CardDescription>{paper.questions.length} question{paper.questions.length === 1 ? "" : "s"} linked to this paper.</CardDescription>
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
-          {paper.questions.length === 0 ? (
-            <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">
-              No questions linked yet — use &quot;Add Questions from Question Bank&quot; above.
-            </p>
-          ) : (
-            <table className="w-full min-w-[760px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
-                  <th className="py-2 pr-4">No.</th>
-                  <th className="py-2 pr-4">Code</th>
-                  <th className="py-2 pr-4">Subject</th>
-                  <th className="py-2 pr-4">Topic</th>
-                  <th className="py-2 pr-4">Question</th>
-                  <th className="py-2 pr-4">Status</th>
-                  <th className="py-2 pr-4">Image</th>
-                  <th className="py-2 pr-4" />
-                </tr>
-              </thead>
-              <tbody>
-                {paper.questions.map((q) => (
-                  <tr key={q.id} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{q.paperQuestionNumber ?? "—"}</td>
-                    <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-foreground)]">{q.code}</td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{q.subject.name}</td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{q.topic?.name ?? "—"}</td>
-                    <td className="py-2.5 pr-4 max-w-[320px] truncate text-[var(--color-foreground)]">{q.text}</td>
-                    <td className="py-2.5 pr-4">
-                      {q.retiredAt ? <Badge variant="error">RETIRED</Badge> : <Badge variant={STATUS_VARIANT[q.status] ?? "neutral"}>{q.status}</Badge>}
-                      {!q.options.some((o) => o.isCorrect) ? (
-                        <Badge variant="warning" className="ml-1">
-                          No Correct Answer
-                        </Badge>
-                      ) : null}
-                    </td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{q.imageUrl ? "Yes" : "—"}</td>
-                    <td className="py-2.5 pr-4">
-                      <div className="flex items-center justify-end gap-2">
-                        {q.retiredAt ? null : (
-                          <Button asChild size="compact" variant="outline">
-                            <Link href={`/admin/questions?tab=add&id=${q.id}`}>Edit</Link>
-                          </Button>
-                        )}
-                        <RetireReplaceLink questionId={q.id} retired={!!q.retiredAt} />
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </CardContent>
-      </Card>
+      <PaperBatches paperId={paper.id} batches={overview.batches} aiJobs={overview.aiJobs} questions={overview.questions} canManage={canManageQuestions} />
     </div>
   );
 }
