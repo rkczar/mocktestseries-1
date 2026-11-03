@@ -549,8 +549,10 @@ export async function evaluateBatchPublish(input: { paperId: string; batchKey: s
   const subTopicTopic = new Map(subTopics.map((s) => [s.id, s.topicId]));
 
   // Duplicate state: a live published question of this paper with the same text or number.
+  // Never excludes the selection: a published question selected alongside its
+  // Draft copy must still block the copy (only Drafts are checked against it).
   const published = await db.question.findMany({
-    where: { previousYearPaperId: paperId, status: QuestionStatus.PUBLISHED, retiredAt: null, id: { notIn: ids } },
+    where: { previousYearPaperId: paperId, status: QuestionStatus.PUBLISHED, retiredAt: null },
     select: { code: true, text: true, paperQuestionNumber: true },
   });
   const publishedByText = new Map(published.map((p) => [normText(p.text), p.code]));
