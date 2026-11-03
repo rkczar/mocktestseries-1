@@ -17,7 +17,8 @@ import { correctCountIssue, toQuestionType } from "@/lib/question-types";
  *  2. its answer key is valid for its type (exactly one correct option for
  *     single-correct / Match the Following, at least two for multiple-correct);
  *  3. it has at least two options, each with text or an image;
- *  4. every image it references still exists in media storage.
+ *  4. every image it references still exists in media storage;
+ *  5. it has question text or a question image (an empty stem is never published).
  *
  * Questions that are ALREADY published are left alone (no retroactive
  * unpublishing). A batch is never all-or-nothing: eligible questions are
@@ -31,6 +32,7 @@ export const PUBLISH_BLOCK_REASONS = {
   IMAGE_MISSING: "Image file missing",
   NOT_FOUND: "Question not found",
   RETIRED: "Retired question",
+  QUESTION_TEXT: "Question text missing",
 } as const;
 export type PublishBlockCode = keyof typeof PUBLISH_BLOCK_REASONS;
 
@@ -57,6 +59,7 @@ const SELECT = {
   reviewRequired: true,
   reviewReason: true,
   questionType: true,
+  text: true,
   imageUrl: true,
   options: { select: { label: true, text: true, isCorrect: true, imageUrl: true } },
   assets: { select: { role: true, optionLabel: true, storageKey: true } },
@@ -65,8 +68,13 @@ const SELECT = {
 type Row = Prisma.QuestionGetPayload<{ select: typeof SELECT }>;
 
 /** Pure rules for one loaded question (image existence is checked separately). */
-export function structuralPublishIssues(q: Pick<Row, "reviewRequired" | "reviewReason" | "questionType" | "options" | "assets">): PublishBlock["reasons"] {
+export function structuralPublishIssues(
+  q: Pick<Row, "reviewRequired" | "reviewReason" | "questionType" | "options" | "assets"> & Partial<Pick<Row, "text" | "imageUrl">>
+): PublishBlock["reasons"] {
   const reasons: PublishBlock["reasons"] = [];
+  if (q.text !== undefined && q.text.trim() === "" && !q.imageUrl && !q.assets.some((a) => a.role === "QUESTION")) {
+    reasons.push({ code: "QUESTION_TEXT", detail: "Question text is empty." });
+  }
   if (q.reviewRequired) {
     reasons.push({ code: "REVIEW_REQUIRED", detail: q.reviewReason ? `Flagged for review: ${q.reviewReason}` : "Flagged for review — mark it reviewed first." });
   }
@@ -81,7 +89,11 @@ export function structuralPublishIssues(q: Pick<Row, "reviewRequired" | "reviewR
 }
 
 /** Evaluates publish eligibility for a set of question ids (any status). */
-export async function evaluatePublishEligibility(ids: string[], db: Db = prisma): Promise<PublishEligibility> {
+export async function evaluatePublishEligibility(
+  ids: string[],
+  db: Db = prisma,
+  opts: { evaluatePublished?: boolean } = {}
+): Promise<PublishEligibility> {
   const unique = Array.from(new Set(ids));
   const rows: Row[] = [];
   for (let i = 0; i < unique.length; i += 500) {
@@ -102,7 +114,9 @@ export async function evaluatePublishEligibility(ids: string[], db: Db = prisma)
       out.blocked.push({ id, code: q.code, reasons: [{ code: "RETIRED", detail: "Retired questions can never be published again — use the replacement question." }] });
       continue;
     }
-    if (q.status === QuestionStatus.PUBLISHED) {
+    // evaluatePublished: the question form writes its new content first and
+    // asks "may THIS content be published?" before it flips the status.
+    if (q.status === QuestionStatus.PUBLISHED && !opts.evaluatePublished) {
       out.alreadyPublished.push(id);
       continue;
     }
@@ -166,8 +180,8 @@ export async function publishQuestions(input: { ids: string[]; actorId: string; 
 }
 
 /** Single-question gate for the form / status select: null = may publish, else the refusal message. */
-export async function publishRefusal(questionId: string): Promise<string | null> {
-  const e = await evaluatePublishEligibility([questionId]);
+export async function publishRefusal(questionId: string, db: Db = prisma, opts: { evaluatePublished?: boolean } = {}): Promise<string | null> {
+  const e = await evaluatePublishEligibility([questionId], db, opts);
   const b = e.blocked[0];
   if (!b) return null;
   return `Cannot publish: ${b.reasons.map((r) => r.detail).join(" ")}`;

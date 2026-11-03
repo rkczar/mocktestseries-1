@@ -281,6 +281,8 @@ export async function createQuestionAction(
     return { error: "A question flagged for review can't be published. Untick Review Required (after reviewing it) or save it as Draft." };
   }
 
+  const publishNow = status === QuestionStatus.PUBLISHED;
+  try {
   await prisma.$transaction(async (tx) => {
     const { examCode, examYear: resolvedYear } = await resolveQuestionCodeInput(tx, {
       examId,
@@ -304,7 +306,7 @@ export async function createQuestionAction(
         text,
         imageUrl: imageUrl || null,
         difficulty,
-        status,
+        status: publishNow ? QuestionStatus.DRAFT : status,
         source: source || (previousYearPaperId ? QuestionSource.PYQ : QuestionSource.QUESTION_BANK),
         examYear: finalYear,
         reviewRequired: isReviewRequired,
@@ -315,6 +317,7 @@ export async function createQuestionAction(
     });
 
     await upsertOptions(tx, created.id, parsed.data);
+    if (publishNow) await publishAfterSave(tx, created.id);
 
     await tx.auditLog.create({
       data: {
@@ -328,9 +331,31 @@ export async function createQuestionAction(
 
     return created;
   });
+  } catch (err) {
+    if (err instanceof PublishRefusedError) return { error: `${err.message} Save it as Draft, or fix it first.` };
+    throw err;
+  }
 
   revalidatePath("/admin/questions");
   return { success: true };
+}
+
+/**
+ * Thrown inside a question-form transaction when the saved content fails the
+ * publishing policy: the whole save rolls back and the admin sees why.
+ */
+class PublishRefusedError extends Error {}
+
+/**
+ * Publishing from the question form uses the SAME rules as bulk Publish
+ * (lib/question-publish-policy.ts): the row is written with its previous
+ * status first, the policy evaluates exactly what was saved, and only then
+ * is the status flipped to Published — all in the caller's transaction.
+ */
+async function publishAfterSave(tx: Prisma.TransactionClient, questionId: string): Promise<void> {
+  const refusal = await publishRefusal(questionId, tx, { evaluatePublished: true });
+  if (refusal) throw new PublishRefusedError(refusal);
+  await tx.question.update({ where: { id: questionId }, data: { status: QuestionStatus.PUBLISHED } });
 }
 
 // Retired questions are read-only (docs/QUESTION-RETIREMENT.md): never edited,
@@ -392,6 +417,9 @@ export async function updateQuestionAction(
     return { error: "A question flagged for review can't be published. Untick Review Required (after reviewing it) or save it as Draft." };
   }
 
+  // Only the transition INTO Published runs the full policy (no retroactive unpublishing).
+  const publishNow = !!before && status === QuestionStatus.PUBLISHED && before.status !== QuestionStatus.PUBLISHED;
+  try {
   await prisma.$transaction(async (tx) => {
     const existing = await tx.question.findUnique({
       where: { id: questionId },
@@ -411,7 +439,7 @@ export async function updateQuestionAction(
         text,
         imageUrl: imageUrl || null,
         difficulty,
-        status,
+        status: publishNow ? before!.status : status,
         reviewRequired: isReviewRequired,
         reviewReason: isReviewRequired ? reviewReason || null : null,
         questionType: parsed.data.questionType,
@@ -420,11 +448,16 @@ export async function updateQuestionAction(
     });
 
     await upsertOptions(tx, questionId, parsed.data);
+    if (publishNow) await publishAfterSave(tx, questionId);
 
     await tx.auditLog.create({
       data: { actorId: session.user.id, action: "QUESTION_UPDATED", entityType: "Question", entityId: questionId },
     });
   });
+  } catch (err) {
+    if (err instanceof PublishRefusedError) return { error: `${err.message} Nothing was saved — save it as Draft, or fix it first.` };
+    throw err;
+  }
 
   if (before && hasMaterialQuestionChange(before, parsed.data)) {
     await flagExplanationStaleIfExists(questionId);

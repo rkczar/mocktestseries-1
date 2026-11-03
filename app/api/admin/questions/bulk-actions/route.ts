@@ -52,9 +52,10 @@ export async function POST(request: NextRequest) {
     const requestedIds = Array.from(new Set(ids));
     const act = action as BulkAction;
     // Retired questions are read-only (docs/QUESTION-RETIREMENT.md): Draft /
-    // Delete never touch them (PUBLISH reports them as blocked: RETIRED).
+    // Delete / review-flag changes never touch them (PUBLISH reports them as
+    // blocked: RETIRED; ARCHIVE is a no-op for them — they are already archived).
     const retiredIds =
-      act === "DRAFT" || act === "DELETE"
+      act === "DRAFT" || act === "DELETE" || act === "SET_REVIEW_REQUIRED"
         ? new Set((await prisma.question.findMany({ where: { id: { in: requestedIds }, retiredAt: { not: null } }, select: { id: true } })).map((q) => q.id))
         : new Set<string>();
     const uniqueIds = requestedIds.filter((id) => !retiredIds.has(id));
@@ -122,7 +123,13 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      return NextResponse.json({ success: true, action: act, updatedCount: result.count });
+      return NextResponse.json({
+        success: true,
+        action: act,
+        updatedCount: result.count,
+        retiredSkippedCount: retiredIds.size,
+        ...(retiredIds.size ? { message: `Updated ${result.count} question(s). ${retiredIds.size} retired question(s) are read-only and were left unchanged.` } : {}),
+      });
     }
 
     // DELETE: protect historical test-attempt integrity — a question ever

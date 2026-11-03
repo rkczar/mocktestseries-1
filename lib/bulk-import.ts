@@ -500,6 +500,29 @@ function mapRowData(row: Record<string, string>, rowNumber: number, mode: Import
 // that isn't available.
 // ---------------------------------------------------------------------------
 
+/**
+ * The resolveRow warnings that actually set `reviewRequired` (exam
+ * substitution, unmapped taxonomy, missing/invalid Correct Answer, possible
+ * duplicate, missing image). Informational warnings such as "Sub-topic not
+ * provided" never flag a row, so they must never be shown as the reason it
+ * was flagged. Keep in step with every `reviewRequired = true` in resolveRow.
+ */
+export const REVIEW_TRIGGER_PATTERNS: readonly RegExp[] = [
+  /^File specifies Exam /,
+  /does not match any existing Exam/,
+  /not found in the master taxonomy/,
+  /— needs mapping$/,
+  /could not be checked because/,
+  /^Correct Answer /,
+  /^Possible duplicate:/,
+  / image ".*" not found/,
+];
+
+/** The warnings among `warnings` that flagged the row for review (in order). */
+export function reviewTriggerWarnings(warnings: readonly string[]): string[] {
+  return warnings.filter((w) => REVIEW_TRIGGER_PATTERNS.some((re) => re.test(w)));
+}
+
 function severityFromIssues(errors: string[], warnings: string[]): ImportRowSeverity {
   if (errors.length > 0) return ImportRowSeverity.ERROR;
   if (warnings.length > 0) return ImportRowSeverity.WARNING;

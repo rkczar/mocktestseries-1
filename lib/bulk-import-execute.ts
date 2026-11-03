@@ -14,6 +14,7 @@ import {
   runExamContextFor,
   buildTaxonomyLookups,
   mergeRowData,
+  reviewTriggerWarnings,
   type BulkImportRow as ParsedRowShape,
 } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
@@ -342,7 +343,9 @@ async function executeLeased(
     let effectiveStatus: QuestionStatus = row.targetStatus ?? rd.status;
     let reviewReason: string | null = null;
     if (resolved.reviewRequired) {
-      reviewReason = resolved.warnings[0] ?? "Flagged for review during bulk import";
+      // The warning that actually flagged the row — never an informational one
+      // ("Sub-topic not provided" was stored as the reason on 2026-11-03).
+      reviewReason = reviewTriggerWarnings(resolved.warnings)[0] ?? resolved.warnings[0] ?? "Flagged for review during bulk import";
     }
 
     // A declared-but-missing required image blocks PUBLISHED, not the import itself.
