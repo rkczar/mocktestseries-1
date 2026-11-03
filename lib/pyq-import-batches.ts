@@ -1,7 +1,7 @@
 import "server-only";
 import { Prisma, QuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { buildTaxonomyLookups, mergeRowData, reviewTriggerWarnings, runExamContextFor, type BulkImportRow as ParsedRowShape } from "@/lib/bulk-import";
+import { buildTaxonomyLookups, examBaseKey, mergeRowData, reviewTriggerWarnings, runExamContextFor, type BulkImportRow as ParsedRowShape } from "@/lib/bulk-import";
 import { getImageFilenameIndex } from "@/lib/bulk-import-images";
 import { applyPaperNumberIssues, paperNumberIssues } from "@/lib/paper-question-numbers";
 import { loadRichContext, resolveImportRow } from "@/lib/rich-import/validate";
@@ -107,8 +107,11 @@ export interface ReviewCheck {
 }
 
 function rootCauseOf(warning: string): string {
-  if (/does not match any existing Exam/.test(warning) || /^File specifies Exam /.test(warning))
-    return "The file's Exam name was not the site's exam name. The importer had no rule for the same exam written without its year label, so it treated the row as substituted into another exam.";
+  const m = /^Exam "(.+)" does not match any existing Exam — using the selected import Exam "(.+)" instead/.exec(warning);
+  if (m && examBaseKey(m[1]) === examBaseKey(m[2]))
+    return "The file's Exam name was the site's exam name without its year label. The importer had no rule for that, so it treated the row as substituted into another exam.";
+  if (m || /^File specifies Exam /.test(warning))
+    return "The file's Exam name is not this exam's name, so the row was moved into the selected import Exam and needs a human check.";
   if (/not found in the master taxonomy|needs mapping|could not be checked because/.test(warning))
     return "A Subject / Topic / Sub-topic name in the file did not match the taxonomy exactly.";
   if (/^Correct Answer /.test(warning)) return "The file gave no valid correct answer (A–D).";
@@ -131,7 +134,7 @@ export async function recheckReviewFlags(input: { paperId: string; batchKey: str
   await assertBatchExists(db, input.paperId, input.batchKey);
   const questions = await db.question.findMany({
     where: { id: { in: ids }, ...batchWhere(input.paperId, input.batchKey), retiredAt: null },
-    select: { id: true, code: true, paperQuestionNumber: true, reviewRequired: true, reviewReason: true },
+    select: { id: true, code: true, paperQuestionNumber: true, reviewRequired: true, reviewReason: true, examId: true, subjectId: true, text: true, previousYearPaperId: true },
   });
   const rows = await db.bulkImportRow.findMany({
     where: { questionId: { in: questions.map((q) => q.id) }, status: { in: ["SUCCESS", "REPLACED"] } },
@@ -173,10 +176,33 @@ export async function recheckReviewFlags(input: { paperId: string; batchKey: str
     const info = await runInfo(row.runId);
     const merged = mergeRowData(row.rawData, row.editedData) as ParsedRowShape;
     const resolved = applyPaperNumberIssues(await resolveImportRow(db as typeof prisma, lookups, merged, imageIndex, info.ctx, info.rich), info.numbers.get(row.id));
+    // The importer's duplicate lookup returns ONE match, which is now often the
+    // question itself. A self-match is not a cause — but it can hide a real
+    // duplicate, so look for another live question explicitly.
     const selfDuplicate = resolved.resolvedData?.duplicateQuestionId === q.id;
+    const otherDuplicates: string[] = [];
+    if (selfDuplicate) {
+      const twins = await db.question.findMany({
+        where: {
+          id: { not: q.id },
+          retiredAt: null,
+          OR: [
+            { examId: q.examId, subjectId: q.subjectId, text: q.text },
+            ...(q.previousYearPaperId && q.paperQuestionNumber != null ? [{ previousYearPaperId: q.previousYearPaperId, paperQuestionNumber: q.paperQuestionNumber }] : []),
+          ],
+        },
+        select: { code: true, text: true, paperQuestionNumber: true },
+        take: 5,
+      });
+      for (const t of twins)
+        otherDuplicates.push(
+          t.text === q.text ? `Possible duplicate: same text as live question ${t.code}` : `Possible duplicate: question number ${t.paperQuestionNumber} is also used by live question ${t.code}`
+        );
+    }
     const remaining = [
       ...resolved.errors,
       ...reviewTriggerWarnings(resolved.warnings).filter((w) => !(selfDuplicate && /^Possible duplicate:/.test(w))),
+      ...otherDuplicates,
     ];
     out.push({
       ...base,

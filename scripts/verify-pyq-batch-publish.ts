@@ -305,9 +305,17 @@ async function main() {
   check("genuine mismatch → STILL_PRESENT", st(byText(3).id)?.status === "STILL_PRESENT" && st(byText(3).id)!.remaining.length > 0);
   check("missing answer → STILL_PRESENT", st(byText(5).id)?.status === "STILL_PRESENT");
   check("unflagged → NOT_FLAGGED", st(byText(8).id)?.status === "NOT_FLAGGED");
+  check("genuine mismatch: root cause does NOT claim a missing year label", !/year label/.test(st(byText(3).id)?.rootCause ?? ""), st(byText(3).id)?.rootCause);
+  {
+    const dupChecks = await recheckReviewFlags({ paperId: paper.id, batchKey: b2.run.id, ids: [dupText.id] });
+    check("same-text duplicate of a live question stays STILL_PRESENT (self-match never hides it)", dupChecks[0]?.status === "STILL_PRESENT" && dupChecks[0].remaining.some((r) => r.includes(manual7.code)), dupChecks[0]);
+    const mrDup = await markBatchQuestionsReviewed({ paperId: paper.id, batchKey: b2.run.id, ids: [dupText.id], actorId });
+    check("…and mark reviewed refuses to clear it", mrDup.markedCount === 0 && mrDup.skipped.length === 1, mrDup);
+  }
   check("re-check writes nothing", (await prisma.question.count({ where: { id: { in: [byText(1).id, byText(2).id] }, reviewRequired: true } })) === 2);
 
   const auditBefore = await prisma.auditLog.count({ where: { action: "PYQ_BATCH_MARK_REVIEWED" } });
+  // (the duplicate refusal above wrote one audit row of its own)
   const mr = await markBatchQuestionsReviewed({ paperId: paper.id, batchKey: b2.run.id, ids: [byText(1).id, byText(2).id, byText(3).id, retiredId, byText(8).id], actorId });
   check("mark reviewed: only the 2 resolved cleared", mr.markedCount === 2 && mr.marked.every((m) => [byText(1).id, byText(2).id].includes(m.id)), mr);
   check("mark reviewed: mismatch / retired / unflagged skipped with reasons", mr.skipped.length === 3 && mr.skipped.every((s) => s.reason.length > 0), mr.skipped);
