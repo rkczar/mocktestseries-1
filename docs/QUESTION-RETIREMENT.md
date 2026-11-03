@@ -62,6 +62,19 @@ rollback: Master Admin). History and rollback: `/admin/questions/replacements`.
    replacement), held containers (only while still held), attempt statuses and
    answer exclusions. It is refused once a later change retired the replacement.
 
+## Owner decisions (final, 2026-11-03)
+
+- **D7** — When a question is retired, every AI-generated variant of it is
+  retired too and is never served again.
+- **D8** — Bookmarks are never moved to the replacement and never deleted.
+  Retired questions are hidden from students' Saved Questions; the bookmark
+  rows stay in the database.
+- **D9** — Invalidated attempts never count toward any ranking or leaderboard
+  (per-test, PYQ, Overall Rank). A reset never makes a student unranked:
+  they stay eligible on every other valid test, including a fresh attempt
+  of the same test. The existing Overall Rank minimum of 3 ranked tests is
+  unchanged.
+
 ## Attempt reset policy (owner decisions)
 
 | Where the question was | Attempts reset | Decision |
@@ -99,7 +112,7 @@ Answers carry `statsExcludedAt`, which accuracy, questions practised, today's
 answers and weak topics all filter on.
 
 Saved Questions hides a retired question. The bookmark row is kept, and
-bookmarks are not moved to the replacement (D8 — owner decision pending).
+bookmarks are not moved to the replacement (D8).
 
 ## Open sessions
 
