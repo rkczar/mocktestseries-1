@@ -30,6 +30,7 @@ export const PUBLISH_BLOCK_REASONS = {
   OPTIONS: "Options incomplete",
   IMAGE_MISSING: "Image file missing",
   NOT_FOUND: "Question not found",
+  RETIRED: "Retired question",
 } as const;
 export type PublishBlockCode = keyof typeof PUBLISH_BLOCK_REASONS;
 
@@ -52,6 +53,7 @@ const SELECT = {
   id: true,
   code: true,
   status: true,
+  retiredAt: true,
   reviewRequired: true,
   reviewReason: true,
   questionType: true,
@@ -93,6 +95,11 @@ export async function evaluatePublishEligibility(ids: string[], db: Db = prisma)
     const q = byId.get(id);
     if (!q) {
       out.blocked.push({ id, code: null, reasons: [{ code: "NOT_FOUND", detail: "Question not found." }] });
+      continue;
+    }
+    // Retired is terminal (docs/QUESTION-RETIREMENT.md): never re-published by any route.
+    if (q.retiredAt) {
+      out.blocked.push({ id, code: q.code, reasons: [{ code: "RETIRED", detail: "Retired questions can never be published again — use the replacement question." }] });
       continue;
     }
     if (q.status === QuestionStatus.PUBLISHED) {

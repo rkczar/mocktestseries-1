@@ -68,8 +68,9 @@ export function PaperDeleteDialog({ paperId, paperTitle }: { paperId: string; pa
           impact.blocked ? (
             <Alert variant="destructive">
               <AlertDescription>
-                This paper has {impact.questions} linked question(s) and {impact.testAttempts} recorded test attempt(s) — unlink the
-                questions (Remove From Paper) first, or deactivate the paper instead.
+                This paper has {impact.questions} linked question(s) and {impact.testAttempts} recorded test attempt(s), so it is kept for
+                history. To correct its questions use Retire / Replace on each question (Question Dependencies on the paper page), or
+                deactivate the paper instead.
               </AlertDescription>
             </Alert>
           ) : (

@@ -78,8 +78,9 @@ Test types only supply data and configuration. There is no per-type player.
   result released), 3+ ranked tests, equal averages share; PYQs never count; memoized
   60 s per process. `isLeaderboardAttempt` is still set by `submitAttempt` but is
   legacy: ranking does not read it.
-- **PYQ full paper** freezes the whole published paper in original order
-  (question `createdAt`, then `code`). It is never sampled or shuffled.
+- **PYQ full paper** freezes the whole servable paper in printed order
+  (`paperQuestionNumber`, then question `createdAt`, then `code`). It is never
+  sampled or shuffled.
   PYQ-only practice goes through Custom Module with Source = PYQ.
 - **History is immutable.** Retake/Reattempt always creates a new attempt.
 
@@ -154,8 +155,21 @@ Each of these once caused a real production failure.
 8. **Content corrections never rewrite a snapshot.** An IN_PROGRESS attempt
    frozen from wrong content is set to `ABANDONED` and gets an AuditLog row.
    Its snapshot and answers are kept, the next Start is a fresh attempt, and
-   the attempt pages render `AttemptResetNotice`. SUBMITTED attempts are never
-   changed. See `docs/CONTENT-OWNERSHIP.md`.
+   the attempt pages render `AttemptResetNotice`. SUBMITTED attempts are
+   changed only by Retire / Replace (`docs/QUESTION-RETIREMENT.md`):
+   - an invalidated attempt is `ABANDONED` + `invalidatedAt` (a DB CHECK keeps
+     it there);
+   - save / reveal / heartbeat answer `RESET`;
+   - the player clears unsent answers and goes to the reset notice;
+   - every student-facing read excludes it.
+
+   See `docs/CONTENT-OWNERSHIP.md`.
+12. **Only servable questions are frozen.** Every start path filters with
+    `SERVABLE_QUESTION_WHERE` (PUBLISHED, not retired —
+    `lib/question-servable.ts`). `createAttemptFromQuestions` re-checks the set
+    inside its transaction with `FOR SHARE`. An archived or retired question is
+    never served through a Mock, PYQ, Custom Module, Grand, Live or Subject
+    Test. Regression: `scripts/verify-question-safety.ts`.
 9. **Start is idempotent; so is submit.** `createAttemptFromQuestions` takes a per-student,
    per-test advisory lock and re-checks for an IN_PROGRESS attempt inside the
    transaction. Before 2026-10-02 a double-clicked Start (or two tabs) created

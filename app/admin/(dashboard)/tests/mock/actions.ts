@@ -162,8 +162,14 @@ export async function updateMockTestDetailsAction(mockTestId: string, _prev: Moc
 export async function setMockTestStatusAction(mockTestId: string, status: MockTestStatus): Promise<{ error?: string }> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   if (status === "PUBLISHED") {
-    const count = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { status: "PUBLISHED" } } });
+    const count = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { status: "PUBLISHED", retiredAt: null } } });
     if (count === 0) return { error: "Add at least one published question before publishing — an empty test can't be attempted." };
+    // P1-E (docs/QUESTION-RETIREMENT.md): a test held because a question was
+    // retired goes live again only after that position is fixed.
+    const retired = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { retiredAt: { not: null } } } });
+    if (retired > 0) {
+      return { error: `This test still contains ${retired} retired question(s). Remove them or replace them with a corrected question in Step 3, then publish.` };
+    }
   }
   await prisma.mockTest.update({ where: { id: mockTestId }, data: { status } });
   await prisma.auditLog.create({

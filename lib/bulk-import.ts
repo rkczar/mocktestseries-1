@@ -890,8 +890,11 @@ export async function resolveRow(
   let duplicateReason: string | undefined;
 
   if (data.questionCode) {
-    const byCode = await db.question.findUnique({ where: { code: data.questionCode }, select: { id: true, code: true } });
-    if (byCode) {
+    const byCode = await db.question.findUnique({ where: { code: data.questionCode }, select: { id: true, code: true, retiredAt: true } });
+    if (byCode?.retiredAt) {
+      // A retired question is never skipped into, attached or overwritten (docs/QUESTION-RETIREMENT.md).
+      errors.push(`Question code ${byCode.code} belongs to a retired question — remove the code to import this row as a new question.`);
+    } else if (byCode) {
       duplicateQuestionId = byCode.id;
       duplicateReason = "Same Question Code";
     }
@@ -919,7 +922,7 @@ export async function resolveRow(
       .catch(() => []);
     const priorIds = priorRows.map((r) => r.questionId).filter((id): id is string => !!id);
     const samePaper = priorIds.length
-      ? await db.question.findMany({ where: { id: { in: priorIds }, previousYearPaperId }, select: { id: true } })
+      ? await db.question.findMany({ where: { id: { in: priorIds }, previousYearPaperId, retiredAt: null }, select: { id: true } })
       : [];
     const priorQuestionId = priorIds.find((id) => samePaper.some((q) => q.id === id));
     if (priorQuestionId) {
@@ -930,7 +933,7 @@ export async function resolveRow(
 
   if (!duplicateReason && subject) {
     const existingQuestion = await db.question.findFirst({
-      where: { examId: exam.id, subjectId: subject.id, text: data.questionText },
+      where: { examId: exam.id, subjectId: subject.id, text: data.questionText, retiredAt: null },
       select: { id: true, code: true },
     });
     if (existingQuestion) {

@@ -32,7 +32,20 @@ of them from another.
   was frozen from wrong content, set it to `ABANDONED`. Record an AuditLog row
   (e.g. `PYQ_DATA_CORRECTION`) and keep the snapshot and answers. Resume only
   considers IN_PROGRESS, so the next Start is fresh. The attempt pages show
-  `AttemptResetNotice`. SUBMITTED attempts are never touched.
+  `AttemptResetNotice`. SUBMITTED attempts are never touched — **except**
+  through Retire / Replace (`docs/QUESTION-RETIREMENT.md`, owner-approved
+  2026-11-03):
+  - D4/D5: every attempt of a test or module whose question set the replacement
+    changed is invalidated;
+  - D3 (Phase 2 only): an explicitly approved complete paper replacement
+    invalidates all attempts of that paper.
+
+  Invalidation is `ABANDONED` + `invalidatedAt`; snapshots, answers and scores
+  are still never rewritten.
+- **Archived and retired questions are never served**, whatever still links to
+  them (`lib/question-servable.ts`). Retired is terminal and read-only.
+- **A paper's question number** is `Question.paperQuestionNumber`. It is
+  separate from a test position (`MockTestQuestion.order` etc.).
 
 ## Regression
 

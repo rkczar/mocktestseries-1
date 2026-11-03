@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
-import { QuestionSource } from "@prisma/client";
+import { QuestionSource, QuestionStatus } from "@prisma/client";
 
 // Standard Mode duration for the paper (Pre-Test Setup "Standard"). Changing
 // it only affects attempts started afterwards — each attempt freezes its own.
@@ -129,7 +129,7 @@ export async function deletePaperAction(paperId: string) {
 
   const impact = await getPaperDeleteImpact(paperId);
   if (impact.blocked) {
-    throw new Error("This paper still has linked Questions or recorded Test Attempts — unlink/remove those first, or deactivate the paper instead.");
+    throw new Error("This paper still has linked Questions or recorded Test Attempts, so it is kept for history — correct its questions with Retire / Replace, or deactivate the paper instead.");
   }
 
   await prisma.previousYearPaper.delete({ where: { id: paperId } });
@@ -226,6 +226,13 @@ export async function unlinkQuestionFromPaperAction(paperId: string, questionId:
   const session = await requirePermission(PERMISSIONS.EXAMS_MANAGE);
 
   // Unlink the relationship only — the Question row itself is untouched.
+  // A PUBLISHED or retired question is never just unlinked: that left it
+  // served everywhere it was reused. Use Retire / Replace instead
+  // (docs/QUESTION-RETIREMENT.md). Draft/archived links can still be undone.
+  const current = await prisma.question.findUnique({ where: { id: questionId }, select: { status: true, retiredAt: true } });
+  if (current && (current.status === QuestionStatus.PUBLISHED || current.retiredAt)) {
+    throw new Error("A published or retired question is not unlinked from its paper — use Retire / Replace on the question instead.");
+  }
   const { count } = await prisma.question.updateMany({
     where: { id: questionId, previousYearPaperId: paperId },
     data: { previousYearPaperId: null },

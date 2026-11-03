@@ -76,8 +76,14 @@ export async function createCustomModuleAction(
   return { success: true };
 }
 
-export async function setCustomModuleStatusAction(moduleId: string, status: CustomModuleStatus) {
+export async function setCustomModuleStatusAction(moduleId: string, status: CustomModuleStatus): Promise<{ error?: string }> {
   const session = await requirePermission(PERMISSIONS.CUSTOM_MODULES_MANAGE);
+  if (status === "PUBLISHED" || status === "ACTIVE") {
+    // P1-E (docs/QUESTION-RETIREMENT.md): a module held because a question was
+    // retired goes live again only after that question is removed or replaced.
+    const retired = await prisma.customModuleQuestion.count({ where: { customModuleId: moduleId, question: { retiredAt: { not: null } } } });
+    if (retired > 0) return { error: `This module still contains ${retired} retired question(s). Remove or replace them, then publish.` };
+  }
   await prisma.customModule.update({ where: { id: moduleId }, data: { status } });
   await prisma.auditLog.create({
     data: {
@@ -90,6 +96,7 @@ export async function setCustomModuleStatusAction(moduleId: string, status: Cust
   });
   revalidatePath("/admin/custom-modules");
   revalidatePath("/student/custom-module");
+  return {};
 }
 
 export async function syncCustomModuleQuestionsAction(moduleId: string, formData: FormData) {

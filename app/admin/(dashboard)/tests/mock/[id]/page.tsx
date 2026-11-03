@@ -303,6 +303,14 @@ export default async function MockTestDetailPage({
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {mockTest._count.testAttempts > 0 && canManage ? (
+            // P1-A (docs/QUESTION-RETIREMENT.md): ordinary builder edits never reset attempts.
+            <p className="mb-3 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs text-[var(--color-foreground)]">
+              This test already has {mockTest._count.testAttempts} attempt(s). Adding, removing or reordering questions here does not reset
+              them. To correct a wrong question, use Retire / Replace on that question (Question Bank → Uses): it swaps the corrected
+              question in at the same position and resets this test&apos;s attempts.
+            </p>
+          ) : null}
           <MockQuestionsManager
             mockTestId={mockTest.id}
             examName={mockTest.exam.name}

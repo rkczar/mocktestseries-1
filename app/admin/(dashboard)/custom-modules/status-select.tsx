@@ -12,7 +12,13 @@ export function CustomModuleStatusSelect({ moduleId, status }: { moduleId: strin
     <SelectNative
       value={status}
       disabled={pending}
-      onChange={(e) => startTransition(() => setCustomModuleStatusAction(moduleId, e.target.value as CustomModuleStatus))}
+      onChange={(e) => {
+        const next = e.target.value as CustomModuleStatus;
+        startTransition(async () => {
+          const result = await setCustomModuleStatusAction(moduleId, next);
+          if (result?.error) window.alert(result.error);
+        });
+      }}
       className="h-8 w-32 text-xs"
       aria-label="Custom module status"
     >

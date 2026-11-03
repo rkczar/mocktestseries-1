@@ -746,6 +746,10 @@ export function AllQuestionsPanelClient({
                       >
                         Edit
                       </Link>
+                      {/* Dependencies + Retire / Replace (docs/QUESTION-RETIREMENT.md). */}
+                      <Link href={`/admin/questions/${q.id}/replace`} className="ml-3 text-[var(--color-primary)] hover:underline">
+                        Uses
+                      </Link>
                     </td>
                   </tr>
                 ))}

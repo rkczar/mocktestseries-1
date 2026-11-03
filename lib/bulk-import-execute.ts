@@ -465,7 +465,12 @@ async function executeLeased(
         const isDuplicate = rd.isDuplicate || Boolean(runMatch);
         const duplicateQuestionId = runMatch?.id ?? rd.duplicateQuestionId;
 
-        if (isDuplicate && duplicateQuestionId) {
+        // A question retired after this run was staged is never skipped into or
+        // overwritten (docs/QUESTION-RETIREMENT.md): the row imports as new.
+        const duplicateRetired =
+          !!duplicateQuestionId && !!(await tx.question.findUnique({ where: { id: duplicateQuestionId }, select: { retiredAt: true } }))?.retiredAt;
+
+        if (isDuplicate && duplicateQuestionId && !duplicateRetired) {
           if (run.duplicateStrategy === BulkImportDuplicateStrategy.SKIP) {
             const existing = await tx.question.findUnique({ where: { id: duplicateQuestionId }, select: { code: true } });
             // SKIP keeps the existing canonical Question — that is the id a
@@ -537,6 +542,8 @@ async function executeLeased(
             status: effectiveStatus,
             source,
             examYear: rd.examYear,
+            // The printed question number orders the PYQ attempt (docs/QUESTION-RETIREMENT.md).
+            paperQuestionNumber: previousYearPaperId ? paperQuestionNumberOf(merged.questionNumber) : null,
             importBatchId: runId,
             reviewRequired: resolved.reviewRequired,
             reviewReason,
@@ -686,4 +693,12 @@ export async function richFormatCounts(runId: string) {
   const fmt = (f: string) => formats.find((x) => x.contentFormat === f)?._count ?? 0;
   const role = (r: string) => assets.find((x) => x.role === r)?._count ?? 0;
   return { PLAIN: fmt("PLAIN"), RICH_V1: fmt("RICH_V1"), withImages, questionImages: role("QUESTION"), optionImages: role("OPTION"), explanationImages: role("EXPLANATION") };
+}
+
+/** "38" → 38; anything that is not a plain positive whole number (Q38a, 2.1, blank) → null. */
+export function paperQuestionNumberOf(raw: string | number | null | undefined): number | null {
+  const v = typeof raw === "number" ? String(raw) : (raw ?? "").trim();
+  if (!/^\d{1,4}$/.test(v)) return null;
+  const n = Number(v);
+  return n >= 1 && n <= 5000 ? n : null;
 }

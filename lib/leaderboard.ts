@@ -131,7 +131,9 @@ function rankedCte(where: Prisma.Sql): Prisma.Sql {
              a."sourceType"::text || ':' || COALESCE(a."mockTestId", a."previousYearPaperId") AS "testKey",
              (a."entryMode" = 'ONLINE' AND a."durationMode" = 'FIXED' AND a."answerMode" = 'EXAM') AS competitive
       FROM "TestAttempt" a
-      WHERE ${where}
+      -- An attempt invalidated by a content replacement never ranks and never
+      -- marks a student "not ranked" (docs/QUESTION-RETIREMENT.md, D9).
+      WHERE ${where} AND a."invalidatedAt" IS NULL
     ),
     official AS (
       SELECT DISTINCT ON ("testKey", "studentId") *

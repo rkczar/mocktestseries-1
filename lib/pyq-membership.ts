@@ -16,7 +16,8 @@ import { QuestionStatus, type Prisma } from "@prisma/client";
  * so the count a student sees is exactly the set a PYQ attempt serves.
  */
 export function paperQuestionWhere(paperId: string): Prisma.QuestionWhereInput {
-  return { previousYearPaperId: paperId, status: QuestionStatus.PUBLISHED };
+  // PUBLISHED and not retired — the same rule as every start path (lib/question-servable.ts).
+  return { previousYearPaperId: paperId, status: QuestionStatus.PUBLISHED, retiredAt: null };
 }
 
 /** `_count` selector for PreviousYearPaper → its student-visible (PUBLISHED) questions. */

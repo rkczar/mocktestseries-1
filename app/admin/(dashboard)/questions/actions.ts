@@ -333,12 +333,21 @@ export async function createQuestionAction(
   return { success: true };
 }
 
+// Retired questions are read-only (docs/QUESTION-RETIREMENT.md): never edited,
+// never re-published. Rollback of the replacement is the only way back.
+const RETIRED_READ_ONLY = "This question is retired and read-only. Edit its replacement instead.";
+async function isRetiredQuestion(questionId: string): Promise<boolean> {
+  const q = await prisma.question.findUnique({ where: { id: questionId }, select: { retiredAt: true } });
+  return !!q?.retiredAt;
+}
+
 export async function updateQuestionAction(
   questionId: string,
   _prev: QuestionFormState,
   formData: FormData
 ): Promise<QuestionFormState> {
   const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
+  if (await isRetiredQuestion(questionId)) return { error: RETIRED_READ_ONLY };
   const parsed = parseQuestionForm(formData);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
 
@@ -428,6 +437,7 @@ export async function updateQuestionAction(
 
 export async function setQuestionStatusAction(questionId: string, status: QuestionStatus): Promise<{ error?: string } | void> {
   const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
+  if (await isRetiredQuestion(questionId)) return { error: RETIRED_READ_ONLY };
   if (status === QuestionStatus.PUBLISHED) {
     const refusal = await publishRefusal(questionId);
     if (refusal) return { error: refusal };

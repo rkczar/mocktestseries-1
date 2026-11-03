@@ -159,6 +159,21 @@ function readPending(attemptId: string): PendingAnswers {
   }
 }
 
+/**
+ * The attempt was closed by an admin content correction (engine code RESET):
+ * stop saving, drop this attempt's unsent answers (they belong to the old
+ * questions) and show the reset notice, from where the student starts fresh.
+ */
+function leaveResetAttempt(attemptId: string, router: { replace: (href: string) => void }, queue: { stop: () => void } | null) {
+  queue?.stop();
+  try {
+    window.sessionStorage.removeItem(pendingKey(attemptId));
+  } catch {
+    // storage unavailable — nothing to clear
+  }
+  router.replace(`/student/attempt/${attemptId}`);
+}
+
 function writePending(attemptId: string, pending: PendingAnswers) {
   try {
     if (Object.keys(pending).length === 0) window.sessionStorage.removeItem(pendingKey(attemptId));
@@ -273,6 +288,8 @@ export function TestPlayer({
           } else if (code === "ACCESS_REVOKED") {
             // Access ended (no plan / trial / grace): the server re-renders this page as the lock screen.
             router.refresh();
+          } else if (code === "RESET") {
+            leaveResetAttempt(attemptId, router, queueRef.current);
           } else {
             router.replace(`/student/attempt/${attemptId}/result`);
           }
@@ -352,13 +369,15 @@ export function TestPlayer({
           if (!result.ok && result.code === "OTHER_DEVICE") {
             queueRef.current?.stop();
             setProblem({ kind: "other-device", message: OTHER_DEVICE_NOTICE });
+          } else if (!result.ok && result.code === "RESET") {
+            leaveResetAttempt(attemptId, router, queueRef.current);
           }
         })
         .catch(() => {});
     };
     const timer = setInterval(beat, HEARTBEAT_MS);
     return () => clearInterval(timer);
-  }, [attemptId]);
+  }, [attemptId, router]);
 
   // ---- Timer (deadline-based; unlimited = no timer) --------------------------
   useEffect(() => {
@@ -488,6 +507,10 @@ export function TestPlayer({
           setProblem({ kind: "other-device", message: OTHER_DEVICE_NOTICE });
           return;
         }
+        if (result.code === "RESET") {
+          leaveResetAttempt(attemptId, router, queueRef.current);
+          return;
+        }
         if (result.code === "NOT_EDITABLE") {
           router.replace(`/student/attempt/${attemptId}/result`);
           return;
@@ -540,6 +563,10 @@ export function TestPlayer({
         if (result.code === "OTHER_DEVICE") {
           queueRef.current?.stop();
           setProblem({ kind: "other-device", message: OTHER_DEVICE_NOTICE });
+          return;
+        }
+        if (result.code === "RESET") {
+          leaveResetAttempt(attemptId, router, queueRef.current);
           return;
         }
         if (result.code === "NOT_EDITABLE") {

@@ -23,6 +23,8 @@ export type EngineErrorCode =
   | "OTHER_DEVICE"
   /** Access to this attempt's content ended (no plan / trial / grace) — the player reloads to the lock screen. */
   | "ACCESS_REVOKED"
+  /** The attempt was closed by an admin content correction (Retire / Replace) — the player goes to the reset notice. */
+  | "RESET"
   /** A test start the student cannot make right now (not released, closed, no questions, retake blocked…). */
   | "UNAVAILABLE"
   | "INTERNAL";

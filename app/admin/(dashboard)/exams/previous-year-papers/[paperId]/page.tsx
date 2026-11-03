@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PaperToggle } from "../paper-toggle";
 import { QuestionBankPicker } from "./question-bank-picker";
-import { RemoveFromPaperButton } from "./remove-from-paper-button";
+import { RetireReplaceLink } from "./remove-from-paper-button";
 import { RankingSettingsForm } from "@/components/admin/ranking-settings-form";
 import { getRankingConfig } from "@/lib/leaderboard";
 import { hasPermission } from "@/lib/rbac";
@@ -30,7 +30,8 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
     include: {
       exam: { select: { id: true, name: true, durationMinutes: true } },
       questions: {
-        orderBy: { code: "asc" },
+        // Paper order (printed number), the same order the PYQ attempt serves.
+        orderBy: [{ paperQuestionNumber: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { code: "asc" }],
         include: { subject: { select: { name: true } }, topic: { select: { name: true } }, options: { select: { isCorrect: true } } },
       },
       _count: { select: { ...PAPER_PUBLISHED_QUESTION_COUNT, testAttempts: true } },
@@ -61,7 +62,15 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
           </Link>
           <h1 className="text-xl font-semibold text-[var(--color-foreground)]">{paper.title}</h1>
         </div>
-        <PaperToggle paperId={paper.id} isActive={paper.isActive} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/admin/exams/previous-year-papers/${paper.id}/dependencies`}>Question Dependencies</Link>
+          </Button>
+          <Button asChild size="sm" variant="ghost">
+            <Link href="/admin/questions/replacements">Replacement History</Link>
+          </Button>
+          <PaperToggle paperId={paper.id} isActive={paper.isActive} />
+        </div>
       </div>
 
       <Card>
@@ -114,6 +123,7 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
+                  <th className="py-2 pr-4">No.</th>
                   <th className="py-2 pr-4">Code</th>
                   <th className="py-2 pr-4">Subject</th>
                   <th className="py-2 pr-4">Topic</th>
@@ -126,12 +136,13 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
               <tbody>
                 {paper.questions.map((q) => (
                   <tr key={q.id} className="border-b border-[var(--color-border)] last:border-0">
+                    <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{q.paperQuestionNumber ?? "—"}</td>
                     <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-foreground)]">{q.code}</td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{q.subject.name}</td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{q.topic?.name ?? "—"}</td>
                     <td className="py-2.5 pr-4 max-w-[320px] truncate text-[var(--color-foreground)]">{q.text}</td>
                     <td className="py-2.5 pr-4">
-                      <Badge variant={STATUS_VARIANT[q.status] ?? "neutral"}>{q.status}</Badge>
+                      {q.retiredAt ? <Badge variant="error">RETIRED</Badge> : <Badge variant={STATUS_VARIANT[q.status] ?? "neutral"}>{q.status}</Badge>}
                       {!q.options.some((o) => o.isCorrect) ? (
                         <Badge variant="warning" className="ml-1">
                           No Correct Answer
@@ -141,10 +152,12 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{q.imageUrl ? "Yes" : "—"}</td>
                     <td className="py-2.5 pr-4">
                       <div className="flex items-center justify-end gap-2">
-                        <Button asChild size="compact" variant="outline">
-                          <Link href={`/admin/questions?tab=add&id=${q.id}`}>Edit</Link>
-                        </Button>
-                        <RemoveFromPaperButton paperId={paper.id} questionId={q.id} />
+                        {q.retiredAt ? null : (
+                          <Button asChild size="compact" variant="outline">
+                            <Link href={`/admin/questions?tab=add&id=${q.id}`}>Edit</Link>
+                          </Button>
+                        )}
+                        <RetireReplaceLink questionId={q.id} retired={!!q.retiredAt} />
                       </div>
                     </td>
                   </tr>

@@ -17,7 +17,6 @@ import {
   AttemptStatus,
   CustomModuleStatus,
   GrandTestStatus,
-  QuestionStatus,
   TestType,
   type Prisma,
 } from "@prisma/client";
@@ -30,6 +29,7 @@ import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQu
 import { accessDeniedMessage, assertContentAccess, attemptGraceAllows, getAttemptAnswerAccess, loadAccessContext, PaymentRequiredError, type ContentDescriptor } from "@/lib/payments/access";
 import { assertExamLive } from "@/lib/exam-live";
 import { TestEngineError } from "@/lib/test-engine-log";
+import { SERVABLE_MEMBERSHIP_WHERE, SERVABLE_QUESTION_WHERE } from "@/lib/question-servable";
 import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
 import { explanationView, toSnapshotAssets, type SnapshotAsset } from "@/lib/rich-content";
 import type { ContentFormat, ExplanationView } from "@/lib/rich-content-types";
@@ -356,6 +356,18 @@ async function createAttemptFromQuestions(params: {
       });
       if (existing && !isExpired(toServerTimedAttempt(existing))) return { attempt: existing, created: false };
     }
+    // Last-line serving guard (docs/QUESTION-RETIREMENT.md): every question
+    // frozen into a NEW attempt must still be PUBLISHED and not retired at
+    // commit time. FOR SHARE waits for a Retire / Replace that is retiring one
+    // of them, so a start racing a retirement can never freeze old content.
+    const ids = questions.map((q) => q.id);
+    const servable = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "Question"
+      WHERE id = ANY(${ids}::text[]) AND status = 'PUBLISHED' AND "retiredAt" IS NULL
+      FOR SHARE`;
+    if (servable.length !== ids.length) {
+      throw new TestEngineError("UNAVAILABLE", "This test was just updated. Please start it again.");
+    }
     const created = await tx.testAttempt.create({
     data: {
       studentId: params.studentId,
@@ -514,7 +526,7 @@ async function planMockTestStart(studentId: string, mockTestId: string, entryMod
       exam: { select: { name: true, instructions: true } },
       testSeries: { select: { instructions: true } },
       questions: {
-        where: { question: { status: QuestionStatus.PUBLISHED } },
+        where: SERVABLE_MEMBERSHIP_WHERE,
         orderBy: { order: "asc" },
         include: { question: { include: { options: true } } },
       },
@@ -637,8 +649,10 @@ export async function startOfflineOmrEntryAttempt(studentId: string, mockTestId:
   return startMockTestAttempt(studentId, mockTestId, AttemptEntryMode.OFFLINE_OMR_ENTRY);
 }
 
+// Only servable questions (lib/question-servable.ts): a module row whose
+// question was archived or retired is skipped, never served.
 const CUSTOM_MODULE_QUESTIONS_INCLUDE = {
-  questions: { orderBy: { order: "asc" as const }, include: { question: { include: { options: true } } } },
+  questions: { where: SERVABLE_MEMBERSHIP_WHERE, orderBy: { order: "asc" as const }, include: { question: { include: { options: true } } } },
 };
 
 type CustomModuleWithQuestions = Awaited<
@@ -732,7 +746,7 @@ export async function startGrandTestAttempt(studentId: string, grandTestId: stri
 
   const grandTest = await prisma.grandTest.findFirst({
     where: { id: grandTestId, status: GrandTestStatus.PUBLISHED },
-    include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
+    include: { questions: { where: SERVABLE_MEMBERSHIP_WHERE, orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
   });
   if (!grandTest) throw new TestEngineError("UNAVAILABLE", "This grand test is not available.");
 
@@ -766,7 +780,7 @@ export async function startLiveTestAttempt(studentId: string, liveTestId: string
 
   const liveTest = await prisma.liveTest.findUnique({
     where: { id: liveTestId },
-    include: { questions: { orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
+    include: { questions: { where: SERVABLE_MEMBERSHIP_WHERE, orderBy: { order: "asc" }, include: { question: { include: { options: true } } } } },
   });
   if (!liveTest) throw new TestEngineError("UNAVAILABLE", "This live test does not exist.");
 
@@ -809,11 +823,12 @@ async function planPreviousYearPaperStart(studentId: string, paperId: string): P
   });
   if (!paper) throw new TestEngineError("UNAVAILABLE", "This paper is not available.");
 
-  // Full-paper integrity: the whole published paper in its original order
-  // (import order = paper order; code breaks ties). Never sampled or shuffled.
+  // Full-paper integrity: the whole servable paper in its printed order —
+  // paperQuestionNumber, then import order (createdAt), then code for papers
+  // whose numbers are unknown. Never sampled or shuffled.
   const questions = (await prisma.question.findMany({
-    where: { previousYearPaperId: paperId, status: QuestionStatus.PUBLISHED },
-    orderBy: [{ createdAt: "asc" }, { code: "asc" }],
+    where: { previousYearPaperId: paperId, ...SERVABLE_QUESTION_WHERE },
+    orderBy: [{ paperQuestionNumber: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { code: "asc" }],
     include: { options: true },
   })) as unknown as QuestionWithOptions[];
 
@@ -967,6 +982,11 @@ const EDITABLE_ATTEMPT_SELECT = {
  */
 async function loadEditableQuestion(attemptId: string, studentId: string, questionId: string, label: string | null) {
   const attempt = await prisma.testAttempt.findFirst({ where: { id: attemptId, studentId }, select: EDITABLE_ATTEMPT_SELECT });
+  if (attempt?.status === AttemptStatus.ABANDONED) {
+    // Closed by an admin content correction (Retire / Replace): the player
+    // goes to the reset notice and the student starts the corrected test fresh.
+    throw new TestEngineError("RESET", "This test was updated. Your attempt was closed — start it again for the corrected version.");
+  }
   if (!attempt || attempt.status !== AttemptStatus.IN_PROGRESS) {
     throw new TestEngineError("NOT_EDITABLE", "This test has already been submitted.");
   }
@@ -989,6 +1009,17 @@ async function loadEditableQuestion(attemptId: string, studentId: string, questi
     }
   }
   return { attempt, attemptQuestion };
+}
+
+/**
+ * Heartbeat check: an attempt closed by an admin content correction tells an
+ * idle player (no save in flight) to leave for the reset notice. Nothing is written.
+ */
+export async function assertAttemptNotReset(attemptId: string, studentId: string): Promise<void> {
+  const attempt = await prisma.testAttempt.findFirst({ where: { id: attemptId, studentId }, select: { status: true } });
+  if (attempt?.status === AttemptStatus.ABANDONED) {
+    throw new TestEngineError("RESET", "This test was updated. Your attempt was closed — start it again for the corrected version.");
+  }
 }
 
 function answerStatusFor(selectedOptionLabel: string | null, markForReview: boolean): AnswerStatus {

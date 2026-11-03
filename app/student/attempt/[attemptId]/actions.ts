@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import type { ReportType } from "@prisma/client";
 import { requireStudentOrLogin } from "@/lib/student-session";
-import { revealAnswer, revealAnswerLabels, saveAnswer, saveAnswerLabels, submitAttempt } from "@/lib/test-attempt";
+import { assertAttemptNotReset, revealAnswer, revealAnswerLabels, saveAnswer, saveAnswerLabels, submitAttempt } from "@/lib/test-attempt";
 import { toggleSavedQuestion, reportQuestion } from "@/lib/student-data";
 import { logEngine, SLOW_OP_MS, TestEngineError, type EngineErrorCode, type EngineOp } from "@/lib/test-engine-log";
 import { claimAttemptLease, OTHER_DEVICE_MESSAGE } from "@/lib/attempt-device-lease";
@@ -37,7 +37,7 @@ async function runEngineOp<T extends object>(
     const ms = Date.now() - t0;
     if (error instanceof TestEngineError) {
       // Expected outcomes (time up / already submitted) are not worth a log line each.
-      if (error.code !== "EXPIRED" && error.code !== "NOT_EDITABLE") logEngine({ op, ...ids, code: error.code, ms });
+      if (error.code !== "EXPIRED" && error.code !== "NOT_EDITABLE" && error.code !== "RESET") logEngine({ op, ...ids, code: error.code, ms });
       return { ok: false, code: error.code, message: error.message };
     }
     logEngine({ op, ...ids, code: "INTERNAL", ms });
@@ -118,6 +118,7 @@ export async function attemptHeartbeatAction(attemptId: string): Promise<EngineR
   const student = await requireStudentOrLogin();
   return runEngineOp("heartbeat", { attemptId }, async () => {
     await assertAttemptDevice(attemptId, student);
+    await assertAttemptNotReset(attemptId, student.id);
     return { held: true as const };
   });
 }

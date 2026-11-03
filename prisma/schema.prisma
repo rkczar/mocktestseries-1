@@ -1001,6 +1001,19 @@ model Question {
   // OFFICIAL_KEY | INDEPENDENTLY_VERIFIED | ADMIN_CONFIRMED | UNVERIFIED — UNVERIFIED is never
   // an official answer and stays visible in the Question Bank.
   answerVerification  String?
+  // Question retirement (Phase 1 question safety, docs/QUESTION-RETIREMENT.md).
+  // retiredAt != null = permanently retired: status is ARCHIVED, it is never
+  // served by any start path (lib/question-servable.ts) and it can never be
+  // re-published. Set only by lib/question-replacement (Retire / Replace).
+  retiredAt            DateTime?
+  retiredReason        String?
+  replacedByQuestionId String?
+  replacedBy           Question?  @relation("QuestionReplacedBy", fields: [replacedByQuestionId], references: [id], onDelete: SetNull)
+  replaces             Question[] @relation("QuestionReplacedBy")
+  // The question's number in its Previous Year Paper (1-based, as printed).
+  // Separate from any test position (MockTestQuestion.order etc.). Null =
+  // unknown: the PYQ attempt then falls back to createdAt, code.
+  paperQuestionNumber  Int?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -1027,6 +1040,8 @@ model Question {
   @@index([aiGenerationStatus])
   @@index([importBatchId])
   @@index([reviewRequired])
+  @@index([retiredAt])
+  @@index([previousYearPaperId, paperQuestionNumber])
 }
 
 model QuestionOption {
@@ -1671,6 +1686,14 @@ model TestAttempt {
   activeDeviceId       String?
   activeDevice         StudentDevice?     @relation(fields: [activeDeviceId], references: [id], onDelete: SetNull)
   activeSeenAt         DateTime?
+  // Invalidation by a content replacement (lib/question-replacement). Set
+  // together with status ABANDONED (DB CHECK); score, snapshot and answers are
+  // kept for audit, and every student-facing read excludes the attempt.
+  // statusBeforeInvalidation lets a rollback restore it exactly.
+  invalidatedAt              DateTime?
+  invalidationReason         String?
+  invalidatedByReplacementId String?
+  statusBeforeInvalidation   AttemptStatus?
 
   questions TestAttemptQuestion[]
   answers   Answer[]
@@ -1695,6 +1718,7 @@ model TestAttempt {
   // submission window (Today / Yesterday / 7d / 30d); without this a
   // "Today" view would scan every attempt ever taken.
   @@index([status, submittedAt])
+  @@index([invalidatedByReplacementId])
 }
 
 // ---------------------------------------------------------------------------
@@ -1781,9 +1805,15 @@ model Answer {
   // only applies when its seq is newer than the stored one, so a delayed or
   // retried older request can never overwrite a newer answer.
   saveSeq             Float               @default(0)
+  // Excluded from student statistics (accuracy, questions practised, weak
+  // topics): the answer belongs to an invalidated attempt, or answers a
+  // retired question (policy D6). Set and cleared only by lib/question-replacement.
+  statsExcludedAt             DateTime?
+  statsExcludedByReplacementId String?
 
   @@index([studentId])
   @@index([attemptId])
+  @@index([statsExcludedByReplacementId])
 }
 
 // ---------------------------------------------------------------------------
@@ -4176,4 +4206,91 @@ model VideoSkillPreset {
   updatedAt    DateTime @updatedAt
 
   @@index([createdById, updatedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Question retirement / replacement records (Phase 1 question safety).
+// One QuestionReplacement per Retire / Replace operation; its items and
+// references hold everything a rollback needs. See docs/QUESTION-RETIREMENT.md.
+// ---------------------------------------------------------------------------
+
+enum QuestionReplacementKind {
+  RETIRE
+  REPLACE
+}
+
+enum QuestionReplacementStatus {
+  APPLIED
+  ROLLED_BACK
+}
+
+enum ReplacementContainerKind {
+  MOCK_TEST
+  CUSTOM_MODULE
+  GRAND_TEST
+  LIVE_TEST
+}
+
+enum ReplacementReferenceAction {
+  /// questionId swapped in place to the replacement (same order).
+  SWAP
+  /// Row left pointing at the retired question; the serving guard skips it.
+  SKIP
+  /// Row left in place and the (admin) container taken offline until fixed.
+  HOLD
+}
+
+model QuestionReplacement {
+  id             String                    @id @default(cuid())
+  kind           QuestionReplacementKind
+  status         QuestionReplacementStatus @default(APPLIED)
+  reason         String
+  createdById    String?
+  createdBySource String                   @default("ADMIN")
+  createdAt      DateTime                  @default(now())
+  rolledBackAt   DateTime?
+  rolledBackById String?
+  summary        Json?
+
+  items      QuestionReplacementItem[]
+  references QuestionReplacementReference[]
+
+  @@index([createdAt])
+}
+
+model QuestionReplacementItem {
+  id                  String              @id @default(cuid())
+  replacementId       String
+  replacement         QuestionReplacement @relation(fields: [replacementId], references: [id], onDelete: Cascade)
+  oldQuestionId       String
+  oldStatus           QuestionStatus
+  newQuestionId       String?
+  /// The replacement question's fields before apply (status, paper link, source, number) — restored on rollback.
+  newQuestionPrior    Json?
+  /// AI variants retired with the old question: [{ id, status }].
+  retiredVariants     Json?
+  paperId             String?
+  paperQuestionNumber Int?
+
+  @@index([replacementId])
+  @@index([oldQuestionId])
+  @@index([newQuestionId])
+}
+
+model QuestionReplacementReference {
+  id                   String                     @id @default(cuid())
+  replacementId        String
+  replacement          QuestionReplacement        @relation(fields: [replacementId], references: [id], onDelete: Cascade)
+  containerKind        ReplacementContainerKind
+  containerId          String
+  rowId                String
+  oldQuestionId        String
+  newQuestionId        String?
+  order                Int
+  action               ReplacementReferenceAction
+  priorContainerStatus String?
+  heldContainerStatus  String?
+
+  @@index([replacementId])
+  @@index([containerKind, containerId])
 }

@@ -170,7 +170,7 @@ export async function getScheduledMockTestsForStudent(studentId: string) {
   const bestByMockTest = new Map(bestAttempts.map((b) => [b.mockTestId, b._max.score]));
 
   const attempts = await prisma.testAttempt.findMany({
-    where: { studentId, sourceType: AttemptSourceType.MOCK_TEST },
+    where: { studentId, sourceType: AttemptSourceType.MOCK_TEST, invalidatedAt: null },
     orderBy: { startedAt: "desc" },
     select: { mockTestId: true, id: true, status: true },
   });
@@ -229,7 +229,7 @@ export async function getMockTestDetailForStudent(studentId: string, mockTestId:
   if (!mockTest) return null;
 
   const attempts = await prisma.testAttempt.findMany({
-    where: { studentId, mockTestId, sourceType: AttemptSourceType.MOCK_TEST },
+    where: { studentId, mockTestId, sourceType: AttemptSourceType.MOCK_TEST, invalidatedAt: null },
     orderBy: { startedAt: "desc" },
     select: { id: true, status: true, entryMode: true },
   });
@@ -300,7 +300,7 @@ export async function getPublishedCustomModulesForStudent(studentId: string, exa
   const bestByModule = new Map(bestAttempts.map((b) => [b.customModuleId, b._max.score]));
 
   const latestAttempts = await prisma.testAttempt.findMany({
-    where: { studentId, sourceType: AttemptSourceType.CUSTOM_MODULE },
+    where: { studentId, sourceType: AttemptSourceType.CUSTOM_MODULE, invalidatedAt: null },
     orderBy: { startedAt: "desc" },
     select: { customModuleId: true, id: true, status: true },
   });
@@ -354,7 +354,7 @@ export async function getStudentOwnedCustomModules(studentId: string) {
   });
 
   const latestAttempts = await prisma.testAttempt.findMany({
-    where: { studentId, sourceType: AttemptSourceType.CUSTOM_MODULE, customModuleId: { in: modules.map((m) => m.id) } },
+    where: { studentId, sourceType: AttemptSourceType.CUSTOM_MODULE, customModuleId: { in: modules.map((m) => m.id) }, invalidatedAt: null },
     orderBy: { startedAt: "desc" },
     select: { customModuleId: true, id: true, status: true, score: true, maxScore: true },
   });
@@ -431,7 +431,7 @@ export async function getDashboardPreviousYearPapers(studentId: string, examId: 
   if (papers.length === 0) return [];
 
   const attempts = await prisma.testAttempt.findMany({
-    where: { studentId, previousYearPaperId: { in: papers.map((p) => p.id) } },
+    where: { studentId, previousYearPaperId: { in: papers.map((p) => p.id) }, invalidatedAt: null },
     orderBy: { startedAt: "desc" },
     select: { id: true, previousYearPaperId: true, status: true },
   });
@@ -520,6 +520,9 @@ export async function getStudentAttemptHistory(
       studentId,
       examId: filters.examId || undefined,
       sourceType: filters.sourceType || undefined,
+      // An attempt invalidated by a content replacement is no longer the
+      // student's history (docs/QUESTION-RETIREMENT.md); it stays for audit only.
+      invalidatedAt: null,
     },
     orderBy: { startedAt: "desc" },
     include: { exam: true, mockTest: true, customModule: true, previousYearPaper: true, subject: true },
@@ -784,7 +787,9 @@ export interface SavedQuestionView {
  */
 export async function getSavedQuestions(studentId: string): Promise<SavedQuestionView[]> {
   const rows = await prisma.savedQuestion.findMany({
-    where: { studentId },
+    // A retired question is never shown again, not even from a bookmark
+    // (docs/QUESTION-RETIREMENT.md); the bookmark row itself is kept.
+    where: { studentId, question: { retiredAt: null } },
     orderBy: { createdAt: "desc" },
     select: {
       question: {
@@ -1125,7 +1130,7 @@ export async function getExamSubjectsOverview(examId: string) {
 
 /** Total saved questions for a student, optionally scoped to one exam. */
 export async function getSavedQuestionsCount(studentId: string, examId?: string) {
-  return prisma.savedQuestion.count({ where: { studentId, question: examId ? { examId } : undefined } });
+  return prisma.savedQuestion.count({ where: { studentId, question: { retiredAt: null, ...(examId ? { examId } : {}) } } });
 }
 
 export async function getDashboardMetrics(studentId: string) {
@@ -1133,8 +1138,8 @@ export async function getDashboardMetrics(studentId: string) {
 
   const [mcqSolvedToday, distinctAttemptedRows, testsCompleted, avgScoreAgg, recentAttempt, inProgress, studyStreak, upcomingExam] =
     await Promise.all([
-      prisma.answer.count({ where: { studentId, status: { not: "UNANSWERED" }, answeredAt: { gte: startOfTodayIst } } }),
-      prisma.answer.findMany({ where: { studentId, status: { not: "UNANSWERED" } }, select: { questionId: true }, distinct: ["questionId"] }),
+      prisma.answer.count({ where: { studentId, status: { not: "UNANSWERED" }, answeredAt: { gte: startOfTodayIst }, statsExcludedAt: null } }),
+      prisma.answer.findMany({ where: { studentId, status: { not: "UNANSWERED" }, statsExcludedAt: null }, select: { questionId: true }, distinct: ["questionId"] }),
       prisma.testAttempt.count({ where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() } }),
       prisma.testAttempt.aggregate({ where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() }, _avg: { score: true } }),
       prisma.testAttempt.findFirst({
@@ -1184,10 +1189,10 @@ export async function getExamScopedDashboardMetrics(studentId: string, examId: s
   const [mcqSolvedToday, distinctAttemptedRows, testsCompleted, avgScoreAgg, recentAttempt, inProgress, exam] =
     await Promise.all([
       prisma.answer.count({
-        where: { studentId, status: { not: "UNANSWERED" }, answeredAt: { gte: startOfTodayIst }, attempt: { examId } },
+        where: { studentId, status: { not: "UNANSWERED" }, answeredAt: { gte: startOfTodayIst }, attempt: { examId }, statsExcludedAt: null },
       }),
       prisma.answer.findMany({
-        where: { studentId, status: { not: "UNANSWERED" }, attempt: { examId } },
+        where: { studentId, status: { not: "UNANSWERED" }, attempt: { examId }, statsExcludedAt: null },
         select: { questionId: true },
         distinct: ["questionId"],
       }),
@@ -1265,7 +1270,7 @@ export async function getUpcomingExamForStudent(studentId: string) {
  */
 export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 500, examId?: string) {
   const wrongAnswers = await prisma.answer.findMany({
-    where: { studentId, isCorrect: false, attempt: { ...(examId ? { examId } : {}), ...resultReleasedAttemptWhere() } },
+    where: { studentId, isCorrect: false, statsExcludedAt: null, attempt: { ...(examId ? { examId } : {}), ...resultReleasedAttemptWhere() } },
     select: { questionId: true },
     orderBy: { id: "desc" },
     take: sampleSize,
@@ -1300,7 +1305,7 @@ export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 5
 
 export async function getStudentAnalytics(studentId: string) {
   const [totals, byExam, bySubject, submittedAttempts] = await Promise.all([
-    prisma.answer.groupBy({ by: ["status"], where: { studentId }, _count: { _all: true } }),
+    prisma.answer.groupBy({ by: ["status"], where: { studentId, statsExcludedAt: null }, _count: { _all: true } }),
     prisma.testAttempt.groupBy({
       by: ["examId"],
       where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() },
@@ -1328,7 +1333,7 @@ export async function getStudentAnalytics(studentId: string) {
 
   const correctIncorrect = await prisma.answer.groupBy({
     by: ["isCorrect"],
-    where: { studentId, isCorrect: { not: null } },
+    where: { studentId, isCorrect: { not: null }, statsExcludedAt: null },
     _count: { _all: true },
   });
   const correct = correctIncorrect.find((c) => c.isCorrect === true)?._count._all ?? 0;

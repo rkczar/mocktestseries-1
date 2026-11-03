@@ -49,8 +49,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Too many questions selected (max ${MAX_IDS})` }, { status: 400 });
     }
 
-    const uniqueIds = Array.from(new Set(ids));
+    const requestedIds = Array.from(new Set(ids));
     const act = action as BulkAction;
+    // Retired questions are read-only (docs/QUESTION-RETIREMENT.md): Draft /
+    // Delete never touch them (PUBLISH reports them as blocked: RETIRED).
+    const retiredIds =
+      act === "DRAFT" || act === "DELETE"
+        ? new Set((await prisma.question.findMany({ where: { id: { in: requestedIds }, retiredAt: { not: null } }, select: { id: true } })).map((q) => q.id))
+        : new Set<string>();
+    const uniqueIds = requestedIds.filter((id) => !retiredIds.has(id));
+    if (uniqueIds.length === 0) {
+      return NextResponse.json({
+        success: true,
+        action: act,
+        updatedCount: 0,
+        retiredSkippedCount: retiredIds.size,
+        message: `${retiredIds.size} retired question(s) are read-only and were left unchanged.`,
+      });
+    }
 
     if (act === "PUBLISH") {
       // Publishing policy (lib/question-publish-policy.ts): eligible questions

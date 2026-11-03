@@ -116,7 +116,7 @@ export async function countPublishedQuestions(filters: QuestionSelectionFilters)
  * (an AI variant waiting for review, a question flagged by an import) never reaches students through one.
  */
 export async function publishedQuestionIds(ids: string[]): Promise<string[]> {
-  const ok = new Set((await prisma.question.findMany({ where: { id: { in: ids }, status: QuestionStatus.PUBLISHED }, select: { id: true } })).map((q) => q.id));
+  const ok = new Set((await prisma.question.findMany({ where: { id: { in: ids }, status: QuestionStatus.PUBLISHED, retiredAt: null }, select: { id: true } })).map((q) => q.id));
   return ids.filter((id) => ok.has(id));
 }
 
@@ -129,6 +129,8 @@ function toQuestionWhere(filters: QuestionSelectionFilters) {
   return {
     examId: filters.examId,
     status: QuestionStatus.PUBLISHED,
+    // Never a retired question (lib/question-servable.ts); retired rows are ARCHIVED too.
+    retiredAt: null,
     examYear: filters.year ?? undefined,
     subjectId: filters.subjectId ?? undefined,
     topicId: filters.topicId ?? undefined,
