@@ -17,8 +17,21 @@ const BINARIES = {
   pdftohtml: "/usr/bin/pdftohtml",
   pdfimages: "/usr/bin/pdfimages",
   tesseract: "/usr/bin/tesseract",
+  // Local OCR (ops/ocr/rapidocr_page.py) runs in its own Python environment: AI_IMPORT_OCR_PYTHON, absolute path only.
+  ocr: "/opt/mts-ocr/venv/bin/python",
 } as const;
 export type ToolName = keyof typeof BINARIES;
+
+/** The OCR script shipped with the release; the only program the `ocr` tool runs. */
+export const OCR_SCRIPT = path.join(/* turbopackIgnore: true */ process.cwd(), "ops", "ocr", "rapidocr_page.py");
+
+function binaryOf(tool: ToolName): string {
+  if (tool === "ocr") {
+    const env = process.env.AI_IMPORT_OCR_PYTHON;
+    return env && path.isAbsolute(env) ? env : BINARIES.ocr;
+  }
+  return BINARIES[tool];
+}
 
 export class ToolError extends Error {
   constructor(
@@ -31,7 +44,8 @@ export class ToolError extends Error {
 }
 
 export function toolAvailable(tool: ToolName): boolean {
-  return existsSync(path.resolve(/* turbopackIgnore: true */ BINARIES[tool]));
+  if (tool === "ocr" && !existsSync(OCR_SCRIPT)) return false;
+  return existsSync(path.resolve(/* turbopackIgnore: true */ binaryOf(tool)));
 }
 
 export interface RunOptions {
@@ -44,7 +58,8 @@ export interface RunOptions {
 }
 
 export async function runTool(tool: ToolName, args: string[], opts: RunOptions = {}): Promise<Buffer> {
-  const bin = BINARIES[tool];
+  const bin = binaryOf(tool);
+  if (tool === "ocr") args = [OCR_SCRIPT, ...args];
   if (!existsSync(path.resolve(/* turbopackIgnore: true */ bin))) throw new ToolError(`${tool} is not installed on this server.`, "missing");
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const maxOutput = opts.maxOutput ?? 32 * 1024 * 1024;

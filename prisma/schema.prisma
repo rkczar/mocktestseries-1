@@ -3814,7 +3814,20 @@ model AiImportPage {
   model       String?
   /// Raw (validated) model output kept for audit and reprocessing.
   rawOutput   Json?
+  /// Original OCR text of the page in reading order (never corrected; corrections live on the questions).
   ocrText     String?
+  /// Documented processing outcome of the page (lib/ai-import/ocr-page.ts PageOutcome): TEXT_LAYER, OCR, AI, BLANK_VERIFIED,
+  /// INSTRUCTIONS, NO_QUESTIONS, NEEDS_REVIEW, FAILED. Null on pages processed before page outcomes existed.
+  outcome       String?
+  outcomeReason String?
+  /// Share of dark pixels of the rendered page (0..1): a page is blank only when this is near zero AND OCR finds no text.
+  inkCoverage   Float?
+  ocrEngine     String?
+  /// Mean line confidence of the OCR reading (0..1) and the number of lines still below the review threshold.
+  ocrConfidence Float?
+  ocrLowLines   Int?
+  /// Original OCR lines (text, confidence, box, polygon, re-read) exactly as the engine returned them.
+  ocrLines      Json?
   errorMessage String?
   processedAt DateTime?
   createdAt   DateTime           @default(now())

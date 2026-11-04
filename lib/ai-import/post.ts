@@ -16,7 +16,7 @@ import { classifierContext, headingResolver, jobPaperMemory } from "@/lib/ai-imp
 import { confirmedRulesFor, confirmedSubjectScope, memoryBrief, memoryFindings } from "@/lib/ai-import/paper-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
 import { PRINTED_DROPPED, candidateInstruction, mergedAnswerIn, mergedStatements, numberSequenceProblems, statementCodeQuestion } from "@/lib/ai-import/local-parse";
-import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem } from "@/lib/ai-import/fidelity";
+import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem, sourceDiffSummary } from "@/lib/ai-import/fidelity";
 import type { StepContext } from "@/lib/ai-import/process";
 import { contentPartOf, fingerprintsOf, taxonomyCurrent, verifyState } from "@/lib/ai-import/verify-core";
 
@@ -87,7 +87,7 @@ export function sourceMayHoldImage(detected: unknown, pages: number[]): boolean 
  * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
  * approved — and an uncertain image placement is cleared only by confirming each figure's placement.
  */
-export const REVIEWABLE = ["EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN"];
+export const REVIEWABLE = ["OCR_UNCERTAIN", "SOURCE_TEXT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN"];
 
 interface Check {
   stage: number;
@@ -515,6 +515,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       else add("OPTIONS_INCOMPLETE", `${e.options.length} option(s) found; four are needed.`);
     }
     if (type === "MATCH_THE_FOLLOWING" && (!e.listI?.length || !e.listII?.length)) checks.push({ stage: 2, name: "Match lists", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: "Lists were not separated; they stay in the question text and the question imports as single-correct." });
+    // Original page reading vs extracted text (never corrected automatically; a person compares with the page).
+    if (!q.editedData) {
+      if (e.method === "LOCAL_OCR" && e.ocr?.lowLines.length) add("OCR_UNCERTAIN", `OCR is unsure of ${e.ocr.lowLines.length} line(s): ${e.ocr.lowLines.slice(0, 3).map((x) => `“${x.text.slice(0, 60)}”`).join(", ")} — compare them with the page.`);
+      const diff = e.sourceCheck ? sourceDiffSummary(e.sourceCheck) : null;
+      if (diff) add("SOURCE_TEXT_MISMATCH", `The extracted text differs from the page's own reading: ${diff}. Compare with the page; nothing was changed automatically.`);
+      if (e.stemHasOptions) add("STEM_HAS_OPTIONS", "The question text still contains option lines — remove them from the question text (the options are kept separately).");
+    }
     // Formulas
     const richText = [e.stem, ...e.options.map((o) => o.text), ...(e.listI ?? []).map((x) => x.text), ...(e.listII ?? []).map((x) => x.text)];
     const formulaWarnings = e.contentFormat === "RICH_V1" ? richText.flatMap((t, i) => lintRichSource(t, i === 0 ? "Question" : `Part ${i}`).warnings) : richText.some((t) => looksRich(t)) ? ["Formula markup in a plain question would show literally."] : [];

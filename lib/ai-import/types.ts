@@ -71,6 +71,15 @@ export interface ExtractedQuestion {
   continuedFromPreviousPage?: boolean;
   /** Page box (0..1) of the whole question (number, stem, options, figures) as the reader located it. */
   region?: NBox | null;
+  /**
+   * Local OCR evidence (method LOCAL_OCR): the question's ORIGINAL OCR text exactly as read, before any cleaning or
+   * correction, with line confidences. Corrected text lives in stem/options (or the admin's edit); this never changes.
+   */
+  ocr?: { engine: string; text: string; minConfidence: number; meanConfidence: number; lowLines: { text: string; confidence: number; firstText?: string }[] } | null;
+  /** AI-read text compared with the page's own reading of the question (lib/ai-import/fidelity.ts sourceTextDiff). */
+  sourceCheck?: { source: "OCR" | "TEXT_LAYER" | "OCR_PAGE"; added: string[]; dropped: string[]; numbers: string[]; negations: string[] } | null;
+  /** Options found repeated inside the question text that could not be removed exactly (post.ts STEM_HAS_OPTIONS). */
+  stemHasOptions?: boolean;
   /** Printed number kept when the number itself had to be cleared (the same number already exists on another page). */
   printedNumber?: number | null;
   notes?: string[];

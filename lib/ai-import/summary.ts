@@ -107,7 +107,7 @@ export async function jobQuality(jobId: string): Promise<QualityReport | null> {
   if (!job) return null;
   const [qs, pages, pending, unmatched, failedKeys] = await Promise.all([
     prisma.aiImportQuestion.findMany({ where: { jobId }, include: { figures: true } }),
-    prisma.aiImportPage.findMany({ where: { jobId }, select: { status: true, kind: true, attempts: true, errorMessage: true, rawOutput: true } }),
+    prisma.aiImportPage.findMany({ where: { jobId }, select: { status: true, kind: true, attempts: true, errorMessage: true, rawOutput: true, fileId: true, pageNumber: true, outcome: true, outcomeReason: true } }),
     prisma.aiImportQuestionVersion.findMany({ where: { jobId, kind: "RESCAN", status: "PENDING" }, select: { questionId: true } }),
     prisma.aiImportKeyEntry.count({ where: { jobId, status: "UNMATCHED" } }),
     prisma.aiImportFile.count({ where: { jobId, role: "ANSWER_KEY", status: "ANALYZED", errorMessage: { not: null } } }),
@@ -133,9 +133,11 @@ export async function jobQuality(jobId: string): Promise<QualityReport | null> {
         answerStatus: q.answerStatus,
         importBlocker: q.questionId ? null : importBlocker(q, settings, { ignoreApproval: true }),
         rescanPending: pendingIds.has(q.id),
+        page: q.pages[0] ?? null,
       };
     }),
-    pages: pages.map((p) => ({ status: p.status, kind: p.kind, attempts: p.attempts, errorMessage: p.errorMessage })),
+    pages: pages.map((p) => ({ status: p.status, kind: p.kind, attempts: p.attempts, errorMessage: p.errorMessage, fileId: p.fileId, pageNumber: p.pageNumber, outcome: p.outcome, outcomeReason: p.outcomeReason })),
+    keyMaxNumber: (await prisma.aiImportKeyEntry.aggregate({ where: { jobId, status: { not: "WITHDRAWN" } }, _max: { sourceNumber: true } }))._max.sourceNumber ?? null,
     unmatchedKeyEntries: unmatched,
     failedKeyFiles: failedKeys,
     verifierExtras: [...new Set(extras)],

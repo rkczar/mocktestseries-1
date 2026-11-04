@@ -15,6 +15,7 @@ import { importerSpendSummary } from "@/lib/ai-import/ledger";
 import { jobQuality } from "@/lib/ai-import/summary";
 import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
+import { PageManifest, type ManifestRow } from "@/components/admin/ai-importer/page-manifest";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import { JobWorkspace, type JobView } from "./job-workspace";
 import type { ExamOption } from "../../new-import-form";
@@ -53,6 +54,30 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     prisma.aiImportEvent.findMany({ where: { jobId: job.id, type: { in: ["MODEL_SWITCHED", "MODEL_SWITCH_SKIPPED", "MODEL_REPLACED", "MODEL_RECONFIGURED", "COST_RECONFIRMED"] } }, orderBy: { createdAt: "desc" }, take: 40, select: { id: true, type: true, message: true, createdAt: true } }),
   ]);
   const runs = await prisma.aiImportQuestion.findMany({ where: { jobId: job.id, bulkImportRunId: { not: null } }, distinct: ["bulkImportRunId"], select: { bulkImportRunId: true } });
+  // Page manifest (OCR text itself is fetched per page on demand, never sent for every page).
+  const [pageRows, pageQuestions] = await Promise.all([
+    prisma.aiImportPage.findMany({ where: { jobId: job.id }, orderBy: [{ fileId: "asc" }, { pageNumber: "asc" }], select: { id: true, fileId: true, pageNumber: true, status: true, kind: true, outcome: true, outcomeReason: true, model: true, ocrEngine: true, ocrConfidence: true, ocrLowLines: true, inkCoverage: true, ocrText: false } }),
+    prisma.aiImportQuestion.findMany({ where: { jobId: job.id, status: { not: "REJECTED" } }, select: { fileId: true, pages: true, sourceLabel: true, orderIndex: true }, orderBy: { orderIndex: "asc" } }),
+  ]);
+  const withOcr = new Set((await prisma.aiImportPage.findMany({ where: { jobId: job.id, ocrText: { not: null } }, select: { id: true } })).map((r) => r.id));
+  const fileName = new Map(job.files.map((f) => [f.id, { name: f.originalName, kind: (f.detected as { kind?: string } | null)?.kind ?? null }]));
+  const manifest: ManifestRow[] = pageRows
+    .filter((r) => r.kind !== "DOCUMENT")
+    .map((r) => ({
+      id: r.id,
+      file: fileName.get(r.fileId)?.name ?? "",
+      page: r.pageNumber,
+      status: r.status,
+      outcome: r.outcome,
+      reason: r.outcomeReason,
+      method: r.outcome === "OCR" || r.ocrEngine ? (r.ocrEngine ?? "local OCR") : r.model === "local" ? "PDF text layer" : r.model,
+      ocrConfidence: r.ocrConfidence,
+      ocrLowLines: r.ocrLowLines,
+      ink: r.inkCoverage,
+      questions: pageQuestions.filter((q) => q.fileId === r.fileId && q.pages[0] === r.pageNumber).map((q) => `Q${q.sourceLabel}`),
+      hasOcr: withOcr.has(r.id),
+      hasImage: ["pdf", "png", "jpeg"].includes(fileName.get(r.fileId)?.kind ?? ""),
+    }));
   const view: JobView = {
     id: job.id,
     title: job.title,
@@ -110,6 +135,7 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
       {finished && quality && (
         <QualityPanel jobId={job.id} report={quality} canUse={canUse} jobStatus={job.status} files={job.files.filter((f) => f.role === "PAPER" && f.status !== "REJECTED").map((f) => ({ id: f.id, name: f.originalName, pageCount: f.pageCount }))} runIds={view.runIds} />
       )}
+      {manifest.length > 0 && <PageManifest rows={manifest} />}
       <JobWorkspace job={view} exams={examOptions} canUse={canUse} canPublish={canPublish && canUse} />
     </div>
   );

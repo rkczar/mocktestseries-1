@@ -1,0 +1,23 @@
+# Local OCR for the AI Question Importer (ops/ocr/rapidocr_page.py), installed in its own venv: /opt/mts-ocr/venv
+# (Python 3.12, CPU only). Exact pins = the versions benchmarked and regression-tested on 2026-11-04.
+# Install: /opt/mts-ocr/venv/bin/pip install --no-cache-dir -r ops/ocr/requirements.txt
+rapidocr==3.10.0
+onnxruntime==1.31.1
+numpy==2.3.5
+opencv-python-headless==5.0.0.93
+pillow==13.0.0
+pyclipper==1.4.0
+shapely==2.2.0
+omegaconf==2.4.0
+pyyaml==6.0.2
+colorlog==6.12.0
+requests==2.34.2
+certifi==2026.10.23
+charset-normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0
+six==1.17.0
+tqdm==4.70.1
+flatbuffers==25.12.19
+packaging==26.3
+protobuf==7.36.2

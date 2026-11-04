@@ -5,6 +5,7 @@ import { AiImportFileRole, AiImportFileStatus, AiImportJobStatus, type AiImportF
 import { prisma } from "@/lib/prisma";
 import { runTool } from "@/lib/ai-import/tools";
 import { imagesPerPage } from "@/lib/ai-import/pdf";
+import { ocrAvailable } from "@/lib/ai-import/ocr";
 import { readDocx } from "@/lib/ai-import/docx";
 import { notationRisk, scriptFragments, splitQuestions, type Line } from "@/lib/ai-import/local-parse";
 import { parseImportFile } from "@/lib/bulk-import";
@@ -97,7 +98,10 @@ async function analyzePdf(file: AiImportFile): Promise<FileFacts> {
     const t = perPage[i] ?? "";
     const chars = t.replace(/\s+/g, "").length;
     const images = imgs.get(i + 1) ?? 0;
-    const kind: PageFact["kind"] = chars >= 80 ? "TEXT" : images > 0 || chars > 0 ? "SCANNED" : "BLANK";
+    // No text layer and no embedded image is NOT blank: the text may be drawn as shapes (seen 2026-11-04, RUHS MO
+    // 2016 — 18 such pages were skipped as blank). Such pages are read from the rendered page; processing decides
+    // "blank" from the page's ink, never from a missing text layer.
+    const kind: PageFact["kind"] = chars >= 80 ? "TEXT" : "SCANNED";
     const lines: Line[] = t.split("\n").map((l) => ({ text: l.trim() })).filter((l) => l.text);
     const found = kind === "TEXT" ? splitQuestions(lines, state).blocks.length : 0;
     local += found;
@@ -109,7 +113,7 @@ async function analyzePdf(file: AiImportFile): Promise<FileFacts> {
   const scannedPages = detail.filter((d) => d.kind === "SCANNED").length;
   const answerKeyDetected = perPage.some(looksLikeAnswerKey);
   const notes: string[] = [];
-  if (scannedPages) notes.push(`${scannedPages} page(s) have no text layer (scanned) — they need AI vision (or manual entry).`);
+  if (scannedPages) notes.push(ocrAvailable() ? `${scannedPages} page(s) have no usable text layer (scanned, or text drawn as shapes) — they are read by local OCR (free); AI vision is used only for a page OCR cannot resolve.` : `${scannedPages} page(s) have no text layer (scanned, or text drawn as shapes) — they need AI vision (or manual entry).`);
   if (detail.some((d) => d.risk.length)) notes.push(`${detail.filter((d) => d.risk.length).length} page(s) may contain formulas or symbols the text layer can flatten — they will be read from the page image.`);
   return {
     kind: "PDF",

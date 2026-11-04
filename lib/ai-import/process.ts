@@ -6,18 +6,21 @@ import { prisma } from "@/lib/prisma";
 import { parseImportFile } from "@/lib/bulk-import";
 import { pageLayout, renderPage, type PageLayout } from "@/lib/ai-import/pdf";
 import { readDocx, IMG_TOKEN, type DocxContent } from "@/lib/ai-import/docx";
-import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
-import { blockToQuestion, candidateInstruction, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
+import { joinPreamble, orphanQuestion, parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
+import { blockToQuestion, candidateInstruction, cleanStem, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
 import { jobMemoryBrief } from "@/lib/ai-import/taxonomy-memory";
 import { cropFromRender, cropFromScan, iou, storeOriginalFigure, visionImage, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
 import { checkFigureMapping, overlappingRegions } from "@/lib/ai-import/figure-map";
-import { formulaDiff } from "@/lib/ai-import/fidelity";
+import { formulaDiff, sourceDiffSummary, sourceTextDiff } from "@/lib/ai-import/fidelity";
 import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
 import { EXTRACT_SYSTEM, extractUserText, pageSchema, toExtracted, type PageOutput } from "@/lib/ai-import/prompts";
 import { readVault, renderKey, putIntermediate, vaultPath, workDir, exists as vaultExists } from "@/lib/ai-import/vault";
 import { logEvent } from "@/lib/ai-import/jobs";
-import { sourceKeyOf, type ExtractedQuestion } from "@/lib/ai-import/types";
+import { sourceKeyOf, type ExtractedQuestion, type PageExtraction } from "@/lib/ai-import/types";
+import { ocrAvailable, ocrImageFile, ocrPdfPage } from "@/lib/ai-import/ocr";
+import { readOcrPage, type OcrPageResult } from "@/lib/ai-import/ocr-page";
+import { BLANK_INK_BELOW, type OcrPage } from "@/lib/ai-import/ocr-layout";
 import type { ImporterSettings, VerifyMode } from "@/lib/ai-import/config";
 import { figureRows, manuallyCorrected, recordVersion, snapshotFigures, type FigureSnapshot } from "@/lib/ai-import/versions";
 import { mkdir } from "node:fs/promises";
@@ -167,6 +170,8 @@ export type RescanOutcome = "applied" | "pending" | "new" | "stored" | "skipped"
  * corrected one is left as it is and the new read waits as a PENDING version for the administrator.
  */
 export async function saveQuestion(ctx: StepContext, file: AiImportFile, q: ExtractedQuestion, orderIndex: number, figureBytes: FigureBytes, pageNumber: number, rescan?: { model: string | null } | null): Promise<RescanOutcome> {
+  // Every method: no printed number and no copied option list inside the stem (flagged when it cannot be removed exactly).
+  cleanStem(q);
   const key = sourceKeyOf(q);
   const existing = await prisma.aiImportQuestion.findUnique({ where: { fileId_sourceKey: { fileId: file.id, sourceKey: key } }, include: { figures: true } });
   // The same printed number read on a DIFFERENT page (a misread number, or a repeated one) never replaces the
@@ -244,11 +249,19 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
   const state: NumberingState = { last: 0, sectionIdx: 1 };
   let order = await nextOrderIndex(file.id);
   let previous: ExtractedQuestion | null = null;
+  const useOcr = ocrAvailable();
+  const record = (p: number, data: Prisma.AiImportPageUncheckedUpdateInput & { status: AiImportPageStatus }) =>
+    prisma.aiImportPage.upsert({
+      where: { fileId_pageNumber: { fileId: file.id, pageNumber: p } },
+      create: { ...(data as Prisma.AiImportPageUncheckedCreateInput), jobId: ctx.job.id, fileId: file.id, pageNumber: p },
+      update: data,
+    });
   for (let p = 1; p <= pages; p++) {
     const done = await prisma.aiImportPage.findUnique({ where: { fileId_pageNumber: { fileId: file.id, pageNumber: p } } });
     if (done?.status === AiImportPageStatus.DONE && done.kind) {
-      // Resume: replay the numbering state recorded for this page.
-      const st = (done.rawOutput as PageState | null)?.startState;
+      // Resume: replay the numbering state recorded at the END of this page (older pages only have the start state).
+      const raw = done.rawOutput as (PageState & { endState?: NumberingState }) | null;
+      const st = raw?.endState ?? raw?.startState;
       if (st) Object.assign(state, st);
       continue;
     }
@@ -259,48 +272,88 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
     try {
       layout = await pageLayout(full, p, work);
     } catch (e) {
-      await prisma.aiImportPage.upsert({
-        where: { fileId_pageNumber: { fileId: file.id, pageNumber: p } },
-        create: { jobId: ctx.job.id, fileId: file.id, pageNumber: p, status: AiImportPageStatus.FAILED, kind, errorMessage: e instanceof Error ? e.message.slice(0, 300) : "layout failed", rawOutput: { startState } },
-        update: { status: AiImportPageStatus.FAILED, errorMessage: e instanceof Error ? e.message.slice(0, 300) : "layout failed" },
-      });
+      const msg = e instanceof Error ? e.message.slice(0, 300) : "layout failed";
+      await record(p, { status: AiImportPageStatus.FAILED, kind, errorMessage: msg, outcome: "FAILED", outcomeReason: msg, rawOutput: { startState } });
       continue;
     }
     const textChars = layout.lines.reduce((a, l) => a + l.text.replace(/\s+/g, "").length, 0);
     const scanned = textChars < 80;
-    const textLayer = layout.lines.map((l) => l.text).join("\n").slice(0, 20_000);
-    if (scanned) {
-      // No usable text layer → vision.
-      await prisma.aiImportPage.upsert({
-        where: { fileId_pageNumber: { fileId: file.id, pageNumber: p } },
-        create: { jobId: ctx.job.id, fileId: file.id, pageNumber: p, status: AiImportPageStatus.PENDING, kind: layout.images.length || textChars ? "SCANNED" : "BLANK", textChars, imageCount: layout.images.length, rawOutput: { startState } },
-        update: { status: AiImportPageStatus.PENDING, kind: layout.images.length || textChars ? "SCANNED" : "BLANK", textChars, imageCount: layout.images.length, rawOutput: { startState } },
-      });
-      if (!layout.images.length && !textChars) await prisma.aiImportPage.update({ where: { fileId_pageNumber: { fileId: file.id, pageNumber: p } }, data: { status: AiImportPageStatus.DONE } });
+    let textLayer = layout.lines.map((l) => l.text).join("\n").slice(0, 20_000);
+    let local: (PageExtraction & { preamble: string }) | null = scanned ? null : parsePdfPageLocal({ lines: layout.lines, images: layout.images }, p, state);
+    // No usable text layer (a scan, or text drawn as outlines) — or a text layer in which no question could be found
+    // (e.g. a poor third-party OCR layer): read the RENDERED page with local OCR. A page is never "blank" only because
+    // it has no text layer.
+    let ocr: { raw: OcrPage; result: OcrPageResult } | null = null;
+    if ((scanned || local?.questions.length === 0) && useOcr) {
+      try {
+        const raw = await ocrPdfPage(full, p);
+        const st = { ...startState };
+        const result = readOcrPage(raw, p, st);
+        if (scanned || (result.extraction?.questions.length ?? 0) > 0) {
+          ocr = { raw, result };
+          Object.assign(state, st);
+          local = result.extraction;
+        }
+      } catch (e) {
+        if (scanned) {
+          const msg = `Local OCR failed: ${e instanceof Error ? e.message.slice(0, 250) : "unknown error"}`;
+          await record(p, { status: aiUsable(ctx.settings) ? AiImportPageStatus.PENDING : AiImportPageStatus.FAILED, kind: "SCANNED", textChars, imageCount: layout.images.length, errorMessage: msg, outcome: "FAILED", outcomeReason: msg, rawOutput: { startState } });
+          continue;
+        }
+      }
+    }
+    const ocrFields = ocr
+      ? { ocrText: ocr.result.layout.text.slice(0, 50_000), ocrLines: ocr.raw.lines as unknown as Prisma.InputJsonValue, ocrEngine: ocr.raw.engine, ocrConfidence: ocr.result.layout.meanConfidence, ocrLowLines: ocr.result.layout.lowLines, inkCoverage: ocr.raw.ink }
+      : {};
+    if (ocr) textLayer = ocr.result.layout.text.slice(0, 20_000);
+    if (scanned && !ocr) {
+      // No OCR on this server: blank only when the rendered page has (almost) no ink; anything else is read by AI or reviewed.
+      const ink = await pageInk(full, p);
+      const blank = ink < BLANK_INK_BELOW;
+      const why = blank ? `blank: ${(ink * 100).toFixed(2)}% ink on the rendered page` : `no text layer and local OCR is not available — ${(ink * 100).toFixed(1)}% of the page has ink`;
+      const status = blank ? AiImportPageStatus.DONE : AiImportPageStatus.PENDING;
+      await record(p, { status, kind: blank ? "BLANK" : "SCANNED", textChars, imageCount: layout.images.length, inkCoverage: ink, outcome: blank ? "BLANK_VERIFIED" : "NEEDS_REVIEW", outcomeReason: why, rawOutput: { startState, endState: { ...state } }, processedAt: status === AiImportPageStatus.DONE ? new Date() : null });
       continue;
     }
-    const local = parsePdfPageLocal({ lines: layout.lines, images: layout.images }, p, state);
-    // Text before the first question on this page continues the previous page's last question.
-    if (local.preamble && previous && previous.options.length < 4) {
-      const merged = blockToQuestion({ section: previous.section, number: previous.number ?? 0, label: previous.label, lines: [], text: `${previous.stem}\n${previous.options.map((o) => `${o.printed} ${o.text}`).join("  ")}\n${local.preamble}` }, previous.pages[0], "LOCAL_PDF");
-      merged.q.pages = [...new Set([...previous.pages, p])];
-      merged.q.figures = previous.figures;
-      merged.q.notes = [...(merged.q.notes ?? []), "Continues from the previous page."];
-      const prevFile = file;
-      await saveQuestion(ctx, prevFile, merged.q, (await prisma.aiImportQuestion.findUnique({ where: { fileId_sourceKey: { fileId: file.id, sourceKey: sourceKeyOf(previous) } }, select: { orderIndex: true } }))?.orderIndex ?? order++, async () => null, previous.pages[0]);
+    if (ocr && !ocr.result.extraction) {
+      // Blank (verified by ink), cover / instructions / rough work, or ink without readable text.
+      const explained = ocr.result.outcome === "BLANK_VERIFIED" || ocr.result.outcome === "INSTRUCTIONS";
+      const status = explained ? AiImportPageStatus.DONE : AiImportPageStatus.PENDING;
+      await record(p, { status, kind: ocr.result.outcome === "BLANK_VERIFIED" ? "BLANK" : "SCANNED", textChars, textLayer, imageCount: layout.images.length, ...ocrFields, outcome: ocr.result.outcome, outcomeReason: ocr.result.reason, model: status === AiImportPageStatus.DONE ? "local" : null, processedAt: status === AiImportPageStatus.DONE ? new Date() : null, rawOutput: { startState, endState: { ...state } } });
+      if (ocr.result.outcome === "INSTRUCTIONS") await logEvent(ctx.job.id, "PAGE_NOT_QUESTIONS", `${file.originalName} page ${p}: ${ocr.result.reason} — no questions taken from it.`, { page: p });
+      continue;
     }
-    const needsAi = !local.reliable;
+    local = local!;
+    // Text before the first question on this page continues the previous page's last question.
+    const joined = joinPreamble(previous, local.preamble, p);
+    if (joined && previous) {
+      await saveQuestion(ctx, file, joined, (await prisma.aiImportQuestion.findUnique({ where: { fileId_sourceKey: { fileId: file.id, sourceKey: sourceKeyOf(previous) } }, select: { orderIndex: true } }))?.orderIndex ?? order++, async () => null, previous.pages[0]);
+    }
+    // A complete question before the first readable number on the page (its number was not read): kept unnumbered.
+    const orphan = joined ? null : orphanQuestion(previous, local.preamble, p, ocr ? "LOCAL_OCR" : "LOCAL_PDF", ocr ? { engine: ocr.raw.engine, minConfidence: Math.min(...ocr.result.layout.lines.map((l) => l.conf), 1), meanConfidence: ocr.result.layout.meanConfidence } : null);
+    if (orphan) await saveQuestion(ctx, file, orphan, order++, async () => null, p);
+    const noQuestions = !local.questions.length;
+    const needsAi = !local.reliable || noQuestions;
     for (const q of local.questions) {
-      await saveQuestion(ctx, file, q, order++, async (f) => (f.embeddedIndex !== null && f.embeddedIndex !== undefined && layout!.images[f.embeddedIndex] ? { bytes: layout!.images[f.embeddedIndex].bytes, ext: layout!.images[f.embeddedIndex].ext, source: "EMBEDDED" } : null), p);
+      await saveQuestion(ctx, file, q, order++, async (f) => (!ocr && f.embeddedIndex !== null && f.embeddedIndex !== undefined && layout!.images[f.embeddedIndex] ? { bytes: layout!.images[f.embeddedIndex].bytes, ext: layout!.images[f.embeddedIndex].ext, source: "EMBEDDED" } : null), p);
     }
     if (local.questions.length) previous = local.questions[local.questions.length - 1];
     const status = needsAi && aiUsable(ctx.settings) ? AiImportPageStatus.PENDING : AiImportPageStatus.DONE;
-    await prisma.aiImportPage.upsert({
-      where: { fileId_pageNumber: { fileId: file.id, pageNumber: p } },
-      create: { jobId: ctx.job.id, fileId: file.id, pageNumber: p, status, kind: needsAi ? "TEXT_UNRELIABLE" : "TEXT", textChars, textLayer, imageCount: layout.images.length, rawOutput: { startState, local: { reliable: local.reliable, reasons: local.reasons } } as Prisma.InputJsonValue, processedAt: status === AiImportPageStatus.DONE ? new Date() : null, model: status === AiImportPageStatus.DONE ? "local" : null },
-      update: { status, kind: needsAi ? "TEXT_UNRELIABLE" : "TEXT", textChars, textLayer, imageCount: layout.images.length, rawOutput: { startState, local: { reliable: local.reliable, reasons: local.reasons } } as Prisma.InputJsonValue, processedAt: status === AiImportPageStatus.DONE ? new Date() : null, model: status === AiImportPageStatus.DONE ? "local" : null },
-    });
+    const outcome = ocr ? ocr.result.outcome : noQuestions ? "NO_QUESTIONS" : "TEXT_LAYER";
+    const outcomeReason = ocr ? ocr.result.reason : noQuestions ? "the text layer was read but no numbered question was found — check it" : `${local.questions.length} question(s) from the PDF's own text${local.reliable ? "" : ` (uncertain: ${local.reasons.slice(0, 3).join("; ")})`}`;
+    const pageKind = ocr ? "SCANNED" : needsAi ? "TEXT_UNRELIABLE" : "TEXT";
+    const rawOutput = { startState, endState: { ...state }, local: { reliable: local.reliable, reasons: local.reasons }, ...(ocr ? { ocr: { skew: ocr.result.layout.skew, gutter: ocr.result.layout.gutter, furniture: ocr.result.layout.furniture.slice(0, 40), seconds: ocr.raw.seconds, rereads: ocr.raw.rereads } } : {}) } as Prisma.InputJsonValue;
+    await record(p, { status, kind: pageKind, textChars, textLayer, imageCount: layout.images.length, ...ocrFields, outcome, outcomeReason, rawOutput, processedAt: status === AiImportPageStatus.DONE ? new Date() : null, model: status === AiImportPageStatus.DONE ? (ocr ? ocr.raw.engine : "local") : null });
   }
+}
+
+/** Share of dark pixels of a page rendered at low resolution (blank detection when local OCR is unavailable). */
+async function pageInk(file: string, page: number): Promise<number> {
+  const png = await renderPage(file, page, 100);
+  const { data } = await sharp(png).greyscale().raw().toBuffer({ resolveWithObject: true });
+  let dark = 0;
+  for (let i = 0; i < data.length; i++) if (data[i] < 128) dark++;
+  return data.length ? dark / data.length : 0;
 }
 
 /** Page render for vision/crops/review (cached in the vault; re-creatable from the original). */
@@ -664,6 +717,21 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       q.confidence = Math.min(q.confidence, 0.5);
     }
     const existingLocal = localOnPage.find((l) => l.sourceKey === sourceKeyOf(q));
+    // The page's own reading (OCR or text layer) is the evidence: AI text that drops, adds or changes medical words,
+    // numbers or negations is flagged for a person (SOURCE_TEXT_MISMATCH) — never accepted silently.
+    const twin = existingLocal ? (existingLocal.data as unknown as ExtractedQuestion) : null;
+    const twinText = twin?.ocr?.text ?? (twin?.method === "LOCAL_PDF" ? [twin.stem, ...twin.options.map((o) => `${o.printed} ${o.text}`)].join("\n") : null);
+    const pageText = page.ocrText ?? (page.kind === "TEXT_UNRELIABLE" ? page.textLayer : null);
+    if (twinText || pageText) {
+      const aiText = [q.stem, ...q.options.map((o) => o.text), ...(q.listI ?? []).map((x) => x.text), ...(q.listII ?? []).map((x) => x.text)].join("\n");
+      const diff = sourceTextDiff(aiText, twinText ?? pageText!, !!twinText);
+      const summary = sourceDiffSummary(diff);
+      if (summary) {
+        q.sourceCheck = { source: twin?.ocr ? "OCR" : twinText ? "TEXT_LAYER" : "OCR_PAGE", ...diff };
+        q.notes = [...(q.notes ?? []), `Compared with the page's own reading: ${summary}.`];
+      }
+      if (twin?.ocr) q.ocr = twin.ocr;
+    }
     aiKeys.add(sourceKeyOf(q));
     const outcome = await saveQuestion(ctx, file, q, existingLocal ? (await prisma.aiImportQuestion.findUnique({ where: { id: existingLocal.id }, select: { orderIndex: true } }))!.orderIndex : order++, figureBytes, page.pageNumber, rescan ? { model: primary.model } : null);
     if (rescan) outcomes.push({ key: sourceKeyOf(q), outcome });
@@ -677,7 +745,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     }
     if (l.editedData || l.status !== AiImportQuestionStatus.EXTRACTED) continue;
     const d = l.data as unknown as ExtractedQuestion;
-    if (d.method !== "LOCAL_PDF" && !rescan) continue;
+    if (d.method !== "LOCAL_PDF" && d.method !== "LOCAL_OCR" && !rescan) continue;
     d.notes = [...(d.notes ?? []), rescan ? "The re-scan of this page did not find this question; it is kept as it was." : "The AI read of this page did not return this question; kept from the text layer."];
     d.confidence = Math.min(d.confidence, 0.5);
     await prisma.aiImportQuestion.update({ where: { id: l.id }, data: { data: d as unknown as Prisma.InputJsonValue, confidence: d.confidence } });
@@ -691,7 +759,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   if (rescan && _joins?.length) pendingJoins.push(..._joins);
   await prisma.aiImportPage.update({
     where: { id: page.id },
-    data: { status: AiImportPageStatus.DONE, model: primary.model, processedAt: new Date(), errorMessage: null, rawOutput: { ...rest, ai: primary.out, ...(pendingJoins.length ? { pendingJoins } : {}), ...(second ? { secondRead: { model: secondModel, questions: second.length }, verified: { model: secondModel ?? "", at: new Date().toISOString(), extra } } : {}) } as unknown as Prisma.InputJsonValue },
+    data: { status: AiImportPageStatus.DONE, model: primary.model, outcome: "AI", outcomeReason: `${qs.length} question(s) read by ${primary.model}${page.ocrText ? " (checked against the local OCR reading)" : ""}`, processedAt: new Date(), errorMessage: null, rawOutput: { ...rest, ai: primary.out, ...(pendingJoins.length ? { pendingJoins } : {}), ...(second ? { secondRead: { model: secondModel, questions: second.length }, verified: { model: secondModel ?? "", at: new Date().toISOString(), extra } } : {}) } as unknown as Prisma.InputJsonValue },
   });
   if (extra.length) await logEvent(ctx.job.id, "VERIFY_EXTRA", `${file.originalName} page ${page.pageNumber}: the independent read found ${extra.join(", ")}, which the primary read did not — check for missing questions.`, { pageId: page.id, extra });
   if (rescan) {
@@ -870,6 +938,26 @@ async function localSheetPass(ctx: StepContext, file: AiImportFile): Promise<voi
 }
 
 async function imagePass(ctx: StepContext, file: AiImportFile): Promise<void> {
+  const existing = await prisma.aiImportPage.findUnique({ where: { fileId_pageNumber: { fileId: file.id, pageNumber: 1 } } });
+  if (existing?.status === AiImportPageStatus.DONE) return;
+  // A photographed / scanned page: local OCR first (free); the vision model only when OCR cannot resolve the page.
+  if (ocrAvailable() && !existing?.outcome) {
+    try {
+      const raw = await ocrImageFile(vaultPath(file.storageKey!));
+      const state: NumberingState = { last: 0, sectionIdx: 1 };
+      const result = readOcrPage(raw, 1, state);
+      const qs = result.extraction?.questions ?? [];
+      let order = await nextOrderIndex(file.id);
+      for (const q of qs) await saveQuestion(ctx, file, q, order++, async () => null, 1);
+      const explained = result.outcome === "BLANK_VERIFIED" || result.outcome === "INSTRUCTIONS" || (result.outcome === "OCR" && !!result.extraction?.reliable);
+      const status = explained || !aiUsable(ctx.settings) ? AiImportPageStatus.DONE : AiImportPageStatus.PENDING;
+      const fields = { status, kind: "SCANNED", imageCount: 1, textLayer: result.layout.text.slice(0, 20_000), ocrText: result.layout.text.slice(0, 50_000), ocrLines: raw.lines as unknown as Prisma.InputJsonValue, ocrEngine: raw.engine, ocrConfidence: result.layout.meanConfidence, ocrLowLines: result.layout.lowLines, inkCoverage: raw.ink, outcome: result.outcome, outcomeReason: result.reason, model: status === AiImportPageStatus.DONE ? raw.engine : null, processedAt: status === AiImportPageStatus.DONE ? new Date() : null, rawOutput: { startState: { last: 0, sectionIdx: 1 }, endState: state, ocr: { skew: result.layout.skew, gutter: result.layout.gutter, furniture: result.layout.furniture.slice(0, 40) } } as unknown as Prisma.InputJsonValue };
+      await prisma.aiImportPage.upsert({ where: { fileId_pageNumber: { fileId: file.id, pageNumber: 1 } }, create: { ...fields, jobId: ctx.job.id, fileId: file.id, pageNumber: 1 }, update: fields });
+      return;
+    } catch (e) {
+      await logEvent(ctx.job.id, "OCR_FAILED", `${file.originalName}: local OCR failed (${e instanceof Error ? e.message.slice(0, 160) : "unknown error"}) — the page is left for the vision model or review.`, { fileId: file.id });
+    }
+  }
   await prisma.aiImportPage.upsert({
     where: { fileId_pageNumber: { fileId: file.id, pageNumber: 1 } },
     create: { jobId: ctx.job.id, fileId: file.id, pageNumber: 1, status: AiImportPageStatus.PENDING, kind: "SCANNED", imageCount: 1, rawOutput: { startState: { last: 0, sectionIdx: 1 } } },

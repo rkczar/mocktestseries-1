@@ -23,6 +23,8 @@ export interface QualityQuestion {
   answerStatus: string;
   importBlocker: string | null;
   rescanPending: boolean;
+  /** First source page of the question (for per-page counts). */
+  page?: number | null;
 }
 
 export interface QualityPage {
@@ -30,6 +32,11 @@ export interface QualityPage {
   kind: string | null;
   attempts: number;
   errorMessage: string | null;
+  /** Page identity and documented outcome (lib/ai-import/ocr-page.ts); absent on callers that predate page outcomes. */
+  fileId?: string;
+  pageNumber?: number;
+  outcome?: string | null;
+  outcomeReason?: string | null;
 }
 
 export interface SequenceAck {
@@ -54,6 +61,40 @@ export interface QualityInput {
   ack: SequenceAck | null;
   /** True after processing finished (review / import / completed states). */
   processed: boolean;
+  /** Highest question number in the answer key(s), to suggest an expected count. */
+  keyMaxNumber?: number | null;
+}
+
+const UNEXPLAINED = new Set(["NO_QUESTIONS", "NEEDS_REVIEW", "FAILED"]);
+
+/**
+ * Pages whose outcome does not explain them: no question found on a page that is not blank or instructions, ink
+ * without readable text, failed reading — and pages processed before outcomes existed that were marked blank only
+ * because they had no text layer and no embedded image (seen 2026-11-04: 18 of 19 RUHS MO 2016 pages).
+ */
+export function unexplainedPages(pages: QualityPage[]): { page: number | null; why: string }[] {
+  const out: { page: number | null; why: string }[] = [];
+  for (const p of pages) {
+    if (p.outcome && UNEXPLAINED.has(p.outcome) && p.status !== "PENDING") out.push({ page: p.pageNumber ?? null, why: p.outcomeReason ?? p.outcome });
+    else if (!p.outcome && p.kind === "BLANK" && p.status === "DONE") out.push({ page: p.pageNumber ?? null, why: "marked blank without checking the page image (processed before page checks existed) — process the paper again" });
+  }
+  return out.sort((a, b) => (a.page ?? 0) - (b.page ?? 0));
+}
+
+/** Pages with far fewer questions than the paper's usual page (a column or half a page may have been missed). */
+export function lowCountPages(questions: Pick<QualityQuestion, "fileId" | "page" | "status">[], pages: QualityPage[]): { page: number; count: number; typical: number }[] {
+  const counts = new Map<string, number>();
+  for (const q of questions) if (q.page && q.status !== "REJECTED") counts.set(`${q.fileId}|${q.page}`, (counts.get(`${q.fileId}|${q.page}`) ?? 0) + 1);
+  const read = pages.filter((p) => p.fileId && p.pageNumber && (p.outcome === "OCR" || p.outcome === "TEXT_LAYER" || p.outcome === "AI"));
+  const vals = read.map((p) => counts.get(`${p.fileId}|${p.pageNumber}`) ?? 0).filter((n) => n > 0).sort((a, b) => a - b);
+  if (vals.length < 4) return [];
+  const typical = vals[Math.floor(vals.length / 2)];
+  if (typical < 3) return [];
+  // The last question page of a paper is often short; it is not flagged.
+  const lastPage = Math.max(...read.map((p) => p.pageNumber!));
+  return read
+    .map((p) => ({ page: p.pageNumber!, count: counts.get(`${p.fileId}|${p.pageNumber}`) ?? 0, typical }))
+    .filter((x) => x.count > 0 && x.count < typical * 0.4 && x.page !== lastPage);
 }
 
 export type QualityState = "PROCESSING" | "NEEDS_CORRECTION" | "READY_FOR_REVIEW" | "READY_FOR_APPROVAL" | "APPROVED" | "COMPLETED" | "COMPLETED_WITH_WARNINGS";
@@ -230,7 +271,13 @@ export function qualityReport(input: QualityInput): QualityReport {
   if (rescanPending) b.push(`${rescanPending} re-scan result(s) are waiting for your choice.`);
   if (needsCorrection) b.push(`${needsCorrection} question(s) need correction.`);
   if (importFailed) b.push(`${importFailed} question(s) were not accepted by the Question Bank.`);
-  if (input.expected === null && input.processed) b.push("The expected number of questions was not confirmed.");
+  const unexplained = unexplainedPages(input.pages);
+  if (unexplained.length) b.push(`${unexplained.length} page(s) not accounted for: ${unexplained.slice(0, 6).map((u) => `page ${u.page ?? "?"} (${u.why})`).join("; ")}${unexplained.length > 6 ? ` … and ${unexplained.length - 6} more` : ""}.`);
+  if (input.expected === null && input.processed) {
+    const maxRead = Math.max(0, ...qs.filter((q) => !q.section).map((q) => q.number ?? 0));
+    const hint = [maxRead ? `the paper reads up to Q${maxRead}` : null, input.keyMaxNumber ? `the answer key goes up to ${input.keyMaxNumber}` : null].filter(Boolean).join(" and ");
+    b.push(`The expected number of questions was not confirmed${hint ? ` (${hint})` : ""} — without it, questions missing at the end of the paper cannot be detected.`);
+  }
   const sequenceProblem = missing.length > 0 || (countDifference !== null && countDifference !== 0);
   if (sequenceProblem && !ackValid) {
     if (missing.length) b.push(`Missing question number(s): ${missing.slice(0, 20).join(", ")}${missing.length > 20 ? ` … and ${missing.length - 20} more` : ""}.`);
@@ -240,6 +287,8 @@ export function qualityReport(input: QualityInput): QualityReport {
   const w = report.warnings;
   if (sequenceProblem && ackValid) w.push(`Count difference / missing numbers acknowledged: ${input.ack!.note}`);
   if (report.duplicateNumbers.length) w.push(`Question number(s) read on more than one question: ${report.duplicateNumbers.slice(0, 10).join(", ")} — each copy is kept and flagged; set the right numbers or reject the extra copy.`);
+  const low = lowCountPages(qs, input.pages);
+  if (low.length) w.push(`Page(s) with unusually few questions: ${low.slice(0, 6).map((l) => `page ${l.page} (${l.count}, usually ${l.typical})`).join(", ")} — check for a missed column or half page.`);
   if (input.verifierExtras.length) w.push(`The independent read found question(s) the primary read did not: ${input.verifierExtras.slice(0, 10).join(", ")}.`);
   if (report.verifyDisagreed) w.push(`${report.verifyDisagreed} question(s) where the independent read disagreed or did not find the question.`);
   if (report.notImportable) w.push(`${report.notImportable} question(s) cannot be stored by the Question Bank (unsupported type).`);

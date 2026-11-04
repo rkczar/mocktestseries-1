@@ -12,6 +12,8 @@ import type { ExtractedOption, ExtractedQuestion, ExtractedType, MatchEntry, NBo
 export interface Seg {
   text: string;
   box?: NBox;
+  /** OCR line confidence (0..1); absent for text-layer and Word text. */
+  conf?: number;
 }
 
 export interface Line {
@@ -35,8 +37,9 @@ export interface Block {
   text: string;
 }
 
-const Q_START = /^\s*(?:Q(?:uestion|ue|n)?\s*[.:]?\s*(?:No\.?\s*)?)?(\d{1,3})\s*[.):]\s*(\S.*)?$/i;
-const Q_START_PREFIXED = /^\s*Q(?:uestion|ue|n)?\s*[.:]?\s*(?:No\.?\s*)?(\d{1,3})\b\s*[.):-]?\s*(.*)$/i;
+// "No." and "No:" both occur ("Question No: 1" — seen 2026-11-04, CMS 2024 Word copy parsed to 4 of 120 questions).
+const Q_START = /^\s*(?:Q(?:uestion|ue|n)?\s*[.:]?\s*(?:No[.:]?\s*)?)?(\d{1,3})\s*[.):]\s*(\S.*)?$/i;
+const Q_START_PREFIXED = /^\s*Q(?:uestion|ue|n)?\s*[.:]?\s*(?:No[.:]?\s*)?(\d{1,3})\b\s*[.):-]?\s*(.*)$/i;
 
 /** Numbering state carried from page to page of one document. */
 export interface NumberingState {
@@ -77,6 +80,9 @@ export function explanationIsHeading(text: string | null | undefined): boolean {
  * question continued from the previous page). Numbering must advance by one;
  * a restart at 1 after Q5+ opens a new section ("S2", …).
  */
+/** Label of a question block whose printed number was not read (number 0 in the block; null on the question). */
+export const UNNUMBERED = "unnumbered";
+
 export function splitQuestions(lines: Line[], state: NumberingState = { last: 0, sectionIdx: 1 }): { blocks: Block[]; preamble: string[] } {
   const blocks: Block[] = [];
   const preamble: string[] = [];
@@ -85,8 +91,11 @@ export function splitQuestions(lines: Line[], state: NumberingState = { last: 0,
   let sectionIdx = state.sectionIdx;
   let heading: string | null = null;
   let headingSinceQuestion = false;
+  let prevColumn: number | undefined;
   for (const line of lines) {
     const t = line.text.trim();
+    const columnChanged = prevColumn !== undefined && line.column !== undefined && line.column !== prevColumn;
+    prevColumn = line.column ?? prevColumn;
     // A heading only between questions: never inside a question whose options are not complete yet.
     const blockComplete: boolean = !current || (chooseRun(markersOf(current.lines.map((l) => l.text).join("\n")))?.length ?? 0) >= 4;
     if (blockComplete && isSectionHeading(t)) {
@@ -98,7 +107,12 @@ export function splitQuestions(lines: Line[], state: NumberingState = { last: 0,
     const m = prefixed ?? Q_START.exec(line.text);
     if (m) {
       const n = Number(m[1]);
-      const next = last === 0 ? n >= 1 && n <= 400 : n === last + 1 || (prefixed !== null && n > last && n <= last + 3);
+      // A skip forward is accepted only after a question that already has its full option list: one missed question
+      // must not swallow the rest of the paper (seen 2026-11-04, CMS 2025 scan: after Q2 every later number was
+      // refused). The skipped numbers are reported by the completeness check, never silently.
+      // At the top of a page (no open question here) the previous page's last question is already settled.
+      const jump = n > last && n <= last + 5 && blockComplete;
+      const next = last === 0 ? n >= 1 && n <= 400 : n === last + 1 || (prefixed !== null && n > last && n <= last + 3) || jump;
       // A restart at 1 opens a new section only once the open question has its options (or a heading was printed
       // since it): "14. … urinalysis … is\n1. Granular casts\n2. Red cell casts" is a statement list (seen 2026-10-31,
       // CMS 2013: a false restart there lost 105 of 120 questions, because numbering never got back to 15).
@@ -116,8 +130,25 @@ export function splitQuestions(lines: Line[], state: NumberingState = { last: 0,
         continue;
       }
     }
+    // A column that starts with text which is not a numbered question, after a question that already has its options:
+    // the next question's printed number was not read (seen 2026-11-04, CMS 2024 Paper I page 2: OCR missed the bold
+    // "5." at the top of the right column, merging Q5 into Q4). It becomes an UNNUMBERED question — never a guessed number.
+    if (current && columnChanged && blockComplete && !isSectionHeading(t)) {
+      current = { heading, section: current.section, number: 0, label: UNNUMBERED, lines: [line], text: "" };
+      blocks.push(current);
+      continue;
+    }
     if (current) current.lines.push(line);
     else preamble.push(line.text);
+  }
+  // An unnumbered column-start block is a question only when it has a complete option list; otherwise it is the
+  // previous question's text continuing in the next column (or stray show-through) and goes back to that question.
+  for (let i = blocks.length - 1; i > 0; i--) {
+    const b = blocks[i];
+    if (b.label === UNNUMBERED && (chooseRun(markersOf(b.lines.map((l) => l.text).join("\n")))?.length ?? 0) < 4) {
+      blocks[i - 1].lines.push(...b.lines);
+      blocks.splice(i, 1);
+    }
   }
   for (const b of blocks) b.text = b.lines.map((l) => l.text).join("\n").trim();
   state.last = last;
@@ -161,7 +192,8 @@ export interface Marker {
   printed: string;
 }
 
-const MARKER = /(^|[\s\n])(\(([A-Ea-e1-5])\)|([A-E])[.)](?=\s)|([a-e])\)(?=\s)|\[([A-Ea-e1-5])\])/g;
+// "Option A" labels: table-style papers print "Option A | 700 Kcal" (seen 2026-11-04, RUHS MO 2016).
+const MARKER = /(^|[\s\n])(\(([A-Ea-e1-5])\)|([A-E])[.)](?=\s)|([a-e])\)(?=\s)|\[([A-Ea-e1-5])\]|(?:Option|OPTION)[ \t]+([A-E])(?=[ \t\n]|$))/g;
 
 export function markersOf(text: string): Marker[] {
   const out: Marker[] = [];
@@ -180,9 +212,12 @@ export function markersOf(text: string): Marker[] {
     } else if (m[5]) {
       ch = m[5];
       family = "a)";
-    } else {
+    } else if (m[6]) {
       ch = m[6];
       family = /\d/.test(ch) ? "[1]" : "[A]";
+    } else {
+      ch = m[7];
+      family = "Option A";
     }
     const index = /\d/.test(ch) ? Number(ch) - 1 : ch.toUpperCase().charCodeAt(0) - 65;
     out.push({ family, index, start, end: start + printed.length, printed });
@@ -560,9 +595,23 @@ export function parseMatchLists(stem: string): { listI: MatchEntry[]; listII: Ma
 
 // ---- One block → one question ------------------------------------------------------------------
 
+/** Complete A–D runs in a text: two means a missed question number merged two questions (the last run would win). */
+export function completeRuns(text: string): number {
+  const ms = markersOf(text);
+  let runs = 0;
+  for (let i = 0; i < ms.length; i++) {
+    if (ms[i].index !== 0) continue;
+    let k = 1;
+    for (let j = i + 1; j < ms.length && k < 4; j++) if (ms[j].family === ms[i].family && ms[j].index === k) k++;
+    if (k >= 4) runs++;
+  }
+  return runs;
+}
+
 export function blockToQuestion(b: Block, page: number, method: string): { q: ExtractedQuestion; split: OptionSplit; text: string } {
   const answered = takePrintedAnswer(b.text);
   const split = splitOptions(answered.text);
+  const doubled = completeRuns(answered.text) >= 2;
   const hasFifth = split.options.length >= 5;
   const type = detectType(split.stem, split.options.length, hasFifth);
   const notes: string[] = [];
@@ -572,6 +621,10 @@ export function blockToQuestion(b: Block, page: number, method: string): { q: Ex
     notes.push(split.options.length === 0 ? "No answer options were found." : `Only ${split.options.length} option(s) were found.`);
   }
   if (answered.note) notes.push(answered.note);
+  if (doubled) {
+    confidence = Math.min(confidence, 0.4);
+    notes.push("Two complete option lists were found in this question — a question number was probably not read, so the next question's text and options are merged into this one. Split them by hand.");
+  }
   if (split.options.some((o) => o.text === "")) {
     confidence = Math.min(confidence, 0.6);
     notes.push("An option has no text (it may be an image).");
@@ -674,14 +727,19 @@ export function numberSequenceProblems(reads: NumberedRead[]): Map<string, strin
  * Groups positioned text segments into visual lines in reading order,
  * handling a two-column layout (left column top→bottom, then right column).
  */
-export function orderSegments(segs: Seg[]): Line[] {
+/**
+ * Reading order of positioned segments. `gutter` (0..1) is the measured gap between two columns of an OCR-read page
+ * (lib/ai-import/ocr-layout.ts findGutter); null means one column; undefined keeps the text-layer heuristic.
+ */
+export function orderSegments(segs: Seg[], gutter?: number | null): Line[] {
   const withBox = segs.filter((s): s is Seg & { box: NBox } => !!s.box);
   if (!withBox.length) return segs.map((s) => ({ text: s.text }));
   const leftOnly = withBox.filter((s) => s.box.x + s.box.w < 0.5).length;
   const rightOnly = withBox.filter((s) => s.box.x > 0.5).length;
   const spanning = withBox.filter((s) => s.box.x < 0.45 && s.box.x + s.box.w > 0.55).length;
-  const twoColumns = leftOnly >= 4 && rightOnly >= 4 && spanning <= Math.max(2, withBox.length * 0.1);
-  const columnOf = (s: { box: NBox }) => (twoColumns ? (s.box.x >= 0.48 ? 1 : 0) : 0);
+  const twoColumns = gutter !== undefined ? gutter !== null : leftOnly >= 4 && rightOnly >= 4 && spanning <= Math.max(2, withBox.length * 0.1);
+  const split = gutter ?? 0.48;
+  const columnOf = (s: { box: NBox }) => (twoColumns ? (s.box.x >= split ? 1 : 0) : 0);
   const sorted = [...withBox].sort((a, b) => columnOf(a) - columnOf(b) || a.box.y - b.box.y || a.box.x - b.box.x);
   const lines: Line[] = [];
   for (const s of sorted) {
@@ -707,4 +765,42 @@ export function scriptFragments(segs: Seg[]): number {
   if (hs.length < 5) return 0;
   const median = hs[Math.floor(hs.length / 2)];
   return segs.filter((s) => s.box && s.box.h < median * 0.75 && s.text.trim().length <= 4).length;
+}
+
+// ---- Question text hygiene (every extraction method) ---------------------------------------------------
+
+const NORM = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * Removes the printed question number from the start of the stem, and the option list when it was copied into the
+ * stem as well (seen 2026-11-04: 22 of 120 vision-read questions of CMS 2024 Paper II). Options are removed from the
+ * stem only when every option's text follows its own label there in order — then the stem's tail IS the option list.
+ * Otherwise nothing is removed and the question is flagged (STEM_HAS_OPTIONS). Never touches the option texts.
+ */
+export function cleanStem(q: Pick<ExtractedQuestion, "stem" | "number" | "options" | "notes"> & { stemHasOptions?: boolean }): void {
+  const numbered = /^\s*(?:Q(?:uestion)?\.?\s*(?:No[.:]?\s*)?)?(\d{1,3})\s*[.):]\s+/i.exec(q.stem);
+  if (numbered && q.number !== null && Number(numbered[1]) === q.number) q.stem = q.stem.slice(numbered[0].length);
+  const opts = q.options.filter((o) => o.text.trim().length >= 2);
+  if (opts.length < 2) return;
+  const run = chooseRun(markersOf(q.stem));
+  if (!run || run.length < 2) return;
+  const tail = q.stem.slice(run[0].start);
+  const tailN = NORM(tail);
+  const inOrder = (() => {
+    let at = 0;
+    for (const o of q.options) {
+      const i = tailN.indexOf(NORM(o.text), at);
+      if (!o.text.trim() || i < 0) return false;
+      at = i + NORM(o.text).length;
+    }
+    return true;
+  })();
+  if (run.length === q.options.length && q.options.length >= 2 && inOrder) {
+    q.stem = q.stem.slice(0, run[0].start).trim();
+    q.notes = [...(q.notes ?? []), "The option list was printed again inside the question text; it was removed there (the options are unchanged)."];
+    return;
+  }
+  // Two or more option texts appear after option labels inside the stem, but not as an exact list: leave it, flag it.
+  const hits = opts.filter((o) => tailN.includes(NORM(o.text))).length;
+  if (hits >= 2) q.stemHasOptions = true;
 }

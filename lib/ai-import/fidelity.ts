@@ -154,3 +154,88 @@ export function parseKeyAnswer(raw: string, printedLabels: string[]): { labels: 
   if (labels.some((l) => !l || !valid.has(l))) return { labels: null, problem: `The key value "${v}" is not one of this question's options.` };
   return { labels: [...new Set(labels as string[])], problem: null };
 }
+
+// ---- Extracted text compared with the page's own text (OCR or text layer) ----------------------------
+
+const NEGATIONS = ["not", "no", "never", "except", "least", "false", "incorrect", "cannot", "without", "none", "neither", "nor", "unlikely", "contraindicated"];
+
+function words(s: string): string[] {
+  return s.normalize("NFKC").toLowerCase().replace(/[‘’]/g, "'").match(/[a-z][a-z'-]*/g) ?? [];
+}
+
+function within1(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else {
+      i++;
+      j++;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+export interface SourceTextDiff {
+  /** Medical-length words (6+ letters) in the extracted text found nowhere in the source (one OCR slip tolerated). */
+  added: string[];
+  /** Medical-length words of the source question missing from the extracted text (only when `twin` is the question's own source). */
+  dropped: string[];
+  /** Numbers that differ (added or, with a twin, dropped). */
+  numbers: string[];
+  /** Negation words that differ ("not", "except", "least" …): a change here inverts the question. */
+  negations: string[];
+}
+
+/**
+ * Differences between AI-extracted text and the page's own reading of the same question. Nothing is corrected:
+ * any difference is a reason for a person to compare the question with the page (seen 2026-11-04: the vision model
+ * stored "…caused by porphyrias?" for "…caused by enzymatic defects in the heme biosynthesis pathway?").
+ * `twin` = the source text of THIS question (both directions are checked); otherwise the whole page text, where
+ * only additions can be judged.
+ */
+// Question labels and option labels of the source ("Q. No. 25", "16.", "Option A", "Correct Option C") are layout, not text.
+const LABELS = /(?:^|\n)\s*(?:Q(?:uestion)?\.?\s*No[.:]?\s*\d{1,3}\s*[.)]?|\d{1,3}\s*[.)])\s|\b(?:Correct|Right)\s+(?:Option|Answer)\b[^\n]*|\bOption\s+[A-E]\b|(?:^|\s)\(?[a-dA-D]\)\s/g;
+export function stripLabels(s: string): string {
+  return s.replace(LABELS, " ");
+}
+
+export function sourceTextDiff(extracted: string, source: string, twin: boolean): SourceTextDiff {
+  extracted = stripLabels(extracted);
+  source = stripLabels(source);
+  const ew = words(extracted);
+  const sw = words(source);
+  const sSet = new Set(sw);
+  const eSet = new Set(ew);
+  const longS = [...sSet].filter((w) => w.length >= 6);
+  const longE = [...eSet].filter((w) => w.length >= 6);
+  const present = (w: string, pool: string[]) => pool.some((x) => within1(w, x));
+  const added = longE.filter((w) => !sSet.has(w) && !present(w, longS));
+  const dropped = twin ? longS.filter((w) => !eSet.has(w) && !present(w, longE)) : [];
+  const nums = (t: string) => new Set((t.replace(/[−–—]/g, "-").match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", ".")));
+  const en = nums(extracted);
+  const sn = nums(source);
+  const numbers = [...[...en].filter((n) => !sn.has(n)), ...(twin ? [...sn].filter((n) => !en.has(n)) : [])];
+  const negCount = (ws: string[], n: string) => ws.filter((w) => w === n).length;
+  const negations = NEGATIONS.filter((n) => (twin ? negCount(ew, n) !== negCount(sw, n) : negCount(ew, n) > 0 && !sSet.has(n)));
+  return { added, dropped, numbers, negations };
+}
+
+export function sourceDiffSummary(d: SourceTextDiff): string | null {
+  const parts: string[] = [];
+  if (d.negations.length) parts.push(`negation words differ (${d.negations.join(", ")})`);
+  if (d.numbers.length) parts.push(`numbers differ (${d.numbers.slice(0, 6).join(", ")})`);
+  if (d.dropped.length) parts.push(`words on the page are missing (${d.dropped.slice(0, 6).join(", ")})`);
+  if (d.added.length) parts.push(`words not on the page were added (${d.added.slice(0, 6).join(", ")})`);
+  return parts.length ? parts.join("; ") : null;
+}
