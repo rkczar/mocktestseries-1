@@ -1,10 +1,14 @@
 # Local OCR for the AI Question Importer (ops/ocr/rapidocr_page.py), installed in its own venv: /opt/mts-ocr/venv
-# (Python 3.12, CPU only). Exact pins = the versions benchmarked and regression-tested on 2026-11-04.
-# Install: /opt/mts-ocr/venv/bin/pip install --no-cache-dir -r ops/ocr/requirements.txt
+# (Python 3.12, CPU only). Exact pins = the versions benchmarked and regression-tested on 2026-11-04
+# (OpenCV 4.10: the regression results were produced with cv2 4.10.0; 5.0 reads some lines differently).
+# Install (no system packages; the venv has no pip of its own, an existing pip >= 22.3 installs into it):
+#   /usr/bin/python3 -m venv --without-pip /opt/mts-ocr/venv
+#   <pip-python> -m pip --python /opt/mts-ocr/venv/bin/python install --no-cache-dir --only-binary=:all: -r ops/ocr/requirements.txt
+# The wheel ships the three PP-OCRv6 model files; RapidOCR then needs no network at run time.
 rapidocr==3.10.0
 onnxruntime==1.31.1
 numpy==2.3.5
-opencv-python-headless==5.0.0.93
+opencv-python-headless==4.10.0.84
 pillow==13.0.0
 pyclipper==1.4.0
 shapely==2.2.0
