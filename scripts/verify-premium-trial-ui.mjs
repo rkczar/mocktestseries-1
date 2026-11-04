@@ -68,10 +68,11 @@ try {
     await page.goto(`${BASE}/student/dashboard`);
     const p = await popupState(page);
     check("Dashboard shows the WELCOME popup", p?.state === "WELCOME", p);
-    check("Title 'Unlock Your 2-Day FREE Premium Trial'", Boolean(p?.text.includes("Unlock Your 2-Day FREE Premium Trial")));
-    check("Subtitle mentions 48 hours", Boolean(p?.text.includes("for 48 hours")));
-    check("Comparison FREE FOREVER | 2-DAY TRIAL | PREMIUM", Boolean(p && /FREE FOREVER/.test(p.text) && /2-DAY TRIAL/.test(p.text) && /PREMIUM/.test(p.text)));
-    check("Buttons: Start 2-Day Free Trial / Buy Premium Now / Continue Free", Boolean(p && p.text.includes("Start 2-Day Free Trial") && p.text.includes("Buy Premium Now") && p.text.includes("Continue Free")));
+    check("Title 'Unlock Your 12-Hour FREE Premium Trial' (from the saved duration)", Boolean(p?.text.includes("Unlock Your 12-Hour FREE Premium Trial")));
+    check("Subtitle mentions 12 hours", Boolean(p?.text.includes("for 12 hours")));
+    check("No '2-Day' / '48' wording anywhere in the popup", Boolean(p && !/2-Day|2-DAY|48 hours/.test(p.text)), p?.text);
+    check("Comparison FREE FOREVER | 12-HOUR TRIAL | PREMIUM", Boolean(p && /FREE FOREVER/.test(p.text) && /12-HOUR TRIAL/.test(p.text) && /PREMIUM/.test(p.text)));
+    check("Buttons: Start 12-Hour Free Trial / Buy Premium Now / Continue Free", Boolean(p && p.text.includes("Start 12-Hour Free Trial") && p.text.includes("Buy Premium Now") && p.text.includes("Continue Free")));
     const buyLink = page.locator("[data-testid=trial-popup] a:has-text('Buy Premium Now')");
     await buyLink.waitFor({ state: "visible" });
     check("Buy Premium Now uses the existing checkout", (await buyLink.getAttribute("href")) === `/student/checkout/${F.premium.code}`);
@@ -105,9 +106,9 @@ try {
     await page.locator("[data-testid=trial-popup][data-state-kind=ACTIVE]").waitFor({ timeout: 15000 });
     const active = await popupState(page);
     check("After clicking Start: 'Your Premium Trial Is Active!'", Boolean(active?.text.includes("Your Premium Trial Is Active!")), active);
-    check("Server-derived countdown ~ '1 Day 23 Hours Remaining' / '2 Days 0 Hours'", Boolean(active && /(1 Day 23 Hours|2 Days 0 Hours) Remaining/.test(active.text)), active?.text);
+    check("Server-derived countdown ~ '11 Hours 59 Minutes Remaining' / '12 Hours 0 Minutes'", Boolean(active && /(11 Hours 5\d Minutes|12 Hours 0 Minutes) Remaining/.test(active.text)), active?.text);
     const t = JSON.parse(fixture("trial", F.students.fresh2));
-    check("DB: trial row created, exactly 48 hours", t?.hours === 48, t);
+    check("DB: trial row created, exactly 12 hours", t?.hours === 12, t);
     await page.keyboard.press("Escape");
     await page.goto(`${BASE}/student/attempt/resume?paper=${F.papers.paid}`);
     check("During the trial the Premium PYQ opens (no paywall redirect)", !/premium=locked/.test(page.url()), page.url());
@@ -117,7 +118,8 @@ try {
     const p2 = await ctx2.newPage();
     await p2.goto(`${BASE}/student/dashboard?premium=locked`);
     const again = await popupState(p2);
-    check("Another browser: same trial, no restart offered", again?.state === "ACTIVE" && !again.text.includes("Start 2-Day Free Trial"), again);
+    // A 12 h trial is always within the 24 h "ending soon" window, so ENDING is the expected state here.
+    check("Another browser: same trial, no restart offered", (again?.state === "ACTIVE" || again?.state === "ENDING") && !/Start \d+-(Hour|Day) Free Trial/.test(again.text), again);
     check("DB: still one trial with the same end", JSON.parse(fixture("trial", F.students.fresh2))?.endsAt === t.endsAt);
     await ctx2.close();
   }
@@ -305,6 +307,37 @@ try {
     await page.locator("form:has(select[name=freePyqId]) button[type=submit]").click();
     await page.locator("text=Free Access & Trial settings saved.").waitFor({ timeout: 15000 });
     check("Master: save works and is audit-logged", Number(sql(`SELECT count(*) FROM "AuditLog" WHERE action='PREMIUM_POLICY_UPDATED'`)) >= 1);
+    // Trial duration: preset select, active-duration line, save round-trip, server-side validation.
+    const dbHours = () => Number(sql(`SELECT value->>'trialHours' FROM "Setting" WHERE key='access.premium_policy'`));
+    const activeLine = () => page.locator("[data-testid=trial-duration-active]").innerText();
+    check("Master: active duration shows 12 hours", /Active trial duration:\s*12 hours/.test(await activeLine()), await activeLine());
+    check("Master: duration select pre-selected at 12", (await page.locator("select[name=trialHours]").inputValue()) === "12");
+    const opts = await page.locator("select[name=trialHours] option").evaluateAll((els) => els.map((e) => e.getAttribute("value")));
+    check("Master: presets 1, 2, 6, 12, 24, 48, 72 offered", ["1", "2", "6", "12", "24", "48", "72"].every((v) => opts.includes(v)), opts);
+    await page.selectOption("select[name=trialHours]", "24");
+    await page.locator("form:has(select[name=freePyqId]) button[type=submit]").click();
+    await page.locator("text=Free Access & Trial settings saved.").waitFor({ timeout: 15000 });
+    check("Master: saving 24 h stores 24 in the DB", dbHours() === 24, dbHours());
+    await page.reload();
+    check("Master: after reload the active line shows 24 hours (1 day)", /Active trial duration:\s*1 day \(24 h\)/.test(await activeLine()), await activeLine());
+    // Tampered form value (not in the select) → refused by the server, DB unchanged.
+    await page.evaluate(() => {
+      const sel = document.querySelector("select[name=trialHours]");
+      const o = document.createElement("option");
+      o.value = "9999";
+      sel.appendChild(o);
+      sel.value = "9999";
+    });
+    await page.locator("form:has(select[name=freePyqId]) button[type=submit]").click();
+    await page.locator("text=Trial duration (hours) must be a whole number").waitFor({ timeout: 15000 });
+    check("Master: out-of-range duration refused by the server, DB unchanged", dbHours() === 24, dbHours());
+    await page.reload();
+    await page.selectOption("select[name=trialHours]", "12");
+    await page.locator("form:has(select[name=freePyqId]) button[type=submit]").click();
+    await page.locator("text=Free Access & Trial settings saved.").waitFor({ timeout: 15000 });
+    await page.reload();
+    check("Master: restored to 12 h (DB + active line)", dbHours() === 12 && /Active trial duration:\s*12 hours/.test(await activeLine()), await activeLine());
+    await shot(page, "06b-admin-trial-duration");
     // Enforcement switch requires typed confirmation
     await page.fill("#pe-confirm", "nope");
     await page.locator("form:has(#pe-confirm) button[type=submit]").click();

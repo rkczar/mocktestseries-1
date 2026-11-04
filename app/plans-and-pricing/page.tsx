@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { trialLengthLabel, trialLengthText } from "@/lib/trial-duration";
 import Link from "next/link";
 import { CheckCircle2, Clock, CreditCard, Info, LogIn, ShieldCheck } from "lucide-react";
 import { safeJsonLd } from "@/lib/json-ld";
@@ -282,7 +283,7 @@ export default async function PlansAndPricingPage() {
             ? [
                 {
                   q: "Is there a free trial?",
-                  a: `Yes. Every student can start a one-time ${premium.trialHours}-hour Premium Trial from the Student Dashboard. It starts only when you click "Start 2-Day Free Trial", needs no payment details, and unlocks every Premium test while it lasts. When it ends, your free tests, analytics and previous results stay available.`,
+                  a: `Yes. Every student can start a one-time ${trialLengthText(premium.trialHours)} Premium Trial from the Student Dashboard. It starts only when you click "Start ${trialLengthLabel(premium.trialHours)} Free Trial", needs no payment details, and unlocks every Premium test while it lasts. When it ends, your free tests, analytics and previous results stay available.`,
                 },
               ]
             : []),

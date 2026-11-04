@@ -181,8 +181,8 @@ export const TEMPLATE_DEFAULTS: Record<EmailTemplateKey, TemplateDefinition> = {
     category: "PROMOTIONAL",
     critical: false,
     automatic: true,
-    subject: "Your 2-Day Premium Trial Is Active!",
-    heading: "Your 2-Day Premium Trial Is Active!",
+    subject: "Your Premium Trial Is Active!",
+    heading: "Your Premium Trial Is Active!",
     bodyHtml:
       "<p>Hi {{studentName}},</p><p>Your Premium Trial is now active. Explore Premium PYQs, Mock Tests, Subject Tests and more until <strong>{{trialEndsAt}}</strong>.</p>",
     ctaText: "Start Practising",

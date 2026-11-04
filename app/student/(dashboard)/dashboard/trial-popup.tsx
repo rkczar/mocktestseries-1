@@ -1,5 +1,6 @@
 "use client";
 
+import { trialLengthLabel, trialLengthText } from "@/lib/trial-duration";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -112,8 +113,8 @@ export function TrialPopup({ force }: { force: boolean }) {
 
   const copy = {
     WELCOME: {
-      title: "Unlock Your 2-Day FREE Premium Trial",
-      text: `Explore Premium PYQs, Mock Tests, Subject Tests and more for ${data.trialHours} hours.`,
+      title: `Unlock Your ${trialLengthLabel(data.trialHours)} FREE Premium Trial`,
+      text: `Explore Premium PYQs, Mock Tests, Subject Tests and more for ${trialLengthText(data.trialHours)}.`,
     },
     ACTIVE: { title: "Your Premium Trial Is Active!", text: formatRemaining(remaining) },
     ENDING: { title: "Your Free Trial Ends Soon!", text: formatRemaining(remaining) },
@@ -157,7 +158,7 @@ export function TrialPopup({ force }: { force: boolean }) {
               </Button>
               {buy("Buy Premium Now", false)}
               <Button variant="cta" onClick={startTrial} disabled={pending} className="w-full sm:w-auto" data-testid="start-trial" data-autofocus="">
-                {pending ? "Starting…" : "Start 2-Day Free Trial"}
+                {pending ? "Starting…" : `Start ${trialLengthLabel(data.trialHours)} Free Trial`}
               </Button>
             </>
           ) : data.state === "EXPIRED" ? (
@@ -196,7 +197,7 @@ function FreeList({ items }: { items: string[] }) {
   );
 }
 
-/** Compact FREE FOREVER | 2-DAY TRIAL | PREMIUM comparison. */
+/** Compact FREE FOREVER | <N>-HOUR TRIAL | PREMIUM comparison. */
 function Comparison({ data }: { data: TrialPopupData }) {
   const yes = <Check className="mx-auto h-4 w-4 text-[var(--color-success)]" aria-label="Included" />;
   const no = <XIcon className="mx-auto h-4 w-4 text-[var(--color-muted-foreground)]" aria-label="Not included" />;
@@ -212,7 +213,7 @@ function Comparison({ data }: { data: TrialPopupData }) {
           <tr>
             <th className="px-2 py-2 text-left font-medium">Feature</th>
             <th className="px-1 py-2 text-center font-semibold">FREE FOREVER</th>
-            <th className="px-1 py-2 text-center font-semibold">{data.trialHours === 48 ? "2-DAY TRIAL" : `${data.trialHours}-HOUR TRIAL`}</th>
+            <th className="px-1 py-2 text-center font-semibold">{`${trialLengthLabel(data.trialHours).toUpperCase()} TRIAL`}</th>
             <th className="px-1 py-2 text-center font-semibold">PREMIUM</th>
           </tr>
         </thead>

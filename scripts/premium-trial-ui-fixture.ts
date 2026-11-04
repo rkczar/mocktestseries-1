@@ -139,7 +139,8 @@ async function setup() {
         freeMockTestId: mFree.id,
         freeSubjectMockTestId: mSubject.id,
         trialEnabled: true,
-        trialHours: 48,
+        // Production value since 2026-11-03 (seeded trials above keep their own 48 h windows).
+        trialHours: 12,
         examDate: "2026-12-13",
         tillExamProductIds: [premium.id],
       },

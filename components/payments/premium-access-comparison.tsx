@@ -2,6 +2,7 @@ import { Check, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatInr } from "@/lib/payments/money";
 import type { PremiumAccessSummary } from "@/lib/plans-catalog";
+import { trialLengthLabel, trialLengthText } from "@/lib/trial-duration";
 
 type Cell = true | false | string;
 interface Row {
@@ -20,7 +21,7 @@ interface Row {
  * cards, no horizontal scroll.
  */
 export function PremiumAccessComparison({ summary, className }: { summary: PremiumAccessSummary; className?: string }) {
-  const trialLabel = summary.trialHours === 48 ? "2-Day Premium Trial" : `${summary.trialHours}-Hour Premium Trial`;
+  const trialLabel = `${trialLengthLabel(summary.trialHours)} Premium Trial`;
   const trialOn = summary.trialEnabled;
   const t = (v: Cell): Cell => (trialOn ? v : false);
   const freeTests = summary.free.filter((f) => /^(PYQ|Mock Test|Subject Test):/.test(f));
@@ -36,7 +37,7 @@ export function PremiumAccessComparison({ summary, className }: { summary: Premi
       key: "validity",
       feature: "Validity",
       free: "Forever",
-      trial: t(`${summary.trialHours} hours, once per student`),
+      trial: t(`${trialLengthText(summary.trialHours)}, once per student`),
       premium: summary.premiumPlan?.accessDuration ?? "—",
     },
     ...(freeTests.length > 0 ? [{ key: "free-tests", feature: `Selected free tests (${freeTests.join(" · ")})`, free: true, trial: t(true), premium: true } as Row] : []),

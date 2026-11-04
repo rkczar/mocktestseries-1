@@ -6,6 +6,7 @@ import { getEmailSettings } from "@/lib/email/settings";
 import { getPaymentMode } from "@/lib/payments/settings";
 import { formatInr } from "@/lib/payments/money";
 import { formatIst } from "@/lib/ist-time";
+import { TRIAL_HOURS_PRESETS, trialLengthText } from "@/lib/trial-duration";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -54,7 +55,8 @@ function Stat({ label, value }: { label: string; value: string | number }) {
 export async function FreeAccessPanel({ canManage }: { canManage: boolean }) {
   const ro = !canManage;
   const [policy, mode, email, analytics, exams] = await Promise.all([
-    getPremiumPolicy(),
+    // Fresh: right after Save, either PM2 worker shows exactly what was stored.
+    getPremiumPolicy({ fresh: true }),
     getPaymentMode(),
     getEmailSettings(),
     getTrialAnalytics(),
@@ -143,6 +145,15 @@ export async function FreeAccessPanel({ canManage }: { canManage: boolean }) {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          <p
+            className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-2 text-sm"
+            data-testid="trial-duration-active"
+          >
+            Active trial duration: <strong>{trialLengthText(policy.trialHours)}</strong> ({policy.trialHours} h)
+            {" · "}Free Trial <strong>{policy.trialEnabled ? "ON" : "OFF"}</strong>
+            {policy.updatedAt ? <> · saved {formatIst(new Date(policy.updatedAt))}</> : null}. New trials end exactly this long after the student starts
+            them; trials already running keep their original end time.
+          </p>
           <ActionForm action={savePremiumPolicyAction} submitLabel="Save settings" readOnly={ro} className="flex flex-col gap-5">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field label="Exam" htmlFor="fa-exam" hint="The exam the policy applies to. Other exams keep their current rules.">
@@ -219,8 +230,18 @@ export async function FreeAccessPanel({ canManage }: { canManage: boolean }) {
                 <Check name="trialEnabled" label="Free Trial ON" defaultChecked={policy.trialEnabled} />
                 <Check name="requireVerifiedMobile" label="Require a verified mobile (one trial per number)" defaultChecked={policy.requireVerifiedMobile} />
               </div>
-              <Field label="Trial duration (hours)" htmlFor="fa-hours" hint="Default 48. Applies to trials started after saving.">
-                <Input id="fa-hours" name="trialHours" type="number" min={TRIAL_HOURS_MIN} max={TRIAL_HOURS_MAX} defaultValue={policy.trialHours} />
+              <Field label="Trial duration (hours)" htmlFor="fa-hours" hint="Applies to trials started after saving. Running trials keep their end time.">
+                <SelectNative id="fa-hours" name="trialHours" defaultValue={String(policy.trialHours)}>
+                  {[...new Set([...TRIAL_HOURS_PRESETS, policy.trialHours])]
+                    .filter((h) => h >= TRIAL_HOURS_MIN && h <= TRIAL_HOURS_MAX)
+                    .sort((a, b) => a - b)
+                    .map((h) => (
+                      <option key={h} value={h}>
+                        {h} {h === 1 ? "hour" : "hours"}
+                        {h % 24 === 0 ? ` (${trialLengthText(h)})` : ""}
+                      </option>
+                    ))}
+                </SelectNative>
               </Field>
               <Field label="Grace for untimed attempts (minutes)" htmlFor="fa-grace" hint="Untimed attempts started before the trial ended / enforcement began may continue this long. Timed attempts finish within their own limit.">
                 <Input id="fa-grace" name="attemptGraceMinutes" type="number" min={0} max={1440} defaultValue={policy.attemptGraceMinutes} />

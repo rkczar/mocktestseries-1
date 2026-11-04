@@ -12,7 +12,7 @@ import { getPremiumPolicy, toPolicyRuntime, type PremiumPolicy, type ReminderKin
  * One-time Premium Trial (Free Access & Trial policy, lib/premium-policy.ts).
  *
  * - Never starts by itself: only startPremiumTrial(), called from the
- *   student's explicit "Start 2-Day Free Trial" click, creates the row.
+ *   student's explicit "Start Free Trial" click, creates the row.
  * - One row per student, ever (unique studentId) → atomic + idempotent;
  *   one trial per verified mobile (unique mobile).
  * - The window is server time only: startedAt..endsAt. Logout, another
@@ -106,7 +106,9 @@ export const INELIGIBLE_MESSAGES: Record<IneligibleReason | "PAID" | "OFF" | "AL
  * (started=false). The unique keys decide every race at the database.
  */
 export async function startPremiumTrial(studentId: string, now: Date = new Date()): Promise<StartTrialResult> {
-  const policy = await getPremiumPolicy();
+  // Fresh read: the stored expiry must use the duration saved in Admin right now,
+  // never a worker's cached copy. The client sends no duration or time.
+  const policy = await getPremiumPolicy({ fresh: true });
   const status = await getTrialStatus(studentId, now);
   if (status.trial) {
     return status.phase === "EXPIRED"

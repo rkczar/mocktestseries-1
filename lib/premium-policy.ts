@@ -64,7 +64,8 @@ export const DEFAULT_PREMIUM_POLICY: PremiumPolicy = {
   freeSubjectMockTestId: null,
   freeLiveCbtMockTestIds: [],
   trialEnabled: false,
-  trialHours: 48,
+  // Fallback only when the saved row has no valid value; the saved Admin value always wins.
+  trialHours: 12,
   requireVerifiedMobile: true,
   attemptGraceMinutes: 60,
   popups: { welcome: true, activeDaily: true, expired: true, expiredEveryDays: 1 },
@@ -160,9 +161,13 @@ export function bumpPremiumPolicyCache() {
   cache = null;
 }
 
-/** Cached 5s per worker, like payments.mode — both PM2 workers converge within that window after a change. */
-export async function getPremiumPolicy(): Promise<PremiumPolicy> {
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.value;
+/**
+ * Cached 5s per worker, like payments.mode — both PM2 workers converge within
+ * that window after a change. `fresh` skips the cache (one indexed read): used
+ * where a stale value would be persisted, e.g. a new trial's expiry.
+ */
+export async function getPremiumPolicy(opts: { fresh?: boolean } = {}): Promise<PremiumPolicy> {
+  if (!opts.fresh && cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.value;
   const row = await prisma.setting.findUnique({ where: { key: PREMIUM_POLICY_KEY } });
   const value = parsePremiumPolicy(row?.value ?? null);
   cache = { at: Date.now(), value };

@@ -27,7 +27,7 @@ export async function claimTrialPopupAction(force: boolean): Promise<TrialPopupD
   }
 }
 
-/** "Start 2-Day Free Trial" — the only way a trial starts (explicit click; all rules re-checked on the server). */
+/** "Start <N>-Hour Free Trial" — duration from the saved policy, never from the client; the only way a trial starts (explicit click; all rules re-checked on the server). */
 export async function startTrialAction(): Promise<{ ok: true; endsAt: string; started: boolean } | { ok: false; message: string }> {
   const student = await requireStudentOrLogin();
   const result = await startPremiumTrial(student.id);
