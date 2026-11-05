@@ -47,15 +47,17 @@ export const SELECTION_TASK_LABELS: Record<SelectionTask, string> = {
 };
 
 /**
- * Bounds of the stored (legacy) budget fields only. NONE is enforced: the importer has no application spending cap
- * (owner decisions 2026-10-20 for job / monthly / all-time, 2026-10-26 for per-request and the Ask AI key reserve).
- * The administrator confirms each operation's estimate and maximum once; provider limits still apply.
+ * Upper bounds of the importer budget. Since 2026-11-05 (owner decision 1) the monthly, per-job, all-time and per-request
+ * budgets are ENFORCED again at the importer's AI gateway (lib/ai-import/ai.ts reserve(), under one database lock, so
+ * concurrent requests cannot pass a limit together). A stored value can be lowered, never raised above these bounds.
  */
 export const PILOT_LIMITS = { totalInr: 10, monthlyInr: 10, maxJobInr: 8, maxRequestInr: 1, minKeyReserveUsd: 5 } as const;
 
 export interface ImporterSettings {
   /** Master switch for PAID AI calls. Local parsing, review, import and publishing work without it. */
   aiEnabled: boolean;
+  /** Run-time only (never stored): why paid AI is off for this run although the switch is on (the importer budget). */
+  aiBlockedReason?: string;
   /**
    * auto (default): the cheapest approved, available, suitable model per task is chosen from current
    * OpenRouter prices and privacy routes when a job is confirmed. manual: the models below (authorised override).
@@ -76,15 +78,15 @@ export interface ImporterSettings {
     zdr: boolean;
   };
   budget: {
-    /** NOT ENFORCED since 2026-10-20 (kept so stored settings stay readable): there is no monthly cap. */
+    /** ENFORCED (2026-11-05): importer AI spend in one IST calendar month, all jobs together. */
     monthlyInr: number;
-    /** NOT ENFORCED since 2026-10-20: jobs have no budget field; the confirmed maximum is recorded instead. */
+    /** Not used for enforcement (maxJobInr is the per-job limit); kept so stored settings stay readable. */
     defaultJobCapInr: number;
-    /** NOT ENFORCED since 2026-10-20: there is no per-job cap. */
+    /** ENFORCED (2026-11-05): one job's AI spend (also never above the maximum the administrator confirmed for it). */
     maxJobInr: number;
-    /** NOT ENFORCED since 2026-10-20: there is no all-time cap. */
+    /** ENFORCED (2026-11-05): all importer AI spend ever recorded. */
     totalInr: number;
-    /** NOT ENFORCED since 2026-10-26: there is no per-request cap. */
+    /** ENFORCED (2026-11-05): the worst case of one request. */
     maxRequestInr: number;
     /** NOT ENFORCED since 2026-10-26: no reserve is held back on the shared OpenRouter key (its own limit applies). */
     keyReserveUsd: number;
@@ -113,7 +115,10 @@ export interface ImporterSettings {
     nearDuplicateAt: number;
   };
   publish: {
-    /** Questions without an official key may be imported/published with their answer marked UNVERIFIED. */
+    /**
+     * ALWAYS false since 2026-11-05 (owner decision 2): an answer that is not from the official key or confirmed by an
+     * administrator is never publishable. A stored true is ignored; kept so stored settings stay readable.
+     */
     allowUnverifiedAnswers: boolean;
     /** A topic is required before a question may be published. */
     requireTopic: boolean;
@@ -218,7 +223,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
       nearDuplicateAt: clamp(r.verification?.nearDuplicateAt, [0.5, 1], d.verification.nearDuplicateAt),
     },
     publish: {
-      allowUnverifiedAnswers: r.publish?.allowUnverifiedAnswers === true,
+      allowUnverifiedAnswers: false,
       requireTopic: r.publish?.requireTopic !== false,
     },
     retention: {
@@ -378,7 +383,8 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   ANSWER_MISMATCH: { label: "Answer key mismatch", blocking: false, publishBlocking: true },
   ANSWER_AMBIGUOUS: { label: "Ambiguous answer-key mapping", blocking: false, publishBlocking: true },
   ANSWER_KEY_PAPER_MISMATCH: { label: "Answer key is for a different paper / series", blocking: true, publishBlocking: true },
-  ANSWER_UNVERIFIED: { label: "Answer unverified", blocking: false, publishBlocking: false },
+  /** No official key entry / admin confirmation (owner decision 2, 2026-11-05): never Ready, never imported or published. */
+  ANSWER_UNVERIFIED: { label: "Answer unverified", blocking: true, publishBlocking: true },
   POSSIBLE_WITHDRAWN: { label: "Possible withdrawn question", blocking: false, publishBlocking: true },
   FORMULA_ISSUE: { label: "Formula needs checking", blocking: false, publishBlocking: true },
   OCR_UNCERTAIN: { label: "OCR unsure of some text", blocking: false, publishBlocking: true },
@@ -388,7 +394,8 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   DUPLICATE_EXISTING: { label: "Duplicate of an existing question", blocking: true, publishBlocking: true },
   DUPLICATE_NEAR: { label: "Near-duplicate of an existing question", blocking: false, publishBlocking: true },
   DUPLICATE_IN_BATCH: { label: "Duplicate within this batch", blocking: true, publishBlocking: true },
-  AI_OPINION_DIFFERS: { label: "AI opinion differs from the key", blocking: false, publishBlocking: false },
+  /** An unresolved answer disagreement (owner decision 2): blocks Ready until an administrator confirms the answer. */
+  AI_OPINION_DIFFERS: { label: "AI opinion differs from the key", blocking: true, publishBlocking: true },
   VERIFY_DISAGREES: { label: "Independent verification disagrees", blocking: false, publishBlocking: true },
   RESCAN_PENDING: { label: "Re-scan result waiting for your choice", blocking: true, publishBlocking: true },
   ANSWER_TYPE_CONFLICT: { label: "Answer does not fit the question type", blocking: true, publishBlocking: true },
@@ -396,10 +403,16 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   QUESTION_TEXT_SUSPECT: { label: "Question text incomplete or a placeholder", blocking: true, publishBlocking: true },
   ANSWER_IN_OPTION: { label: "Answer text inside an option or the question", blocking: true, publishBlocking: true },
   STATEMENTS_MERGED: { label: "Numbered statements run together", blocking: true, publishBlocking: true },
+  /** The options cite a statement number the question text does not have (a statement lost or merged in the source). */
+  STATEMENT_COUNT_MISMATCH: { label: "Options refer to a statement the text does not have", blocking: false, publishBlocking: true },
   SUBJECT_MISMATCH: { label: "Subject does not fit the question", blocking: true, publishBlocking: true },
   FORMAT_DEVIATION: { label: "Differs from this paper format's profile", blocking: false, publishBlocking: true },
   REFERENCE_CONFLICT: { label: "Differs from the reference paper", blocking: false, publishBlocking: true },
   VERIFY2_DISAGREES: { label: "Verify 2 (independent model) disagrees", blocking: true, publishBlocking: true },
+  /** Verify 2 was sent but gave no usable answer (model error, timeout, cut-off output) — never agreement, never a disagreement. */
+  VERIFY2_FAILED: { label: "Verify 2 failed (no answer)", blocking: false, publishBlocking: true },
+  /** The Verify 2 subject / topic check gave no answer for the current classification — not verified, not a disagreement. */
+  TAXONOMY_CHECK_FAILED: { label: "Subject / topic check failed (no answer)", blocking: false, publishBlocking: true },
 };
 
 export function issueLabel(code: string): string {

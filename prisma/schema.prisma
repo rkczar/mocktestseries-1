@@ -4050,6 +4050,15 @@ model AiImportAiCall {
   costStatus   String
   fxRate       Float?
   errorSummary String?
+  /// Importer step that sent it (extract, key, post-answer, post-classify, verify2-read, verify2-classify, reference-ocr …).
+  stage        String?
+  /// Short hash of the system prompt sent (changes whenever the prompt changes).
+  promptVersion String?
+  /// Provider gateway used (openrouter).
+  provider     String?
+  /// Wall time of the request (ms) and the failure category (truncated, empty_response, timeout, rate_limited, …).
+  durationMs   Int?
+  errorCategory String?
   createdAt    DateTime    @default(now())
 
   @@index([jobId, createdAt])

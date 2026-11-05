@@ -4,7 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
-import { applyReferenceAnswersAction, referenceOcrPreviewAction, referenceOcrStartAction, unlinkReferenceAction } from "@/app/admin/(dashboard)/ai-importer/actions";
+import { applyReferenceAnswersAction, referenceLocalOcrAction, referenceOcrPreviewAction, referenceOcrStartAction, unlinkReferenceAction } from "@/app/admin/(dashboard)/ai-importer/actions";
 import type { ReferenceOcrPreview } from "@/lib/ai-import/reference-ocr";
 import { ACCEPT, STAGE_LABEL, uploadReferenceFile } from "@/components/admin/ai-importer/upload-client";
 
@@ -97,6 +97,15 @@ export function ReferencePanel({ jobId, refs, canUse }: { jobId: string; refs: R
               <span className="text-xs text-[var(--color-muted-foreground)]" data-testid="reference-status">
                 {r.status ?? `${r.questions} question(s)${r.key ? `, ${r.key} answer-key entries` : ""}${r.note ? ` · ${r.note}` : ""}`}
               </span>
+              {canUse && r.ocrAvailable && (
+                <Button size="sm" variant="outline" disabled={pending} onClick={() => start(async () => {
+                  const x = await callImporter(() => referenceLocalOcrAction(jobId, r.refId));
+                  setMsg(x.ok ? { ok: true, text: `Free local OCR started for ${x.data.pages} scanned page(s) (no AI, no cost). Run Verify 1 when it finishes to compare this import with the original paper.` } : { ok: false, text: x.error ?? "Failed" });
+                  if (x.ok) router.refresh();
+                })} data-testid="reference-local-ocr">
+                  Read scanned pages (local OCR, free)
+                </Button>
+              )}
               {canUse && r.ocrAvailable && <ReferenceOcr jobId={jobId} refId={r.refId} onDone={(text, ok) => setMsg({ ok, text })} />}
               {canUse && (
                 <Button size="sm" variant="ghost" disabled={pending} onClick={() => confirm(`Unlink “${r.name}” from this import? Its file is kept.`) && start(async () => {

@@ -7,7 +7,8 @@ import { getUsdInr, type FxRate } from "@/lib/ai-engine/fx";
 import { istDayMonth } from "@/lib/ai-engine/budget";
 import { formatInr, usdToInr } from "@/lib/ai-engine/config";
 import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeCategory, sanitize, type ChatContentPart } from "@/lib/ai-engine/openrouter";
-import { IMPORTER_SETTING_KEY, SELECTION_TASK_LABELS, importerFeature, normalizeImporterSettings, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
+import { IMPORTER_SETTING_KEY, PILOT_LIMITS, SELECTION_TASK_LABELS, importerFeature, normalizeImporterSettings, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
+import { budgetBlock, capsOf, type BudgetBlock, type ImporterCaps } from "@/lib/ai-import/budget-guard";
 import { FAILURE_ADVICE, failureMessage, kindOfCategory, type FailureKind } from "@/lib/ai-import/failure";
 import { computeModelPlan, evaluateModel, planOf, requestUsd } from "@/lib/ai-import/select";
 import { OUTPUT_SCHEMAS, type OutputSchemaName } from "@/lib/ai-import/output-schemas";
@@ -25,12 +26,11 @@ import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
  *     request) → SETTLE to the provider-reported cost (unknown cost = worst case kept)
  *   → logged in AiImportAiCall (per job) and AiGatewayCall (platform usage).
  *
- * No application spending cap stops a request (owner decision 2026-10-26: no
- * per-request, job, monthly, all-time or key-reserve threshold). The administrator
- * confirms each operation's estimate and maximum once; that maximum prices every
- * send the operation can make (retries and fallbacks included). What still stops
- * requests: Paid AI switched off, the AI emergency stop, provider refusals and
- * errors (credits exhausted at OpenRouter pauses the job with the reason).
+ * The importer budget is ENFORCED at RESERVE (owner decision 1, 2026-11-05, reversing 2026-10-26): per request, per
+ * job (never above the maximum the administrator confirmed), per IST month and all time, under one database lock.
+ * The administrator also confirms each operation's estimate and maximum once; that maximum prices every send the
+ * operation can make (retries and fallbacks included). Also stopping requests: Paid AI switched off, the AI emergency
+ * stop, provider refusals and errors (credits exhausted at OpenRouter pauses the job with the reason).
  * At most REQUEST_ATTEMPTS sends per request: one retry after a dropped connection always, after any
  * transient error only when budget.retryTransient is on. Every confirmed maximum prices both.
  *
@@ -147,6 +147,18 @@ export interface AiCallInput {
   needsVision: boolean;
   /** The answer's shape (lib/ai-import/output-schemas.ts): sent as a JSON Schema / JSON mode where the route supports it. */
   jsonSchema?: OutputSchemaName;
+  /** Importer step, recorded with the call (defaults to the task): extract, key, post-answer, post-classify, verify2-read, … */
+  stage?: string;
+  /**
+   * Thinking allowed for a reasoning model (2026-11-05): "none" for reading / structuring / classification (the answer is a
+   * transcription or a choice from a list), "low" for an answer opinion. Default "none".
+   */
+  reasoningEffort?: "none" | "low";
+}
+
+/** Short, stable version of a system prompt (changes whenever the prompt text changes). */
+export function promptVersionOf(system: string): string {
+  return crypto.createHash("sha256").update(system).digest("hex").slice(0, 10);
 }
 
 export interface AiCallResult {
@@ -232,11 +244,59 @@ async function reserve(input: { jobId: string; requestKey: string; feature: stri
     const row = await tx.setting.findUnique({ where: { key: IMPORTER_SETTING_KEY } });
     const current = normalizeImporterSettings(row?.value ?? {});
     if (!current.aiEnabled) throw new ImporterAiSwitchedOff(`${failureMessage("paid_ai_off", "it was switched off in Import Settings after this job started, so no further AI request was sent")} Pages not yet read stay pending. ${FAILURE_ADVICE.paid_ai_off}`);
-    // No application spending cap (owner decision 2026-10-26): no per-request, job, monthly, all-time or key-reserve
-    // threshold stops a request. The reservation only records the request's worst case for cost tracking.
+    // Importer budget, ENFORCED again (owner decision 1, 2026-11-05): per request, per job, per IST month and all time.
+    // Spend = settled amounts + every open reservation (requests in flight), read under the same advisory lock every
+    // importer request takes here — so two concurrent requests can never pass a limit together. The limits are the
+    // CURRENT stored settings (a lowered limit applies at once), never above PILOT_LIMITS.
+    const block = budgetBlock({
+      amountInr: input.amountInr,
+      caps: importerCaps(current),
+      job: { spentInr: job.spentInr, inFlightInr: await jobInFlight(tx, input.jobId), confirmedMaxInr: job.budgetInr },
+      spend: await importerSpendTx(tx, istMonth),
+    });
+    if (block) throw new ImporterBudgetError(block.message, block.scope);
     await tx.aiBudgetReservation.create({ data: { requestKey: input.requestKey, feature: input.feature, reservedInr: input.amountInr, istDay, istMonth } });
   });
 }
+
+/** The enforced importer budget of the given (current) settings. */
+export function importerCaps(s: ImporterSettings): ImporterCaps {
+  return capsOf(s.budget, PILOT_LIMITS);
+}
+
+type Tx = Prisma.TransactionClient | typeof prisma;
+
+/** A job's requests still in flight (open reservations), ₹. */
+async function jobInFlight(tx: Tx, jobId: string): Promise<number> {
+  const r = await tx.$queryRaw<{ v: number }[]>`SELECT COALESCE(SUM("reservedInr"), 0)::float8 AS v FROM "AiBudgetReservation" WHERE "status" = 'RESERVED' AND "requestKey" LIKE ${`qi:${jobId}:%`}`;
+  return r[0]?.v ?? 0;
+}
+
+/** Importer spend incl. requests in flight (worst case held for unknown costs): this IST month and all time. */
+async function importerSpendTx(tx: Tx, istMonth: string): Promise<{ monthInr: number; allInr: number }> {
+  const [all, month] = await Promise.all([
+    tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "status" <> 'RELEASED' AND left("feature", 8) = 'qimport_'`),
+    tx.$queryRawUnsafe<{ v: number }[]>(`SELECT ${SPEND} AS v FROM "AiBudgetReservation" WHERE "istMonth" = $1 AND "status" <> 'RELEASED' AND left("feature", 8) = 'qimport_'`, istMonth),
+  ]);
+  return { monthInr: month[0]?.v ?? 0, allInr: all[0]?.v ?? 0 };
+}
+
+/**
+ * Whether the importer budget leaves room for ANY paid request of this job now (the smallest possible request), read
+ * without a lock: the worker uses it to run a job local-only from the start instead of stopping halfway. The gateway
+ * check in reserve() stays the authority for every single request.
+ */
+export async function importerBudgetBlock(jobId: string, settings: ImporterSettings, opts: { beforeConfirmation?: boolean } = {}): Promise<BudgetBlock | null> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { spentInr: true, budgetInr: true } });
+  if (!job) return null;
+  // A cost preview comes BEFORE the confirmation that raises the job's confirmed maximum: only the budget itself counts.
+  // Probe with ₹0: blocked only when a limit is already used up (a job confirmed for a ₹0 model has a ₹0 maximum and
+  // must still run). Every real request is checked again at reserve() with its own worst case.
+  return budgetBlock({ amountInr: 0, caps: importerCaps(settings), job: { spentInr: job.spentInr, inFlightInr: await jobInFlight(prisma, jobId), confirmedMaxInr: opts.beforeConfirmation ? null : job.budgetInr }, spend: await importerSpendTx(prisma, istDayMonth().istMonth) });
+}
+
+/** Test hook only (scripts/verify-ai-import-reliability3.ts): the gateway's budget reservation, exactly as every request makes it. */
+export const reserveForTest = (input: { jobId: string; requestKey: string; feature: string; amountInr: number }) => reserve(input);
 
 /** Importer AI spend so far (₹, worst case held for unknown costs): all time and this IST month. */
 export async function importerSpend(): Promise<{ allUsed: number; monthUsed: number }> {
@@ -309,6 +369,11 @@ async function log(e: {
         costStatus: e.costStatus,
         fxRate: e.fx.rate,
         errorSummary: e.errorSummary ? sanitize(e.errorSummary).slice(0, 300) : null,
+        stage: (e.input.stage ?? e.input.task).slice(0, 40),
+        promptVersion: promptVersionOf(e.input.system),
+        provider: "openrouter",
+        durationMs: Math.round(e.latencyMs),
+        errorCategory: e.errorCategory ?? null,
       },
     })
     .catch(() => undefined);
@@ -439,7 +504,7 @@ async function persistReplacement(jobId: string, sel: SelectionTask, failed: str
  * One priced, budgeted, privacy-constrained OpenRouter request, made with the model the job's frozen
  * plan chose for this task (job.config.modelPlan). Throws ImporterAiUnavailable (configuration, no usable
  * model, emergency stop, credits exhausted at OpenRouter — the job pauses, nothing more is sent) or
- * ImporterAiFailure (provider failed after its retry). No application spending cap stops it.
+ * ImporterAiFailure (provider failed after its retry), or ImporterBudgetError (the importer budget refuses it; nothing sent).
  */
 export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> {
   if (!input.settings.aiEnabled) throw new ImporterAiUnavailable("Paid AI processing is switched off in Import Settings.");
@@ -525,7 +590,11 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         // configured (2026-10-25: Verify 2 had a fallback, so the bound was left out and 12 reads were cut off).
         // importer-reliability-2: the thinking is bounded by a token budget (a share of the output limit) rather than an
         // effort word some models ignore (2026-10-26: gemma-4-26b spent all 8,000 tokens thinking in 23 of 27 requests).
-        ...(reasoningRoutes ? { reasoning: { max_tokens: reasoningBudget(input.maxOutputTokens), exclude: true } } : {}),
+        // 2026-11-05: the token budget above was IGNORED by the importer's reasoning models (nex-n2.5-mini, deepseek,
+        // gemma-4 publish no max_tokens support and default to high effort): 205 requests used the whole output limit
+        // thinking. OpenRouter's effort level is honoured by every provider (mapped to a budget where needed): no thinking
+        // for reading / structuring / classification, a little for an answer opinion.
+        ...(reasoningRoutes ? { reasoning: { effort: input.reasoningEffort ?? "none", exclude: true } } : {}),
         // Structured output where a route supports it: a JSON Schema of the expected answer, else JSON mode. The answer
         // is parsed and validated exactly as before (require_parameters keeps only routes that honour it).
         ...(input.jsonSchema && structuredRoutes ? { responseFormat: { type: "json_schema" as const, json_schema: { name: `importer_${input.jsonSchema}`, strict: false, schema: OUTPUT_SCHEMAS[input.jsonSchema] } } } : input.jsonSchema && jsonModeRoutes ? { responseFormat: { type: "json_object" as const } } : {}),

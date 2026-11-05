@@ -65,8 +65,14 @@ export interface ExceptionRow {
     v1: { status: string; found: string | null; findings: string[] } | null;
     v2: { status: string; found: string | null; findings: string[]; model: string; vsV1: string } | null;
     agreement: string;
+    /** Other valid classifications of this exam's syllabus, with where they came from (shown for review, never applied). */
+    alternatives: string[];
   };
   eligible: boolean;
+  /** The separate checks Ready depends on (lib/ai-import/checks.ts); null on rows not re-checked since they existed. */
+  checks: { key: string; name: string; status: string; label: string; required: boolean; detail: string }[] | null;
+  /** Formatting rules applied to the question text, with the text exactly as it was read. */
+  formatting: { rules: string[]; original: string } | null;
 }
 
 export interface TaxonomyOption {
@@ -76,7 +82,8 @@ export interface TaxonomyOption {
 }
 
 const toneOf = (label: string) => (label === "Passed" ? "text-[var(--color-success)]" : label.startsWith("Disagreement") ? "text-[var(--color-error)]" : label === "Not run" ? "text-[var(--color-muted-foreground)]" : "text-[var(--color-warning)]");
-const STRUCTURE = new Set(["ANSWER_IN_OPTION", "STATEMENTS_MERGED", "QUESTION_TEXT_SUSPECT", "OPTIONS_INCOMPLETE", "NUMBER_CONFLICT"]);
+const STRUCTURE = new Set(["ANSWER_IN_OPTION", "STATEMENTS_MERGED", "STATEMENT_COUNT_MISMATCH", "QUESTION_TEXT_SUSPECT", "OPTIONS_INCOMPLETE", "NUMBER_CONFLICT"]);
+const CHECK_TONE: Record<string, string> = { PASSED: "text-[var(--color-success)]", NOT_RUN: "text-[var(--color-muted-foreground)]", DISAGREEMENT: "text-[var(--color-error)]", FAILED: "text-[var(--color-error)]" };
 /** The decisive part of a classification reason (the full text stays in the cell's tooltip). */
 const shortReason = (reason: string) => {
   const matched = /matched (“[^;]*?”)(?:;|$)/.exec(reason)?.[1];
@@ -85,7 +92,7 @@ const shortReason = (reason: string) => {
 };
 /** A Verify 1 / Verify 2 classification result in a few words: the finding only when the check does not simply agree. */
 const verdict = (v: { status: string; found: string | null; findings: string[] } | null) => (!v ? "not run" : v.status === "AGREED" ? "agreed" : `${v.status.replace(/_/g, " ").toLowerCase()} — ${v.findings[0] ?? ""}`.slice(0, 180));
-const TAXONOMY = new Set(["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN", "TAXONOMY_DISAGREES"]);
+const TAXONOMY = new Set(["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN", "TAXONOMY_DISAGREES", "TAXONOMY_CHECK_FAILED"]);
 
 /**
  * Bulk subject / topic / subtopic correction — only records of the job's exam are offered. Applying needs an explicit
@@ -295,6 +302,12 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                       </p>
                     ))}
                     {r.answerLine && <p className="text-[var(--color-muted-foreground)]">Printed answer: {r.answerLine}</p>}
+                    {r.formatting && (
+                      <details className="mt-1 text-[var(--color-muted-foreground)]" data-testid="row-formatting">
+                        <summary className="cursor-pointer">Formatting applied: {r.formatting.rules.join(", ")} (wording unchanged) — show the text as read</summary>
+                        <p className="whitespace-pre-line">{r.formatting.original}</p>
+                      </details>
+                    )}
                   </div>
                 </details>
               </td>
@@ -313,6 +326,18 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                   ))}
               </td>
               <td className="max-w-xs py-1.5 pr-2 text-[11px]" data-testid="row-verify" data-v1={r.v1} data-v2={r.v2}>
+                {r.checks && (
+                  <ul className="mb-1 flex flex-col gap-0.5 border-b border-[var(--color-border)] pb-1" data-testid="row-checks">
+                    {r.checks.map((c) => (
+                      <li key={c.key} data-testid="row-check" data-check={c.key} data-status={c.status} title={c.detail}>
+                        <span className="text-[var(--color-muted-foreground)]">{c.name}: </span>
+                        <span className={CHECK_TONE[c.status] ?? "text-[var(--color-warning)]"}>{c.label}</span>
+                        {!c.required && c.status !== "PASSED" && <span className="text-[var(--color-muted-foreground)]"> (not required)</span>}
+                        {c.status !== "PASSED" && c.status !== "NOT_RUN" && <span className="block text-[var(--color-muted-foreground)]">{c.detail.slice(0, 180)}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <p>
                   <span className="text-[var(--color-muted-foreground)]">V1: </span>
                   <span className={toneOf(r.v1Label)} data-testid="row-v1">{r.v1Label}</span>
@@ -386,6 +411,14 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                   <span className="text-[var(--color-muted-foreground)]">V2: </span>
                   {verdict(r.tax.v2)}
                 </p>
+                {r.tax.alternatives.length > 0 && (
+                  <div className="mt-0.5 text-[11px]" data-testid="row-taxonomy-alternatives">
+                    <span className="text-[var(--color-muted-foreground)]">Other valid choices:</span>
+                    {r.tax.alternatives.map((a) => (
+                      <p key={a} className="text-[var(--color-muted-foreground)]">· {a}</p>
+                    ))}
+                  </div>
+                )}
                 <p className={`text-[11px] ${r.tax.agreement === "Both checks agree" ? "text-[var(--color-success)]" : r.tax.agreement.startsWith("Disagreement") || r.tax.agreement.includes("failed") ? "text-[var(--color-error)]" : "text-[var(--color-muted-foreground)]"}`} data-testid="row-taxonomy-agreement">
                   {r.tax.agreement}
                 </p>

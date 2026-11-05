@@ -7,7 +7,7 @@ import { parseImportFile } from "@/lib/bulk-import";
 import { pageLayout, renderPage, type PageLayout } from "@/lib/ai-import/pdf";
 import { readDocx, IMG_TOKEN, type DocxContent } from "@/lib/ai-import/docx";
 import { joinPreamble, orphanQuestion, parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
-import { blockToQuestion, candidateInstruction, cleanStem, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
+import { blockToQuestion, candidateInstruction, cleanStem, formatStem, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
 import { jobMemoryBrief } from "@/lib/ai-import/taxonomy-memory";
 import { cropFromRender, cropFromScan, iou, storeOriginalFigure, visionImage, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
 import { checkFigureMapping, overlappingRegions } from "@/lib/ai-import/figure-map";
@@ -172,6 +172,12 @@ export type RescanOutcome = "applied" | "pending" | "new" | "stored" | "skipped"
 export async function saveQuestion(ctx: StepContext, file: AiImportFile, q: ExtractedQuestion, orderIndex: number, figureBytes: FigureBytes, pageNumber: number, rescan?: { model: string | null } | null): Promise<RescanOutcome> {
   // Every method: no printed number and no copied option list inside the stem (flagged when it cannot be removed exactly).
   cleanStem(q);
+  // Formatting only (a leading "Question:" label, numbered statements run together): the text as read is kept with it.
+  const formatted = formatStem(q.stem);
+  if (formatted) {
+    q.formatting = { original: q.stem, rules: formatted.rules, by: "EXTRACTION", at: new Date().toISOString() };
+    q.stem = formatted.stem;
+  }
   const key = sourceKeyOf(q);
   const existing = await prisma.aiImportQuestion.findUnique({ where: { fileId_sourceKey: { fileId: file.id, sourceKey: key } }, include: { figures: true } });
   // The same printed number read on a DIFFERENT page (a misread number, or a repeated one) never replaces the
@@ -999,7 +1005,7 @@ export async function runAiPages(ctx: StepContext): Promise<{ skippedNoAi: numbe
   if (!pending.length) return { skippedNoAi: 0 };
   if (!aiUsable(ctx.settings)) {
     for (const p of pending) {
-      await prisma.aiImportPage.update({ where: { id: p.id }, data: { status: AiImportPageStatus.SKIPPED, errorMessage: p.kind === "SCANNED" ? "Scanned page: needs AI vision, which is switched off in Import Settings." : "Needs AI to confirm the layout (switched off); the locally read questions are flagged." } });
+      await prisma.aiImportPage.update({ where: { id: p.id }, data: { status: AiImportPageStatus.SKIPPED, errorMessage: ctx.settings.aiBlockedReason ? `${p.kind === "SCANNED" ? "Scanned page: needs AI vision" : "Needs AI to confirm the layout"}, which the importer budget blocks now: ${ctx.settings.aiBlockedReason}`.slice(0, 500) : p.kind === "SCANNED" ? "Scanned page: needs AI vision, which is switched off in Import Settings." : "Needs AI to confirm the layout (switched off); the locally read questions are flagged." } });
     }
     return { skippedNoAi: pending.length };
   }

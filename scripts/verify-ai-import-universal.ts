@@ -393,11 +393,16 @@ async function main() {
     check("VERIFY2_DONE logs model, counts and actual vs estimated / maximum cost", !!doneEv && /mockvision\/checker/.test(doneEv.message) && /Actual cost ₹/.test(doneEv.message) && /maximum ₹/.test(doneEv.message), doneEv?.message);
     const sum1 = await paperSummary(jB);
     const eligibleLabels = qs.filter((x) => sum1!.eligible.includes(x.id)).map((x) => x.sourceLabel).sort();
-    check("eligible to publish without individual review: exactly Q1 and Q4 (both verifications, every check clean)", eligibleLabels.join() === "1,4", [eligibleLabels, qs.map((x) => [x.sourceLabel, vs(x)?.v1, vs(x)?.v2, x.status, x.issueCodes])]);
+    // importer-reliability-3 (owner decision 7): Verify 2 of a Word file re-reads the SAME text — it confirms the
+    // transcription only, so no question is eligible for publishing without individual review.
+    check("eligible to publish without individual review: none (Verify 2 re-read the same Word text — not independent)", eligibleLabels.length === 0 && ["1", "4"].every((l) => v(l).v2 === "verified" && v(l).pv?.v2?.independence === "SAME_TEXT"), [eligibleLabels, qs.map((x) => [x.sourceLabel, vs(x)?.v1, vs(x)?.v2, x.status, x.issueCodes])]);
     check("paper summary: totals, verified, unresolved disagreements, cost estimate vs actual", sum1!.total === 5 && sum1!.verified === 2 && sum1!.unresolved >= 2 && sum1!.classificationIssues >= 1 && sum1!.missing.includes("Q5") && sum1!.cost.verify2?.actualInr === Math.round(jobB2.spentInr * 100) / 100, sum1);
-    // Approval safeguards: Q3 (disagreement) is never approved by the eligible action.
-    const pub = await importAndPublishEligible(jB, actor);
-    check("Import & Publish Eligible: approves and sends only Q1 and Q4", pub.requested === 2 && pub.approved === 2, pub);
+    const noBulk = await importAndPublishEligible(jB, actor).catch((e) => e as Error);
+    check("Import & Publish Eligible refuses: nothing is eligible", noBulk instanceof Error && /No question is eligible yet/.test(noBulk.message), noBulk instanceof Error ? noBulk.message : noBulk);
+    // An administrator reviews Q1 and Q4 one by one and publishes them (the backend publish rules still apply).
+    const apQ = await approveQuestions(["1", "4"].map((l) => byLabel(qs, l)!.id), actor);
+    check("Q1 and Q4 approved individually", apQ.approved === 2, apQ);
+    await requestImport(jB, actor, "PUBLISH_SELECTED", ["1", "4"].map((l) => byLabel(qs, l)!.id));
     await runWorker(300_000);
     qs = await questionsOf(jB);
     for (const x of qs) if (x.questionId) stored.push(x.questionId);

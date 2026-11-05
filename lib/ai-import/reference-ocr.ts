@@ -10,7 +10,10 @@ import { kickWorker } from "@/lib/ai-import/kick";
 import { pageText, renderPage } from "@/lib/ai-import/pdf";
 import { visionImage } from "@/lib/ai-import/figures";
 import { parsePage, type StepContext } from "@/lib/ai-import/process";
-import { exhaustedModels, importerAiCall, modelFamily, preferReliable, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
+import { ocrAvailable, ocrImageFile, ocrPdfPage } from "@/lib/ai-import/ocr";
+import { readOcrPage } from "@/lib/ai-import/ocr-page";
+import type { NumberingState } from "@/lib/ai-import/local-parse";
+import { exhaustedModels, importerAiCall, importerBudgetBlock, modelFamily, preferReliable, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import { EXTRACT_SYSTEM, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
 import { computeModelPlan, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
 import { OCR_MIN_CONFIDENCE, isInstructionText, listReferences, type ReferencePaper, type ReferenceQuestion, type ReferenceRead } from "@/lib/ai-import/reference";
@@ -21,20 +24,24 @@ import type { TaskChoice } from "@/lib/ai-import/selection-types";
  * Optional OCR / vision reading of a SCANNED reference paper (paid AI). Price → Confirm & Continue → read, like
  * Verify 2: the estimate and the maximum (every send it can make: REQUEST_ATTEMPTS per page to the model and, after
  * a failed page, REQUEST_ATTEMPTS to one fallback model) are shown first; nothing is sent without the
- * administrator's one confirmation. No application spending cap applies (owner decision 2026-10-26). The result is a REFERENCE_READ event (no migration):
+ * administrator's one confirmation; the importer budget is enforced for every request at the gateway. A FREE local OCR
+ * reading (LOCAL_REFERENCE_OCR, no AI) is also available. The result is a REFERENCE_READ event (no migration):
  * evidence for Verify 1's comparison only. It never changes a question, an answer, a taxonomy or an image —
  * low-confidence pages / questions are marked "reference unreadable" and are never used as evidence.
  */
 
 const FINISHED: AiImportJobStatus[] = [AiImportJobStatus.NEEDS_REVIEW, AiImportJobStatus.COMPLETED, AiImportJobStatus.COMPLETED_WITH_ISSUES];
 const OUTPUT_TOKENS = 8000;
+/** The "model" of a reference read by this server's own OCR engine (free, no AI request). */
+export const LOCAL_REFERENCE_OCR = "local OCR (RapidOCR, this server)";
 
 export interface ReferenceOcrState {
   status: "QUEUED" | "RUNNING" | "DONE" | "STOPPED";
   refId: string;
   name: string;
   model: string;
-  choice: TaskChoice;
+  /** The paid model's plan choice; null for the free local OCR reading (model LOCAL_REFERENCE_OCR). */
+  choice: TaskChoice | null;
   /** The one model a failed page is sent to (optional: older requests have none). */
   fallback?: TaskChoice | null;
   pages: number[];
@@ -88,6 +95,9 @@ async function priceReferenceOcr(jobId: string, refId: string, refresh: boolean)
   if (ref.ocr) problems.push(`“${ref.name}” was already read with ${ref.ocr.model}.`);
   else if (!pages.length) problems.push(`“${ref.name}” has no scanned page to read — its text was read without AI.`);
   if (!settings.aiEnabled) problems.push("Paid AI is switched off in Import Settings — reference OCR cannot run.");
+  // The importer budget (owner decision 1, 2026-11-05): said before anything is confirmed; the gateway enforces it anyway.
+  const blocked = settings.aiEnabled ? await importerBudgetBlock(jobId, settings, { beforeConfirmation: true }) : null;
+  if (blocked) problems.push(`Paid AI is blocked by the importer budget — ${blocked.message.replace(/ Nothing was sent\..*$/, "")} The free local OCR can read it instead.`);
   // The cheapest suitable image-reading model of the importer's list (the same selection rules as every request) —
   // a reliable non-thinking one first (importer-reliability-2: a 4B model and a thinking model failed most pages).
   const plan = await computeModelPlan({ ...settings, selection: { ...settings.selection, mode: "auto" } }, { refresh, jobId });
@@ -168,7 +178,28 @@ export async function runReferenceOcr(ctx: StepContext): Promise<ReferenceOcrSta
   const full = vaultPath(ref.storageKey);
   const done = [...state.done];
   const failed = new Set(state.failedPages);
-  for (const page of state.pages) {
+  // Free local reading (owner decision 7, 2026-11-05): the original scanned paper read by this server's OCR engine, so
+  // Verify 1 can compare a Word transcription with the ORIGINAL paper (never the same text again). No AI request, no
+  // cost; one page at a time like the paper OCR. Numbering runs through the pages, so every page is read again on a resume.
+  if (state.model === LOCAL_REFERENCE_OCR) {
+    const numbering: NumberingState = { last: 0, sectionIdx: 1 };
+    done.length = 0;
+    for (const page of state.pages) {
+      if (!(await ctx.stillRunning())) return state;
+      try {
+        const raw = ref.kind === "pdf" ? await ocrPdfPage(full, page) : await ocrImageFile(full);
+        const r = readOcrPage(raw, page, numbering);
+        const qs = (r.extraction?.questions ?? []).map((q) => ocrQuestion({ ...q, confidence: q.ocr?.meanConfidence ?? q.confidence }));
+        done.push({ page, questions: qs.filter((x) => !isInstructionText(x.stem, x.options)) });
+        failed.delete(page);
+      } catch (e) {
+        failed.add(page);
+        await logEvent(ctx.job.id, "REFERENCE_OCR_PAGE_FAILED", `Reference “${ref.name}” page ${page}: local OCR failed (${e instanceof Error ? e.message.slice(0, 200) : "error"}). That page stays unread — never counted as agreement.`, { refId: ref.refId, page });
+      }
+      state = await saveState({ done, failedPages: [...failed] });
+    }
+  }
+  for (const page of state.model === LOCAL_REFERENCE_OCR ? [] : state.pages) {
     if (done.some((d) => d.page === page)) continue;
     if (!(await ctx.stillRunning())) return state;
     try {
@@ -184,7 +215,7 @@ export async function runReferenceOcr(ctx: StepContext): Promise<ReferenceOcrSta
       try {
         // The model used up its output limit repeatedly in this job: the page goes straight to the confirmed fallback.
         skipped = !!state.fallback?.model && (await exhaustedModels(ctx.job.id)).has(state.model);
-        qs = await read(skipped ? state.fallback! : state.choice);
+        qs = await read(skipped ? state.fallback! : state.choice!);
       } catch (e) {
         // A failed page is sent ONCE to the fallback model (priced in the confirmed maximum); a provider stop is not.
         const fb = state.fallback;
@@ -212,4 +243,27 @@ export async function runReferenceOcr(ctx: StepContext): Promise<ReferenceOcrSta
   const unreadable = questions.filter((q) => q.unreadable).length;
   await logEvent(ctx.job.id, "REFERENCE_READ", `Reference “${ref.name}” read by OCR with ${state.model}: ${done.length} of ${state.pages.length} page(s), ${questions.length} question(s)${unreadable ? ` (${unreadable} unreadable — confidence below ${Math.round(OCR_MIN_CONFIDENCE * 100)}%, never used as evidence)` : ""}${failed.size ? `, ${failed.size} page(s) failed` : ""}. Run Verify 1 (free) to compare it; nothing was changed by this reading.`, read as unknown as Record<string, unknown>);
   return saveState({ status: "DONE", finishedAt: new Date().toISOString() });
+}
+
+/**
+ * Starts the FREE local OCR reading of a scanned reference (no AI, ₹0, no confirmation of cost needed): the worker reads
+ * its pages with this server's OCR engine; Verify 1 then compares the import with the original paper.
+ */
+export async function requestLocalReferenceOcr(input: { jobId: string; refId: string; actorId: string }): Promise<{ pages: number }> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId } });
+  if (!job) throw new ImportJobError("Import job not found.", 404);
+  if (!FINISHED.includes(job.status)) throw new ImportJobError("Read a reference once the import has finished processing.", 409);
+  if (!ocrAvailable()) throw new ImportJobError("The local OCR engine is not installed on this server.", 409);
+  const ref = (await listReferences(input.jobId)).find((r) => r.refId === input.refId);
+  if (!ref) throw new ImportJobError("That reference paper is not linked to this import.", 404);
+  if (ref.ocr) throw new ImportJobError(`“${ref.name}” was already read with ${ref.ocr.model}.`, 409);
+  const pages = await scannedPages(ref);
+  if (!pages.length) throw new ImportJobError(`“${ref.name}” has no scanned page to read — its text was read without AI.`, 409);
+  const state: ReferenceOcrState = { status: "QUEUED", refId: ref.refId, name: ref.name, model: LOCAL_REFERENCE_OCR, choice: null, fallback: null, pages, estimateInr: 0, maxInr: 0, confirmedMaxInr: 0, spentBeforeInr: job.spentInr, requestedById: input.actorId, requestedAt: new Date().toISOString(), done: [], failedPages: [] };
+  const r = await prisma.aiImportJob.updateMany({ where: { id: input.jobId, status: job.status }, data: { status: AiImportJobStatus.QUEUED, finishedAt: null, config: { ...((job.config as object) ?? {}), referenceOcr: state } as unknown as Prisma.InputJsonValue } });
+  if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
+  await logEvent(input.jobId, "REFERENCE_OCR_REQUESTED", `Free local OCR of the reference “${ref.name}” requested: ${pages.length} scanned page(s), no AI and no cost. It is evidence only for Verify 1's comparison with the original paper.`, { refId: ref.refId, model: LOCAL_REFERENCE_OCR, pages }, input.actorId);
+  await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_REFERENCE_OCR_REQUESTED", entityType: "AiImportJob", entityId: input.jobId, metadata: { refId: ref.refId, model: LOCAL_REFERENCE_OCR, maxInr: 0 } } });
+  kickWorker();
+  return { pages: pages.length };
 }

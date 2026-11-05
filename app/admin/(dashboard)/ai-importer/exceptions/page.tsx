@@ -19,7 +19,8 @@ import { STRUCTURE_CODES, TAXONOMY_CODES, fingerprintOf, paperSummary, scannedPa
 import { mergedAnswerIn, statementsOf } from "@/lib/ai-import/local-parse";
 import { fieldBoard } from "@/lib/ai-import/field-checks";
 import { listReferences } from "@/lib/ai-import/reference";
-import { V1_DISPLAY, v2Display, verifyState } from "@/lib/ai-import/verify-core";
+import { V1_DISPLAY, v2Display, v2Independence, verifyState } from "@/lib/ai-import/verify-core";
+import { CHECK_NAMES, CHECK_STATUS_LABELS } from "@/lib/ai-import/checks";
 import { DRAFT_IMPORT_STATUSES, approvedReadyCounts } from "@/lib/ai-import/summary";
 import { referenceStatusText } from "@/lib/ai-import/reference-status";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
@@ -47,8 +48,8 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const issue = sp.issue && sp.issue in ISSUE_DEFS ? sp.issue : undefined;
   const VERIFY_FILTERS = { verified: "Verified (1 + 2)", eligible: "Eligible to publish", "v1-problems": "Verify 1 findings", "v2-disagree": "Verify 2 disagreements", "v2-noresult": "Verify 2 failed / unavailable", "v2-notrun": "Verify 2 not run / out of date", unverified: "Not verified yet", "field-problems": "Field problems (any check)", memory: "Paper-memory findings" } as const;
   const verify = sp.verify && sp.verify in VERIFY_FILTERS ? (sp.verify as keyof typeof VERIFY_FILTERS) : undefined;
-  const PROBLEM_FILTERS = { structure: "Structure errors (stem / option / answer boundaries)", taxonomy: "Subject / topic errors", "subject-mismatch": "Subject mismatch", "taxonomy-disagree": "Subject / topic check disagrees (Verify 1 / 2)", "classifier-failed": "Classifier failed (no answer)", answer: "Answer-key / type", reference: "Reference differences", ocr: "OCR unsure of text", "source-mismatch": "Text differs from the page", "stem-options": "Options repeated in question text" } as const;
-  const PROBLEM_CODES: Record<keyof typeof PROBLEM_FILTERS, string[]> = { structure: STRUCTURE_CODES, taxonomy: TAXONOMY_CODES, "subject-mismatch": ["SUBJECT_MISMATCH"], "taxonomy-disagree": ["TAXONOMY_DISAGREES"], "classifier-failed": ["CLASSIFICATION_FAILED"], answer: ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"], reference: ["REFERENCE_CONFLICT"], ocr: ["OCR_UNCERTAIN"], "source-mismatch": ["SOURCE_TEXT_MISMATCH"], "stem-options": ["STEM_HAS_OPTIONS"] };
+  const PROBLEM_FILTERS = { structure: "Structure errors (stem / option / answer boundaries)", taxonomy: "Subject / topic errors", "subject-mismatch": "Subject mismatch", "taxonomy-disagree": "Subject / topic check disagrees (Verify 1 / 2)", "classifier-failed": "Classifier failed (no answer)", "model-failure": "Model failures (error, timeout, cut off)", answer: "Answer-key / type", "answer-unverified": "Answer unverified / AI disagrees", reference: "Reference differences", ocr: "OCR unsure of text", "source-mismatch": "Text differs from the page", "stem-options": "Options repeated in question text" } as const;
+  const PROBLEM_CODES: Record<keyof typeof PROBLEM_FILTERS, string[]> = { structure: STRUCTURE_CODES, taxonomy: TAXONOMY_CODES, "subject-mismatch": ["SUBJECT_MISMATCH"], "taxonomy-disagree": ["TAXONOMY_DISAGREES"], "classifier-failed": ["CLASSIFICATION_FAILED"], "model-failure": ["TAXONOMY_CHECK_FAILED", "VERIFY2_FAILED", "CLASSIFICATION_FAILED"], "answer-unverified": ["ANSWER_UNVERIFIED", "AI_OPINION_DIFFERS"], answer: ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"], reference: ["REFERENCE_CONFLICT"], ocr: ["OCR_UNCERTAIN"], "source-mismatch": ["SOURCE_TEXT_MISMATCH"], "stem-options": ["STEM_HAS_OPTIONS"] };
   const problem = sp.problem && sp.problem in PROBLEM_FILTERS ? (sp.problem as keyof typeof PROBLEM_FILTERS) : undefined;
   const where: Prisma.AiImportQuestionWhereInput = {
     ...(jobId ? { jobId } : {}),
@@ -80,7 +81,8 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
     const out = new Set<string>();
     for (const r of rows) {
       const pv = (r.data as unknown as ExtractedQuestion).paperVerify;
-      for (const x of [r, pv?.v1?.classification?.found, pv?.v2?.classification?.found]) if (x && pick(x)) out.add(pick(x)!);
+      const alts = ((r.data as unknown as ExtractedQuestion).classification?.alternatives ?? []).map((a) => ({ ...a, subTopicId: null }));
+      for (const x of [r, pv?.v1?.classification?.found, pv?.v2?.classification?.found, ...alts]) if (x && pick(x)) out.add(pick(x)!);
     }
     return [...out];
   };
@@ -131,7 +133,16 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       v2: vs.v2,
       v2Model: vs.pv?.v2?.model ?? null,
       v1Label: V1_DISPLAY[vs.v1],
-      v2Label: v2Display(vs.v2, jobV2),
+      // A Verify 2 that re-read the same Word / sheet text is never shown as an independent pass.
+      v2Label: vs.v2 === "verified" && vs.pv?.v2 && v2Independence(vs.pv.v2) === "SAME_TEXT" ? "Same text only (not independent)" : v2Display(vs.v2, jobV2),
+      checks: (() => {
+        const c = (r.data as unknown as ExtractedQuestion).checks;
+        return c ? (["content", "answer", "taxonomy", "independent"] as const).map((k) => ({ key: k, name: CHECK_NAMES[k], status: c[k].status, label: CHECK_STATUS_LABELS[c[k].status], required: c[k].required, detail: c[k].detail.slice(0, 300) })) : null;
+      })(),
+      formatting: (() => {
+        const f = (r.data as unknown as ExtractedQuestion).formatting;
+        return f ? { rules: f.rules.map((x) => (x === "FIELD_LABEL" ? "“Question:” label removed" : "statements put on their own lines")), original: f.original.slice(0, 1500) } : null;
+      })(),
       v1Findings: vs.v1 === "problems" || vs.v1 === "passed" ? (vs.pv?.v1?.problems ?? []).map((p) => `${p.code}: ${p.detail}`).slice(0, 6) : [],
       v1Fixes: vs.v1 !== "stale" ? (vs.pv?.v1?.fixes ?? []).map((f) => `${f.field} (${f.evidence})`).slice(0, 4) : [],
       v2Detail: vs.pv?.v2 && vs.v2 !== "stale" ? `${vs.pv.v2.part ? `${vs.pv.v2.part}: ` : ""}${vs.pv.v2.error ? `${vs.pv.v2.error.message}` : vs.pv.v2.detail}`.slice(0, 400) : vs.v2 === "stale" ? "the question changed after Verify 2 ran" : null,
@@ -158,6 +169,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
         v1: v1c ? { status: v1c.status, found: nameOf(v1c.found), findings: v1c.findings.slice(0, 3) } : null,
         v2: v2c ? { status: v2c.status, found: nameOf(v2c.found), findings: v2c.findings.slice(0, 3), model: v2c.method, vsV1: v2c.comparedWithV1 } : null,
         agreement,
+        alternatives: (rec?.alternatives ?? []).map((a) => `${nameOf({ subjectId: a.subjectId, topicId: a.topicId, subTopicId: null }) ?? "?"} — ${a.source}: ${a.reason}`.slice(0, 240)),
       },
       eligible: eligible.has(r.id),
     };

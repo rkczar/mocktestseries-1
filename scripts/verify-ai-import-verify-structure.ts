@@ -504,13 +504,15 @@ async function main() {
     sum = (await paperSummary(jB))!;
     const elig = sum.eligible.length;
     if (!elig) console.log("  (debug) not eligible:", JSON.stringify(qs.slice(0, 8).map((q) => [q.sourceLabel, q.status, q.issueCodes, vs(q).v1, vs(q).v2, q.approvedById ? "approved" : ""])));
+    // importer-reliability-3 (owner decision 7): Verify 2 of this Word paper re-read the SAME document text, so it is not an
+    // independent verification — nothing is eligible to publish without individual review, and nothing is stored by it.
     const pubBefore = await prisma.question.count();
-    const pub = await importAndPublishEligible(jB, actor);
+    const pub = await importAndPublishEligible(jB, actor).catch((e) => e as Error);
     await runWorker(300_000);
     qs = await questionsOf(jB);
     const storedNow = qs.filter((q) => q.questionId).map((q) => q.questionId!);
     stored.push(...storedNow);
-    check("Import & Publish Eligible: only questions with Verify 1 passed + Verify 2 agreed were stored", elig > 0 && pub.requested === elig && storedNow.length === elig && (await prisma.question.count()) === pubBefore + elig && qs.filter((q) => q.questionId).every((q) => sum.eligible.includes(q.id)), [pub, elig, storedNow.length]);
+    check("Import & Publish Eligible: none eligible after a same-text Verify 2 (Word file) — refused, nothing stored", elig === 0 && pub instanceof Error && /No question is eligible yet/.test(pub.message) && storedNow.length === 0 && (await prisma.question.count()) === pubBefore && qs.filter((q) => vs(q).v2 === "verified").every((q) => v2Of(q)?.independence === "SAME_TEXT"), [pub instanceof Error ? pub.message : pub, elig, storedNow.length]);
     check("unresolved questions stayed out of the Question Bank (Q10 disagreement, Q12 not found, Q9 subject mismatch, Q19 no subject)", ["10", "12", "9", "19"].every((l) => !byLabel(qs, l).questionId), ["10", "12", "9", "19"].map((l) => byLabel(qs, l).questionId));
 
     section("B6. Format profile: learned from verified questions, applied to the next paper, disabled");

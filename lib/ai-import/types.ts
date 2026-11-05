@@ -83,6 +83,14 @@ export interface ExtractedQuestion {
   /** Printed number kept when the number itself had to be cleared (the same number already exists on another page). */
   printedNumber?: number | null;
   notes?: string[];
+  /**
+   * Formatting applied to the question text (lib/ai-import/local-parse.ts formatStem): the text exactly as read before it,
+   * and the rules that changed it (FIELD_LABEL removed a leading "Question:" label, STATEMENT_BREAKS added line breaks).
+   * The wording itself is never changed by a formatting rule.
+   */
+  formatting?: { original: string; rules: string[]; by: "EXTRACTION" | "VERIFY1"; at: string } | null;
+  /** Machine-readable result of every check the Ready status depends on, rewritten by each post-processing run. */
+  checks?: QuestionChecks | null;
   /** Independent verification (Agent B): a different model read the same source page without seeing this result. */
   verification?: QuestionVerification | null;
   /** Full-paper verification (Review Exceptions → Verify 1 / Verify 2). Kept on the extraction; stale once the content changes. */
@@ -117,6 +125,42 @@ export interface ClassificationRecord {
   local: { status: string; subjectId: string | null; topicId: string | null; subTopicId: string | null; subjectConfidence: number; topicConfidence: number; method: string; reason: string; candidates: { subjectId: string; topicId: string | null; score: number }[]; evidenceQuestions: number } | null;
   /** The AI classifier's part: USED / REJECTED (its answer failed the guards) / FAILED / NO_RESULT. */
   ai: { model: string | null; status: "USED" | "REJECTED" | "FAILED" | "NO_RESULT"; detail: string } | null;
+  /**
+   * Other valid classifications of this exam's syllabus that the evidence supports (the local classifier's runners-up,
+   * a Verify 2 / AI choice that differs), each with where it came from and why — shown for review, never applied.
+   */
+  alternatives?: { subjectId: string; topicId: string | null; source: string; reason: string }[];
+}
+
+/**
+ * Machine-readable status of one check (2026-11-05 owner decision 7). A model failure is never a disagreement:
+ * MODEL_ERROR (provider error, invalid / unusable output), TIMEOUT and OUTPUT_TRUNCATED say the check produced no answer;
+ * DISAGREEMENT says it produced a different answer; NEEDS_REVIEW says a person must decide; NOT_RUN says it did not run.
+ */
+export type CheckStatus = "NOT_RUN" | "PASSED" | "FAILED" | "DISAGREEMENT" | "MODEL_ERROR" | "TIMEOUT" | "OUTPUT_TRUNCATED" | "NEEDS_REVIEW";
+export const CHECK_STATUSES: CheckStatus[] = ["NOT_RUN", "PASSED", "FAILED", "DISAGREEMENT", "MODEL_ERROR", "TIMEOUT", "OUTPUT_TRUNCATED", "NEEDS_REVIEW"];
+
+export interface CheckResult {
+  status: CheckStatus;
+  /** Whether Ready depends on this check (a required check must be PASSED). */
+  required: boolean;
+  /** Plain explanation for the administrator (never a stack trace, key or prompt). */
+  detail: string;
+  model?: string | null;
+}
+
+/**
+ * The separate checks a question's Ready status depends on (owner decision 7, 2026-11-05):
+ * content = V1 scope (wording, structure, options, source fidelity — deterministic); answer = official key / admin
+ * confirmation (an AI opinion never passes it); taxonomy = subject / topic incl. every classifier and Verify 2 result;
+ * independent = Verify 2's second reading (NOT_RUN until requested; a same-text re-read of a Word file never passes it).
+ */
+export interface QuestionChecks {
+  at: string;
+  content: CheckResult;
+  answer: CheckResult;
+  taxonomy: CheckResult;
+  independent: CheckResult;
 }
 
 /**
@@ -135,6 +179,8 @@ export interface TaxonomyVerification {
   /** local / the Verify 2 model. */
   method: string;
   findings: string[];
+  /** VERIFICATION_FAILED only: what kind of failure (never a disagreement). */
+  failure?: "MODEL_ERROR" | "TIMEOUT" | "OUTPUT_TRUNCATED" | null;
 }
 
 /** One finding of a full-paper verification, with the issue code it raises on the question. */
@@ -240,6 +286,12 @@ export interface PaperVerification {
     fieldChecks?: FieldCheck[];
     /** Whether confirmed paper memory was given to the Verify 2 model with this read. */
     memoryUsed?: boolean;
+    /**
+     * What the second read was read FROM: SOURCE = the original page images / an independent source; SAME_TEXT = the same
+     * Word / sheet text the question was extracted from (it can confirm the transcription only — never an independent
+     * verification of the wording or structure).
+     */
+    independence?: "SOURCE" | "SAME_TEXT";
     /** Independent subject / topic / subtopic classification by the Verify 2 model, compared with the stored one and Verify 1's. */
     classification?: TaxonomyVerification & { comparedWithV1: "AGREES" | "DIFFERS" | "NO_V1" } | null;
   };

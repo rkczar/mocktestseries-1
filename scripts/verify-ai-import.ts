@@ -23,6 +23,7 @@ import { AiImportFileRole, AiImportPaperType, QuestionStatus } from "@prisma/cli
 import { prisma } from "@/lib/prisma";
 import { CHUNK_BYTES, DEFAULT_IMPORTER_SETTINGS, normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { saveImporterSettings, getImporterSettings } from "@/lib/ai-import/settings";
+import { importBlocker } from "@/lib/ai-import/adapter";
 import { addFile, completeFile, confirmJob, createJob, discardUpload, putChunk, removeFile, requestAnalysis, resumeJob, setExpectedQuestions } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
 import { approveQuestions, rejectQuestions, requestImport, setAnswer, setFigure, setTaxonomy, revalidateQuestions, allowDuplicate, acknowledgeSequence } from "@/lib/ai-import/review";
@@ -328,7 +329,12 @@ async function main() {
   check("admin-chosen answer C saved as the correct option", savedOpts.find((o) => o.isCorrect)?.label === "C");
   const verif = await prisma.question.findMany({ where: { id: { in: imported.map((x) => x.questionId!) } }, select: { id: true, answerVerification: true } });
   check("answer provenance recorded on saved questions", verif.every((v) => !!v.answerVerification) && verif.some((v) => v.answerVerification === "ADMIN_CONFIRMED") && verif.some((v) => v.answerVerification === "OFFICIAL_KEY"), verif.map((v) => v.answerVerification));
-  check("Q8 (printed answer, no key) imported with UNVERIFIED provenance", verif.find((v) => v.id === imported.find((x) => x.sourceLabel === "8")?.questionId)?.answerVerification === "UNVERIFIED");
+  // importer-reliability-3 (owner decision 2): an answer printed in the paper without an official key is not a verified
+  // answer — the question is not imported until an administrator confirms the answer (here it is rejected instead).
+  const q8now = await prisma.aiImportQuestion.findFirstOrThrow({ where: { jobId: jobC, sourceLabel: "8" }, include: { figures: true } });
+  const q8block = importBlocker(q8now, await getImporterSettings());
+  check("Q8 (printed answer, no key) is NOT imported: its answer is not verified", !q8now.questionId && /answer (not verified|unverified)/i.test(q8block ?? ""), { q: q8now.questionId, b: q8block });
+  await rejectQuestions([q8now.id], actor, "answer cannot be verified (no official key)");
   sum = await jobSummary(jobC);
   check("not-importable / duplicate / rejected stay out", !imported.some((x) => ["6", "7", "9", "10"].includes(x.sourceLabel)));
   // Final quality gate: never "Completed" while the expected count is unconfirmed or numbers are missing.
@@ -469,7 +475,7 @@ async function main() {
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/reader" }, budget: { ...s.budget, retryTransient: false } }), actor);
 
   // ------------------------------------------------------------------ M
-  section("M. Cost confirmation once; no application spending cap (per-request, job, month, all-time, key reserve)");
+  section("M. Cost confirmation once; the importer budget enforced at the gateway (per-request, job, month, all-time)");
   await freshPilotBudget();
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/pricey", extractFallbacks: [] } }), actor);
   const chatsBefore = (await mockStats()).chat;
@@ -481,7 +487,8 @@ async function main() {
   await confirmJob({ jobId: jobM, actorId: actor, examId: jm.examId, paperType: jm.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY });
   await runWorker(60_000);
   const jmP = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM } });
-  check("a model whose request could cost more than the old ₹1 per-request limit is used: one confirmation, then it completes", jmP.status === "NEEDS_REVIEW" && (await mockStats()).chat > chatsBefore && jmP.spentInr > 0 && !jmP.pauseReason, { s: jmP.status, r: jmP.pauseReason, spent: jmP.spentInr });
+  // importer-reliability-3 (owner decision 1, 2026-11-05): the ₹1 per-request budget is enforced again.
+  check("a model whose request could cost more than the ₹1 per-request budget is refused before sending: paused with the reason, nothing charged", jmP.status === "PAUSED_BUDGET" && /per-request budget/.test(jmP.pauseReason ?? "") && (await mockStats()).chat === chatsBefore && jmP.spentInr === 0, { s: jmP.status, r: jmP.pauseReason, spent: jmP.spentInr });
   check("…its estimated maximum prices REQUEST_ATTEMPTS sends to the model and to a fallback", ((jmP.estimate as { maxInr: number | null }).maxInr ?? 0) >= 2 * (((jmP.estimate as { lines: { task: string; maxCalls: number }[] }).lines.find((l) => l.task === "extract")?.maxCalls ?? 1) * 2), (jmP.estimate as { maxInr: number | null }).maxInr);
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/reader" } }), actor);
   // Confirmation re-prices the job: nothing starts until the administrator confirms the displayed maximum.
@@ -515,7 +522,7 @@ async function main() {
   const chatsM2 = (await mockStats()).chat;
   await runWorker(300_000);
   const jm2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM2 } });
-  check("spend past the recorded maximum → processing continues without a pause or a new confirmation", jm2.status === "NEEDS_REVIEW" && !jm2.pauseReason && (await mockStats()).chat > chatsM2 && jm2.spentInr > 8.5 && !(await prisma.aiImportEvent.count({ where: { jobId: jobM2, type: { in: ["PAUSED_BUDGET", "COST_RECONFIRMED"] } } })), { s: jm2.status, r: jm2.pauseReason, spent: jm2.spentInr });
+  check("spend past the confirmed maximum → paid AI blocked before the run (PAID_AI_BLOCKED, job scope), nothing sent, the job still finishes its local work", jm2.status === "NEEDS_REVIEW" && (await mockStats()).chat === chatsM2 && jm2.spentInr === 8.5 && (await prisma.aiImportEvent.count({ where: { jobId: jobM2, type: "PAID_AI_BLOCKED", message: { contains: "(job)" } } })) === 1, { s: jm2.status, r: jm2.pauseReason, spent: jm2.spentInr });
   // Monthly / all-time fields in stored settings are no longer enforced (even at ₹0).
   await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 0, totalInr: 0, maxJobInr: 0 } }), actor);
   const jobM3 = await newJob(actor, exam.id, "FX no monthly cap");
@@ -526,7 +533,7 @@ async function main() {
   await confirmJob({ jobId: jobM3, actorId: actor, examId: jm3a.examId, paperType: jm3a.paperType, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, confirmedMaxInr: CONFIRM_ANY });
   await runWorker(60_000);
   const jm3 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobM3 } });
-  check("stored monthly / all-time / job figures of ₹0 → confirm accepted and the job completes", jm3.status === "NEEDS_REVIEW" && jm3.spentInr > 0, { s: jm3.status, r: jm3.pauseReason });
+  check("stored monthly / all-time / job budgets of ₹0 → confirm accepted, paid AI blocked (nothing spent), the job finishes locally", jm3.status === "NEEDS_REVIEW" && jm3.spentInr === 0 && (await prisma.aiImportEvent.count({ where: { jobId: jobM3, type: "PAID_AI_BLOCKED" } })) === 1, { s: jm3.status, r: jm3.pauseReason });
   await setSettings((s) => ({ ...s, budget: { ...s.budget, monthlyInr: 10, totalInr: 10, maxJobInr: 8 } }), actor);
   // The mock key has $9 left: a legacy $9 Ask AI reserve no longer holds anything back.
   await setSettings((s) => ({ ...s, budget: { ...s.budget, keyReserveUsd: 9 } }), actor);
@@ -832,7 +839,7 @@ async function attachPlan(jobId: string) {
 /** Hard pilot limits (server-side), concurrency, cost overrun, image prices, model validation, catalog status. */
 async function sectionT(actor: string, examId: string) {
   section("T. Hard limits, model validation and catalog status");
-  const { importerAiCall, worstCaseUsd, IMAGE_TOKENS, PRICE_MARGIN, modelProblem } = await import("@/lib/ai-import/ai");
+  const { importerAiCall, worstCaseUsd, IMAGE_TOKENS, PRICE_MARGIN, modelProblem, ImporterBudgetError } = await import("@/lib/ai-import/ai");
   const { importerModelCatalog, importerSettingsProblems } = await import("@/lib/ai-import/models");
   const { estimateJobCost } = await import("@/lib/ai-import/estimate");
   const { computeModelPlan } = await import("@/lib/ai-import/select");
@@ -888,8 +895,8 @@ async function sectionT(actor: string, examId: string) {
   await attachPlan(jb);
   const chats3 = (await mockStats()).chat;
   const big = await importerAiCall({ jobId: ja, task: "classify", models: [], system: "You classify exam questions into an EXISTING syllabus.", content: [{ type: "text", text: "x".repeat(3_000_000) }], maxOutputTokens: 2500, settings: normalizeImporterSettings(raw1), needsVision: false }).then(() => null, (e) => e as Error);
-  check("no per-request cap: a request whose worst case is far above the old ₹1 limit is sent and answers", big === null, big?.message);
-  check("…it was sent once, reserved and recorded (cost tracking kept)", (await mockStats()).chat === chats3 + 1 && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${ja}:` }, status: "SETTLED" } })) === 1);
+  check("per-request budget: a request whose worst case is far above ₹1 is refused at the gateway (ImporterBudgetError)", big instanceof ImporterBudgetError && big.scope === "request", big?.message);
+  check("…nothing was sent and nothing reserved", (await mockStats()).chat === chats3 && (await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${ja}:` } } })) === 0);
   // Resume after a provider / key pause, whatever the job already spent (no "raise the budget" step).
   await prisma.aiImportJob.update({ where: { id: jobT }, data: { status: "PAUSED_BUDGET", pauseReason: "The provider refused the request (credit).", spentInr: 12 } });
   const rt1 = await resumeJob(jobT, actor);
@@ -910,7 +917,7 @@ async function sectionT(actor: string, examId: string) {
   const chats4 = (await mockStats()).chat;
   await runWorker(60_000);
   const t4 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT4 } });
-  check("stored job / monthly / all-time figures lowered to ₹0.05 after confirmation: the job is not paused and completes", t4.status === "NEEDS_REVIEW" && (await mockStats()).chat > chats4, { s: t4.status, r: t4.pauseReason });
+  check("budgets lowered to ₹0.05 after confirmation apply at once: the request is refused before sending, the job pauses with the reason", t4.status === "PAUSED_BUDGET" && /budget/.test(t4.pauseReason ?? "") && (await mockStats()).chat === chats4, { s: t4.status, r: t4.pauseReason });
   await setSettings(pilot, actor);
 
   // T5 — concurrent requests on two jobs: no cap refuses them, and each attempt is counted exactly once.
@@ -938,7 +945,7 @@ async function sectionT(actor: string, examId: string) {
   const nowMonth = (await prisma.aiBudgetReservation.findFirstOrThrow({ where: { requestKey: { startsWith: `qi:${ja}:` } }, orderBy: { createdAt: "desc" } })).istMonth;
   await prisma.aiBudgetReservation.create({ data: { requestKey: `qi:${jb}:history:2`, feature: "qimport_extract", reservedInr: 11, settledInr: 11, status: "SETTLED", costKnown: true, istDay: `${nowMonth}-01`, istMonth: nowMonth } });
   const after10 = await callFor(ja).then(() => true, (e) => (e as Error).message);
-  check("₹9.99 in an earlier month + ₹11 this month (above the former ₹10 all-time and monthly caps): the next request is still sent", after10 === true, after10);
+  check("₹9.99 in an earlier month + ₹11 this month: the next request is refused by the ₹10 monthly budget", typeof after10 === "string" && /monthly budget/.test(after10), after10);
   await freshPilotBudget();
 
   // T6 — no Ask AI key reserve any more: the key's own limit (enforced by OpenRouter) is the only one.
@@ -1015,8 +1022,8 @@ async function sectionT(actor: string, examId: string) {
   const t9 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobT9 } });
   const t9q = await prisma.aiImportQuestion.findMany({ where: { jobId: jobT9 } });
   const t9p = await prisma.aiImportPage.findMany({ where: { jobId: jobT9 } });
-  check("second read above a legacy per-request limit → sent, job finishes (no pause)", t9.status === "NEEDS_REVIEW" && !t9.pauseReason, { s: t9.status, r: t9.pauseReason, cap9 });
-  check("…every page is read and no question is marked 'independent second read did not run'", t9p.length > 0 && t9p.every((p) => p.status === "DONE") && t9q.length > 0 && t9q.every((x) => !JSON.stringify(x.data).includes("independent second read did not run")), { p: t9p.map((p) => [p.kind, p.status]), q: t9q.length });
+  check("second read above the per-request budget → refused before sending; the job pauses with the budget reason", t9.status === "PAUSED_BUDGET" && /per-request budget/.test(t9.pauseReason ?? ""), { s: t9.status, r: t9.pauseReason, cap9 });
+  check("…the first read is kept (page saved) and its questions are flagged as not independently read", t9p.length > 0 && t9p.every((p) => p.status === "DONE") && t9q.length > 0 && t9q.every((x) => x.issueCodes.length > 0), { p: t9p.map((p) => [p.kind, p.status]), q: t9q.map((x) => x.issueCodes) });
   await setSettings((s) => ({ ...pilot(s), models: { ...pilot(s).models, verify: null } }), actor);
   await freshPilotBudget();
 
@@ -2171,7 +2178,7 @@ async function sectionY(actor: string, examId: string) {
     check("Y1 proposal pins the chosen models (manual), keeps the old list and adds only what is needed", pr.selection.mode === "manual" && pr.models.extract === E && START.every((id) => pr.importerModels.includes(id)) && pr.importerModels.length <= START.length + 4);
     check("Y1 OCR resolution raised to 150 DPI (images stay capped, cost unchanged); concurrency not increased", pr.limits.renderDpi === 150 && pr.limits.concurrency <= 2);
     const ch = (k: string) => p1.changes.find((c) => c.key === k)!;
-    check("Y1 current-versus-proposed table: models and DPI changed; Paid AI, spending caps (none), privacy unchanged", ch("models.extract").changed && ch("limits.renderDpi").changed && !ch("aiEnabled").changed && ch("budget").proposed === "none" && !ch("budget").changed && ch("privacy").proposed === "unchanged");
+    check("Y1 current-versus-proposed table: models and DPI changed; Paid AI, the enforced importer budget, privacy unchanged", ch("models.extract").changed && ch("limits.renderDpi").changed && !ch("aiEnabled").changed && /\/ month/.test(ch("budget").proposed) && !ch("budget").changed && ch("privacy").proposed === "unchanged");
     check("Y1 job cost: estimate, estimated maximum and the maximum per scanned page known (no job cap any more)", p1.jobCost.estimateInr !== null && p1.jobCost.maxInr !== null && (p1.jobCost.maxPerPageInr ?? -1) >= 0 && !("jobCapInr" in p1.jobCost), p1.jobCost);
     check("Y1 Paid AI status stated (OFF; not switched on)", p1.paidAiOn === false && /does not switch it on/.test(p1.paidAiText));
     await expectError("Y1 safety guard: a proposal that raises a budget is refused", async () => assertSafeProposal(s1, { ...pr, budget: { ...pr.budget, maxJobInr: 9 } }), /a budget would change/);

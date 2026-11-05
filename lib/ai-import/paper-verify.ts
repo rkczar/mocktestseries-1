@@ -11,7 +11,7 @@ import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { ImportJobError, logEvent } from "@/lib/ai-import/jobs";
 import { kickWorker } from "@/lib/ai-import/kick";
 import { effective, runPostProcessing } from "@/lib/ai-import/post";
-import { ANNOTATION_TAIL, blockToQuestion, explanationIsHeading, mergedAnswerIn, splitQuestions, statementCodeQuestion, stripAnnotationTail } from "@/lib/ai-import/local-parse";
+import { ANNOTATION_TAIL, blockToQuestion, explanationIsHeading, formatStem, mergedAnswerIn, splitQuestions, statementCodeQuestion, stripAnnotationTail } from "@/lib/ai-import/local-parse";
 import { applyFormatProfile } from "@/lib/ai-import/format-profile";
 import { referenceStatus, type ReferenceStatus } from "@/lib/ai-import/reference-status";
 import { classifyUserText, decideClassification, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
@@ -20,11 +20,12 @@ import { classifierContext, examFormatRules, jobMemoryBrief, jobPaperMemory, typ
 import { confirmedRulesFor, memoryBrief, memoryFindings, type PaperRule } from "@/lib/ai-import/paper-memory";
 import { v1FieldChecks, v2FieldChecks, type AnswerFacts } from "@/lib/ai-import/field-checks";
 import { readDocx } from "@/lib/ai-import/docx";
+import { runKeyFiles } from "@/lib/ai-import/keys";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
 import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
 import { assignSections, ensureRender, mergeContinuation, parsePage, readsAgree, type StepContext } from "@/lib/ai-import/process";
-import { exhaustedModels, importerAiCall, modelFamily, parseModelJson, preferReliable, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
-import { failureMessage } from "@/lib/ai-import/failure";
+import { exhaustedModels, importerAiCall, importerBudgetBlock, modelFamily, parseModelJson, preferReliable, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
+import { failureCheckStatus, failureMessage } from "@/lib/ai-import/failure";
 import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, documentTextUserText, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
 import { computeModelPlan, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
 import { compareWithReference, listReferences, referenceOnly, textSimilarity, type ReferencePaper } from "@/lib/ai-import/reference";
@@ -33,7 +34,7 @@ import { exists as vaultExists, vaultPath } from "@/lib/ai-import/vault";
 import { jobQuality, settleJobStatus } from "@/lib/ai-import/summary";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { approveQuestions, requestImport } from "@/lib/ai-import/review";
-import { MAX_VERIFY_PASSES, V2_RESULT_STATUSES, contentCurrent, contentFingerprint, fingerprintParts, fingerprintsOf, needsVerify2, passCount, stampOf, verifyState, withPass, type Fp } from "@/lib/ai-import/verify-core";
+import { MAX_VERIFY_PASSES, V2_RESULT_STATUSES, checksAllowReady, v2Independence, contentCurrent, contentFingerprint, fingerprintParts, fingerprintsOf, needsVerify2, passCount, stampOf, verifyState, withPass, type Fp } from "@/lib/ai-import/verify-core";
 import type { CandidateRow, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
 import type { ExtractedQuestion, PaperVerification, VerifyFix, VerifyProblem } from "@/lib/ai-import/types";
 
@@ -103,6 +104,8 @@ export interface Verify1Result {
   referencesCompared: number;
   /** References that were only stored (scanned): named, never counted as compared. */
   referencesNotCompared: string[];
+  /** Questions given the formatting rules (leading "Question:" label, statements on their own lines; wording unchanged). */
+  formatted?: number;
   /** Questions whose line breaks (statements, paragraphs) were restored from the Word source. */
   whitespaceRestored: number;
   /** Subject / topic check results (free): AGREED / DISAGREEMENT / NEEDS_REVIEW / NOT_VERIFIED. */
@@ -214,6 +217,22 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { data: { ...d, paperVerify: rest } as unknown as Prisma.InputJsonValue } });
   }
 
+  // 0b. Answer-key files that gave no entries are read again from their own text layer (free, never AI — Verify 1 runs with
+  // paid AI off). 2026-11-05: a clean 8-column key was read and then rejected by the layout check, so every question was
+  // left without an official answer. The file itself is never changed. What each question's answer was before is kept, so
+  // the reconciliation below can be reported question by question; nothing is approved or published by it.
+  const keyFiles = await prisma.aiImportFile.findMany({ where: { jobId, role: "ANSWER_KEY", status: { in: ["PROCESSED", "ANALYZED"] }, storageKey: { not: null } }, select: { id: true, originalName: true } });
+  const keyCounts = new Map((await prisma.aiImportKeyEntry.groupBy({ by: ["keyFileId"], where: { jobId }, _count: { _all: true } })).map((g) => [g.keyFileId, g._count._all]));
+  const unreadKeys = keyFiles.filter((f) => !keyCounts.get(f.id));
+  const answersBefore = new Map<string, { n: number | null; final: string[]; status: string }>();
+  if (unreadKeys.length) {
+    for (const q of await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { id: true, sourceNumber: true, finalAnswer: true, answerStatus: true } })) answersBefore.set(q.id, { n: q.sourceNumber, final: q.finalAnswer, status: q.answerStatus });
+    await prisma.aiImportFile.updateMany({ where: { id: { in: unreadKeys.map((f) => f.id) } }, data: { status: "ANALYZED", errorMessage: null } });
+    await runKeyFiles(ctx);
+    const after = new Map((await prisma.aiImportKeyEntry.groupBy({ by: ["keyFileId"], where: { jobId, keyFileId: { in: unreadKeys.map((f) => f.id) } }, _count: { _all: true } })).map((g) => [g.keyFileId, g._count._all]));
+    await logEvent(jobId, "KEY_REREAD", `Verify 1 read the answer key again from its text (no AI): ${unreadKeys.map((f) => `“${f.originalName}” ${after.get(f.id) ?? 0} entr${(after.get(f.id) ?? 0) === 1 ? "y" : "ies"}`).join(", ")}.`, { files: unreadKeys.map((f) => ({ id: f.id, name: f.originalName, entries: after.get(f.id) ?? 0 })) }, actorId);
+  }
+
   // 1. Corrections with source evidence: an answer (and explanation) run into an option / the question text.
   for (const q of await prisma.aiImportQuestion.findMany({ where: { jobId }, include: { figures: true } })) {
     if (LOCKED.includes(q.status)) continue;
@@ -319,6 +338,25 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     fixesBy.set(q.id, [...(fixesBy.get(q.id) ?? []), ...fixes]);
   }
 
+  // 1e. Formatting rules on questions extracted before them (local-parse.ts formatStem): a leading "Question:" label and
+  // numbered statements run together in the source text itself (2026-11-05: a Word transcription with no line breaks to
+  // restore). Each rule is validated on its own (label removed exactly / whitespace only); the wording never changes, the
+  // text as read is kept in data.formatting and the previous version in the history. Never on a question an
+  // administrator edited or approved: those keep their flag for a manual decision.
+  let formatted = 0;
+  for (const q of await prisma.aiImportQuestion.findMany({ where: { jobId }, include: { figures: true } })) {
+    if (LOCKED.includes(q.status) || q.editedData || q.approvedById) continue;
+    const d = q.data as unknown as ExtractedQuestion;
+    const f = formatStem(d.stem);
+    if (!f) continue;
+    const fixes: VerifyFix[] = [{ field: "question text", before: d.stem.slice(0, 300), after: f.stem.slice(0, 300), evidence: `formatting only (${f.rules.map((r) => (r === "FIELD_LABEL" ? "leading “Question:” label removed" : "numbered statements put on their own lines")).join("; ")}) — every printed character of the wording kept` }];
+    await recordVersion({ questionId: q.id, jobId, kind: "EXTRACTION", data: d, figures: snapshotFigures(q.figures), changes: fixes, actorId, note: "Before Verify 1 applied the formatting rules (label / statement line breaks)." });
+    const formatting = { original: d.formatting?.original ?? d.stem, rules: [...new Set([...(d.formatting?.rules ?? []), ...f.rules])], by: "VERIFY1" as const, at: new Date().toISOString() };
+    await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { data: { ...d, stem: f.stem, formatting, notes: [...(d.notes ?? []), `Verify 1 applied formatting rules: ${f.rules.join(", ")} (wording unchanged).`] } as unknown as Prisma.InputJsonValue } });
+    fixesBy.set(q.id, [...(fixesBy.get(q.id) ?? []), ...fixes]);
+    formatted++;
+  }
+
   // 1c. A reusable paper-format profile for this exam / format, checked against THIS paper (never trusted blindly).
   const profileRun = await applyFormatProfile(jobId);
   const profileFindings = profileRun?.findings ?? new Map<string, { id: string; version: number; findings: string[] }>();
@@ -327,6 +365,16 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
   // 2. Every deterministic check of the importer, on the corrected content (no AI). Questions still without a
   // subject / topic get the free local classification there (never a paid call).
   await runPostProcessing(ctx);
+  // The answer-key reconciliation of 0b, question by question: the answer stored before vs the official key now.
+  if (answersBefore.size) {
+    const rows = await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { id: true, sourceNumber: true, finalAnswer: true, answerStatus: true, officialAnswerRaw: true, status: true }, orderBy: { orderIndex: "asc" } });
+    const changes = rows
+      .map((q) => ({ q, before: answersBefore.get(q.id) }))
+      .filter(({ q, before }) => before && (before.final.join() !== q.finalAnswer.join() || before.status !== q.answerStatus))
+      .map(({ q, before }) => ({ n: q.sourceNumber, before: before!.final.join(",") || "—", beforeStatus: before!.status, official: q.officialAnswerRaw, after: q.finalAnswer.join(",") || "—", status: q.answerStatus, questionStatus: q.status }));
+    const differed = changes.filter((c) => c.before !== "—" && c.official && !c.official.split("/").includes(c.before));
+    await logEvent(jobId, "KEY_RECONCILED", `Answer key reconciled: ${rows.filter((q) => q.answerStatus === "OFFICIAL_MATCHED").length} of ${rows.length} question(s) now match the official key; ${differed.length} question(s) had a different answer stored before (${differed.slice(0, 40).map((c) => `Q${c.n} ${c.before}→${c.official}`).join(", ")}${differed.length > 40 ? " …" : ""}). Nothing was approved or published.`, { changes }, actorId);
+  }
 
   // 2b. Subject / topic check (free): the local classifier over the whole paper WITHOUT the stored choice (only a
   // single-subject paper stays within its selected subject), compared with what is stored.
@@ -434,8 +482,8 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
   const refOnly = refs.filter(referenceComparable).flatMap((r) => referenceOnly(r, questions.map((x) => effective(x))).map((l) => `${l} (${r.name})`));
   const compared = refs.filter(referenceComparable);
   const notCompared = refs.filter((r) => !referenceComparable(r));
-  const result: Verify1Result = { questions: passed + withProblems, passed, withProblems, corrected: fixesBy.size, missing: quality?.missing ?? [], duplicateNumbers: quality?.duplicateNumbers ?? [], referenceOnly: refOnly.slice(0, 200), referenceConflicts: refConflicts, referencesCompared: compared.length, referencesNotCompared: notCompared.map((r) => r.name), whitespaceRestored: restored, classification: taxTally, annotationsRemoved: ticksRemoved, headingsRestored, verify2Upgrade: legacy };
-  await logEvent(jobId, "VERIFY1_DONE", `Verify 1 (full paper, no AI): ${result.questions} question(s) checked — ${passed} passed, ${withProblems} with findings, ${result.corrected} corrected from the source${result.missing.length ? `; missing ${result.missing.slice(0, 10).join(", ")}${result.missing.length > 10 ? " …" : ""}` : ""}${result.duplicateNumbers.length ? `; numbers read twice ${result.duplicateNumbers.slice(0, 10).join(", ")}` : ""}${compared.length ? `; reference papers compared: ${compared.map((r) => `“${r.name}”`).join(", ")} — ${refConflicts} conflict(s)${refOnly.length ? `, ${refOnly.length} reference question(s) not in the source (${refOnly.slice(0, 6).join(", ")})` : ""}` : ""}${notCompared.length ? `; NOT compared (scanned, stored only — needs OCR / vision): ${notCompared.map((r) => `“${r.name}” (${scannedPagesOf(r)} page(s))`).join(", ")}` : ""}${result.whitespaceRestored ? `; line breaks restored from the Word source in ${result.whitespaceRestored} question(s)` : ""}${ticksRemoved ? `; printed answer-line tick removed from ${ticksRemoved} question(s) (source evidence)` : ""}${headingsRestored ? `; section heading restored in ${headingsRestored} question(s)` : ""}${profileNote ? `; ${profileNote}` : ""}; subject / topic check (free): ${taxTally.AGREED} agreed, ${taxTally.DISAGREEMENT} disagreement(s), ${taxTally.NEEDS_REVIEW} need review, ${taxTally.NOT_VERIFIED} not verified.`, result as unknown as Record<string, unknown>, actorId);
+  const result: Verify1Result = { questions: passed + withProblems, passed, withProblems, corrected: fixesBy.size, missing: quality?.missing ?? [], duplicateNumbers: quality?.duplicateNumbers ?? [], referenceOnly: refOnly.slice(0, 200), referenceConflicts: refConflicts, referencesCompared: compared.length, referencesNotCompared: notCompared.map((r) => r.name), whitespaceRestored: restored, formatted, classification: taxTally, annotationsRemoved: ticksRemoved, headingsRestored, verify2Upgrade: legacy };
+  await logEvent(jobId, "VERIFY1_DONE", `Verify 1 (full paper, no AI): ${result.questions} question(s) checked — ${passed} passed, ${withProblems} with findings, ${result.corrected} corrected from the source${result.missing.length ? `; missing ${result.missing.slice(0, 10).join(", ")}${result.missing.length > 10 ? " …" : ""}` : ""}${result.duplicateNumbers.length ? `; numbers read twice ${result.duplicateNumbers.slice(0, 10).join(", ")}` : ""}${compared.length ? `; reference papers compared: ${compared.map((r) => `“${r.name}”`).join(", ")} — ${refConflicts} conflict(s)${refOnly.length ? `, ${refOnly.length} reference question(s) not in the source (${refOnly.slice(0, 6).join(", ")})` : ""}` : ""}${notCompared.length ? `; NOT compared (scanned, stored only — needs OCR / vision): ${notCompared.map((r) => `“${r.name}” (${scannedPagesOf(r)} page(s))`).join(", ")}` : ""}${result.whitespaceRestored ? `; line breaks restored from the Word source in ${result.whitespaceRestored} question(s)` : ""}${formatted ? `; formatting rules (label / statement line breaks, wording unchanged) applied to ${formatted} question(s)` : ""}${ticksRemoved ? `; printed answer-line tick removed from ${ticksRemoved} question(s) (source evidence)` : ""}${headingsRestored ? `; section heading restored in ${headingsRestored} question(s)` : ""}${profileNote ? `; ${profileNote}` : ""}; subject / topic check (free): ${taxTally.AGREED} agreed, ${taxTally.DISAGREEMENT} disagreement(s), ${taxTally.NEEDS_REVIEW} need review, ${taxTally.NOT_VERIFIED} not verified.`, result as unknown as Record<string, unknown>, actorId);
   await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_VERIFY1", entityType: "AiImportJob", entityId: jobId, metadata: { questions: result.questions, passed, corrected: result.corrected } } });
   return result;
 }
@@ -693,6 +741,9 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
   const model = modelArg ?? candidates.find((c) => c.eligible)?.id ?? null;
   const problems: string[] = [...auto.problems];
   if (!settings.aiEnabled) problems.push("Paid AI is switched off in Import Settings — Verify 2 cannot run.");
+  // The importer budget (owner decision 1, 2026-11-05): said before anything is confirmed; the gateway enforces it anyway.
+  const blocked = settings.aiEnabled ? await importerBudgetBlock(jobId, settings, { beforeConfirmation: true }) : null;
+  if (blocked) problems.push(`Paid AI is blocked by the importer budget — ${blocked.message.replace(/ Nothing was sent\..*$/, "")}`);
   if (modelArg && usedBy(used, modelArg)) throw new ImportJobError(`${modelArg} extracted this import; Verify 2 must use a different model.`);
   const prior = (job.config as { verify2?: Verify2State } | null)?.verify2 ?? null;
   const units = await verify2Units(jobId);
@@ -983,13 +1034,13 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
       if (u.kind === "page") {
         const render = await ensureRender(ctx.job, u.file, u.pageNumber!, ctx.settings.limits.renderDpi);
         const image = await visionImage(render);
-        const { value, model } = await verifyCall(ctx, state!, { task: "verify", system: EXTRACT_SYSTEM, content: [{ type: "text", text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page: u.pageNumber!, pages: u.file.pageCount ?? 1, textLayer: u.textLayer ?? null, memory }) }, { type: "image_url", image_url: { url: image, detail: "high" } }], maxOutputTokens: 8000, pageId: u.pageId, needsVision: true, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
+        const { value, model } = await verifyCall(ctx, state!, { task: "verify", stage: "verify2-read", system: EXTRACT_SYSTEM, content: [{ type: "text", text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page: u.pageNumber!, pages: u.file.pageCount ?? 1, textLayer: u.textLayer ?? null, memory }) }, { type: "image_url", image_url: { url: image, detail: "high" } }], maxOutputTokens: 8000, pageId: u.pageId, needsVision: true, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
         const qs = toExtracted(value, u.pageNumber!, model);
         assignSections(qs, u.startState as never);
         return { qs, model, text: u.textLayer ?? null };
       }
       const text = u.parts?.[0] ?? "";
-      const r = await verifyCall(ctx, state!, { task: "verify", system: EXTRACT_SYSTEM, content: [{ type: "text", text: documentTextUserText({ exam: exam?.name ?? "Exam", subject: null, part: (u.partIndex ?? 0) + 1, parts: u.partCount ?? 1, text, memory }) }], maxOutputTokens: 8000, needsVision: false, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
+      const r = await verifyCall(ctx, state!, { task: "verify", stage: "verify2-read", system: EXTRACT_SYSTEM, content: [{ type: "text", text: documentTextUserText({ exam: exam?.name ?? "Exam", subject: null, part: (u.partIndex ?? 0) + 1, parts: u.partCount ?? 1, text, memory }) }], maxOutputTokens: 8000, needsVision: false, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
       const qs = toExtracted(r.value, 1, r.model);
       // Sections (numbering restarts) as the local reader numbered this part's questions.
       if (u.qkeys?.length) sectionsFromKeys(qs, u.qkeys);
@@ -1046,7 +1097,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
       const find = (list: SecondRead[]) => list.find((x) => x.q.number === e.number && x.q.section === e.section) ?? (e.number === null ? list.find((x) => textSimilarity(x.q.stem, e.stem) >= 0.85) : undefined);
       const result: V2Result = failed
         ? { ...stamp(q), at: new Date().toISOString(), model: failed.error.model ?? state.model, status: failed.status, fields: [], detail: `no independent result (${failed.status === "UNAVAILABLE" ? "unavailable" : "failed"}): ${failed.error.message}`.slice(0, 600), error: failed.error, part: unitLabel(u) }
-        : { ...compareSecond(q, find(second) ?? (placed ? undefined : find(pool)), v1, rules, { ...memo, model: state.model, part: unitLabel(u) }), part: unitLabel(u) };
+        : { ...compareSecond(q, find(second) ?? (placed ? undefined : find(pool)), v1, rules, { ...memo, model: state.model, part: unitLabel(u) }), part: unitLabel(u), independence: u.kind === "text" ? ("SAME_TEXT" as const) : ("SOURCE" as const) };
       if (!result.model) result.model = state.model;
       counts[result.status]++;
       counts.attempted++;
@@ -1108,15 +1159,19 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   }
   if (checkable.length) {
     const codes = taxonomyCodes(taxonomy);
-    for (let i = 0; i < checkable.length; i += CLASSIFY_BATCH) {
+    // A batch whose answer was cut off at the output limit is split in half ONCE (two smaller requests, each budget-
+    // checked); a half that is cut off again is a failed check (OUTPUT_TRUNCATED), never resent at the same size.
+    const queue: { batch: typeof checkable; split: boolean }[] = [];
+    for (let i = 0; i < checkable.length; i += CLASSIFY_BATCH) queue.push({ batch: checkable.slice(i, i + CLASSIFY_BATCH), split: false });
+    while (queue.length) {
       if (!(await ctx.stillRunning())) return counts;
-      const batch = checkable.slice(i, i + CLASSIFY_BATCH);
+      const { batch, split } = queue.shift()!;
       const text = classifyUserText(codes.list, batch.map((q) => effective(q)), memoryBrief(paperRules, paper, "classify"));
       let value: { results: { q: string; subject: string | null; topic: string | null; subtopic: string | null; confidence: number; about: string | string[] | null; reason: string | null }[] } | null = null;
       let model = state.model;
       let failure: string | null = null;
       try {
-        const r = await verifyCall(ctx, state, { task: "classify", system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, needsVision: false, jsonSchema: "classify" }, (out) => {
+        const r = await verifyCall(ctx, state, { task: "classify", stage: "verify2-classify", system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, needsVision: false, jsonSchema: "classify" }, (out) => {
           const parsed = classifyAnswerOf(parseModelJson(out));
           if (!parsed) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format"), "model_output");
           return parsed;
@@ -1125,16 +1180,22 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
         model = r.model;
       } catch (e) {
         if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) {
-          for (const q of checkable.slice(i)) await saveTax(q, { status: "VERIFICATION_FAILED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: [`not checked — Verify 2 stopped: ${(e as Error).message.slice(0, 200)}`], comparedWithV1: "NO_V1" });
+          for (const q of [...batch, ...queue.flatMap((b) => b.batch)]) await saveTax(q, { status: "NOT_VERIFIED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: [`not checked — Verify 2 stopped before this request was sent: ${(e as Error).message.slice(0, 200)}`], comparedWithV1: "NO_V1" });
           throw e;
         }
         failure = e instanceof Error ? e.message.slice(0, 300) : "request failed";
+        if (!split && batch.length > 1 && failureCheckStatus(failure) === "OUTPUT_TRUNCATED") {
+          const half = Math.ceil(batch.length / 2);
+          queue.unshift({ batch: batch.slice(0, half), split: true }, { batch: batch.slice(half), split: true });
+          await logEvent(ctx.job.id, "VERIFY2_BATCH_SPLIT", `Verify 2 classification of ${batch.length} question(s) was cut off at the output limit; sent again once as two smaller requests (${half} + ${batch.length - half}).`, { size: batch.length });
+          continue;
+        }
         await logEvent(ctx.job.id, "VERIFY2_FAILED", `Verify 2 classification request failed (${failure.slice(0, 200)}); the subject / topic of those ${batch.length} question(s) is VERIFICATION_FAILED (not agreement).`, {});
       }
       for (const [k, q] of batch.entries()) {
         const stored = storedOf(q);
         if (!value) {
-          await saveTax(q, { status: "VERIFICATION_FAILED", stored, found: null, confidence: null, method: model, findings: [`the classification request failed: ${failure}`], comparedWithV1: "NO_V1" });
+          await saveTax(q, { status: "VERIFICATION_FAILED", stored, found: null, confidence: null, method: model, findings: [`the classification request failed: ${failure}`], comparedWithV1: "NO_V1", failure: failureCheckStatus(failure) });
           continue;
         }
         const res = value.results.find((x) => Number.parseInt(x.q.replace(/\D+/g, ""), 10) - 1 === k);
@@ -1209,8 +1270,8 @@ export interface PaperSummary {
 }
 
 const has = (q: { issueCodes: string[] }, codes: string[]) => q.issueCodes.some((c) => codes.includes(c));
-export const STRUCTURE_CODES = ["ANSWER_IN_OPTION", "STATEMENTS_MERGED", "QUESTION_TEXT_SUSPECT", "OPTIONS_INCOMPLETE", "NUMBER_CONFLICT", "STEM_HAS_OPTIONS"];
-export const TAXONOMY_CODES = ["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN", "TAXONOMY_DISAGREES"];
+export const STRUCTURE_CODES = ["ANSWER_IN_OPTION", "STATEMENTS_MERGED", "QUESTION_TEXT_SUSPECT", "OPTIONS_INCOMPLETE", "NUMBER_CONFLICT", "STEM_HAS_OPTIONS", "STATEMENT_COUNT_MISMATCH"];
+export const TAXONOMY_CODES = ["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED", "SUBJECT_MISMATCH", "TOPIC_UNCERTAIN", "TAXONOMY_DISAGREES", "TAXONOMY_CHECK_FAILED"];
 
 /** Pages of a reference with no text layer (stored, but not compared without OCR / vision). */
 export function scannedPagesOf(r: Pick<ReferencePaper, "note" | "kind" | "pageCount"> & { scannedPages?: number }): number {
@@ -1227,6 +1288,10 @@ export function eligibleForPublish(q: QRow, settings: ImporterSettings, rescanPe
   if (q.questionId || LOCKED.includes(q.status) || rescanPending) return false;
   const s = verifyState(q.data, fingerprintOf(q));
   if (s.v1 !== "passed" || s.v2 !== "verified") return false;
+  // A Verify 2 that re-read the same Word / sheet text confirms the transcription only — never an independent verification.
+  if (s.pv?.v2 && v2Independence(s.pv.v2) !== "SOURCE") return false;
+  // Every check Ready depends on must have passed, with nothing left for review (owner decision 7, 2026-11-05).
+  if (!checksAllowReady((q.data as unknown as ExtractedQuestion).checks)) return false;
   if (q.status !== AiImportQuestionStatus.READY && !(q.approvedById && q.status === AiImportQuestionStatus.EXTRACTED)) return false;
   if (q.issueCodes.some((c) => ISSUE_DEFS[c]?.blocking || ISSUE_DEFS[c]?.publishBlocking)) return false;
   // A subject that differs from the printed section is decided on its own (never published in bulk / from the list).

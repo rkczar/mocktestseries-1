@@ -7,6 +7,7 @@ import { formatIst } from "@/lib/ist-time";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TASK_LABELS, type ImporterTask } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
+import { importerCaps } from "@/lib/ai-import/ai";
 import { actualState, importerLedger } from "@/lib/ai-import/ledger";
 
 export const metadata = { title: "AI Cost Center — AI Question Importer" };
@@ -58,6 +59,7 @@ function Stat({ label, value, sub, id }: { label: string; value: string; sub?: s
 export default async function CostsPage() {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="AI Cost Center" />;
   const settings = await getImporterSettings();
+  const caps = importerCaps(settings);
   const [ledger, byTask, byModel, calls] = await Promise.all([
     importerLedger(),
     prisma.$queryRaw<{ task: string; n: number; inTok: number; outTok: number; actual: number | null; unknown: number }[]>`
@@ -93,14 +95,21 @@ export default async function CostsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Limits</CardTitle>
-            <CardDescription>There is no importer spending cap: each paid operation&apos;s estimated and maximum cost is shown and confirmed once (Confirm &amp; Continue). OpenRouter&apos;s own account and key limits still apply.</CardDescription>
+            <CardDescription>The importer budget is enforced for every paid request (spend + requests in flight + the request&apos;s maximum). When a limit is reached nothing more is sent; local reading, OCR and the deterministic checks keep working. OpenRouter&apos;s own account and key limits also apply.</CardDescription>
           </CardHeader>
           <CardContent>
             <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm" data-testid="cost-limits">
               <dt>Paid AI for the importer</dt>
               <dd className="font-medium" data-testid="cost-paid">{settings.aiEnabled ? "On" : "Off"}</dd>
-              <dt>Application spending caps</dt>
-              <dd data-testid="cost-caps">None (no per-request, job, monthly, all-time or key-reserve limit)</dd>
+              <dt>Importer budget (enforced)</dt>
+              <dd data-testid="cost-caps">
+                {inr(caps.monthlyInr)} per month · {inr(caps.jobInr)} per import · {inr(caps.totalInr)} in total · {inr(caps.requestInr)} per request
+              </dd>
+              <dt>Used</dt>
+              <dd data-testid="cost-used">
+                {inr(month.committedInr)} this month · {inr(all.committedInr)} in total
+                {month.committedInr >= caps.monthlyInr || all.committedInr >= caps.totalInr ? <span className="ml-1 font-medium text-[var(--color-error)]">— paid AI is blocked by the budget</span> : null}
+              </dd>
               <dt>Retries and fallbacks</dt>
               <dd>One retry per request{settings.budget.retryTransient ? " (any temporary error)" : " (dropped connection)"}, then one fallback model — all included in each confirmed maximum</dd>
               <dt>Privacy for importer requests</dt>

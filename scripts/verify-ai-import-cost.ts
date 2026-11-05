@@ -158,6 +158,9 @@ async function main() {
     check("job 3: cost not reported → unknown with ₹0.60 held, actual not claimed", s3.job?.actualRequests === 0 && s3.job?.unknownRequests === 1 && near(s3.job?.unknownHeldInr, 0.6), s3.job);
     const s0 = await importerSpendSummary(null, now);
     check("no job asked → job figure null", s0.job === null);
+    // importer-reliability-3: the importer budget is enforced again, so section A's seeded ₹16 of spend would (correctly)
+    // block every paid request below — it is removed before the sections that send requests.
+    await prisma.aiBudgetReservation.deleteMany({ where: { OR: [{ requestKey: { contains: TAG } }, ...[j1, j2, j3].map((j) => ({ requestKey: { startsWith: `qi:${j.id}:` } }))] } });
 
     // ------------------------------------------------------------------ B
     section("B. Cost panel shows estimate, estimated maximum, job and month actual spend");

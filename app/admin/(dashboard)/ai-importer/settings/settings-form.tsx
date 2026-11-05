@@ -864,10 +864,9 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
             <input type="checkbox" checked={s.verification.independentAnswer} onChange={(e) => set("verification", { independentAnswer: e.target.checked })} disabled={d} data-testid="v-independent" />
             Ask the independent model for its own answer to every question (an opinion only; it never replaces the official key)
           </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={s.publish.allowUnverifiedAnswers} onChange={(e) => set("publish", { allowUnverifiedAnswers: e.target.checked })} disabled={d} data-testid="p-unverified" />
-            Allow bulk publishing of questions without an official key (their answer stays marked UNVERIFIED in the Question Bank)
-          </label>
+          <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="p-unverified-policy">
+            Answers without an official key are never publishable: an AI opinion (or two AI opinions agreeing) is not an answer. Confirm such answers by hand, or upload the official key.
+          </p>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={s.publish.requireTopic} onChange={(e) => set("publish", { requireTopic: e.target.checked })} disabled={d} />
             Require a topic before a question can be published

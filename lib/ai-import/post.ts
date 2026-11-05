@@ -6,7 +6,8 @@ import { taxonomyNameKey } from "@/lib/exam-taxonomy";
 import { lintRichSource, looksRich } from "@/lib/rich-import/manifest";
 import { ISSUE_DEFS, KEY_MIN_COVERAGE } from "@/lib/ai-import/config";
 import { importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
-import { failureMessage } from "@/lib/ai-import/failure";
+import { failureCheckStatus, failureMessage } from "@/lib/ai-import/failure";
+import { CHECK_STATUS_LABELS, checksAllowReady, questionChecks } from "@/lib/ai-import/checks";
 import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
@@ -15,7 +16,9 @@ import { classifyPaper, type LocalClassification } from "@/lib/ai-import/taxonom
 import { classifierContext, headingResolver, jobPaperMemory } from "@/lib/ai-import/taxonomy-memory";
 import { confirmedRulesFor, confirmedSubjectScope, memoryBrief, memoryFindings } from "@/lib/ai-import/paper-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
-import { PRINTED_DROPPED, candidateInstruction, mergedAnswerIn, mergedStatements, numberSequenceProblems, statementCodeQuestion } from "@/lib/ai-import/local-parse";
+import { PRINTED_DROPPED, candidateInstruction, formatStem, mergedAnswerIn, mergedStatements, numberSequenceProblems, statementCodeQuestion, statementsOf } from "@/lib/ai-import/local-parse";
+
+const ROMAN_INDEX: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
 import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem, sourceDiffSummary } from "@/lib/ai-import/fidelity";
 import type { StepContext } from "@/lib/ai-import/process";
 import { contentPartOf, fingerprintsOf, taxonomyCurrent, verifyState } from "@/lib/ai-import/verify-core";
@@ -280,6 +283,11 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     await prisma.aiImportKeyEntry.updateMany({ where: { id: { in: rows.map((r) => r.id).filter((id) => !matchedIds.has(id)) } }, data: { status: "UNMATCHED" } });
   }
   const anyKey = keyRowsRaw.length > 0;
+  // Answer-key files of this job that gave no entries (unreadable, failed, or read nothing): named on every question that
+  // therefore has no official answer — never a silent AI substitute (owner decision 2, 2026-11-05).
+  const unreadKeyFiles = (await prisma.aiImportFile.findMany({ where: { jobId: job.id, role: "ANSWER_KEY", status: { not: "REJECTED" } }, select: { id: true, originalName: true } }))
+    .filter((f) => !keyRowsRaw.some((r) => r.keyFileId === f.id))
+    .map((f) => f.originalName);
   // A key printed for another paper / series never supplies official answers to this one.
   const wrongKeyFiles = new Map((await keyPaperChecks(job.id)).filter((c) => c.state === "MISMATCH").map((c) => [c.keyFileId, c.detail]));
   const keyFileOfRow = new Map(keyRowsRaw.map((r) => [r.id, r.keyFileId]));
@@ -300,11 +308,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
 
   // ---- Optional AI: independent answers + classification (only for questions that need them) ----
   const needsSolve = settings.verification.independentAnswer && settings.aiEnabled && settings.models.verify ? open.filter((q) => !only || only.has(q.id)).filter((q) => !q.aiAnswer.length && IMPORTABLE.has(effective(q).type) && effective(q).options.length === 4) : [];
+  // A spending limit stops the optional AI steps of this run only: everything deterministic below still runs (owner
+  // decision 1, 2026-11-05: local and deterministic processing keep working while paid AI is blocked).
+  let aiStop: string | null = null;
   for (const q of needsSolve) {
     if (!(await ctx.stillRunning())) return;
+    if (aiStop) break;
     const e = effective(q);
     try {
-      const r = await importerAiCall({ jobId: job.id, task: "verify", models: [settings.models.verify!], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: 600, settings, questionId: q.id, needsVision: false });
+      const r = await importerAiCall({ jobId: job.id, task: "verify", models: [settings.models.verify!], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: 600, settings, questionId: q.id, needsVision: false, stage: "post-answer-opinion", reasoningEffort: "low" });
       const parsed = solveSchema.safeParse(parseModelJson(r.text));
       if (parsed.success) {
         const labels = parsed.data.defective ? [] : parsed.data.answer.map((a) => labelFromPrinted(a, e.options.map((o) => o.label))).filter((x): x is string => !!x);
@@ -314,9 +326,14 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         q.aiAnswerConfidence = parsed.data.confidence;
       }
     } catch (err) {
-      if (err instanceof ImporterAiUnavailable || (err instanceof Error && err.name === "ImporterBudgetError")) throw err;
+      if (err instanceof Error && err.name === "ImporterBudgetError") {
+        aiStop = err.message;
+        continue;
+      }
+      if (err instanceof ImporterAiUnavailable) throw err;
     }
   }
+  if (aiStop) await logEvent(job.id, "AI_SKIPPED_BUDGET", `Independent AI answer opinions were not requested: ${aiStop.slice(0, 300)} Deterministic checks continue.`, {});
 
   // The paper's printed section heading names the subject (exam subject names, confirmed heading aliases, one unique
   // subject); never for a subject an administrator chose or a question already approved (those are flagged instead).
@@ -360,7 +377,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   /** Questions the AI classifier was asked about but gave nothing usable for: a failure, never a judgement. */
   const aiOutcome = new Map<string, { status: "FAILED" | "NO_RESULT"; detail: string; model: string | null }>();
   const classifyResults = new Map<string, ClassifyDecision & { model: string }>();
-  if (settings.aiEnabled && settings.models.classify && toAi.length && taxonomy.length) {
+  if (settings.aiEnabled && settings.models.classify && toAi.length && taxonomy.length && !aiStop) {
     const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, misaligned: 0, unsure: 0, missing: 0, errors: [] as string[], models: new Set<string>() };
     // Questions whose subject the paper prints (section heading) are classified only within that subject: the AI picks
     // the topic, never another subject (2026-10-26: "cauda equina" in the Surgery section was filed under Neurology).
@@ -369,7 +386,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       const g = job.paperType === AiImportPaperType.SINGLE_SUBJECT && job.subjectId ? job.subjectId : (sectionSubject.get(q.id) ?? "");
       groups.set(g, [...(groups.get(g) ?? []), q]);
     }
-    for (const [groupSubject, members] of groups) {
+    groupLoop: for (const [groupSubject, members] of groups) {
     const subjectsAllowed = groupSubject ? taxonomy.filter((s) => s.id === groupSubject) : taxonomy;
     // Short codes (S3, T41, U7, Q7) instead of database ids: a small model copies "T41" reliably, a 25-character id
     // often not. The codes are mapped back (lib/ai-import/taxonomy-check.ts); a code that is not on the list is
@@ -382,7 +399,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       const text = classifyUserText(codes.list, batch.map((q) => effective(q)), memoryBrief(mem.rules, mem.paper, "classify"));
       tally.batches++;
       try {
-        const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false, jsonSchema: "classify" }, (out) => {
+        const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", stage: "post-classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false, jsonSchema: "classify" }, (out) => {
           // Item by item: a malformed entry only leaves its own question without a result.
           const parsed = classifyAnswerOf(parseModelJson(out));
           if (!parsed) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format (no usable result list)"), "model_output");
@@ -413,7 +430,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           aiOutcome.set(q.id, { status: "NO_RESULT", detail: `${r.model} returned no answer for this question (${value.results.length} answer(s) for ${batch.length} question(s) in the request)`, model: r.model });
         }
       } catch (err) {
-        if (err instanceof ImporterAiUnavailable || (err instanceof Error && err.name === "ImporterBudgetError")) throw err;
+        if (err instanceof Error && err.name === "ImporterBudgetError") {
+          // Not sent: the questions of this and every later batch have no AI result (never "nothing fits").
+          aiStop = err.message;
+          for (const q of members.slice(i)) aiOutcome.set(q.id, { status: "NO_RESULT", detail: `not sent — ${err.message.slice(0, 200)}`, model: settings.models.classify });
+          for (const [g, rest] of groups) if (g !== groupSubject && rest.every((q) => !aiOutcome.has(q.id) && !classifyResults.has(q.id))) for (const q of rest) aiOutcome.set(q.id, { status: "NO_RESULT", detail: `not sent — ${err.message.slice(0, 200)}`, model: settings.models.classify });
+          await logEvent(job.id, "AI_SKIPPED_BUDGET", `Subject / topic AI classification stopped: ${err.message.slice(0, 300)} The free local classification is kept; deterministic checks continue.`, {});
+          break groupLoop;
+        }
+        if (err instanceof ImporterAiUnavailable) throw err;
         tally.failedBatches++;
         const message = err instanceof Error ? err.message.slice(0, 200) : "error";
         tally.errors.push(message);
@@ -463,7 +488,20 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const contaminated = mergedAnswerIn(e);
     if (contaminated) add("ANSWER_IN_OPTION", `${contaminated.where[0].toUpperCase()}${contaminated.where.slice(1)} contains the printed answer “${contaminated.raw.slice(0, 80)}” — Verify 1 moves it out when the source confirms it; otherwise remove it and set the answer.`);
     const glued = mergedStatements(e.stem);
-    if (glued) add("STATEMENTS_MERGED", `The numbered statements ${glued.join(", ")} run together with the text before them — Verify 1 restores the line breaks from a Word source; otherwise put each statement on its own line.`);
+    if (glued) add("STATEMENTS_MERGED", formatStem(e.stem)?.rules.includes("STATEMENT_BREAKS") ? `The numbered statements ${glued.join(", ")} run together in the question text. Run Verify 1 (free): it puts each statement on its own line (whitespace only — the wording is not changed).` : `The numbered statements ${glued.join(", ")} run together in the question text and cannot be separated automatically (for example a table or a list without a lead-in). Put each statement or row on its own line by hand.`);
+    // Statement-code options that cite a statement the text does not have ("1, 2 and 4" with three statements): a statement
+    // was lost or merged with another in the source text (2026-11-05: a Word transcription merged statements 1 and 2 of
+    // CMS 2024 Q105 and changed the options of Q70). Flagged for comparison with the original paper — never changed.
+    {
+      const stmts = statementsOf(e.stem);
+      const index = (k: string) => (/^\d$/.test(k) ? Number(k) : ROMAN_INDEX[k] ?? 0);
+      if (stmts.length >= 2 && statementCodeQuestion(e)) {
+        const roman = stmts.every((x) => /^[IVX]+$/.test(x.key));
+        const cited = Math.max(0, ...e.options.flatMap((o) => (roman ? [...o.text.matchAll(/\b([IVX]{1,4})\b/g)].map((m) => index(m[1])) : [...o.text.matchAll(/\b([1-9])\b/g)].map((m) => Number(m[1])))));
+        const top = Math.max(...stmts.map((x) => index(x.key)));
+        if (cited > top) add("STATEMENT_COUNT_MISMATCH", `The options refer to statement ${roman ? Object.keys(ROMAN_INDEX).find((k) => ROMAN_INDEX[k] === cited) : cited}, but the question text has ${stmts.length} numbered statement(s) — one may be missing or merged with another. Compare the statements and options with the original paper.`);
+      }
+    }
     if (lowConf) add("EXTRACTION_UNCERTAIN", e.notes?.join(" ").slice(0, 300) || `Extraction confidence ${Math.round(conf * 100)}%.`);
     // Independent verification evidence (Agent B), kept on the original extraction.
     const ver = (q.data as unknown as ExtractedQuestion).verification;
@@ -748,27 +786,40 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         add("ANSWER_AMBIGUOUS", unsafe);
       }
       checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: unsafe ?? ([...incompleteKeys.values()][0] ?? (anyKey ? "The answer key has no entry for this question." : "No answer key uploaded for this paper.")) });
+      // Owner decision 2, 2026-11-05: only the official key (or an administrator's confirmation) verifies an answer.
+      // A printed answer in the paper is kept as a proposal; an AI opinion — or two AI opinions agreeing — never becomes
+      // the answer, and an answer key that is missing or could not be read never triggers an AI substitute.
       const printed = e.printedAnswer;
-      const aiAgrees = q.aiAnswer.length > 0 && (q.aiAnswerConfidence ?? 0) >= 0.7;
+      const keyUnread = unreadKeyFiles.length ? `The answer key ${unreadKeyFiles.map((f) => `“${f}”`).join(", ")} could not be read, so no official answer is available — no answer was substituted.` : null;
       if (printed.length) {
-        if (aiAgrees && sameSet(printed, q.aiAnswer)) answerStatus = AiImportAnswerStatus.INDEPENDENTLY_VERIFIED;
-        else answerStatus = AiImportAnswerStatus.UNVERIFIED;
+        answerStatus = AiImportAnswerStatus.UNVERIFIED;
         if (!q.answerConfirmedById) finalAnswer = printed;
       } else if (e.printedAnswerRaw && PRINTED_DROPPED.test(e.printedAnswerRaw)) {
         // The paper itself prints the question as dropped ("► Official Answer: Question Dropped (X)"): never answered.
         answerStatus = AiImportAnswerStatus.WITHDRAWN;
         add("POSSIBLE_WITHDRAWN", `The paper prints “${e.printedAnswerRaw.trim().slice(0, 80)}” for this question (dropped / bonus).`);
-      } else if (q.aiAnswer.length) {
+      } else if (!unsafe) {
         answerStatus = AiImportAnswerStatus.UNVERIFIED;
-        if (!q.answerConfirmedById) finalAnswer = settings.publish.allowUnverifiedAnswers ? q.aiAnswer : [];
       }
-      if (answerStatus === AiImportAnswerStatus.UNVERIFIED) add("ANSWER_UNVERIFIED", printed.length ? `Answer ${printed.join(", ")} is printed in the paper but not confirmed by an official key.` : `Only an AI opinion (${q.aiAnswer.join(", ")}) is available — not an official answer.`);
+      if (answerStatus === AiImportAnswerStatus.UNVERIFIED)
+        add(
+          "ANSWER_UNVERIFIED",
+          [
+            printed.length ? `Answer ${printed.join(", ")} is printed in the paper but not confirmed by an official key.` : keyUnread ?? (anyKey ? "The answer key has no entry for this question." : "No official answer key for this paper."),
+            q.aiAnswer.length ? `An AI opinion (${q.aiAnswer.join(", ")}, ${q.aiAnswerModel ?? "AI"}) is shown for reference only — it is not an answer.` : "",
+            "Confirm the answer by hand, or upload the official key.",
+          ].filter(Boolean).join(" ")
+        );
     }
+    // An administrator's answer that contradicts the official key is never settled silently (2026-11-05: Q119 was set to B
+    // by hand while the official key says D): the administrator's value is kept, the conflict blocks Ready until resolved.
+    const adminVsKey = !!q.answerConfirmedById && official.length > 0 && q.finalAnswer.length > 0 && !sameSet(q.finalAnswer, official);
+    if (adminVsKey) add("ANSWER_MISMATCH", `An administrator set the answer to ${q.finalAnswer.join(", ")}, but the official key says ${official.join(", ")}${officialPage ? ` (key page ${officialPage})` : ""}. Check it and set the answer again (the official key is shown; nothing was changed).`);
     if (q.aiAnswer.length && official.length && !sameSet(q.aiAnswer, official)) add("AI_OPINION_DIFFERS", `AI opinion ${q.aiAnswer.join(", ")} (${q.aiAnswerModel}) differs from the official key ${official.join(", ")}. The official key is kept.`);
     if (q.aiAnswer.length) checks.push({ stage: 3, name: "Independent AI opinion", passed: !official.length || sameSet(q.aiAnswer, official), severity: official.length && !sameSet(q.aiAnswer, official) ? "WARNING" : "INFO", method: "AI", model: q.aiAnswerModel, detail: `AI suggests ${q.aiAnswer.join(", ")} (confidence ${Math.round((q.aiAnswerConfidence ?? 0) * 100)}%) — an opinion, never an official answer.` });
     const typeOk = (labels: string[]) => (type === "MULTIPLE_CORRECT" ? labels.length >= 2 : labels.length === 1);
     if (!finalAnswer.length || !typeOk(finalAnswer)) {
-      if (!issues.has("ANSWER_AMBIGUOUS") && !issues.has("ANSWER_MISMATCH") && !issues.has("POSSIBLE_WITHDRAWN") && !issues.has("ANSWER_KEY_PAPER_MISMATCH") && !issues.has("ANSWER_TYPE_CONFLICT")) add("ANSWER_MISSING", finalAnswer.length ? `The answer (${finalAnswer.join(", ")}) does not fit a ${type.replace(/_/g, " ").toLowerCase()} question.` : "No usable answer (no key entry, nothing printed in the paper).");
+      if (!issues.has("ANSWER_UNVERIFIED") && !issues.has("ANSWER_AMBIGUOUS") && !issues.has("ANSWER_MISMATCH") && !issues.has("POSSIBLE_WITHDRAWN") && !issues.has("ANSWER_KEY_PAPER_MISMATCH") && !issues.has("ANSWER_TYPE_CONFLICT")) add("ANSWER_MISSING", finalAnswer.length ? `The answer (${finalAnswer.join(", ")}) does not fit a ${type.replace(/_/g, " ").toLowerCase()} question.` : "No usable answer (no key entry, nothing printed in the paper).");
       if (finalAnswer.length && !typeOk(finalAnswer)) finalAnswer = [];
     }
 
@@ -836,7 +887,14 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           if (vc.found?.subjectId && vc.found.subjectId !== subjectId) add("SUBJECT_MISMATCH", `Verify 2 (${vc.method}): ${vc.findings[0] ?? "another subject"}`.slice(0, 600));
         }
         if (vc) checks.push({ stage: 6, name: "Verify 2 — subject / topic", passed: vc.status === "AGREED", severity: vc.status === "AGREED" ? "INFO" : vc.status === "DISAGREEMENT" ? "ERROR" : "WARNING", method: "AI", model: vc.method, detail: `${vc.status.replace(/_/g, " ").toLowerCase()}${vc.comparedWithV1 === "AGREES" ? " · agrees with Verify 1" : vc.comparedWithV1 === "DIFFERS" ? " · differs from Verify 1" : ""}: ${vc.findings.join(" · ")}`.slice(0, 1000) });
+        // A check that produced no answer is its own finding: never agreement, never a disagreement, never hidden by the
+        // wording result (owner decision 7, 2026-11-05).
+        if (vc?.status === "VERIFICATION_FAILED" && !q.taxonomySource?.startsWith("admin")) {
+          const kind = vc.failure ?? failureCheckStatus(vc.findings.join(" "));
+          add("TAXONOMY_CHECK_FAILED", `Verify 2 subject / topic check gave no answer (${CHECK_STATUS_LABELS[kind].toLowerCase()}, ${vc.method}): ${(vc.findings[0] ?? "").slice(0, 300)} — not verified and not a disagreement. Retry Verify 2, or confirm the subject and topic by hand.`);
+        }
         const noResult = vs.v2 === "failed" || vs.v2 === "unavailable";
+        if (vs.v2 === "failed") add("VERIFY2_FAILED", `Verify 2 gave no independent result (${CHECK_STATUS_LABELS[failureCheckStatus(v2.error?.message ?? v2.detail)].toLowerCase()}, ${v2.model}): ${(v2.error?.message ?? v2.detail).slice(0, 300)} — not counted as agreement.`);
         checks.push({ stage: 6, name: "Verify 2 — independent model", passed: vs.v2 === "verified", severity: vs.v2 === "verified" ? "INFO" : noResult ? "WARNING" : "ERROR", method: "AI", model: v2.model, detail: `${v2.status === "VERIFIED" ? "Agrees" : v2.status === "FAILED" ? "Failed — no independent result (not counted as agreement)" : v2.status === "UNAVAILABLE" ? "Unavailable — nothing was read independently (not counted as agreement)" : v2.status === "NOT_FOUND" ? "Not found by the second read" : "Disagrees"}: ${v2.detail}${v2.resolvedBySource ? ` · settled by the source: ${v2.resolvedBySource}` : ""}`.slice(0, 1000) });
       }
     }
@@ -845,13 +903,37 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     // "needs a human look" flags (never structural ones), an admin-chosen
     // answer settles the answer flags.
     if (q.reviewedById) for (const c of REVIEWABLE) issues.delete(c);
-    if (q.answerConfirmedById && finalAnswer.length && typeOk(finalAnswer)) for (const c of ["ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "POSSIBLE_WITHDRAWN", "ANSWER_UNVERIFIED", "ANSWER_MISSING", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT"]) issues.delete(c);
+    if (q.answerConfirmedById && finalAnswer.length && typeOk(finalAnswer) && !adminVsKey) for (const c of ["ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "POSSIBLE_WITHDRAWN", "ANSWER_UNVERIFIED", "ANSWER_MISSING", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "AI_OPINION_DIFFERS"]) issues.delete(c);
     if (q.allowDuplicate) {
       issues.delete("DUPLICATE_EXISTING");
       issues.delete("DUPLICATE_NEAR");
       issues.delete("DUPLICATE_IN_BATCH");
     }
     checks.push({ stage: 4, name: "Duplicates", passed: !duplicateOf && !batchTwin, severity: dupKind === "EXACT" || batchTwin ? "ERROR" : dupKind ? "WARNING" : "INFO", method: "DETERMINISTIC", detail: dupKind ? `${dupKind === "EXACT" ? "Exact" : "Near"} duplicate (${Math.round((dupScore ?? 0) * 100)}%)${q.allowDuplicate ? " — admin chose to import anyway" : ""}` : batchTwin ? "Duplicate within this import." : "No duplicate found." });
+
+    // Other valid classifications of this exam's syllabus that the evidence supports (owner decision 4, 2026-11-05): the
+    // local classifier's runners-up, and a Verify 2 / AI choice that differs. Shown for review, never applied.
+    {
+      const alts: NonNullable<ClassificationRecord["alternatives"]> = [];
+      const push = (sid: string | null | undefined, tid: string | null | undefined, source: string, reason: string) => {
+        if (!sid || !subjectById.has(sid) || (tid && topicById.get(tid)?.subjectId !== sid)) return; // only this exam's records, topic within its subject
+        if (sid === subjectId && (tid ?? null) === topicId) return;
+        if (alts.some((a) => a.subjectId === sid && a.topicId === (tid ?? null))) return;
+        alts.push({ subjectId: sid, topicId: tid ?? null, source, reason: reason.slice(0, 300) });
+      };
+      const v2c = vs.pv?.v2?.classification && sameIds(vs.pv.v2.classification.stored) ? vs.pv.v2.classification : null;
+      if (v2c?.found) push(v2c.found.subjectId, v2c.found.topicId, `Verify 2 (${v2c.method})`, v2c.findings[0] ?? "independent classification");
+      const v1c = vs.pv?.v1?.classification && sameIds(vs.pv.v1.classification.stored) ? vs.pv.v1.classification : null;
+      if (v1c?.found) push(v1c.found.subjectId, v1c.found.topicId, "Verify 1 (local)", v1c.findings[0] ?? "local check");
+      const aiPick = classifyResults.get(q.id);
+      if (aiPick?.subject) push(aiPick.subject, aiPick.topic, `AI classifier (${aiPick.model})`, aiPick.explanation);
+      const top = loc?.candidates?.[0]?.score ?? 0;
+      for (const c of (loc ?? record.local)?.candidates ?? []) if (top > 0 && c.score >= top * 0.35) push(c.subjectId, c.topicId, "local classifier", `runner-up (${Math.round((c.score / top) * 100)}% of the best match's score)`);
+      record.alternatives = alts.slice(0, 4);
+    }
+
+    // The separate checks Ready depends on (owner decision 7, 2026-11-05), stored as machine-readable statuses.
+    const qChecks = questionChecks({ codes: [...issues.keys()], answerStatus, answerConfirmed: !!q.answerConfirmedById && finalAnswer.length > 0 && !adminVsKey, subjectId, topicId, adminTaxonomy: !!q.taxonomySource?.startsWith("admin"), v2: vs.v2 === "stale" ? null : vs.pv?.v2 ?? null, v2Classification: vs.pv?.v2?.classification && sameIds(vs.pv.v2.classification.stored) ? vs.pv.v2.classification : null, v1Ran: !!vs.pv?.v1 && vs.v1 !== "stale", issues });
 
     // Status
     const codes = [...issues.keys()];
@@ -860,13 +942,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (codes.includes("UNSUPPORTED_TYPE")) status = AiImportQuestionStatus.NOT_IMPORTABLE;
     else if (!q.allowDuplicate && (codes.includes("DUPLICATE_EXISTING") || codes.includes("DUPLICATE_IN_BATCH"))) status = AiImportQuestionStatus.DUPLICATE;
     else if (blocking.length || codes.some((c) => ISSUE_DEFS[c]?.publishBlocking)) status = AiImportQuestionStatus.NEEDS_CORRECTION;
+    // Never Ready while a required check has not passed (also when no issue code describes it).
+    else if (!checksAllowReady(qChecks)) status = AiImportQuestionStatus.NEEDS_CORRECTION;
     checks.push({ stage: 4, name: "Import readiness", passed: !blocking.length, severity: blocking.length ? "ERROR" : codes.length ? "WARNING" : "INFO", method: "DETERMINISTIC", detail: blocking.length ? `Blocked: ${blocking.map((c) => ISSUE_DEFS[c].label).join(", ")}` : codes.length ? `Importable with flags: ${codes.map((c) => ISSUE_DEFS[c]?.label ?? c).join(", ")}` : "Ready" });
 
     await prisma.$transaction([
       prisma.aiImportCheck.deleteMany({ where: { questionId: q.id, method: { not: "ADMIN" } } }),
       prisma.aiImportCheck.createMany({ data: checks.map((c) => ({ questionId: q.id, stage: c.stage, name: c.name, passed: c.passed, severity: c.severity, method: c.method, model: c.model ?? null, detail: c.detail.slice(0, 1000) })) }),
       // The classification record lives on the original extraction (like the full-paper verification), set in place.
-      prisma.$executeRaw`UPDATE "AiImportQuestion" SET "data" = jsonb_set("data", '{classification}', ${JSON.stringify(record)}::jsonb, true) WHERE "id" = ${q.id}`,
+      prisma.$executeRaw`UPDATE "AiImportQuestion" SET "data" = jsonb_set(jsonb_set("data", '{classification}', ${JSON.stringify(record)}::jsonb, true), '{checks}', ${JSON.stringify(qChecks)}::jsonb, true) WHERE "id" = ${q.id}`,
       prisma.aiImportQuestion.update({
         where: { id: q.id },
         data: {

@@ -103,13 +103,22 @@ export function keyReadingIncomplete(method: string, pairs: KeyPair[], expected:
   return method === "ai" && pairs.length && expected && read < Math.ceil(expected * KEY_MIN_COVERAGE) ? { read, expected } : null;
 }
 
-/** Sanity of a parsed key: enough entries, mostly increasing numbers. */
+/**
+ * Sanity of a parsed key: enough entries, few repeated numbers, and either mostly increasing in reading order (a
+ * one-column key) or a dense block of numbers in any order (a grid read row by row: 1, 16, 31, … — seen 2026-11-05,
+ * CMS 2024 Paper I: all 120 entries were read and then rejected, so every answer fell back to an AI guess).
+ */
 export function keyLooksValid(pairs: KeyPair[]): boolean {
   if (pairs.length < 3) return false;
   const nums = pairs.map((p) => p.number);
+  const unique = [...new Set(nums.map((n, i) => `${pairs[i].section}#${n}`))].length;
+  if (unique / nums.length < 0.9) return false;
   let ordered = 0;
   for (let i = 1; i < nums.length; i++) if (nums[i] === nums[i - 1] + 1) ordered++;
-  return ordered / Math.max(1, nums.length - 1) >= 0.6;
+  if (ordered / Math.max(1, nums.length - 1) >= 0.6) return true;
+  const set = [...new Set(nums)];
+  const span = Math.max(...set) - Math.min(...set) + 1;
+  return set.length >= 10 && set.length / span >= 0.9;
 }
 
 export function sheetPairs(bytes: Buffer, ext: string): KeyPair[] {
@@ -163,6 +172,8 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     let pairs: KeyPair[] = [];
     let header: KeyHeader | null = null;
     let method = "local";
+    /** Entries a text page gave that did not form a recognisable key (reported, never used). */
+    let rejectedPairs = 0;
     const full = vaultPath(file.storageKey!);
     try {
     if (kind === "pdf") {
@@ -172,6 +183,7 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
       for (let p = 0; p < pages.length; p++) {
         header ??= parseKeyHeader(pages[p]);
         const local = parseKeyText(pages[p]);
+        if (local.length) rejectedPairs = Math.max(rejectedPairs, keyLooksValid(local) ? 0 : local.length);
         if (keyLooksValid(local)) {
           pairs.push(...local.map((x) => ({ ...x, page: p + 1 })));
           continue;
@@ -218,8 +230,8 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     }
     await prisma.aiImportKeyEntry.deleteMany({ where: { keyFileId: file.id } });
     if (!pairs.length) {
-      await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: kind === "pdf" || kind === "png" || kind === "jpeg" ? "No answer-key entries could be read (a scanned key needs AI vision, which is off or not configured)." : "No answer-key entries were found." } });
-      await logEvent(ctx.job.id, "KEY_EMPTY", `${file.originalName}: no answer-key entries could be read`, { fileId: file.id });
+      await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: rejectedPairs ? `The key's text was read (${rejectedPairs} number–answer pair(s)), but they do not form a recognisable key layout, so none was used — no answer was substituted. Check the file, or enter the answers by hand.` : kind === "pdf" || kind === "png" || kind === "jpeg" ? "No answer-key entries could be read (a scanned key needs AI vision, which is off, not configured or blocked by the budget). No answer was substituted." : "No answer-key entries were found. No answer was substituted." } });
+      await logEvent(ctx.job.id, "KEY_EMPTY", `${file.originalName}: no answer-key entries could be read${rejectedPairs ? ` (${rejectedPairs} pair(s) read from the text layer did not form a recognisable layout)` : ""} — the questions keep Answer unverified; no AI answer is substituted`, { fileId: file.id, rejectedPairs });
       continue;
     }
     await saveKeyEntries(ctx, file.id, paperFileId, null, pairs);

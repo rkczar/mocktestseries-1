@@ -360,11 +360,28 @@ export function compareWithReference(q: ExtractedQuestion, answer: string[], ref
   if (twin) {
     out.matched = refLabel(twin);
     out.similarity = Math.round(textSimilarity(twin.stem, q.stem) * 100) / 100;
-    const asQuestion: ExtractedQuestion = { ...q, stem: twin.stem, options: twin.options.map((t, i) => ({ label: String.fromCharCode(65 + i), printed: String.fromCharCode(65 + i), text: t })), printedAnswer: [], figures: q.figures };
-    const v = readsAgree({ ...q, stem: stripAnnotationTail(q.stem), options: q.options.map((o) => ({ ...o, text: stripAnnotationTail(o.text) })) }, asQuestion);
+    // An OCR reading drops short statement markers ("1." on its own) and keeps the booklet's page footer ("KCSP-A-GMPK
+    // (19-A)") at the end of the last option: neither is a difference of the question (2026-11-05, CMS 2024 scan).
+    const markers = (t: string) => (ocr(twin!) ? t.replace(/^[ \t]*\(?(?:\d|[ivxIVX]{1,4})[.)][ \t]*/gm, "") : t);
+    const footer = (t: string) => (ocr(twin!) ? t.replace(/\s*\b[A-Z]{2,}(?:-[A-Z]+)+\s*\(\d{1,3}-[A-Z]\)\s*$/, "").replace(/\n\s*\d{1,3}\s*$/, "") : t);
+    const asQuestion: ExtractedQuestion = { ...q, stem: markers(twin.stem), options: twin.options.map((t, i) => ({ label: String.fromCharCode(65 + i), printed: String.fromCharCode(65 + i), text: footer(t) })), printedAnswer: [], figures: q.figures };
+    const v = readsAgree({ ...q, stem: markers(stripAnnotationTail(q.stem)), options: q.options.map((o) => ({ ...o, text: stripAnnotationTail(o.text) })) }, asQuestion);
     if (!v.agree) {
       // OCR wording is noisy: only a changed number / symbol or a different option count is evidence there.
       for (const part of v.detail.split("; ")) if (!/printed answer|figure/.test(part) && (!ocr(twin) || /numbers \/ symbols|option count/.test(part))) out.conflicts.push(`Reference: ${part}.`);
+    }
+    // An option printed at ANOTHER position in the reference is evidence even through OCR noise (2026-11-05: a Word
+    // transcription of CMS 2024 Paper I had the options of Q57 / Q77 in a different order than the original paper, so the
+    // official key letter pointed at another option's text).
+    if (ocr(twin) && twin.options.length === q.options.length) {
+      const moved: string[] = [];
+      q.options.forEach((o, i) => {
+        const here = textSimilarity(o.text, twin!.options[i] ?? "");
+        if (here >= 0.6 || o.text.trim().length < 3) return;
+        const j = twin!.options.findIndex((t, k) => k !== i && textSimilarity(o.text, t) >= 0.85);
+        if (j >= 0) moved.push(`${o.label} “${o.text.slice(0, 40)}” is option ${String.fromCharCode(65 + j)} in the reference`);
+      });
+      if (moved.length && !out.conflicts.some((c) => /order/.test(c))) out.conflicts.push(`Reference: option order differs — ${moved.join("; ")}. The answer key letter may point at another option; compare with the original paper.`);
     }
   }
   // An answer only from what the reference PRINTS as text (an "Ans:" line read without AI) or its answer-key entries —

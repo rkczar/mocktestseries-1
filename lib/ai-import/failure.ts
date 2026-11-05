@@ -26,7 +26,7 @@ export const FAILURE_ADVICE: Record<FailureKind, string> = {
   route_unavailable: "No provider route can serve this model under the privacy and price settings right now. Refresh provider routes in Import Settings or choose another importer model, then use Retry.",
   bad_request: "The provider rejected the request parameters. Check the model in Import Settings (Test Models), then use Retry.",
   image_unsupported: "The model or its route does not accept page images. Choose a model that reads images (Import Settings → Model Assistant), then use Retry.",
-  budget: "The OpenRouter credit or the key's spending limit stopped the request (the importer has no spending cap of its own). Check the key's credit at OpenRouter and the AI Cost Center, then use Retry — finished pages are not read or charged again.",
+  budget: "A spending limit stopped the request: the importer's own monthly / per-job / total budget (Import Settings), or the OpenRouter credit or key limit. Nothing more is sent until the limit allows it; local and deterministic steps still run.",
   model_output: "The model answered, but not in the expected format (empty, cut off or malformed). Use Retry once; if it repeats, choose another model for this task.",
   provider: "The provider failed or timed out. Use Retry once; if it repeats, check the provider status.",
   paid_ai_off: "Paid AI was switched off in Import Settings, so no further AI request was sent. Switch it on and use Retry to continue.",
@@ -79,4 +79,16 @@ export function summarizeFailures(messages: (string | null)[]): { text: string; 
     .map(([k, n]) => `${n} ${k === "other" ? "other error" : FAILURE_LABELS[k as FailureKind].toLowerCase()}`)
     .join(", ");
   return { text, kinds };
+}
+
+/**
+ * The check status of a failed AI check, from its stored message (owner decision 7, 2026-11-05): a cut-off answer is
+ * OUTPUT_TRUNCATED, a timeout / aborted request TIMEOUT, anything else (provider error, empty, invalid JSON) MODEL_ERROR.
+ * Never a disagreement.
+ */
+export function failureCheckStatus(message: string | null | undefined): "MODEL_ERROR" | "TIMEOUT" | "OUTPUT_TRUNCATED" {
+  const m = message ?? "";
+  if (/cut off|output limit|token limit|truncat/i.test(m)) return "OUTPUT_TRUNCATED";
+  if (/timed? ?out|timeout|aborted|did not answer within/i.test(m)) return "TIMEOUT";
+  return "MODEL_ERROR";
 }

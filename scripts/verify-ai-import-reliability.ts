@@ -225,8 +225,9 @@ async function main() {
     const jr = await runJob(actor, jR);
     const sR = await mockStats();
     const thinkCalls = await prisma.aiImportAiCall.findMany({ where: { jobId: jR, model: { startsWith: "mockreason/" } } });
-    // importer-reliability-2: the thinking is bounded by a token budget (a share of the output limit), not an effort word.
-    check("the reasoning model was sent a bounded thinking budget {max_tokens ≤ 2000, exclude: true}", sR.reasoning.length > 0 && sR.reasoning.every((r) => typeof r?.max_tokens === "number" && r.max_tokens <= 2000 && r?.exclude === true), sR.reasoning);
+    // importer-reliability-3 (2026-11-05): the importer's reasoning models ignored a token budget (205 cut-off requests),
+    // so reading / structuring requests ask for no thinking at all — an effort level every provider honours.
+    check("the reasoning model was sent {effort: none, exclude: true} for page reading", sR.reasoning.length > 0 && sR.reasoning.every((r) => r?.effort === "none" && r?.exclude === true), sR.reasoning);
     check("…and the page was read on the first attempt (no failed call), job finished", jr.status === "NEEDS_REVIEW" && thinkCalls.length >= 1 && thinkCalls.every((c) => c.ok), { s: jr.status, calls: thinkCalls.map((c) => [c.ok, c.errorSummary]) });
     check("…its 3 questions extracted", (await prisma.aiImportQuestion.count({ where: { jobId: jR } })) === 3);
 
@@ -299,7 +300,8 @@ async function main() {
     const jD9 = await directJob(actor, exam.id, "Over max", 0.000001);
     const sD9 = await mockStats();
     const e9 = await errorOf(async () => importerAiCallChecked(await classifyInput(jD9), parseClassify));
-    check("a request past the job's recorded maximum is still sent (no application spending cap)", !e9 && (await mockStats()).chat > sD9.chat, e9?.message);
+    // importer-reliability-3 (owner decision 1, 2026-11-05): the job's confirmed maximum is enforced again at the gateway.
+    check("a request past the job's confirmed maximum is refused before it is sent (importer budget)", !!e9 && /Nothing was sent/.test(e9.message) && (await mockStats()).chat === sD9.chat, e9?.message);
 
     // ------------------------------------------------------------------ E
     section("E. Page reading: malformed shapes, and the paid first read is never bought twice");

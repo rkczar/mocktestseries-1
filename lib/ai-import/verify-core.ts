@@ -143,3 +143,5 @@ export function needsVerify2(q: { data: unknown }, fingerprint: string | Fp): bo
   const s = verifyState(q.data, fingerprint);
   return passCount(s.pv) < MAX_VERIFY_PASSES && s.v2 !== "verified";
 }
+
+export { checksAllowReady, v2Independence } from "@/lib/ai-import/checks";

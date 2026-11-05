@@ -10,7 +10,7 @@ import { runKeyFiles } from "@/lib/ai-import/keys";
 import { runPostProcessing } from "@/lib/ai-import/post";
 import { runImport, type ImportPlan } from "@/lib/ai-import/adapter";
 import { logEvent } from "@/lib/ai-import/jobs";
-import { ImporterAiUnavailable, ImporterBudgetError, resetOutputFailures, resetRateLimitStreak } from "@/lib/ai-import/ai";
+import { ImporterAiUnavailable, ImporterBudgetError, importerBudgetBlock, resetOutputFailures, resetRateLimitStreak } from "@/lib/ai-import/ai";
 import { summarizeFailures } from "@/lib/ai-import/failure";
 import { jobQuality, reconcileJob, settleJobStatus } from "@/lib/ai-import/summary";
 import { runVerify2, verify2Outcome, type Verify2State } from "@/lib/ai-import/paper-verify";
@@ -179,7 +179,12 @@ async function processJob(job: AiImportJob): Promise<void> {
     await prisma.aiImportJob.update({ where: { id: job.id }, data: { config: { ...((job.config as Record<string, unknown>) ?? {}), modelPlan: plan } as unknown as Prisma.InputJsonValue } });
     await logEvent(job.id, "MODEL_PLAN", `Models chosen (${plan.mode}): ${Object.values(plan.tasks).map((t) => `${t.task}: ${t.model ?? "none"}`).join(", ")}`);
   }
-  const settings: ImporterSettings = { ...base, models: plan ? modelsFromPlan(plan) : { ...base.models, extract: null, extractFallbacks: [], verify: null, classify: null, key: null } };
+  const planned: ImporterSettings = { ...base, models: plan ? modelsFromPlan(plan) : { ...base.models, extract: null, extractFallbacks: [], verify: null, classify: null, key: null } };
+  // Budget exhausted before the run (owner decision 1, 2026-11-05): the job runs local-only — local reading, OCR, the
+  // answer key's text layer and every deterministic check — instead of pausing halfway. The gateway still checks every
+  // single paid request; this only avoids starting work that would be refused.
+  const blocked = planned.aiEnabled ? await importerBudgetBlock(job.id, planned) : null;
+  const settings: ImporterSettings = blocked ? { ...planned, aiEnabled: false, aiBlockedReason: blocked.message } : planned;
   const [exam, subject] = await Promise.all([
     prisma.exam.findUnique({ where: { id: job.examId }, select: { name: true } }),
     job.subjectId ? prisma.subject.findUnique({ where: { id: job.subjectId }, select: { name: true } }) : null,
@@ -189,6 +194,7 @@ async function processJob(job: AiImportJob): Promise<void> {
     await logEvent(job.id, "PROCESSING", "Processing started");
   }
   const ctx = makeContext({ ...job, status: AiImportJobStatus.PROCESSING }, settings, { exam: exam?.name ?? "Exam", subject: subject?.name ?? null });
+  if (blocked) await logEvent(job.id, "PAID_AI_BLOCKED", `Paid AI is blocked by the importer budget (${blocked.scope}): ${blocked.message}`, { scope: blocked.scope });
   // The rate-limit circuit breaker counts per run: a resumed or retried job starts again at zero.
   resetRateLimitStreak(job.id);
   // So is the run of unusable answers that keeps a model switch for the rest of the job.
@@ -199,7 +205,7 @@ async function processJob(job: AiImportJob): Promise<void> {
     if (!(await ctx.stillRunning())) return;
     await stage(job.id, "EXTRACT");
     const { skippedNoAi } = await runAiPages(ctx);
-    if (skippedNoAi) await logEvent(job.id, "AI_SKIPPED", `${skippedNoAi} page(s) need AI vision, which is switched off — their questions are flagged or missing.`);
+    if (skippedNoAi) await logEvent(job.id, "AI_SKIPPED", `${skippedNoAi} page(s) need AI vision, which is ${settings.aiBlockedReason ? "blocked by the importer budget" : "switched off"} — their questions are flagged or missing.`);
     if (!(await ctx.stillRunning())) return;
     await stage(job.id, "KEY");
     await runKeyFiles(ctx);
@@ -245,6 +251,11 @@ async function processJob(job: AiImportJob): Promise<void> {
     }
   } catch (e) {
     if (e instanceof ImporterBudgetError) {
+      // The deterministic part of the run still happens (answer key text layer, validation, checks) with paid AI off;
+      // pages that needed AI stay as they are, and Resume continues once the budget allows it.
+      const local = { ...ctx, settings: { ...settings, aiEnabled: false, aiBlockedReason: e.message } };
+      await runKeyFiles(local).catch(() => undefined);
+      await runPostProcessing(local).catch((err) => console.error(`[ai-import] deterministic checks after a budget stop of job ${job.id} failed: ${err instanceof Error ? err.message.slice(0, 200) : "error"}`));
       if (await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.PAUSED_BUDGET, pauseReason: e.message })) await logEvent(job.id, "PAUSED_BUDGET", e.message, { scope: e.scope });
       return;
     }

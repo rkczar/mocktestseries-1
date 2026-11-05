@@ -307,7 +307,7 @@ async function build(saved: ImporterSettings): Promise<Built> {
     change("verification.secondReadBelow", "Second read below confidence", String(saved.verification.secondReadBelow), String(proposed.verification.secondReadBelow), "Unchanged."),
     change("budget.retryTransient", "Retry after a transient provider error", yes(saved.budget.retryTransient), yes(proposed.budget.retryTransient), "Unchanged. Failed pages are recovered with Retry failed pages (an explicit action); the rate-limit circuit breaker stays on."),
     change("aiEnabled", "Paid AI", yes(saved.aiEnabled), yes(proposed.aiEnabled), "Never changed here: Paid AI is switched separately by an administrator."),
-    change("budget", "Spending caps", "none", "none", "The importer has no application spending cap; each operation's estimate and maximum are confirmed once."),
+    change("budget", "Importer budget", `₹${saved.budget.monthlyInr} / month, ₹${saved.budget.maxJobInr} / import, ₹${saved.budget.totalInr} total`, `₹${saved.budget.monthlyInr} / month, ₹${saved.budget.maxJobInr} / import, ₹${saved.budget.totalInr} total`, "Enforced for every paid request; never changed automatically."),
     change("privacy", "Privacy", `ZDR ${saved.privacy.zdr ? "required" : "not required"}, data collection ${saved.privacy.dataCollection}`, "unchanged", "Never changed automatically; every chosen model meets it."),
   ];
 

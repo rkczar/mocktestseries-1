@@ -46,6 +46,12 @@ const BENIGN_ROW_WARNINGS = [/^Explanation: missing/];
 const answerVerification = (q: AiImportQuestion): string =>
   q.answerConfirmedById && q.answerStatus !== AiImportAnswerStatus.OFFICIAL_MATCHED ? "ADMIN_CONFIRMED" : q.answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED ? "OFFICIAL_KEY" : q.answerStatus === AiImportAnswerStatus.INDEPENDENTLY_VERIFIED ? "INDEPENDENTLY_VERIFIED" : "UNVERIFIED";
 
+/** The answer is verified: the official key matched it, or an administrator confirmed it (never an AI opinion). */
+export function answerVerified(q: Pick<AiImportQuestion, "answerStatus" | "answerConfirmedById" | "finalAnswer">): boolean {
+  if (!q.finalAnswer.length) return false;
+  return q.answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED || !!q.answerConfirmedById;
+}
+
 /**
  * Why a question cannot be imported now (null = importable). Only questions an administrator approved
  * enter the Question Bank; `ignoreApproval` answers "would it be importable once approved?".
@@ -58,7 +64,9 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
   const blocking = q.issueCodes.filter((c) => ISSUE_DEFS[c]?.blocking && !(q.allowDuplicate && c.startsWith("DUPLICATE")));
   if (blocking.length) return blocking.map(issueLabel).join(", ");
   if (!q.finalAnswer.length) return "no answer";
-  if (q.answerStatus === AiImportAnswerStatus.UNVERIFIED && !q.answerConfirmedById && !q.sourceAnswer.length && !settings.publish.allowUnverifiedAnswers) return "answer is only an AI opinion";
+  // Owner decision 2, 2026-11-05: only the official key or an administrator's confirmation makes an answer usable —
+  // never an AI opinion, two agreeing AI opinions, or an unconfirmed answer printed in the paper.
+  if (!answerVerified(q)) return "answer not verified (official key or an administrator's confirmation needed)";
   if (!q.subjectId) return "no subject";
   const e = effective(q);
   if (!IMPORTABLE.has(q.questionType) || e.options.length !== 4) return "not a 4-option question";
@@ -73,12 +81,7 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
 export function publishBlocker(q: AiImportQuestion & { figures: AiImportFigure[] }, settings: ImporterSettings): string | null {
   const flags = q.issueCodes.filter((c) => ISSUE_DEFS[c]?.publishBlocking && !(q.allowDuplicate && c.startsWith("DUPLICATE")));
   if (flags.length) return flags.map(issueLabel).join(", ");
-  const answerOk =
-    q.answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED ||
-    q.answerStatus === AiImportAnswerStatus.INDEPENDENTLY_VERIFIED ||
-    !!q.answerConfirmedById ||
-    (q.answerStatus === AiImportAnswerStatus.UNVERIFIED && settings.publish.allowUnverifiedAnswers);
-  if (!answerOk) return q.answerStatus === AiImportAnswerStatus.UNVERIFIED ? "answer unverified (policy does not allow publishing unverified answers)" : "no verified answer";
+  if (!answerVerified(q)) return "answer not verified (official key or an administrator's confirmation needed)";
   if (settings.publish.requireTopic && !q.topicId) return "no topic";
   if (q.figures.some((f) => f.mappingStatus !== "OK" && !f.confirmedById)) return "figure not confirmed";
   return null;
@@ -86,7 +89,7 @@ export function publishBlocker(q: AiImportQuestion & { figures: AiImportFigure[]
 
 function reviewFlags(q: AiImportQuestion, settings: ImporterSettings): string[] {
   const flags = q.issueCodes.filter((c) => ISSUE_DEFS[c]?.publishBlocking).map(issueLabel);
-  if (q.answerStatus === AiImportAnswerStatus.UNVERIFIED && !q.answerConfirmedById && !settings.publish.allowUnverifiedAnswers) flags.push("Answer unverified");
+  if (!answerVerified(q)) flags.push("Answer unverified");
   if (settings.publish.requireTopic && !q.topicId) flags.push("No topic");
   return [...new Set(flags)];
 }

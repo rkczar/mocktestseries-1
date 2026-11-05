@@ -30,7 +30,7 @@ import { prisma } from "@/lib/prisma";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
 import { runWorker } from "@/lib/ai-import/worker";
-import { DROPPED_CONNECTION, REQUEST_ATTEMPTS, fallbackAllowance, importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable, type AiCallInput } from "@/lib/ai-import/ai";
+import { DROPPED_CONNECTION, REQUEST_ATTEMPTS, fallbackAllowance, importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable, ImporterBudgetError, type AiCallInput } from "@/lib/ai-import/ai";
 import { CLASSIFY_BATCH, classifyAnswerOf } from "@/lib/ai-import/prompts";
 import { MENTIONS_FIGURE, runPostProcessing, sourceMayHoldImage } from "@/lib/ai-import/post";
 import { MAX_VERIFY_PASSES, needsVerify2, passCount, withPass } from "@/lib/ai-import/verify-core";
@@ -217,7 +217,8 @@ async function main() {
     const rr = await importerAiCall({ jobId: jR, task: "extract", models: ["mockreason/think"], override: withFallback, noReplace: true, system: "Extract questions. OUTPUT (JSON only)", content: [{ type: "text", text: "Page 1 of 1" }], maxOutputTokens: 2000, settings: normalizeImporterSettings(await getImporterSettings()), needsVision: false }).catch((e) => e as Error);
     const sR1 = await mockStats();
     const sent = sR1.reasoning.slice(sR0.reasoning.length);
-    check("a reasoning model gets a bounded thinking budget {max_tokens, exclude: true} even with a fallback configured, and answers", sent.length >= 1 && sent.every((r) => typeof r?.max_tokens === "number" && r?.exclude === true) && !(rr instanceof Error), { sent, rr: rr instanceof Error ? rr.message : "ok" });
+    // importer-reliability-3: an effort level (none for reading / structuring), not a token budget the models ignored.
+    check("a reasoning model gets {effort: none, exclude: true} even with a fallback configured, and answers", sent.length >= 1 && sent.every((r) => r?.effort === "none" && r?.exclude === true) && !(rr instanceof Error), { sent, rr: rr instanceof Error ? rr.message : "ok" });
 
     await manual({ classify: "mocktext/cheap" }, ["mocktext/classifier", "mocktext/cheap"]);
     const s1 = normalizeImporterSettings(await getImporterSettings());
@@ -268,20 +269,22 @@ async function main() {
     const sT5 = await mockStats();
     check("…another transient error (rate limit) is not retried while retries are OFF", (sT5.attempts["mocktext/cheap"] ?? 0) - (sT4.attempts["mocktext/cheap"] ?? 0) === 1);
 
-    // No application cap stops or pauses a request: not the job's recorded maximum, nor a legacy per-request limit or Ask AI key reserve.
+    // importer-reliability-3 (owner decision 1, 2026-11-05): the importer budget is ENFORCED again — a request above the
+    // per-request budget is refused before anything is sent (nothing reserved, no AI call, no provider request).
     await mockConfig({ ...MOCK_BASE, keyLimitRemaining: 0.01 });
     await manual({ classify: "mocktext/cheap" }, ["mocktext/classifier", "mocktext/cheap"], { maxRequestInr: 0.01, keyReserveUsd: 10_000, monthlyInr: 0, totalInr: 0, maxJobInr: 0 });
     const sLegacy = normalizeImporterSettings(await getImporterSettings());
     const resBefore = await prisma.aiBudgetReservation.count({ where: { requestKey: { startsWith: `qi:${jTight}:` } } });
+    const chatsTight = (await mockStats()).chat;
     const tight = await importerAiCall(classifyInput(jTight, sLegacy)).catch((e) => e as Error);
-    const jTightAfter = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jTight } });
     const resAfter = await prisma.aiBudgetReservation.findMany({ where: { requestKey: { startsWith: `qi:${jTight}:` } } });
-    check("a request above the job's recorded maximum, a ₹0.01 legacy per-request limit, a $10,000 legacy key reserve and ₹0 legacy month / all-time caps is still sent and answers", !(tight instanceof Error) && jTightAfter.status === "PROCESSING" && !jTightAfter.pauseReason, tight instanceof Error ? tight.message : "ok");
-    check("…its cost is still tracked (reservation settled, job spend and AI call recorded)", resAfter.length === resBefore + 1 && resAfter.every((r) => r.status === "SETTLED") && jTightAfter.spentInr > 0 && (await prisma.aiImportAiCall.count({ where: { jobId: jTight } })) >= 1, { res: resAfter.map((r) => r.status), spent: jTightAfter.spentInr });
+    check("a request above the ₹0.01 per-request budget is refused at the gateway (ImporterBudgetError), nothing sent", tight instanceof ImporterBudgetError && /Nothing was sent/.test(tight.message) && (await mockStats()).chat === chatsTight, tight instanceof Error ? tight.message : "sent");
+    check("…nothing reserved and no AI call recorded", resAfter.length === resBefore && (await prisma.aiImportAiCall.count({ where: { jobId: jTight } })) === 0, { res: resAfter.map((r) => r.status) });
     await mockConfig({ ...MOCK_BASE, failTask: { classify: [402, "Insufficient credits"] } });
     await manual({ classify: "mocktext/cheap" }, ["mocktext/classifier", "mocktext/cheap"]);
     const sCredit = normalizeImporterSettings(await getImporterSettings());
-    const eCredit = await errorOf(() => importerAiCallChecked(classifyInput(jTight, sCredit), parseClassify));
+    const jCredit = await directJob(actor, exam.id, "Credits exhausted");
+    const eCredit = await errorOf(() => importerAiCallChecked(classifyInput(jCredit, sCredit), parseClassify));
     check("credits exhausted at OpenRouter → a clear provider stop (ImporterAiUnavailable: pause, pages kept), not a silent skip", eCredit instanceof ImporterAiUnavailable && /no credits left/.test(eCredit.message) && /Resume/.test(eCredit.message), eCredit?.message);
     await mockConfig(MOCK_BASE);
 
@@ -317,11 +320,15 @@ async function main() {
     const low = await requestReferenceOcr({ jobId: jE, refId: ref.refId, actorId: actor, confirmedMaxInr: Math.max(0, (pv.maxInr ?? 0) / 2 - 0.01) });
     check("a confirmation below the current maximum does not start it", !low.started && /price changed|Confirm/.test(low.reason), low);
     check("the maximum prices every send: REQUEST_ATTEMPTS per page to the model plus REQUEST_ATTEMPTS to the fallback", (pv.maxInr ?? 0) + 0.01 >= pv.pages.length * REQUEST_ATTEMPTS * (pv.perRequestMaxInr ?? Infinity), { max: pv.maxInr, pages: pv.pages.length, per: pv.perRequestMaxInr });
-    // Every legacy cap at its lowest and ₹20+ already spent (the production state of 2026-10-26): nothing blocks it.
+    // importer-reliability-3: the importer budget is enforced again — with every cap at its lowest the preview says paid AI
+    // is blocked (and offers the free local OCR); nothing can start. Then the normal budget, with room left.
     await saveImporterSettings({ ...base(savedSettings), selection: { mode: "auto" }, importerModels: mockIds, budget: { ...base(savedSettings).budget, totalInr: 0, monthlyInr: 0, maxJobInr: 0, maxRequestInr: 0.01 } }, actor);
-    await prisma.aiImportJob.update({ where: { id: jE }, data: { spentInr: 20.1 } });
+    const blockedPv = await referenceOcrPreview(jE, ref.refId);
+    check("with the budget used up, the preview cannot run and names the importer budget (and the free local OCR)", !blockedPv.canRun && /blocked by the importer budget/.test(blockedPv.problems.join(" ")) && /free local OCR/.test(blockedPv.problems.join(" ")), blockedPv.problems);
+    await saveImporterSettings({ ...base(savedSettings), selection: { mode: "auto" }, importerModels: mockIds }, actor);
+    await prisma.aiImportJob.update({ where: { id: jE }, data: { spentInr: 0 } });
     const capped = await referenceOcrPreview(jE, ref.refId);
-    check("with every legacy cap at 0 and ₹20.10 spent, the preview still runs and lists no cap problem", capped.canRun && !capped.problems.length, capped.problems);
+    check("within the budget the preview runs and lists no problem", capped.canRun && !capped.problems.length, capped.problems);
     // Page 1: a dropped connection, then an unusable answer → the retry and the one fallback read are sent automatically.
     await mockConfig({ ...MOCK_BASE, script: { [pv.model!]: ["terminated", "malformed"] } });
     const sE1 = await mockStats();
@@ -334,7 +341,7 @@ async function main() {
     check("the worker read the scanned pages into one REFERENCE_READ event; the job is back in review", read.length === 1 && !!refs[0]?.ocr && refs[0].ocr.pagesRead.length + refs[0].ocr.failedPages.length === pv.pages.length && ["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(jE2.status), { read: read.map((e) => e.message), status: jE2.status, ocr: refs[0]?.ocr });
     const sE2 = await mockStats();
     check("…the retry and the fallback read were sent without any new confirmation (no stop, no pause)", (sE2.attempts[pv.model!] ?? 0) - (sE1.attempts[pv.model!] ?? 0) >= 2 && (sE2.byModel[pv.fallbackModel!] ?? 0) - (sE1.byModel[pv.fallbackModel!] ?? 0) >= 1 && (await events(jE, "MODEL_SWITCHED")).length >= 1 && !(await events(jE, "REFERENCE_OCR_STOPPED")).length && !(await events(jE, "PAUSED_BUDGET")).length, { a: sE2.attempts, b: sE2.byModel });
-    check("…its cost stayed within the confirmed maximum", jE2.spentInr - 20.1 <= (capped.maxInr ?? 0) + 0.005, { spent: jE2.spentInr - 20.1, max: capped.maxInr });
+    check("…its cost stayed within the confirmed maximum", jE2.spentInr <= (capped.maxInr ?? 0) + 0.005, { spent: jE2.spentInr, max: capped.maxInr });
     check("…and no question, answer, subject, status or approval changed", (await qHash(jE)) === hash0);
     const again = await referenceOcrPreview(jE, ref.refId);
     check("…a read reference is not offered for OCR again", !again.canRun && /already read/.test(again.problems.join(" ")), again.problems);

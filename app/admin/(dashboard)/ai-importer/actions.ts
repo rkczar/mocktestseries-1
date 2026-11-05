@@ -54,7 +54,7 @@ import { CLEANUP_CATEGORIES, executeCleanup, findCandidates, findDuplicates, sca
 import type { ImportMode } from "@/lib/ai-import/adapter";
 import { applyReferenceAnswers, importAndPublishEligible, publishEligibleQuestion, requestVerify2, runVerify1, verify2Preview, type Verify1Result, type Verify2Preview, type Verify2Request } from "@/lib/ai-import/paper-verify";
 import { unlinkReference } from "@/lib/ai-import/reference";
-import { referenceOcrPreview, requestReferenceOcr, type ReferenceOcrPreview, type ReferenceOcrRequest } from "@/lib/ai-import/reference-ocr";
+import { referenceOcrPreview, requestLocalReferenceOcr, requestReferenceOcr, type ReferenceOcrPreview, type ReferenceOcrRequest } from "@/lib/ai-import/reference-ocr";
 import { applySourceReread, sourceRereadPreview, type RereadChoice, type RereadPreview } from "@/lib/ai-import/source-reread";
 import { learnPaperMemory } from "@/lib/ai-import/paper-learn";
 import { decidePaperRule } from "@/lib/ai-import/taxonomy-memory";
@@ -752,6 +752,11 @@ export async function referenceOcrPreviewAction(jobId: string, refId: string): P
 /** Reference OCR — starts only when `confirmedMaxInr` covers the freshly computed maximum and every budget allows it. */
 export async function referenceOcrStartAction(jobId: string, refId: string, confirmedMaxInr: number | null): Promise<ImporterResult<ReferenceOcrRequest>> {
   return run(await requireUse(), async (actorId) => requestReferenceOcr({ jobId, refId: String(refId), actorId, confirmedMaxInr: costOf(confirmedMaxInr) }));
+}
+
+/** Free local OCR of a scanned reference (this server's OCR engine, no AI, ₹0) — evidence for Verify 1 only. */
+export async function referenceLocalOcrAction(jobId: string, refId: string): Promise<ImporterResult<{ pages: number }>> {
+  return run(await requireUse(), async (actorId) => requestLocalReferenceOcr({ jobId, refId: String(refId), actorId }));
 }
 
 export async function unlinkReferenceAction(jobId: string, refId: string): Promise<ImporterResult<null>> {

@@ -1,0 +1,1445 @@
+{
+"_about": "CMS 2024 Paper I job cmw2w5irk\u2026 as production left it on 2026-11-05 (prod d989bcf): per question only the number, the AI answer letters (google/gemma-3-4b-it), the status and the Verify 2 classification status. NO question text. The BEFORE state for the reconciliation test \u2014 never ground truth.",
+"questions": [
+{
+"n": 1,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 2,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 3,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 4,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 5,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 6,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "READY",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 7,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 8,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 9,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 10,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 11,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 12,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 13,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 14,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 15,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 16,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 17,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 18,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 19,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 20,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 21,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 22,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 23,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 24,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 25,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 26,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 27,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 28,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 29,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 30,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 31,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 32,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 33,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 34,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 35,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 36,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 37,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 38,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 39,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 40,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 41,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 42,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 43,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 44,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 45,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 46,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 47,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 48,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 49,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 50,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 51,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 52,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 53,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 54,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 55,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 56,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 57,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 58,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 59,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 60,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 61,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 62,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 63,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 64,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 65,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 66,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 67,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 68,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 69,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 70,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 71,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 72,
+"aiAnswer": [
+"D"
+],
+"finalAnswer": [
+"D"
+],
+"status": "READY",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 73,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "READY",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 74,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 75,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 76,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 77,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 78,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 79,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "READY",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 80,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 81,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "READY",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 82,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 83,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 84,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 85,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 86,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "AGREED",
+"adminTaxonomy": false
+},
+{
+"n": 87,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 88,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 89,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "DISAGREEMENT",
+"adminTaxonomy": false
+},
+{
+"n": 90,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 91,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 92,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 93,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 94,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 95,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 96,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 97,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 98,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 99,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 100,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "NEEDS_REVIEW",
+"adminTaxonomy": false
+},
+{
+"n": 101,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 102,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 103,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 104,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 105,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 106,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 107,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 108,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 109,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 110,
+"aiAnswer": [
+"A"
+],
+"finalAnswer": [
+"A"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 111,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 112,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 113,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 114,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 115,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 116,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 117,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 118,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+},
+{
+"n": 119,
+"aiAnswer": [
+"B"
+],
+"finalAnswer": [
+"B"
+],
+"status": "NEEDS_CORRECTION",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": true
+},
+{
+"n": 120,
+"aiAnswer": [
+"C"
+],
+"finalAnswer": [
+"C"
+],
+"status": "READY",
+"v2Classification": "VERIFICATION_FAILED",
+"adminTaxonomy": false
+}
+]
+}

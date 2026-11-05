@@ -396,9 +396,130 @@ export function statementsOf(stem: string): Statement[] {
  * the line breaks): the markers that are glued to the previous word, or null.
  */
 export function mergedStatements(stem: string): string[] | null {
+  const split = splitGluedStatements(stem);
+  if (split) return split.markers;
   const glued = [...stem.matchAll(/[a-z?:;)](?=((?:IX|IV|V?I{1,3}|VI{1,3})\.\s+\S))/g)].map((m) => m[1].split(".")[0]);
-  const arabic = [...stem.matchAll(/[?:](?=([1-9])\.\s+[A-Z])/g)].map((m) => m[1]);
-  return glued.length >= 2 || arabic.length >= 1 ? [...glued, ...arabic] : null;
+  const arabic = [...stem.matchAll(/[?:](?=([1-9])\.\s+[A-Z0-9])/g)].map((m) => m[1]);
+  if (glued.length >= 2 || arabic.length >= 1) return [...glued, ...arabic];
+  // "…poisoning1. Pink | Cephalosporin2. Brown …" (a table or list glued to words — seen 2026-11-05, CMS 2024 Q112, Q104):
+  // two consecutive numbers glued to the previous word. Flagged only; never split automatically.
+  const loose = [...stem.matchAll(/[a-z)%](?=([1-9])\.\s*[A-Z0-9])/g)].map((m) => Number(m[1]));
+  for (let i = 0; i + 1 < loose.length; i++) if (loose[i + 1] === loose[i] + 1) return loose.map(String);
+  return null;
+}
+
+// ---- Formatting rules (whitespace / field labels only; never the wording) -----------------------------------------
+
+const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+const LOWER_ROMAN = ROMAN.map((r) => r.toLowerCase());
+/** Text that introduces a statement list ("Consider the following statements:", "… if", "Which of the following are …?"). */
+const STATEMENT_LEAD = /(?:following|statements?|pairs?|criteria|regard(?:ing)?|about|[:?]|\b(?:if|that|are|is))\s*$/i;
+/** The question that closes a statement list ("Which of the statements given above are correct?"). */
+const STATEMENT_CLOSE = /(?:Which (?:of|one of) the (?:statements|above|pairs|following)|Select the (?:correct )?answer|How many of the|Which of the above|Choose the correct)/i;
+
+type MarkerFamily = "arabic" | "paren-arabic" | "roman" | "paren-roman" | "statement" | "statement-roman";
+
+function markerPattern(family: MarkerFamily, label: string): RegExp {
+  const l = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  switch (family) {
+    // "1. Text", glued to a word, a full stop, a colon or a question mark ("deficiency:1. Vitamin", "if1. Any").
+    case "arabic":
+      return new RegExp(String.raw`(?:(?<=[A-Za-z.:?;)\]%])|(?<=\s)|^)${l}[.)]\s*(?=[A-Z0-9(“"'])`, "g");
+    case "paren-arabic":
+      return new RegExp(String.raw`(?:(?<=[A-Za-z.:?;\]%])|(?<=\s)|^)\(${l}\)\s*(?=[A-Za-z0-9(“"'])`, "g");
+    // "I. Text" — never "I.V.P." (a space must follow the full stop).
+    case "roman":
+      return new RegExp(String.raw`(?:(?<=[a-z.:?;)\]])|(?<=\s)|^)${l}[.)]\s+(?=[A-Z0-9(“"'])`, "g");
+    case "paren-roman":
+      return new RegExp(String.raw`(?:(?<=[A-Za-z.:?;\]])|(?<=\s)|^)\(${l}\)\s*(?=[A-Za-z0-9(“"'])`, "g");
+    case "statement":
+    case "statement-roman":
+      return new RegExp(String.raw`(?:(?<=[a-z.:?;)\]])|(?<=\s)|^)Statement\s+${l}\s*[:.)\-–]\s*`, "g");
+  }
+}
+
+function markerLabels(family: MarkerFamily): string[] {
+  return family === "roman" || family === "statement-roman" ? ROMAN : family === "paren-roman" ? LOWER_ROMAN : ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+}
+
+/** Whether the character before `at` makes the marker part of a number ("5.5. Which", "1.2 cm", "B12."). */
+function insideNumber(text: string, at: number): boolean {
+  const prev = text[at - 1] ?? "";
+  if (/\d/.test(prev)) return true;
+  return prev === "." && /\d/.test(text[at - 2] ?? "");
+}
+
+/**
+ * Numbered statements run together on one line, split onto their own lines (seen 2026-11-05: a Word transcription of CMS
+ * 2024 Paper I stored "…deficiency:1. Vitamin D … latitudes.2. Vitamin D …" in one text run, 33 of 120 questions).
+ * Splits only an ordered run 1, 2, 3 … (or I, II …, (i), (ii) …, Statement 1 …) of at least two markers that follows a
+ * lead-in, never a marker inside a number (decimals, doses, dates, "I.V.P."); the closing question goes on its own line.
+ * Only line breaks are added: the text without whitespace is identical to the input, or nothing is returned. A stem that
+ * already has line breaks is left as it is (its layout came from the source). Null = nothing to split.
+ */
+export function splitGluedStatements(stem: string): { stem: string; markers: string[] } | null {
+  if (stem.includes("\n")) return null;
+  for (const family of ["arabic", "paren-arabic", "roman", "paren-roman", "statement", "statement-roman"] as MarkerFamily[]) {
+    const found: { start: number; end: number; label: string }[] = [];
+    let pos = 0;
+    for (const label of markerLabels(family)) {
+      const re = markerPattern(family, label);
+      re.lastIndex = pos;
+      let m: RegExpExecArray | null;
+      let hit: RegExpExecArray | null = null;
+      while ((m = re.exec(stem))) {
+        if (!insideNumber(stem, m.index)) {
+          hit = m;
+          break;
+        }
+      }
+      if (!hit) break;
+      found.push({ start: hit.index, end: hit.index + hit[0].length, label });
+      pos = hit.index + hit[0].length;
+    }
+    if (found.length < 2) continue;
+    const lead = stem.slice(0, found[0].start);
+    if (!lead.trim() || !STATEMENT_LEAD.test(lead.trimEnd())) continue;
+    const parts = [lead.trimEnd()];
+    for (let i = 0; i < found.length; i++) parts.push(stem.slice(found[i].start, i + 1 < found.length ? found[i + 1].start : stem.length).trim());
+    const last = parts[parts.length - 1];
+    const close = STATEMENT_CLOSE.exec(last);
+    if (close && close.index > 0) parts.splice(parts.length - 1, 1, last.slice(0, close.index).trim(), last.slice(close.index).trim());
+    const out = parts.join("\n");
+    // Whitespace only: every printed character is kept, in order.
+    if (out.replace(/\s+/g, "") !== stem.replace(/\s+/g, "")) return null;
+    return { stem: out, markers: found.map((f) => f.label) };
+  }
+  return null;
+}
+
+/** A field label printed before the question text by a Word transcription ("Question: Consider …"). */
+const FIELD_LABEL = /^\s*(?:Question|Ques\.?|Qn\.?)\s*:\s*/i;
+
+export type FormatRule = "FIELD_LABEL" | "STATEMENT_BREAKS";
+
+/**
+ * The formatting rules applied to an extracted question text, each validated on its own: FIELD_LABEL removes only a
+ * leading "Question:" label (the rest is unchanged character for character); STATEMENT_BREAKS only adds line breaks
+ * (splitGluedStatements). The wording is never changed. Returns null when no rule applies.
+ */
+export function formatStem(stem: string): { stem: string; rules: FormatRule[] } | null {
+  const rules: FormatRule[] = [];
+  let out = stem;
+  const label = FIELD_LABEL.exec(out);
+  if (label && out.slice(label[0].length).trim().length >= 3) {
+    const rest = out.slice(label[0].length);
+    if (label[0] + rest === out) {
+      out = rest;
+      rules.push("FIELD_LABEL");
+    }
+  }
+  const split = splitGluedStatements(out);
+  if (split) {
+    out = split.stem;
+    rules.push("STATEMENT_BREAKS");
+  }
+  return rules.length ? { stem: out, rules } : null;
 }
 
 /**

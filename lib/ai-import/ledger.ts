@@ -47,7 +47,7 @@ export interface ImporterLedger {
    * todayInr sums exactly the todayCalls calls (today's IST day, with an estimate); todayUnestimated are today's calls without one.
    */
   estimates: { todayInr: number | null; todayCalls: number; todayUnestimated: number; allInr: number | null; comparedEstimateInr: number | null; comparedActualInr: number | null; comparedRequests: number };
-  /** The importer has no spending cap at all (no per-request, job, monthly, all-time or key-reserve limit). */
+  /** Kept empty for the screens' contract: the enforced budget is lib/ai-import/ai.ts importerCaps (2026-11-05). */
   limits: Record<string, never>;
   usage: {
     calls: number;

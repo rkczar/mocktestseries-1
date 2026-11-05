@@ -850,7 +850,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             <CardTitle>Import into the Question Bank</CardTitle>
             <CardDescription>
               Only questions an administrator approved are added. They go through the existing Bulk Import (validation, duplicate check, Import History, rollback); questions that fail a mandatory check stay in Review Exceptions. {s.pendingDecision - s.approvedReady > 0 ? `${s.pendingDecision - s.approvedReady} checked question(s) still await approval.` : ""}
-              {job.allowUnverified ? " Policy: questions without an official key may be published with their answer marked UNVERIFIED." : " Policy: answers without an official key or independent verification are imported as drafts only."}
+              {" Policy: only answers matched to the official key or confirmed by an administrator can be imported or published — an AI opinion never counts."}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
