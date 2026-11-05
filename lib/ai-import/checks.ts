@@ -3,8 +3,8 @@
  * client-safe: post-processing computes them, the review screens show them.
  *
  *  content     — V1 scope: wording, statement structure, options, figures and source fidelity (deterministic).
- *  answer      — the official answer key or an administrator's confirmation. An AI opinion never passes it, and an
- *                AI opinion that differs from the key is an unresolved disagreement until an administrator decides.
+ *  answer      — the official answer key or an administrator's confirmation. An AI opinion never passes it; an AI
+ *                opinion that differs from a verified official key is a warning (the key is the source of truth).
  *  taxonomy    — subject / topic of the selected exam's syllabus, including every Verify 2 classification result: a
  *                failed classification is never hidden by a passed wording check.
  *  independent — Verify 2's second reading. NOT_RUN until requested; required once it ran. A re-read of the same Word /
@@ -99,8 +99,8 @@ export function questionChecks(input: {
   let answer: CheckResult;
   if (input.answerConfirmed) answer = { status: "PASSED", required: true, detail: "Answer confirmed by an administrator." };
   else if (aFail.length) answer = { status: "FAILED", required: true, detail: listOf(aFail, issues) };
-  else if (codes.includes("AI_OPINION_DIFFERS")) answer = { status: "DISAGREEMENT", required: true, detail: issues.get("AI_OPINION_DIFFERS") ?? "An AI opinion differs from the official key." };
-  else if (input.answerStatus === "OFFICIAL_MATCHED" && !has(["ANSWER_UNVERIFIED", "ANSWER_MISSING", "POSSIBLE_WITHDRAWN"]).length) answer = { status: "PASSED", required: true, detail: "Matches the official answer key." };
+  // The verified official key settles the answer; a differing AI opinion is shown as a warning (never an overwrite).
+  else if (input.answerStatus === "OFFICIAL_MATCHED" && !has(["ANSWER_UNVERIFIED", "ANSWER_MISSING", "POSSIBLE_WITHDRAWN"]).length) answer = { status: "PASSED", required: true, detail: codes.includes("AI_OPINION_DIFFERS") ? `Matches the official answer key. Warning: ${issues.get("AI_OPINION_DIFFERS") ?? "an AI opinion differs"}` : "Matches the official answer key." };
   else answer = { status: "NEEDS_REVIEW", required: true, detail: listOf(has(["ANSWER_UNVERIFIED", "ANSWER_MISSING", "POSSIBLE_WITHDRAWN"]), issues) || "No official answer: confirm the answer by hand, or upload the official key." };
 
   // Subject / topic.

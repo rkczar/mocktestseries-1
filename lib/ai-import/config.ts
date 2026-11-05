@@ -51,7 +51,9 @@ export const SELECTION_TASK_LABELS: Record<SelectionTask, string> = {
  * budgets are ENFORCED again at the importer's AI gateway (lib/ai-import/ai.ts reserve(), under one database lock, so
  * concurrent requests cannot pass a limit together). A stored value can be lowered, never raised above these bounds.
  */
-export const PILOT_LIMITS = { totalInr: 10, monthlyInr: 10, maxJobInr: 8, maxRequestInr: 1, minKeyReserveUsd: 5 } as const;
+// Owner decision 2026-11-05 (pre-deployment): an initial paid-test cap of ₹200 in total (all importer spend ever recorded)
+// and ₹1,500 per IST month; the per-job (₹8) and per-request (₹1) limits are kept.
+export const PILOT_LIMITS = { totalInr: 200, monthlyInr: 1500, maxJobInr: 8, maxRequestInr: 1, minKeyReserveUsd: 5 } as const;
 
 export interface ImporterSettings {
   /** Master switch for PAID AI calls. Local parsing, review, import and publishing work without it. */
@@ -84,7 +86,7 @@ export interface ImporterSettings {
     defaultJobCapInr: number;
     /** ENFORCED (2026-11-05): one job's AI spend (also never above the maximum the administrator confirmed for it). */
     maxJobInr: number;
-    /** ENFORCED (2026-11-05): all importer AI spend ever recorded. */
+    /** ENFORCED (2026-11-05): all importer AI spend ever recorded — the initial paid-test cap (at most ₹200). */
     totalInr: number;
     /** ENFORCED (2026-11-05): the worst case of one request. */
     maxRequestInr: number;
@@ -394,8 +396,12 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   DUPLICATE_EXISTING: { label: "Duplicate of an existing question", blocking: true, publishBlocking: true },
   DUPLICATE_NEAR: { label: "Near-duplicate of an existing question", blocking: false, publishBlocking: true },
   DUPLICATE_IN_BATCH: { label: "Duplicate within this batch", blocking: true, publishBlocking: true },
-  /** An unresolved answer disagreement (owner decision 2): blocks Ready until an administrator confirms the answer. */
-  AI_OPINION_DIFFERS: { label: "AI opinion differs from the key", blocking: true, publishBlocking: true },
+  /**
+   * A warning only (owner decision 2026-11-05, pre-deployment): the verified official key is the source of truth; an AI
+   * opinion never overwrites it and never blocks Ready. A key that is missing, ambiguous, wrongly mapped, for another paper
+   * or disputed (printed answer / administrator differs) has its own blocking codes.
+   */
+  AI_OPINION_DIFFERS: { label: "AI opinion differs from the key (warning)", blocking: false, publishBlocking: false },
   VERIFY_DISAGREES: { label: "Independent verification disagrees", blocking: false, publishBlocking: true },
   RESCAN_PENDING: { label: "Re-scan result waiting for your choice", blocking: true, publishBlocking: true },
   ANSWER_TYPE_CONFLICT: { label: "Answer does not fit the question type", blocking: true, publishBlocking: true },

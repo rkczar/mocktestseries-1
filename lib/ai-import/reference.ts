@@ -362,13 +362,18 @@ export function compareWithReference(q: ExtractedQuestion, answer: string[], ref
     out.similarity = Math.round(textSimilarity(twin.stem, q.stem) * 100) / 100;
     // An OCR reading drops short statement markers ("1." on its own) and keeps the booklet's page footer ("KCSP-A-GMPK
     // (19-A)") at the end of the last option: neither is a difference of the question (2026-11-05, CMS 2024 scan).
-    const markers = (t: string) => (ocr(twin!) ? t.replace(/^[ \t]*\(?(?:\d|[ivxIVX]{1,4})[.)][ \t]*/gm, "") : t);
-    const footer = (t: string) => (ocr(twin!) ? t.replace(/\s*\b[A-Z]{2,}(?:-[A-Z]+)+\s*\(\d{1,3}-[A-Z]\)\s*$/, "").replace(/\n\s*\d{1,3}\s*$/, "") : t);
-    const asQuestion: ExtractedQuestion = { ...q, stem: markers(twin.stem), options: twin.options.map((t, i) => ({ label: String.fromCharCode(65 + i), printed: String.fromCharCode(65 + i), text: footer(t) })), printedAnswer: [], figures: q.figures };
-    const v = readsAgree({ ...q, stem: markers(stripAnnotationTail(q.stem)), options: q.options.map((o) => ({ ...o, text: stripAnnotationTail(o.text) })) }, asQuestion);
+    // A statement marker ("1." — never the "0." of a decimal such as 0.6) is compared without its digit.
+    const markers = (t: string) => (ocr(twin!) ? t.replace(/^[ \t]*\(?(?:\d|[ivxIVX]{1,4})[.)](?!\d)[ \t]*/gm, "") : t);
+    const footer = (t: string) => (ocr(twin!) ? t.replace(/\s*\b[A-Z]{2,}(?:-[A-Z]+)+\s*(?:\(\s*\d{1,3}\s*[-–]\s*[A-Z]\s*\))?\s*$/, "").replace(/\s*\(\s*\d{1,3}\s*[-–]\s*[A-Z]\s*\)\s*$/, "").replace(/\n\s*\d{1,3}\s*$/, "") : t);
+    // Same printed value, other notation (2026-11-05 review of the CMS 2024 scan): the paper prints decimals with a middle dot
+    // ("1·6 μgm", "1·73 m²") and superscripts that a transcription writes as "^2". Comparison only — no text is changed.
+    const notation = (t: string) => (ocr(twin!) ? t.replace(/(\d)\s*[·∙•]\s*(\d)/g, "$1.$2").replace(/\^\s*(\d)/g, "$1").replace(/²/g, "2").replace(/³/g, "3") : t);
+    const asQuestion: ExtractedQuestion = { ...q, stem: notation(markers(twin.stem)), options: twin.options.map((t, i) => ({ label: String.fromCharCode(65 + i), printed: String.fromCharCode(65 + i), text: notation(footer(t)) })), printedAnswer: [], figures: q.figures };
+    const v = readsAgree({ ...q, stem: notation(markers(stripAnnotationTail(q.stem))), options: q.options.map((o) => ({ ...o, text: notation(stripAnnotationTail(o.text)) })) }, asQuestion);
     if (!v.agree) {
-      // OCR wording is noisy: only a changed number / symbol or a different option count is evidence there.
-      for (const part of v.detail.split("; ")) if (!/printed answer|figure/.test(part) && (!ocr(twin) || /numbers \/ symbols|option count/.test(part))) out.conflicts.push(`Reference: ${part}.`);
+      // OCR wording is noisy: only a changed number / symbol or a different option count is evidence there — and it is
+      // reported as a difference from an OCR reading (the reading itself may be wrong), never settled automatically.
+      for (const part of v.detail.split("; ")) if (!/printed answer|figure/.test(part) && (!ocr(twin) || /numbers \/ symbols|option count/.test(part))) out.conflicts.push(ocr(twin) ? `Reference (OCR reading of the original — check the page, OCR may misread): ${part}.` : `Reference: ${part}.`);
     }
     // An option printed at ANOTHER position in the reference is evidence even through OCR noise (2026-11-05: a Word
     // transcription of CMS 2024 Paper I had the options of Q57 / Q77 in a different order than the original paper, so the

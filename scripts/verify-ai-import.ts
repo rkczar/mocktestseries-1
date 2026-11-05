@@ -865,12 +865,13 @@ async function sectionT(actor: string, examId: string) {
   check("settings saved before the pilot ceilings (₹1500/month, ₹10/request, no all-time cap) read as ₹10 / ₹1 / ₹10 all-time / ₹8 per job", legacy.budget.monthlyInr === 10 && legacy.budget.maxRequestInr === 1 && legacy.budget.totalInr === 10 && legacy.budget.maxJobInr === 8 && legacy.budget.defaultJobCapInr === 8, legacy.budget);
   check("…an explicit ZDR off is respected (not silently changed)", legacy.privacy.zdr === false);
   const n2 = normalizeImporterSettings({ budget: { maxJobInr: 200, defaultJobCapInr: 200, totalInr: "1000", keyReserveUsd: 0, monthlyInr: 99 } });
-  check("values above the ceilings are clamped; the Ask AI reserve never below $5", n2.budget.maxJobInr === 8 && n2.budget.defaultJobCapInr === 8 && n2.budget.totalInr === 10 && n2.budget.keyReserveUsd === 5 && n2.budget.monthlyInr === 10, n2.budget);
-  check("the ceilings: ₹10 all-time, ₹10/month, ₹8 per job, ₹1 per request, $5 Ask AI reserve", PILOT_LIMITS.totalInr === 10 && PILOT_LIMITS.monthlyInr === 10 && PILOT_LIMITS.maxJobInr === 8 && PILOT_LIMITS.maxRequestInr === 1 && PILOT_LIMITS.minKeyReserveUsd === 5);
+  // Owner decision 2026-11-05 (pre-deployment): ₹200 initial paid-test cap (all time), ₹1,500 per month; ₹8 / job, ₹1 / request kept.
+  check("values above the ceilings are clamped; the Ask AI reserve never below $5", n2.budget.maxJobInr === 8 && n2.budget.defaultJobCapInr === 8 && n2.budget.totalInr === 200 && n2.budget.keyReserveUsd === 5 && n2.budget.monthlyInr === 99, n2.budget);
+  check("the ceilings: ₹200 all-time (initial paid-test cap), ₹1,500/month, ₹8 per job, ₹1 per request, $5 Ask AI reserve", PILOT_LIMITS.totalInr === 200 && PILOT_LIMITS.monthlyInr === 1500 && PILOT_LIMITS.maxJobInr === 8 && PILOT_LIMITS.maxRequestInr === 1 && PILOT_LIMITS.minKeyReserveUsd === 5);
   // Written straight into the database (bypassing the form and its validation): still clamped when used.
-  await prisma.setting.update({ where: { key: "ai.importer" }, data: { value: { ...(normalizeImporterSettings(await getImporterSettings()) as object), budget: { monthlyInr: 1500, totalInr: null, maxJobInr: 200, defaultJobCapInr: 200, maxRequestInr: 50, keyReserveUsd: 0 } } as never } });
+  await prisma.setting.update({ where: { key: "ai.importer" }, data: { value: { ...(normalizeImporterSettings(await getImporterSettings()) as object), budget: { monthlyInr: 15000, totalInr: null, maxJobInr: 200, defaultJobCapInr: 200, maxRequestInr: 50, keyReserveUsd: 0 } } as never } });
   const raw1 = await getImporterSettings();
-  check("a raw database value above the ceilings is still clamped server-side", raw1.budget.monthlyInr === 10 && raw1.budget.totalInr === 10 && raw1.budget.maxJobInr === 8 && raw1.budget.maxRequestInr === 1 && raw1.budget.keyReserveUsd === 5, raw1.budget);
+  check("a raw database value above the ceilings is still clamped server-side", raw1.budget.monthlyInr === 1500 && raw1.budget.totalInr === 200 && raw1.budget.maxJobInr === 8 && raw1.budget.maxRequestInr === 1 && raw1.budget.keyReserveUsd === 5, raw1.budget);
   await setSettings(pilot, actor);
 
   // T2 — no per-job cap (owner decision 2026-10-20): a job budget is never asked for or enforced.

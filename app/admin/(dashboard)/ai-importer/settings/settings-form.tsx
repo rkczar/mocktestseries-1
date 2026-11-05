@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
+import { PILOT_LIMITS, SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
 import { GEMINI_DIRECT_REASONS, suggestModels, type ImporterCatalog, type ImporterModelOption, type RequestCost } from "@/lib/ai-import/model-options";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import { importerModelsAction, refreshRoutesAction, saveSettingsAction } from "../actions";
@@ -836,9 +836,13 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       <Card>
         <CardHeader>
           <CardTitle>Limits</CardTitle>
-          <CardDescription>There is no importer spending cap — no per-request, job, monthly, all-time or Ask AI key-reserve limit. Each paid operation shows its estimated and maximum cost (retries and fallbacks included) and starts after one Confirm &amp; Continue; actual spend is in the AI Cost Center. OpenRouter&apos;s own account and key limits still apply.</CardDescription>
+          <CardDescription>The importer budget below is enforced for every paid request (spend + requests in flight + the request&apos;s maximum); when a limit is reached nothing more is sent, and local reading, OCR and the deterministic checks keep working. Each paid operation also shows its estimated and maximum cost and starts after one Confirm &amp; Continue. Values can be lowered at any time; they can never be set above ₹{PILOT_LIMITS.monthlyInr} per month, ₹{PILOT_LIMITS.totalInr} in total, ₹{PILOT_LIMITS.maxJobInr} per import or ₹{PILOT_LIMITS.maxRequestInr} per request.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-3">
+          {field("b-month", `Monthly budget (₹, at most ${PILOT_LIMITS.monthlyInr})`, s.budget.monthlyInr, (n) => set("budget", { monthlyInr: n }), "All importer AI spend in one IST calendar month.")}
+          {field("b-total", `Total budget (₹, at most ${PILOT_LIMITS.totalInr})`, s.budget.totalInr, (n) => set("budget", { totalInr: n }), "Initial paid-test cap: all importer AI spend ever recorded, every month included.")}
+          {field("b-job", `Per-import budget (₹, at most ${PILOT_LIMITS.maxJobInr})`, s.budget.maxJobInr, (n) => set("budget", { maxJobInr: n, defaultJobCapInr: n }), "Also never above the maximum confirmed for the import.")}
+          {field("b-request", `Per-request budget (₹, at most ${PILOT_LIMITS.maxRequestInr})`, s.budget.maxRequestInr, (n) => set("budget", { maxRequestInr: n }), "The worst case of one request (retries are separate requests).")}
           <label className="flex items-center gap-2 self-end text-sm sm:col-span-3">
             <input type="checkbox" checked={s.budget.retryTransient} onChange={(e) => set("budget", { retryTransient: e.target.checked })} disabled={d} data-testid="b-retry" />
             Retry a request once after any temporary provider error (a dropped connection is always retried once; every attempt is recorded and included in the maximum)

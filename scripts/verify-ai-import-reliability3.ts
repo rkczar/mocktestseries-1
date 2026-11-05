@@ -214,8 +214,12 @@ function pureChecks() {
   check("clean question with an official key: content / answer / taxonomy PASSED, Verify 2 NOT_RUN (not required)", clean.content.status === "PASSED" && clean.answer.status === "PASSED" && clean.taxonomy.status === "PASSED" && clean.independent.status === "NOT_RUN" && !clean.independent.required && checksAllowReady(clean));
   const ai = questionChecks({ ...base, answerStatus: AiImportAnswerStatus.UNVERIFIED, codes: ["ANSWER_UNVERIFIED"] });
   check("an AI opinion only: answer NEEDS_REVIEW → never Ready", ai.answer.status === "NEEDS_REVIEW" && !checksAllowReady(ai));
-  const differs = questionChecks({ ...base, codes: ["AI_OPINION_DIFFERS"] });
-  check("an AI opinion that differs from the key: DISAGREEMENT → never Ready", differs.answer.status === "DISAGREEMENT" && !checksAllowReady(differs));
+  const differs = questionChecks({ ...base, codes: ["AI_OPINION_DIFFERS"], issues: new Map([["AI_OPINION_DIFFERS", "AI opinion B differs from the official key C"]]) });
+  check("an AI opinion that differs from a verified official key: answer PASSED with the warning shown (the key is the source of truth)", differs.answer.status === "PASSED" && /Warning: AI opinion B differs/.test(differs.answer.detail) && checksAllowReady(differs));
+  const disputed = questionChecks({ ...base, codes: ["ANSWER_MISMATCH", "AI_OPINION_DIFFERS"] });
+  check("a disputed key (printed answer / administrator differs) still FAILS the answer check → never Ready", disputed.answer.status === "FAILED" && !checksAllowReady(disputed));
+  const noKey = questionChecks({ ...base, answerStatus: AiImportAnswerStatus.AMBIGUOUS_MAPPING, codes: ["ANSWER_AMBIGUOUS"] });
+  check("an ambiguous key mapping fails the answer check → admin review", noKey.answer.status === "FAILED" && !checksAllowReady(noKey));
   const confirmed = questionChecks({ ...base, answerStatus: AiImportAnswerStatus.UNVERIFIED, answerConfirmed: true, codes: [] });
   check("an administrator's confirmed answer passes the answer check", confirmed.answer.status === "PASSED");
   const trunc = { status: "VERIFICATION_FAILED" as const, stored: { subjectId: "s", topicId: "t", subTopicId: null }, found: null, confidence: null, method: "m", findings: ["the classification request failed: Model output failure: the model used its whole output limit of 2500 tokens (reasoning) and returned no answer — cut off at the token limit."], comparedWithV1: "NO_V1" as const };
@@ -253,8 +257,13 @@ function pureBudget() {
   check("within every limit: allowed", budgetBlock({ amountInr: 0.3, caps, job, spend: { monthInr: 2, allInr: 2 } }) === null);
   const raised = capsOf({ monthlyInr: 500, maxJobInr: 200, totalInr: 1500, maxRequestInr: 5 }, { monthlyInr: 10, maxJobInr: 8, totalInr: 10, maxRequestInr: 1 });
   check("a stored value above the bounds is never used (cannot raise the budget)", raised.monthlyInr === 10 && raised.jobInr === 8 && raised.totalInr === 10 && raised.requestInr === 1);
-  const stored = normalizeImporterSettings({ budget: { monthlyInr: 500, maxJobInr: 200, totalInr: 1500 }, publish: { allowUnverifiedAnswers: true } });
-  check("settings: budgets clamped to ₹10 / ₹8 / ₹10, allowUnverifiedAnswers forced off", stored.budget.monthlyInr <= 10 && stored.budget.maxJobInr <= 8 && stored.budget.totalInr <= 10 && stored.publish.allowUnverifiedAnswers === false);
+  const stored = normalizeImporterSettings({ budget: { monthlyInr: 5000, maxJobInr: 200, totalInr: 1500, maxRequestInr: 9 }, publish: { allowUnverifiedAnswers: true } });
+  check("settings: budgets clamped to the owner's bounds — ₹1,500 / month, ₹200 total, ₹8 / import, ₹1 / request; allowUnverifiedAnswers forced off", stored.budget.monthlyInr === 1500 && stored.budget.totalInr === 200 && stored.budget.maxJobInr === 8 && stored.budget.maxRequestInr === 1 && stored.publish.allowUnverifiedAnswers === false, stored.budget);
+  const policy = capsOf({ monthlyInr: 1500, maxJobInr: 8, totalInr: 200, maxRequestInr: 1 }, { monthlyInr: 1500, maxJobInr: 8, totalInr: 200, maxRequestInr: 1 });
+  check("new policy: with ₹89.69 ever spent and ₹13.54 this month, a ₹0.30 request is allowed", budgetBlock({ amountInr: 0.3, caps: policy, job, spend: { monthInr: 13.54, allInr: 89.69 } }) === null);
+  check("new policy: the ₹200 initial paid-test cap stops paid AI once used (₹199.80 + ₹0.30 → total)", budgetBlock({ amountInr: 0.3, caps: policy, job, spend: { monthInr: 50, allInr: 199.8 } })?.scope === "total");
+  check("new policy: the ₹1,500 month stops paid AI (₹1,499.90 + ₹0.30 → month)", budgetBlock({ amountInr: 0.3, caps: { ...policy, totalInr: 5000 }, job, spend: { monthInr: 1499.9, allInr: 1499.9 } })?.scope === "month");
+  check("new policy: per-import ₹8 and per-request ₹1 kept", budgetBlock({ amountInr: 0.5, caps: policy, job: { spentInr: 7.8, inFlightInr: 0, confirmedMaxInr: 50 }, spend: { monthInr: 1, allInr: 1 } })?.scope === "job" && budgetBlock({ amountInr: 1.5, caps: policy, job, spend: { monthInr: 1, allInr: 1 } })?.scope === "request");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -440,8 +449,9 @@ async function productionReplay(examId: string, pypId: string, actorId: string, 
   for (const b of wrong) {
     const r = rows.find((x) => x.sourceNumber === b.n)!;
     const off = truth[String(b.n)];
-    const ok = b.n === 119 ? r.issueCodes.includes("ANSWER_MISMATCH") : off.includes("/") ? r.answerStatus === "AMBIGUOUS_MAPPING" : r.finalAnswer.join() === off && r.issueCodes.includes("AI_OPINION_DIFFERS") && r.status !== "READY";
-    check(`  Q${b.n}: production ${b.finalAnswer.join("") || "—"} → official ${off}; now ${r.finalAnswer.join("") || "—"} (${r.answerStatus}${r.issueCodes.includes("AI_OPINION_DIFFERS") ? ", AI opinion differs — admin decides" : ""})`, ok, r.issueCodes);
+    const ac = (r.data as unknown as ExtractedQuestion).checks?.answer;
+    const ok = b.n === 119 ? r.issueCodes.includes("ANSWER_MISMATCH") && ac?.status === "FAILED" : off.includes("/") ? r.answerStatus === "AMBIGUOUS_MAPPING" && ac?.status !== "PASSED" : r.finalAnswer.join() === off && r.answerStatus === "OFFICIAL_MATCHED" && r.issueCodes.includes("AI_OPINION_DIFFERS") && ac?.status === "PASSED" && /Warning/.test(ac.detail);
+    check(`  Q${b.n}: production ${b.finalAnswer.join("") || "—"} → official ${off}; now ${r.finalAnswer.join("") || "—"} (${r.answerStatus}${r.issueCodes.includes("AI_OPINION_DIFFERS") ? ", AI opinion differs — shown as a warning" : ""})`, ok, { codes: r.issueCodes, answer: ac });
   }
   const rec = await prisma.aiImportEvent.findFirst({ where: { jobId: job.id, type: "KEY_RECONCILED" } });
   check("KEY_RECONCILED event lists every changed answer", !!rec && ((rec.data as { changes?: unknown[] } | null)?.changes?.length ?? 0) >= 116, rec?.message);
@@ -479,6 +489,44 @@ async function referenceComparison(jobId: string, actorId: string) {
   const extra = conflicts.filter((n) => !DOCX_OPTION_DEFECTS.includes(n));
   check(`other questions flagged by the comparison: ${extra.length} (reviewed in the report)`, extra.length <= 25, extra);
   check("questions with a reference conflict are never Ready", rows.filter((r) => r.issueCodes.includes("REFERENCE_CONFLICT")).every((r) => r.status !== "READY"));
+}
+
+async function scanCorrections(jobId: string, actorId: string) {
+  section("9b. The 7 transcription defects corrected from the ORIGINAL scan (administrator edit), Verify 1 again");
+  const fix = JSON.parse(readFileSync("scripts/fixtures/ai-import-papers/cms2024p1-scan-corrections.json", "utf8")).questions as { n: number; scanPage: number; officialKey: string; keyMapsTo: string; options: string[]; stem?: string; difference: string }[];
+  const files = await prisma.aiImportFile.findMany({ where: { jobId }, select: { sha256: true, storageKey: true } });
+  const { createHash } = await import("node:crypto");
+  const { vaultPath } = await import("@/lib/ai-import/vault");
+  const hashes = () => files.filter((f) => f.storageKey).map((f) => createHash("sha256").update(readFileSync(vaultPath(f.storageKey!))).digest("hex"));
+  const before = hashes();
+  let rows = await prisma.aiImportQuestion.findMany({ where: { jobId, sourceNumber: { in: fix.map((f) => f.n) } } });
+  const settings = await getImporterSettings();
+  for (const f of fix) {
+    const r = rows.find((x) => x.sourceNumber === f.n)!;
+    check(`Q${f.n} before correction: not Ready and not publish-eligible (${f.difference})`, r.status !== "READY" && !eligibleForPublish({ ...r, figures: [] } as never, settings, false), { status: r.status, codes: r.issueCodes });
+  }
+  const { editQuestion } = await import("@/lib/ai-import/review");
+  const { effective } = await import("@/lib/ai-import/post");
+  for (const f of fix) {
+    const r = await prisma.aiImportQuestion.findFirstOrThrow({ where: { jobId, sourceNumber: f.n } });
+    const e = effective(r);
+    await editQuestion(r.id, actorId, { stem: f.stem ?? e.stem, options: f.options.map((t, i) => ({ label: "ABCD"[i], text: t })), type: e.type, contentFormat: e.contentFormat }, { note: `Corrected from the original scan (CMS_GS_paper1.pdf page ${f.scanPage}): ${f.difference}.` });
+  }
+  await runVerify1(jobId, actorId);
+  rows = await prisma.aiImportQuestion.findMany({ where: { jobId, sourceNumber: { in: fix.map((f) => f.n) } } });
+  for (const f of fix) {
+    const r = rows.find((x) => x.sourceNumber === f.n)!;
+    const e = effective(r);
+    const letter = r.finalAnswer.join();
+    const mapped = e.options.find((o) => o.label === letter)?.text;
+    const conflict = (r.issues as Record<string, string> | null)?.REFERENCE_CONFLICT ?? "";
+    check(`Q${f.n} after correction: official key ${f.officialKey} → “${mapped}” (expected “${f.keyMapsTo}”); no option-order / count conflict with the original left`, r.answerStatus === "OFFICIAL_MATCHED" && letter === f.officialKey && mapped === f.keyMapsTo && !/option order differs|option count/.test(conflict) && !r.issueCodes.includes("STATEMENT_COUNT_MISMATCH"), { letter, mapped, codes: r.issueCodes, conflict: conflict.slice(0, 200) });
+    const v = await prisma.aiImportQuestionVersion.count({ where: { questionId: r.id, kind: "ADMIN_EDIT" } });
+    check(`Q${f.n}: the correction is an administrator edit with history (the extraction is kept)`, !!r.editedData && v >= 1 && (r.data as unknown as ExtractedQuestion).options.map((o) => o.text).join("|") !== f.options.join("|"));
+  }
+  check("Q105 now has the four statements printed in the original", statementsOf(effective(rows.find((x) => x.sourceNumber === 105)!).stem).length === 4);
+  check("the original source files are byte-identical (never modified)", JSON.stringify(hashes()) === JSON.stringify(before));
+  console.log(`  after correction: ${rows.filter((r) => r.status === "READY").length} of 7 Ready (the rest have other open checks: ${[...new Set(rows.filter((r) => r.status !== "READY").flatMap((r) => r.issueCodes))].join(", ")})`);
 }
 
 async function localReferenceWorker(jobId: string, actorId: string) {
@@ -538,7 +586,8 @@ async function publishingSafeguards(jobId: string) {
   check("an unconfirmed answer printed in the paper is not importable", !!importBlocker(variant({ answerStatus: "UNVERIFIED", finalAnswer: ["B"], sourceAnswer: ["B"] }), settingsOn));
   check("the official key answer is importable and publishable", importBlocker(variant({}), settingsOn) === null && publishBlocker(variant({}), settingsOn) === null, [importBlocker(variant({}), settingsOn), publishBlocker(variant({}), settingsOn)]);
   check("an administrator-confirmed answer is importable", importBlocker(variant({ answerStatus: "UNVERIFIED", finalAnswer: ["C"], answerConfirmedById: "admin" }), settingsOn) === null);
-  check("ANSWER_UNVERIFIED / AI_OPINION_DIFFERS / TAXONOMY_CHECK_FAILED / VERIFY2_FAILED block publishing", ["ANSWER_UNVERIFIED", "AI_OPINION_DIFFERS", "TAXONOMY_CHECK_FAILED", "VERIFY2_FAILED", "STATEMENT_COUNT_MISMATCH"].every((c) => ISSUE_DEFS[c]?.publishBlocking));
+  check("ANSWER_UNVERIFIED / TAXONOMY_CHECK_FAILED / VERIFY2_FAILED / STATEMENT_COUNT_MISMATCH block publishing", ["ANSWER_UNVERIFIED", "TAXONOMY_CHECK_FAILED", "VERIFY2_FAILED", "STATEMENT_COUNT_MISMATCH"].every((c) => ISSUE_DEFS[c]?.publishBlocking));
+  check("AI_OPINION_DIFFERS is a warning only (neither blocking nor publish-blocking) when the official key is verified", !ISSUE_DEFS.AI_OPINION_DIFFERS.blocking && !ISSUE_DEFS.AI_OPINION_DIFFERS.publishBlocking);
   // Bulk publish eligibility: a same-text Verify 2 never qualifies.
   const fp = fingerprintOf(row);
   const d = row.data as unknown as ExtractedQuestion;
@@ -561,6 +610,7 @@ async function main() {
   await budgetGateway(exam.id, admin.id);
   const prodJob = await productionReplay(exam.id, pyp.id, admin.id, ids);
   await referenceComparison(prodJob.id, admin.id);
+  await scanCorrections(prodJob.id, admin.id);
   const newJob = await newImportBlockedBudget(exam.id, pyp.id, admin.id);
   await localReferenceWorker(prodJob.id, admin.id);
   await publishingSafeguards(newJob.id);
