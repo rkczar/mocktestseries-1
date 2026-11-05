@@ -10,6 +10,7 @@ import { callImporter } from "@/components/admin/ai-importer/call-importer";
 import { importAction, importEligibleAction, saveFormatProfileAction, verify2PreviewAction, verify2StartAction, verifyPaperAction } from "@/app/admin/(dashboard)/ai-importer/actions";
 import type { PaperSummary, Verify2Preview } from "@/lib/ai-import/paper-verify";
 import { referenceStatusText } from "@/lib/ai-import/reference-status";
+import { BudgetCheck } from "@/components/admin/ai-importer/budget-check";
 
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `₹${v.toFixed(2)}`);
 
@@ -115,6 +116,7 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
             <li data-testid="verify2-estimate">Estimated cost: <b>{inr(preview.estimateInr)}</b></li>
             <li data-testid="verify2-max">Maximum cost: <b>{inr(preview.maxInr)}</b> (includes one retry and one fallback read per request)</li>
           </ul>
+          <BudgetCheck maxInr={preview.maxInr} />
           {preview.referenceOcr.length > 0 && (
             <ul className="list-disc pl-5 text-xs text-[var(--color-warning)]" data-testid="verify2-reference-ocr">
               {preview.referenceOcr.map((r) => (

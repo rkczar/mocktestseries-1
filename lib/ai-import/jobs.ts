@@ -406,7 +406,7 @@ export type ContinueResult = { started: true; cost: null } | { started: false; c
  * asked. Otherwise the caller gets the cost to show, and only a confirmation of at least the freshly priced amount
  * raises the job's confirmed maximum (to exactly that amount). With Paid AI off nothing can be spent, so nothing is asked.
  */
-async function authorizeRemaining(job: AiImportJob, actorId: string, confirmedMaxInr: number | null | undefined, sameOperation = false): Promise<ContinueCost | null> {
+async function authorizeRemaining(job: AiImportJob, actorId: string, confirmedMaxInr: number | null | undefined): Promise<ContinueCost | null> {
   const current = await getImporterSettings();
   const plan = planOf(job.config);
   if (!current.aiEnabled || !plan) return null;
@@ -418,14 +418,7 @@ async function authorizeRemaining(job: AiImportJob, actorId: string, confirmedMa
   if (job.spentInr + r.maxInr <= job.budgetInr + 0.005) return null;
   const needed = Math.ceil((job.spentInr + r.maxInr) * 100) / 100;
   const cost: ContinueCost = { spentInr: job.spentInr, confirmedMaxInr: job.budgetInr, remainingMaxInr: r.maxInr, neededMaxInr: needed, pages: r.unreadPages, keyFiles: r.failedKeyFiles, questionsToClassify: r.toClassify };
-  // Continuing the SAME confirmed operation (Resume after a pause or a failure): nothing is asked again — the recorded
-  // maximum is raised to spent + the remaining work's maximum and logged. The importer budget (₹ per job / month / total)
-  // still applies to every request at the gateway, whatever this recorded maximum says.
-  if (sameOperation) {
-    await prisma.aiImportJob.update({ where: { id: job.id }, data: { budgetInr: needed } });
-    await logEvent(job.id, "MAXIMUM_RECORDED", `Resumed the confirmed operation: recorded maximum now ₹${needed.toFixed(2)} (₹${job.spentInr.toFixed(2)} spent + up to ₹${r.maxInr.toFixed(2)} for the remaining work). No new confirmation is needed — the importer has no spending cap.`, { spentInr: job.spentInr, remainingMaxInr: r.maxInr, recordedMaxInr: needed }, actorId);
-    return null;
-  }
+  // Owner 2026-11-05 (final): more than the confirmed maximum is never approved automatically — Resume asks too.
   const confirmed = typeof confirmedMaxInr === "number" && Number.isFinite(confirmedMaxInr) ? confirmedMaxInr : null;
   if (confirmed === null || confirmed + 0.005 < needed) return cost;
   await prisma.aiImportJob.update({ where: { id: job.id }, data: { budgetInr: needed } });
@@ -438,8 +431,8 @@ export async function resumeJob(jobId: string, actorId: string, confirmedMaxInr?
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
   if (!job) throw new ImportJobError("Import job not found.", 404);
   if (job.status !== AiImportJobStatus.PAUSED && job.status !== AiImportJobStatus.PAUSED_BUDGET && job.status !== AiImportJobStatus.FAILED) throw new ImportJobError("Only a paused or failed import can be resumed.");
-  // The operation's cost was confirmed when it started: resuming it never asks again (the gateway's budget still applies).
-  const cost = await authorizeRemaining(job, actorId, confirmedMaxInr, true);
+  // Within the confirmed maximum Resume starts at once; beyond it the remaining cost is shown and must be confirmed.
+  const cost = await authorizeRemaining(job, actorId, confirmedMaxInr);
   if (cost) return { started: false, cost };
   await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, leaseOwner: null, leaseUntil: null } });
   // Failed pages get one more attempt on resume (never automatically in a loop).

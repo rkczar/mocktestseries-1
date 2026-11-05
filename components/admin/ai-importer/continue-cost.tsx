@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import type { ContinueCost } from "@/lib/ai-import/jobs";
+import { BudgetCheck } from "@/components/admin/ai-importer/budget-check";
 
 const inr = (v: number) => `₹${v.toFixed(2)}`;
 
@@ -29,6 +30,7 @@ export function ContinueCostConfirm({ cost, changed, pending, label, onConfirm, 
           <dd data-testid="continue-cost-needed">{inr(cost.neededMaxInr)}</dd>
         </div>
       </dl>
+      <BudgetCheck maxInr={cost.remainingMaxInr} />
       <p className="text-xs text-[var(--color-muted-foreground)]">
         Remaining work: {work}. The maximum assumes every request at its worst case, including one retry and one fallback model per request; the actual spend is usually far lower. Finished pages are not read or charged again. Nothing has been sent yet.
       </p>

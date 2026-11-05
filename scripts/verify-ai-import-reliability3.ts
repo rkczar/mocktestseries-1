@@ -30,10 +30,10 @@ import { keyLooksValid, parseKeyText } from "@/lib/ai-import/keys";
 import { runPostProcessing } from "@/lib/ai-import/post";
 import { eligibleForPublish, fingerprintOf, runVerify1 } from "@/lib/ai-import/paper-verify";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { IMPORTER_SETTING_KEY, ISSUE_DEFS, normalizeImporterSettings } from "@/lib/ai-import/config";
+import { IMPORTER_SETTING_KEY, ISSUE_DEFS, PILOT_LIMITS, normalizeImporterSettings } from "@/lib/ai-import/config";
 import { answerVerified, importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { checksAllowReady, questionChecks, v2Independence } from "@/lib/ai-import/checks";
-import { budgetBlock, capsOf } from "@/lib/ai-import/budget-guard";
+import { budgetBlock, budgetShortfall, capsOf } from "@/lib/ai-import/budget-guard";
 import { importerBudgetBlock, reserveForTest, ImporterBudgetError } from "@/lib/ai-import/ai";
 import { failureCheckStatus } from "@/lib/ai-import/failure";
 import { stampOf } from "@/lib/ai-import/verify-core";
@@ -244,26 +244,29 @@ function pureChecks() {
 }
 
 function pureBudget() {
-  section("6. Budget rule (pure)");
-  const caps = capsOf({ monthlyInr: 10, maxJobInr: 8, totalInr: 10, maxRequestInr: 1 }, { monthlyInr: 10, maxJobInr: 8, totalInr: 10, maxRequestInr: 1 });
-  const job = { spentInr: 0, inFlightInr: 0, confirmedMaxInr: 8 };
-  check("November already spent ₹13.54: every request refused (month)", budgetBlock({ amountInr: 0.01, caps, job, spend: { monthInr: 13.54, allInr: 89.69 } })?.scope === "month");
-  check("even a ₹0 request is refused once the month is over budget", budgetBlock({ amountInr: 0, caps, job, spend: { monthInr: 13.54, allInr: 13.54 } })?.scope === "month");
-  check("all-time spend over ₹10: refused (total)", budgetBlock({ amountInr: 0.01, caps, job, spend: { monthInr: 0, allInr: 89.69 } })?.scope === "total");
-  check("per-job ₹8: refused when spent + in flight + request > 8", budgetBlock({ amountInr: 0.5, caps, job: { spentInr: 7.2, inFlightInr: 0.4, confirmedMaxInr: 408.9 }, spend: { monthInr: 1, allInr: 1 } })?.scope === "job");
-  check("the confirmed ₹408.90 maximum never lifts the ₹8 job cap", budgetBlock({ amountInr: 0.9, caps, job: { spentInr: 7.5, inFlightInr: 0, confirmedMaxInr: 408.9 }, spend: { monthInr: 1, allInr: 1 } })?.scope === "job");
-  check("a lower confirmed maximum applies", budgetBlock({ amountInr: 0.3, caps, job: { spentInr: 0.8, inFlightInr: 0, confirmedMaxInr: 1 }, spend: { monthInr: 1, allInr: 1 } })?.scope === "job");
-  check("per-request ₹1: a ₹1.20 worst case refused", budgetBlock({ amountInr: 1.2, caps, job, spend: { monthInr: 0, allInr: 0 } })?.scope === "request");
-  check("within every limit: allowed", budgetBlock({ amountInr: 0.3, caps, job, spend: { monthInr: 2, allInr: 2 } }) === null);
-  const raised = capsOf({ monthlyInr: 500, maxJobInr: 200, totalInr: 1500, maxRequestInr: 5 }, { monthlyInr: 10, maxJobInr: 8, totalInr: 10, maxRequestInr: 1 });
-  check("a stored value above the bounds is never used (cannot raise the budget)", raised.monthlyInr === 10 && raised.jobInr === 8 && raised.totalInr === 10 && raised.requestInr === 1);
+  section("6. Budget rule (pure) — owner 2026-11-05 final: ₹1,500 / month, ₹200 initial total, NO per-job / per-request cap");
+  const policy = capsOf({ monthlyInr: 1500, totalInr: 200 }, PILOT_LIMITS);
+  const job = { spentInr: 0, inFlightInr: 0, confirmedMaxInr: 50 };
+  check("the bounds: ₹1,500 per month and ₹200 in total, nothing per job or per request", PILOT_LIMITS.monthlyInr === 1500 && PILOT_LIMITS.totalInr === 200 && !("maxJobInr" in PILOT_LIMITS) && !("maxRequestInr" in PILOT_LIMITS) && Object.keys(policy).sort().join() === "monthlyInr,totalInr", { PILOT_LIMITS, policy });
+  check("with ₹89.69 ever spent and ₹13.54 this month, a ₹0.30 request is allowed", budgetBlock({ amountInr: 0.3, caps: policy, job, spend: { monthInr: 13.54, allInr: 89.69 } }) === null);
+  check("the ₹200 initial paid-test cap stops paid AI once used (₹199.80 + ₹0.30 → total)", budgetBlock({ amountInr: 0.3, caps: policy, job, spend: { monthInr: 50, allInr: 199.8 } })?.scope === "total");
+  check("the ₹1,500 month stops paid AI (₹1,499.90 + ₹0.30 → month)", budgetBlock({ amountInr: 0.3, caps: { ...policy, totalInr: 5000 }, job, spend: { monthInr: 1499.9, allInr: 1499.9 } })?.scope === "month");
+  check("even a ₹0 request is refused once the month is used up", budgetBlock({ amountInr: 0, caps: { monthlyInr: 10, totalInr: 200 }, job, spend: { monthInr: 13.54, allInr: 13.54 } })?.scope === "month");
+  check("no per-request cap: one ₹25 request (worst case) is allowed within the confirmed maximum and the budget", budgetBlock({ amountInr: 25, caps: policy, job, spend: { monthInr: 1, allInr: 1 } }) === null);
+  check("no per-job cap: a job confirmed for ₹150 may spend past the former ₹8 (₹120 spent + ₹20)", budgetBlock({ amountInr: 20, caps: policy, job: { spentInr: 120, inFlightInr: 0, confirmedMaxInr: 150 }, spend: { monthInr: 120, allInr: 120 } }) === null);
+  check("never past the CONFIRMED maximum (an approval, not a cap): ₹48 spent + ₹1.5 in flight + ₹1 > ₹50 → job, Resume asks", /Resume shows the cost/.test(budgetBlock({ amountInr: 1, caps: policy, job: { spentInr: 48, inFlightInr: 1.5, confirmedMaxInr: 50 }, spend: { monthInr: 1, allInr: 1 } })?.message ?? "") && budgetBlock({ amountInr: 1, caps: policy, job: { spentInr: 48, inFlightInr: 1.5, confirmedMaxInr: 50 }, spend: { monthInr: 1, allInr: 1 } })?.scope === "job");
+  const raised = capsOf({ monthlyInr: 5000, totalInr: 1500 }, PILOT_LIMITS);
+  check("a stored value above the bounds is never used (cannot raise the budget)", raised.monthlyInr === 1500 && raised.totalInr === 200, raised);
   const stored = normalizeImporterSettings({ budget: { monthlyInr: 5000, maxJobInr: 200, totalInr: 1500, maxRequestInr: 9 }, publish: { allowUnverifiedAnswers: true } });
-  check("settings: budgets clamped to the owner's bounds — ₹1,500 / month, ₹200 total, ₹8 / import, ₹1 / request; allowUnverifiedAnswers forced off", stored.budget.monthlyInr === 1500 && stored.budget.totalInr === 200 && stored.budget.maxJobInr === 8 && stored.budget.maxRequestInr === 1 && stored.publish.allowUnverifiedAnswers === false, stored.budget);
-  const policy = capsOf({ monthlyInr: 1500, maxJobInr: 8, totalInr: 200, maxRequestInr: 1 }, { monthlyInr: 1500, maxJobInr: 8, totalInr: 200, maxRequestInr: 1 });
-  check("new policy: with ₹89.69 ever spent and ₹13.54 this month, a ₹0.30 request is allowed", budgetBlock({ amountInr: 0.3, caps: policy, job, spend: { monthInr: 13.54, allInr: 89.69 } }) === null);
-  check("new policy: the ₹200 initial paid-test cap stops paid AI once used (₹199.80 + ₹0.30 → total)", budgetBlock({ amountInr: 0.3, caps: policy, job, spend: { monthInr: 50, allInr: 199.8 } })?.scope === "total");
-  check("new policy: the ₹1,500 month stops paid AI (₹1,499.90 + ₹0.30 → month)", budgetBlock({ amountInr: 0.3, caps: { ...policy, totalInr: 5000 }, job, spend: { monthInr: 1499.9, allInr: 1499.9 } })?.scope === "month");
-  check("new policy: per-import ₹8 and per-request ₹1 kept", budgetBlock({ amountInr: 0.5, caps: policy, job: { spentInr: 7.8, inFlightInr: 0, confirmedMaxInr: 50 }, spend: { monthInr: 1, allInr: 1 } })?.scope === "job" && budgetBlock({ amountInr: 1.5, caps: policy, job, spend: { monthInr: 1, allInr: 1 } })?.scope === "request");
+  check("settings: monthly / total clamped to ₹1,500 / ₹200; allowUnverifiedAnswers forced off", stored.budget.monthlyInr === 1500 && stored.budget.totalInr === 200 && stored.publish.allowUnverifiedAnswers === false, stored.budget);
+  // The shortfall shown on every approval (components/admin/ai-importer/cost-summary.tsx).
+  const b = { monthlyInr: 1500, totalInr: 200, monthUsedInr: 13.54, allUsedInr: 89.69 };
+  const fits = budgetShortfall(40, b);
+  check("approval: ₹40 maximum fits — budget left shown (₹1,486.46 month, ₹110.31 total), no shortfall", fits.short.length === 0 && Math.abs((fits.monthLeft ?? 0) - 1486.46) < 0.001 && Math.abs((fits.totalLeft ?? 0) - 110.31) < 0.001, fits);
+  const over = budgetShortfall(150, b);
+  check("approval: ₹150 maximum → says it exceeds the ₹200 testing cap by up to ₹39.69", over.short.length === 1 && /₹200\.00 paid-testing cap by up to ₹39\.69/.test(over.short[0]), over.short);
+  const both = budgetShortfall(150, { ...b, monthlyInr: 100, monthUsedInr: 90 });
+  check("approval: monthly shortfall named with the amount (₹140.00 more than ₹10.00 left)", both.short.length === 2 && /₹140\.00 more than the monthly budget left \(₹10\.00 of ₹100\.00\)/.test(both.short[0]), both.short);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -309,16 +312,21 @@ async function seedSpend(inr: number, istMonth: string, tag: string) {
 const clearSpend = () => prisma.aiBudgetReservation.deleteMany({ where: { feature: { startsWith: "qimport_" } } });
 
 async function budgetGateway(examId: string, actorId: string) {
-  section("7. Budget at the gateway (scratch DB) — concurrent requests, job / month / total caps, pre-flight");
+  section("7. Budget at the gateway (scratch DB) — concurrent requests, confirmed maximum / month / total, pre-flight");
   await clearSpend();
   const job = await prisma.aiImportJob.create({ data: { title: `budget ${RUN}`, examId, createdById: actorId, budgetInr: 408.9, status: AiImportJobStatus.PROCESSING } });
   const fire = async (n: number, amount: number) => {
     const res = await Promise.allSettled(Array.from({ length: n }, (_, i) => reserveForTest({ jobId: job.id, requestKey: `qi:${job.id}:c${RUN}${i}${Math.random().toString(36).slice(2)}:1`, feature: "qimport_classify", amountInr: amount })));
     return { ok: res.filter((r) => r.status === "fulfilled").length, scopes: res.filter((r): r is PromiseRejectedResult => r.status === "rejected").map((r) => (r.reason instanceof ImporterBudgetError ? r.reason.scope : String(r.reason).slice(0, 80))) };
   };
-  // Per-job cap ₹8: 30 concurrent requests of ₹0.30 → exactly 26 fit (7.80); the rest are refused — never 27.
+  // Owner 2026-11-05 (final): no per-job cap — a job confirmed for ₹408.90 is not held to the former ₹8.
+  const free = await fire(30, 0.3);
+  check("no per-job cap: 30 concurrent ₹0.30 requests (₹9.00) on a job confirmed for ₹408.90 → all 30 reserved", free.ok === 30 && free.scopes.length === 0, free);
+  await clearSpend();
+  // The CONFIRMED maximum still holds under concurrency: confirmed ₹8 → exactly 26 fit (7.80); never 27.
+  await prisma.aiImportJob.update({ where: { id: job.id }, data: { budgetInr: 8 } });
   const a = await fire(30, 0.3);
-  check("per job: 30 concurrent ₹0.30 requests → exactly 26 reserved (₹7.80 ≤ ₹8), 4 refused as job", a.ok === 26 && a.scopes.length === 4 && a.scopes.every((s) => s === "job"), a);
+  check("confirmed maximum ₹8: 30 concurrent ₹0.30 requests → exactly 26 reserved (₹7.80), 4 refused as job (approval needed)", a.ok === 26 && a.scopes.length === 4 && a.scopes.every((s) => s === "job"), a);
   await clearSpend();
   // Month ₹10 (spend recorded earlier this month ₹9.00): 10 concurrent ₹0.30 → exactly 3 fit.
   await seedSpend(9, istDayMonth().istMonth, "m");

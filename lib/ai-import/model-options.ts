@@ -71,7 +71,7 @@ export interface ImporterCatalog {
   plan: ModelPlan;
   routes: RouteStatus;
   /** Hard pilot ceilings fixed in code (lib/ai-import/config.ts PILOT_LIMITS). */
-  pilot: { totalInr: number; monthlyInr: number; maxJobInr: number; maxRequestInr: number; minKeyReserveUsd: number };
+  pilot: { totalInr: number; monthlyInr: number; minKeyReserveUsd: number };
 }
 
 /** Why the importer does not use the direct Gemini API (Gemini models remain usable through OpenRouter). */

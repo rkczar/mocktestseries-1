@@ -47,13 +47,15 @@ export const SELECTION_TASK_LABELS: Record<SelectionTask, string> = {
 };
 
 /**
- * Upper bounds of the importer budget. Since 2026-11-05 (owner decision 1) the monthly, per-job, all-time and per-request
- * budgets are ENFORCED again at the importer's AI gateway (lib/ai-import/ai.ts reserve(), under one database lock, so
+ * Upper bounds of the importer budget. Since 2026-11-05 the monthly and all-time budgets are ENFORCED at the importer's AI gateway (lib/ai-import/ai.ts reserve(), under one database lock, so
  * concurrent requests cannot pass a limit together). A stored value can be lowered, never raised above these bounds.
  */
-// Owner decision 2026-11-05 (pre-deployment): an initial paid-test cap of ₹200 in total (all importer spend ever recorded)
-// and ₹1,500 per IST month; the per-job (₹8) and per-request (₹1) limits are kept.
-export const PILOT_LIMITS = { totalInr: 200, monthlyInr: 1500, maxJobInr: 8, maxRequestInr: 1, minKeyReserveUsd: 5 } as const;
+// Owner decision 2026-11-05 (final): ₹1,500 per IST month and an initial paid-test cap of ₹200 in total (all importer
+// spend ever recorded). NO per-job or per-request cap: every paid operation runs only after its cost is confirmed, and a
+// job never spends past the maximum confirmed for it (lib/ai-import/budget-guard.ts).
+export const PILOT_LIMITS = { totalInr: 200, monthlyInr: 1500, minKeyReserveUsd: 5 } as const;
+/** Bounds of the stored legacy per-job / per-request figures: kept readable, NOT enforced and not shown in Settings. */
+const LEGACY_FIGURES = { maxJobInr: 8, maxRequestInr: 1 } as const;
 
 export interface ImporterSettings {
   /** Master switch for PAID AI calls. Local parsing, review, import and publishing work without it. */
@@ -82,13 +84,13 @@ export interface ImporterSettings {
   budget: {
     /** ENFORCED (2026-11-05): importer AI spend in one IST calendar month, all jobs together. */
     monthlyInr: number;
-    /** Not used for enforcement (maxJobInr is the per-job limit); kept so stored settings stay readable. */
+    /** NOT ENFORCED since 2026-11-05 (owner, final: no per-job cap); kept so stored settings stay readable. */
     defaultJobCapInr: number;
-    /** ENFORCED (2026-11-05): one job's AI spend (also never above the maximum the administrator confirmed for it). */
+    /** NOT ENFORCED since 2026-11-05 (owner, final: no per-job cap — only the maximum confirmed for each import applies). */
     maxJobInr: number;
     /** ENFORCED (2026-11-05): all importer AI spend ever recorded — the initial paid-test cap (at most ₹200). */
     totalInr: number;
-    /** ENFORCED (2026-11-05): the worst case of one request. */
+    /** NOT ENFORCED since 2026-11-05 (owner, final: no per-request cap). */
     maxRequestInr: number;
     /** NOT ENFORCED since 2026-10-26: no reserve is held back on the shared OpenRouter key (its own limit applies). */
     keyReserveUsd: number;
@@ -141,7 +143,7 @@ export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   importerModels: [],
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
   privacy: { dataCollection: "deny", zdr: true },
-  budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: PILOT_LIMITS.maxJobInr, maxJobInr: PILOT_LIMITS.maxJobInr, totalInr: PILOT_LIMITS.totalInr, maxRequestInr: PILOT_LIMITS.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
+  budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: LEGACY_FIGURES.maxJobInr, maxJobInr: LEGACY_FIGURES.maxJobInr, totalInr: PILOT_LIMITS.totalInr, maxRequestInr: LEGACY_FIGURES.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
   limits: { maxFileMb: 100, maxPagesPerFile: 300, maxFilesPerJob: 10, renderDpi: 150, concurrency: 2 },
   verification: { secondReadBelow: 0.8, independentAnswer: false, topicMinConfidence: 0.7, nearDuplicateAt: 0.85 },
   publish: { allowUnverifiedAnswers: false, requireTopic: true },
@@ -155,10 +157,10 @@ export const SETTINGS_BOUNDS = {
   renderDpi: [100, 220],
   concurrency: [1, 3],
   monthlyInr: [0, PILOT_LIMITS.monthlyInr],
-  defaultJobCapInr: [0, PILOT_LIMITS.maxJobInr],
-  maxJobInr: [0, PILOT_LIMITS.maxJobInr],
+  defaultJobCapInr: [0, LEGACY_FIGURES.maxJobInr],
+  maxJobInr: [0, LEGACY_FIGURES.maxJobInr],
+  maxRequestInr: [0.01, LEGACY_FIGURES.maxRequestInr],
   totalInr: [0, PILOT_LIMITS.totalInr],
-  maxRequestInr: [0.01, PILOT_LIMITS.maxRequestInr],
   keyReserveUsd: [PILOT_LIMITS.minKeyReserveUsd, 10_000],
   originalDays: [1, 3650],
   intermediateDays: [1, 365],
@@ -181,7 +183,6 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
   const d = DEFAULT_IMPORTER_SETTINGS;
   const m = (r.models ?? {}) as Partial<ImporterModels>;
   const extract = model(m.extract);
-  // Settings saved before the hard per-job ceiling existed keep their old effective behaviour (the default job cap).
   const maxJobInr = clamp(r.budget?.maxJobInr ?? r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.maxJobInr, d.budget.maxJobInr);
   return {
     aiEnabled: r.aiEnabled === true,
@@ -201,7 +202,6 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
     },
     budget: {
       monthlyInr: clamp(r.budget?.monthlyInr, SETTINGS_BOUNDS.monthlyInr, d.budget.monthlyInr),
-      // The default offered on New Import can never be above the hard per-job ceiling.
       defaultJobCapInr: Math.min(maxJobInr, clamp(r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.defaultJobCapInr, d.budget.defaultJobCapInr)),
       maxJobInr,
       // Never "no cap": an absent or empty value means the pilot ceiling.

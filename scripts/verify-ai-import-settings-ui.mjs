@@ -115,12 +115,12 @@ check("unsaved change (ZDR off) previewed: the cheaper non-ZDR model would be ch
 await page.locator("[data-testid=privacy-zdr]").check();
 await page.locator("[data-testid=models-reload]").click();
 await until(async () => (await selModel("extract")) === "mockvision/reader");
-// Reliability-3 (owner 2026-11-05): the importer budget is enforced again — ₹1,500/month, ₹200 total, ₹8/import, ₹1/request.
-check("enforced importer budget shown with its ceilings (₹1500 / ₹200 / ₹8 / ₹1); no Ask AI key-reserve field", /importer budget below is enforced/.test(await page.locator("body").textContent()) && /above ₹1500 per month, ₹200 in total, ₹8 per import or ₹1 per request/.test(await page.locator("body").textContent()) && (await page.locator("[data-testid=b-key]").count()) === 0);
+// Owner 2026-11-05 (final): ₹1,500 / month and ₹200 in total enforced; no per-import or per-request limit (fields gone).
+check("enforced importer budget shown with its ceilings (₹1500 / ₹200), no per-import / per-request field; no Ask AI key-reserve field", /monthly budget and the initial paid-test cap are enforced/.test(await page.locator("body").textContent()) && /There is no per-import or per-request limit/.test(await page.locator("body").textContent()) && /above ₹1500 per month or ₹200 in total/.test(await page.locator("body").textContent()) && (await page.locator("[data-testid=b-job], [data-testid=b-request], [data-testid=b-key]").count()) === 0);
 await page.locator("[data-testid=settings-save]").click();
 await page.locator("[data-testid=settings-msg]").waitFor();
 const va = await saved();
-check("saved: importer model list, automatic selection, ZDR on, pricier fallbacks off, pilot limits", JSON.stringify(va?.importerModels) === JSON.stringify(APPROVED) && va?.selection?.mode === "auto" && va?.privacy?.zdr === true && va?.budget?.allowPricierFallback === false && va?.budget?.monthlyInr === 1500 && va?.budget?.totalInr === 200 && va?.budget?.maxJobInr === 8 && va?.budget?.maxRequestInr === 1, va);
+check("saved: importer model list, automatic selection, ZDR on, pricier fallbacks off, pilot limits", JSON.stringify(va?.importerModels) === JSON.stringify(APPROVED) && va?.selection?.mode === "auto" && va?.privacy?.zdr === true && va?.budget?.allowPricierFallback === false && va?.budget?.monthlyInr === 1500 && va?.budget?.totalInr === 200, va);
 check("saving the importer list changed no global AI → Models approval", (await globalFlags()) === flags0);
 await page.reload();
 check("after refresh: the importer list is shown again", (await page.locator("[data-testid=importer-model]").count()) === APPROVED.length);
@@ -190,14 +190,14 @@ check("a model above the old per-request limit is not flagged as refused", (awai
 await pick("extract", "mockvision/reader");
 
 section("E. Save, persistence after refresh, limits");
-check("budget fields shown with the stored values: monthly ₹1500, total ₹200, per import ₹8, per request ₹1", JSON.stringify(await Promise.all(["b-month", "b-total", "b-job", "b-request"].map((id) => page.locator(`[data-testid=${id}]`).inputValue()))) === JSON.stringify(["1500", "200", "8", "1"]));
+check("budget fields shown with the stored values: monthly ₹1500, total ₹200", JSON.stringify(await Promise.all(["b-month", "b-total"].map((id) => page.locator(`[data-testid=${id}]`).inputValue()))) === JSON.stringify(["1500", "200"]));
 await page.locator("[data-testid=privacy-zdr]").check();
 await page.locator("[data-testid=settings-save]").click();
 await page.locator("[data-testid=settings-msg]").waitFor();
 const msg = (await page.locator("[data-testid=settings-msg]").textContent()) ?? "";
 check("save confirmation shown", /Settings saved at/.test(msg), msg);
 const v = await saved();
-check("persisted: manual override + models + pilot limits + ZDR; paid AI still OFF", v?.selection?.mode === "manual" && v?.models?.extract === "mockvision/reader" && v?.models?.verify === "mockvision/checker" && v?.budget?.maxRequestInr === 1 && v?.budget?.keyReserveUsd === 5 && v?.privacy?.zdr === true && v?.aiEnabled === false && v?.budget?.retryTransient === false && (v?.models?.extractFallbacks ?? []).length === 0, v);
+check("persisted: manual override + models + pilot limits + ZDR; paid AI still OFF", v?.selection?.mode === "manual" && v?.models?.extract === "mockvision/reader" && v?.models?.verify === "mockvision/checker" && v?.budget?.monthlyInr === 1500 && v?.budget?.totalInr === 200 && v?.budget?.keyReserveUsd === 5 && v?.privacy?.zdr === true && v?.aiEnabled === false && v?.budget?.retryTransient === false && (v?.models?.extractFallbacks ?? []).length === 0, v);
 await page.reload();
 check("after refresh: selections shown again", /mockvision\/reader/.test(await page.locator("[data-testid=m-extract-current]").textContent()) && /mockvision\/checker/.test(await page.locator("[data-testid=m-verify-current]").textContent()));
 check("no model is flagged against a spending cap", (await page.locator("[data-testid=cost-over-cap]").count()) === 0);
@@ -222,7 +222,7 @@ const t2 = await call({ ...v, budget: { ...v.budget, maxRequestInr: 1, maxJobInr
 check("raw save with stored job figures below the request cap: accepted (no job cap to cross-check)", /"ok":true/.test(t2) && !/hard limit per job/.test(t2), t2.slice(-200));
 const t3 = await call({ ...v, budget: { ...v.budget, monthlyInr: 5000, totalInr: 1000, maxJobInr: 200, defaultJobCapInr: 200, maxRequestInr: 50, keyReserveUsd: 0 } });
 const v3 = await saved();
-check("raw save above the pilot ceilings: stored clamped (₹1500 / ₹200 / ₹8 / ₹1 / $5)", /"ok":true/.test(t3) && v3.budget.monthlyInr === 1500 && v3.budget.totalInr === 200 && v3.budget.maxJobInr === 8 && v3.budget.maxRequestInr === 1 && v3.budget.keyReserveUsd === 5, v3.budget);
+check("raw save above the pilot ceilings: stored clamped (₹1500 / ₹200 / $5)", /"ok":true/.test(t3) && v3.budget.monthlyInr === 1500 && v3.budget.totalInr === 200 && v3.budget.keyReserveUsd === 5, v3.budget);
 
 section("G. Loading, error, retry");
 await page.goto(URL_SETTINGS);

@@ -103,7 +103,7 @@ export default async function CostsPage() {
               <dd className="font-medium" data-testid="cost-paid">{settings.aiEnabled ? "On" : "Off"}</dd>
               <dt>Importer budget (enforced)</dt>
               <dd data-testid="cost-caps">
-                {inr(caps.monthlyInr)} per month · {inr(caps.jobInr)} per import · {inr(caps.totalInr)} in total · {inr(caps.requestInr)} per request
+                {inr(caps.monthlyInr)} per month · {inr(caps.totalInr)} in total (initial paid-test cap) · no per-import or per-request limit
               </dd>
               <dt>Used</dt>
               <dd data-testid="cost-used">

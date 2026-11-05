@@ -95,7 +95,7 @@ check("summary: estimated today, actual today, total actual, actual this month (
 check("no NaN / undefined anywhere", !/NaN|undefined/.test(await page.locator("main").innerText()));
 check("direct Gemini API shown with 0 calls (not used by the importer)", /Gemini \(direct API\): 0 calls — not used by the importer/.test(await text("[data-testid=cost-gemini-direct]")));
 const limitsText = await text("[data-testid=cost-limits]");
-check("limits: enforced importer budget (₹1500/month · ₹8/import · ₹200 total · ₹1/request), no Ask AI key reserve; retries + fallbacks named; paid AI state shown", /Importer budget \(enforced\)/.test(limitsText) && /₹1500\.00 per month · ₹8\.00 per import · ₹200\.00 in total · ₹1\.00 per request/.test(await text("[data-testid=cost-caps]")) && !/Kept on the shared/.test(limitsText) && /fallback/.test(limitsText) && /^(On|Off)$/.test(await text("[data-testid=cost-paid]")), limitsText);
+check("limits: enforced importer budget (₹1500/month · ₹200 total, no per-import or per-request limit), no Ask AI key reserve; retries + fallbacks named; paid AI state shown", /Importer budget \(enforced\)/.test(limitsText) && /₹1500\.00 per month · ₹200\.00 in total \(initial paid-test cap\) · no per-import or per-request limit/.test(await text("[data-testid=cost-caps]")) && !/Kept on the shared/.test(limitsText) && /fallback/.test(limitsText) && /^(On|Off)$/.test(await text("[data-testid=cost-paid]")), limitsText);
 
 // Unreported / in-flight costs are never shown as ₹0.00 actual spend (synthetic ledger rows, removed below).
 const istNow = new Date(Date.now() + 5.5 * 3_600_000).toISOString();

@@ -1,6 +1,9 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { istDayMonth } from "@/lib/ai-engine/budget";
+import { capsOf } from "@/lib/ai-import/budget-guard";
+import { PILOT_LIMITS } from "@/lib/ai-import/config";
+import { getImporterSettings } from "@/lib/ai-import/settings";
 
 /**
  * The AI Question Importer's cost ledger, read for the AI Cost Center. Two existing records, each
@@ -202,6 +205,8 @@ export interface SpendSummary {
   month: LedgerPeriod;
   /** The same for one job (null when no job was asked for). */
   job: LedgerPeriod | null;
+  /** The enforced importer budget and what it already holds (spent + unknown held + in flight), for the approval screen. */
+  budget: { monthlyInr: number; totalInr: number; monthUsedInr: number; allUsedInr: number };
 }
 
 /**
@@ -211,12 +216,18 @@ export interface SpendSummary {
  */
 export async function importerSpendSummary(jobId: string | null, now = new Date()): Promise<SpendSummary> {
   const { istMonth } = istDayMonth(now);
-  const [monthRows, jobRows] = await Promise.all([
+  const [monthRows, allRows, settings, jobRows] = await Promise.all([
     prisma.$queryRaw<PeriodRow[]>`
       SELECT "status"::text AS status, "costKnown" AS known, COUNT(*)::int AS n,
              COALESCE(SUM("reservedInr"), 0)::float8 AS reserved, COALESCE(SUM("settledInr"), 0)::float8 AS settled
       FROM "AiBudgetReservation" WHERE left("feature", 8) = 'qimport_' AND "istMonth" = ${istMonth}
       GROUP BY 1, 2`,
+    prisma.$queryRaw<PeriodRow[]>`
+      SELECT "status"::text AS status, "costKnown" AS known, COUNT(*)::int AS n,
+             COALESCE(SUM("reservedInr"), 0)::float8 AS reserved, COALESCE(SUM("settledInr"), 0)::float8 AS settled
+      FROM "AiBudgetReservation" WHERE left("feature", 8) = 'qimport_'
+      GROUP BY 1, 2`,
+    getImporterSettings(),
     jobId
       ? prisma.$queryRaw<PeriodRow[]>`
           SELECT "status"::text AS status, "costKnown" AS known, COUNT(*)::int AS n,
@@ -225,7 +236,9 @@ export async function importerSpendSummary(jobId: string | null, now = new Date(
           GROUP BY 1, 2`
       : Promise.resolve(null),
   ]);
-  return { istMonth, month: toPeriod(monthRows), job: jobRows ? toPeriod(jobRows) : null };
+  const month = toPeriod(monthRows);
+  const caps = capsOf(settings.budget, PILOT_LIMITS);
+  return { istMonth, month, job: jobRows ? toPeriod(jobRows) : null, budget: { ...caps, monthUsedInr: month.committedInr, allUsedInr: toPeriod(allRows).committedInr } };
 }
 
 /** Start of an IST calendar day ("2026-10-18") as a Date. */

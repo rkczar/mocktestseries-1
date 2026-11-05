@@ -16,6 +16,9 @@ import { SESSION_EXPIRED, failureKind as probeFailure } from "@/components/admin
 import { ModelAssistant } from "./model-assistant";
 import { AutoConfigure } from "./auto-configure";
 
+// A suggestion filter only (cheap models first) — not a spending limit; the cost of every operation is confirmed before it runs.
+const SUGGEST_MAX_PAGE_INR = 1;
+
 const failureKind = () => probeFailure(SETTINGS_PATH);
 
 type Slot = "extract" | "fallback" | "verify" | "classify" | "key";
@@ -383,7 +386,7 @@ function ImporterModelsCard({ options, value, onChange, disabled, capInr, zdrReq
         )}
         {!disabled && !value.some((id) => options.find((o) => o.id === id && o.vision && !o.visionProblem)) && (
           <div className="flex flex-col gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3" data-testid="importer-suggestions">
-            <p className="font-medium">Models that can read pages within your limits</p>
+            <p className="font-medium">Low-cost models that can read pages</p>
             <p className="text-xs text-[var(--color-muted-foreground)]">
               From the synced catalog: reads page images, fixed published price, at most ₹{capInr} per page at catalog prices{zdrRequired ? ", has a Zero-Data-Retention route" : ""}. Cheapest page first. Nothing is added until you choose Add and save; provider routes are checked after that.
             </p>
@@ -733,7 +736,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
         </CardContent>
       </Card>
 
-      <ImporterModelsCard options={options} value={s.importerModels} onChange={(v) => setS({ ...s, importerModels: v })} disabled={d} capInr={s.budget.maxRequestInr} zdrRequired={s.privacy.zdr} zdrModels={catalog.routes.zdrModels} />
+      <ImporterModelsCard options={options} value={s.importerModels} onChange={(v) => setS({ ...s, importerModels: v })} disabled={d} capInr={SUGGEST_MAX_PAGE_INR} zdrRequired={s.privacy.zdr} zdrModels={catalog.routes.zdrModels} />
 
       <AutoConfigure
         canManage={canManage}
@@ -836,13 +839,11 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
       <Card>
         <CardHeader>
           <CardTitle>Limits</CardTitle>
-          <CardDescription>The importer budget below is enforced for every paid request (spend + requests in flight + the request&apos;s maximum); when a limit is reached nothing more is sent, and local reading, OCR and the deterministic checks keep working. Each paid operation also shows its estimated and maximum cost and starts after one Confirm &amp; Continue. Values can be lowered at any time; they can never be set above ₹{PILOT_LIMITS.monthlyInr} per month, ₹{PILOT_LIMITS.totalInr} in total, ₹{PILOT_LIMITS.maxJobInr} per import or ₹{PILOT_LIMITS.maxRequestInr} per request.</CardDescription>
+          <CardDescription>The monthly budget and the initial paid-test cap are enforced for every paid request (spend + requests in flight + the request&apos;s maximum); when one is reached nothing more is sent, and local reading, OCR and the deterministic checks keep working. There is no per-import or per-request limit: every paid operation shows its estimated and maximum cost, the remaining budget and any shortfall, and starts only after you confirm it; an import never spends more than the maximum you confirmed. Values can be lowered at any time; they can never be set above ₹{PILOT_LIMITS.monthlyInr} per month or ₹{PILOT_LIMITS.totalInr} in total.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-3">
           {field("b-month", `Monthly budget (₹, at most ${PILOT_LIMITS.monthlyInr})`, s.budget.monthlyInr, (n) => set("budget", { monthlyInr: n }), "All importer AI spend in one IST calendar month.")}
           {field("b-total", `Total budget (₹, at most ${PILOT_LIMITS.totalInr})`, s.budget.totalInr, (n) => set("budget", { totalInr: n }), "Initial paid-test cap: all importer AI spend ever recorded, every month included.")}
-          {field("b-job", `Per-import budget (₹, at most ${PILOT_LIMITS.maxJobInr})`, s.budget.maxJobInr, (n) => set("budget", { maxJobInr: n, defaultJobCapInr: n }), "Also never above the maximum confirmed for the import.")}
-          {field("b-request", `Per-request budget (₹, at most ${PILOT_LIMITS.maxRequestInr})`, s.budget.maxRequestInr, (n) => set("budget", { maxRequestInr: n }), "The worst case of one request (retries are separate requests).")}
           <label className="flex items-center gap-2 self-end text-sm sm:col-span-3">
             <input type="checkbox" checked={s.budget.retryTransient} onChange={(e) => set("budget", { retryTransient: e.target.checked })} disabled={d} data-testid="b-retry" />
             Retry a request once after any temporary provider error (a dropped connection is always retried once; every attempt is recorded and included in the maximum)

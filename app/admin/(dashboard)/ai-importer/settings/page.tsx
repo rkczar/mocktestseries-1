@@ -23,7 +23,7 @@ export default async function ImportSettingsPage() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Import Settings</h1>
         <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">
-          Paid AI, models, privacy and limits of the AI Question Importer. The importer budget (₹{settings.budget.monthlyInr} per month, ₹{settings.budget.maxJobInr} per import, ₹{settings.budget.totalInr} in total, ₹{settings.budget.maxRequestInr} per request) is enforced for every paid request; each paid operation&apos;s estimated and maximum cost is also shown and confirmed once (Confirm &amp; Continue).
+          Paid AI, models, privacy and limits of the AI Question Importer. The importer budget (₹{settings.budget.monthlyInr} per month, ₹{settings.budget.totalInr} initial paid-test cap in total) is enforced for every paid request; there is no per-import or per-request limit — each paid operation&apos;s estimated and maximum cost is shown and starts only after you confirm it (Confirm &amp; Continue).
         </p>
       </div>
       {!canManage && (

@@ -13,6 +13,7 @@ import { cancelJobAction, deleteJobAction, deleteJobPreviewAction, reconfigureJo
 import type { ReconfigurePreview } from "@/lib/ai-import/autoconfig-types";
 import { formatInr } from "@/lib/ai-engine/config";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
+import { BudgetCheck } from "@/components/admin/ai-importer/budget-check";
 
 export interface JobControlState {
   id: string;
@@ -165,6 +166,7 @@ function ReconfigureDialog({ job, onClose, onDone }: { job: JobControlState; onC
               </li>
               <li>{preview.next}</li>
             </ul>
+            <BudgetCheck maxInr={preview.maxInr} />
             {preview.blocking.length > 0 && (
               <ul className="list-disc pl-5 text-xs text-[var(--color-error)]" role="alert" data-testid="reconfigure-blocking">
                 {preview.blocking.map((b) => (

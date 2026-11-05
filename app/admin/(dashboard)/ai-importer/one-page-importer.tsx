@@ -628,7 +628,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
               </div>
             </div>
             <div className="flex flex-col gap-2" data-testid="op-cost" data-cost-basis={v.costBasis}>
-              <CostSummary estimateInr={v.estimatedCostInr} maxInr={v.maxCostInr} priced={v.costBasis !== "unknown"} breakdown={current.costLines} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} />
+              <CostSummary estimateInr={v.estimatedCostInr} maxInr={v.maxCostInr} priced={v.costBasis !== "unknown"} breakdown={current.costLines} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} budget={current.spend.budget} />
               {v.costBasis === "zero_published" && (
                 <div className="text-xs text-[var(--color-warning)]" data-testid="op-cost-zero">
                   Published free price (₹0) — a known zero, but free-price routes are often rate-limited.
@@ -731,14 +731,14 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
               </>
             )}
             <div data-testid="op-live-cost">
-              <CostSummary estimateInr={v?.estimatedCostInr ?? null} maxInr={j.maxCostInr} priced={j.maxCostInr !== null} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} />
+              <CostSummary estimateInr={v?.estimatedCostInr ?? null} maxInr={j.maxCostInr} priced={j.maxCostInr !== null} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} budget={current.spend.budget} />
             </div>
           </div>
         )}
 
         {finished && (
           <div data-testid="op-final-cost">
-            <CostSummary estimateInr={v?.estimatedCostInr ?? null} maxInr={j.maxCostInr} priced={j.maxCostInr !== null} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} />
+            <CostSummary estimateInr={v?.estimatedCostInr ?? null} maxInr={j.maxCostInr} priced={j.maxCostInr !== null} job={current.spend.job} month={current.spend.month} istMonth={current.spend.istMonth} budget={current.spend.budget} />
           </div>
         )}
         {finished && current.quality && <QualityPanel jobId={j.id} report={current.quality} canUse={canUse} jobStatus={j.status} files={current.files} runIds={j.runIds} />}

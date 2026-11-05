@@ -1,4 +1,5 @@
-import type { LedgerPeriod } from "@/lib/ai-import/ledger";
+import type { LedgerPeriod, SpendSummary } from "@/lib/ai-import/ledger";
+import { budgetShortfall } from "@/lib/ai-import/budget-guard";
 
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `₹${v.toFixed(2)}`);
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -13,6 +14,15 @@ function actual(p: LedgerPeriod | null): { value: string; detail: string | null 
   return { value: inr(p.actualInr), detail: extra.length ? `plus ${extra.join(" · ")}` : null };
 }
 
+export function ShortfallNote({ short }: { short: string[] }) {
+  if (!short.length) return null;
+  return (
+    <p className="rounded-[var(--radius-card)] border border-[var(--color-warning)] p-3 text-sm" role="alert" data-testid="cost-shortfall">
+      {short.join(" ")} If you confirm, paid AI stops as soon as the budget is reached — nothing beyond it is ever spent — and local reading and checks continue. To avoid that, process fewer pages or raise the budget in Import Settings first.
+    </p>
+  );
+}
+
 /** One priced step of the estimate (page reading, second read, classification, answer key). */
 export interface CostBreakdownLine {
   label: string;
@@ -25,10 +35,11 @@ export interface CostBreakdownLine {
  * The importer's cost figures for one job: its estimate and estimated maximum (before processing), its actual
  * spend, and this month's actual importer spend (AI Question Importer only — no Ask AI, Instagram or other features).
  */
-export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced = true, breakdown, confirmedMaxInr }: { estimateInr: number | null; maxInr: number | null; job: LedgerPeriod | null; month: LedgerPeriod; istMonth: string; priced?: boolean; breakdown?: CostBreakdownLine[]; confirmedMaxInr?: number | null }) {
+export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced = true, breakdown, confirmedMaxInr, budget }: { estimateInr: number | null; maxInr: number | null; job: LedgerPeriod | null; month: LedgerPeriod; istMonth: string; priced?: boolean; breakdown?: CostBreakdownLine[]; confirmedMaxInr?: number | null; budget?: SpendSummary["budget"] }) {
   const [y, m] = istMonth.split("-");
   const j = actual(job);
   const mo = actual(month);
+  const { monthLeft, totalLeft, short } = budgetShortfall(priced ? maxInr : null, budget);
   const rows: { id: string; label: string; value: string; detail?: string | null }[] = [
     { id: "cost-estimate", label: "Estimated cost", value: priced ? inr(estimateInr) : "Unknown — not priced" },
     { id: "cost-max", label: "Estimated maximum", value: priced ? inr(maxInr) : "Unknown — not priced", detail: "an estimate: every request at its worst case" },
@@ -36,6 +47,12 @@ export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced 
     ...(confirmedMaxInr !== undefined ? [{ id: "cost-confirmed-max", label: "Confirmed maximum", value: inr(confirmedMaxInr), detail: "approved by an administrator — never exceeded without a new confirmation" }] : []),
     { id: "cost-job-actual", label: "This job's actual spend", value: j.value, detail: j.detail },
     { id: "cost-month-actual", label: `Importer spend in ${MONTHS[Number(m) - 1] ?? m} ${y}`, value: mo.value, detail: mo.detail ?? "actual, all imports" },
+    ...(budget
+      ? [
+          { id: "cost-month-left", label: "Monthly budget left", value: inr(monthLeft), detail: `${inr(budget.monthUsedInr)} of ${inr(budget.monthlyInr)} used or in flight` },
+          { id: "cost-total-left", label: "Initial paid-testing cap left", value: inr(totalLeft), detail: `${inr(budget.allUsedInr)} of ${inr(budget.totalInr)} used in all` },
+        ]
+      : []),
   ];
   return (
     <div className="flex flex-col gap-2" data-testid="cost-summary">
@@ -50,6 +67,7 @@ export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced 
           </div>
         ))}
       </dl>
+      <ShortfallNote short={short} />
       {breakdown && breakdown.length > 0 && (
         <ul className="flex flex-col gap-0.5 text-xs" data-testid="cost-breakdown">
           {breakdown.map((l) => (

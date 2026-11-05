@@ -7,6 +7,7 @@ import { callImporter } from "@/components/admin/ai-importer/call-importer";
 import { applyReferenceAnswersAction, referenceLocalOcrAction, referenceOcrPreviewAction, referenceOcrStartAction, unlinkReferenceAction } from "@/app/admin/(dashboard)/ai-importer/actions";
 import type { ReferenceOcrPreview } from "@/lib/ai-import/reference-ocr";
 import { ACCEPT, STAGE_LABEL, uploadReferenceFile } from "@/components/admin/ai-importer/upload-client";
+import { BudgetCheck } from "@/components/admin/ai-importer/budget-check";
 
 export interface ReferenceRow {
   refId: string;
@@ -43,6 +44,7 @@ function ReferenceOcr({ jobId, refId, onDone }: { jobId: string; refId: string; 
       <p>
         {preview.pages.length} scanned page(s) with {preview.model ?? "no suitable model"} — estimated cost <b data-testid="reference-ocr-estimate">{inr(preview.estimateInr)}</b>, maximum cost <b data-testid="reference-ocr-max">{inr(preview.maxInr)}</b> (includes one retry per page{preview.fallbackModel ? ` and one fallback read with ${preview.fallbackModel}` : ""}). The reading is evidence only: it never changes a question, an answer, a subject or an image.
       </p>
+      <BudgetCheck maxInr={preview.maxInr} />
       {preview.problems.length > 0 && (
         <ul className="list-disc pl-5 text-[var(--color-error)]" data-testid="reference-ocr-problems">
           {preview.problems.map((p) => (

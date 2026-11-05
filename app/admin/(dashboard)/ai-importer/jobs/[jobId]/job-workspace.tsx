@@ -724,7 +724,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <JobContextFields exams={exams} value={ctx} onChange={(v) => setCtx((c) => ({ ...c, ...v }))} />
-            <CostSummary estimateInr={paid ? (est?.totalInr ?? null) : 0} maxInr={paid ? (est?.maxInr ?? null) : 0} priced={!costUnknown} job={job.spend.job} month={job.spend.month} istMonth={job.spend.istMonth} />
+            <CostSummary estimateInr={paid ? (est?.totalInr ?? null) : 0} maxInr={paid ? (est?.maxInr ?? null) : 0} priced={!costUnknown} job={job.spend.job} month={job.spend.month} istMonth={job.spend.istMonth} budget={job.spend.budget} />
             {cannotConfirm && (
               <p className="text-sm text-[var(--color-error)]" role="alert" data-testid="confirm-blocked">
                 {cannotConfirm}
@@ -777,7 +777,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <CostSummary estimateInr={job.estCostInr} maxInr={job.maxCostInr} priced={job.estCostInr !== null && job.maxCostInr !== null} job={job.spend.job} month={job.spend.month} istMonth={job.spend.istMonth} confirmedMaxInr={job.budgetInr} />
+            <CostSummary estimateInr={job.estCostInr} maxInr={job.maxCostInr} priced={job.estCostInr !== null && job.maxCostInr !== null} job={job.spend.job} month={job.spend.month} istMonth={job.spend.istMonth} budget={job.spend.budget} confirmedMaxInr={job.budgetInr} />
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6" data-testid="batch-summary">
               <Stat label="Questions extracted" value={s.extracted} />
               <Stat label="Eligible for import" value={s.eligibleImport} />

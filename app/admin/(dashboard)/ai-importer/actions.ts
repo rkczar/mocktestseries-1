@@ -38,6 +38,7 @@ import {
   type QuestionEdit,
 } from "@/lib/ai-import/review";
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
+import { importerSpendSummary, type SpendSummary } from "@/lib/ai-import/ledger";
 import { saveProfileFromJob, updateFormatProfile, type FormatProfile, type FormatRules } from "@/lib/ai-import/format-profile";
 import { FORMAT_RULES, addConfusion, addFormatRule, addHeadingAlias, addSynonym, removeMemoryEntry, type FormatRuleCode } from "@/lib/ai-import/taxonomy-memory";
 import { settleJobStatus } from "@/lib/ai-import/summary";
@@ -636,6 +637,11 @@ export async function autoConfigApplyAction(baselineKey: string, proposalKey: st
     },
     ["/admin/ai-importer/settings"]
   );
+}
+
+/** The enforced importer budget and what it holds now — read-only, for the approval dialogs (BudgetCheck). */
+export async function importerBudgetAction(): Promise<ImporterResult<SpendSummary["budget"]>> {
+  return run(await requireUse(), async () => (await importerSpendSummary(null)).budget, []);
 }
 
 /** "Reconfigure Models for This Job": a new model and cost preview for a paused import (nothing is changed). */
