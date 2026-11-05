@@ -238,7 +238,8 @@ check("approved questions added; the job waits for the remaining decisions", /Re
 const pub = (await db.query(`select "sourceLabel", status, "questionId" from "AiImportQuestion" where "jobId"=$1 order by "orderIndex"`, [jobId])).rows;
 const published = pub.filter((r) => r.status === "PUBLISHED");
 check("eligible questions published (incl. option-image Q3, admin-answered Q2)", published.some((r) => r.sourceLabel === "3") && published.some((r) => r.sourceLabel === "2"), pub);
-check("Q8 (answer unverified) imported but not published", pub.find((r) => r.sourceLabel === "8")?.status === "IMPORTED", pub.find((r) => r.sourceLabel === "8"));
+// Reliability-3 (owner 2026-11-05): answers come only from the official key or an administrator, so Q8 (AI answer only) is never stored.
+check("Q8 (AI answer only: no official key, no admin answer) is not added to the Question Bank — Needs correction", pub.find((r) => r.sourceLabel === "8")?.status === "NEEDS_CORRECTION" && !pub.find((r) => r.sourceLabel === "8")?.questionId, pub.find((r) => r.sourceLabel === "8"));
 check("stored questions carry the job's exam and Previous Year Paper", (await db.query(`select count(*)::int n from "Question" q join "AiImportQuestion" a on a."questionId"=q.id where a."jobId"=$1 and (q."examId"<>$2 or q."previousYearPaperId" is distinct from $3)`, [jobId, F.examId, F.paperId])).rows[0].n === 0);
 // The remaining questions are decided (rejected): the job then completes with warnings, never plain Completed.
 await admin.goto(`${BASE}/admin/ai-importer/exceptions?job=${jobId}`);
@@ -259,9 +260,10 @@ const runPage = await admin.goto(`${BASE}${runHref}`);
 // The run page streams in: wait for its label instead of counting immediately.
 const runLabel = await admin.locator(`text=AI Importer — AIUI digital ${F.suffix}`).first().waitFor({ timeout: 20000 }).then(() => true, () => false);
 check("existing Bulk Import history page opens for the run", runPage.status() === 200 && (await admin.locator("text=Application error").count()) === 0 && runLabel);
-const q8 = pub.find((r) => r.sourceLabel === "8");
-await admin.goto(`${BASE}/admin/questions/preview/${q8.questionId}`);
-check("saved question shows 'Answer unverified'", (await admin.locator("text=Answer unverified").count()) > 0);
+// The importer no longer stores a flagged question, so section E exercises the Question Bank publishing gate on a synthetic
+// flag: this scratch job's Q1 is set back to a flagged Draft (scratch DB only; section F still has the other published questions).
+const flagged = pub.find((r) => r.sourceLabel === "1");
+await db.query(`update "Question" set status='DRAFT', "reviewRequired"=true, "reviewReason"='synthetic test: flagged for review' where id=$1`, [flagged.questionId]);
 const q3saved = pub.find((r) => r.sourceLabel === "3");
 await admin.goto(`${BASE}/admin/questions/preview/${q3saved.questionId}`);
 await admin.waitForTimeout(1500);
@@ -277,20 +279,20 @@ check("Cost Center lists the AI calls that were made (none invented when the fre
 
 // ------------------------------------------------------------------ publishing policy in the Question Bank
 section("E. Question Bank publishing gate");
-const bulk = await inPage(admin, "/api/admin/questions/bulk-actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "PUBLISH", ids: [q8.questionId] }) });
+const bulk = await inPage(admin, "/api/admin/questions/bulk-actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "PUBLISH", ids: [flagged.questionId] }) });
 const bj = JSON.parse(bulk.text);
 check("bulk Publish refuses a flagged question and says why", bulk.status === 200 && bj.updatedCount === 0 && bj.blockedCount === 1 && /flagged for review/i.test(bj.message), bj);
 await admin.goto(`${BASE}/admin/questions`);
 await admin.locator("table tbody [role=checkbox]").first().waitFor({ timeout: 30000 });
 await admin.locator("table tbody [role=checkbox]").first().click();
 check("bulk action list offers 'Mark Reviewed (clear flag)'", (await admin.locator("option[value=CLEAR_REVIEW_REQUIRED]").count()) === 1);
-await admin.goto(`${BASE}/admin/questions?tab=add&id=${q8.questionId}`);
+await admin.goto(`${BASE}/admin/questions?tab=add&id=${flagged.questionId}`);
 await admin.locator("select[name=status]").waitFor({ timeout: 20000 });
 await admin.selectOption("select[name=status]", "PUBLISHED");
 await admin.locator("form button[type=submit]").last().click();
 await admin.waitForTimeout(2500);
 check("question form refuses publishing a flagged question", (await admin.locator("text=can't be published").count()) > 0);
-check("still a draft in the database", (await db.query(`select status from "Question" where id=$1`, [q8.questionId])).rows[0].status === "DRAFT");
+check("still a draft in the database", (await db.query(`select status from "Question" where id=$1`, [flagged.questionId])).rows[0].status === "DRAFT");
 
 // ------------------------------------------------------------------ student sees images
 section("F. Student opens the published imported questions");

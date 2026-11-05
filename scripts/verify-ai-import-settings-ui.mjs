@@ -115,11 +115,12 @@ check("unsaved change (ZDR off) previewed: the cheaper non-ZDR model would be ch
 await page.locator("[data-testid=privacy-zdr]").check();
 await page.locator("[data-testid=models-reload]").click();
 await until(async () => (await selModel("extract")) === "mockvision/reader");
-check("no spending cap shown or editable (no per-request / Ask AI reserve fields)", /There is no importer spending cap/.test(await page.locator("body").textContent()) && !/Ceiling fixed in code/.test(await page.locator("body").textContent()) && (await page.locator("[data-testid=b-req], [data-testid=b-key]").count()) === 0);
+// Reliability-3 (owner 2026-11-05): the importer budget is enforced again — ₹1,500/month, ₹200 total, ₹8/import, ₹1/request.
+check("enforced importer budget shown with its ceilings (₹1500 / ₹200 / ₹8 / ₹1); no Ask AI key-reserve field", /importer budget below is enforced/.test(await page.locator("body").textContent()) && /above ₹1500 per month, ₹200 in total, ₹8 per import or ₹1 per request/.test(await page.locator("body").textContent()) && (await page.locator("[data-testid=b-key]").count()) === 0);
 await page.locator("[data-testid=settings-save]").click();
 await page.locator("[data-testid=settings-msg]").waitFor();
 const va = await saved();
-check("saved: importer model list, automatic selection, ZDR on, pricier fallbacks off, pilot limits", JSON.stringify(va?.importerModels) === JSON.stringify(APPROVED) && va?.selection?.mode === "auto" && va?.privacy?.zdr === true && va?.budget?.allowPricierFallback === false && va?.budget?.totalInr === 10 && va?.budget?.maxRequestInr === 1, va);
+check("saved: importer model list, automatic selection, ZDR on, pricier fallbacks off, pilot limits", JSON.stringify(va?.importerModels) === JSON.stringify(APPROVED) && va?.selection?.mode === "auto" && va?.privacy?.zdr === true && va?.budget?.allowPricierFallback === false && va?.budget?.monthlyInr === 1500 && va?.budget?.totalInr === 200 && va?.budget?.maxJobInr === 8 && va?.budget?.maxRequestInr === 1, va);
 check("saving the importer list changed no global AI → Models approval", (await globalFlags()) === flags0);
 await page.reload();
 check("after refresh: the importer list is shown again", (await page.locator("[data-testid=importer-model]").count()) === APPROVED.length);
@@ -189,7 +190,7 @@ check("a model above the old per-request limit is not flagged as refused", (awai
 await pick("extract", "mockvision/reader");
 
 section("E. Save, persistence after refresh, limits");
-check("no job / monthly / all-time budget fields any more", (await page.locator("[data-testid=b-total], [data-testid=b-month], [data-testid=b-maxjob], [data-testid=b-job]").count()) === 0);
+check("budget fields shown with the stored values: monthly ₹1500, total ₹200, per import ₹8, per request ₹1", JSON.stringify(await Promise.all(["b-month", "b-total", "b-job", "b-request"].map((id) => page.locator(`[data-testid=${id}]`).inputValue()))) === JSON.stringify(["1500", "200", "8", "1"]));
 await page.locator("[data-testid=privacy-zdr]").check();
 await page.locator("[data-testid=settings-save]").click();
 await page.locator("[data-testid=settings-msg]").waitFor();
@@ -219,9 +220,9 @@ for (const [label, patch, re] of [
 check("…the saved settings did not change", JSON.stringify(await saved()) === before);
 const t2 = await call({ ...v, budget: { ...v.budget, maxRequestInr: 1, maxJobInr: 0.5 } });
 check("raw save with stored job figures below the request cap: accepted (no job cap to cross-check)", /"ok":true/.test(t2) && !/hard limit per job/.test(t2), t2.slice(-200));
-const t3 = await call({ ...v, budget: { ...v.budget, monthlyInr: 1500, totalInr: 1000, maxJobInr: 200, defaultJobCapInr: 200, maxRequestInr: 50, keyReserveUsd: 0 } });
+const t3 = await call({ ...v, budget: { ...v.budget, monthlyInr: 5000, totalInr: 1000, maxJobInr: 200, defaultJobCapInr: 200, maxRequestInr: 50, keyReserveUsd: 0 } });
 const v3 = await saved();
-check("raw save above the pilot ceilings: stored clamped (₹10 / ₹10 / ₹8 / ₹1 / $5)", /"ok":true/.test(t3) && v3.budget.monthlyInr === 10 && v3.budget.totalInr === 10 && v3.budget.maxJobInr === 8 && v3.budget.maxRequestInr === 1 && v3.budget.keyReserveUsd === 5, v3.budget);
+check("raw save above the pilot ceilings: stored clamped (₹1500 / ₹200 / ₹8 / ₹1 / $5)", /"ok":true/.test(t3) && v3.budget.monthlyInr === 1500 && v3.budget.totalInr === 200 && v3.budget.maxJobInr === 8 && v3.budget.maxRequestInr === 1 && v3.budget.keyReserveUsd === 5, v3.budget);
 
 section("G. Loading, error, retry");
 await page.goto(URL_SETTINGS);

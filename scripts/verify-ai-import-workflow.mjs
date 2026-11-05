@@ -102,7 +102,10 @@ async function submitAndWait(page) {
 
 const admin = await newPage();
 await adminLogin(admin);
-await db.query(`update "Setting" set value = jsonb_set(value, '{aiEnabled}', 'true') where key='ai.importer'`);
+// The UI fixture deletes the ai.importer row, so a plain UPDATE changed nothing and Paid AI stayed OFF (section H then
+// saw "Local reader only"). Upsert so the switch really is ON; the stored budget and every other default still apply.
+await db.query(`insert into "Setting" (key, value, "updatedAt") values ('ai.importer', '{"aiEnabled": true}', now()) on conflict (key) do update set value = jsonb_set("Setting".value, '{aiEnabled}', 'true'), "updatedAt" = now()`);
+check("Paid AI switched ON for this suite (setting row present)", (await db.query(`select value->>'aiEnabled' v from "Setting" where key='ai.importer'`)).rows[0]?.v === "true");
 
 section("A. Choosing files never starts an upload; Submit & Analyze is explicit and validated");
 const before = await jobCount();
