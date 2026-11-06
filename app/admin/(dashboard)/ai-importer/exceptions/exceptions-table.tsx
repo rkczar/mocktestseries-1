@@ -117,7 +117,7 @@ function BulkTaxonomy({ taxonomy, disabled, labels, onApply }: { taxonomy: Taxon
         </span>
         <span className="text-[var(--color-muted-foreground)]">Only questions of this exam can be changed. They are not verified by this: they must still be approved, and their Verify 1 / Verify 2 results become out of date until run again.</span>
         <label className="flex items-center gap-1">
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} data-testid="bulk-taxonomy-remember" /> Remember these as confirmed examples for this exam (only if you have checked each question)
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} data-testid="bulk-taxonomy-remember" /> Remember these as confirmed examples for this exam (only if you have checked each question; each is used only after its question is approved)
         </label>
         <span className="flex gap-1">
           <Button size="sm" disabled={disabled} onClick={() => (setConfirming(false), onApply(s, t || null, u || null, { count: labels.length, remember }))} data-testid="bulk-taxonomy-confirm-apply">
@@ -237,7 +237,7 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
               taxonomy={taxonomy}
               disabled={!ids.length || pending}
               labels={rows.filter((r) => selected.has(r.id)).map((r) => `${r.section ? `${r.section} ` : ""}Q${r.label}`)}
-              onApply={(s, t, u, confirm) => act(() => bulkTaxonomyAction(ids, s, t, u, confirm), (d) => `Subject / topic set on ${d.updated} question(s)${d.remembered ? ` (${d.remembered} saved as examples for this exam)` : ""}${d.refused.length ? `; not changed: ${d.refused.join(" ")}` : ""}. They still need approval; run Verify 1 / Verify 2 again to check them.`)}
+              onApply={(s, t, u, confirm) => act(() => bulkTaxonomyAction(ids, s, t, u, confirm), (d) => `Subject / topic set on ${d.updated} question(s)${d.remembered ? ` (${d.remembered} proposed as examples, used after approval)` : ""}${d.refused.length ? `; not changed: ${d.refused.join(" ")}` : ""}. They still need approval; run Verify 1 / Verify 2 again to check them.`)}
             />
           )}
           {canPublish && (

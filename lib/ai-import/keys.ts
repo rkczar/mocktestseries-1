@@ -49,6 +49,21 @@ export function parseKeyHeader(text: string): KeyHeader | null {
   return h.paper || h.series || h.set || h.totalQuestions ? h : null;
 }
 
+/**
+ * The number of questions a paper or key PRINTS about itself, from its first 3,000 characters: "Total Questions: 120",
+ * "Total Number of Questions: 120", "No. of Questions: 100", "This Test Booklet contains 120 items (questions)".
+ * Null when nothing is printed. Used to establish the expected count independently of the extraction.
+ */
+export function printedQuestionTotal(text: string): number | null {
+  const head = text.slice(0, 3000);
+  const m =
+    /\bTotal\s*(?:No\.?|Number)?\s*(?:of\s*)?(?:Questions|Items)\s*[-:–=]?\s*(\d{1,4})\b/i.exec(head) ??
+    /\b(?:No\.?|Number)\s*of\s*(?:Questions|Items)\s*[-:–=]?\s*(\d{1,4})\b/i.exec(head) ??
+    /\bcontains\s+(\d{1,4})\s+(?:items|questions)\b/i.exec(head);
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isInteger(n) && n > 0 && n <= 1000 ? n : null;
+}
+
 function headerOf(h: { paper?: string | null; series?: string | null; set?: string | null; total_questions?: number | string | null; exam?: string | null } | null | undefined): KeyHeader | null {
   if (!h) return null;
   const total = h.total_questions === null || h.total_questions === undefined ? null : Number.parseInt(String(h.total_questions), 10);

@@ -3,7 +3,10 @@ import { AiImportAnswerStatus, AiImportQuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
-import { qualityReport, type QualityReport, type SequenceAck } from "@/lib/ai-import/quality";
+import { qualityReport, type ExpectedSource, type QualityReport, type SequenceAck } from "@/lib/ai-import/quality";
+import { printedQuestionTotal, type KeyHeader } from "@/lib/ai-import/keys";
+import { readDocx } from "@/lib/ai-import/docx";
+import { vaultPath } from "@/lib/ai-import/vault";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
 /** Statuses in which approved questions can be added to the Question Bank (lib/ai-import/review.ts requestImport). */
@@ -101,6 +104,43 @@ export async function reconcileJob(jobId: string): Promise<JobSummary> {
 
 const PROCESSED_STATES = ["NEEDS_REVIEW", "IMPORTING", "COMPLETED", "COMPLETED_WITH_ISSUES"];
 
+/** Printed totals of Word papers, by vault key (the file never changes once stored). */
+const docxTotals = new Map<string, number | null>();
+
+/**
+ * Question totals printed on the job's own files — the question paper's header (first pages / the Word document's
+ * opening) and each answer key's header — never anything the extraction produced (Sprint A item 6, 2026-11-06).
+ */
+export async function printedExpectedSources(jobId: string): Promise<ExpectedSource[]> {
+  const files = await prisma.aiImportFile.findMany({ where: { jobId, role: { in: ["PAPER", "ANSWER_KEY"] }, status: { not: "REJECTED" } }, select: { id: true, role: true, originalName: true, detected: true, storageKey: true } });
+  const out: ExpectedSource[] = [];
+  for (const f of files) {
+    const detected = f.detected as { kind?: string; keyHeader?: KeyHeader | null } | null;
+    if (f.role === "ANSWER_KEY") {
+      const n = detected?.keyHeader?.totalQuestions ?? null;
+      if (n) out.push({ source: `printed on the answer key “${f.originalName}”`, value: n });
+      continue;
+    }
+    let n: number | null = null;
+    if (detected?.kind === "docx" && f.storageKey) {
+      if (!docxTotals.has(f.storageKey)) {
+        const total = await readDocx(vaultPath(f.storageKey)).then((d) => printedQuestionTotal(d.lines.slice(0, 60).map((l) => l.text).join("\n"))).catch(() => null);
+        docxTotals.set(f.storageKey, total);
+      }
+      n = docxTotals.get(f.storageKey) ?? null;
+    } else {
+      const pages = await prisma.aiImportPage.findMany({ where: { fileId: f.id, pageNumber: { lte: 3 } }, orderBy: { pageNumber: "asc" }, select: { textLayer: true, ocrText: true, rawOutput: true } });
+      for (const p of pages) {
+        const ai = (p.rawOutput as { ai?: { paper_header?: { total_questions?: number | string | null } | null } } | null)?.ai?.paper_header?.total_questions;
+        n = printedQuestionTotal(p.textLayer ?? "") ?? printedQuestionTotal(p.ocrText ?? "") ?? (ai ? Number.parseInt(String(ai), 10) || null : null);
+        if (n) break;
+      }
+    }
+    if (n) out.push({ source: `printed on the question paper “${f.originalName}”`, value: n });
+  }
+  return out;
+}
+
 /** The sequence / quality report of a job, from stored facts only (see lib/ai-import/quality.ts). */
 export async function jobQuality(jobId: string): Promise<QualityReport | null> {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { status: true, expectedQuestions: true, config: true } });
@@ -143,6 +183,7 @@ export async function jobQuality(jobId: string): Promise<QualityReport | null> {
     verifierExtras: [...new Set(extras)],
     ack: ((job.config as { sequenceAck?: SequenceAck } | null)?.sequenceAck ?? null),
     processed: PROCESSED_STATES.includes(job.status),
+    expectedSources: await printedExpectedSources(jobId),
   });
 }
 

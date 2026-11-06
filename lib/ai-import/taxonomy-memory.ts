@@ -59,7 +59,39 @@ export interface MemoryCorrection {
   byId: string;
   at: string;
   source: "admin correction" | "admin bulk correction";
+  /**
+   * Set when the example became active: the administrator ticked "Remember" AND approved the question with this
+   * classification (Sprint A, 2026-11-06). Examples without it (saved before Sprint A) are never used by the classifier.
+   */
+  verifiedAt?: string;
+  verifiedById?: string;
+  evidence?: MemoryExampleEvidence;
+  /** Set when an administrator re-activated a quarantined example after checking its approved question. */
+  reactivatedAt?: string;
+  reactivatedFromBatch?: string;
 }
+/** What the example was based on when it was proposed. */
+export interface MemoryExampleEvidence {
+  sourceNumber: number | null;
+  pages: number[];
+  /** The classification before the administrator's choice, and where it came from. */
+  previous: { subjectId: string | null; topicId: string | null; subTopicId: string | null; source: string | null; confidence: number | null };
+}
+/** "Remember" ticked on a question that is not approved yet: never used until the question is approved unchanged. */
+export interface MemoryProposedExample extends MemoryCorrection {
+  status: "PROPOSED";
+  proposedAt: string;
+}
+/** Kept, with its full record, but never used by the classifier or sent anywhere; re-activated only one by one. */
+export interface MemoryQuarantinedExample extends MemoryCorrection {
+  quarantinedAt: string;
+  quarantinedById: string | null;
+  reason: string;
+  /** One quarantine operation (all entries moved together share it). */
+  batch: string;
+}
+/** An example the classifier may use: active (in `corrections`) and verified by an approval. */
+export const isActiveExample = (c: MemoryCorrection) => !!c.verifiedAt;
 /** A printed section heading of this exam's papers that names one of its subjects ("PREVENTIVE & SOCIAL MEDICINE" → Community Medicine / PSM). */
 export interface MemoryHeadingAlias {
   id: string;
@@ -111,6 +143,10 @@ export interface ExamTaxonomyMemory {
   synonyms: MemorySynonym[];
   confusions: MemoryConfusion[];
   corrections: MemoryCorrection[];
+  /** Examples waiting for their question's approval (kept outside `corrections`, so an older release ignores them). */
+  proposedCorrections?: MemoryProposedExample[];
+  /** Quarantined examples (kept outside `corrections`, so an older release — a rollback — never uses them either). */
+  quarantinedCorrections?: MemoryQuarantinedExample[];
   headingAliases?: MemoryHeadingAlias[];
   formatRules?: MemoryFormatRule[];
   /** Paper-format memory (lib/ai-import/paper-memory.ts): evidence-backed rules, PROPOSED until an administrator confirms. */
@@ -133,7 +169,7 @@ export async function loadExamMemory(examId: string): Promise<ExamTaxonomyMemory
   const row = await prisma.setting.findUnique({ where: { key: `${TAXONOMY_MEMORY_PREFIX}${examId}` } });
   const v = row?.value as Partial<ExamTaxonomyMemory> | null | undefined;
   if (!v || typeof v !== "object" || v.examId !== examId) return null;
-  return { ...emptyMemory(examId, v.taxonomyFingerprint ?? ""), ...v, synonyms: Array.isArray(v.synonyms) ? v.synonyms : [], confusions: Array.isArray(v.confusions) ? v.confusions : [], corrections: Array.isArray(v.corrections) ? v.corrections : [], headingAliases: Array.isArray(v.headingAliases) ? v.headingAliases : [], formatRules: Array.isArray(v.formatRules) ? v.formatRules : [], paperRules: Array.isArray(v.paperRules) ? v.paperRules : [], history: Array.isArray(v.history) ? v.history : [] } as ExamTaxonomyMemory;
+  return { ...emptyMemory(examId, v.taxonomyFingerprint ?? ""), ...v, synonyms: Array.isArray(v.synonyms) ? v.synonyms : [], confusions: Array.isArray(v.confusions) ? v.confusions : [], corrections: Array.isArray(v.corrections) ? v.corrections : [], proposedCorrections: Array.isArray(v.proposedCorrections) ? v.proposedCorrections : [], quarantinedCorrections: Array.isArray(v.quarantinedCorrections) ? v.quarantinedCorrections : [], headingAliases: Array.isArray(v.headingAliases) ? v.headingAliases : [], formatRules: Array.isArray(v.formatRules) ? v.formatRules : [], paperRules: Array.isArray(v.paperRules) ? v.paperRules : [], history: Array.isArray(v.history) ? v.history : [] } as ExamTaxonomyMemory;
 }
 
 async function saveExamMemory(mem: ExamTaxonomyMemory, actorId: string | null, action: string, metadata: Record<string, unknown>): Promise<ExamTaxonomyMemory> {
@@ -223,7 +259,8 @@ export async function classifierContext(examId: string): Promise<ClassifierConte
   if (hit && hit.key === key && Date.now() - hit.at < CACHE_MS) return { ...hit.ctx, droppedOnRefresh: dropped };
   const evidence = await loadEvidence(taxonomy);
   const valid = memory ? validEntries(memory, taxonomy) : null;
-  const mem: ClassifierMemory | null = valid ? { synonyms: valid.synonyms, confusions: valid.confusions, corrections: valid.corrections } : null;
+  // Only active, approval-verified examples (Sprint A): proposed and quarantined ones are stored apart and never read here.
+  const mem: ClassifierMemory | null = valid ? { synonyms: valid.synonyms, confusions: valid.confusions, corrections: valid.corrections.filter(isActiveExample) } : null;
   const ctx: ClassifierContext = { examId, taxonomy, index: buildTaxonomyIndex(taxonomy, evidence, mem), fingerprint, memory, evidenceQuestions: evidence.length, droppedOnRefresh: dropped };
   cache.set(examId, { key, at: Date.now(), ctx });
   return ctx;
@@ -239,19 +276,121 @@ async function current(examId: string): Promise<{ mem: ExamTaxonomyMemory & { he
 }
 
 /**
- * Stores an administrator-confirmed classification of one imported question as a reusable example of its exam
- * (replacing an earlier example of the same question). Questions with too little text are not stored.
+ * "Remember as a confirmed example" on one imported question: stored as a PROPOSED example (replacing an earlier proposal
+ * of the same question). It is used only after the administrator APPROVES the question with this same classification
+ * (promoteExamples). Questions with too little text are not stored. Never called for an AI or local-classifier result.
  */
-export async function rememberCorrection(input: { examId: string; jobId: string; questionId: string; e: ExtractedQuestion; subjectId: string; topicId: string | null; subTopicId: string | null; actorId: string; bulk: boolean }): Promise<boolean> {
+export async function rememberCorrection(input: { examId: string; jobId: string; questionId: string; e: ExtractedQuestion; subjectId: string; topicId: string | null; subTopicId: string | null; actorId: string; bulk: boolean; evidence?: MemoryExampleEvidence }): Promise<boolean> {
   const text = classificationText(input.e).replace(/⟦IMG:[^⟧]*⟧/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200);
   if (text.split(" ").length < 4) return false;
   const { mem, taxonomy } = await current(input.examId);
   const s = taxonomy.find((x) => x.id === input.subjectId);
   if (!s || (input.topicId && !s.topics.some((t) => t.id === input.topicId))) return false;
-  const entry: MemoryCorrection = { id: randomBytes(6).toString("hex"), text, subjectId: input.subjectId, topicId: input.topicId, subTopicId: input.subTopicId, jobId: input.jobId, questionId: input.questionId, byId: input.actorId, at: new Date().toISOString(), source: input.bulk ? "admin bulk correction" : "admin correction" };
-  const corrections = [...mem.corrections.filter((c) => c.questionId !== input.questionId), entry].slice(-MAX_CORRECTIONS);
-  await saveExamMemory({ ...mem, corrections }, input.actorId, "AI_IMPORT_TAXONOMY_EXAMPLE_SAVED", { questionId: input.questionId, jobId: input.jobId, subjectId: input.subjectId, topicId: input.topicId, subTopicId: input.subTopicId });
+  const at = new Date().toISOString();
+  const entry: MemoryProposedExample = { id: randomBytes(6).toString("hex"), text, subjectId: input.subjectId, topicId: input.topicId, subTopicId: input.subTopicId, jobId: input.jobId, questionId: input.questionId, byId: input.actorId, at, source: input.bulk ? "admin bulk correction" : "admin correction", ...(input.evidence ? { evidence: input.evidence } : {}), status: "PROPOSED", proposedAt: at };
+  const proposed = [...(mem.proposedCorrections ?? []).filter((c) => c.questionId !== input.questionId), entry].slice(-MAX_CORRECTIONS);
+  await saveExamMemory({ ...mem, proposedCorrections: proposed }, input.actorId, "AI_IMPORT_TAXONOMY_EXAMPLE_PROPOSED", { questionId: input.questionId, jobId: input.jobId, subjectId: input.subjectId, topicId: input.topicId, subTopicId: input.subTopicId });
   return true;
+}
+
+/**
+ * After an approval: each PROPOSED example of these questions becomes active (verified) when its question is approved
+ * now with exactly the proposed classification; a proposal whose question was re-classified since stays proposed.
+ */
+export async function promoteExamples(examId: string, questions: { id: string; approvedById: string | null; subjectId: string | null; topicId: string | null; subTopicId: string | null }[], actorId: string): Promise<number> {
+  const mem = await loadExamMemory(examId);
+  if (!mem?.proposedCorrections?.length) return 0;
+  const byId = new Map(questions.map((q) => [q.id, q]));
+  const at = new Date().toISOString();
+  const promoted: MemoryCorrection[] = [];
+  const keep: MemoryProposedExample[] = [];
+  for (const p of mem.proposedCorrections) {
+    const q = byId.get(p.questionId);
+    if (q && q.approvedById && q.subjectId === p.subjectId && (q.topicId ?? null) === p.topicId && (q.subTopicId ?? null) === p.subTopicId) {
+      const { status: _s, proposedAt: _p, ...base } = p;
+      void _s;
+      void _p;
+      promoted.push({ ...base, verifiedAt: at, verifiedById: q.approvedById });
+    } else keep.push(p);
+  }
+  if (!promoted.length) return 0;
+  const ids = new Set(promoted.map((c) => c.questionId));
+  const corrections = [...mem.corrections.filter((c) => !ids.has(c.questionId)), ...promoted].slice(-MAX_CORRECTIONS);
+  await saveExamMemory({ ...mem, corrections, proposedCorrections: keep }, actorId, "AI_IMPORT_TAXONOMY_EXAMPLE_VERIFIED", { examples: promoted.map((c) => ({ id: c.id, questionId: c.questionId, subjectId: c.subjectId, topicId: c.topicId })) });
+  return promoted.length;
+}
+
+/** After a rejection: proposals of these questions are quarantined (kept, never used), with the reason. */
+export async function quarantineProposals(examId: string, questionIds: string[], actorId: string, reason: string): Promise<number> {
+  const mem = await loadExamMemory(examId);
+  const gone = (mem?.proposedCorrections ?? []).filter((p) => questionIds.includes(p.questionId));
+  if (!mem || !gone.length) return 0;
+  const at = new Date().toISOString();
+  const batch = `reject-${randomBytes(4).toString("hex")}`;
+  const moved: MemoryQuarantinedExample[] = gone.map(({ status: _s, proposedAt: _p, ...c }) => (void _s, void _p, { ...c, quarantinedAt: at, quarantinedById: actorId, reason, batch }));
+  await saveExamMemory({ ...mem, proposedCorrections: mem.proposedCorrections!.filter((p) => !questionIds.includes(p.questionId)), quarantinedCorrections: [...(mem.quarantinedCorrections ?? []), ...moved] }, actorId, "AI_IMPORT_TAXONOMY_EXAMPLES_QUARANTINED", { batch, reason, count: moved.length, ids: moved.map((c) => c.id) });
+  return moved.length;
+}
+
+export interface QuarantineReport {
+  examId: string;
+  batch: string;
+  dryRun: boolean;
+  before: { active: number; proposed: number; quarantined: number };
+  after: { active: number; proposed: number; quarantined: number };
+  moved: { id: string; questionId: string; jobId: string; subjectId: string; topicId: string | null; subTopicId: string | null; at: string; source: string }[];
+}
+
+/**
+ * Quarantines EVERY active example of an exam (owner approval 2, 2026-11-06: the 108 CMS examples saved by a checkbox that
+ * was on by default). Nothing is deleted: each entry is moved with its full record (text, ids, job, question,
+ * administrator, time) into `quarantinedCorrections` with the reason, actor, time and one batch id; the history and the
+ * audit log record the operation and every id. Quarantined examples are never read by the classifier or any AI request
+ * and are never re-activated automatically. `dryRun` reports what would move and writes nothing.
+ */
+export async function quarantineExamples(examId: string, actorId: string, reason: string, opts: { dryRun?: boolean } = {}): Promise<QuarantineReport> {
+  if (reason.trim().length < 10) throw new ImportJobError("Give the reason for the quarantine (at least a few words).");
+  const mem = await loadExamMemory(examId);
+  if (!mem) throw new ImportJobError("Nothing is stored for this exam.");
+  const at = new Date().toISOString();
+  const batch = `q-${at.slice(0, 10).replace(/-/g, "")}-${randomBytes(3).toString("hex")}`;
+  const before = { active: mem.corrections.length, proposed: mem.proposedCorrections?.length ?? 0, quarantined: mem.quarantinedCorrections?.length ?? 0 };
+  const moved: MemoryQuarantinedExample[] = mem.corrections.map((c) => ({ ...c, quarantinedAt: at, quarantinedById: actorId, reason: reason.trim().slice(0, 300), batch }));
+  const report: QuarantineReport = {
+    examId,
+    batch,
+    dryRun: !!opts.dryRun,
+    before,
+    after: { active: 0, proposed: before.proposed, quarantined: before.quarantined + moved.length },
+    moved: moved.map((c) => ({ id: c.id, questionId: c.questionId, jobId: c.jobId, subjectId: c.subjectId, topicId: c.topicId, subTopicId: c.subTopicId, at: c.at, source: c.source })),
+  };
+  if (opts.dryRun || !moved.length) return report;
+  await saveExamMemory({ ...mem, corrections: [], quarantinedCorrections: [...(mem.quarantinedCorrections ?? []), ...moved] }, actorId, "AI_IMPORT_TAXONOMY_EXAMPLES_QUARANTINED", { batch, reason: reason.trim().slice(0, 300), count: moved.length, ids: moved.map((c) => c.id) });
+  return report;
+}
+
+/**
+ * Re-activates ONE quarantined example, only when it can be verified now: its import question still exists, an
+ * administrator has approved it (or it is in the Question Bank), and its current subject / topic / subtopic are exactly
+ * the example's. Anything else is refused with the reason; the entry stays quarantined.
+ */
+export async function reactivateExample(examId: string, id: string, actorId: string): Promise<MemoryCorrection> {
+  const mem = await loadExamMemory(examId);
+  const entry = mem?.quarantinedCorrections?.find((c) => c.id === id);
+  if (!mem || !entry) throw new ImportJobError("That quarantined example no longer exists.");
+  const q = await prisma.aiImportQuestion.findUnique({ where: { id: entry.questionId }, select: { approvedById: true, status: true, subjectId: true, topicId: true, subTopicId: true, job: { select: { examId: true } } } });
+  if (!q) throw new ImportJobError("Its question no longer exists (the import was deleted), so the example cannot be verified — it stays quarantined.");
+  if (q.job.examId !== examId) throw new ImportJobError("Its question belongs to another exam — it stays quarantined.");
+  if (!q.approvedById && q.status !== "IMPORTED" && q.status !== "PUBLISHED") throw new ImportJobError("Its question is not approved — approve the question with this classification first; the example stays quarantined.");
+  if (q.subjectId !== entry.subjectId || (q.topicId ?? null) !== entry.topicId || (q.subTopicId ?? null) !== entry.subTopicId) throw new ImportJobError("The question's approved subject / topic differs from the example's — it stays quarantined.");
+  const { quarantinedAt: _a, quarantinedById: _b, reason: _r, batch, ...base } = entry;
+  void _a;
+  void _b;
+  void _r;
+  const at = new Date().toISOString();
+  const active: MemoryCorrection = { ...base, verifiedAt: at, verifiedById: actorId, reactivatedAt: at, reactivatedFromBatch: batch };
+  await saveExamMemory({ ...mem, corrections: [...mem.corrections.filter((c) => c.questionId !== entry.questionId), active], quarantinedCorrections: mem.quarantinedCorrections!.filter((c) => c.id !== id) }, actorId, "AI_IMPORT_TAXONOMY_EXAMPLE_REACTIVATED", { id, questionId: entry.questionId, batch });
+  return active;
 }
 
 export async function addSynonym(examId: string, actorId: string, term: string, subjectId: string | null, topicId: string | null): Promise<void> {

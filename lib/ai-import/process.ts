@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { AiImportFileRole, AiImportFileStatus, AiImportPageStatus, AiImportQuestionStatus, type AiImportFile, type AiImportJob, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseImportFile } from "@/lib/bulk-import";
-import { pageLayout, renderPage, type PageLayout } from "@/lib/ai-import/pdf";
+import { ocrTextLayer, pageLayout, renderPage, type PageLayout } from "@/lib/ai-import/pdf";
 import { readDocx, IMG_TOKEN, type DocxContent } from "@/lib/ai-import/docx";
 import { joinPreamble, orphanQuestion, parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
 import { blockToQuestion, candidateInstruction, cleanStem, formatStem, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
@@ -286,6 +286,17 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
     const scanned = textChars < 80;
     let textLayer = layout.lines.map((l) => l.text).join("\n").slice(0, 20_000);
     let local: (PageExtraction & { preamble: string }) | null = scanned ? null : parsePdfPageLocal({ lines: layout.lines, images: layout.images }, p, state);
+    // A searchable scan carries an invisible OCR text layer (Sprint A item 2, 2026-11-06). It is read (free) but never
+    // trusted on its own: local OCR stays the reader, and the layer's question numbers are an independent cross-check
+    // recorded on the page; without local OCR the layer's text is kept for review / the AI read as a hint only.
+    const layerLayout = scanned ? await ocrTextLayer(full, p, work, textChars) : null;
+    const layer = layerLayout
+      ? {
+          chars: layerLayout.lines.reduce((a, l) => a + l.text.replace(/\s+/g, "").length, 0),
+          text: layerLayout.lines.map((l) => l.text).join("\n").slice(0, 20_000),
+          numbers: parsePdfPageLocal({ lines: layerLayout.lines, images: [] }, p, { ...startState }).questions.map((q) => q.number).filter((n): n is number => n !== null),
+        }
+      : null;
     // No usable text layer (a scan, or text drawn as outlines) — or a text layer in which no question could be found
     // (e.g. a poor third-party OCR layer): read the RENDERED page with local OCR. A page is never "blank" only because
     // it has no text layer.
@@ -316,14 +327,15 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
       // No OCR on this server: blank only when the rendered page has (almost) no ink; anything else is read by AI or reviewed.
       const ink = await pageInk(full, p);
       const blank = ink < BLANK_INK_BELOW;
-      const why = blank ? `blank: ${(ink * 100).toFixed(2)}% ink on the rendered page` : `no text layer and local OCR is not available — ${(ink * 100).toFixed(1)}% of the page has ink`;
-      const status = blank ? AiImportPageStatus.DONE : AiImportPageStatus.PENDING;
-      await record(p, { status, kind: blank ? "BLANK" : "SCANNED", textChars, imageCount: layout.images.length, inkCoverage: ink, outcome: blank ? "BLANK_VERIFIED" : "NEEDS_REVIEW", outcomeReason: why, rawOutput: { startState, endState: { ...state } }, processedAt: status === AiImportPageStatus.DONE ? new Date() : null });
+      const why = blank && !layer ? `blank: ${(ink * 100).toFixed(2)}% ink on the rendered page` : layer ? `no visible text and local OCR is not available — the PDF's own OCR text layer (${layer.chars} characters${layer.numbers.length ? `, question numbers ${layer.numbers.join(", ")}` : ""}) is kept as a hint, not as the reading` : `no text layer and local OCR is not available — ${(ink * 100).toFixed(1)}% of the page has ink`;
+      const status = blank && !layer ? AiImportPageStatus.DONE : AiImportPageStatus.PENDING;
+      await record(p, { status, kind: blank && !layer ? "BLANK" : "SCANNED", textChars, ...(layer ? { textLayer: layer.text } : {}), imageCount: layout.images.length, inkCoverage: ink, outcome: blank && !layer ? "BLANK_VERIFIED" : "NEEDS_REVIEW", outcomeReason: why, rawOutput: { startState, endState: { ...state }, ...(layer ? { ocrLayer: { chars: layer.chars, numbers: layer.numbers } } : {}) }, processedAt: status === AiImportPageStatus.DONE ? new Date() : null });
       continue;
     }
     if (ocr && !ocr.result.extraction) {
       // Blank (verified by ink), cover / instructions / rough work, or ink without readable text.
-      const explained = ocr.result.outcome === "BLANK_VERIFIED" || ocr.result.outcome === "INSTRUCTIONS";
+      // The OCR layer showing question numbers on a page local OCR called blank / instructions is a disagreement to review.
+      const explained = (ocr.result.outcome === "BLANK_VERIFIED" || ocr.result.outcome === "INSTRUCTIONS") && !layer?.numbers.length;
       const status = explained ? AiImportPageStatus.DONE : AiImportPageStatus.PENDING;
       await record(p, { status, kind: ocr.result.outcome === "BLANK_VERIFIED" ? "BLANK" : "SCANNED", textChars, textLayer, imageCount: layout.images.length, ...ocrFields, outcome: ocr.result.outcome, outcomeReason: ocr.result.reason, model: status === AiImportPageStatus.DONE ? "local" : null, processedAt: status === AiImportPageStatus.DONE ? new Date() : null, rawOutput: { startState, endState: { ...state } } });
       if (ocr.result.outcome === "INSTRUCTIONS") await logEvent(ctx.job.id, "PAGE_NOT_QUESTIONS", `${file.originalName} page ${p}: ${ocr.result.reason} — no questions taken from it.`, { page: p });
@@ -345,10 +357,14 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
     }
     if (local.questions.length) previous = local.questions[local.questions.length - 1];
     const status = needsAi && aiUsable(ctx.settings) ? AiImportPageStatus.PENDING : AiImportPageStatus.DONE;
-    const outcome = ocr ? ocr.result.outcome : noQuestions ? "NO_QUESTIONS" : "TEXT_LAYER";
-    const outcomeReason = ocr ? ocr.result.reason : noQuestions ? "the text layer was read but no numbered question was found — check it" : `${local.questions.length} question(s) from the PDF's own text${local.reliable ? "" : ` (uncertain: ${local.reasons.slice(0, 3).join("; ")})`}`;
+    const read = local.questions.map((q) => q.number).filter((n): n is number => n !== null);
+    const layerOnly = layer ? layer.numbers.filter((n) => !read.includes(n)) : [];
+    // A question number the OCR layer shows but the reading missed leaves the page unexplained (quality blocker).
+    const outcome = layerOnly.length ? "NEEDS_REVIEW" : ocr ? ocr.result.outcome : noQuestions ? "NO_QUESTIONS" : "TEXT_LAYER";
+    const layerCheck = layer ? (layerOnly.length ? ` The PDF's own OCR text layer also shows question number(s) ${layerOnly.join(", ")} that this reading did not find — check the page.` : ` The PDF's own OCR text layer agrees on the question numbers (${layer.numbers.length}).`) : "";
+    const outcomeReason = (ocr ? ocr.result.reason : noQuestions ? "the text layer was read but no numbered question was found — check it" : `${local.questions.length} question(s) from the PDF's own text${local.reliable ? "" : ` (uncertain: ${local.reasons.slice(0, 3).join("; ")})`}`) + layerCheck;
     const pageKind = ocr ? "SCANNED" : needsAi ? "TEXT_UNRELIABLE" : "TEXT";
-    const rawOutput = { startState, endState: { ...state }, local: { reliable: local.reliable, reasons: local.reasons }, ...(ocr ? { ocr: { skew: ocr.result.layout.skew, gutter: ocr.result.layout.gutter, furniture: ocr.result.layout.furniture.slice(0, 40), seconds: ocr.raw.seconds, rereads: ocr.raw.rereads } } : {}) } as Prisma.InputJsonValue;
+    const rawOutput = { startState, endState: { ...state }, local: { reliable: local.reliable, reasons: local.reasons }, ...(layer ? { ocrLayer: { chars: layer.chars, numbers: layer.numbers, notRead: layerOnly } } : {}), ...(ocr ? { ocr: { skew: ocr.result.layout.skew, gutter: ocr.result.layout.gutter, furniture: ocr.result.layout.furniture.slice(0, 40), seconds: ocr.raw.seconds, rereads: ocr.raw.rereads } } : {}) } as Prisma.InputJsonValue;
     await record(p, { status, kind: pageKind, textChars, textLayer, imageCount: layout.images.length, ...ocrFields, outcome, outcomeReason, rawOutput, processedAt: status === AiImportPageStatus.DONE ? new Date() : null, model: status === AiImportPageStatus.DONE ? (ocr ? ocr.raw.engine : "local") : null });
   }
 }

@@ -18,7 +18,7 @@ import { effective, runPostProcessing } from "@/lib/ai-import/post";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { planOf } from "@/lib/ai-import/select";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
-import { headingResolver, rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
+import { headingResolver, promoteExamples, quarantineProposals, rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { MAX_VERIFY_PASSES, contentCurrent, contentPartOf, fingerprintsOf, passCount, withPass } from "@/lib/ai-import/verify-core";
 import { learnFromCorrections } from "@/lib/ai-import/paper-learn";
@@ -214,6 +214,11 @@ export async function approveQuestions(ids: string[], actorId: string, opts: { f
   }
   // The corrections just confirmed may establish a reusable paper-format rule (stored PROPOSED; never used unconfirmed).
   for (const j of jobIds) if (out.approved) await learnFromCorrections(j, actorId);
+  // Proposed classification examples of the questions approved now become active (only when unchanged since proposed).
+  if (done.length) {
+    const rows = await prisma.aiImportQuestion.findMany({ where: { id: { in: done } }, select: { id: true, approvedById: true, subjectId: true, topicId: true, subTopicId: true, job: { select: { examId: true } } } });
+    for (const examId of new Set(rows.map((r) => r.job.examId))) await promoteExamples(examId, rows.filter((r) => r.job.examId === examId), actorId);
+  }
   return out;
 }
 
@@ -251,6 +256,8 @@ export async function rejectQuestions(ids: string[], actorId: string, reason: st
     await logEvent(first.jobId, "QUESTIONS_REJECTED", `${ids.length} question(s) rejected`, { ids, reason }, actorId);
     await settleJobStatus(first.jobId);
     await learnFromCorrections(first.jobId, actorId);
+    const job = await prisma.aiImportJob.findUnique({ where: { id: first.jobId }, select: { examId: true } });
+    if (job) await quarantineProposals(job.examId, ids, actorId, `question rejected: ${(reason || "rejected by an administrator").slice(0, 120)}`);
   }
 }
 
@@ -292,9 +299,10 @@ export async function setTaxonomy(id: string, actorId: string, subjectId: string
   if (subTopicId && (!topic || !topic.subTopics.some((st) => st.id === subTopicId))) throw new ImportJobError("That sub-topic does not belong to the topic (for this exam).");
   const subTopic = subTopicId ? topic!.subTopics.find((st) => st.id === subTopicId)! : null;
   await prisma.aiImportQuestion.update({ where: { id }, data: { subjectId, topicId, subTopicId: subTopicId ?? null, taxonomyConfidence: 1, taxonomySource: "admin", ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED } });
-  const remembered = opts.remember ? await rememberCorrection({ examId: q.job.examId, jobId: q.jobId, questionId: id, e: effective(q), subjectId, topicId, subTopicId: subTopicId ?? null, actorId, bulk: !!opts.bulk }) : false;
-  await adminCheck(id, "Topic set", `${subject.name} › ${topic ? topic.name : "no topic"}${subTopic ? ` › ${subTopic.name}` : ""}${opts.bulk ? " (bulk correction)" : ""}${remembered ? " — saved as an example for this exam" : ""}`);
-  await logEvent(q.jobId, "TAXONOMY_SET", `Q${q.sourceLabel}: ${subject.name} › ${topic?.name ?? "no topic"}${subTopic ? ` › ${subTopic.name}` : ""}${opts.bulk ? " (bulk)" : ""}${remembered ? " — saved as an example for this exam" : ""}`, { questionId: id, from: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource }, to: { subjectId, topicId, subTopicId }, remembered, bulk: !!opts.bulk }, actorId);
+  // "Remember" stores a PROPOSED example only; it becomes active when this question is approved with this classification.
+  const remembered = opts.remember === true ? await rememberCorrection({ examId: q.job.examId, jobId: q.jobId, questionId: id, e: effective(q), subjectId, topicId, subTopicId: subTopicId ?? null, actorId, bulk: !!opts.bulk, evidence: { sourceNumber: q.sourceNumber, pages: q.pages, previous: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource, confidence: q.taxonomyConfidence } } }) : false;
+  await adminCheck(id, "Topic set", `${subject.name} › ${topic ? topic.name : "no topic"}${subTopic ? ` › ${subTopic.name}` : ""}${opts.bulk ? " (bulk correction)" : ""}${remembered ? " — proposed as an example for this exam (used only after this question is approved)" : ""}`);
+  await logEvent(q.jobId, "TAXONOMY_SET", `Q${q.sourceLabel}: ${subject.name} › ${topic?.name ?? "no topic"}${subTopic ? ` › ${subTopic.name}` : ""}${opts.bulk ? " (bulk)" : ""}${remembered ? " — proposed as an example for this exam (used only after this question is approved)" : ""}`, { questionId: id, from: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource }, to: { subjectId, topicId, subTopicId }, remembered, bulk: !!opts.bulk }, actorId);
   await prisma.auditLog.create({ data: { actorId, action: opts.bulk ? "AI_IMPORT_TAXONOMY_BULK_SET" : "AI_IMPORT_TAXONOMY_SET", entityType: "AiImportQuestion", entityId: id, metadata: { jobId: q.jobId, from: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, source: q.taxonomySource }, to: { subjectId, topicId, subTopicId: subTopicId ?? null }, remembered } } });
   return { remembered };
 }
@@ -669,9 +677,9 @@ export async function acknowledgeSequence(jobId: string, actorId: string, note: 
   // What is acknowledged is the CURRENT difference, computed here; it lapses when the facts change.
   const quality = await jobQuality(jobId);
   if (!quality) throw new ImportJobError("Import job not found.", 404);
-  if (!quality.missing.length && !quality.countDifference) throw new ImportJobError("There is no count difference or missing number to acknowledge.");
+  if (!quality.missing.length && !quality.countDifference && !quality.expectedConflict && quality.expected !== null) throw new ImportJobError("There is no count difference, missing number, expected-count conflict or unknown expected count to acknowledge.");
   const expect = { missing: quality.missing, expected: quality.expected, counted: quality.counted };
-  const ack: SequenceAck = { byId: actorId, at: new Date().toISOString(), note: note.trim().slice(0, 500), missing: expect.missing.slice(0, 1000), expected: expect.expected, counted: expect.counted };
+  const ack: SequenceAck = { byId: actorId, at: new Date().toISOString(), note: note.trim().slice(0, 500), missing: expect.missing.slice(0, 1000), expected: expect.expected, counted: expect.counted, conflict: quality.expectedConflict };
   await prisma.aiImportJob.update({ where: { id: jobId }, data: { config: { ...((job.config as object) ?? {}), sequenceAck: ack } as unknown as Prisma.InputJsonValue } });
   await settleJobStatus(jobId);
   await logEvent(jobId, "SEQUENCE_ACKNOWLEDGED", `Count difference acknowledged: ${ack.note} (expected ${ack.expected ?? "—"}, counted ${ack.counted}, missing ${ack.missing.join(", ") || "none"})`, ack as unknown as Record<string, unknown>, actorId);
@@ -699,6 +707,14 @@ export async function addMissingQuestion(input: { jobId: string; fileId: string;
   return row.id;
 }
 
+/** Refuses publishing while the paper is incomplete (QualityReport.publishBlocker); the refusal is logged. */
+export async function assertPaperPublishable(jobId: string, actorId: string, mode: string): Promise<void> {
+  const quality = await jobQuality(jobId);
+  if (!quality?.publishBlocker) return;
+  await logEvent(jobId, "PUBLISH_BLOCKED_INCOMPLETE", `Publish refused: ${quality.publishBlocker}`, { mode, expected: quality.expected, counted: quality.counted, missing: quality.missing.slice(0, 50), expectedFrom: quality.expectedFrom }, actorId);
+  throw new ImportJobError(`Not published: ${quality.publishBlocker}`);
+}
+
 /** Admin chooses how to import: draft only, or import and publish (all eligible / selected). */
 export async function requestImport(jobId: string, actorId: string, mode: ImportMode, questionIds: string[] | null) {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId } });
@@ -706,6 +722,10 @@ export async function requestImport(jobId: string, actorId: string, mode: Import
   const allowed: AiImportJobStatus[] = [AiImportJobStatus.NEEDS_REVIEW, AiImportJobStatus.COMPLETED_WITH_ISSUES, AiImportJobStatus.COMPLETED];
   if (!allowed.includes(job.status)) throw new ImportJobError("Questions can be imported once processing has finished.");
   if (mode === "PUBLISH_SELECTED" && !questionIds?.length) throw new ImportJobError("Select the questions to publish.");
+  // Completeness gate (owner Sprint A item 6, 2026-11-06): nothing of a paper is published while its question count is
+  // unconfirmed or contradicted by a printed total, questions are missing without an acknowledged reason, or pages were
+  // not read. Adding questions as Draft stays possible; the decision is the administrator's, never silent.
+  if (mode !== "DRAFT") await assertPaperPublishable(jobId, actorId, mode);
   const plan: ImportPlan = { mode, questionIds: mode === "PUBLISH_SELECTED" ? questionIds : null, requestedById: actorId, requestedAt: new Date().toISOString() };
   const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: { in: allowed } }, data: { status: AiImportJobStatus.IMPORTING, config: { ...((job.config as object) ?? {}), importPlan: plan } as unknown as Prisma.InputJsonValue } });
   if (!r.count) throw new ImportJobError("Another import of this job has just started.", 409);

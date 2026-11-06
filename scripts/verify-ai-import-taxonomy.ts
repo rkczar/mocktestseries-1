@@ -31,7 +31,7 @@ import { addFile, completeFile, confirmJob, createJob, putChunk, requestAnalysis
 import { runWorker } from "@/lib/ai-import/worker";
 import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
 import { fingerprintOf, requestVerify2, runVerify1, verify2Preview } from "@/lib/ai-import/paper-verify";
-import { bulkSetTaxonomy, reclassifyQuestions, setTaxonomy } from "@/lib/ai-import/review";
+import { approveQuestions, bulkSetTaxonomy, reclassifyQuestions, setAnswer, setTaxonomy } from "@/lib/ai-import/review";
 import { refreshRoutes } from "@/lib/ai-import/routes";
 import { buildTaxonomyIndex, classifyLocally, classifyPaper, textSufficient, verifyStoredTaxonomy, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
 import { TAXONOMY_MEMORY_PREFIX, classifierContext, loadExamMemory, taxonomyFingerprint, validEntries } from "@/lib/ai-import/taxonomy-memory";
@@ -474,10 +474,16 @@ async function main() {
     const t7now = verifyState(t7.data, fingerprintOf(t7));
     const t7pv = (t7.data as unknown as ExtractedQuestion).paperVerify;
     check("…its content verification is NOT out of date; the classification checks no longer describe the stored ids", t7now.v1 !== "stale" && t7now.v2 !== "stale" && [t7pv?.v1?.classification?.stored, t7pv?.v2?.classification?.stored].every((x) => !x || x.subjectId !== t7.subjectId || x.topicId !== t7.topicId), [t7now.v1, t7now.v2, t7pv?.v2?.classification?.stored]);
-    check("…audit log entry + TAXONOMY_SET event with from / to", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_TAXONOMY_SET", entityId: target.id } })) === auditBefore + 1 && /saved as an example/.test((await events(j1, "TAXONOMY_SET")).at(-1)?.message ?? ""));
-    const memA = await loadExamMemory(A.exam.id);
-    check("…saved as a confirmed example of THIS exam (ids, job, question, administrator, source)", memA?.corrections.length === 1 && memA.corrections[0].subjectId === idOf("s-derm") && memA.corrections[0].questionId === target.id && memA.corrections[0].byId === actor && memA.corrections[0].source === "admin correction" && !(await loadExamMemory(B.exam.id)), memA?.corrections);
-    check("…an audit entry for the stored example", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_TAXONOMY_EXAMPLE_SAVED", entityId: A.exam.id } })) === 1);
+    check("…audit log entry + TAXONOMY_SET event with from / to", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_TAXONOMY_SET", entityId: target.id } })) === auditBefore + 1 && /proposed as an example/.test((await events(j1, "TAXONOMY_SET")).at(-1)?.message ?? ""));
+    // Sprint A item 3 (2026-11-06): "Remember" PROPOSES the example; it becomes active only when the question is approved.
+    let memA = await loadExamMemory(A.exam.id);
+    check("…proposed as an example of THIS exam (ids, job, question, administrator, source) — not active yet", memA?.corrections.length === 0 && memA.proposedCorrections?.length === 1 && memA.proposedCorrections[0].subjectId === idOf("s-derm") && memA.proposedCorrections[0].questionId === target.id && memA.proposedCorrections[0].byId === actor && memA.proposedCorrections[0].source === "admin correction" && !(await loadExamMemory(B.exam.id)), memA?.proposedCorrections);
+    check("…an audit entry for the proposed example", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_TAXONOMY_EXAMPLE_PROPOSED", entityId: A.exam.id } })) === 1);
+    // The synthetic paper has no key: the administrator confirms Q7's answer, then approves the question.
+    await setAnswer(target.id, actor, [((await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: target.id } })).data as unknown as ExtractedQuestion).options[0].label]);
+    const ap7 = await approveQuestions([target.id], actor);
+    memA = await loadExamMemory(A.exam.id);
+    check("…approving the question with that classification makes the example active (verified, audited)", ap7.approved === 1 && memA?.corrections.length === 1 && !!memA.corrections[0].verifiedAt && memA.corrections[0].questionId === target.id && (await prisma.auditLog.count({ where: { action: "AI_IMPORT_TAXONOMY_EXAMPLE_VERIFIED", entityId: A.exam.id } })) === 1, { ap7, c: memA?.corrections });
     // A later paper of the same exam with the same question uses the example; another exam does not.
     writeFileSync(path.join(FX, "tx-paper2.docx"), docx(paperParagraphs([{ ...SRC[6], n: 1 }, { ...SRC[0], n: 2 }, { ...SRC[2], n: 3 }, { ...SRC[3], n: 4 }, { ...SRC[8], n: 5 }])));
     const j2 = await createJob({ actorId: actor, title: `Taxonomy reuse ${TAG}`, examId: A.exam.id, paperType: AiImportPaperType.FULL_PAPER, subjectId: null, year: 2025, paperCode: null, previousYearPaperId: null, expectedQuestions: 5 });

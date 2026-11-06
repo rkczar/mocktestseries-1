@@ -291,6 +291,37 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     }
   }
 
+  // 1c. A printed answer an earlier reader misread (2026-11-06: "Correct Answer: (B) 1, 2 and 4" stored as B, A, D — the
+  // statement code taken as option labels): read again from the Word source and corrected when the source's question is
+  // the same (stem and options equal apart from whitespace). Only the printed annotation changes — never the official,
+  // administrator or final answer (the official key still decides); approved or hand-edited questions are only reported.
+  let printedFixed = 0;
+  for (const [fileId, src] of freshByFile) {
+    for (const q of await prisma.aiImportQuestion.findMany({ where: { fileId }, include: { figures: true } })) {
+      if (LOCKED.includes(q.status)) continue;
+      const d = q.data as unknown as ExtractedQuestion;
+      const twin = src.questions.get(`${d.section}|${d.number}`);
+      if (!twin) continue;
+      const was = [...(d.printedAnswer ?? [])].sort().join();
+      const now = [...twin.printedAnswer].sort().join();
+      if (was === now) continue;
+      const flat = (t: string) => t.replace(/\s*⟦IMG:(?:\d+|missing)⟧\s*/g, " ").replace(/\s+/g, "");
+      const same = flat(twin.stem) === flat(d.stem) && twin.options.length === d.options.length && twin.options.every((o, i) => flat(o.text) === flat(stripAnnotationTail(d.options[i].text)));
+      if (!same) continue;
+      if (q.editedData || q.approvedById) {
+        fixProblems.set(q.id, [...(fixProblems.get(q.id) ?? []), { code: "EXTRACTION_UNCERTAIN", detail: `The Word source prints the answer as ${twin.printedAnswer.join(", ") || "nothing"} (“${(twin.printedAnswerRaw ?? "").slice(0, 60)}”), but ${was || "nothing"} is stored. The question was ${q.approvedById ? "approved" : "corrected by hand"}, so it is not changed automatically.` }]);
+        continue;
+      }
+      const evidence = `the answer line as printed in ${src.name} (“${(twin.printedAnswerRaw ?? "").slice(0, 60)}”)`;
+      const fixes: VerifyFix[] = [{ field: "printed answer", before: (d.printedAnswer ?? []).join(", ") || "—", after: twin.printedAnswer.join(", ") || "—", evidence }];
+      await recordVersion({ questionId: q.id, jobId, kind: "EXTRACTION", data: d, figures: snapshotFigures(q.figures), changes: fixes, actorId, note: "Before Verify 1 read the printed answer again from the Word source." });
+      await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { data: { ...d, printedAnswer: twin.printedAnswer, printedAnswerRaw: twin.printedAnswerRaw ?? d.printedAnswerRaw, notes: [...(d.notes ?? []), `Verify 1 read the printed answer again from ${src.name}: ${(d.printedAnswer ?? []).join(", ") || "—"} → ${twin.printedAnswer.join(", ") || "—"} (a printed annotation, not an official answer).`] } as unknown as Prisma.InputJsonValue } });
+      fixesBy.set(q.id, [...(fixesBy.get(q.id) ?? []), ...fixes]);
+      printedFixed++;
+    }
+  }
+  if (printedFixed) await logEvent(jobId, "PRINTED_ANSWER_REREAD", `Verify 1 read the printed answer of ${printedFixed} question(s) again from the Word source (no AI). Only the printed annotation changed; official and administrator answers were not touched.`, { questions: printedFixed }, actorId);
+
   // 1d. A lone printed tick left at the end of an option / the question text (the mark of the answer line that follows
   // the options, "✓ Correct Answer: (b) …"), and section headings the earlier reading missed: corrected only with source
   // evidence (the Word source read again, or the page's text layer), never on a question an administrator edited or
@@ -1386,6 +1417,8 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
  */
 export async function importAndPublishEligible(jobId: string, actorId: string): Promise<{ approved: number; requested: number; skipped: number }> {
   await finishedJob(jobId);
+  const { assertPaperPublishable } = await import("@/lib/ai-import/review");
+  await assertPaperPublishable(jobId, actorId, "PUBLISH_ALL");
   const summary = await paperSummary(jobId);
   if (!summary?.eligible.length) throw new ImportJobError("No question is eligible yet: a question needs a passed Verify 1 and an agreeing Verify 2 (both up to date) and no open flag. Run the verifications, or approve questions one by one.");
   const r = await approveQuestions(summary.eligible, actorId);
@@ -1407,7 +1440,8 @@ export async function publishEligibleQuestion(questionId: string, actorId: strin
   const q = await prisma.aiImportQuestion.findUnique({ where: { id: questionId }, include: { figures: true } });
   if (!q) throw new ImportJobError("Question not found.", 404);
   await finishedJob(q.jobId);
-  const { revalidateQuestions } = await import("@/lib/ai-import/review");
+  const { revalidateQuestions, assertPaperPublishable } = await import("@/lib/ai-import/review");
+  await assertPaperPublishable(q.jobId, actorId, "PUBLISH_SELECTED");
   await revalidateQuestions(q.jobId, [q.id]);
   const fresh = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: questionId }, include: { figures: true } });
   const settings = await getImporterSettings();

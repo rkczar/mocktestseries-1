@@ -458,8 +458,8 @@ async function productionReplay(examId: string, pypId: string, actorId: string, 
     const r = rows.find((x) => x.sourceNumber === b.n)!;
     const off = truth[String(b.n)];
     const ac = (r.data as unknown as ExtractedQuestion).checks?.answer;
-    const ok = b.n === 119 ? r.issueCodes.includes("ANSWER_MISMATCH") && ac?.status === "FAILED" : off.includes("/") ? r.answerStatus === "AMBIGUOUS_MAPPING" && ac?.status !== "PASSED" : r.finalAnswer.join() === off && r.answerStatus === "OFFICIAL_MATCHED" && r.issueCodes.includes("AI_OPINION_DIFFERS") && ac?.status === "PASSED" && /Warning/.test(ac.detail);
-    check(`  Q${b.n}: production ${b.finalAnswer.join("") || "—"} → official ${off}; now ${r.finalAnswer.join("") || "—"} (${r.answerStatus}${r.issueCodes.includes("AI_OPINION_DIFFERS") ? ", AI opinion differs — shown as a warning" : ""})`, ok, { codes: r.issueCodes, answer: ac });
+    const ok = b.n === 119 ? r.issueCodes.includes("ANSWER_MISMATCH") && ac?.status === "FAILED" : off.includes("/") ? r.answerStatus === "AMBIGUOUS_MAPPING" && ac?.status !== "PASSED" : r.finalAnswer.join() === off && r.answerStatus === "OFFICIAL_MATCHED" && !r.issueCodes.includes("AI_OPINION_DIFFERS") && ac?.status === "PASSED"; // Sprint A item 5 (2026-11-06): the matched official key decides; a differing AI opinion raises no flag
+    check(`  Q${b.n}: production ${b.finalAnswer.join("") || "—"} → official ${off}; now ${r.finalAnswer.join("") || "—"} (${r.answerStatus}${r.issueCodes.includes("AI_OPINION_DIFFERS") ? ", AI opinion differs — flagged" : ", the differing AI opinion raises no flag"})`, ok, { codes: r.issueCodes, answer: ac });
   }
   const rec = await prisma.aiImportEvent.findFirst({ where: { jobId: job.id, type: "KEY_RECONCILED" } });
   check("KEY_RECONCILED event lists every changed answer", !!rec && ((rec.data as { changes?: unknown[] } | null)?.changes?.length ?? 0) >= 116, rec?.message);

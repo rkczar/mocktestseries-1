@@ -38,7 +38,7 @@ import { mergedAnswerIn, splitOptions, takePrintedAnswer } from "@/lib/ai-import
 import { addReference, compareWithReference, listReferences, referenceOnly, unlinkReference } from "@/lib/ai-import/reference";
 import { contentFingerprint, verifyState } from "@/lib/ai-import/verify-core";
 import { importAndPublishEligible, paperSummary, requestVerify2, runVerify1, verify2Preview } from "@/lib/ai-import/paper-verify";
-import { approveQuestions, requestImport, setTaxonomy } from "@/lib/ai-import/review";
+import { acknowledgeSequence, approveQuestions, requestImport, setTaxonomy } from "@/lib/ai-import/review";
 import { refreshRoutes } from "@/lib/ai-import/routes";
 import { buildZip } from "@/lib/rich-import/zip-writer";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
@@ -398,7 +398,13 @@ async function main() {
     check("eligible to publish without individual review: none (Verify 2 re-read the same Word text — not independent)", eligibleLabels.length === 0 && ["1", "4"].every((l) => v(l).v2 === "verified" && v(l).pv?.v2?.independence === "SAME_TEXT"), [eligibleLabels, qs.map((x) => [x.sourceLabel, vs(x)?.v1, vs(x)?.v2, x.status, x.issueCodes])]);
     check("paper summary: totals, verified, unresolved disagreements, cost estimate vs actual", sum1!.total === 5 && sum1!.verified === 2 && sum1!.unresolved >= 2 && sum1!.classificationIssues >= 1 && sum1!.missing.includes("Q5") && sum1!.cost.verify2?.actualInr === Math.round(jobB2.spentInr * 100) / 100, sum1);
     const noBulk = await importAndPublishEligible(jB, actor).catch((e) => e as Error);
-    check("Import & Publish Eligible refuses: nothing is eligible", noBulk instanceof Error && /No question is eligible yet/.test(noBulk.message), noBulk instanceof Error ? noBulk.message : noBulk);
+    // Sprint A item 6 (2026-11-06): the paper is incomplete (Q5 missing) — publishing is refused on that ground first.
+    check("Import & Publish Eligible refuses: the paper is incomplete (Q5 missing) — nothing is published", noBulk instanceof Error && /6 expected \/ 5 extracted \/ 1 missing/.test(noBulk.message), noBulk instanceof Error ? noBulk.message : noBulk);
+    const blockedSel = await requestImport(jB, actor, "PUBLISH_SELECTED", ["1", "4"].map((l) => byLabel(qs, l)!.id)).catch((e) => e as Error);
+    check("publishing selected questions of the incomplete paper is refused too (Draft stays possible)", blockedSel instanceof Error && /incomplete/.test(blockedSel.message), blockedSel instanceof Error ? blockedSel.message : blockedSel);
+    await acknowledgeSequence(jB, actor, "synthetic paper: Q5 is deliberately absent");
+    const noBulk2 = await importAndPublishEligible(jB, actor).catch((e) => e as Error);
+    check("after the gap is acknowledged with a reason: Import & Publish Eligible refuses only because nothing is eligible", noBulk2 instanceof Error && /No question is eligible yet/.test(noBulk2.message), noBulk2 instanceof Error ? noBulk2.message : noBulk2);
     // An administrator reviews Q1 and Q4 one by one and publishes them (the backend publish rules still apply).
     const apQ = await approveQuestions(["1", "4"].map((l) => byLabel(qs, l)!.id), actor);
     check("Q1 and Q4 approved individually", apQ.approved === 2, apQ);

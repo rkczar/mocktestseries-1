@@ -40,7 +40,7 @@ import {
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
 import { importerSpendSummary, type SpendSummary } from "@/lib/ai-import/ledger";
 import { saveProfileFromJob, updateFormatProfile, type FormatProfile, type FormatRules } from "@/lib/ai-import/format-profile";
-import { FORMAT_RULES, addConfusion, addFormatRule, addHeadingAlias, addSynonym, removeMemoryEntry, type FormatRuleCode } from "@/lib/ai-import/taxonomy-memory";
+import { FORMAT_RULES, addConfusion, addFormatRule, addHeadingAlias, addSynonym, removeMemoryEntry, type FormatRuleCode, reactivateExample } from "@/lib/ai-import/taxonomy-memory";
 import { settleJobStatus } from "@/lib/ai-import/summary";
 import { normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
 import { importerModelCatalog, importerSettingsProblems } from "@/lib/ai-import/models";
@@ -826,6 +826,15 @@ export async function removeTaxonomyMemoryAction(examId: string, kind: "synonym"
   return run(await requireManage(), async (actorId) => {
     if (typeof examId !== "string" || !["synonym", "confusion", "correction", "headingAlias", "formatRule", "paperRule"].includes(kind) || typeof id !== "string") throw new ImportJobError("Choose the entry to remove.");
     await removeMemoryEntry(examId, actorId, kind, id);
+    return null;
+  });
+}
+
+/** Re-activates one quarantined classification example — only when its question is approved with the same classification. */
+export async function reactivateTaxonomyExampleAction(examId: string, id: string): Promise<ImporterResult<null>> {
+  return run(await requireManage(), async (actorId) => {
+    if (typeof examId !== "string" || typeof id !== "string" || !id) throw new ImportJobError("Choose the example to re-activate.");
+    await reactivateExample(examId, id, actorId);
     return null;
   });
 }

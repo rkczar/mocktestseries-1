@@ -433,6 +433,11 @@ async function main() {
   const apK = await approveQuestions([sk2.id, sk3.id], actor);
   check("approval sees the figure placements confirmed a moment earlier (re-checked first)", apK.approved === 2, apK.refused);
   await revalidateQuestions(jobK, [sk2.id, sk3.id]);
+  // Sprint A item 6 (2026-11-06): nothing is published while the paper's question count is unconfirmed.
+  const unconfirmed = await requestImport(jobK, actor, "PUBLISH_ALL", null).catch((e) => e as Error);
+  check("publishing is refused while the expected question count is not confirmed (nothing printed, nothing entered)", unconfirmed instanceof Error && /not confirmed/.test(unconfirmed.message), unconfirmed instanceof Error ? unconfirmed.message : unconfirmed);
+  // Two papers, one key: the administrator explains why no single expected count applies (never silent).
+  await acknowledgeSequence(jobK, actor, "two synthetic papers in one job; no printed total");
   await requestImport(jobK, actor, "PUBLISH_ALL", null);
   await runWorker(300_000);
   const kq = await prisma.aiImportQuestion.findMany({ where: { jobId: jobK }, include: { figures: true } });

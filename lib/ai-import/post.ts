@@ -50,6 +50,16 @@ export function effective(q: Pick<AiImportQuestion, "data" | "editedData">): Ext
 export const IMPORTABLE = new Set(["SINGLE_CORRECT", "MULTIPLE_CORRECT", "MATCH_THE_FOLLOWING", "ASSERTION_REASON"]);
 
 const WITHDRAWN = /^(bonus|dropped|deleted|withdrawn|\*|x|×)$/i;
+
+/**
+ * Does the matched official key entry decide this question's answer by itself? One distinct value, from a key printed for
+ * this paper, not dropped, that names an option of the question. Then no AI answer opinion is requested (Sprint A item 5).
+ */
+export function keyDecidesAnswer(rows: { rawValue: string; wrongPaper: boolean }[], optionLabels: string[]): boolean {
+  if (!rows.length || rows.some((r) => r.wrongPaper)) return false;
+  const values = [...new Set(rows.map((r) => r.rawValue.toUpperCase().replace(/[()\s]/g, "")))];
+  return values.length === 1 && !WITHDRAWN.test(values[0]) && !!parseKeyAnswer(rows[0].rawValue, optionLabels).labels?.length;
+}
 /** Words for a visual a question can point at (a bare mention is not a pointer: "seen on chest X-ray" is text). */
 const VISUAL = String.raw`(?:figure|fig\.?|diagram|graph|image|picture|photo(?:graph|micrograph)?|radiograph|x-ray|xray|ecg|ekg|chart|illustration|circuit|structure|specimen)`;
 /**
@@ -307,7 +317,16 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const seenInBatch = new Map<string, string>();
 
   // ---- Optional AI: independent answers + classification (only for questions that need them) ----
-  const needsSolve = settings.verification.independentAnswer && settings.aiEnabled && settings.models.verify ? open.filter((q) => !only || only.has(q.id)).filter((q) => !q.aiAnswer.length && IMPORTABLE.has(effective(q).type) && effective(q).options.length === 4) : [];
+  // An official key entry that gives this question one usable answer decides it: an AI opinion there can only add noise
+  // (2026-11-06: a 4B model disagreed with the official key on 66 of 120 questions). Opinions are asked only where the
+  // paper's own (correct-paper) key has no single usable entry.
+  const officialDecides = (q: (typeof open)[number]) => {
+    const k = keyFor.get(q.id);
+    return !!k && keyDecidesAnswer(k.rows.map((r) => ({ rawValue: r.rawValue, wrongPaper: wrongKeyFiles.has(keyFileOfRow.get(r.id) ?? "") })), effective(q).options.map((o) => o.printed || o.label));
+  };
+  const needsSolve = settings.verification.independentAnswer && settings.aiEnabled && settings.models.verify ? open.filter((q) => !only || only.has(q.id)).filter((q) => !q.aiAnswer.length && IMPORTABLE.has(effective(q).type) && effective(q).options.length === 4 && !officialDecides(q)) : [];
+  const opinionSkipped = settings.verification.independentAnswer && settings.aiEnabled && settings.models.verify ? open.filter((q) => (!only || only.has(q.id)) && !q.aiAnswer.length && officialDecides(q)).length : 0;
+  if (opinionSkipped) await logEvent(job.id, "AI_OPINION_SKIPPED", `Independent AI answer opinions were not requested for ${opinionSkipped} question(s): the official answer key gives their answer.`, { questions: opinionSkipped });
   // A spending limit stops the optional AI steps of this run only: everything deterministic below still runs (owner
   // decision 1, 2026-11-05: local and deterministic processing keep working while paid AI is blocked).
   let aiStop: string | null = null;
@@ -815,8 +834,11 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     // by hand while the official key says D): the administrator's value is kept, the conflict blocks Ready until resolved.
     const adminVsKey = !!q.answerConfirmedById && official.length > 0 && q.finalAnswer.length > 0 && !sameSet(q.finalAnswer, official);
     if (adminVsKey) add("ANSWER_MISMATCH", `An administrator set the answer to ${q.finalAnswer.join(", ")}, but the official key says ${official.join(", ")}${officialPage ? ` (key page ${officialPage})` : ""}. Check it and set the answer again (the official key is shown; nothing was changed).`);
-    if (q.aiAnswer.length && official.length && !sameSet(q.aiAnswer, official)) add("AI_OPINION_DIFFERS", `AI opinion ${q.aiAnswer.join(", ")} (${q.aiAnswerModel}) differs from the official key ${official.join(", ")}. The official key is kept.`);
-    if (q.aiAnswer.length) checks.push({ stage: 3, name: "Independent AI opinion", passed: !official.length || sameSet(q.aiAnswer, official), severity: official.length && !sameSet(q.aiAnswer, official) ? "WARNING" : "INFO", method: "AI", model: q.aiAnswerModel, detail: `AI suggests ${q.aiAnswer.join(", ")} (confidence ${Math.round((q.aiAnswerConfidence ?? 0) * 100)}%) — an opinion, never an official answer.` });
+    // When the official key matched, it decides the answer: a differing AI opinion is shown for reference only and raises
+    // no flag (2026-11-06, owner Sprint A item 5). It is still flagged where the key entry could not be applied.
+    const keyDecided = answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED;
+    if (q.aiAnswer.length && official.length && !sameSet(q.aiAnswer, official) && !keyDecided) add("AI_OPINION_DIFFERS", `AI opinion ${q.aiAnswer.join(", ")} (${q.aiAnswerModel}) differs from the official key ${official.join(", ")}. The official key is kept.`);
+    if (q.aiAnswer.length) checks.push({ stage: 3, name: "Independent AI opinion", passed: keyDecided || !official.length || sameSet(q.aiAnswer, official), severity: official.length && !sameSet(q.aiAnswer, official) && !keyDecided ? "WARNING" : "INFO", method: "AI", model: q.aiAnswerModel, detail: `AI suggests ${q.aiAnswer.join(", ")} (confidence ${Math.round((q.aiAnswerConfidence ?? 0) * 100)}%) — an opinion, never an official answer.${keyDecided && !sameSet(q.aiAnswer, official) ? ` The official key (${official.join(", ")}) decides this question; the opinion is shown for reference only.` : ""}` });
     const typeOk = (labels: string[]) => (type === "MULTIPLE_CORRECT" ? labels.length >= 2 : labels.length === 1);
     if (!finalAnswer.length || !typeOk(finalAnswer)) {
       if (!issues.has("ANSWER_UNVERIFIED") && !issues.has("ANSWER_AMBIGUOUS") && !issues.has("ANSWER_MISMATCH") && !issues.has("POSSIBLE_WITHDRAWN") && !issues.has("ANSWER_KEY_PAPER_MISMATCH") && !issues.has("ANSWER_TYPE_CONFLICT")) add("ANSWER_MISSING", finalAnswer.length ? `The answer (${finalAnswer.join(", ")}) does not fit a ${type.replace(/_/g, " ").toLowerCase()} question.` : "No usable answer (no key entry, nothing printed in the paper).");

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
-import { addFormatRuleAction, addHeadingAliasAction, addTaxonomyConfusionAction, addTaxonomySynonymAction, removeTaxonomyMemoryAction } from "../actions";
+import { addFormatRuleAction, addHeadingAliasAction, addTaxonomyConfusionAction, addTaxonomySynonymAction, reactivateTaxonomyExampleAction, removeTaxonomyMemoryAction } from "../actions";
 
 type Subject = { id: string; name: string; topics: { id: string; name: string }[] };
 
@@ -19,6 +19,9 @@ export function TaxonomyMemoryEditor({
   synonyms,
   confusions,
   corrections,
+  proposed = [],
+  quarantined = [],
+  quarantinedTotal = 0,
   headingAliases = [],
   formatRules = [],
   ruleOptions = [],
@@ -30,7 +33,10 @@ export function TaxonomyMemoryEditor({
   subjects: Subject[];
   synonyms: { id: string; term: string; target: string; at: string }[];
   confusions: { id: string | null; a: string; b: string; note: string | null; builtIn: boolean }[];
-  corrections: { id: string; text: string; target: string; source: string; at: string; jobId: string }[];
+  corrections: { id: string; text: string; target: string; source: string; at: string; jobId: string; active?: boolean }[];
+  proposed?: { id: string; text: string; target: string; at: string; questionId: string }[];
+  quarantined?: { id: string; text: string; target: string; at: string; quarantinedAt: string; reason: string; batch: string; jobId: string }[];
+  quarantinedTotal?: number;
   headingAliases?: { id: string; raw: string; target: string; at: string; version: number; note: string | null }[];
   formatRules?: { id: string; rule: string; label: string; at: string; version: number; note: string | null }[];
   ruleOptions?: { code: string; label: string }[];
@@ -239,8 +245,8 @@ export function TaxonomyMemoryEditor({
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>Confirmed examples ({corrections.length})</CardTitle>
-          <CardDescription>Questions an administrator classified in Review Exceptions with “Remember” on. A new question that is nearly the same gets the same subject / topic (and is still checked by Verify 1 / Verify 2).</CardDescription>
+          <CardTitle>Confirmed examples ({corrections.filter((c) => c.active).length} active)</CardTitle>
+          <CardDescription>Questions an administrator classified with “Remember” ticked AND then approved with that classification. A new question that is nearly the same gets the same subject / topic (and is still checked by Verify 1 / Verify 2). Entries marked “not verified” were saved before approval was required and are not used.</CardDescription>
         </CardHeader>
         <CardContent>
           <ul className="flex flex-col gap-1 text-xs" data-testid="taxonomy-corrections">
@@ -248,7 +254,7 @@ export function TaxonomyMemoryEditor({
               <li key={c.id} className="flex items-start gap-2 border-t border-[var(--color-border)] pt-1">
                 <span className="flex-1">
                   <b>{c.target}</b> — {c.text}
-                  <span className="ml-1 text-[var(--color-muted-foreground)]">({c.source}, {c.at.slice(0, 10)})</span>
+                  <span className="ml-1 text-[var(--color-muted-foreground)]">({c.source}, {c.at.slice(0, 10)}{c.active ? "" : ", not verified — not used"})</span>
                 </span>
                 {canEdit && (
                   <Button size="sm" variant="outline" disabled={ro} onClick={() => act(() => removeTaxonomyMemoryAction(examId, "correction", c.id), "Removed.")}>
@@ -258,6 +264,47 @@ export function TaxonomyMemoryEditor({
               </li>
             ))}
             {!corrections.length && <li className="text-[var(--color-muted-foreground)]">None yet.</li>}
+          </ul>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Proposed examples ({proposed.length})</CardTitle>
+          <CardDescription>“Remember” was ticked, but the question is not approved yet. Not used until the question is approved with this exact classification; a rejected question&apos;s proposal is quarantined.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="flex flex-col gap-1 text-xs" data-testid="taxonomy-proposed">
+            {proposed.map((c) => (
+              <li key={c.id} className="border-t border-[var(--color-border)] pt-1">
+                <b>{c.target}</b> — {c.text} <span className="text-[var(--color-muted-foreground)]">(proposed {c.at.slice(0, 10)})</span>
+              </li>
+            ))}
+            {!proposed.length && <li className="text-[var(--color-muted-foreground)]">None.</li>}
+          </ul>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Quarantined examples ({quarantinedTotal})</CardTitle>
+          <CardDescription>Kept with their full record, never used by the classifier or sent to any AI, and never re-activated automatically. “Re-activate” works only when the example&apos;s question still exists and is approved with exactly this classification.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="flex flex-col gap-1 text-xs" data-testid="taxonomy-quarantined">
+            {quarantined.map((c) => (
+              <li key={c.id} className="flex items-start gap-2 border-t border-[var(--color-border)] pt-1">
+                <span className="flex-1">
+                  <b>{c.target}</b> — {c.text}
+                  <span className="ml-1 text-[var(--color-muted-foreground)]">(saved {c.at.slice(0, 10)}; quarantined {c.quarantinedAt.slice(0, 10)}, batch {c.batch}: {c.reason})</span>
+                </span>
+                {canEdit && (
+                  <Button size="sm" variant="outline" disabled={ro} onClick={() => act(() => reactivateTaxonomyExampleAction(examId, c.id), "Re-activated: its approved question confirms it.")} data-testid="taxonomy-reactivate">
+                    Re-activate
+                  </Button>
+                )}
+              </li>
+            ))}
+            {!quarantined.length && <li className="text-[var(--color-muted-foreground)]">None.</li>}
+            {quarantinedTotal > quarantined.length && <li className="text-[var(--color-muted-foreground)]">Showing the newest {quarantined.length} of {quarantinedTotal}.</li>}
           </ul>
         </CardContent>
       </Card>

@@ -248,7 +248,8 @@ export function QuestionReview({
   const [subjectId, setSubjectId] = useState(q.subjectId ?? "");
   const [topicId, setTopicId] = useState(q.topicId ?? "");
   const [subTopicId, setSubTopicId] = useState(q.subTopicId ?? "");
-  const [rememberTax, setRememberTax] = useState(true);
+  // Off by default (Sprint A, 2026-11-06): remembering is an explicit decision, and it only proposes the example.
+  const [rememberTax, setRememberTax] = useState(false);
   const [take, setTake] = useState<Set<string>>(new Set());
   const [addImg, setAddImg] = useState({ owner: "STEM", label: "A" });
   const [addCrop, setAddCrop] = useState<number | null>(null);
@@ -528,9 +529,9 @@ export function QuestionReview({
               </SelectNative>
             )}
             <label className="flex items-center gap-1 text-xs">
-              <input type="checkbox" checked={rememberTax} onChange={(e) => setRememberTax(e.target.checked)} data-testid="rv-remember-topic" /> Remember as a confirmed example for this exam
+              <input type="checkbox" checked={rememberTax} onChange={(e) => setRememberTax(e.target.checked)} data-testid="rv-remember-topic" /> Remember as a confirmed example for this exam (proposed now; used only after you approve this question with this subject / topic)
             </label>
-            <Button size="sm" disabled={pending || !subjectId} onClick={() => act(() => setTaxonomyAction(q.id, subjectId, topicId || null, subTopicId || null, rememberTax), "Subject/topic saved. The question still needs approval; run Verify 1 / Verify 2 again to check it.")} data-testid="rv-set-topic">
+            <Button size="sm" disabled={pending || !subjectId} onClick={() => act(() => setTaxonomyAction(q.id, subjectId, topicId || null, subTopicId || null, rememberTax), rememberTax ? "Subject/topic saved and proposed as an example — it is used only after you approve this question. The question still needs approval; run Verify 1 / Verify 2 again to check it." : "Subject/topic saved. The question still needs approval; run Verify 1 / Verify 2 again to check it.")} data-testid="rv-set-topic">
               Save
             </Button>
             {q.classification && (

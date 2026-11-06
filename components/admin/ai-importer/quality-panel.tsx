@@ -67,7 +67,7 @@ export function QualityPanel({
       setMsg(res.ok ? { ok: true, text: ok(res.data) } : { ok: false, text: res.error });
       if (res.ok) router.refresh();
     });
-  const sequenceIssue = r.missing.length > 0 || (r.countDifference !== null && r.countDifference !== 0);
+  const sequenceIssue = r.missing.length > 0 || (r.countDifference !== null && r.countDifference !== 0) || !!r.expectedConflict || r.expected === null;
 
   return (
     <div className="flex flex-col gap-3" data-testid="quality-panel" data-state={r.state}>
@@ -78,7 +78,7 @@ export function QualityPanel({
         </Badge>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Expected" value={r.expected ?? "—"} testId="q-expected" tone={r.expected === null ? "warn" : undefined} />
+        <Stat label="Expected" value={r.expected ?? "—"} testId="q-expected" tone={r.expected === null || r.expectedConflict ? "warn" : undefined} hint={r.expectedFrom ?? (r.expectedSources.length ? undefined : "not printed on the paper or key")} />
         <Stat label="Extracted" value={r.extracted} testId="q-extracted" hint={r.rejected ? `${r.rejected} rejected` : undefined} />
         <Stat label="Independently verified" value={r.verified} testId="q-verified" tone={r.verifyDisagreed ? "warn" : undefined} hint={r.verifyDisagreed ? `${r.verifyDisagreed} disagree` : r.unverified ? `${r.unverified} not verified` : undefined} />
         <Stat label="Approved" value={r.approved} testId="q-approved" hint={r.awaitingApproval ? `${r.awaitingApproval} awaiting approval` : undefined} />
@@ -91,6 +91,11 @@ export function QualityPanel({
         <Stat label="Answer key" value={`${r.answerKey.official} official`} testId="q-key" hint={`${r.answerKey.independentlyVerified} verified · ${r.answerKey.unverified} unverified · ${r.answerKey.missing} missing${r.answerKey.mismatch ? ` · ${r.answerKey.mismatch} mismatch` : ""}`} />
         <Stat label="Subject / topic uncertain" value={r.topicUncertain} tone={r.topicUncertain ? "warn" : undefined} testId="q-topics" />
       </div>
+      <p className="text-sm" data-testid="q-completeness">
+        <b>{r.expected ?? "?"} expected / {r.counted} extracted{r.countDifference !== null && r.countDifference > 0 ? ` / ${r.countDifference} missing` : ""}</b>
+        {r.expectedSources.length > 0 && <span className="text-[var(--color-muted-foreground)]"> · printed: {r.expectedSources.map((x) => `${x.value} (${x.source})`).join("; ")}</span>}
+        {r.publishBlocker ? <span className="block text-[var(--color-error)]" data-testid="q-publish-blocked">Publishing is blocked: {r.publishBlocker}</span> : null}
+      </p>
       {r.blockers.length > 0 && (
         <div className="rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-error)_45%,transparent)] p-3" role="alert" data-testid="quality-blockers">
           <p className="text-sm font-medium">Unresolved — the import cannot be completed until these are fixed or explained:</p>

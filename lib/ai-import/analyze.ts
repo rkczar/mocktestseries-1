@@ -67,16 +67,23 @@ function typeCounts(texts: string[]): Record<string, number> {
   return out;
 }
 
-/** Per page: small text fragments (flattened sub/superscripts), from ONE pdftohtml pass over the document. */
-async function scriptFragmentsPerPage(full: string): Promise<Map<number, number>> {
-  const out = new Map<number, number>();
+/**
+ * Per page: small text fragments (flattened sub/superscripts) and the VISIBLE text's length, from ONE pdftohtml pass over
+ * the document (pdftohtml leaves out invisible OCR-layer text, which pdftotext includes). `visible` is null when the
+ * pass failed.
+ */
+async function scriptFragmentsPerPage(full: string): Promise<Map<number, number> & { visible?: Map<number, number> | null }> {
+  const out: Map<number, number> & { visible?: Map<number, number> | null } = new Map<number, number>();
+  out.visible = null;
   let xml: string;
   try {
     xml = (await runTool("pdftohtml", ["-xml", "-i", "-q", "-stdout", "-zoom", "1.5", full], { timeoutMs: 180_000, maxOutput: 64 * 1024 * 1024 })).toString("utf8");
   } catch {
     return out;
   }
+  out.visible = new Map();
   for (const page of xml.matchAll(/<page number="(\d+)"[^>]*height="([\d.]+)"[^>]*>([\s\S]*?)<\/page>/g)) {
+    out.visible.set(Number(page[1]), [...page[3].matchAll(/<text [^>]*>([\s\S]*?)<\/text>/g)].reduce((a, m) => a + m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, "").length, 0));
     const segs = [...page[3].matchAll(/<text [^>]*height="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/g)].map((m) => ({ text: m[2].replace(/<[^>]+>/g, ""), box: { x: 0, y: 0, w: 0, h: Number(m[1]) / Number(page[2]) } }));
     const n = scriptFragments(segs);
     if (n) out.set(Number(page[1]), n);
@@ -94,6 +101,7 @@ async function analyzePdf(file: AiImportFile): Promise<FileFacts> {
   const state = { last: 0, sectionIdx: 1 };
   const detail: PageFact[] = [];
   let local = 0;
+  let ocrLayerPages = 0;
   for (let i = 0; i < pages; i++) {
     const t = perPage[i] ?? "";
     const chars = t.replace(/\s+/g, "").length;
@@ -101,7 +109,12 @@ async function analyzePdf(file: AiImportFile): Promise<FileFacts> {
     // No text layer and no embedded image is NOT blank: the text may be drawn as shapes (seen 2026-11-04, RUHS MO
     // 2016 — 18 such pages were skipped as blank). Such pages are read from the rendered page; processing decides
     // "blank" from the page's ink, never from a missing text layer.
-    const kind: PageFact["kind"] = chars >= 80 ? "TEXT" : "SCANNED";
+    // A searchable scan (text only in an invisible OCR layer) is processed like a scan — local OCR reads it, the layer is a
+    // cross-check (process.ts) — so it is counted as scanned here too (Sprint A item 2).
+    const visible = fragments.visible?.get(i + 1);
+    const ocrLayerOnly = chars >= 80 && visible !== undefined && visible < 80;
+    if (ocrLayerOnly) ocrLayerPages++;
+    const kind: PageFact["kind"] = chars >= 80 && !ocrLayerOnly ? "TEXT" : "SCANNED";
     const lines: Line[] = t.split("\n").map((l) => ({ text: l.trim() })).filter((l) => l.text);
     const found = kind === "TEXT" ? splitQuestions(lines, state).blocks.length : 0;
     local += found;
@@ -114,6 +127,7 @@ async function analyzePdf(file: AiImportFile): Promise<FileFacts> {
   const answerKeyDetected = perPage.some(looksLikeAnswerKey);
   const notes: string[] = [];
   if (scannedPages) notes.push(ocrAvailable() ? `${scannedPages} page(s) have no usable text layer (scanned, or text drawn as shapes) — they are read by local OCR (free); AI vision is used only for a page OCR cannot resolve.` : `${scannedPages} page(s) have no text layer (scanned, or text drawn as shapes) — they need AI vision (or manual entry).`);
+  if (ocrLayerPages) notes.push(`${ocrLayerPages} of these page(s) carry the PDF's own OCR text layer (a searchable scan): local OCR reads the page and the layer is used as a cross-check — it is never trusted on its own.`);
   if (detail.some((d) => d.risk.length)) notes.push(`${detail.filter((d) => d.risk.length).length} page(s) may contain formulas or symbols the text layer can flatten — they will be read from the page image.`);
   return {
     kind: "PDF",

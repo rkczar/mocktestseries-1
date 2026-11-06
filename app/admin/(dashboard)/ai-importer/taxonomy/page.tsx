@@ -34,7 +34,7 @@ export default async function TaxonomyReferencePage({ searchParams }: { searchPa
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Taxonomy Reference</h1>
         <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">
-          The exam-specific reference the importer classifies questions with — free, before any AI. Only the selected exam&apos;s own subjects, topics and subtopics can ever be assigned. Confirmed examples come only from administrator corrections in Review Exceptions (with “Remember” on), never from AI guesses. When the exam&apos;s taxonomy changes, entries whose subject / topic left it are dropped.
+          The exam-specific reference the importer classifies questions with — free, before any AI. Only the selected exam&apos;s own subjects, topics and subtopics can ever be assigned. Examples come only from administrator corrections with “Remember” ticked, never from AI guesses; each is proposed first and used only after its question is approved with that classification. When the exam&apos;s taxonomy changes, entries whose subject / topic left it are dropped.
         </p>
       </div>
       <nav className="flex flex-wrap gap-2 text-sm" aria-label="Exams" data-testid="taxonomy-exams">
@@ -51,7 +51,7 @@ export default async function TaxonomyReferencePage({ searchParams }: { searchPa
             <CardHeader>
               <CardTitle>{exam.name}</CardTitle>
               <CardDescription>
-                {ctx.taxonomy.length} subject(s), {ctx.taxonomy.reduce((a, s) => a + s.topics.length, 0)} topic(s), {ctx.taxonomy.reduce((a, s) => a + s.topics.reduce((b, t) => b + t.subTopics.length, 0), 0)} subtopic(s) · {ctx.evidenceQuestions} reviewed Question Bank question(s) as topic evidence · {mem?.corrections.length ?? 0} confirmed example(s) · taxonomy fingerprint {ctx.fingerprint}
+                {ctx.taxonomy.length} subject(s), {ctx.taxonomy.reduce((a, s) => a + s.topics.length, 0)} topic(s), {ctx.taxonomy.reduce((a, s) => a + s.topics.reduce((b, t) => b + t.subTopics.length, 0), 0)} subtopic(s) · {ctx.evidenceQuestions} reviewed Question Bank question(s) as topic evidence · {mem?.corrections.filter((c) => !!c.verifiedAt).length ?? 0} active example(s) · {mem?.proposedCorrections?.length ?? 0} proposed · {mem?.quarantinedCorrections?.length ?? 0} quarantined · taxonomy fingerprint {ctx.fingerprint}
                 {mem?.lastRefresh ? ` · last refresh ${formatIst(new Date(mem.lastRefresh.at))} dropped ${mem.lastRefresh.dropped} entr(ies)` : ""}
               </CardDescription>
             </CardHeader>
@@ -79,7 +79,10 @@ export default async function TaxonomyReferencePage({ searchParams }: { searchPa
             subjects={ctx.taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name })) }))}
             synonyms={(mem?.synonyms ?? []).map((x) => ({ id: x.id, term: x.term, target: names.get(x.topicId ?? x.subjectId ?? "") ?? "?", at: x.at }))}
             confusions={[...ctx.index.confusions.filter((c) => !(mem?.confusions ?? []).some((m) => (m.a === c.a && m.b === c.b) || (m.a === c.b && m.b === c.a))).map((c) => ({ id: null, a: names.get(c.a) ?? "?", b: names.get(c.b) ?? "?", note: c.note, builtIn: true })), ...(mem?.confusions ?? []).map((c) => ({ id: c.id, a: names.get(c.a) ?? "?", b: names.get(c.b) ?? "?", note: c.note, builtIn: false }))]}
-            corrections={[...(mem?.corrections ?? [])].reverse().slice(0, 200).map((c) => ({ id: c.id, text: c.text.slice(0, 200), target: names.get(c.subTopicId ?? c.topicId ?? c.subjectId) ?? "?", source: c.source, at: c.at, jobId: c.jobId }))}
+            corrections={[...(mem?.corrections ?? [])].reverse().slice(0, 200).map((c) => ({ id: c.id, text: c.text.slice(0, 200), target: names.get(c.subTopicId ?? c.topicId ?? c.subjectId) ?? "?", source: c.source, at: c.at, jobId: c.jobId, active: !!c.verifiedAt }))}
+            proposed={[...(mem?.proposedCorrections ?? [])].reverse().slice(0, 200).map((c) => ({ id: c.id, text: c.text.slice(0, 200), target: names.get(c.subTopicId ?? c.topicId ?? c.subjectId) ?? "?", at: c.proposedAt, questionId: c.questionId }))}
+            quarantined={[...(mem?.quarantinedCorrections ?? [])].reverse().slice(0, 500).map((c) => ({ id: c.id, text: c.text.slice(0, 200), target: names.get(c.subTopicId ?? c.topicId ?? c.subjectId) ?? "?", at: c.at, quarantinedAt: c.quarantinedAt, reason: c.reason, batch: c.batch, jobId: c.jobId }))}
+            quarantinedTotal={mem?.quarantinedCorrections?.length ?? 0}
             headingAliases={(mem?.headingAliases ?? []).map((x) => ({ id: x.id, raw: x.raw, target: names.get(x.subjectId) ?? "? (subject no longer part of this exam)", at: x.at, version: x.version, note: x.note }))}
             formatRules={(mem?.formatRules ?? []).map((x) => ({ id: x.id, rule: x.rule, label: FORMAT_RULES[x.rule] ?? x.rule, at: x.at, version: x.version, note: x.note }))}
             ruleOptions={Object.entries(FORMAT_RULES).map(([code, label]) => ({ code, label }))}

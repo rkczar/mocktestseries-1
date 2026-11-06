@@ -72,12 +72,15 @@ const attr = (tag: string, name: string) => Number(new RegExp(`\\b${name}="(-?[\
  * Text lines and embedded images of ONE page (pdftohtml -xml). `work` is a
  * private scratch directory; it is emptied afterwards.
  */
-export async function pageLayout(file: string, page: number, work: string): Promise<PageLayout> {
-  const dir = path.join(/* turbopackIgnore: true */ work, `layout-${page}`);
+export async function pageLayout(file: string, page: number, work: string, opts: { hidden?: boolean } = {}): Promise<PageLayout> {
+  const dir = path.join(/* turbopackIgnore: true */ work, `layout-${page}${opts.hidden ? "-h" : ""}`);
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true, mode: 0o700 });
   try {
-    await runTool("pdftohtml", ["-xml", "-q", "-f", String(page), "-l", String(page), "-zoom", "1.5", "-fmt", "png", file, path.join(/* turbopackIgnore: true */ dir, "p")], { timeoutMs: 60_000, maxOutput: 1024 * 1024 });
+    // `hidden`: also the INVISIBLE text of a searchable scan (an OCR layer drawn with render mode 3 — Adobe "Make
+    // searchable", ocrmypdf, scanner apps). pdftohtml leaves it out by default (2026-11-06: a 32-page "OCR Searchable"
+    // CMS reference was read as 32 scanned pages). Images are not needed for that read.
+    await runTool("pdftohtml", ["-xml", "-q", ...(opts.hidden ? ["-hidden", "-i"] : []), "-f", String(page), "-l", String(page), "-zoom", "1.5", "-fmt", "png", file, path.join(/* turbopackIgnore: true */ dir, "p")], { timeoutMs: 60_000, maxOutput: 1024 * 1024 });
     const xml = await readFile(path.join(/* turbopackIgnore: true */ dir, "p.xml"), "utf8");
     const pageTag = /<page [^>]*>/.exec(xml)?.[0] ?? "";
     const width = attr(pageTag, "width");
@@ -103,6 +106,19 @@ export async function pageLayout(file: string, page: number, work: string): Prom
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * The OCR text layer of a scanned page (invisible text), as layout lines — only when the page's visible text is too
+ * short to read (< 80 characters) and the hidden layer has at least 80. Null otherwise. Never trusted on its own:
+ * callers cross-check it against local OCR or mark what they read from it as uncertain.
+ */
+export async function ocrTextLayer(file: string, page: number, work: string, visibleChars: number): Promise<PageLayout | null> {
+  if (visibleChars >= 80) return null;
+  const hidden = await pageLayout(file, page, work, { hidden: true }).catch(() => null);
+  if (!hidden) return null;
+  const chars = hidden.lines.reduce((a, l) => a + l.text.replace(/\s+/g, "").length, 0);
+  return chars >= 80 ? hidden : null;
 }
 
 /** Plain text of one page in reading layout (pdftotext -layout). */

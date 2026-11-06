@@ -47,6 +47,8 @@ export interface SequenceAck {
   missing: string[];
   expected: number | null;
   counted: number;
+  /** A printed-total conflict explained with the same note (it lapses when the conflict's wording changes). */
+  conflict?: string | null;
 }
 
 export interface QualityInput {
@@ -63,6 +65,17 @@ export interface QualityInput {
   processed: boolean;
   /** Highest question number in the answer key(s), to suggest an expected count. */
   keyMaxNumber?: number | null;
+  /**
+   * Question totals PRINTED on the paper or its answer key ("Total Questions: 120", "This booklet contains 120 items") —
+   * established independently of the extraction (Sprint A item 6, 2026-11-06). Never derived from what was extracted.
+   */
+  expectedSources?: ExpectedSource[];
+}
+
+export interface ExpectedSource {
+  /** Plain words: "printed on the answer key “…pdf”". */
+  source: string;
+  value: number;
 }
 
 const UNEXPLAINED = new Set(["NO_QUESTIONS", "NEEDS_REVIEW", "FAILED"]);
@@ -111,6 +124,17 @@ export const QUALITY_STATE_LABELS: Record<QualityState, string> = {
 
 export interface QualityReport {
   expected: number | null;
+  /** Where the expected count comes from: "entered by an administrator", or a printed source when none was entered. */
+  expectedFrom: string | null;
+  /** The independent printed totals that were found (paper header, key header). */
+  expectedSources: ExpectedSource[];
+  /** An entered count that a printed total contradicts (plain sentence), else null. */
+  expectedConflict: string | null;
+  /**
+   * Why the paper may not be published yet (incomplete or unconfirmed question count, unread pages), else null —
+   * enforced server-side on every publish request (review.ts requestImport). Importing as Draft stays possible.
+   */
+  publishBlocker: string | null;
   extracted: number;
   /**
    * Questions of the paper that were found: distinct printed numbers (per file and section, whatever the
@@ -201,10 +225,26 @@ export function qualityReport(input: QualityInput): QualityReport {
   const numbered = new Set(qs.filter((q) => q.number !== null).map((q) => `${q.fileId}|${q.section}|${q.number}`));
   const counted = numbered.size + live.filter((q) => q.number === null).length;
   // Missing = numbers the extraction never found (a rejected question was found, so it is not missing).
-  const missing = missingNumbers(qs, input.expected);
-  const countDifference = input.expected === null ? null : input.expected - counted;
+  // The expected count: the administrator's entry; without one, a printed total (paper / key header) when all printed
+  // totals agree. The extraction never sets it. A printed total that contradicts the entry is a conflict to decide.
+  const sources = (input.expectedSources ?? []).filter((x) => Number.isInteger(x.value) && x.value > 0 && x.value <= 1000);
+  const printedValues = [...new Set(sources.map((x) => x.value))];
+  const expected = input.expected ?? (printedValues.length === 1 ? printedValues[0] : null);
+  const expectedFrom = input.expected !== null ? "entered by an administrator" : expected !== null ? sources.filter((x) => x.value === expected).map((x) => x.source).join("; ") : null;
+  // The key's highest number is not a printed total (a key may list more entries than one paper): it is a warning only.
+  const keyBeyond = !!input.keyMaxNumber && expected !== null && input.keyMaxNumber > expected;
+  const against = input.expected !== null ? sources.filter((x) => x.value !== input.expected) : printedValues.length > 1 ? sources : [];
+  const expectedConflict = !against.length
+    ? null
+    : input.expected !== null
+      ? `The expected count is ${input.expected}, but ${against.map((x) => `${x.value} is ${x.source}`).join("; ")} — set the expected number to the paper's real total (job page) before publishing.`
+      : `The printed totals disagree (${against.map((x) => `${x.value} ${x.source}`).join("; ")}) — enter the expected number of questions (job page).`;
+  // A conflict an administrator explained (e.g. an OCR-misread cover total) stays visible as a warning.
+  const conflictAcked = !!expectedConflict && !!input.ack?.conflict && input.ack.conflict === expectedConflict;
+  const missing = missingNumbers(qs, expected);
+  const countDifference = expected === null ? null : expected - counted;
   const ackValid =
-    !!input.ack && input.ack.expected === input.expected && input.ack.counted === counted && input.ack.missing.length === missing.length && input.ack.missing.every((m, i) => m === missing[i]);
+    !!input.ack && input.ack.expected === expected && input.ack.counted === counted && input.ack.missing.length === missing.length && input.ack.missing.every((m, i) => m === missing[i]);
   const pages = {
     total: input.pages.length,
     completed: input.pages.filter((p) => p.status === "DONE").length,
@@ -225,7 +265,11 @@ export function qualityReport(input: QualityInput): QualityReport {
   const importFailed = by((q) => q.status === "IMPORT_FAILED");
   const rescanPending = by((q) => q.rescanPending);
   const report: QualityReport = {
-    expected: input.expected,
+    expected,
+    expectedFrom,
+    expectedSources: sources,
+    expectedConflict,
+    publishBlocker: null,
     extracted: qs.length,
     counted,
     verified: by((q) => q.verified === true),
@@ -273,7 +317,8 @@ export function qualityReport(input: QualityInput): QualityReport {
   if (importFailed) b.push(`${importFailed} question(s) were not accepted by the Question Bank.`);
   const unexplained = unexplainedPages(input.pages);
   if (unexplained.length) b.push(`${unexplained.length} page(s) not accounted for: ${unexplained.slice(0, 6).map((u) => `page ${u.page ?? "?"} (${u.why})`).join("; ")}${unexplained.length > 6 ? ` … and ${unexplained.length - 6} more` : ""}.`);
-  if (input.expected === null && input.processed) {
+  if (expectedConflict && !conflictAcked) b.push(expectedConflict);
+  if (expected === null && input.processed) {
     const maxRead = Math.max(0, ...qs.filter((q) => !q.section).map((q) => q.number ?? 0));
     const hint = [maxRead ? `the paper reads up to Q${maxRead}` : null, input.keyMaxNumber ? `the answer key goes up to ${input.keyMaxNumber}` : null].filter(Boolean).join(" and ");
     b.push(`The expected number of questions was not confirmed${hint ? ` (${hint})` : ""} — without it, questions missing at the end of the paper cannot be detected.`);
@@ -281,11 +326,21 @@ export function qualityReport(input: QualityInput): QualityReport {
   const sequenceProblem = missing.length > 0 || (countDifference !== null && countDifference !== 0);
   if (sequenceProblem && !ackValid) {
     if (missing.length) b.push(`Missing question number(s): ${missing.slice(0, 20).join(", ")}${missing.length > 20 ? ` … and ${missing.length - 20} more` : ""}.`);
-    if (countDifference !== null && countDifference !== 0) b.push(countDifference > 0 ? `${countDifference} question(s) fewer than the ${input.expected} expected.` : `${-countDifference} question(s) more than the ${input.expected} expected — check for duplicates or split questions.`);
+    if (countDifference !== null && countDifference !== 0) b.push(countDifference > 0 ? `${countDifference} question(s) fewer than the ${expected} expected.` : `${-countDifference} question(s) more than the ${expected} expected — check for duplicates or split questions.`);
   }
+  // Completeness gate for publishing (owner Sprint A item 6): a paper with an unconfirmed or contradicted question count,
+  // unexplained missing questions / count difference, or pages that were not read is never published silently.
+  const shortBy = countDifference !== null && countDifference > 0 ? ` (${expected} expected / ${counted} extracted / ${countDifference} missing)` : "";
+  report.publishBlocker =
+    (conflictAcked ? null : expectedConflict) ??
+    (expected === null && !ackValid ? "The expected number of questions is not confirmed (enter it on the job page, or explain why it is unknown) — without it, missing questions cannot be detected." : null) ??
+    (sequenceProblem && !ackValid ? `The paper is incomplete${shortBy}${missing.length ? `; missing ${missing.slice(0, 15).join(", ")}${missing.length > 15 ? " …" : ""}` : ""} — add or re-scan the missing questions, or acknowledge the difference with a reason.` : null) ??
+    (pages.failed || pages.needsReview ? `${pages.failed + pages.needsReview} page(s) of the paper were not read — retry them first.` : null);
 
   const w = report.warnings;
   if (sequenceProblem && ackValid) w.push(`Count difference / missing numbers acknowledged: ${input.ack!.note}`);
+  if (keyBeyond) w.push(`The answer key numbers up to ${input.keyMaxNumber}, more than the ${expected} expected — check for questions missing at the end of the paper.`);
+  if (conflictAcked) w.push(`Expected-count conflict acknowledged: ${input.ack!.note} (${expectedConflict})`);
   if (report.duplicateNumbers.length) w.push(`Question number(s) read on more than one question: ${report.duplicateNumbers.slice(0, 10).join(", ")} — each copy is kept and flagged; set the right numbers or reject the extra copy.`);
   const low = lowCountPages(qs, input.pages);
   if (low.length) w.push(`Page(s) with unusually few questions: ${low.slice(0, 6).map((l) => `page ${l.page} (${l.count}, usually ${l.typical})`).join(", ")} — check for a missed column or half page.`);

@@ -8,7 +8,7 @@ import { parseImportFile } from "@/lib/bulk-import";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { CHUNK_BYTES } from "@/lib/ai-import/config";
 import { checkFilename, detectFile } from "@/lib/ai-import/detect";
-import { pageLayout, pdfInfo } from "@/lib/ai-import/pdf";
+import { ocrTextLayer, pageLayout, pdfInfo } from "@/lib/ai-import/pdf";
 import { readDocx } from "@/lib/ai-import/docx";
 import { parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
 import { blockToQuestion, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
@@ -92,17 +92,29 @@ async function readReference(full: string, kind: string, pages: number, jobId: s
     await mkdir(work, { recursive: true, mode: 0o700 });
     const state: NumberingState = { last: 0, sectionIdx: 1 };
     let scanned = 0;
+    let ocrLayerPages = 0;
     for (let p = 1; p <= pages; p++) {
-      const layout = await pageLayout(full, p, work);
-      const pageText = layout.lines.map((l) => l.text).join("\n");
-      text += `${pageText}\n`;
+      let layout = await pageLayout(full, p, work);
+      let pageText = layout.lines.map((l) => l.text).join("\n");
       if (pageText.replace(/\s+/g, "").length < 80) {
-        scanned++;
-        continue;
+        // A searchable scan: its invisible OCR text layer is read (free, local). A reference is only ever compared —
+        // never copied into a question — and what it says is shown as the reference's reading, never as verified.
+        const hidden = await ocrTextLayer(full, p, work, pageText.replace(/\s+/g, "").length);
+        if (!hidden) {
+          text += `${pageText}\n`;
+          scanned++;
+          continue;
+        }
+        layout = hidden;
+        pageText = layout.lines.map((l) => l.text).join("\n");
+        ocrLayerPages++;
       }
+      text += `${pageText}\n`;
       for (const q of parsePdfPageLocal({ lines: layout.lines, images: layout.images }, p, state).questions) questions.push(toRef(q));
     }
+    const layerNote = ocrLayerPages ? `${ocrLayerPages} of ${pages} page(s) were read from the PDF's own OCR text layer (a searchable scan; its OCR quality is not verified).` : null;
     if (scanned) note = `${scanned} of ${pages} page(s) have no text layer (scanned) — they cannot be compared without paid AI, so they are kept as a file only.`;
+    if (layerNote) note = [layerNote, note].filter(Boolean).join(" ");
     if (scanned) {
       const key = parseKeyText(text).map((p) => ({ number: p.number, section: p.section, raw: p.raw }));
       if (!questions.length && !key.length) note = `${note} Nothing of this reference has been compared: reading it needs OCR / vision (${scanned} page image(s)).`;

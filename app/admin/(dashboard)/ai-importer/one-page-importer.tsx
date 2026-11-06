@@ -539,7 +539,10 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
   // A page-reading override chosen on the import form (AI Configuration) carries over to the confirmation.
   const [override, setOverride] = useState(initialOverride);
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
-  const [expected, setExpected] = useState(String(current.mapping.expectedQuestions ?? current.estimatedQuestions ?? ""));
+  // Never pre-filled from what the extraction counted (Sprint A item 6): the administrator's entry, else a total printed
+  // on the paper / answer key, else empty.
+  const printedExpected = current.quality?.expectedSources.length && new Set(current.quality.expectedSources.map((x) => x.value)).size === 1 ? current.quality.expectedSources[0].value : null;
+  const [expected, setExpected] = useState(String(current.mapping.expectedQuestions ?? printedExpected ?? ""));
   const [verifyMode, setVerifyMode] = useState<"risk" | "all">("risk");
   const [confirmed, setConfirmed] = useState(false);
   const busy = BUSY.includes(j.status) && !j.stalled;
@@ -679,7 +682,7 @@ function CurrentJobPanel({ current, canUse, canManage, aiEnabled, importerModels
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="op-confirm-expected">Expected number of questions</Label>
                     <Input id="op-confirm-expected" inputMode="numeric" maxLength={4} value={expected} onChange={(e) => setExpected(e.target.value.replace(/\D/g, ""))} data-testid="op-confirm-expected" />
-                    <span className="text-xs text-[var(--color-muted-foreground)]">{current.estimatedQuestions ? `The analyzer counted about ${current.estimatedQuestions} — check it against the paper.` : "Check it against the paper."}</span>
+                    <span className="text-xs text-[var(--color-muted-foreground)]">{[current.quality?.expectedSources.length ? `Printed: ${current.quality.expectedSources.map((x) => `${x.value} (${x.source})`).join("; ")}.` : "No total is printed on the paper or key — enter it from the paper.", current.estimatedQuestions ? `The analyzer found about ${current.estimatedQuestions} (an extraction count, not used as the expected number).` : null].filter(Boolean).join(" ")}</span>
                   </div>
                   {aiEnabled && current.verifyAvailable && (
                     <div className="flex flex-col gap-1">

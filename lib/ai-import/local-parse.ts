@@ -280,7 +280,10 @@ function tidy(s: string): string {
 
 // After the answer words nothing crosses a line break: "(c) selenium ✓ Correct Answer\n(d) chromium" must never read the
 // next option's label as the answer (seen 2026-10-31, CMS 2013: 59 questions lost option D and took D as their answer).
-const ANSWER_LINE = /(?:^|\n)[ \t]*(?:[►▶➤→•✓✔☑√■][ \t]*)?(?:(?:Official|Final)[ \t]+)?(?:(?:The[ \t]+)?(?:Correct|Right)[ \t]+(?:answer|option|choice)(?:[ \t]+is)?|Ans(?:wer)?(?:[ \t]+is)?|Key)[ \t]*[:.\-–=]?[ \t]*(?:option[ \t]*)?((?:\(?[A-Da-d1-4]\)?[ \t]*(?:,|&|and|\/)?[ \t]*){1,4})[ \t]*\.?[ \t]*(?=\n|$)/i;
+// One label family per answer line (letters OR digits, never both): "Correct Answer: (B) 1, 2 and 4" is option B followed
+// by its text — the statement code "1, 2 and 4" — never the labels B, 1, 2, 4 (2026-11-06: 43 false key mismatches on CMS
+// 2024 Paper II). Such a line falls through to ANS_INLINE, which accepts the trailing text only when it is the option's.
+const ANSWER_LINE = /(?:^|\n)[ \t]*(?:[►▶➤→•✓✔☑√■][ \t]*)?(?:(?:Official|Final)[ \t]+)?(?:(?:The[ \t]+)?(?:Correct|Right)[ \t]+(?:answer|option|choice)(?:[ \t]+is)?|Ans(?:wer)?(?:[ \t]+is)?|Key)[ \t]*[:.\-–=]?[ \t]*(?:option[ \t]*)?((?:\(?[A-Da-d]\)?[ \t]*(?:,|&|and|\/)?[ \t]*){1,4}|(?:\(?[1-4]\)?[ \t]*(?:,|&|and|\/)?[ \t]*){1,4})[ \t]*\.?[ \t]*(?=\n|$)/i;
 
 /** A printed answer that drops / withdraws the question instead of naming an option (seen 2026-10-31, CMS 2025 Paper I Q101). */
 export const PRINTED_DROPPED = /\b(?:question[ \t]+)?(?:dropped|withdrawn|deleted|bonus)\b/i;
@@ -353,7 +356,8 @@ export interface PrintedAnswerTake {
   note: string | null;
 }
 
-const labelsOf = (v: string) => [...new Set([...v.matchAll(/[A-Da-d1-4]/g)].map((x) => (/\d/.test(x[0]) ? String.fromCharCode(64 + Number(x[0])) : x[0].toUpperCase())))];
+// The joining word "and" is not a label: "(a) and (c)" is A, C — never A, D, C (the a / d of "and", seen 2026-11-06).
+const labelsOf = (v: string) => [...new Set([...v.replace(/\band\b/gi, " ").matchAll(/[A-Da-d1-4]/g)].map((x) => (/\d/.test(x[0]) ? String.fromCharCode(64 + Number(x[0])) : x[0].toUpperCase())))];
 const normOption = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[\s.,;:()[\]'"`]/g, "");
 
 /**
