@@ -25,6 +25,13 @@ export const SERVABLE_MEMBERSHIP_WHERE = { question: SERVABLE_QUESTION_WHERE } s
   question: Prisma.QuestionWhereInput;
 };
 
+/**
+ * Mock Test membership (Teacher Portal Phase A): additionally skips a row a
+ * teacher or the Master Admin unpublished from THIS test (excludedAt). Only
+ * new attempts are affected — a started attempt keeps its frozen questions.
+ */
+export const SERVABLE_MOCK_MEMBERSHIP_WHERE = { ...SERVABLE_MEMBERSHIP_WHERE, excludedAt: null } satisfies Prisma.MockTestQuestionWhereInput;
+
 export function isServable(q: { status: QuestionStatus | string; retiredAt?: Date | null }): boolean {
   return q.status === QuestionStatus.PUBLISHED && !q.retiredAt;
 }

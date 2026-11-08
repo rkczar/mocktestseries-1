@@ -1,12 +1,12 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getAdminSession } from "@/lib/rbac";
+import { getAdminSession, getStaffSession } from "@/lib/rbac";
 import { Sidebar } from "@/components/admin/sidebar";
 import { AdminHeader } from "@/components/admin/header";
 
 export default async function AdminDashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await getAdminSession();
-  if (!session?.user) redirect("/admin/login");
+  if (!session?.user) redirect((await getStaffSession())?.user.role === "TEACHER" ? "/teacher" : "/admin/login");
 
   const cookieStore = await cookies();
   const defaultCollapsed = cookieStore.get("admin_sidebar_collapsed")?.value === "1";

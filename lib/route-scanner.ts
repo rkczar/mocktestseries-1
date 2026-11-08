@@ -57,6 +57,7 @@ function classify(route: string): { userType: RouteUserType; module: string; aut
   if (route.startsWith("/admin")) {
     return { userType: "ADMIN", module: route.startsWith("/admin/settings") ? "Settings" : "Admin", authRequired: route !== "/admin/login" };
   }
+  if (route === "/teacher" || route.startsWith("/teacher/")) return { userType: "ADMIN", module: "Teacher Portal", authRequired: true };
   if (route.startsWith("/student") || route === "/login") {
     const isAuthPage = route === "/login" || route === "/student/login" || route === "/student/register";
     return { userType: "STUDENT", module: "Student", authRequired: !isAuthPage };

@@ -128,6 +128,18 @@ export const PERMISSIONS = {
   // callback route.
   SEO_INTEL_VIEW: "seo-intel:view",
   SEO_INTEL_MANAGE: "seo-intel:manage",
+  // Teacher Portal Phase A (docs/TEACHER-PORTAL.md). TEACHER_PORTAL is the
+  // teacher's ONLY key: /teacher pages and actions additionally require role
+  // TEACHER + an ACTIVE TeacherProfile and scope every read/write to the
+  // teacher's assigned exams (lib/teacher/scope.ts). Teachers can never use
+  // /admin or /api/admin (lib/rbac.ts#getAdminSession refuses them).
+  TEACHER_PORTAL: "teacher:portal",
+  // Create / suspend / deactivate teachers and assign exams: MASTER_ADMIN only.
+  TEACHERS_MANAGE: "teachers:manage",
+  // Teacher Content Approvals queue: VIEW = MASTER_ADMIN + FULL_ADMIN;
+  // approve / reject / restore = MASTER_ADMIN only.
+  TEACHER_APPROVALS_VIEW: "teacher-approvals:view",
+  TEACHER_APPROVALS_MANAGE: "teacher-approvals:manage",
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -150,6 +162,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.AI_ENGINE_VIEW,
     PERMISSIONS.AI_IMPORTER_VIEW,
     PERMISSIONS.SEO_INTEL_VIEW,
+    PERMISSIONS.TEACHER_APPROVALS_VIEW,
   ],
-  TEACHER: [PERMISSIONS.EXAMS_MANAGE, PERMISSIONS.QUESTIONS_MANAGE, PERMISSIONS.SEO_INTEL_VIEW],
+  // Teacher Portal Phase A: no global manage key at all (the old
+  // EXAMS_MANAGE + QUESTIONS_MANAGE + SEO_INTEL_VIEW grant was unscoped).
+  TEACHER: [PERMISSIONS.TEACHER_PORTAL],
 };

@@ -92,7 +92,7 @@ export async function getExamMockSeries(examId: string, now: Date = new Date()):
       coverageType: true,
       coverageSubjectIds: true,
       coverageTopicIds: true,
-      _count: { select: { questions: { where: { question: { status: "PUBLISHED" } } } } },
+      _count: { select: { questions: { where: { excludedAt: null, question: { status: "PUBLISHED" } } } } },
     },
   });
 

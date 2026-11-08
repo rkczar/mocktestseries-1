@@ -252,6 +252,7 @@ export default async function AdminDashboardPage() {
     recovery: perms.has(PERMISSIONS.ACCOUNT_RECOVERY_VIEW),
     // Same gate as Admin → Monitoring → Authentication, where the detail lives.
     sessions: perms.has(PERMISSIONS.SETTINGS_MANAGE),
+    teacherApprovals: perms.has(PERMISSIONS.TEACHER_APPROVALS_VIEW),
   };
 
   const {
@@ -287,7 +288,7 @@ export default async function AdminDashboardPage() {
     getLiveActivity(now),
     can.communications ? getCommunicationsSummary() : Promise.resolve(null),
     can.sessions ? getMultipleSessions(now, 0) : Promise.resolve(null),
-    getActionRequired({ communications: can.communications, reports: true, deletion: can.deletion, recovery: can.recovery, payments: can.payments }, now),
+    getActionRequired({ communications: can.communications, reports: true, deletion: can.deletion, recovery: can.recovery, payments: can.payments, teacherApprovals: can.teacherApprovals }, now),
     dashboardAiCardNodes(),
     session?.user?.id ? prisma.setting.findUnique({ where: { key: dashboardLayoutKey(session.user.id) } }) : Promise.resolve(null),
   ]);

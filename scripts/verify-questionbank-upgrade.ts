@@ -72,7 +72,7 @@ async function main() {
       ].every((p) => DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN.includes(p))
     );
     check("MASTER_ADMIN has QUESTIONS_MANAGE", DEFAULT_ROLE_PERMISSIONS.MASTER_ADMIN.includes(PERMISSIONS.QUESTIONS_MANAGE));
-    check("TEACHER still has QUESTIONS_MANAGE (unaffected by the FULL_ADMIN change)", DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.QUESTIONS_MANAGE));
+    check("TEACHER holds no QUESTIONS_MANAGE (Teacher Portal Phase A: scoped portal only)", !DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.QUESTIONS_MANAGE));
     check("RoleName.FULL_ADMIN exists on the Prisma enum (schema rename applied)", "FULL_ADMIN" in RoleName);
 
     const mutationRoutes = [

@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { SERVABLE_QUESTION_WHERE } from "@/lib/question-servable";
 
 /**
  * Mock Test question MEMBERSHIP (Step 3). Every assignment references a
@@ -26,22 +27,40 @@ export async function loadAssignment(mockTestId: string) {
   return mockTest ? { ...mockTest, ids: mockTest.questions.map((q) => q.questionId) } : null;
 }
 
-/** Replaces the whole ordered assignment in one transaction. */
+/**
+ * Replaces the whole ordered assignment in one transaction. A kept question
+ * keeps its per-test Unpublish state (excludedAt/By/Reason, Teacher Portal
+ * Phase A): reorder, add, remove and replace never silently re-publish it.
+ */
 export async function writeAssignment(mockTestId: string, ids: string[]) {
-  await prisma.$transaction([
-    prisma.mockTestQuestion.deleteMany({ where: { mockTestId } }),
-    prisma.mockTestQuestion.createMany({ data: ids.map((questionId, order) => ({ mockTestId, questionId, order })) }),
-  ]);
+  await prisma.$transaction(async (tx) => {
+    const excluded = await tx.mockTestQuestion.findMany({
+      where: { mockTestId, excludedAt: { not: null } },
+      select: { questionId: true, excludedAt: true, excludedById: true, excludedReason: true },
+    });
+    const keep = new Map(excluded.map((e) => [e.questionId, e]));
+    await tx.mockTestQuestion.deleteMany({ where: { mockTestId } });
+    await tx.mockTestQuestion.createMany({
+      data: ids.map((questionId, order) => {
+        const e = keep.get(questionId);
+        return { mockTestId, questionId, order, ...(e ? { excludedAt: e.excludedAt, excludedById: e.excludedById, excludedReason: e.excludedReason } : {}) };
+      }),
+    });
+  });
 }
 
-/** Any non-archived question of ANY exam can be attached (cross-exam reuse is reference-only). */
+/**
+ * Only PUBLISHED, non-retired questions of ANY exam can be attached
+ * (cross-exam reuse is reference-only). A Draft never enters a test from the
+ * builder (Teacher Portal Phase A) — publish it first.
+ */
 export async function attachableIds(ids: string[]) {
-  const rows = await prisma.question.findMany({ where: { id: { in: ids }, status: { not: "ARCHIVED" } }, select: { id: true } });
+  const rows = await prisma.question.findMany({ where: { id: { in: ids }, ...SERVABLE_QUESTION_WHERE }, select: { id: true } });
   const ok = new Set(rows.map((r) => r.id));
   return ids.filter((id) => ok.has(id));
 }
 
-/** Appends in the order given, skipping anything already in the test or archived/missing. */
+/** Appends in the order given, skipping anything already in the test or not published/missing. */
 export async function addQuestionsToMock(mockTestId: string, questionIds: string[]) {
   const current = await loadAssignment(mockTestId);
   if (!current) return { error: "Mock test not found." } as const;
@@ -73,7 +92,7 @@ export async function replaceQuestionInMock(mockTestId: string, oldId: string, n
   if (slot === -1) return { error: "That question is no longer in this test — reload and try again." } as const;
   if (current.ids.includes(newId)) return { error: "The replacement is already in this test." } as const;
   const [valid] = await attachableIds([newId]);
-  if (!valid) return { error: "The replacement must be a non-archived Question Bank question." } as const;
+  if (!valid) return { error: "The replacement must be a published Question Bank question." } as const;
   const next = [...current.ids];
   next[slot] = newId;
   await writeAssignment(mockTestId, next);

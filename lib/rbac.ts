@@ -36,6 +36,22 @@ const loadAdminAccount = cache(async (adminId: string) =>
  * separate student auth instance is unaffected.
  */
 export async function getAdminSession() {
+  const session = await getStaffSession();
+  // Teachers never use the admin area: every /admin page, admin Server Action
+  // and /api/admin route reads the session here (directly or through
+  // requirePermission), so a TEACHER gets "not signed in" everywhere. The
+  // Teacher Portal uses lib/teacher/scope.ts#requireTeacher instead.
+  if (session?.user.role === "TEACHER") return null;
+  return session;
+}
+
+/**
+ * The account behind the admin-instance session cookie, whatever its role
+ * (MASTER_ADMIN, FULL_ADMIN or TEACHER) — same re-validation rules as
+ * getAdminSession. Only for code that must tell a teacher apart from "not
+ * signed in" (login page, admin layout redirect, Teacher Portal).
+ */
+export async function getStaffSession() {
   const session = await auth();
   const adminId = session?.user?.id;
   if (!session || !adminId) return null;

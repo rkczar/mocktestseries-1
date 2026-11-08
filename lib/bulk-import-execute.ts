@@ -281,9 +281,16 @@ async function executeLeased(
    */
   const attachInTx = async (tx: Prisma.TransactionClient, questionId: string): Promise<boolean> => {
     if (!mockTarget) return false;
-    const question = await tx.question.findUnique({ where: { id: questionId }, select: { examId: true } });
+    const question = await tx.question.findUnique({ where: { id: questionId }, select: { examId: true, status: true } });
     if (question?.examId !== mockTarget.examId) {
       throw new Error("Resolved question belongs to a different exam than the target Mock Test — not imported or attached.");
+    }
+    // Teacher Portal Phase A: a Draft never enters a test that is already
+    // published — it is imported into the Question Bank only (a Draft mock
+    // still reserves its slot; publishing that mock refuses Drafts).
+    if (question.status !== "PUBLISHED") {
+      const target = await tx.mockTest.findUnique({ where: { id: mockTarget.id }, select: { status: true } });
+      if (target?.status === "PUBLISHED") return false;
     }
     const existing = await tx.mockTestQuestion.findUnique({
       where: { mockTestId_questionId: { mockTestId: mockTarget.id, questionId } },

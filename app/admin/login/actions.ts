@@ -2,6 +2,7 @@
 
 import { AuthError } from "next-auth";
 import { signIn } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
 export interface LoginFormState {
   error?: string;
@@ -15,11 +16,17 @@ export async function loginAction(
   const password = String(formData.get("password") ?? "");
   const callbackUrl = String(formData.get("callbackUrl") ?? "/admin");
 
+  // Teachers sign in here too, but land in the Teacher Portal (a redirect to
+  // /admin would only be bounced by the proxy, leaving /admin in the address bar).
+  const isTeacher = username
+    ? (await prisma.adminUser.findUnique({ where: { username }, select: { role: { select: { name: true } } } }))?.role.name === "TEACHER"
+    : false;
+  const toTeacher = callbackUrl === "/teacher" || callbackUrl.startsWith("/teacher/");
   try {
     await signIn("credentials", {
       username,
       password,
-      redirectTo: callbackUrl.startsWith("/admin") ? callbackUrl : "/admin",
+      redirectTo: isTeacher ? (toTeacher ? callbackUrl : "/teacher") : callbackUrl.startsWith("/admin") ? callbackUrl : "/admin",
     });
     return {};
   } catch (error) {

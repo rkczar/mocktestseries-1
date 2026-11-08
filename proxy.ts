@@ -153,7 +153,28 @@ export default async function proxy(request: NextRequest) {
   // /api/student/test-resources/[id] route; the raw file is Admin-only.
   if (pathname.startsWith("/storage/test-resources/")) {
     const session = await adminAuth();
-    if (!session?.user) return new NextResponse("Not found", { status: 404 });
+    if (!session?.user || session.user.role === "TEACHER") return new NextResponse("Not found", { status: 404 });
+    return NextResponse.next();
+  }
+
+  // Teacher Portal Phase A: teachers share the admin sign-in but never the
+  // admin area. This is the early, friendly gate (role as signed in); the
+  // authoritative check is lib/rbac.ts#getAdminSession, which re-reads the
+  // CURRENT role on every request and refuses teachers.
+  if (pathname.startsWith("/api/admin")) {
+    const session = await adminAuth();
+    if (session?.user?.role === "TEACHER") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return NextResponse.next();
+  }
+
+  if (pathname === "/teacher" || pathname.startsWith("/teacher/")) {
+    const session = await adminAuth();
+    if (!session?.user) {
+      const loginUrl = new URL("/admin/login", request.nextUrl.origin);
+      loginUrl.searchParams.set("callbackUrl", pathname + request.nextUrl.search);
+      return NextResponse.redirect(loginUrl);
+    }
+    if (session.user.role !== "TEACHER") return NextResponse.redirect(new URL("/admin", request.nextUrl.origin));
     return NextResponse.next();
   }
 
@@ -166,6 +187,7 @@ export default async function proxy(request: NextRequest) {
       loginUrl.searchParams.set("callbackUrl", pathname + request.nextUrl.search);
       return NextResponse.redirect(loginUrl);
     }
+    if (session.user.role === "TEACHER") return NextResponse.redirect(new URL("/teacher", request.nextUrl.origin));
     return NextResponse.next();
   }
 

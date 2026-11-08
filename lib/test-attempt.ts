@@ -29,7 +29,7 @@ import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQu
 import { accessDeniedMessage, assertContentAccess, attemptGraceAllows, getAttemptAnswerAccess, loadAccessContext, PaymentRequiredError, type ContentDescriptor } from "@/lib/payments/access";
 import { assertExamLive } from "@/lib/exam-live";
 import { TestEngineError } from "@/lib/test-engine-log";
-import { SERVABLE_MEMBERSHIP_WHERE, SERVABLE_QUESTION_WHERE } from "@/lib/question-servable";
+import { SERVABLE_MEMBERSHIP_WHERE, SERVABLE_MOCK_MEMBERSHIP_WHERE, SERVABLE_QUESTION_WHERE } from "@/lib/question-servable";
 import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
 import { explanationView, toSnapshotAssets, type SnapshotAsset } from "@/lib/rich-content";
 import type { ContentFormat, ExplanationView } from "@/lib/rich-content-types";
@@ -526,7 +526,7 @@ async function planMockTestStart(studentId: string, mockTestId: string, entryMod
       exam: { select: { name: true, instructions: true } },
       testSeries: { select: { instructions: true } },
       questions: {
-        where: SERVABLE_MEMBERSHIP_WHERE,
+        where: SERVABLE_MOCK_MEMBERSHIP_WHERE,
         orderBy: { order: "asc" },
         include: { question: { include: { options: true } } },
       },
@@ -642,7 +642,7 @@ export async function startMockTestAttempt(
 export async function startOfflineOmrEntryAttempt(studentId: string, mockTestId: string) {
   // An OMR sheet has one bubble per question: a multiple-correct answer can't be
   // entered from it (NEET Phase 4), so such a mock is online-only.
-  const multi = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { questionType: "MULTIPLE_CORRECT" } } });
+  const multi = await prisma.mockTestQuestion.count({ where: { mockTestId, excludedAt: null, question: { questionType: "MULTIPLE_CORRECT" } } });
   if (multi > 0) {
     throw new TestEngineError("UNAVAILABLE", "This test has multiple-correct questions, which can't be entered from an OMR sheet. Take it online instead.");
   }

@@ -37,6 +37,8 @@ export type BankQuestion = BankRow;
 export interface SelectedQuestion extends BankQuestion {
   imageUrl: string | null;
   options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean }[];
+  /** Teacher Portal Phase A: non-null = unpublished from THIS test (skipped by new attempts); restore via Teacher Approvals. */
+  unpublishedReason?: string | null;
 }
 
 type Panel = "selected" | "bank";
@@ -445,6 +447,9 @@ function SelectedRow({
             <Provenance q={q} mockExamId={mockExamId} />
             {q.hasImage ? <ImageIcon className="h-3.5 w-3.5" aria-label="Has image" /> : null}
             {q.status !== "PUBLISHED" ? <Badge variant="warning">{q.status}</Badge> : null}
+            {"unpublishedReason" in q && q.unpublishedReason != null ? (
+              <Badge variant="warning" title={`Unpublished from this test: ${q.unpublishedReason}. Restore it from Users & Access → Teachers → Content Approvals.`}>Unpublished from this test</Badge>
+            ) : null}
           </span>
         </span>
         <span className="flex shrink-0 gap-0.5">

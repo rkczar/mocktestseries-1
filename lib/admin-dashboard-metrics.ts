@@ -186,7 +186,7 @@ export interface ActionItem {
  * `can` is the viewer's permission set — rows for queues they can't open
  * are omitted entirely, counts included.
  */
-export async function getActionRequired(can: { communications: boolean; reports: boolean; deletion: boolean; recovery: boolean; payments: boolean }, now: Date = new Date()): Promise<ActionItem[]> {
+export async function getActionRequired(can: { communications: boolean; reports: boolean; deletion: boolean; recovery: boolean; payments: boolean; teacherApprovals?: boolean }, now: Date = new Date()): Promise<ActionItem[]> {
   const day = new Date(now.getTime() - 24 * 3600_000);
   const zero = Promise.resolve(0);
   const [comms, reportsOpen, reportsOld, deletion, deletionOld, recovery, recoveryOld, webhookFailed, refundsOpen, refundsFailed, paidNoAccess] = await Promise.all([
@@ -266,6 +266,21 @@ export async function getActionRequired(can: { communications: boolean; reports:
       priority: prio(paidNoAccess + webhookFailed + refundsFailed > 0, total),
       detail: parts.length ? parts.join(" · ") : "Nothing waiting",
       href: paidNoAccess || webhookFailed ? "/admin/payments?tab=orders" : "/admin/payments?tab=refunds",
+    });
+  }
+  if (can.teacherApprovals) {
+    // Teacher Portal Phase A: unpublish notices have already taken effect, so they are urgent.
+    const [open, notices] = await Promise.all([
+      prisma.teacherContentRequest.count({ where: { status: "OPEN" } }),
+      prisma.teacherContentRequest.count({ where: { status: "OPEN", type: "UNPUBLISH_NOTICE" } }),
+    ]);
+    items.push({
+      key: "teacher-approvals",
+      label: "Teacher content approvals",
+      pending: open,
+      priority: prio(notices > 0, open),
+      detail: open ? `${open} waiting${notices ? ` · ${notices} question(s) already unpublished by teachers` : ""}` : "Nothing waiting",
+      href: "/admin/users/teachers/approvals",
     });
   }
   return items;

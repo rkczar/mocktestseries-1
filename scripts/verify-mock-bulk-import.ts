@@ -368,7 +368,7 @@ async function main() {
     const full = DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN;
     check("MASTER_ADMIN has TEST_SERIES_MANAGE + QUESTIONS_MANAGE", DEFAULT_ROLE_PERMISSIONS.MASTER_ADMIN.includes(PERMISSIONS.TEST_SERIES_MANAGE) && DEFAULT_ROLE_PERMISSIONS.MASTER_ADMIN.includes(PERMISSIONS.QUESTIONS_MANAGE));
     check("FULL_ADMIN read-only: no TEST_SERIES_MANAGE / QUESTIONS_MANAGE", !full.includes(PERMISSIONS.TEST_SERIES_MANAGE) && !full.includes(PERMISSIONS.QUESTIONS_MANAGE));
-    check("TEACHER can import to the bank but not attach to Mock Tests", DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.QUESTIONS_MANAGE) && !DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.TEST_SERIES_MANAGE));
+    check("TEACHER can neither bulk import nor attach to Mock Tests (Teacher Portal Phase A)", !DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.QUESTIONS_MANAGE) && !DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.TEST_SERIES_MANAGE));
   } finally {
     // Cleanup — disposable fixtures only.
     await prisma.answer.deleteMany({ where: { studentId: { in: studentIds } } });

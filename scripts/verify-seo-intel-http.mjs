@@ -1,6 +1,6 @@
 /**
  * SEO Intelligence end-to-end: role access (MASTER_ADMIN manages; FULL_ADMIN
- * and TEACHER view only, enforced server-side), the full Google OAuth code
+ * views only; TEACHER is refused, enforced server-side), the full Google OAuth code
  * flow against scripts/mock-google-seo.mjs (never real Google), callback
  * forgery/replay/other-admin, every failure scenario, sync + partial
  * failures, needs-reconnect, disconnect + revoke, isolation from the student
@@ -84,12 +84,17 @@ const robotsBefore = await (await fetch(`${BASE}/robots.txt`)).text();
 const sitemapBefore = await (await fetch(`${BASE}/sitemap.xml`)).text();
 
 // ---- View-only roles -----------------------------------------------------------------------
-const teacher = await login("teacher");
+// Teacher Portal Phase A: TEACHER no longer opens any /admin page (it is sent
+// to /teacher), so FULL_ADMIN is the read-only viewer exercised below.
+const teacherOnly = await login("teacher");
+await teacherOnly.page.goto(`${BASE}/admin/seo/intelligence`);
+check("Viewer (FULL_ADMIN) is sent to the Teacher Portal, never SEO Intelligence", new URL(teacherOnly.page.url()).pathname.startsWith("/teacher") || new URL(teacherOnly.page.url()).pathname === "/admin/login");
 const full = await login("full");
+const teacher = full;
 const master = await login("master");
 const master2 = await login("master2");
 
-for (const [label, s] of [["TEACHER", teacher], ["FULL_ADMIN", full]]) {
+for (const [label, s] of [["FULL_ADMIN", full]]) {
   const html = await open(s.page);
   check(`${label} can open SEO Intelligence`, html.includes("SEO Intelligence") && html.includes("Google Connection"));
   check(`${label} sees view-only notice and no controls`, html.includes("View only") && !html.includes('data-testid="seo-intel-controls"'));
@@ -130,7 +135,7 @@ const actionId = (name) =>
 const syncId = actionId("syncGoogleAction");
 const connectId = actionId("startGoogleConnectAction");
 check("found Server Action ids in the build manifest", Boolean(syncId && connectId), JSON.stringify({ syncId, connectId }));
-for (const [label, s] of [["TEACHER", teacher], ["FULL_ADMIN", full]]) {
+for (const [label, s] of [["FULL_ADMIN", full]]) {
   for (const [name, id] of [["sync", syncId], ["connect", connectId]]) {
     if (!id) continue;
     const res = await s.ctx.request.post(PAGE, { headers: { "Next-Action": id, "Content-Type": "text/plain;charset=UTF-8", Origin: BASE }, data: "[]", maxRedirects: 0 });
@@ -198,7 +203,7 @@ await master.page.getByRole("button", { name: "Sync now" }).click();
 await master.page.getByText("less than a minute ago").waitFor({ timeout: 30000 });
 check("second sync within a minute is throttled", true);
 html = await open(teacher.page);
-check("TEACHER sees synced data", html.includes("ruhs mo mock test 1") && html.includes("Organic Search") && !html.includes('data-testid="seo-intel-controls"'));
+check("Viewer (FULL_ADMIN) sees synced data", html.includes("ruhs mo mock test 1") && html.includes("Organic Search") && !html.includes('data-testid="seo-intel-controls"'));
 
 // ---- Other admin cannot finish someone else's flow ---------------------------------------------
 // Hold the browser at the consent step, then ask the mock for the callback URL ourselves
@@ -426,7 +431,7 @@ check("scheduled sync audited without an actor", (await db.query(`select 1 from 
 check("today's history entry written", Boolean(await setting(`seo.intel.history.${istDay(0)}`)));
 
 html = await open(teacher.page);
-check("TEACHER sees history table, comparison and both daily charts", html.includes('data-testid="seo-intel-history"') && html.includes('data-testid="seo-intel-compare"') && (html.match(/data-testid="seo-intel-chart"/g) ?? []).length === 2 && html.includes("(daily automatic)"));
+check("Viewer (FULL_ADMIN) sees history table, comparison and both daily charts", html.includes('data-testid="seo-intel-history"') && html.includes('data-testid="seo-intel-compare"') && (html.match(/data-testid="seo-intel-chart"/g) ?? []).length === 2 && html.includes("(daily automatic)"));
 // React separates adjacent text pieces with <!-- --> in the HTML, so read the rendered text.
 let text = await teacher.page.locator("main").innerText();
 check("comparison is against the entry 8 days back", text.includes(`compared with ${istDay(8)}`) && text.includes("▲ +234"), text.match(/compared with[^\n]*/)?.[0]);
@@ -451,7 +456,7 @@ const csvGet = (ctx, report) => ctx.request.get(`${BASE}/api/admin/seo-intel/exp
 let res = await csvGet(teacher.ctx, "queries");
 let body = await res.text();
 htmlSeen.push(body);
-check("TEACHER downloads queries CSV", res.status() === 200 && res.headers()["content-type"].startsWith("text/csv") && /attachment; filename="seo-intel-queries-/.test(res.headers()["content-disposition"]) && body.startsWith("query,clicks,impressions,ctr,position") && body.includes("ruhs mo mock test 1"));
+check("Viewer (FULL_ADMIN) downloads queries CSV", res.status() === 200 && res.headers()["content-type"].startsWith("text/csv") && /attachment; filename="seo-intel-queries-/.test(res.headers()["content-disposition"]) && body.startsWith("query,clicks,impressions,ctr,position") && body.includes("ruhs mo mock test 1"));
 check("CSV neutralises formula cells", body.includes(`"'=HYPERLINK(""http://evil.example"",""click"")"`) && !/^=HYPERLINK/m.test(body));
 for (const rep of ["pages", "landing-pages", "channels", "history"]) {
   res = await csvGet(full.ctx, rep);
@@ -502,7 +507,7 @@ check("key install audited (fingerprint only)", (await db.query(`select 1 from "
 const runPsiId = actionId("runPageSpeedAction");
 check("found runPageSpeedAction id", Boolean(runPsiId));
 await mock("/__mock/control", { psiScenario: "ok", resetPsiCalls: true });
-for (const [label, sess] of [["TEACHER", teacher], ["FULL_ADMIN", full]]) {
+for (const [label, sess] of [["FULL_ADMIN", full]]) {
   const r = await sess.ctx.request.post(PAGE, { headers: { "Next-Action": runPsiId, "Content-Type": "text/plain;charset=UTF-8", Origin: BASE }, data: "[]", maxRedirects: 0 });
   check(`${label} forged PageSpeed run is refused`, r.status() >= 400 && (await mock("/__mock/stats")).psiCalls.length === 0, `status ${r.status()}`);
 }
@@ -522,7 +527,7 @@ check("run audited", (await db.query(`select 1 from "AuditLog" where action='SEO
 
 await open(teacher.page);
 text = await teacher.page.locator("main").innerText();
-check("TEACHER sees scores with rating text", /Mobile\s+72\s+Needs improvement/.test(text) && /Desktop\s+96\s+Good/.test(text), text.match(/Lab test[\s\S]{0,300}/)?.[0]);
+check("Viewer (FULL_ADMIN) sees scores with rating text", /Mobile\s+72\s+Needs improvement/.test(text) && /Desktop\s+96\s+Good/.test(text), text.match(/Lab test[\s\S]{0,300}/)?.[0]);
 check("lab LCP/CLS/TBT shown with ratings", text.includes("3.4 s (Needs improvement)") && text.includes("1.2 s (Good)") && text.includes("310 ms"));
 check("field data: this page for /, whole site elsewhere", text.includes("This page: LCP 2.3 s, INP 150 ms, CLS 0.08") && text.includes("Whole site: LCP 2.7 s"));
 check("CrUX origin table with collection period + ratings", text.includes("2026-09-22 to 2026-10-19") && text.includes("2.9 s (Needs improvement)") && text.includes("0.12 (Needs improvement)") && text.includes("90 ms (Good)"));
@@ -589,7 +594,7 @@ check("next run tests only the saved pages", (await mock("/__mock/stats")).psiCa
 res = await csvGet(teacher.ctx, "pagespeed");
 body = await res.text();
 htmlSeen.push(body);
-check("TEACHER downloads PageSpeed CSV (no key)", res.status() === 200 && body.startsWith("page,strategy,checked_at,score") && body.includes("/exams,desktop") && !body.includes("AIza"));
+check("Viewer (FULL_ADMIN) downloads PageSpeed CSV (no key)", res.status() === 200 && body.startsWith("page,strategy,checked_at,score") && body.includes("/exams,desktop") && !body.includes("AIza"));
 
 // Daily job runs PageSpeed independently of the Google connection
 await backdatePsi();

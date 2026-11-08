@@ -127,7 +127,7 @@ export async function getExamDetailForStudent(examId: string) {
     prisma.mockTest.findMany({
       where: { examId, ...LIVE_MOCK_TEST_WHERE },
       orderBy: { order: "asc" },
-      include: { _count: { select: { questions: { where: { question: { status: QuestionStatus.PUBLISHED } } } } } },
+      include: { _count: { select: { questions: { where: { excludedAt: null, question: { status: QuestionStatus.PUBLISHED } } } } } },
     }),
     prisma.customModule.findMany({
       where: { examId, status: { in: VISIBLE_CUSTOM_MODULE_STATUSES } },
@@ -159,7 +159,7 @@ export async function getScheduledMockTestsForStudent(studentId: string) {
     orderBy: [{ order: "asc" }, { createdAt: "desc" }],
     // Students only ever receive PUBLISHED questions (startMockTestAttempt),
     // so the count they see is that number, not the admin's attached total.
-    include: { exam: true, testSeries: true, _count: { select: { questions: { where: { question: { status: QuestionStatus.PUBLISHED } } } } } },
+    include: { exam: true, testSeries: true, _count: { select: { questions: { where: { excludedAt: null, question: { status: QuestionStatus.PUBLISHED } } } } } },
   });
 
   const bestAttempts = await prisma.testAttempt.groupBy({
@@ -223,7 +223,7 @@ export async function getMockTestDetailForStudent(studentId: string, mockTestId:
     include: {
       exam: { select: { id: true, name: true, instructions: true } },
       testSeries: { select: { id: true, name: true, instructions: true } },
-      _count: { select: { questions: { where: { question: { status: QuestionStatus.PUBLISHED } } } } },
+      _count: { select: { questions: { where: { excludedAt: null, question: { status: QuestionStatus.PUBLISHED } } } } },
     },
   });
   if (!mockTest) return null;

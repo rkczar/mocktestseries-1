@@ -80,6 +80,9 @@ model AdminUser {
   createdReviews         Review[]              @relation("ReviewCreatedBy")
   approvedReviews        Review[]              @relation("ReviewApprovedBy")
   editedReviews          Review[]              @relation("ReviewEditedBy")
+  teacherProfile         TeacherProfile?
+  teacherExamAssignments TeacherExamAssignment[]
+  teacherContentRequests TeacherContentRequest[]
 }
 
 model LoginAttempt {
@@ -187,6 +190,8 @@ model Exam {
   testResources      TestResource[]
   products           Product[]
   emailCampaigns     EmailCampaign[]
+  teacherAssignments     TeacherExamAssignment[]
+  teacherContentRequests TeacherContentRequest[]
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,6 +1019,10 @@ model Question {
   // Separate from any test position (MockTestQuestion.order etc.). Null =
   // unknown: the PYQ attempt then falls back to createdAt, code.
   paperQuestionNumber  Int?
+  // Teacher Portal Phase A: the admin/teacher who created the question
+  // (NULL = created before author tracking). Last editor and full history
+  // come from AuditLog + QuestionRevision.
+  createdByAdminId     String?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -1028,6 +1037,8 @@ model Question {
   aiExplanation         AIExplanation?
   aiVariants            Question[]             @relation("AiQuestionVariants")
   aiExplanationVariants AIExplanationVariant[]
+  revisions             QuestionRevision[]
+  teacherContentRequests TeacherContentRequest[]
 
   @@unique([parentQuestionId, aiSlot])
   @@index([examId, examYear])
@@ -1264,6 +1275,12 @@ model MockTestQuestion {
   questionId String
   question   Question @relation(fields: [questionId], references: [id])
   order      Int      @default(0)
+  // Teacher Portal Phase A — per-test Unpublish. excludedAt != null = this
+  // question is skipped by NEW attempts of this test only; existing attempts
+  // keep their frozen snapshot. Cleared by a Master Admin restore.
+  excludedAt     DateTime?
+  excludedById   String?
+  excludedReason String?
 
   @@unique([mockTestId, questionId])
 }
@@ -4315,4 +4332,133 @@ model QuestionReplacementReference {
 
   @@index([replacementId])
   @@index([containerKind, containerId])
+}
+
+// ---------------------------------------------------------------------------
+// Teacher Portal — Phase A (docs/TEACHER-PORTAL.md). Teachers are AdminUser
+// rows with role TEACHER; they work only inside /teacher, scoped to their
+// ACTIVE exam assignments. Publishing, permanent deletion, restoration and
+// every approval stay with the Master Admin (TeacherContentRequest queue).
+// ---------------------------------------------------------------------------
+
+enum TeacherStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model TeacherProfile {
+  id          String        @id @default(cuid())
+  adminUserId String        @unique
+  adminUser   AdminUser     @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  status      TeacherStatus @default(ACTIVE)
+  notes       String?
+  createdById String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+/// One row per grant. Active = revokedAt IS NULL (at most one active row per
+/// teacher + exam: partial unique index in the migration).
+model TeacherExamAssignment {
+  id          String    @id @default(cuid())
+  teacherId   String
+  teacher     AdminUser @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  examId      String
+  exam        Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  grantedById String?
+  grantedAt   DateTime  @default(now())
+  revokedAt   DateTime?
+  revokedById String?
+
+  @@index([teacherId, revokedAt])
+  @@index([examId])
+}
+
+enum QuestionRevisionStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  STALE
+  WITHDRAWN
+}
+
+/// A proposed edit to a PUBLISHED question. The live question changes only
+/// when a Master Admin approves; approval is refused when the question's
+/// content no longer equals baseSnapshot (STALE). At most one DRAFT/SUBMITTED
+/// revision per question (partial unique index in the migration).
+model QuestionRevision {
+  id               String                 @id @default(cuid())
+  questionId       String
+  question         Question               @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  authorId         String
+  lastEditedById   String?
+  status           QuestionRevisionStatus @default(DRAFT)
+  /// Question content when the revision was started (lib/question-content.ts shape).
+  baseSnapshot     Json
+  /// Proposed content, same shape as baseSnapshot.
+  proposedSnapshot Json
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  decidedAt        DateTime?
+  decidedById      String?
+
+  requests TeacherContentRequest[]
+
+  @@index([questionId, status])
+}
+
+enum TeacherRequestType {
+  /// Publish a teacher's Draft question.
+  PUBLISH_QUESTION
+  /// Apply a QuestionRevision to a published question.
+  REVISION
+  /// Notification: the teacher already unpublished a question from a Mock Test.
+  UNPUBLISH_NOTICE
+  /// Unpublish from a Live CBT / Grand Test / Live Test / PYQ paper: takes effect only on approval.
+  UNPUBLISH_REQUEST
+  /// Restore a question unpublished from a test.
+  RESTORE_REQUEST
+  /// Permanent deletion; executed by the Master Admin via Retire / Replace.
+  DELETE_REQUEST
+}
+
+enum TeacherRequestStatus {
+  OPEN
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+model TeacherContentRequest {
+  id           String               @id @default(cuid())
+  type         TeacherRequestType
+  status       TeacherRequestStatus @default(OPEN)
+  teacherId    String
+  // Restrict: request history must outlive any attempt to delete the account.
+  teacher      AdminUser            @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  examId       String
+  exam         Exam                 @relation(fields: [examId], references: [id], onDelete: Cascade)
+  questionId   String?
+  question     Question?            @relation(fields: [questionId], references: [id], onDelete: SetNull)
+  revisionId   String?
+  revision     QuestionRevision?    @relation(fields: [revisionId], references: [id], onDelete: SetNull)
+  /// MOCK_TEST | GRAND_TEST | LIVE_TEST | PYQ_PAPER (unpublish / restore targets).
+  targetKind   String?
+  targetId     String?
+  /// Mandatory teacher reason (CHECK in the migration).
+  reason       String
+  /// Facts captured at request time (e.g. attempt counts for an unpublish).
+  impact       Json?
+  reviewerId   String?
+  decisionNote String?
+  decidedAt    DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@index([status, createdAt])
+  @@index([teacherId, createdAt])
+  @@index([questionId])
+  @@index([examId, status])
 }

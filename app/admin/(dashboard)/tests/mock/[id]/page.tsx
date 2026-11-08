@@ -82,6 +82,8 @@ export default async function MockTestDetailPage({
       questions: {
         orderBy: { order: "asc" },
         select: {
+          excludedAt: true,
+          excludedReason: true,
           question: {
             select: {
               ...bankRowSelect,
@@ -119,10 +121,11 @@ export default async function MockTestDetailPage({
     loadCoverageProducts(prisma),
   ]);
 
-  const selected: SelectedQuestion[] = mockTest.questions.map(({ question: q }) => ({
+  const selected: SelectedQuestion[] = mockTest.questions.map(({ question: q, excludedAt, excludedReason }) => ({
     ...toBankRow({ ...q, options: q.options.filter((o) => o.imageUrl).map((o) => ({ id: o.label })) }, true),
     imageUrl: q.imageUrl,
     options: q.options,
+    unpublishedReason: excludedAt ? excludedReason ?? "" : null,
   }));
 
   const now = new Date();

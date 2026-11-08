@@ -130,7 +130,8 @@ export const ROUTE_MANIFEST: RouteManifestEntry[] = [
   // Users & Access (RBAC ships this slice — minimal)
   { pageName: "Admin Users", route: "/admin/users/admins", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin", status: "CONNECTED" },
   { pageName: "Roles", route: "/admin/users/roles", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin/users/admins", status: "CONNECTED" },
-  { pageName: "Teachers", route: "/admin/users/teachers", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin/users/admins", status: "DRAFT" },
+  { pageName: "Teachers", route: "/admin/users/teachers", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin/users/admins", status: "CONNECTED" },
+  { pageName: "Teacher Content Approvals", route: "/admin/users/teachers/approvals", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin/users/teachers", status: "CONNECTED" },
   { pageName: "Permissions", route: "/admin/users/permissions", module: "Users & Access", userType: "ADMIN", authRequired: true, parentRoute: "/admin/users/admins", status: "DRAFT" },
 
   // Payments — Payment Control Center (Razorpay Standard Checkout,

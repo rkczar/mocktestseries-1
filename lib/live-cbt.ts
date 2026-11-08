@@ -267,7 +267,7 @@ const LIVE_CBT_CARD_SELECT = {
   enrollmentClosesAt: true,
   allowSharing: true,
   exam: { select: { name: true } },
-  _count: { select: { questions: { where: { question: { status: "PUBLISHED" } } } } },
+  _count: { select: { questions: { where: { excludedAt: null, question: { status: "PUBLISHED" } } } } },
 } satisfies Prisma.MockTestSelect;
 
 type LiveCbtCardRow = Prisma.MockTestGetPayload<{ select: typeof LIVE_CBT_CARD_SELECT }>;

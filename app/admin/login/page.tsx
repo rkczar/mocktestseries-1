@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
-import { getAdminSession } from "@/lib/rbac";
+import { getStaffSession } from "@/lib/rbac";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { LoginForm } from "./login-form";
@@ -13,8 +13,8 @@ export default async function AdminLoginPage({
 }: {
   searchParams: Promise<{ callbackUrl?: string }>;
 }) {
-  const session = await getAdminSession();
-  if (session?.user) redirect("/admin");
+  const session = await getStaffSession();
+  if (session?.user) redirect(session.user.role === "TEACHER" ? "/teacher" : "/admin");
 
   const { callbackUrl } = await searchParams;
 

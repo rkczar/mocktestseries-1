@@ -43,17 +43,50 @@ export interface QuestionDefaults {
   matchSpec?: unknown;
 }
 
-function SubmitButton({ editing }: { editing: boolean }) {
+function SubmitButton({ editing, label }: { editing: boolean; label?: string }) {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? "Saving…" : editing ? "Save Changes" : "Create Question"}
+      {pending ? "Saving…" : label ?? (editing ? "Save Changes" : "Create Question")}
     </Button>
   );
 }
 
-export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?: QuestionDefaults }) {
-  const action = defaults ? updateQuestionAction.bind(null, defaults.id) : createQuestionAction;
+/**
+ * Teacher Portal mode (Phase A): the same form posting to a scoped teacher
+ * action. Status, source, PYQ link and review flags are not shown (the server
+ * ignores them for teachers anyway), and images can be kept or removed but
+ * not uploaded (image upload is an admin API).
+ */
+export interface TeacherFormMode {
+  action: (prev: QuestionFormState, formData: FormData) => Promise<QuestionFormState>;
+  submitLabel: string;
+  /** Edit only: the version the editor was opened from (lib/teacher/content.ts#editVersion). */
+  version?: string;
+}
+
+function KeptImageField({ label, name, defaultUrl }: { label: string; name: string; defaultUrl?: string | null }) {
+  const [url, setUrl] = useState(defaultUrl ?? "");
+  return (
+    <div className="flex flex-col gap-1.5">
+      <input type="hidden" name={name} value={url} />
+      {url ? (
+        <div className="flex items-center gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={url} alt={label} className="h-16 w-auto rounded border border-[var(--color-border)]" />
+          <Button type="button" variant="outline" size="sm" onClick={() => setUrl("")}>
+            Remove {label.toLowerCase()}
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-[var(--color-muted-foreground)]">{label}: none (images are added by the Master Admin)</p>
+      )}
+    </div>
+  );
+}
+
+export function QuestionForm({ exams, defaults, teacher }: { exams: ExamTree[]; defaults?: QuestionDefaults; teacher?: TeacherFormMode }) {
+  const action = teacher ? teacher.action : defaults ? updateQuestionAction.bind(null, defaults.id) : createQuestionAction;
   const [state, formAction] = useActionState<QuestionFormState, FormData>(action, {});
 
   const [examId, setExamId] = useState(defaults?.examId ?? exams[0]?.id ?? "");
@@ -79,6 +112,7 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
 
   return (
     <form action={formAction} className="flex flex-col gap-5">
+      {teacher?.version ? <input type="hidden" name="baseVersion" value={teacher.version} /> : null}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="examId">Exam</Label>
@@ -164,6 +198,7 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
           </SelectNative>
         </div>
 
+        {teacher ? null : (<>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="source">Source</Label>
           <SelectNative id="source" name="source" defaultValue={defaults?.source ?? "QUESTION_BANK"}>
@@ -183,6 +218,7 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
             ))}
           </SelectNative>
         </div>
+        </>)}
 
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="difficulty">Difficulty</Label>
@@ -217,13 +253,17 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
         />
       </div>
 
-      <ImageUploadField
-        label="Question Image (optional)"
-        name="imageUrl"
-        target="question"
-        questionId={defaults?.id}
-        defaultUrl={defaults?.imageUrl}
-      />
+      {teacher ? (
+        <KeptImageField label="Question image" name="imageUrl" defaultUrl={defaults?.imageUrl} />
+      ) : (
+        <ImageUploadField
+          label="Question Image (optional)"
+          name="imageUrl"
+          target="question"
+          questionId={defaults?.id}
+          defaultUrl={defaults?.imageUrl}
+        />
+      )}
 
       {questionType === "MATCH_THE_FOLLOWING" ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="match-fields">
@@ -289,18 +329,23 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
               <Input name={`option${label}`} defaultValue={optionText(label)} placeholder={`Option ${label} text (optional if image provided)`} />
             </div>
             <div className="sm:w-64">
-              <ImageUploadField
-                label={`Option ${label} image`}
-                name={`option${label}ImageUrl`}
-                target={label}
-                questionId={defaults?.id}
-                defaultUrl={optionImageUrl(label)}
-              />
+              {teacher ? (
+                <KeptImageField label={`Option ${label} image`} name={`option${label}ImageUrl`} defaultUrl={optionImageUrl(label)} />
+              ) : (
+                <ImageUploadField
+                  label={`Option ${label} image`}
+                  name={`option${label}ImageUrl`}
+                  target={label}
+                  questionId={defaults?.id}
+                  defaultUrl={optionImageUrl(label)}
+                />
+              )}
             </div>
           </div>
         ))}
       </div>
 
+      {teacher ? null : (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="status">Status</Label>
@@ -329,9 +374,10 @@ export function QuestionForm({ exams, defaults }: { exams: ExamTree[]; defaults?
           ) : null}
         </div>
       </div>
+      )}
 
       <div className="flex items-center gap-3">
-        <SubmitButton editing={Boolean(defaults)} />
+        <SubmitButton editing={Boolean(defaults)} label={teacher?.submitLabel} />
         {state.error ? <p className="text-sm text-[var(--color-error)]">{state.error}</p> : null}
         {state.success ? <p className="text-sm text-[var(--color-success)]">Saved.</p> : null}
       </div>

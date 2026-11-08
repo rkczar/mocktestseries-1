@@ -71,7 +71,7 @@ async function main() {
       )
     );
     check("MASTER_ADMIN has EXAMS_MANAGE", DEFAULT_ROLE_PERMISSIONS.MASTER_ADMIN.includes(PERMISSIONS.EXAMS_MANAGE));
-    check("TEACHER still has EXAMS_MANAGE (unaffected by the FULL_ADMIN change)", DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.EXAMS_MANAGE));
+    check("TEACHER holds no EXAMS_MANAGE (Teacher Portal Phase A: scoped portal only)", !DEFAULT_ROLE_PERMISSIONS.TEACHER.includes(PERMISSIONS.EXAMS_MANAGE));
 
     const examsManageFiles = [
       "app/admin/(dashboard)/exams/actions.ts",

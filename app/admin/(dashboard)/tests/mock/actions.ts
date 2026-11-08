@@ -162,8 +162,13 @@ export async function updateMockTestDetailsAction(mockTestId: string, _prev: Moc
 export async function setMockTestStatusAction(mockTestId: string, status: MockTestStatus): Promise<{ error?: string }> {
   const session = await requirePermission(PERMISSIONS.TEST_SERIES_MANAGE);
   if (status === "PUBLISHED") {
-    const count = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { status: "PUBLISHED", retiredAt: null } } });
+    const count = await prisma.mockTestQuestion.count({ where: { mockTestId, excludedAt: null, question: { status: "PUBLISHED", retiredAt: null } } });
     if (count === 0) return { error: "Add at least one published question before publishing — an empty test can't be attempted." };
+    // Teacher Portal Phase A: a Draft question never goes live inside a test.
+    const drafts = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { status: "DRAFT" } } });
+    if (drafts > 0) {
+      return { error: `This test still contains ${drafts} Draft question(s). Publish them (Question Bank) or remove them in Step 3, then publish the test.` };
+    }
     // P1-E (docs/QUESTION-RETIREMENT.md): a test held because a question was
     // retired goes live again only after that position is fixed.
     const retired = await prisma.mockTestQuestion.count({ where: { mockTestId, question: { retiredAt: { not: null } } } });
