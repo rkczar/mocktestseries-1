@@ -220,6 +220,11 @@ function FigureRow({ f, questionId, busy, act, onUpload }: { f: ReviewFigure; qu
   );
 }
 
+type ReviewMsg = { ok: boolean; text: string };
+// The page remounts QuestionReview whenever the stored question changes (key = updatedAt), and most actions change it:
+// the result message ("Re-scan queued", "Saved and re-checked") is carried across that one remount instead of vanishing.
+const carriedMsg = new Map<string, { msg: ReviewMsg; at: number }>();
+
 export function QuestionReview({
   q,
   taxonomy,
@@ -233,7 +238,15 @@ export function QuestionReview({
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsgState] = useState<ReviewMsg | null>(() => {
+    const kept = carriedMsg.get(q.id);
+    carriedMsg.delete(q.id);
+    return kept && Date.now() - kept.at < 60_000 ? kept.msg : null;
+  });
+  const setMsg = (m: ReviewMsg | null) => {
+    if (m) carriedMsg.set(q.id, { msg: m, at: Date.now() });
+    setMsgState(m);
+  };
   const initial = {
     number: q.number === null ? "" : String(q.number),
     stem: q.stem,

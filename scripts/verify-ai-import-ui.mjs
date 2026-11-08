@@ -134,7 +134,7 @@ for (const id of ["mockvision/reader", "mockvision/checker", "mockvision/mid", "
 check("automatic model selection is the default", await admin.locator("[data-testid=sel-auto]").isChecked());
 await admin.locator("[data-testid=routes-refresh]").click();
 await until(async () => (await admin.locator("[data-testid=sel-extract]").getAttribute("data-model")) === "mockvision/reader");
-check("automatic choice shown: page reading mockvision/reader (cheapest with a ZDR route), verification a different model", (await admin.locator("[data-testid=sel-extract]").getAttribute("data-model")) === "mockvision/reader" && (await admin.locator("[data-testid=sel-verify]").getAttribute("data-model")) === "mockvision/mid");
+check("automatic choice shown: page reading mockvision/reader (cheapest with a ZDR route), verification a different model", (await admin.locator("[data-testid=sel-extract]").getAttribute("data-model")) === "mockvision/reader" && (await admin.locator("[data-testid=sel-verify]").getAttribute("data-model")) === "mockvision/mid", { extract: await admin.locator("[data-testid=sel-extract]").getAttribute("data-model"), verify: await admin.locator("[data-testid=sel-verify]").getAttribute("data-model"), why: await admin.locator("[data-testid=sel-verify-reason]").textContent().catch(() => null) });
 await admin.locator("[data-testid=settings-save]").click();
 await admin.locator("[data-testid=settings-msg]").waitFor();
 check("settings saved", /saved/i.test(await admin.locator("[data-testid=settings-msg]").textContent()));
