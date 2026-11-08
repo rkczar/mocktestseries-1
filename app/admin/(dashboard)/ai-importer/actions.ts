@@ -59,6 +59,7 @@ import { referenceOcrPreview, requestLocalReferenceOcr, requestReferenceOcr, typ
 import { applySourceReread, sourceRereadPreview, type RereadChoice, type RereadPreview } from "@/lib/ai-import/source-reread";
 import { learnPaperMemory } from "@/lib/ai-import/paper-learn";
 import { decidePaperRule } from "@/lib/ai-import/taxonomy-memory";
+import { getUsdInr } from "@/lib/ai-engine/fx";
 
 /**
  * AI Question Importer Server Actions. USE (upload, process, review, import,
@@ -572,6 +573,8 @@ export async function refreshRoutesAction(draft?: ImporterSettings): Promise<Imp
       // OpenRouter failures are recorded inside the snapshot; what throws here is the database read or write.
       try {
         await refreshRoutes(settings.importerModels);
+        // Prices need a USD→INR rate; the catalog only peeks, so a missing or >14-day-old rate is renewed here (free ECB fetch, only when due).
+        await getUsdInr();
       } catch (error) {
         console.error("[ai-importer] route refresh", error instanceof Error ? error.message.slice(0, 200) : "error");
         throw new ImportJobError("The provider routes could not be saved (database error), so the previous route data is unchanged.");
