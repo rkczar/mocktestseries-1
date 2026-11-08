@@ -1,8 +1,10 @@
 # mocktestseries watchdog — installed as /etc/cron.d/mocktestseries-watchdog (source: ops/monitoring/ in the repo).
-# Every 5 min: /api/health (app + DB), PM2 workers (restarts a crash-looped/stopped app at most once per
-# 30 min), disk, TLS expiry, nightly dump freshness. One line per run in /var/log/mocktestseries/watchdog.log;
-# current state in watchdog-status.txt. flock prevents overlapping runs.
+# Every 5 min, read-only: database/file backup status + checksums, newest Full package SHA-256, /api/health,
+# PostgreSQL, PM2 workers, disk (85%), TLS expiry (14 days). Email via Resend when a problem starts, every 24 h
+# while it lasts, and when it clears (recipient in /etc/mocktestseries-watchdog.conf). It NEVER restarts anything.
+# One line per run in /var/log/mocktestseries/watchdog.log; flock prevents overlapping runs; nice/ionice keep
+# the daily re-hashing out of the app's way.
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-*/5 * * * * root flock -n /run/mocktestseries-watchdog.lock /var/www/mocktestseries-current/ops/monitoring/mocktestseries-watchdog.sh >/dev/null 2>&1
+*/5 * * * * root flock -n /run/mocktestseries-watchdog.lock nice -n 10 ionice -c3 /usr/bin/python3 /usr/local/bin/mocktestseries-watchdog.py >/dev/null 2>&1

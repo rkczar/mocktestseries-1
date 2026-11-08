@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Liveness + database reachability for the local watchdog
- * (ops/monitoring/mocktestseries-watchdog.sh) and any external uptime
+ * (ops/monitoring/mocktestseries-watchdog.py) and any external uptime
  * monitor. Public and read-only: it reveals nothing beyond up/down.
  */
 export async function GET() {
