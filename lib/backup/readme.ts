@@ -60,6 +60,7 @@ export function buildRestoreReadme(m: BackupManifest): string {
             `chmod 600 /var/www/mocktestseries-shared/.env`,
             "```",
             `Then edit \`DATABASE_URL\` to use the new database password from step 2. Keep \`AUTH_SECRET\` unchanged.`,
+            `Variables the restored file must contain (names only; values are in the encrypted payload): ${m.secrets.variableNames.join(", ") || "(see portable-config/env.template)"}.`,
           ].join("\n")
         : `This backup contains **no secrets**. Start from \`portable-config/env.template\` and set: ${m.secrets.variableNames.join(", ") || "(see template)"}. A new AUTH_SECRET means credentials stored in Admin settings must be re-entered and all users re-login.`,
       ``,
@@ -88,6 +89,7 @@ export function buildRestoreReadme(m: BackupManifest): string {
       `cd /var/www/mocktestseries-current && pm2 start node_modules/next/dist/bin/next --name mocktestseries -i 2 -- start -p 3002 -H 127.0.0.1`,
       `pm2 save && pm2 startup`,
       `cp portable-config/nginx-mocktestseries.in.conf /etc/nginx/sites-available/mocktestseries.in   # edit server_name if the domain changes`,
+      `mkdir -p /etc/nginx/snippets && cp portable-config/nginx-snippet-mocktestseries-media.conf /etc/nginx/snippets/mocktestseries-media.conf   # included by the site for /media`,
       `ln -s /etc/nginx/sites-available/mocktestseries.in /etc/nginx/sites-enabled/ && nginx -t && systemctl reload nginx`,
       `certbot --nginx -d <domain> -d www.<domain>`,
       `cp portable-config/mocktestseries-*.sh /usr/local/bin/ && chmod 700 /usr/local/bin/mocktestseries-*.sh`,

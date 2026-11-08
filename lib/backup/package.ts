@@ -59,11 +59,15 @@ export interface ManifestComponent {
 export interface BackupManifest {
   format: typeof BACKUP_FORMAT;
   formatVersion: number;
+  /** BackupJob id that produced this package (absent in packages made before 2026-11-08). */
+  backupId?: string;
   backupType: BackupKindName;
   createdAt: string;
   app: { name: string; version: string; gitSha: string | null; sourceProvenance: string; workingTreeDirty: boolean | null; node: string; next: string | null; postgres: string };
   database: {
     name: string;
+    /** PostgreSQL cluster identity (system identifier when readable) — tells which server the dump came from. */
+    identity?: { systemIdentifier: string | null; serverVersion: string };
     latestMigration: string | null;
     migrationCount: number;
     tableCount: number;
@@ -105,12 +109,13 @@ export async function latestMigrationOnDisk(repo: string): Promise<string | null
   return names.at(-1) ?? null;
 }
 
-async function countFiles(dir: string): Promise<{ files: number; bytes: number }> {
+async function countFiles(dir: string, exclude: string[] = []): Promise<{ files: number; bytes: number }> {
   let files = 0;
   let bytes = 0;
   async function walk(d: string, depth: number) {
     if (depth > 12) return;
     for (const e of await readdir(d, { withFileTypes: true }).catch(() => [])) {
+      if (depth === 0 && exclude.includes(e.name)) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) await walk(p, depth + 1);
       else if (e.isFile()) {
@@ -220,7 +225,11 @@ async function buildPortableConfig(dir: string, roots: BackupRoots, envText: str
       2
     ) + "\n"
   );
-  const refs: [string, string][] = [["/etc/nginx/sites-available/mocktestseries.in", "nginx-mocktestseries.in.conf"]];
+  const refs: [string, string][] = [
+    ["/etc/nginx/sites-available/mocktestseries.in", "nginx-mocktestseries.in.conf"],
+    // The site config includes this snippet for /media and /storage/question-images.
+    ["/etc/nginx/snippets/mocktestseries-media.conf", "nginx-snippet-mocktestseries-media.conf"],
+  ];
   // EVERY app cron (backups, email worker, Live CBT sweep, payment
   // reconciliation, trial reminders …) and every host backup script — not
   // just the backup cron — so a fresh VPS gets all scheduled jobs back.
@@ -274,6 +283,7 @@ export async function buildBackupPackage(opts: {
   passphrase?: string;
   databaseUrl?: string;
   envFile?: string;
+  backupId?: string;
 }): Promise<BuildResult> {
   const { kind, roots, workspace } = opts;
   const databaseUrl = opts.databaseUrl ?? process.env.DATABASE_URL ?? "";
@@ -286,6 +296,10 @@ export async function buildBackupPackage(opts: {
     const f = path.join(stage, rel);
     components.push({ path: rel, kind: kindName, bytes: (await stat(f)).size, sha256: await sha256File(f), description });
   };
+
+  // Cluster identity, read OUTSIDE the snapshot transaction (a refused query would abort it). pg_control_system()
+  // needs pg_monitor/superuser on some servers, so it is best-effort and never fails the backup.
+  const sysId = await prisma.$queryRaw<{ id: string }[]>`SELECT system_identifier::text AS id FROM pg_control_system()`.catch(() => null);
 
   // 1. Database (consistent snapshot).
   const facts = await dumpDatabase(path.join(stage, "database.dump"), kind, databaseUrl);
@@ -320,8 +334,9 @@ export async function buildBackupPackage(opts: {
       const exists = await stat(p.dir).catch(() => null);
       const name = `assets-${p.key}.tar.gz`;
       if (exists?.isDirectory()) {
-        await runOk("tar", ["-czf", path.join(stage, name), "-C", path.dirname(p.dir), path.basename(p.dir)]);
-        const c = await countFiles(p.dir);
+        const excludes = (p.exclude ?? []).map((x) => `--exclude=${path.basename(p.dir)}/${x}`);
+        await runOk("tar", ["-czf", path.join(stage, name), "--anchored", ...excludes, "-C", path.dirname(p.dir), path.basename(p.dir)]);
+        const c = await countFiles(p.dir, p.exclude);
         persistentAssets.push({ key: p.key, label: p.label, fileCount: c.files, bytes: c.bytes });
       } else {
         await runOk("tar", ["-czf", path.join(stage, name), "--files-from=/dev/null"]);
@@ -348,6 +363,7 @@ export async function buildBackupPackage(opts: {
   const manifest: BackupManifest = {
     format: BACKUP_FORMAT,
     formatVersion: BACKUP_FORMAT_VERSION,
+    ...(opts.backupId ? { backupId: opts.backupId } : {}),
     backupType: kind,
     createdAt: new Date().toISOString(),
     app: {
@@ -362,6 +378,7 @@ export async function buildBackupPackage(opts: {
     },
     database: {
       name: databaseNameFromUrl(databaseUrl),
+      identity: { systemIdentifier: sysId?.[0]?.id ?? null, serverVersion: facts.pgVersion },
       latestMigration: facts.latestMigration,
       migrationCount: facts.migrationCount,
       tableCount: facts.tableCount,
@@ -423,6 +440,7 @@ export function buildInventory(kind: BackupKindName): BackupManifest["inventory"
     },
     { item: "Application source (exact production git SHA), package.json, lockfile, Prisma schema + migrations, scripts", status: full ? "INCLUDED" : "EXCLUDED BY DESIGN", note: full ? "source.tar.gz" : "database-only backup" },
     { item: "Persistent files: question/option images, test resource PDFs/OMR, uploads", status: full ? "INCLUDED" : "EXCLUDED BY DESIGN", note: full ? "assets-*.tar.gz" : "database-only backup" },
+    { item: "Original Paper Vault (AI Importer source papers, figures, page renders) and rich-import staging bundles", status: full ? "INCLUDED" : "EXCLUDED BY DESIGN", note: full ? "assets-ai-import-vault.tar.gz (without transient tmp/ and work/), assets-import-staging.tar.gz" : "database-only backup" },
     { item: "node_modules, .next build output, npm cache", status: "REGENERABLE", note: "npm ci && npx prisma generate && npm run build" },
     {
       item: "Environment secrets (.env: DATABASE_URL, AUTH_SECRET, …)",

@@ -23,6 +23,7 @@ DUMP_DIR="${DUMP_DIR:-/var/backups/mocktestseries/postgres}"
 DISK_WARN_PCT="${DISK_WARN_PCT:-85}"
 CERT_WARN_DAYS="${CERT_WARN_DAYS:-14}"
 DUMP_MAX_AGE_H="${DUMP_MAX_AGE_H:-26}"
+FILES_STATUS="${FILES_STATUS:-/var/backups/mocktestseries/files-status.txt}"
 STATE_DIR="${STATE_DIR:-/var/lib/mocktestseries-watchdog}"
 
 mkdir -p "$LOG_DIR" "$STATE_DIR"
@@ -74,6 +75,16 @@ if [ -z "$newest" ]; then
 else
   age_h=$(( ($(date +%s) - ${newest%.*}) / 3600 ))
   [ "$age_h" -ge "$DUMP_MAX_AGE_H" ] && alerts+=("newest database dump is ${age_h}h old")
+fi
+
+# 6. Nightly file backup (uploads, storage, importer vault + staging) result and freshness.
+if [ ! -f "$FILES_STATUS" ]; then
+  alerts+=("no file backup status in $FILES_STATUS")
+else
+  read -r files_ts files_state files_rest <"$FILES_STATUS"
+  files_age_h=$(( ($(date +%s) - $(date -d "$files_ts" +%s 2>/dev/null || echo 0)) / 3600 ))
+  [ "$files_state" = "OK" ] || alerts+=("file backup $files_state ${files_rest:-}")
+  [ "$files_age_h" -ge "$DUMP_MAX_AGE_H" ] && alerts+=("last file backup is ${files_age_h}h old")
 fi
 
 ts=$(date -u +%FT%TZ)

@@ -245,6 +245,8 @@ export async function rehearseRestoreAction(input: { id: string; passphrase?: st
     const { artifact, file } = await resolveArtifact(roots, input.id);
     if (artifact.kind !== "PACKAGE") return { ok: false, error: "Restore rehearsal needs a Backup Center package (.tar)." };
     const r = await rehearseRestore({ file, roots, passphrase: input.passphrase || undefined, adminId: session.user.id });
+    // "Restore Tested" belongs to these exact bytes: a later change of the file (other SHA-256) drops the label.
+    if (r.ok && r.verify.sha256) await logBackupAudit(session.user.id, "RESTORE_TESTED", "BackupArtifact", artifact.id, { sha256: r.verify.sha256, name: artifact.name, checks: r.checks.length });
     return { ok: true, data: { ok: r.ok, checks: r.checks } };
   } catch (e) {
     return fail(e);

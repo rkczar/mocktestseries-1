@@ -1,7 +1,8 @@
 # mocktestseries backups — installed as /etc/cron.d/mocktestseries-backups (source: ops/backup/ in the repo).
 # Additive jobs only; none of them touch the live database or files.
 # 02:00 DB dump (pg_dump -Fc, 14-day retention)
-# 02:15 file mirrors: uploads + shared storage (images, test resources) — never deletes backup copies
+# 02:15 file mirrors: uploads + shared storage (images, test resources) + AI Importer vault and
+#       staging — never deletes backup copies; SHA-256 verified, result in files-status.txt
 # 02:25 config archive (.env, nginx, PM2 dump, cron, scripts; 30-day retention; contains secrets, 0600)
 # 02:45 off-VPS copy via encrypted rclone remote "mts-offsite" (no-op until the owner configures it)
 SHELL=/bin/bash

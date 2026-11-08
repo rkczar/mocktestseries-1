@@ -50,7 +50,9 @@ async function main() {
   const { groupComponentSizes, readPackageManifest } = await import("../lib/backup/package");
   const { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } = await import("../lib/permissions");
 
-  const base = `/var/backups/mocktestseries-verify-retention-${crypto.randomBytes(4).toString("hex")}`;
+  // BACKUP_VERIFY_BASE / BACKUP_VERIFY_REPO: scratch fixture location and the checkout under test (defaults: as before).
+  const base = `${process.env.BACKUP_VERIFY_BASE ?? "/var/backups/mocktestseries-verify"}-retention-${crypto.randomBytes(4).toString("hex")}`;
+  const repoUnderTest = process.env.BACKUP_VERIFY_REPO ?? PRODUCTION_ROOTS.repo;
   const R = {
     ...PRODUCTION_ROOTS,
     managed: `${base}/managed`,
@@ -391,10 +393,10 @@ async function main() {
     console.log("\n20–21. RBAC");
     check("FULL_ADMIN has BACKUP_VIEW, not BACKUP_MANAGE (defaults)", DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN.includes(PERMISSIONS.BACKUP_VIEW) && !DEFAULT_ROLE_PERMISSIONS.FULL_ADMIN.includes(PERMISSIONS.BACKUP_MANAGE));
     // Sessions get permissions from DEFAULT_ROLE_PERMISSIONS (lib/auth.config.ts jwt/session callbacks), not the RolePermission table.
-    const authCfg = await readFile(path.join(PRODUCTION_ROOTS.repo, "lib/auth.config.ts"), "utf8");
+    const authCfg = await readFile(path.join(repoUnderTest, "lib/auth.config.ts"), "utf8");
     check("Session permissions are derived from DEFAULT_ROLE_PERMISSIONS", authCfg.includes("DEFAULT_ROLE_PERMISSIONS[role]"));
     check("MASTER_ADMIN has backup:manage + backup:view", DEFAULT_ROLE_PERMISSIONS.MASTER_ADMIN.includes(PERMISSIONS.BACKUP_MANAGE) && DEFAULT_ROLE_PERMISSIONS.MASTER_ADMIN.includes(PERMISSIONS.BACKUP_VIEW));
-    const actionsSrc = await readFile(path.join(PRODUCTION_ROOTS.repo, "app/admin/(dashboard)/backup/actions.ts"), "utf8");
+    const actionsSrc = await readFile(path.join(repoUnderTest, "app/admin/(dashboard)/backup/actions.ts"), "utf8");
     const exported = [...actionsSrc.matchAll(/export async function (\w+)\([^]*?\{\n  try \{\n    (.+)\n/g)].map((x) => ({ name: x[1], first: x[2] }));
     const mutations = ["createBackupAction", "verifyArtifactAction", "deleteArtifactAction", "cleanupBackupsAction", "cleanTempAction", "deleteReleaseAction", "cleanupReleasesAction", "refreshStorageAction", "saveRetentionAction", "rehearseRestoreAction", "restoreProductionAction"];
     check(
@@ -406,7 +408,7 @@ async function main() {
     const body = (n: string) => actionsSrc.split(`export async function ${n}(`)[1]?.split("export async function")[0] ?? "";
     check("Destructive actions re-verify the admin password", destructive.every((n) => body(n).includes("reauth(")));
     check("No action calls revalidatePath (no full-page re-render inside a mutation)", !/revalidatePath\(/.test(actionsSrc));
-    const reconcileSrc = await readFile(path.join(PRODUCTION_ROOTS.repo, "app/api/admin/backup/reconcile/route.ts"), "utf8");
+    const reconcileSrc = await readFile(path.join(repoUnderTest, "app/api/admin/backup/reconcile/route.ts"), "utf8");
     check("Reconcile endpoint is read-only + BACKUP_VIEW", reconcileSrc.includes("PERMISSIONS.BACKUP_VIEW") && !/\b(rm|unlink|delete\w*)\(/.test(reconcileSrc));
 
     // ---- 25b. Route registry ----------------------------------------------------

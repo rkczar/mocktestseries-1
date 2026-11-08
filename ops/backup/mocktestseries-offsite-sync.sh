@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Off-VPS copy of /var/backups/mocktestseries (DB dumps, file mirrors, config
-# archives) via rclone.
+# Off-VPS copy of /var/backups/mocktestseries via rclone: nightly DB dumps (+ .sha256), file mirrors
+# (uploads, storage, Original Paper Vault, import staging) with their SHA-256 manifests, config
+# archives, verified Backup Center packages, milestone and pre-deploy snapshots, status files.
 #
 # OWNER CONFIGURATION REQUIRED (one time): create an ENCRYPTED rclone remote
 # named "mts-offsite" (type = crypt) wrapping e.g. a Google Drive remote:
@@ -41,6 +42,8 @@ fi
 log "Syncing $SRC -> $REMOTE: (copy, never deletes remote history)"
 if rclone copy "$SRC" "$REMOTE:" \
      --include "postgres/**" --include "uploads/**" --include "storage/**" --include "config/**" \
+     --include "ai-import-vault/**" --include "import-staging/**" --include "manifests/**" \
+     --include "packages/**" --include "milestones/**" --include "pre-*/**" --include "*-status.txt" \
      --transfers 2 >>"$LOG" 2>&1; then
   log "OFF-VPS BACKUP: OK"; status "OK"
 else

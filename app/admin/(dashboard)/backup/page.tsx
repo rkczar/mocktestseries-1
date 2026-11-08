@@ -8,7 +8,7 @@ import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PRODUCTION_ROOTS } from "@/lib/backup/roots";
-import { autoVerifyCheap, listArtifacts, resolveArtifact, type Artifact } from "@/lib/backup/discovery";
+import { autoVerifyCheap, backupLifecycle, listArtifacts, resolveArtifact, type Artifact, type BackupLifecycle } from "@/lib/backup/discovery";
 import { planBackupCleanup, retentionClass } from "@/lib/backup/cleanup";
 import { listReleases, planReleaseCleanup, RELEASE_STATUS_LABEL, type Release } from "@/lib/backup/releases";
 import { buildStorageView, fmtBytes, getStorageSnapshot, releaseSizeMap, type StorageRow, type StorageView } from "@/lib/backup/storage";
@@ -533,7 +533,7 @@ export default async function BackupPage({ searchParams }: { searchParams: Promi
             <CardDescription>Discovered only in approved backup locations. Unknown files are listed but never deleted. Downloads stream directly to your device.</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table head={["Name", "Type", "Modified", "Size", "Format", "Verification", "Actions"]} minWidth={980}>
+            <Table head={["Name", "Type", "Modified", "Size", "Format", "Status", "Actions"]} minWidth={980}>
               {artifacts.map((a) => (
                 <tr key={a.id}>
                   <td className="break-all font-mono text-xs">
@@ -550,7 +550,9 @@ export default async function BackupPage({ searchParams }: { searchParams: Promi
                   <td>{fmtBytes(a.sizeBytes)}</td>
                   <td className="text-xs">{a.format}</td>
                   <td>
+                    {a.kind !== "MIRROR" ? <LifecycleBadge state={backupLifecycle(a)} /> : null}{" "}
                     <StatusBadge status={a.verification} />
+                    {a.restoreTestedAt ? <div className="text-[10px] text-[var(--color-muted-foreground)]">Restore rehearsal passed {fmtDate(a.restoreTestedAt)}</div> : null}
                     {plan.protectedIds.includes(a.id) ? (
                       <Badge variant="success" className="ml-1">
                         PROTECTED LATEST
@@ -834,6 +836,7 @@ export default async function BackupPage({ searchParams }: { searchParams: Promi
                       ) : null}
                     </td>
                     <td>
+                      <LifecycleBadge state={jobLifecycle(j)} />{" "}
                       <Badge variant={j.status === "FAILED" ? "error" : j.status === "RUNNING" ? "warning" : "success"}>{j.status}</Badge>
                       {j.error ? <div className="text-[10px] text-[var(--color-error)]">{j.error}</div> : null}
                     </td>
@@ -888,4 +891,27 @@ export default async function BackupPage({ searchParams }: { searchParams: Promi
       </BackupOpsProvider>
     </div>
   );
+}
+
+const LIFECYCLE_LABEL: Record<BackupLifecycle | "IN_PROGRESS" | "EXPIRED", { label: string; variant: "success" | "info" | "error" | "warning" | "neutral" }> = {
+  CREATED: { label: "CREATED (not verified)", variant: "neutral" },
+  INTEGRITY_VERIFIED: { label: "INTEGRITY VERIFIED", variant: "info" },
+  RESTORE_TESTED: { label: "RESTORE TESTED", variant: "success" },
+  FAILED: { label: "FAILED", variant: "error" },
+  INCOMPLETE: { label: "INCOMPLETE", variant: "warning" },
+  IN_PROGRESS: { label: "IN PROGRESS", variant: "warning" },
+  EXPIRED: { label: "EXPIRED", variant: "neutral" },
+};
+
+/** Backup lifecycle: a file that merely exists is only CREATED; verified/restore-tested need a passing check of its bytes. */
+function LifecycleBadge({ state }: { state: keyof typeof LIFECYCLE_LABEL }) {
+  const l = LIFECYCLE_LABEL[state];
+  return <Badge variant={l.variant}>{l.label}</Badge>;
+}
+
+function jobLifecycle(j: { status: string; error: string | null; summary: unknown }): keyof typeof LIFECYCLE_LABEL {
+  if (j.status === "RUNNING") return "IN_PROGRESS";
+  if (j.status === "FAILED") return /^Interrupted/.test(j.error ?? "") ? "INCOMPLETE" : "FAILED";
+  if (j.status === "EXPIRED") return "EXPIRED";
+  return (j.summary as { integrity?: string } | null)?.integrity === "VALID" ? "INTEGRITY_VERIFIED" : "CREATED";
 }

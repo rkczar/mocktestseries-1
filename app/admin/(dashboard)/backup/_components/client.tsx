@@ -174,7 +174,6 @@ export function CreateBackupCard({ kind, title, description, canManage }: { kind
   const [pass, setPass] = useState("");
   const [pass2, setPass2] = useState("");
   const [password, setPassword] = useState("");
-  const [save, setSave] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -206,7 +205,7 @@ export function CreateBackupCard({ kind, title, description, canManage }: { kind
       misses = 0;
       setStatus(r.data.status);
       if (r.data.status === "RUNNING") timer.current = setTimeout(poll, 2500);
-      else if (r.data.status === "READY") {
+      else if (r.data.status === "READY" || r.data.status === "SAVED") {
         // A streamed file download (API route), not page navigation — the page stays interactive.
         const a = document.createElement("a");
         a.href = `/api/admin/backup/jobs/${jobId}/download`;
@@ -229,7 +228,7 @@ export function CreateBackupCard({ kind, title, description, canManage }: { kind
     setError(null);
     setStatus(null);
     void execute({
-      run: () => createBackupAction({ kind, saveOnVps: save, passphrase: kind === "FULL" ? pass : undefined, passphraseConfirm: pass2, password }),
+      run: () => createBackupAction({ kind, saveOnVps: true, passphrase: kind === "FULL" ? pass : undefined, passphraseConfirm: pass2, password }),
       timeoutMs: 60_000,
     }).then((r) => {
       setPassword("");
@@ -269,9 +268,9 @@ export function CreateBackupCard({ kind, title, description, canManage }: { kind
             </div>
           </>
         ) : null}
-        <label className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
-          <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} /> Also save a copy on the VPS (default off — download only)
-        </label>
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          The backup is integrity-verified and kept in VPS Backups, so it can be downloaded again or resumed. Old backups are removed only by retention.
+        </p>
         <Button type="submit" size="sm" className="w-fit">
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Download className="h-3.5 w-3.5" aria-hidden />}
           {running ? "Generating…" : `Download ${kind === "FULL" ? "Full Backup" : kind === "CLEAN" ? "Clean Backup" : "Database Backup"}`}
@@ -279,7 +278,7 @@ export function CreateBackupCard({ kind, title, description, canManage }: { kind
       </fieldset>
       {status && status !== "RUNNING" && !error ? (
         <p className="text-xs text-[var(--color-success)]" role="status">
-          {status === "READY" ? "Ready — your download has started." : status === "SAVED" ? "Saved on the VPS (see VPS Backups)." : status === "DOWNLOADED" ? "Downloaded and removed from the VPS." : status}
+          {status === "READY" || status === "SAVED" ? "Integrity verified and kept on the VPS — your download has started. If it is interrupted, download it again from VPS Backups." : status === "DOWNLOADED" ? "Downloaded (still kept on the VPS)." : status}
         </p>
       ) : null}
       <Msg ok={false} text={error} />

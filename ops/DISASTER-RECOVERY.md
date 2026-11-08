@@ -6,8 +6,8 @@ Rehearsed 2026-09-25 on a throwaway PostgreSQL instance (never over production).
 
 | Time (UTC) | What | Where |
 |---|---|---|
-| 02:00 | PostgreSQL `pg_dump -Fc`, 14-day retention | `/var/backups/mocktestseries/postgres/` |
-| 02:15 | File mirrors (never deletes): `/var/lib/mocktestseries/uploads`, `/var/www/mocktestseries-shared/storage` (question images, test resources/OMR) | `/var/backups/mocktestseries/{uploads,storage}/` |
+| 02:00 | PostgreSQL `pg_dump -Fc`, verified with `pg_restore --list` before it is kept, `.sha256` sidecar per dump, result in `db-status.txt`; 14-day retention (nightly-format names only) | `/var/backups/mocktestseries/postgres/` |
+| 02:15 | File mirrors (never deletes, SHA-256 verified, result in `files-status.txt`): `/var/lib/mocktestseries/uploads`, `/var/www/mocktestseries-shared/storage` (question images, test resources/OMR), `/var/lib/mocktestseries/ai-import-vault` (AI Importer originals, renders, figures; transient `tmp/` and `work/` skipped), `/var/lib/mocktestseries/import-staging` (RICH import bundles) | `/var/backups/mocktestseries/{uploads,storage,ai-import-vault,import-staging}/` |
 | 02:25 | Config archive (0600, **contains secrets**): shared `.env`, nginx site, PM2 dump, cron, backup scripts; 30-day retention | `/var/backups/mocktestseries/config/` |
 | 02:45 | Off-VPS copy of all of the above via the encrypted rclone remote `mts-offsite` | `offsite-status.txt` shows the state |
 
@@ -35,6 +35,7 @@ Guarded by `scripts/verify-migration-replay.sh` (clean replay + drift check, opt
 ## Files and config
 
 - Files: `rsync -a /var/backups/mocktestseries/storage/ /var/www/mocktestseries-shared/storage/` (same for `uploads` → `/var/lib/mocktestseries/uploads`). Rehearsal: byte-identical (sha256).
+- AI Importer files: `install -d -m 700 /var/lib/mocktestseries/{ai-import-vault,import-staging}`, then `rsync -a /var/backups/mocktestseries/ai-import-vault/ /var/lib/mocktestseries/ai-import-vault/` (same for `import-staging`). Restore the database first: vault and staging files are only reachable through their DB rows. Check with `cd <live dir> && sha256sum -c --quiet /var/backups/mocktestseries/manifests/<name>.sha256` (the manifest lists the files that were live at the last backup).
 - Config: `tar -xzf mocktestseries-config-*.tar.gz -C /` restores `.env`, the nginx site, the PM2 dump, cron and scripts. Then `nginx -t && systemctl reload nginx`, `pm2 resurrect`, `certbot --nginx -d mocktestseries.in -d www.mocktestseries.in`.
 
 ## New-server order
@@ -87,3 +88,12 @@ The site is installable as "MockTestSeries" (`app/manifest.ts`, icons in `public
 
 - **Kill switch:** if the worker ever misbehaves, add `PWA_SW_DISABLED=1` to the shared `.env` and run `pm2 reload mocktestseries`. Every browser that checks `/sw.js` then gets a worker that deletes the `mts-*` caches and unregisters itself; the site keeps working as a normal website. Remove the line and reload to re-enable.
 - **Verify (local build + disposable DB, as for the test-engine suite):** `BASE=http://localhost:3100 FIXTURE=<fixture.json> NODE_PATH=<dir with playwright> node scripts/verify-pwa.mjs`. Add `SIGNAL_DIR=<dir>` to also exercise a live update mid-test (see the script header).
+
+## Backup Center packages (Admin → Backup)
+
+- Database / Full Disaster Recovery / Clean Portable packages are integrity-verified when built (manifest, SHA-256 of every component, `pg_restore` catalog, inner archives, passphrase) and then **kept** in `/var/backups/mocktestseries/packages/`. A package that fails verification is marked FAILED and not kept.
+- Downloads never delete a package. Every download is re-checked against the verified SHA-256 first and can be repeated or resumed (HTTP Range).
+- Full and Clean packages contain shared storage, import uploads, the **Original Paper Vault** (without transient `tmp/`, `work/`) and **import staging**. FULL adds `secrets.env.gpg` (encrypted with the Backup Recovery Passphrase); Clean and Database packages contain no secrets, only `portable-config/env.template` with variable names.
+- Status shown per backup: CREATED (exists, not verified) → INTEGRITY VERIFIED → RESTORE TESTED (a passing Restore → Rehearsal of the same SHA-256); FAILED; INCOMPLETE (interrupted job).
+- Old packages are removed only by retention (Clean Old Backups or the scheduled auto-retention, OFF by default), which always keeps the newest verified backup of each type.
+

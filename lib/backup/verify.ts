@@ -25,7 +25,7 @@ export interface VerifyReport {
   status: VerifyStatus;
   summary: string;
   checks: { label: string; ok: boolean; detail?: string }[];
-  manifest?: Pick<BackupManifest, "backupType" | "createdAt" | "app" | "database" | "persistentAssets" | "secrets" | "components" | "inventory">;
+  manifest?: Pick<BackupManifest, "backupId" | "backupType" | "createdAt" | "app" | "database" | "persistentAssets" | "secrets" | "components" | "inventory">;
   compatibility?: { productionRestore: boolean; reason: string };
   passphrase?: "NOT_REQUIRED" | "NOT_PROVIDED" | "CORRECT" | "INCORRECT";
   sha256?: string;
@@ -173,7 +173,7 @@ export async function verifyPackage(
   checks.push({ label: "Schema compatible with this production release", ok: productionRestore, detail: compatibility.reason });
 
   const sha256 = await sha256File(file);
-  const { backupType, createdAt, app, database, persistentAssets, secrets, components, inventory } = manifest;
+  const { backupId, backupType, createdAt, app, database, persistentAssets, secrets, components, inventory } = manifest;
   const status: VerifyStatus = passphrase === "INCORRECT" ? "INVALID" : "VALID";
   return {
     status,
@@ -182,7 +182,7 @@ export async function verifyPackage(
         ? `${backupType} backup verified: manifest, ${components.length} components, checksums and database payload OK.`
         : "Recovery passphrase did not decrypt the secrets payload.",
     checks,
-    manifest: { backupType, createdAt, app, database, persistentAssets, secrets, components, inventory },
+    manifest: { backupId, backupType, createdAt, app, database, persistentAssets, secrets, components, inventory },
     compatibility,
     passphrase,
     sha256,
