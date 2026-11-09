@@ -26,6 +26,12 @@ export interface PaymentFilters {
   couponId: string | null;
   status: OrderStatus | null;
   student: string | null;
+  /**
+   * Teacher Portal (server-side only, never parsed from the URL): limits every
+   * order / payment / refund query to products of these exams and searches
+   * students by code or name only (never email / mobile).
+   */
+  scope?: { examIds: string[] };
 }
 
 const PAID_LIKE: OrderStatus[] = [OrderStatus.PAID, OrderStatus.PARTIALLY_REFUNDED, OrderStatus.REFUNDED];
@@ -56,6 +62,11 @@ export function parsePaymentFilters(sp: Record<string, string | string[] | undef
 }
 
 export function orderWhere(f: PaymentFilters): Prisma.PaymentOrderWhereInput {
+  const base = adminOrderWhere(f);
+  return f.scope ? { AND: [base, { product: { examId: { in: f.scope.examIds } } }] } : base;
+}
+
+function adminOrderWhere(f: PaymentFilters): Prisma.PaymentOrderWhereInput {
   return {
     environment: f.environment,
     ...(f.from || f.to ? { createdAt: { ...(f.from ? { gte: f.from } : {}), ...(f.to ? { lte: f.to } : {}) } } : {}),
@@ -69,8 +80,7 @@ export function orderWhere(f: PaymentFilters): Prisma.PaymentOrderWhereInput {
             OR: [
               { studentId: { contains: f.student, mode: "insensitive" as const } },
               { name: { contains: f.student, mode: "insensitive" as const } },
-              { email: { contains: f.student, mode: "insensitive" as const } },
-              { mobile: { contains: f.student } },
+              ...(f.scope ? [] : [{ email: { contains: f.student, mode: "insensitive" as const } }, { mobile: { contains: f.student } }]),
             ],
           },
         }

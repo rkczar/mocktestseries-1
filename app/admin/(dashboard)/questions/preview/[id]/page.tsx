@@ -5,11 +5,7 @@ import { hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { RichText } from "@/components/content/rich-text";
-import { QuestionMedia } from "@/components/content/question-media";
-import { HumanExplanation } from "@/components/content/human-explanation";
-import { liveMatchView, liveRichViews } from "@/lib/rich-content";
-import { MatchLists } from "@/components/content/match-lists";
+import { QuestionPreviewBody } from "@/components/content/question-preview-body";
 import { QUESTION_TYPE_LABEL, matchAssetKey, readMatchSpec, toQuestionType } from "@/lib/question-types";
 import { mediaUrl } from "@/lib/media-storage";
 import { MediaManager } from "./media-manager";
@@ -57,8 +53,6 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
   // Provenance of a question added by the AI Question Importer (the import record outlives the question).
   const imported = await prisma.aiImportQuestion.findFirst({ where: { questionId: q.id }, orderBy: { importedAt: "desc" }, select: { jobId: true, id: true, sourceLabel: true, pages: true, data: true, editedData: true, answerStatus: true, job: { select: { title: true } } } });
   const importedSection = imported ? (((imported.editedData ?? imported.data) as { section?: string } | null)?.section ?? "") : "";
-  const { rich, explanation } = liveRichViews(q);
-  const match = liveMatchView(q);
   const spec = q.questionType === "MATCH_THE_FOLLOWING" ? readMatchSpec(q.matchSpec) : null;
   const listKeys = spec ? [...spec.listI.map((e) => matchAssetKey("I", e.key)), ...spec.listII.map((e) => matchAssetKey("II", e.key))] : [];
 
@@ -112,38 +106,7 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
       </dl>
       <Card>
         <CardContent className="flex flex-col gap-3 pt-5" data-testid="admin-question-preview">
-          <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">
-            <RichText text={q.text} html={rich?.textHtml} />
-          </p>
-          {q.imageUrl && !rich?.assets.some((a) => a.role === "QUESTION") ? (
-            // eslint-disable-next-line @next/next/no-img-element -- admin preview of a legacy question image
-            <img src={q.imageUrl} alt={`${q.code} image`} className="max-h-72 w-fit rounded border border-[var(--color-border)]" />
-          ) : null}
-          {rich ? <QuestionMedia assets={rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
-          {match ? <MatchLists match={match} /> : null}
-          <ul className="flex flex-col gap-2">
-            {q.options.map((o) => (
-              <li
-                key={o.label}
-                className={
-                  o.isCorrect
-                    ? "rounded-[var(--radius-card)] border border-[var(--color-success)] bg-[var(--color-success)]/10 p-3 text-sm"
-                    : "rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-sm"
-                }
-              >
-                <span className="font-semibold">{o.label}.</span> <RichText text={o.text} html={rich?.optionHtml[o.label]} />
-                {o.isCorrect ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
-                {o.imageUrl && !rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === o.label) ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- admin preview of a legacy option image
-                  <img src={o.imageUrl} alt={`${q.code} option ${o.label}`} className="mt-2 max-h-48 w-fit rounded border border-[var(--color-border)]" />
-                ) : null}
-                {rich ? (
-                  <QuestionMedia className="mt-2" size="option" assets={rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === o.label)} />
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          {explanation ? <HumanExplanation explanation={explanation} /> : null}
+          <QuestionPreviewBody q={q} />
         </CardContent>
       </Card>
       <MediaManager

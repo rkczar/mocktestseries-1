@@ -30,7 +30,7 @@ export default async function TeacherTests({ searchParams }: { searchParams: Pro
               <tbody>
                 {tests.map((t) => (
                   <tr key={t.id} className="border-t border-[var(--color-border)]">
-                    <td className="py-2 pr-3"><Link className="underline" href={`/teacher/tests/${t.id}`}>{t.title}</Link> {t.enrollmentEnabled ? <Badge>Live CBT</Badge> : null}</td>
+                    <td className="py-2 pr-3"><Link className="underline" href={`/teacher/tests/${t.id}`}>{t.title}</Link> {t.enrollmentEnabled ? <Badge>Live CBT</Badge> : null} <Link className="text-xs underline" href={`/teacher/tests/${t.id}/results`}>results</Link></td>
                     <td className="pr-3">{t.exam.name}</td>
                     <td className="pr-3">{t._count.questions}</td>
                     <td><Badge variant={t.status === "PUBLISHED" ? "success" : "neutral"}>{t.status.toLowerCase()}</Badge></td>

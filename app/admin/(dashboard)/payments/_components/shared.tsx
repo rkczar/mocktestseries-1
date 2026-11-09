@@ -79,14 +79,17 @@ export interface FilterOptions {
 const toDateInput = (d: Date | null) => (d ? new Date(d.getTime() + 5.5 * 3600_000).toISOString().slice(0, 10) : "");
 
 /** GET filter bar — keeps the active tab; environment defaults to LIVE so TEST data is opt-in. */
-export function FilterBar({ tab, filters, options, showStatus = true }: { tab: string; filters: PaymentFilters; options: FilterOptions; showStatus?: boolean }) {
+/** `basePath` (Teacher Portal): LIVE only (no environment switch), filters posted to that page. */
+export function FilterBar({ tab, filters, options, showStatus = true, basePath }: { tab: string; filters: PaymentFilters; options: FilterOptions; showStatus?: boolean; basePath?: string }) {
   return (
-    <form method="get" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+    <form method="get" action={basePath} className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
       <input type="hidden" name="tab" value={tab} />
-      <SelectNative name="env" defaultValue={filters.environment} aria-label="Environment">
-        <option value="LIVE">LIVE</option>
-        <option value="TEST">TEST</option>
-      </SelectNative>
+      {basePath ? null : (
+        <SelectNative name="env" defaultValue={filters.environment} aria-label="Environment">
+          <option value="LIVE">LIVE</option>
+          <option value="TEST">TEST</option>
+        </SelectNative>
+      )}
       <Input type="date" name="from" defaultValue={toDateInput(filters.from)} aria-label="From date" />
       <Input type="date" name="to" defaultValue={toDateInput(filters.to)} aria-label="To date" />
       <SelectNative name="exam" defaultValue={filters.examId ?? ""} aria-label="Exam">
@@ -124,7 +127,7 @@ export function FilterBar({ tab, filters, options, showStatus = true }: { tab: s
         </SelectNative>
       ) : null}
       <div className="flex gap-2">
-        <Input name="student" defaultValue={filters.student ?? ""} placeholder="Student" aria-label="Student" />
+        <Input name="student" defaultValue={filters.student ?? ""} placeholder={basePath ? "Student name or code" : "Student"} aria-label="Student" />
         <Button type="submit" size="sm" className="h-10">
           Filter
         </Button>
@@ -132,7 +135,7 @@ export function FilterBar({ tab, filters, options, showStatus = true }: { tab: s
       {filters.environment === "TEST" ? (
         <p className="col-span-full text-xs text-[var(--color-warning)]">Showing TEST-mode transactions — these are not real revenue.</p>
       ) : null}
-      <Link href={`/admin/payments?tab=${tab}`} className="col-span-full text-xs text-[var(--color-muted-foreground)] hover:underline">
+      <Link href={`${basePath ?? "/admin/payments"}?tab=${tab}`} className="col-span-full text-xs text-[var(--color-muted-foreground)] hover:underline">
         Reset filters
       </Link>
     </form>

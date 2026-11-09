@@ -8,17 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { NameCorrectionDialog } from "./name-correction-dialog";
 import { StudentPaymentProfile } from "@/app/admin/(dashboard)/payments/_components/student-payment-profile";
 import { DeviceAccessSection } from "./device-access-section";
+import { StudentTestHistory } from "@/components/admin/student-test-history";
 
 export const metadata = { title: "Student — Mock Test Series.in Admin" };
 
-const SOURCE_LABEL = {
-  MOCK_TEST: "Mock Test",
-  PREVIOUS_YEAR_PAPER: "Previous Year Paper",
-  CUSTOM_MODULE: "Custom Module",
-  SUBJECT_TEST: "Subject Test",
-  GRAND_TEST: "Grand Test",
-  LIVE_TEST: "Live Test",
-} as const;
 
 export default async function StudentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -125,46 +118,7 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
           <CardDescription>{student.testAttempts.length} attempts (max 100 shown)</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          {student.testAttempts.length === 0 ? (
-            <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">No attempts yet.</p>
-          ) : (
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
-                  <th className="py-2 pr-4">Type</th>
-                  <th className="py-2 pr-4">Name</th>
-                  <th className="py-2 pr-4">Exam</th>
-                  <th className="py-2 pr-4">Score</th>
-                  <th className="py-2 pr-4">Correct / Incorrect / Skipped</th>
-                  <th className="py-2 pr-4">Date</th>
-                  <th className="py-2 pr-4">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {student.testAttempts.map((a) => (
-                  <tr key={a.id} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="py-2.5 pr-4">
-                      <Badge variant="neutral">{SOURCE_LABEL[a.sourceType]}</Badge>
-                    </td>
-                    <td className="py-2.5 pr-4 text-[var(--color-foreground)]">
-                      {a.mockTest?.title ?? a.customModule?.title ?? a.previousYearPaper?.title ?? a.grandTest?.title ?? a.liveTest?.title ?? "—"}
-                    </td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{a.exam.name}</td>
-                    <td className="py-2.5 pr-4">{a.score !== null ? `${a.score} / ${a.maxScore}` : "—"}</td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
-                      {a.correctCount ?? "—"} / {a.incorrectCount ?? "—"} / {a.unansweredCount ?? "—"}
-                    </td>
-                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{a.startedAt.toLocaleDateString()}</td>
-                    <td className="py-2.5 pr-4">
-                      <Badge variant={a.status === "SUBMITTED" ? "success" : a.status === "IN_PROGRESS" ? "info" : "neutral"}>
-                        {a.status.replace(/_/g, " ")}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          <StudentTestHistory attempts={student.testAttempts} />
         </CardContent>
       </Card>
 

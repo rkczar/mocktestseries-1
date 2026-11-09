@@ -60,8 +60,19 @@ async function premiumEntitlementWhere(now: Date): Promise<Prisma.StudentEntitle
   };
 }
 
-export async function buildStudentWhere(p: StudentListParams, now: Date): Promise<Prisma.StudentWhereInput> {
+/**
+ * Optional restriction for non-admin viewers (Teacher Portal): `where` limits
+ * the list to the students the viewer may see, and `privacy` never selects,
+ * searches or filters by contact details or access labels.
+ */
+export interface StudentListScope {
+  where: Prisma.StudentWhereInput;
+  privacy: true;
+}
+
+export async function buildStudentWhere(p: StudentListParams, now: Date, scope?: StudentListScope): Promise<Prisma.StudentWhereInput> {
   const and: Prisma.StudentWhereInput[] = [{ status: { not: StudentStatus.DELETED } }];
+  if (scope) and.push(scope.where);
   if (p.account === "active") and.push({ status: StudentStatus.ACTIVE });
   if (p.account === "inactive") and.push({ status: { in: [StudentStatus.SUSPENDED, StudentStatus.DELETION_REQUESTED] } });
 
@@ -69,17 +80,16 @@ export async function buildStudentWhere(p: StudentListParams, now: Date): Promis
     const or: Prisma.StudentWhereInput[] = [
       { studentId: { contains: p.q, mode: "insensitive" } },
       { name: { contains: p.q, mode: "insensitive" } },
-      { email: { contains: p.q, mode: "insensitive" } },
-      { mobile: { contains: p.q } },
+      ...(scope ? [] : [{ email: { contains: p.q, mode: "insensitive" as const } }, { mobile: { contains: p.q } }]),
     ];
     const code = normalizeStudentCode(p.q);
     if (code) or.push({ studentId: code });
     const digits = p.q.replace(/\D/g, "");
-    if (digits.length >= 4 && digits !== p.q) or.push({ mobile: { contains: digits } });
+    if (!scope && digits.length >= 4 && digits !== p.q) or.push({ mobile: { contains: digits } });
     and.push({ OR: or });
   }
 
-  if (p.access !== "all") {
+  if (p.access !== "all" && !scope) {
     const premium: Prisma.StudentWhereInput = { entitlements: { some: await premiumEntitlementWhere(now) } };
     const trial: Prisma.StudentWhereInput = { premiumTrial: { is: { startedAt: { lte: now }, endsAt: { gt: now } } } };
     if (p.access === "premium") and.push(premium);
@@ -91,10 +101,11 @@ export async function buildStudentWhere(p: StudentListParams, now: Date): Promis
 
 export type StudentAccessLabel = "PREMIUM" | "TRIAL" | "FREE";
 
-export async function loadStudentList(p: StudentListParams, now: Date = new Date()) {
-  const where = await buildStudentWhere(p, now);
+export async function loadStudentList(p: StudentListParams, now: Date = new Date(), scope?: StudentListScope) {
+  const where = await buildStudentWhere(p, now, scope);
+  const contact = !scope; // privacy: email / mobile are never read
   const [total, filtered] = await Promise.all([
-    prisma.student.count({ where: { status: { not: StudentStatus.DELETED } } }),
+    prisma.student.count({ where: { AND: [{ status: { not: StudentStatus.DELETED } }, ...(scope ? [scope.where] : [])] } }),
     prisma.student.count({ where }),
   ]);
   const pageCount = Math.max(1, Math.ceil(filtered / p.perPage));
@@ -110,8 +121,8 @@ export async function loadStudentList(p: StudentListParams, now: Date = new Date
       id: true,
       studentId: true,
       name: true,
-      email: true,
-      mobile: true,
+      email: contact,
+      mobile: contact,
       status: true,
       createdAt: true,
       lastLoginAt: true,
@@ -120,14 +131,16 @@ export async function loadStudentList(p: StudentListParams, now: Date = new Date
     },
   });
 
-  // Access label for just this page's rows (one query).
+  // Access label for just this page's rows (one query). Not computed in privacy mode.
   const premiumIds = new Set(
-    (
-      await prisma.studentEntitlement.findMany({
-        where: { studentId: { in: students.map((s) => s.id) }, ...(await premiumEntitlementWhere(now)) },
-        select: { studentId: true },
-      })
-    ).map((e) => e.studentId)
+    scope
+      ? []
+      : (
+          await prisma.studentEntitlement.findMany({
+            where: { studentId: { in: students.map((s) => s.id) }, ...(await premiumEntitlementWhere(now)) },
+            select: { studentId: true },
+          })
+        ).map((e) => e.studentId)
   );
   // Last activity = the most recent server-side touch of any session/device (throttled to 5 min), else last sign-in.
   const seen = await prisma.studentDevice.groupBy({
@@ -139,7 +152,7 @@ export async function loadStudentList(p: StudentListParams, now: Date = new Date
 
   const rows = students.map((s) => {
     const trialActive = Boolean(s.premiumTrial && s.premiumTrial.startedAt <= now && s.premiumTrial.endsAt > now);
-    const access: StudentAccessLabel = premiumIds.has(s.id) ? "PREMIUM" : trialActive ? "TRIAL" : "FREE";
+    const access: StudentAccessLabel | null = scope ? null : premiumIds.has(s.id) ? "PREMIUM" : trialActive ? "TRIAL" : "FREE";
     const lastSeen = seenMap.get(s.id) ?? null;
     const lastActivity = [lastSeen, s.lastLoginAt].filter((d): d is Date => d instanceof Date).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
     return { ...s, access, lastActivity };

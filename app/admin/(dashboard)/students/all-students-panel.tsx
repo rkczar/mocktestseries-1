@@ -4,7 +4,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
-import { PAGE_SIZES, loadStudentList, type StudentListParams } from "@/lib/admin-students-list";
+import { PAGE_SIZES, loadStudentList, type StudentListParams, type StudentListScope } from "@/lib/admin-students-list";
+
+/**
+ * Teacher Portal reuse: the same list, scoped to the teacher's exams, linking
+ * to /teacher/students and never showing contact details or access labels.
+ */
+export interface StudentsPanelTeacherView {
+  scope: StudentListScope;
+  basePath: string;
+}
 
 const STATUS_VARIANT = {
   ACTIVE: "success",
@@ -17,16 +26,16 @@ const ACCESS_VARIANT = { PREMIUM: "success", TRIAL: "info", FREE: "neutral" } as
 
 const fmtDate = (d: Date) => d.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" });
 
-function hrefFor(p: StudentListParams, patch: Partial<StudentListParams>) {
+function hrefFor(p: StudentListParams, patch: Partial<StudentListParams>, basePath?: string) {
   const n = { ...p, ...patch };
-  const sp = new URLSearchParams({ tab: "all" });
+  const sp = new URLSearchParams(basePath ? {} : { tab: "all" });
   if (n.q) sp.set("q", n.q);
   if (n.account !== "all") sp.set("account", n.account);
   if (n.access !== "all") sp.set("access", n.access);
   if (n.sort !== "newest") sp.set("sort", n.sort);
   if (n.perPage !== 50) sp.set("per", String(n.perPage));
   if (n.page > 1) sp.set("page", String(n.page));
-  return `/admin/students?${sp.toString()}`;
+  return `${basePath ?? "/admin/students"}?${sp.toString()}`;
 }
 
 /** Page numbers to show: first, last, and a window around the current page. */
@@ -41,12 +50,14 @@ function pageWindow(page: number, pageCount: number): (number | "…")[] {
   return out;
 }
 
-export async function AllStudentsPanel({ params }: { params: StudentListParams }) {
+export async function AllStudentsPanel({ params, teacher }: { params: StudentListParams; teacher?: StudentsPanelTeacherView }) {
   // Approved deletions leave an anonymized "Deleted Student" row behind for
   // retained attempt/payment history; it is not an active student. Who it
   // was lives in the deletion audit record (Deletion Requests tab).
-  const { total, filtered, page, pageCount, perPage, rows } = await loadStudentList(params);
+  const { total, filtered, page, pageCount, perPage, rows } = await loadStudentList(params, undefined, teacher?.scope);
   const p = { ...params, page };
+  const base = teacher?.basePath;
+  const href = (q: StudentListParams, patch: Partial<StudentListParams>) => hrefFor(q, patch, base);
   const from = filtered === 0 ? 0 : (page - 1) * perPage + 1;
   const to = Math.min(page * perPage, filtered);
   const filtering = Boolean(params.q) || params.account !== "all" || params.access !== "all";
@@ -56,17 +67,18 @@ export async function AllStudentsPanel({ params }: { params: StudentListParams }
       <CardHeader>
         <CardTitle>Students</CardTitle>
         <CardDescription data-testid="students-counts">
-          {total.toLocaleString("en-IN")} registered student{total === 1 ? "" : "s"}
-          {filtering ? ` · ${filtered.toLocaleString("en-IN")} match the filters` : ""} · deleted accounts are listed under Deleted Students
+          {total.toLocaleString("en-IN")} {teacher ? "student" : "registered student"}{total === 1 ? "" : "s"}
+          {filtering ? ` · ${filtered.toLocaleString("en-IN")} match the filters` : ""}
+          {teacher ? " in your exams" : " · deleted accounts are listed under Deleted Students"}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <form method="get" action="/admin/students" className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6" data-testid="students-filters">
-          <input type="hidden" name="tab" value="all" />
+        <form method="get" action={base ?? "/admin/students"} className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6" data-testid="students-filters">
+          {teacher ? null : <input type="hidden" name="tab" value="all" />}
           <Input
             name="q"
             defaultValue={params.q}
-            placeholder="Search Student ID, name, email or mobile"
+            placeholder={teacher ? "Search Student ID or name" : "Search Student ID, name, email or mobile"}
             aria-label="Search students"
             className="sm:col-span-2"
           />
@@ -75,12 +87,14 @@ export async function AllStudentsPanel({ params }: { params: StudentListParams }
             <option value="active">Active</option>
             <option value="inactive">Inactive (suspended / deletion requested)</option>
           </SelectNative>
+          {teacher ? null : (
           <SelectNative name="access" defaultValue={params.access} aria-label="Access">
             <option value="all">All access</option>
             <option value="premium">Premium</option>
             <option value="trial">Trial</option>
             <option value="free">Free</option>
           </SelectNative>
+          )}
           <SelectNative name="sort" defaultValue={params.sort} aria-label="Sort">
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
@@ -99,7 +113,7 @@ export async function AllStudentsPanel({ params }: { params: StudentListParams }
           </div>
         </form>
         {filtering ? (
-          <Link href={hrefFor(params, { q: "", account: "all", access: "all", page: 1 })} className="w-fit text-xs text-[var(--color-primary)] hover:underline">
+          <Link href={href(params, { q: "", account: "all", access: "all", page: 1 })} className="w-fit text-xs text-[var(--color-primary)] hover:underline">
             Clear filters
           </Link>
         ) : null}
@@ -115,11 +129,11 @@ export async function AllStudentsPanel({ params }: { params: StudentListParams }
                 <tr className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-muted-foreground)]">
                   <th className="py-2 pr-4">Student ID</th>
                   <th className="py-2 pr-4">Name</th>
-                  <th className="py-2 pr-4">Email / Mobile</th>
+                  {teacher ? null : <th className="py-2 pr-4">Email / Mobile</th>}
                   <th className="py-2 pr-4">Registered</th>
                   <th className="py-2 pr-4">Last Activity</th>
                   <th className="py-2 pr-4">Attempts</th>
-                  <th className="py-2 pr-4">Access</th>
+                  {teacher ? null : <th className="py-2 pr-4">Access</th>}
                   <th className="py-2 pr-4">Status</th>
                 </tr>
               </thead>
@@ -127,21 +141,25 @@ export async function AllStudentsPanel({ params }: { params: StudentListParams }
                 {rows.map((s) => (
                   <tr key={s.id} className="border-b border-[var(--color-border)] last:border-0">
                     <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">
-                      <Link href={`/admin/students/${s.id}`} className="text-[var(--color-primary)] hover:underline">
+                      <Link href={`${base ?? "/admin/students"}/${s.id}`} className="text-[var(--color-primary)] hover:underline">
                         {s.studentId}
                       </Link>
                     </td>
                     <td className="py-2.5 pr-4 font-medium text-[var(--color-foreground)]">{s.name}</td>
+                    {teacher ? null : (
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
                       {s.email ?? s.mobile ?? "—"}
                       {s.email && s.mobile ? <span className="block text-xs">{s.mobile}</span> : null}
                     </td>
+                    )}
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{fmtDate(s.createdAt)}</td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{s.lastActivity ? fmtDate(s.lastActivity) : "Never"}</td>
                     <td className="py-2.5 pr-4">{s._count.testAttempts}</td>
+                    {teacher || !s.access ? null : (
                     <td className="py-2.5 pr-4">
                       <Badge variant={ACCESS_VARIANT[s.access]}>{s.access}</Badge>
                     </td>
+                    )}
                     <td className="py-2.5 pr-4">
                       <Badge variant={STATUS_VARIANT[s.status]}>{s.status.replace(/_/g, " ")}</Badge>
                     </td>
@@ -158,7 +176,7 @@ export async function AllStudentsPanel({ params }: { params: StudentListParams }
           </p>
           <div className="flex flex-wrap items-center gap-1">
             {page > 1 ? (
-              <Link href={hrefFor(p, { page: page - 1 })} className="rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-1.5 hover:bg-[var(--color-surface)]" rel="prev">
+              <Link href={href(p, { page: page - 1 })} className="rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-1.5 hover:bg-[var(--color-surface)]" rel="prev">
                 Previous
               </Link>
             ) : (
@@ -172,7 +190,7 @@ export async function AllStudentsPanel({ params }: { params: StudentListParams }
               ) : (
                 <Link
                   key={n}
-                  href={hrefFor(p, { page: n })}
+                  href={href(p, { page: n })}
                   aria-current={n === page ? "page" : undefined}
                   className={`min-w-9 rounded-[var(--radius-button)] border px-2.5 py-1.5 text-center ${
                     n === page ? "border-[var(--color-primary)] font-semibold text-[var(--color-primary)]" : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
@@ -183,7 +201,7 @@ export async function AllStudentsPanel({ params }: { params: StudentListParams }
               )
             )}
             {page < pageCount ? (
-              <Link href={hrefFor(p, { page: page + 1 })} className="rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-1.5 hover:bg-[var(--color-surface)]" rel="next">
+              <Link href={href(p, { page: page + 1 })} className="rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-1.5 hover:bg-[var(--color-surface)]" rel="next">
                 Next
               </Link>
             ) : (

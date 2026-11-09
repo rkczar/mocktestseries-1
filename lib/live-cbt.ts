@@ -145,7 +145,9 @@ export interface LiveCandidateRow {
  * students see); the page shows scores and ranks only once the result is
  * released (lib/mock-test-schedule.ts#isMockResultReleased).
  */
-export async function getLiveCbtMonitor(mockTestId: string, now: Date = new Date()) {
+/** `includeContact: false` (Teacher Portal) never reads email / mobile; `contact` is then always null. */
+export async function getLiveCbtMonitor(mockTestId: string, now: Date = new Date(), opts: { includeContact?: boolean } = {}) {
+  const includeContact = opts.includeContact ?? true;
   const { getTestRanksForAdmin } = await import("@/lib/leaderboard");
   const mock = await prisma.mockTest.findUniqueOrThrow({
     where: { id: mockTestId },
@@ -175,7 +177,7 @@ export async function getLiveCbtMonitor(mockTestId: string, now: Date = new Date
   const studentIds = [...new Set([...enrollments.map((e) => e.studentId), ...liveByStudent.keys()])];
   const students = await prisma.student.findMany({
     where: { id: { in: studentIds } },
-    select: { id: true, name: true, studentId: true, email: true, mobile: true },
+    select: { id: true, name: true, studentId: true, email: includeContact, mobile: includeContact },
   });
   const studentById = new Map(students.map((s) => [s.id, s]));
   const enrolledAt = new Map(enrollments.map((e) => [e.studentId, e.enrolledAt]));
@@ -197,7 +199,7 @@ export async function getLiveCbtMonitor(mockTestId: string, now: Date = new Date
       studentDbId: id,
       name: s?.name ?? "Former Student",
       studentCode: s?.studentId ?? "—",
-      contact: s?.email ?? s?.mobile ?? null,
+      contact: includeContact ? (s?.email ?? s?.mobile ?? null) : null,
       enrolledAt: enrolledAt.get(id) ?? null,
       status,
       attemptId: a?.id ?? null,

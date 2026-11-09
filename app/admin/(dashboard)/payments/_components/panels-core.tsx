@@ -6,7 +6,17 @@ import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Empty, EnvBadge, fmtDate, StatusBadge, TableShell, Td, Th } from "./shared";
 
-export async function OverviewPanel({ filters }: { filters: PaymentFilters }) {
+/**
+ * Teacher Portal reuse (read-only): links point into /teacher and gateway
+ * identifiers (Razorpay payment ids) are not shown. The filters passed in
+ * carry the teacher's exam scope (PaymentFilters.scope), set server-side.
+ */
+export interface PaymentsTeacherView {
+  orderHref: (orderId: string) => string;
+  studentHref: (studentDbId: string) => string;
+}
+
+export async function OverviewPanel({ filters, teacher }: { filters: PaymentFilters; teacher?: PaymentsTeacherView }) {
   const o = await getPaymentOverview(filters);
   return (
     <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
@@ -16,15 +26,20 @@ export async function OverviewPanel({ filters }: { filters: PaymentFilters }) {
       <StatCard label="Pending Payments" value={o.pendingOrders} />
       <StatCard label="Refunded Amount" value={formatInr(o.refundedPaise)} />
       <StatCard label="Net Collected" value={formatInr(o.netPaise)} />
-      <StatCard label="Active Subscriptions" value={o.activeSubscriptions} />
-      <StatCard label="Expired Subscriptions" value={o.expiredSubscriptions} />
-      <StatCard label="Free Access Grants" value={o.freeAccessGrants} />
+      {/* Platform-wide counts (not exam-scoped): never for the Teacher Portal. */}
+      {teacher ? null : (
+        <>
+          <StatCard label="Active Subscriptions" value={o.activeSubscriptions} />
+          <StatCard label="Expired Subscriptions" value={o.expiredSubscriptions} />
+          <StatCard label="Free Access Grants" value={o.freeAccessGrants} />
+        </>
+      )}
       <StatCard label="Coupon Redemptions" value={o.couponRedemptions} />
     </div>
   );
 }
 
-export async function OrdersPanel({ filters }: { filters: PaymentFilters }) {
+export async function OrdersPanel({ filters, teacher }: { filters: PaymentFilters; teacher?: PaymentsTeacherView }) {
   const orders = await prisma.paymentOrder.findMany({
     where: orderWhere(filters),
     include: { student: { select: { id: true, name: true, studentId: true } }, product: { select: { name: true } } },
@@ -60,14 +75,14 @@ export async function OrdersPanel({ filters }: { filters: PaymentFilters }) {
               {orders.map((o) => (
                 <tr key={o.id}>
                   <Td mono>
-                    <Link href={`/admin/payments/orders/${o.id}`} className="text-[var(--color-primary)] hover:underline">
+                    <Link href={teacher ? teacher.orderHref(o.id) : `/admin/payments/orders/${o.id}`} className="text-[var(--color-primary)] hover:underline">
                       {o.orderNumber}
                     </Link>{" "}
                     <EnvBadge env={o.environment} />
                   </Td>
                   <Td>{fmtDate(o.createdAt, true)}</Td>
                   <Td>
-                    <Link href={`/admin/students/${o.student.id}`} className="hover:underline">
+                    <Link href={teacher ? teacher.studentHref(o.student.id) : `/admin/students/${o.student.id}`} className="hover:underline">
                       {o.student.name}
                     </Link>
                     <div className="font-mono text-[10px] text-[var(--color-muted-foreground)]">{o.student.studentId}</div>
@@ -92,7 +107,7 @@ export async function OrdersPanel({ filters }: { filters: PaymentFilters }) {
   );
 }
 
-export async function TransactionsPanel({ filters }: { filters: PaymentFilters }) {
+export async function TransactionsPanel({ filters, teacher }: { filters: PaymentFilters; teacher?: PaymentsTeacherView }) {
   const payments = await prisma.payment.findMany({
     where: { environment: filters.environment, order: orderWhere(filters) },
     include: { order: { select: { id: true, orderNumber: true, product: { select: { name: true } } } }, student: { select: { id: true, name: true, studentId: true } } },
@@ -112,7 +127,7 @@ export async function TransactionsPanel({ filters }: { filters: PaymentFilters }
           <TableShell minWidth={960}>
             <thead>
               <tr>
-                <Th>Payment ID</Th>
+                {teacher ? null : <Th>Payment ID</Th>}
                 <Th>Date</Th>
                 <Th>Order</Th>
                 <Th>Student</Th>
@@ -127,17 +142,19 @@ export async function TransactionsPanel({ filters }: { filters: PaymentFilters }
             <tbody>
               {payments.map((p) => (
                 <tr key={p.id}>
-                  <Td mono>
-                    {p.gatewayPaymentId} <EnvBadge env={p.environment} />
-                  </Td>
+                  {teacher ? null : (
+                    <Td mono>
+                      {p.gatewayPaymentId} <EnvBadge env={p.environment} />
+                    </Td>
+                  )}
                   <Td>{fmtDate(p.createdAt, true)}</Td>
                   <Td mono>
-                    <Link href={`/admin/payments/orders/${p.order.id}`} className="text-[var(--color-primary)] hover:underline">
+                    <Link href={teacher ? teacher.orderHref(p.order.id) : `/admin/payments/orders/${p.order.id}`} className="text-[var(--color-primary)] hover:underline">
                       {p.order.orderNumber}
                     </Link>
                   </Td>
                   <Td>
-                    <Link href={`/admin/students/${p.student.id}`} className="hover:underline">
+                    <Link href={teacher ? teacher.studentHref(p.student.id) : `/admin/students/${p.student.id}`} className="hover:underline">
                       {p.student.name}
                     </Link>
                   </Td>
@@ -181,11 +198,12 @@ function BarList({ rows, total }: { rows: { key: string; label: string; paise: n
   );
 }
 
-export async function RevenuePanel({ filters }: { filters: PaymentFilters }) {
+export async function RevenuePanel({ filters, teacher }: { filters: PaymentFilters; teacher?: PaymentsTeacherView }) {
   const [o, b, expiring, refunds] = await Promise.all([
     getPaymentOverview(filters),
     getRevenueBreakdowns(filters),
-    getExpiringEntitlements(7),
+    // Platform-wide (not exam-scoped): never for the Teacher Portal.
+    teacher ? Promise.resolve([]) : getExpiringEntitlements(7),
     prisma.refund.findMany({ where: { order: orderWhere(filters) }, select: { status: true, amountPaise: true } }),
   ]);
   const maxDay = Math.max(1, ...b.byDate.map((d) => d.paise));
@@ -273,6 +291,7 @@ export async function RevenuePanel({ filters }: { filters: PaymentFilters }) {
             )}
           </CardContent>
         </Card>
+        {teacher ? null : (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Expiring in 7 days</CardTitle>
@@ -297,6 +316,7 @@ export async function RevenuePanel({ filters }: { filters: PaymentFilters }) {
             )}
           </CardContent>
         </Card>
+        )}
       </div>
     </div>
   );

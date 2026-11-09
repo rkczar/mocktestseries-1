@@ -3,6 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { inScopeOr404, requireTeacherPage } from "@/lib/teacher/page";
 import { questionInScope } from "@/lib/teacher/scope";
 import { CONTENT_SELECT, contentOf, diffContent, readContent, sameContent } from "@/lib/question-content";
+import { parseQuestionListFilters, questionListQuery } from "@/lib/teacher/queries";
+import { QuestionPreviewBody } from "@/components/content/question-preview-body";
+import { QUESTION_PREVIEW_SELECT } from "@/lib/question-preview";
 import { effectiveStatuses } from "@/lib/teacher/request-status";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,13 +15,13 @@ import { discardRevisionAction, requestDeletionAction, requestUnpublishAction, s
 
 export const metadata = { title: "Question — Teacher Portal" };
 
-export default async function TeacherQuestion({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ ok?: string; err?: string }> }) {
+export default async function TeacherQuestion({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ ok?: string; err?: string; from?: string }> }) {
   const scope = await requireTeacherPage();
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   const q = await inScopeOr404(() => questionInScope(scope, id));
   const [row, extra, rev, requests, history, mocks, grands, lives, paper] = await Promise.all([
     prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: CONTENT_SELECT }),
-    prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: { explanation: true, createdByAdminId: true, createdAt: true, exam: { select: { name: true } }, subject: { select: { name: true } }, topic: { select: { name: true } } } }),
+    prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: { ...QUESTION_PREVIEW_SELECT, createdByAdminId: true, createdAt: true, exam: { select: { name: true } }, subject: { select: { name: true } }, topic: { select: { name: true } }, subTopic: { select: { name: true } } } }),
     prisma.questionRevision.findFirst({ where: { questionId: q.id, status: { in: ["DRAFT", "SUBMITTED"] } } }),
     prisma.teacherContentRequest.findMany({ where: { questionId: q.id, examId: { in: scope.examIds } }, orderBy: { createdAt: "desc" }, take: 30, include: { teacher: { select: { name: true } } } }),
     prisma.auditLog.findMany({ where: { entityType: "Question", entityId: q.id }, orderBy: { createdAt: "desc" }, take: 20, select: { action: true, createdAt: true, actor: { select: { name: true } } } }),
@@ -38,6 +41,7 @@ export default async function TeacherQuestion({ params, searchParams }: { params
   const hid = { questionId: q.id };
   return (
     <>
+      <Link href={`/teacher/questions?${questionListQuery(parseQuestionListFilters(new URLSearchParams(sp.from ?? "")))}`} className="w-fit text-sm underline">← Back to the question list</Link>
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="font-mono text-lg font-semibold">{q.code}</h1>
         <QuestionStatusBadge status={q.status} retired={!!q.retiredAt} />
@@ -47,18 +51,14 @@ export default async function TeacherQuestion({ params, searchParams }: { params
       <Card>
         <CardHeader><CardTitle>Question</CardTitle></CardHeader>
         <CardContent className="flex flex-col gap-3 text-sm">
-          <p className="text-[var(--color-muted-foreground)]">{extra.exam.name} · {extra.subject.name}{extra.topic ? ` · ${extra.topic.name}` : ""} · {content.difficulty.toLowerCase()} · {content.questionType.replaceAll("_", " ").toLowerCase()}</p>
-          <p className="whitespace-pre-wrap">{content.text}</p>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          {content.imageUrl ? <img src={content.imageUrl} alt="Question" className="max-h-48 w-auto" /> : null}
-          <ol className="flex flex-col gap-1">
-            {content.options.map((o) => (
-              <li key={o.label} className={o.isCorrect ? "font-medium text-[var(--color-success)]" : ""}>
-                {o.label}. {o.text} {o.isCorrect ? "✓ correct" : ""}
-              </li>
-            ))}
-          </ol>
-          {extra.explanation ? <div><p className="font-medium">Explanation</p><p className="whitespace-pre-wrap">{extra.explanation}</p></div> : null}
+          <p className="text-[var(--color-muted-foreground)]">
+            {extra.exam.name} · {extra.subject.name}
+            {extra.topic ? ` › ${extra.topic.name}` : ""}
+            {extra.subTopic ? ` › ${extra.subTopic.name}` : ""} · {content.difficulty.toLowerCase()} · {content.questionType.replaceAll("_", " ").toLowerCase()}
+          </p>
+          <div className="flex flex-col gap-3" data-testid="full-preview">
+            <QuestionPreviewBody q={extra} />
+          </div>
           <p className="text-xs text-[var(--color-muted-foreground)]">Created {fmtDate(extra.createdAt)}{author ? ` by ${author.name}` : ""}{history[0] ? ` · last change: ${history[0].action.replaceAll("_", " ").toLowerCase()} by ${history[0].actor?.name ?? "system"}, ${fmtDate(history[0].createdAt)}` : ""}</p>
         </CardContent>
       </Card>

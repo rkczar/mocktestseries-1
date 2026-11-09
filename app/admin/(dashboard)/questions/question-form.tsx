@@ -52,6 +52,15 @@ function SubmitButton({ editing, label }: { editing: boolean; label?: string }) 
   );
 }
 
+function NextButton({ label }: { label: string }) {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" name="after" value="next" variant="outline" disabled={pending}>
+      {label}
+    </Button>
+  );
+}
+
 /**
  * Teacher Portal mode (Phase A): the same form posting to a scoped teacher
  * action. Status, source, PYQ link and review flags are not shown (the server
@@ -63,6 +72,10 @@ export interface TeacherFormMode {
   submitLabel: string;
   /** Edit only: the version the editor was opened from (lib/teacher/content.ts#editVersion). */
   version?: string;
+  /** Extra hidden fields (e.g. the list position to return to). */
+  hidden?: Record<string, string>;
+  /** Second submit button ("Save & next"): posts after=next. */
+  nextLabel?: string;
 }
 
 function KeptImageField({ label, name, defaultUrl }: { label: string; name: string; defaultUrl?: string | null }) {
@@ -113,6 +126,9 @@ export function QuestionForm({ exams, defaults, teacher }: { exams: ExamTree[]; 
   return (
     <form action={formAction} className="flex flex-col gap-5">
       {teacher?.version ? <input type="hidden" name="baseVersion" value={teacher.version} /> : null}
+      {Object.entries(teacher?.hidden ?? {}).map(([k, v]) => (
+        <input key={k} type="hidden" name={k} value={v} />
+      ))}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="examId">Exam</Label>
@@ -378,6 +394,7 @@ export function QuestionForm({ exams, defaults, teacher }: { exams: ExamTree[]; 
 
       <div className="flex items-center gap-3">
         <SubmitButton editing={Boolean(defaults)} label={teacher?.submitLabel} />
+        {teacher?.nextLabel ? <NextButton label={teacher.nextLabel} /> : null}
         {state.error ? <p className="text-sm text-[var(--color-error)]">{state.error}</p> : null}
         {state.success ? <p className="text-sm text-[var(--color-success)]">Saved.</p> : null}
       </div>

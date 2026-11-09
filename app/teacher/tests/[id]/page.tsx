@@ -30,6 +30,7 @@ export default async function TeacherTest({ params, searchParams }: { params: Pr
         <Badge variant={mock.status === "PUBLISHED" ? "success" : "neutral"}>{mock.status.toLowerCase()}</Badge>
       </div>
       <Flash ok={sp.ok} err={sp.err} />
+      <Link href={`/teacher/tests/${mock.id}/results`} className="w-fit text-sm underline">View results and ranks →</Link>
       <p className="text-sm text-[var(--color-muted-foreground)]">
         {mock.enrollmentEnabled
           ? "Live CBT: an unpublish request takes effect only after Master Admin approval."

@@ -1268,9 +1268,20 @@ export async function getUpcomingExamForStudent(studentId: string) {
  * query plus in-memory aggregation over at most `sampleSize` rows, not a
  * huge client-side dataset.
  */
-export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 500, examId?: string) {
+/**
+ * Staff views (Teacher Portal): `examIds` limits everything to those exams and
+ * `includeUnreleased` also counts results not yet released to the student.
+ * Student-facing callers pass nothing and keep the released-only rule.
+ */
+export interface StaffAnalyticsScope {
+  examIds?: string[];
+  includeUnreleased?: boolean;
+}
+
+export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 500, examId?: string, staff?: StaffAnalyticsScope) {
+  const examFilter = staff?.examIds ? { examId: { in: staff.examIds } } : examId ? { examId } : {};
   const wrongAnswers = await prisma.answer.findMany({
-    where: { studentId, isCorrect: false, statsExcludedAt: null, attempt: { ...(examId ? { examId } : {}), ...resultReleasedAttemptWhere() } },
+    where: { studentId, isCorrect: false, statsExcludedAt: null, attempt: { ...examFilter, ...(staff?.includeUnreleased ? {} : resultReleasedAttemptWhere()) } },
     select: { questionId: true },
     orderBy: { id: "desc" },
     take: sampleSize,
@@ -1303,23 +1314,26 @@ export async function getWeakTopics(studentId: string, limit = 5, sampleSize = 5
 // Analytics (Step 7.7) — server-side aggregation from attempts/answers.
 // ---------------------------------------------------------------------------
 
-export async function getStudentAnalytics(studentId: string) {
+export async function getStudentAnalytics(studentId: string, staff?: StaffAnalyticsScope) {
+  const examWhere = staff?.examIds ? { examId: { in: staff.examIds } } : {};
+  const released = staff?.includeUnreleased ? {} : resultReleasedAttemptWhere();
+  const answerScope = staff?.examIds ? { attempt: examWhere } : {};
   const [totals, byExam, bySubject, submittedAttempts] = await Promise.all([
-    prisma.answer.groupBy({ by: ["status"], where: { studentId, statsExcludedAt: null }, _count: { _all: true } }),
+    prisma.answer.groupBy({ by: ["status"], where: { studentId, statsExcludedAt: null, ...answerScope }, _count: { _all: true } }),
     prisma.testAttempt.groupBy({
       by: ["examId"],
-      where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() },
+      where: { studentId, status: AttemptStatus.SUBMITTED, ...released, ...examWhere },
       _avg: { score: true },
       _count: { _all: true },
     }),
     prisma.testAttempt.groupBy({
       by: ["subjectId"],
-      where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere(), subjectId: { not: null } },
+      where: { studentId, status: AttemptStatus.SUBMITTED, ...released, ...examWhere, subjectId: { not: null } },
       _avg: { score: true },
       _count: { _all: true },
     }),
     prisma.testAttempt.findMany({
-      where: { studentId, status: AttemptStatus.SUBMITTED, ...resultReleasedAttemptWhere() },
+      where: { studentId, status: AttemptStatus.SUBMITTED, ...released, ...examWhere },
       orderBy: { submittedAt: "desc" },
       take: 100, // most recent 100 — a long test history shouldn't ship an unbounded list to the client
       select: { submittedAt: true, score: true, maxScore: true, testType: true },
@@ -1333,7 +1347,7 @@ export async function getStudentAnalytics(studentId: string) {
 
   const correctIncorrect = await prisma.answer.groupBy({
     by: ["isCorrect"],
-    where: { studentId, isCorrect: { not: null }, statsExcludedAt: null },
+    where: { studentId, isCorrect: { not: null }, statsExcludedAt: null, ...answerScope },
     _count: { _all: true },
   });
   const correct = correctIncorrect.find((c) => c.isCorrect === true)?._count._all ?? 0;
@@ -1362,7 +1376,7 @@ export async function getStudentAnalytics(studentId: string) {
       attempts: s._count._all,
       averageScore: s._avg.score,
     })),
-    weakTopics: await getWeakTopics(studentId, 8),
+    weakTopics: await getWeakTopics(studentId, 8, 500, undefined, staff),
     performanceOverTime: submittedAttempts.map((a) => ({
       date: a.submittedAt,
       score: a.score,

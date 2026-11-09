@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import type { QuestionFormState } from "@/app/admin/(dashboard)/questions/actions";
 import { TeacherAccessError } from "@/lib/teacher/scope";
 import { requireTeacher } from "@/lib/teacher/session";
+import { nextQuestionId, parseQuestionListFilters, questionListQuery } from "@/lib/teacher/queries";
 import {
   createDraftQuestion,
   discardRevision,
@@ -55,7 +56,17 @@ export async function saveQuestionTeacherAction(questionId: string, _prev: Quest
   const r = await saveQuestionEdit(scope, questionId, formData);
   if (!r.ok) return { error: r.error };
   revalidatePath("/teacher", "layout");
-  redirect(`/teacher/questions/${questionId}?ok=${r.outcome === "DRAFT_SAVED" ? "draft" : "revision"}`);
+  const ok = r.outcome === "DRAFT_SAVED" ? "draft" : "revision";
+  // List position to return to: re-parsed, so only known filter keys survive.
+  const from = questionListQuery(parseQuestionListFilters(new URLSearchParams(str(formData, "from"))));
+  const back = from ? `&from=${encodeURIComponent(from)}` : "";
+  if (str(formData, "after") === "next") {
+    // "Save & next": the next question of the same filtered list (re-derived server-side; the edit page re-checks scope).
+    const next = await nextQuestionId(scope, parseQuestionListFilters(new URLSearchParams(from)), questionId);
+    if (next) redirect(`/teacher/questions/${encodeURIComponent(next)}/edit?ok=${ok}&saved=${encodeURIComponent(questionId)}${back}`);
+    redirect(`/teacher/questions?${from}${from ? "&" : ""}ok=${ok}&last=1`);
+  }
+  redirect(`/teacher/questions/${questionId}?ok=${ok}${back}`);
 }
 
 export async function submitForPublicationAction(formData: FormData) {
