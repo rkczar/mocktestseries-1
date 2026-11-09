@@ -170,8 +170,8 @@ export default async function proxy(request: NextRequest) {
   if (pathname === "/teacher" || pathname.startsWith("/teacher/")) {
     const session = await adminAuth();
     if (!session?.user) {
-      // Teacher Login lives at /teacher itself (app/teacher-login, no sign-up); deeper links start there.
-      if (pathname === "/teacher") return NextResponse.rewrite(new URL("/teacher-login", request.nextUrl.origin));
+      // Teacher Login is /teacher itself (app/teacher/layout.tsx renders it with no session; no sign-up); deeper links start there.
+      if (pathname === "/teacher") return NextResponse.next();
       return NextResponse.redirect(new URL("/teacher", request.nextUrl.origin));
     }
     if (session.user.role !== "TEACHER") return NextResponse.redirect(new URL("/admin", request.nextUrl.origin));

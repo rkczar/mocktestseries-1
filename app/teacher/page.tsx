@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { requireTeacherPage } from "@/lib/teacher/page";
+import { getTeacher } from "@/lib/teacher/session";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { teacherMobileStatus } from "@/lib/teacher/auth";
 import { MobileVerify } from "./mobile-verify";
@@ -8,7 +8,9 @@ import { MobileVerify } from "./mobile-verify";
 const weekAgo = () => new Date(Date.now() - 7 * 86400_000);
 
 export default async function TeacherDashboard() {
-  const scope = await requireTeacherPage();
+  // Signed out: the layout shows the Teacher Login instead of this page.
+  const scope = await getTeacher();
+  if (!scope) return null;
   const [exams, drafts, open, decided, mobile] = await Promise.all([
     prisma.exam.findMany({
       where: { id: { in: scope.examIds } },

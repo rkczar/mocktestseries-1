@@ -262,6 +262,8 @@ await E2.ctx.close();
 
 // ---------------------------------------------------------------- live session invalidation
 console.log("\n== Session invalidation (real sessions)");
+/** Signed out / dead session: /teacher shows the Teacher Login. */
+const onTeacherLogin = async (page) => path(page) === "/teacher" && (await page.getByRole("heading", { name: "Teacher Login" }).isVisible());
 const teacherCard = () => MA.page.locator("div").filter({ has: MA.page.locator(`text=@${F.accounts.teacher.username}`) }).filter({ has: MA.page.locator("button:has-text('Deactivate')") }).last();
 MA.page.on("dialog", (d) => d.accept());
 await MA.page.goto(`${BASE}/admin/users?tab=teachers`);
@@ -281,14 +283,14 @@ await teacherCard().locator("button:has-text('Suspend')").click();
 await MA.page.waitForTimeout(1500);
 const reqCount = sql(`select count(*) from "TeacherContentRequest"`);
 await T.page.goto(`${BASE}/teacher`);
-check("suspension: the teacher's existing session is dead at once (sent to sign-in)", path(T.page) === "/teacher-login", T.page.url());
+check("suspension: the teacher's existing session is dead at once (sent to sign-in)", (await onTeacherLogin(T.page)), T.page.url());
 const forged = await T.page.evaluate(async (u) => (await fetch(u, { method: "POST", headers: { "Next-Action": "x" }, body: "[]" })).status, `${BASE}/teacher/tests/${F.mockA}`);
 check("suspension: old session can't create requests", sql(`select count(*) from "TeacherContentRequest"`) === reqCount, forged);
 await MA.page.goto(`${BASE}/admin/users?tab=teachers`);
 await teacherCard().getByRole("button", { name: "Activate", exact: true }).click();
 await MA.page.waitForTimeout(1500);
 await T.page.goto(`${BASE}/teacher`);
-check("re-activation does not revive the old session", path(T.page) === "/teacher-login");
+check("re-activation does not revive the old session", (await onTeacherLogin(T.page)));
 const T2 = await login("teacher");
 await T2.page.waitForURL((u) => u.pathname.startsWith("/teacher"), { timeout: 15000 }).catch(() => {});
 check("after re-activation the teacher can sign in again", path(T2.page) === "/teacher", T2.page.url());
@@ -296,12 +298,12 @@ await MA.page.goto(`${BASE}/admin/users?tab=teachers`);
 await teacherCard().locator("button:has-text('Deactivate')").click();
 await MA.page.waitForTimeout(1500);
 await T2.page.goto(`${BASE}/teacher`);
-check("deactivation: the session is dead at once", path(T2.page) === "/teacher-login", T2.page.url());
+check("deactivation: the session is dead at once", (await onTeacherLogin(T2.page)), T2.page.url());
 await T2.page.fill('input[name="username"]', F.accounts.teacher.username);
 await T2.page.fill('input[name="password"]', F.accounts.teacher.password);
 await T2.page.click('button[type="submit"]');
 await T2.page.waitForTimeout(3000);
-check("deactivation: sign-in refused", path(T2.page) === "/teacher-login");
+check("deactivation: sign-in refused", (await onTeacherLogin(T2.page)));
 
 await browser.close();
 console.log(`\n${pass} passed, ${fail} failed`);

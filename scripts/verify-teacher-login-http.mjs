@@ -10,6 +10,7 @@
  *   BASE=http://localhost:<p> FIXTURE=<tmp>/tlh.json MSG91_MOCK_FILE=<tmp>/msg91.json SERVER_LOG=<tmp>/server.log DATABASE_URL=<scratch> \
  *     NODE_PATH=<dir containing playwright> node scripts/verify-teacher-login-http.mjs
  */
+import http from "node:http";
 import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -119,6 +120,15 @@ section("B. /teacher — dedicated Teacher Login");
 const V = await ctx(true);
 const res = await V.page.goto(`${BASE}/teacher`);
 check("signed-out /teacher → 200, URL stays /teacher", res?.status() === 200 && path(V.page) === "/teacher", `${res?.status()} ${V.page.url()}`);
+// Same headers as production nginx (the 2026-11-09 rewrite bug only showed behind them).
+const behindNginx = await new Promise((resolve, reject) => {
+  http.get(`${BASE}/teacher`, { headers: { "X-Forwarded-Proto": "https", "X-Forwarded-Host": "mocktestseries.in", Host: "mocktestseries.in" } }, (r) => {
+    let body = "";
+    r.on("data", (c) => (body += c));
+    r.on("end", () => resolve({ status: r.statusCode, body }));
+  }).on("error", reject);
+});
+check("behind nginx (X-Forwarded-Proto https): /teacher → 200 Teacher Login", behindNginx.status === 200 && behindNginx.body.includes("Teacher Login"), behindNginx.status);
 check("heading 'Teacher Login'", await V.page.getByRole("heading", { name: "Teacher Login" }).isVisible());
 check("two tabs: Username & Password, Login with OTP", (await V.page.getByRole("tab", { name: "Username & Password" }).isVisible()) && (await V.page.getByRole("tab", { name: "Login with OTP" }).isVisible()));
 check("no registration / sign-up link", (await V.page.getByRole("link", { name: /register|sign ?up|create account/i }).count()) === 0);

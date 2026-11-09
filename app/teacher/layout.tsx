@@ -4,6 +4,7 @@ import { LogOut } from "lucide-react";
 import { getStaffSession } from "@/lib/rbac";
 import { getTeacher } from "@/lib/teacher/session";
 import { teacherLogoutAction } from "@/app/teacher-login/actions";
+import { TeacherLoginView } from "@/app/teacher-login/login-view";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 
@@ -27,7 +28,8 @@ export default async function TeacherLayout({ children }: { children: React.Reac
   const teacher = await getTeacher();
   if (!teacher) {
     const staff = await getStaffSession();
-    if (!staff?.user) redirect("/teacher-login");
+    // Signed out (or a dead session): /teacher is the Teacher Login.
+    if (!staff?.user) return <TeacherLoginView />;
     if (staff.user.role !== "TEACHER") redirect("/admin");
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-4 px-4 text-center">
