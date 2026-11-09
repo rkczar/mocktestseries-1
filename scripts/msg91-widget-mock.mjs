@@ -35,6 +35,8 @@ globalThis.fetch = async function mockedFetch(input, init) {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   const db = load();
   if (url.endsWith("/widget/sendOtp")) {
+    // db.failSend simulates MSG91 refusing the send (e.g. DLT/template/balance error).
+    if (db.failSend) return json({ type: "error", message: String(db.failSend) });
     const reqId = crypto.randomUUID();
     const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, "0");
     db.requests[reqId] = { identifier: body.identifier, code };

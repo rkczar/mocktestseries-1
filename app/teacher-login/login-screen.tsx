@@ -63,7 +63,7 @@ function PasswordForm() {
 
 function OtpForm() {
   const [left, setLeft] = useState(0);
-  // Every send answer (sent or not) restarts the countdown, so the screen never hints whether the number is registered.
+  // The countdown starts only when the server says MSG91 accepted the SMS.
   const [sendState, sendAction] = useActionState<TeacherLoginState, FormData>(async (prev, fd) => {
     const r = await sendTeacherOtpAction(prev, fd);
     if (r.sent) setLeft(RESEND_SECONDS);

@@ -15,7 +15,8 @@ import { prisma } from "@/lib/prisma";
 import { verifyOtp, OtpError } from "@/lib/otp";
 import { TOO_MANY_ATTEMPTS_MESSAGE } from "@/lib/auth-rate-limit";
 import {
-  OTP_SENT_GENERIC,
+  OTP_NOT_AVAILABLE,
+  OTP_SENT,
   TEACHER_INACTIVE,
   TeacherAuthError,
   authorizeTeacherOtp,
@@ -125,8 +126,9 @@ async function main() {
     const b = await mk("b", { examIds: [examY.id] });
     ip = freshIp();
     const t0 = Date.now();
-    const unverifiedSend = await requestTeacherLoginOtp(b.digits, ip);
-    check("unverified number: generic answer, no code issued", !unverifiedSend.devCode && (await openCodes(b.mobile)) === 0);
+    const unverifiedErr = await errorOf(() => requestTeacherLoginOtp(b.digits, ip));
+    check("unverified number: OTP_NOT_AVAILABLE, no code issued", unverifiedErr === OTP_NOT_AVAILABLE && (await openCodes(b.mobile)) === 0, unverifiedErr);
+    check("unverified number: failed attempt recorded (counts toward lockout)", (await prisma.loginAttempt.count({ where: { username: otpAttemptKey(b.mobile), ipAddress: ip, success: false } })) === 1);
     check("…and the answer took ≥ 1.5 s (timing padded)", Date.now() - t0 >= 1450);
     const v = await sendTeacherMobileVerifyCode(b.id, freshIp());
     check("portal sends a code to the REGISTERED number only", Boolean(v.devCode) && (await openCodes(b.mobile)) === 1);
@@ -160,8 +162,8 @@ async function main() {
     await coolDown(b.mobile);
     const r1 = await requestTeacherLoginOtp(b.digits, freshIp());
     const before = await prisma.otpRequest.count({ where: { mobile: b.mobile, purpose: "TEACHER_LOGIN" } });
-    const r2 = await requestTeacherLoginOtp(b.digits, freshIp());
-    check("resend within 60 s: no new code (generic answer)", !r2.devCode && (await prisma.otpRequest.count({ where: { mobile: b.mobile, purpose: "TEACHER_LOGIN" } })) === before);
+    const r2 = await errorOf(() => requestTeacherLoginOtp(b.digits, freshIp()));
+    check("resend within 60 s: cooldown message, no new code", /^Please wait \d+s before requesting another code\.$/.test(r2 ?? "") && (await prisma.otpRequest.count({ where: { mobile: b.mobile, purpose: "TEACHER_LOGIN" } })) === before, r2);
     // A newer code invalidates the older one.
     await coolDown(b.mobile);
     const r3 = await requestTeacherLoginOtp(b.digits, freshIp());
@@ -182,11 +184,13 @@ async function main() {
     const stranger = rnd("7");
     ip = freshIp();
     const ts = Date.now();
-    const strangerSend = await requestTeacherLoginOtp(stranger, ip);
-    check("unregistered number: same generic answer, no code, nothing sent", !strangerSend.devCode && (await prisma.otpRequest.count({ where: { mobile: e164(stranger) } })) === 0);
+    const strangerErr = await errorOf(() => requestTeacherLoginOtp(stranger, ip));
+    check("unregistered number: same OTP_NOT_AVAILABLE as an unverified one, nothing sent", strangerErr === OTP_NOT_AVAILABLE && strangerErr === unverifiedErr && (await prisma.otpRequest.count({ where: { mobile: e164(stranger) } })) === 0, strangerErr);
+    check("unregistered number: same failed-attempt record as an unverified one", (await prisma.loginAttempt.count({ where: { username: otpAttemptKey(e164(stranger)), ipAddress: ip, success: false } })) === 1);
     check("…timing padded like a real send", Date.now() - ts >= 1450);
     check("unregistered verify → same text as a registered number with no code", (await errorOf(() => authorizeTeacherOtp(stranger, "123456", freshIp()))) === NO_PENDING);
-    check("OTP_SENT_GENERIC never names an account", !/teacher account exists|not registered|no account/i.test(OTP_SENT_GENERIC));
+    check("OTP_NOT_AVAILABLE never says whether an account exists", !/teacher account exists|not registered|no account|unverified|suspended|inactive/i.test(OTP_NOT_AVAILABLE));
+    check("OTP_SENT is only the success text", OTP_SENT.startsWith("A 6-digit code has been sent"));
     check("invalid number format → validation message", (await errorOf(() => requestTeacherLoginOtp("12345", freshIp()))) === "Enter a valid 10-digit Indian mobile number.");
     ip = freshIp();
     for (let i = 0; i < 20; i++) await requestTeacherLoginOtp(rnd("6"), ip).catch(() => undefined);
@@ -217,11 +221,15 @@ async function main() {
     check("suspend ends existing sessions (sessionsValidAfter stamped)", ((await prisma.adminUser.findUniqueOrThrow({ where: { id: c.id } })).sessionsValidAfter?.getTime() ?? 0) >= tSusp - 1000);
     check("suspended: pending code no longer signs in", (await errorOf(() => authorizeTeacherOtp(c.digits, pending.devCode, freshIp()))) === NO_PENDING);
     await coolDown(c.mobile);
-    check("suspended: no new code sent", !(await requestTeacherLoginOtp(c.digits, freshIp())).devCode);
+    const sErrOpen = await openCodes(c.mobile); // the pre-suspension code stays open but can't sign in (checked above)
+    const sErr = await errorOf(() => requestTeacherLoginOtp(c.digits, freshIp()));
+    check("suspended: no new code, same OTP_NOT_AVAILABLE", sErr === OTP_NOT_AVAILABLE && (await openCodes(c.mobile)) === sErrOpen, `${sErr} open=${await openCodes(c.mobile)}`);
     check("suspended: password login blocked", (await errorOf(() => authorizeTeacherPassword(c.username, PASS, freshIp()))) === TEACHER_INACTIVE);
     await setTeacherStatus(M, c.id, "DEACTIVATED");
     await coolDown(c.mobile);
-    check("deactivated: no code sent", !(await requestTeacherLoginOtp(c.digits, freshIp())).devCode);
+    const dErrOpen = await openCodes(c.mobile); // the pre-suspension code stays open but can't sign in (checked above)
+    const dErr = await errorOf(() => requestTeacherLoginOtp(c.digits, freshIp()));
+    check("deactivated: no code, same OTP_NOT_AVAILABLE", dErr === OTP_NOT_AVAILABLE && (await openCodes(c.mobile)) === dErrOpen, `${dErr} open=${await openCodes(c.mobile)}`);
     check("deactivated: scope gone", (await teacherScope(c.id)) === null);
     await setTeacherStatus(M, c.id, "ACTIVE");
     await coolDown(c.mobile);
@@ -238,8 +246,8 @@ async function main() {
     const audit = await prisma.auditLog.findFirst({ where: { action: "TEACHER_MOBILE_CHANGED", entityId: c.id }, orderBy: { createdAt: "desc" } });
     check("TEACHER_MOBILE_CHANGED audited with masked old/new numbers", (audit?.metadata as { from?: string; to?: string } | null)?.from === `+91 ******${c.digits.slice(-4)}` && (audit?.metadata as { to?: string } | null)?.to === `+91 ******${newDigits.slice(-4)}`, audit?.metadata);
     check("old number: pending code closed + can't sign in", (await openCodes(c.mobile)) === 0 && (await errorOf(() => authorizeTeacherOtp(c.digits, oldCode.devCode, freshIp()))) === NO_PENDING);
-    check("old number: no new code", !(await requestTeacherLoginOtp(c.digits, freshIp())).devCode);
-    check("new number: no code until verified", !(await requestTeacherLoginOtp(newDigits, freshIp())).devCode);
+    check("old number: no new code (OTP_NOT_AVAILABLE)", (await errorOf(() => requestTeacherLoginOtp(c.digits, freshIp()))) === OTP_NOT_AVAILABLE);
+    check("new number: no code until verified (OTP_NOT_AVAILABLE)", (await errorOf(() => requestTeacherLoginOtp(newDigits, freshIp()))) === OTP_NOT_AVAILABLE);
     await verifyMobile(c.id);
     await coolDown(e164(newDigits));
     const nc = await requestTeacherLoginOtp(newDigits, freshIp());

@@ -4,7 +4,7 @@ import { AuthError } from "next-auth";
 import { auth, signIn, signOut } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getClientIp } from "@/lib/client-ip";
-import { OTP_SENT_GENERIC, TeacherAuthError, requestTeacherLoginOtp } from "@/lib/teacher/auth";
+import { OTP_SENT, TeacherAuthError, requestTeacherLoginOtp } from "@/lib/teacher/auth";
 
 export interface TeacherLoginState {
   error?: string;
@@ -39,7 +39,7 @@ export async function teacherPasswordLoginAction(_prev: TeacherLoginState, fd: F
 export async function sendTeacherOtpAction(_prev: TeacherLoginState, fd: FormData): Promise<TeacherLoginState> {
   try {
     const { devCode } = await requestTeacherLoginOtp(fd.get("mobile"), await getClientIp());
-    return { sent: true, mobile: String(fd.get("mobile") ?? "").trim(), info: OTP_SENT_GENERIC, devCode };
+    return { sent: true, mobile: String(fd.get("mobile") ?? "").trim(), info: OTP_SENT, devCode };
   } catch (error) {
     if (error instanceof TeacherAuthError) return { error: error.message, mobile: String(fd.get("mobile") ?? "").trim() };
     throw error;

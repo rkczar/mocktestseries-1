@@ -17,7 +17,10 @@ import { parseIndianMobile, INDIAN_MOBILE_ERROR } from "@/lib/indian-mobile";
  */
 
 export const TEACHER_INACTIVE = "This teacher account is not active. Please contact the Master Admin.";
-export const OTP_SENT_GENERIC = "If this number is registered to an active teacher account, a 6-digit code has been sent to it.";
+export const OTP_SENT = "A 6-digit code has been sent to your registered mobile number.";
+/** Identical answer for unregistered, unverified, suspended and deactivated numbers. */
+export const OTP_NOT_AVAILABLE =
+  "No code was sent. OTP login works only for a verified registered mobile. Please log in with your username and password, then verify your mobile in the Teacher Portal.";
 /** Same wording lib/otp.ts uses, so an unregistered number answers exactly like a registered one with no code. */
 const NO_PENDING = "No pending verification code for this number. Please request a new one.";
 
@@ -106,8 +109,11 @@ async function closeOlderCodes(e164: string) {
 
 /**
  * Option B, step 1. Sends a code only to a verified registered mobile of an
- * active teacher. The answer is OTP_SENT_GENERIC for every well-formed number
- * (and padded to a fixed minimum time); only an IP/number lockout says so.
+ * active teacher and resolves only when MSG91 accepted it. Every number that
+ * can't get a code (unregistered, unverified, inactive) gets the same
+ * OTP_NOT_AVAILABLE error and the same failed-attempt record; cooldown, caps and
+ * provider failures surface lib/otp.ts's own wording. Answers are padded to a
+ * fixed minimum time.
  */
 export async function requestTeacherLoginOtp(mobileInput: unknown, ip: string): Promise<{ devCode?: string }> {
   const started = Date.now();
@@ -120,17 +126,17 @@ export async function requestTeacherLoginOtp(mobileInput: unknown, ip: string): 
     if (!teacher) {
       // Counts toward the per-IP / per-number failure caps, so probing numbers gets locked out.
       await prisma.loginAttempt.create({ data: { username: key, ipAddress: ip, success: false } });
-      return {};
+      throw new TeacherAuthError(OTP_NOT_AVAILABLE);
     }
     try {
       const { devCode } = await requestOtp(mobile.e164, "TEACHER_LOGIN", ip);
       await closeOlderCodes(mobile.e164);
       return { devCode };
     } catch (error) {
-      // Cooldown / caps / provider failure would reveal a registered number: same generic answer.
+      // Cooldown / caps / MSG91 failure: say so, so the screen never shows a countdown for an SMS that wasn't sent.
       if (error instanceof OtpError) {
         console.warn("[teacher-auth] login OTP not sent:", error.message);
-        return {};
+        throw new TeacherAuthError(error.message);
       }
       throw error;
     }
