@@ -2,12 +2,14 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireTeacherPage } from "@/lib/teacher/page";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { teacherMobileStatus } from "@/lib/teacher/auth";
+import { MobileVerify } from "./mobile-verify";
 
 const weekAgo = () => new Date(Date.now() - 7 * 86400_000);
 
 export default async function TeacherDashboard() {
   const scope = await requireTeacherPage();
-  const [exams, drafts, open, decided] = await Promise.all([
+  const [exams, drafts, open, decided, mobile] = await Promise.all([
     prisma.exam.findMany({
       where: { id: { in: scope.examIds } },
       orderBy: { order: "asc" },
@@ -16,6 +18,7 @@ export default async function TeacherDashboard() {
     prisma.question.count({ where: { examId: { in: scope.examIds }, status: "DRAFT" } }),
     prisma.teacherContentRequest.count({ where: { teacherId: scope.teacherId, status: "OPEN" } }),
     prisma.teacherContentRequest.count({ where: { teacherId: scope.teacherId, status: { in: ["APPROVED", "REJECTED"] }, decidedAt: { gte: weekAgo() } } }),
+    teacherMobileStatus(scope.teacherId),
   ]);
   return (
     <>
@@ -25,6 +28,12 @@ export default async function TeacherDashboard() {
         <Card><CardContent className="py-4"><p className="text-sm text-[var(--color-muted-foreground)]">My requests waiting</p><p className="text-2xl font-semibold">{open}</p></CardContent></Card>
         <Card><CardContent className="py-4"><p className="text-sm text-[var(--color-muted-foreground)]">Decided in the last 7 days</p><p className="text-2xl font-semibold">{decided}</p></CardContent></Card>
       </div>
+      {mobile.masked && !mobile.verified ? (
+        <Card>
+          <CardHeader><CardTitle>Login with OTP</CardTitle></CardHeader>
+          <CardContent><MobileVerify masked={mobile.masked} /></CardContent>
+        </Card>
+      ) : null}
       <Card>
         <CardHeader><CardTitle>My exams</CardTitle></CardHeader>
         <CardContent>

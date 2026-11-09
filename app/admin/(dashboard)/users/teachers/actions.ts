@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import type { TeacherStatus } from "@prisma/client";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
-import { assignExam, createTeacher, revokeAssignment, setTeacherStatus, type ManageResult } from "@/lib/teacher/manage";
+import { assignExam, createTeacher, revokeAssignment, setTeacherMobile, setTeacherStatus, type ManageResult } from "@/lib/teacher/manage";
 import { approveRequest, rejectRequest } from "@/lib/teacher/approvals";
 
 /**
@@ -31,7 +31,22 @@ function done(r: ManageResult): TeacherFormState {
 
 export async function createTeacherAction(_prev: TeacherFormState, fd: FormData): Promise<TeacherFormState> {
   const actor = await manage();
-  return done(await createTeacher(actor, { name: String(fd.get("name") ?? ""), username: String(fd.get("username") ?? ""), email: String(fd.get("email") ?? ""), password: String(fd.get("password") ?? "") }));
+  return done(
+    await createTeacher(actor, {
+      name: String(fd.get("name") ?? ""),
+      username: String(fd.get("username") ?? ""),
+      email: String(fd.get("email") ?? ""),
+      password: String(fd.get("password") ?? ""),
+      mobile: String(fd.get("mobile") ?? ""),
+      examIds: fd.getAll("examIds").map(String),
+      status: fd.get("status") === "SUSPENDED" ? "SUSPENDED" : "ACTIVE",
+    })
+  );
+}
+
+export async function setTeacherMobileAction(teacherId: string, _prev: TeacherFormState, fd: FormData): Promise<TeacherFormState> {
+  const actor = await manage();
+  return done(await setTeacherMobile(actor, teacherId, String(fd.get("mobile") ?? "")));
 }
 
 export async function setTeacherStatusAction(teacherId: string, status: TeacherStatus): Promise<TeacherFormState> {

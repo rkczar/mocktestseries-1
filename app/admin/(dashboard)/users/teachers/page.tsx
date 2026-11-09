@@ -4,7 +4,8 @@ import { getAdminSession } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AssignExamForm, CreateTeacherForm, RevokeButton, TeacherStatusButtons } from "./teacher-controls";
+import { AssignExamForm, CreateTeacherForm, RevokeButton, TeacherMobileForm, TeacherStatusButtons } from "./teacher-controls";
+import { maskMobile } from "@/lib/teacher/auth";
 
 export const metadata = { title: "Teachers — Mock Test Series.in Admin" };
 
@@ -29,7 +30,7 @@ export default async function TeachersPage() {
         email: true,
         isActive: true,
         lastLoginAt: true,
-        teacherProfile: { select: { status: true } },
+        teacherProfile: { select: { status: true, mobile: true, mobileVerifiedAt: true } },
         teacherExamAssignments: { where: { revokedAt: null }, select: { id: true, exam: { select: { id: true, name: true } } } },
       },
     }),
@@ -53,7 +54,7 @@ export default async function TeachersPage() {
         <CardHeader>
           <CardTitle>Teachers</CardTitle>
           <CardDescription>
-            Teachers sign in at the admin login and work only in the Teacher Portal, limited to their assigned exams. They can create Draft questions, edit questions (published ones through revisions), unpublish questions from Mock Tests and send requests. Publishing, deletion and restoring are approved here by the Master Admin.
+            Teachers sign in at /teacher (username and password, or an OTP to their verified registered mobile) and work only in the Teacher Portal, limited to their assigned exams. They can create Draft questions, edit questions (published ones through revisions), unpublish questions from Mock Tests and send requests. Publishing, deletion and restoring are approved here by the Master Admin.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -69,6 +70,13 @@ export default async function TeachersPage() {
                   <Badge variant={status === "ACTIVE" ? "success" : status === "SUSPENDED" ? "warning" : "neutral"}>{status === "NOT_SET_UP" ? "Not set up" : status.toLowerCase()}</Badge>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[var(--color-muted-foreground)]">Registered mobile:</span>
+                  <span>{maskMobile(t.teacherProfile?.mobile) ?? "not set"}</span>
+                  {t.teacherProfile?.mobile ? (
+                    <Badge variant={t.teacherProfile.mobileVerifiedAt ? "success" : "warning"}>{t.teacherProfile.mobileVerifiedAt ? "verified — OTP login on" : "not verified — OTP login off"}</Badge>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[var(--color-muted-foreground)]">Exams:</span>
                   {t.teacherExamAssignments.length === 0 ? <span>none</span> : null}
                   {t.teacherExamAssignments.map((a) => (
@@ -81,6 +89,7 @@ export default async function TeachersPage() {
                 {canManage ? (
                   <div className="flex flex-col gap-2">
                     <AssignExamForm teacherId={t.id} exams={exams.filter((e) => !assigned.has(e.id))} />
+                    {t.teacherProfile ? <TeacherMobileForm teacherId={t.id} hasMobile={Boolean(t.teacherProfile.mobile)} /> : null}
                     <TeacherStatusButtons teacherId={t.id} status={status} />
                   </div>
                 ) : null}
@@ -93,9 +102,9 @@ export default async function TeachersPage() {
         <Card>
           <CardHeader>
             <CardTitle>Add teacher</CardTitle>
-            <CardDescription>Creates a sign-in account with the Teacher role. Share the temporary password privately; password resets are in Admins → Edit.</CardDescription>
+            <CardDescription>Creates a sign-in account with the Teacher role. Share the username and temporary password privately; the teacher signs in at /teacher. Password resets are in Admins → Edit.</CardDescription>
           </CardHeader>
-          <CardContent><CreateTeacherForm /></CardContent>
+          <CardContent><CreateTeacherForm exams={exams} /></CardContent>
         </Card>
       ) : null}
     </div>

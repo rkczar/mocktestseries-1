@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { getStaffSession } from "@/lib/rbac";
 import { getTeacher } from "@/lib/teacher/session";
-import { logoutAction } from "@/app/admin/(dashboard)/actions";
+import { teacherLogoutAction } from "@/app/teacher-login/actions";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 
@@ -27,13 +27,13 @@ export default async function TeacherLayout({ children }: { children: React.Reac
   const teacher = await getTeacher();
   if (!teacher) {
     const staff = await getStaffSession();
-    if (!staff?.user) redirect("/admin/login?callbackUrl=/teacher");
+    if (!staff?.user) redirect("/teacher-login");
     if (staff.user.role !== "TEACHER") redirect("/admin");
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-4 px-4 text-center">
         <h1 className="text-lg font-semibold text-[var(--color-foreground)]">Teacher access is not active</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">Your teacher account is suspended or not set up yet. Contact the Master Admin.</p>
-        <form action={logoutAction}>
+        <form action={teacherLogoutAction}>
           <button type="submit" className="underline">Sign out</button>
         </form>
       </main>
@@ -50,7 +50,7 @@ export default async function TeacherLayout({ children }: { children: React.Reac
           <div className="flex items-center gap-3">
             <ThemeToggle />
             <span className="hidden text-sm font-medium text-[var(--color-foreground)] sm:inline">{teacher.name}</span>
-            <form action={logoutAction}>
+            <form action={teacherLogoutAction}>
               <button type="submit" aria-label="Sign out" title="Sign out" className="inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-button)] border border-[var(--color-border)]">
                 <LogOut className="h-4 w-4" aria-hidden />
               </button>

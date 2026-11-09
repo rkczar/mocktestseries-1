@@ -139,8 +139,10 @@ async function main() {
 
     // ------------------------------------------------------------ B. management
     section("B. Teacher management");
+    // Teacher Login: a registered mobile is required (unique, random per run).
+    const testMobile = () => `9${String(Math.floor(Math.random() * 1e9)).padStart(9, "0")}`;
     const mk = async (u: string) => {
-      const r = await createTeacher(M, { name: `TPA Teacher ${u}`, username: `tpa-${u}-${sfx}`, email: "", password: "tpa-password-123" });
+      const r = await createTeacher(M, { name: `TPA Teacher ${u}`, username: `tpa-${u}-${sfx}`, email: "", password: "tpa-password-123", mobile: testMobile() });
       check(`create teacher ${u}`, r.ok, r);
       return (await prisma.adminUser.findUniqueOrThrow({ where: { username: `tpa-${u}-${sfx}` } })).id;
     };
@@ -148,8 +150,8 @@ async function main() {
     const t2 = await mk("t2");
     const t3 = await mk("t3");
     const tB = await mk("tb");
-    check("duplicate username refused", !(await createTeacher(M, { name: "dup", username: `tpa-t1-${sfx}`, password: "tpa-password-123" })).ok);
-    check("short password refused", !(await createTeacher(M, { name: "x", username: `tpa-x-${sfx}`, password: "short" })).ok);
+    check("duplicate username refused", !(await createTeacher(M, { name: "dup", username: `tpa-t1-${sfx}`, password: "tpa-password-123", mobile: testMobile() })).ok);
+    check("short password refused", !(await createTeacher(M, { name: "x", username: `tpa-x-${sfx}`, password: "short", mobile: testMobile() })).ok);
     check("new teacher has empty scope", (await teacherScope(t1))?.examIds.length === 0);
     check("assign A to t1", (await assignExam(M, t1, examA.id)).ok);
     check("duplicate active assignment refused", !(await assignExam(M, t1, examA.id)).ok);

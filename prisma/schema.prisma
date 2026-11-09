@@ -525,6 +525,8 @@ enum OtpPurpose {
   REGISTER
   RESET_PASSWORD
   VERIFY_MOBILE
+  /// Teacher Portal sign-in / registered-mobile verification (lib/teacher/auth.ts). Separate from LOGIN so a teacher code can never sign in a student with the same number.
+  TEACHER_LOGIN
 }
 
 /// How an OTP reached the phone. WHATSAPP = an MSG91 Widget retryOtp of a pending SMS code (lib/otp.ts).
@@ -4352,6 +4354,9 @@ model TeacherProfile {
   adminUserId String        @unique
   adminUser   AdminUser     @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
   status      TeacherStatus @default(ACTIVE)
+  /// Registered mobile (E.164), set only by the Master Admin. OTP sign-in works only once mobileVerifiedAt is set; any change clears it.
+  mobile           String?   @unique
+  mobileVerifiedAt DateTime?
   notes       String?
   createdById String?
   createdAt   DateTime      @default(now())

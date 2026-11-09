@@ -3,6 +3,8 @@ import argon2 from "argon2";
 import { z } from "zod";
 import { Prisma, type TeacherStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { parseIndianMobile, INDIAN_MOBILE_ERROR } from "@/lib/indian-mobile";
+import { maskMobile } from "@/lib/teacher/auth";
 
 /**
  * Teacher account management (Admin → Users & Access → Teachers), Phase A.
@@ -20,7 +22,19 @@ const createSchema = z.object({
   username: z.string().trim().toLowerCase().min(3).max(40).regex(/^[a-z0-9._-]+$/, "Username: lowercase letters, numbers, dot, underscore, hyphen only"),
   email: z.string().trim().toLowerCase().email("Enter a valid email address").optional().or(z.literal("").transform(() => undefined)),
   password: z.string().min(10, "Password must be at least 10 characters").max(200),
+  mobile: z.string().transform((v, ctx) => {
+    const m = parseIndianMobile(v);
+    if (!m) {
+      ctx.addIssue({ code: "custom", message: `Registered mobile: ${INDIAN_MOBILE_ERROR}` });
+      return z.NEVER;
+    }
+    return m.e164;
+  }),
+  examIds: z.array(z.string()).default([]),
+  status: z.enum(["ACTIVE", "SUSPENDED"]).default("ACTIVE"),
 });
+
+const MOBILE_TAKEN = "That mobile number is already registered to another teacher.";
 
 async function log(db: Pick<Prisma.TransactionClient, "auditLog">, actorId: string, action: string, entityType: string, entityId: string, metadata?: Prisma.InputJsonValue) {
   await db.auditLog.create({ data: { actorId, action, entityType, entityId, metadata } });
@@ -34,14 +48,52 @@ export async function createTeacher(actorId: string, input: z.input<typeof creat
   if (!role) return { ok: false, error: "The Teacher role is missing — run the role seed first." };
   const clash = await prisma.adminUser.findFirst({ where: { OR: [{ username: d.username }, ...(d.email ? [{ email: d.email }] : [])] }, select: { id: true } });
   if (clash) return { ok: false, error: "That username or email is already used." };
+  if (await prisma.teacherProfile.findUnique({ where: { mobile: d.mobile }, select: { id: true } })) return { ok: false, error: MOBILE_TAKEN };
+  const exams = await prisma.exam.findMany({ where: { id: { in: [...new Set(d.examIds)] } }, select: { id: true } });
   const passwordHash = await argon2.hash(d.password);
-  const user = await prisma.$transaction(async (tx) => {
-    const u = await tx.adminUser.create({ data: { name: d.name, username: d.username, email: d.email, passwordHash, roleId: role.id } });
-    await tx.teacherProfile.create({ data: { adminUserId: u.id, createdById: actorId } });
-    await log(tx, actorId, "TEACHER_CREATED", "AdminUser", u.id, { username: u.username });
-    return u;
-  });
-  return { ok: true, message: `Teacher ${user.username} created. Assign at least one exam so they can work.` };
+  let user;
+  try {
+    user = await prisma.$transaction(async (tx) => {
+      const u = await tx.adminUser.create({ data: { name: d.name, username: d.username, email: d.email, passwordHash, roleId: role.id } });
+      await tx.teacherProfile.create({ data: { adminUserId: u.id, createdById: actorId, mobile: d.mobile, status: d.status } });
+      await log(tx, actorId, "TEACHER_CREATED", "AdminUser", u.id, { username: u.username, mobile: maskMobile(d.mobile), status: d.status });
+      for (const e of exams) {
+        const a = await tx.teacherExamAssignment.create({ data: { teacherId: u.id, examId: e.id, grantedById: actorId } });
+        await log(tx, actorId, "TEACHER_EXAM_ASSIGNED", "TeacherExamAssignment", a.id, { teacherId: u.id, examId: e.id });
+      }
+      return u;
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return { ok: false, error: "That username, email or mobile number is already used." };
+    throw e;
+  }
+  const hint = exams.length ? "" : " Assign at least one exam so they can work.";
+  return { ok: true, message: `Teacher ${user.username} created.${hint} They verify their mobile after the first password login to enable OTP login.` };
+}
+
+/**
+ * Sets or changes a teacher's registered mobile (Master Admin only). OTP sign-in
+ * stays off until the teacher verifies the new number; pending codes for the old
+ * number are closed. Audited with masked numbers.
+ */
+export async function setTeacherMobile(actorId: string, teacherId: string, mobileInput: string): Promise<ManageResult> {
+  const m = parseIndianMobile(mobileInput);
+  if (!m) return { ok: false, error: INDIAN_MOBILE_ERROR };
+  const user = await prisma.adminUser.findUnique({ where: { id: String(teacherId) }, select: { id: true, role: { select: { name: true } }, teacherProfile: { select: { mobile: true } } } });
+  if (!user || user.role.name !== "TEACHER" || !user.teacherProfile) return { ok: false, error: "Teacher not found." };
+  const old = user.teacherProfile.mobile;
+  if (old === m.e164) return { ok: false, error: "That is already the registered number." };
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.teacherProfile.update({ where: { adminUserId: user.id }, data: { mobile: m.e164, mobileVerifiedAt: null } });
+      if (old) await tx.otpRequest.updateMany({ where: { mobile: old, purpose: "TEACHER_LOGIN", consumedAt: null }, data: { consumedAt: new Date() } });
+      await log(tx, actorId, "TEACHER_MOBILE_CHANGED", "AdminUser", user.id, { from: maskMobile(old), to: maskMobile(m.e164) });
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return { ok: false, error: MOBILE_TAKEN };
+    throw e;
+  }
+  return { ok: true, message: "Registered mobile updated. OTP login turns on after the teacher verifies it." };
 }
 
 /** ACTIVE / SUSPENDED / DEACTIVATED. Creates the profile for a TEACHER-role account that has none. */

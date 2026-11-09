@@ -6,7 +6,7 @@ import { getTeacher } from "@/lib/teacher/session";
 /** For Teacher Portal pages: the scope, or a redirect to sign-in. */
 export async function requireTeacherPage(): Promise<TeacherScope> {
   const scope = await getTeacher();
-  if (!scope) redirect("/admin/login?callbackUrl=/teacher");
+  if (!scope) redirect("/teacher-login");
   return scope;
 }
 

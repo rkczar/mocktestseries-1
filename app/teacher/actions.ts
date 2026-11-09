@@ -38,7 +38,7 @@ async function scopeOrLogin() {
   try {
     return await requireTeacher();
   } catch (e) {
-    if (e instanceof TeacherAccessError) redirect("/admin/login");
+    if (e instanceof TeacherAccessError) redirect("/teacher-login");
     throw e;
   }
 }

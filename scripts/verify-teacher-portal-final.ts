@@ -101,7 +101,7 @@ async function main() {
 
   try {
     const mkT = async (u: string, examId: string) => {
-      await createTeacher(M, { name: `TPF ${u}`, username: `tpf-${u}-${sfx}`, password: "tpf-password-123" });
+      await createTeacher(M, { name: `TPF ${u}`, username: `tpf-${u}-${sfx}`, password: "tpf-password-123", mobile: `8${String(Math.floor(Math.random() * 1e9)).padStart(9, "0")}` });
       const id = (await prisma.adminUser.findUniqueOrThrow({ where: { username: `tpf-${u}-${sfx}` } })).id;
       await assignExam(M, id, examId);
       return id;

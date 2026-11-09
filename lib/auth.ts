@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { authConfig } from "@/lib/auth.config";
 import { clientIpFromHeaders } from "@/lib/client-ip";
 import { isAdminLoginBlocked } from "@/lib/auth-rate-limit";
+import { authorizeTeacherOtp, authorizeTeacherPassword } from "@/lib/teacher/auth";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
@@ -69,6 +70,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           role: adminUser.role.name,
         };
       },
+    }),
+    // Teacher Login (/teacher): username + password, or an OTP to the registered mobile. Same session as above.
+    Credentials({
+      id: "teacher-password",
+      credentials: { username: {}, password: {} },
+      authorize: (c, request) => authorizeTeacherPassword(c?.username, c?.password, clientIpFromHeaders(request.headers)),
+    }),
+    Credentials({
+      id: "teacher-otp",
+      credentials: { mobile: {}, code: {} },
+      authorize: (c, request) => authorizeTeacherOtp(c?.mobile, c?.code, clientIpFromHeaders(request.headers)),
     }),
   ],
 });
