@@ -349,3 +349,22 @@ touch phone, Mock/PYQ/Subject through the same player, and the following:
 rapid taps, double Next, palette, refresh/resume, back/forward, Mark for
 Review, all three duration modes, instant reveal and its lock, exam-mode
 leakage, a malformed question, and concurrent browsers.
+
+## Bilingual questions (Hindi + English, 2026-11-10)
+
+`Exam.languageMode` is `ENGLISH` (default), `HINDI` or `BILINGUAL`. A bilingual question stays ONE canonical
+`Question` with one answer, one set of images and one `Answer` row per attempt-question. The Hindi version sits in
+`Question.textHi` and `QuestionOption.textHi`, by label.
+- **Snapshot:** a question with `textHi` freezes an extra `hi: { text, options[{label,text}] }` key. Every other
+  question's snapshot is byte-identical to before.
+- **Player payload:** `toPlayerQuestions` adds `hi` (text, options by label, and the RICH_V1 rendering) only when
+  the snapshot has it. `hi` is presentation only and never answer-key data.
+- **Player / Review:** the English / हिंदी switch (`components/student/test-language.tsx`) only swaps the text shown.
+  Selection, save queue, timer, navigation and mark-for-review are keyed by question id and option label, so they
+  never change.
+- **Language choice:** Pre-Test Setup asks for the language (Mock/PYQ). Any other start path asks on the player's first
+  screen. The choice is a per-device convenience (localStorage), and the controls render only for BILINGUAL exams.
+
+Regression:
+- `scripts/verify-fso-bilingual.ts` (importer → Question Bank → snapshot → payload → scoring, mock AI)
+- `scripts/verify-bilingual-player-ui.mjs` (fixture: `scripts/bilingual-player-ui-fixture.ts`)

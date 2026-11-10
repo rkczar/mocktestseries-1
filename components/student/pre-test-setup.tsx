@@ -1,5 +1,6 @@
 "use client";
 
+import { LanguageChoice, useTestLanguage } from "@/components/student/test-language";
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { AlertTriangle, ArrowRight } from "lucide-react";
@@ -39,6 +40,7 @@ export function PreTestSetup({
   standardMinutes,
   submitLabel = "Start Test",
   notes,
+  bilingual = false,
 }: {
   kind: "MOCK_TEST" | "PREVIOUS_YEAR_PAPER";
   testId: string;
@@ -47,7 +49,10 @@ export function PreTestSetup({
   submitLabel?: string;
   /** Extra test-specific rules (negative marking, single attempt) listed under the mode notes. */
   notes?: React.ReactNode;
+  /** BILINGUAL exam: ask for the preferred question language first (remembered on this device; switchable in the test). */
+  bilingual?: boolean;
 }) {
+  const language = useTestLanguage(bilingual);
   const [state, formAction] = useActionState<PreTestSetupState, FormData>(startConfiguredTestAction, {});
   const [answerMode, setAnswerMode] = useState<AnswerReviewMode>("EXAM");
   return (
@@ -59,6 +64,7 @@ export function PreTestSetup({
           <CardTitle>Set up your test</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
+          {bilingual ? <LanguageChoice lang={language.lang} chosen={language.chosen} onChoose={language.choose} /> : null}
           <AttemptModeFields
             timeModes={FORMAL_TIME_MODES}
             defaultTimeMode="FIXED"

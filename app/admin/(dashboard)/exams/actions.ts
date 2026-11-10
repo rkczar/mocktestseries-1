@@ -108,6 +108,8 @@ const editExamSchema = z.object({
   durationMinutes: z.coerce.number().int().min(1).max(1000).optional().or(z.literal("").transform(() => undefined)),
   instructions: z.string().max(5000).optional(),
   description: z.string().max(2000).optional(),
+  // Question languages (absent = unchanged). BILINGUAL turns on the Hindi version in the importer and the Test Player.
+  languageMode: z.enum(["ENGLISH", "HINDI", "BILINGUAL"]).optional(),
 
   // Public exam landing page (/exams/[slug]) — see the
   // 20260921120000_add_public_exam_page_and_page_visibility migration.
@@ -155,6 +157,7 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
     durationMinutes: formData.get("durationMinutes"),
     instructions: formData.get("instructions"),
     description: formData.get("description"),
+    languageMode: formData.get("languageMode") ?? undefined,
     publicPageEnabled: formData.get("publicPageEnabled") === "on" || formData.get("publicPageEnabled") === "true",
     publicSlug: formData.get("publicSlug")?.toString().trim().toLowerCase(),
     shortDescription: formData.get("shortDescription"),
@@ -219,6 +222,7 @@ export async function editExamAction(_prev: EditExamFormState, formData: FormDat
       durationMinutes: data.durationMinutes ?? null,
       instructions: data.instructions || null,
       description: data.description || null,
+      ...(data.languageMode ? { languageMode: data.languageMode } : {}),
       publicPageEnabled: data.publicPageEnabled,
       publicSlug: data.publicSlug ?? null,
       shortDescription: data.shortDescription || null,

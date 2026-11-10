@@ -187,6 +187,7 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
         standardMinutes={mockTest.durationMinutes}
         submitLabel={latestSubmittedAttempt ? "Practice Again" : "Start Test"}
         notes={testRules}
+        bilingual={mockTest.exam.languageMode === "BILINGUAL"}
       />
     );
   } else {

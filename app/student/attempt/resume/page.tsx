@@ -123,6 +123,7 @@ export default async function ResumeAttemptPage({
         testId={summary.id}
         questionCount={summary.questionCount}
         standardMinutes={summary.standardMinutes}
+        bilingual={summary.bilingual}
         notes={summary.negativeMarking > 0 ? <li>Each wrong answer deducts {summary.negativeMarking} mark(s).</li> : null}
       />
     </div>

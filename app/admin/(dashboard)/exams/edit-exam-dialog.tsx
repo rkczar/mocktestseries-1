@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { SelectNative } from "@/components/ui/select-native";
 import {
   Dialog,
   DialogClose,
@@ -35,6 +36,7 @@ export interface EditableExam {
   order: number;
   negativeMarking: number | null;
   durationMinutes: number | null;
+  languageMode: "ENGLISH" | "HINDI" | "BILINGUAL";
   instructions: string | null;
   description: string | null;
   publicPageEnabled: boolean;
@@ -138,6 +140,14 @@ export function EditExamDialog({ exam }: { exam: EditableExam }) {
               defaultValue={exam.negativeMarking ?? ""}
               placeholder="0.25"
             />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`languageMode-${exam.id}`}>Question language</Label>
+            <SelectNative id={`languageMode-${exam.id}`} name="languageMode" defaultValue={exam.languageMode} data-testid="exam-language-mode">
+              <option value="ENGLISH">English only</option>
+              <option value="HINDI">Hindi only</option>
+              <option value="BILINGUAL">Bilingual (English + हिंदी)</option>
+            </SelectNative>
           </div>
           <div className="flex flex-col justify-end gap-2">
             <label className="flex items-center gap-2 text-sm text-[var(--color-foreground)]">

@@ -18,6 +18,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
 import { StudentShell } from "@/components/student/shell";
 import { AttemptReview, type ReviewQuestionView } from "./attempt-review";
+import { hindiView } from "@/lib/test-player-data";
 import { toggleSaveQuestionAction, reportAttemptQuestionAction } from "../actions";
 
 export const metadata = { title: "Review Answers — Mock Test Series.in" };
@@ -115,6 +116,7 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
     // Snapshot v3 (NEET Phase 4) only — SINGLE_CORRECT rows get no new keys.
     const type = snapshotQuestionType(snapshot);
     const match = type === "MATCH_THE_FOLLOWING" ? matchView(snapshot) : null;
+    const hi = hindiView(snapshot, snapshot.options);
     return {
       attemptId,
       attemptQuestionId: tq.id,
@@ -143,6 +145,7 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
       ...(explanation ? { explanation } : {}),
       ...(type === "MULTIPLE_CORRECT" ? { selectedLabels: tq.answer?.selectedLabels ?? [] } : {}),
       ...(match ? { match } : {}),
+      ...(hi ? { hi } : {}),
     };
   });
 
@@ -155,7 +158,7 @@ export default async function AttemptReviewPage({ params }: { params: Promise<{ 
         </div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Review Answers</h1>
 
-        <AttemptReview questions={questions} />
+        <AttemptReview questions={questions} bilingual={attempt.exam.languageMode === "BILINGUAL" && questions.some((q) => q.hi)} />
       </div>
     </StudentShell>
   );

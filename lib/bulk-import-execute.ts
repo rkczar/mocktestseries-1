@@ -512,6 +512,8 @@ async function executeLeased(
                 topicId: rd.topicId,
                 subTopicId: rd.subTopicId,
                 text: questionText,
+                // Replaced content has no Hindi version: a stale one must not stay paired with the new English text.
+                textHi: null,
                 imageUrl: rich ? null : merged.image || null,
                 difficulty: rd.difficulty,
                 status: replacedStatus,

@@ -59,6 +59,11 @@ export interface QuestionEdit {
   explanation?: string | null;
   /** Source page reference (pages of the paper file the question is printed on). */
   pages?: number[];
+  /**
+   * Bilingual papers: the Hindi version as the administrator checked it against the page (undefined = unchanged).
+   * Saving it confirms the Hindi reading; the structural pair checks still run on it.
+   */
+  hi?: { stem: string; options: { text: string }[] } | null;
 }
 
 const TYPES: ExtractedQuestion["type"][] = ["SINGLE_CORRECT", "MULTIPLE_CORRECT", "MATCH_THE_FOLLOWING", "ASSERTION_REASON", "NUMERICAL", "SUBJECTIVE", "FIVE_OPTIONS", "OTHER"];
@@ -72,6 +77,9 @@ export async function editProblems(q: { id: string; jobId: string; fileId: strin
   if (!edit.stem.trim()) errors.push("The question text cannot be empty.");
   if (!TYPES.includes(edit.type)) errors.push("Choose a valid question type.");
   if (edit.options.length < 2 || edit.options.length > 6) errors.push("A question needs 2 to 6 options.");
+  if (edit.hi !== undefined && edit.hi !== null && (typeof edit.hi.stem !== "string" || !Array.isArray(edit.hi.options) || edit.hi.options.some((o) => typeof o?.text !== "string"))) return [...errors, "The Hindi version is not valid."];
+  if (edit.hi && !edit.hi.stem.trim()) errors.push("The Hindi question text cannot be empty.");
+  if (edit.hi && edit.hi.options.length !== edit.options.length) errors.push(`The Hindi version needs the same number of options as the English version (${edit.options.length}).`);
   edit.options.forEach((o, i) => {
     const label = String.fromCharCode(65 + i);
     if (!o.text.trim() && !figureOptions.has(label)) errors.push(`Option ${label} has neither text nor an image.`);
@@ -111,6 +119,11 @@ function changedFields(before: ExtractedQuestion, after: ExtractedQuestion): { f
   add("Explanation", before.hints?.explanation ?? "", after.hints?.explanation ?? "");
   add("Source pages", before.pages, after.pages);
   add("Match lists", [before.listI, before.listII], [after.listI, after.listII]);
+  add("Hindi text", before.hi?.stem ?? "", after.hi?.stem ?? "");
+  const hiCount = Math.max(before.hi?.options.length ?? 0, after.hi?.options.length ?? 0);
+  for (let k = 0; k < hiCount; k++) add(`Hindi option ${String.fromCharCode(65 + k)}`, before.hi?.options[k]?.text ?? "(none)", after.hi?.options[k]?.text ?? "(none)");
+  // Confirming an unchanged Hindi reading is a change of its review state.
+  if (!before.hi?.confirmedById && after.hi?.confirmedById) out.push({ field: "Hindi confirmed", before: "no", after: "yes" });
   return out;
 }
 
@@ -140,6 +153,23 @@ export async function editQuestion(questionId: string, actorId: string, edit: Qu
     unreadable: [],
     method: base.method.endsWith("+ADMIN") ? base.method : `${base.method}+ADMIN`,
     notes: [...(base.notes ?? []), `Corrected by an administrator.`],
+    ...(edit.hi === undefined
+      ? {}
+      : {
+          hi: edit.hi
+            ? {
+                stem: edit.hi.stem.trim().slice(0, 20_000),
+                options: edit.hi.options.map((o, i) => ({ label: String.fromCharCode(65 + i), printed: base.hi?.options[i]?.printed ?? String(i + 1), text: o.text.trim().slice(0, 5_000) })),
+                confidence: 1,
+                unreadable: [],
+                // The administrator compared the two columns: same order unless they left a different option count.
+                sameOptionOrder: edit.hi.options.length === edit.options.length ? true : null,
+                figuresDiffer: false,
+                secondReadAgreement: null,
+                confirmedById: actorId,
+              }
+            : null,
+        }),
   };
   const changes = changedFields(base, next);
   if (!changes.length) throw new ImportJobError("Nothing changed — the question is exactly as before.");

@@ -24,6 +24,7 @@ import { BLANK_INK_BELOW, type OcrPage } from "@/lib/ai-import/ocr-layout";
 import type { ImporterSettings, VerifyMode } from "@/lib/ai-import/config";
 import { figureRows, manuallyCorrected, recordVersion, snapshotFigures, type FigureSnapshot } from "@/lib/ai-import/versions";
 import { mkdir } from "node:fs/promises";
+import { BILINGUAL_RULES, hindiAgreement, mergeHindi } from "@/lib/ai-import/bilingual";
 
 /**
  * Extraction stage of the worker. Question papers are read LOCALLY first
@@ -33,6 +34,11 @@ import { mkdir } from "node:fs/promises";
  * DIFFERENT model re-reads low-confidence pages. Every page is a checkpoint:
  * an interrupted job resumes at the first page that is not DONE.
  */
+
+/** The job's exam prints every question in Hindi and English (Exam.languageMode BILINGUAL). */
+export async function jobIsBilingual(job: { examId: string }): Promise<boolean> {
+  return (await prisma.exam.findUnique({ where: { id: job.examId }, select: { languageMode: true } }))?.languageMode === "BILINGUAL";
+}
 
 export interface StepContext {
   job: AiImportJob;
@@ -255,7 +261,11 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
   const state: NumberingState = { last: 0, sectionIdx: 1 };
   let order = await nextOrderIndex(file.id);
   let previous: ExtractedQuestion | null = null;
-  const useOcr = ocrAvailable();
+  // Bilingual papers: local OCR cannot read Devanagari (2026-11-10: RapidOCR PP-OCRv6 read Hindi as "3π", "HRH" at
+  // 80–100% confidence) and the local parser would read the two language columns as two questions with one number.
+  // Every page therefore goes to the vision reader, which returns each number once with both versions.
+  const bilingual = await jobIsBilingual(ctx.job);
+  const useOcr = ocrAvailable() && !bilingual;
   const record = (p: number, data: Prisma.AiImportPageUncheckedUpdateInput & { status: AiImportPageStatus }) =>
     prisma.aiImportPage.upsert({
       where: { fileId_pageNumber: { fileId: file.id, pageNumber: p } },
@@ -283,7 +293,7 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
       continue;
     }
     const textChars = layout.lines.reduce((a, l) => a + l.text.replace(/\s+/g, "").length, 0);
-    const scanned = textChars < 80;
+    const scanned = textChars < 80 || bilingual;
     let textLayer = layout.lines.map((l) => l.text).join("\n").slice(0, 20_000);
     let local: (PageExtraction & { preamble: string }) | null = scanned ? null : parsePdfPageLocal({ lines: layout.lines, images: layout.images }, p, state);
     // A searchable scan carries an invisible OCR text layer (Sprint A item 2, 2026-11-06). It is read (free) but never
@@ -327,7 +337,7 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
       // No OCR on this server: blank only when the rendered page has (almost) no ink; anything else is read by AI or reviewed.
       const ink = await pageInk(full, p);
       const blank = ink < BLANK_INK_BELOW;
-      const why = blank && !layer ? `blank: ${(ink * 100).toFixed(2)}% ink on the rendered page` : layer ? `no visible text and local OCR is not available — the PDF's own OCR text layer (${layer.chars} characters${layer.numbers.length ? `, question numbers ${layer.numbers.join(", ")}` : ""}) is kept as a hint, not as the reading` : `no text layer and local OCR is not available — ${(ink * 100).toFixed(1)}% of the page has ink`;
+      const why = blank && !layer ? `blank: ${(ink * 100).toFixed(2)}% ink on the rendered page` : bilingual ? `bilingual paper (Hindi + English): read by the vision model, which pairs both language versions of each question${layer ? ` (the page's own text layer, ${layer.chars} characters, is kept as a hint)` : ""}` : layer ? `no visible text and local OCR is not available — the PDF's own OCR text layer (${layer.chars} characters${layer.numbers.length ? `, question numbers ${layer.numbers.join(", ")}` : ""}) is kept as a hint, not as the reading` : `no text layer and local OCR is not available — ${(ink * 100).toFixed(1)}% of the page has ink`;
       const status = blank && !layer ? AiImportPageStatus.DONE : AiImportPageStatus.PENDING;
       await record(p, { status, kind: blank && !layer ? "BLANK" : "SCANNED", textChars, ...(layer ? { textLayer: layer.text } : {}), imageCount: layout.images.length, inkCoverage: ink, outcome: blank && !layer ? "BLANK_VERIFIED" : "NEEDS_REVIEW", outcomeReason: why, rawOutput: { startState, endState: { ...state }, ...(layer ? { ocrLayer: { chars: layer.chars, numbers: layer.numbers } } : {}) }, processedAt: status === AiImportPageStatus.DONE ? new Date() : null });
       continue;
@@ -473,6 +483,7 @@ export function mergeContinuation(pd: ExtractedQuestion, q: ExtractedQuestion, p
     printedAnswer: [...new Set([...pd.printedAnswer, ...q.printedAnswer])],
     listI: pd.listI || q.listI ? [...(pd.listI ?? []), ...(q.listI ?? [])] : null,
     listII: pd.listII || q.listII ? [...(pd.listII ?? []), ...(q.listII ?? [])] : null,
+    ...(pd.hi !== undefined || q.hi !== undefined ? { hi: mergeHindi(pd.hi, q.hi) } : {}),
     unreadable: [...pd.unreadable, ...q.unreadable],
     contentFormat: pd.contentFormat === "RICH_V1" || q.contentFormat === "RICH_V1" ? "RICH_V1" : "PLAIN",
     confidence,
@@ -634,18 +645,20 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   // Confirmed paper memory of this exam / paper (empty when none applies): how the paper is printed, never content.
   const memory = await jobMemoryBrief(ctx.job, "extract");
   const userText = extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: total, textLayer: page.textLayer, memory });
+  const bilingual = await jobIsBilingual(ctx.job);
   const call = async (models: string[], task: "extract" | "verify") => {
     const { value, result: r } = await importerAiCallChecked(
       {
         jobId: ctx.job.id,
         task,
         models,
-        system: EXTRACT_SYSTEM,
+        system: bilingual ? EXTRACT_SYSTEM + BILINGUAL_RULES : EXTRACT_SYSTEM,
         content: [
           { type: "text", text: userText },
           { type: "image_url", image_url: { url: image, detail: "high" } },
         ],
-        maxOutputTokens: 8000,
+        // Both language versions of every question (Devanagari costs several tokens per word).
+        maxOutputTokens: bilingual ? 16000 : 8000,
         settings: ctx.settings,
         pageId: page.id,
         needsVision: true,
@@ -731,6 +744,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     if (!inScope(sourceKeyOf(q))) continue;
     if (second) {
       q.verification = verificationOf(q, second, secondModel ?? verifyModel ?? "second model");
+      if (q.hi) q.hi.secondReadAgreement = hindiAgreement(q.hi, second.find((s) => s.number === q.number && s.section === q.section)?.hi);
       q.notes = [...(q.notes ?? []), `Independent read (${q.verification.model}): ${q.verification.detail}.`];
       if (!q.verification.agree) q.confidence = Math.min(q.confidence, 0.5);
       else q.confidence = Math.max(q.confidence, 0.9);

@@ -1,3 +1,4 @@
+import { toHindi } from "@/lib/ai-import/bilingual";
 import { z } from "zod";
 import type { ExtractedFigure, ExtractedQuestion, ExtractedType } from "@/lib/ai-import/types";
 import { boxScale, normalizeBox } from "@/lib/ai-import/figure-map";
@@ -114,6 +115,12 @@ export const pageSchema = z.object({
         confidence,
         continues_on_next_page: flag,
         continued_from_previous_page: flag,
+        // Bilingual papers only (lib/ai-import/bilingual.ts BILINGUAL_RULES): the Hindi version, as printed.
+        hi: z
+          .object({ stem: text, options: z.array(optionSchema).nullable().optional().transform((v) => v ?? []), confidence, unreadable: strList.optional().transform((v) => v ?? []), same_option_order: flag, figures_differ: flag })
+          .nullable()
+          .optional()
+          .catch(null),
       })
     )
     .max(200)
@@ -194,6 +201,7 @@ export function toExtracted(out: PageOutput, page: number, model: string): Extra
       region: q.region ? normalizeBox(q.region, scale).box : null,
       notes: labelsMissing ? ["The model did not return the printed option labels; the options are labelled by their position — check them against the page."] : [],
       ...(q.explanation?.trim() ? { hints: { explanation: q.explanation.trim() } } : {}),
+      ...(q.hi !== undefined ? { hi: toHindi(q.hi, labels) } : {}),
     } satisfies ExtractedQuestion;
   });
 }

@@ -166,6 +166,10 @@ model Exam {
   faqItems            Json?
   seoTitle            String?
   seoDescription      String?
+  // Question languages of this exam. ENGLISH (default) / HINDI = one language, stored in Question.text — the
+  // existing behaviour. BILINGUAL = each question also carries its Hindi version (Question.textHi,
+  // QuestionOption.textHi) and the Test Player offers an English / हिंदी switch.
+  languageMode        ExamLanguageMode @default(ENGLISH)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -297,6 +301,9 @@ model PreviousYearPaper {
   // durationMinutes, then 120 (lib/test-attempt.ts). Frozen onto each NEW
   // TestAttempt at start; existing attempts keep their own snapshot.
   durationMinutes Int?
+  // Date the paper was actually held, when it differs from its title year
+  // (RPSC "FSO Comp. Exam 2022" was held on 27-06-2023). Informational; null = not recorded.
+  heldOn    DateTime? @db.Date
   isActive  Boolean  @default(true)
   order     Int      @default(0)
   createdAt DateTime @default(now())
@@ -955,6 +962,9 @@ model Question {
   previousYearPaperId String?
   previousYearPaper   PreviousYearPaper? @relation(fields: [previousYearPaperId], references: [id])
   text                String
+  // Hindi version of the same question (BILINGUAL exams only; null everywhere else). Same answer, images,
+  // taxonomy and paper as `text`: one canonical question and one student Answer row in either language.
+  textHi              String?
   imageUrl            String?
   difficulty          QuestionDifficulty @default(MEDIUM)
   status              QuestionStatus     @default(DRAFT)
@@ -1063,11 +1073,19 @@ model QuestionOption {
   question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
   label      String
   text       String
+  // Hindi text of the same option (BILINGUAL exams only); label and isCorrect are shared by both languages.
+  textHi     String?
   imageUrl   String?
   isCorrect  Boolean  @default(false)
   order      Int      @default(0)
 
   @@index([questionId])
+}
+
+enum ExamLanguageMode {
+  ENGLISH
+  HINDI
+  BILINGUAL
 }
 
 enum QuestionContentFormat {

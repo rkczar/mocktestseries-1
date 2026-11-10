@@ -207,12 +207,15 @@ export async function upsertOptions(
     D: { text: data.optionD, imageUrl: data.optionDImageUrl || null },
   };
 
+  // A bilingual question's Hindi option text is not on this form: carried over by label, never dropped by an edit.
+  const keepHi = new Map((await db.questionOption.findMany({ where: { questionId }, select: { label: true, textHi: true } })).map((o) => [o.label, o.textHi]));
   await db.questionOption.deleteMany({ where: { questionId } });
   await db.questionOption.createMany({
     data: OPTION_LABELS.map((label, order) => ({
       questionId,
       label,
       text: byLabel[label].text,
+      textHi: keepHi.get(label) ?? null,
       imageUrl: byLabel[label].imageUrl,
       isCorrect: correct.includes(label),
       order,

@@ -36,6 +36,22 @@ export interface ExtractedFigure {
   mappingReason?: string | null;
 }
 
+export interface HindiVersion {
+  stem: string;
+  options: { label: string; printed: string; text: string }[];
+  /** 0..1 — the reader's certainty that the Hindi text is complete and exact. */
+  confidence: number;
+  unreadable: string[];
+  /** The reader's statement that Hindi option k is the same option as English option k (null = not said). */
+  sameOptionOrder: boolean | null;
+  /** The reader saw a figure in only one language version. */
+  figuresDiffer: boolean | null;
+  /** Similarity (0..1) of the independent second read's Hindi text; null when there was no second read. */
+  secondReadAgreement?: number | null;
+  /** Set when an administrator saved / confirmed the Hindi version (it is then the reviewed text). */
+  confirmedById?: string | null;
+}
+
 export interface MatchEntry {
   key: string;
   text: string;
@@ -53,6 +69,11 @@ export interface ExtractedQuestion {
   options: ExtractedOption[];
   listI?: MatchEntry[] | null;
   listII?: MatchEntry[] | null;
+  /**
+   * Hindi version of the same question (bilingual papers: Hindi and English columns, one number). Transcribed from the
+   * paper, never translated. Options are in the English option order (same canonical labels). See lib/ai-import/bilingual.ts.
+   */
+  hi?: HindiVersion | null;
   /** Answer printed in the question paper itself ("Ans: B"), canonical labels. */
   printedAnswer: string[];
   /** The printed answer exactly as it appeared ("Correct answer is (b)"), when it was found in the question's own text. */

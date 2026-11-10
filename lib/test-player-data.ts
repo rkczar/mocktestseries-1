@@ -34,6 +34,7 @@ export interface SnapshotLike {
   questionType?: unknown;
   correctLabels?: unknown;
   matchSpec?: unknown;
+  hi?: unknown;
 }
 
 export interface AttemptQuestionLike {
@@ -61,6 +62,28 @@ export interface SerializedPlayerQuestion {
   selectedLabels?: string[];
   /** MATCH_THE_FOLLOWING only: rendered List I / List II. */
   match?: MatchView;
+  /** Bilingual questions only: the Hindi version (presentation only; same labels, same answer). */
+  hi?: HindiView;
+}
+
+/** The Hindi version of a bilingual question as the student sees it. An option without Hindi text falls back to English. */
+export interface HindiView {
+  text: string;
+  options: Record<string, string>;
+  /** RICH_V1 only: the Hindi text and options rendered like the English ones (same images). */
+  rich?: RichQuestionView;
+}
+
+/** Hindi view of a snapshot (null = not bilingual, or garbled — the English version is then the only one shown). */
+export function hindiView(snapshot: SnapshotLike, options: { label: string; text: string }[]): HindiView | null {
+  const h = snapshot.hi as { text?: unknown; options?: unknown } | null | undefined;
+  if (!h || typeof h.text !== "string" || !h.text.trim()) return null;
+  const map: Record<string, string> = {};
+  for (const o of Array.isArray(h.options) ? (h.options as { label?: unknown; text?: unknown }[]) : []) {
+    if (typeof o?.label === "string" && typeof o.text === "string" && o.text.trim()) map[o.label] = o.text;
+  }
+  const rich = richQuestionView({ ...snapshot, text: h.text, options: options.map((o) => ({ ...o, text: map[o.label] ?? o.text })) } as Parameters<typeof richQuestionView>[0]);
+  return { text: h.text, options: map, ...(rich ? { rich } : {}) };
 }
 
 export function isMalformedSnapshot(snapshot: SnapshotLike | null | undefined): boolean {
@@ -90,6 +113,7 @@ export function toPlayerQuestions(
     const type = snapshotQuestionType(snapshot);
     const multi = type === "MULTIPLE_CORRECT";
     const match = type === "MATCH_THE_FOLLOWING" && !malformed ? matchView(snapshot) : null;
+    const hi = malformed ? null : hindiView(snapshot, options);
     return {
       questionId: tq.questionId,
       text: typeof snapshot.text === "string" ? snapshot.text : "",
@@ -112,6 +136,7 @@ export function toPlayerQuestions(
       ...(type !== "SINGLE_CORRECT" ? { questionType: type } : {}),
       ...(multi ? { selectedLabels: tq.answer?.selectedLabels ?? [] } : {}),
       ...(match ? { match } : {}),
+      ...(hi ? { hi } : {}),
     };
   });
 }

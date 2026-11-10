@@ -64,6 +64,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
   // questionId has no FK (the import record outlives the question): don't link a deleted one.
   const savedExists = q.questionId ? !!(await prisma.question.findUnique({ where: { id: q.questionId }, select: { id: true } })) : false;
   const e = effective(q);
+  const bilingual = (await prisma.exam.findUnique({ where: { id: q.job.examId }, select: { languageMode: true } }))?.languageMode === "BILINGUAL";
   const kind = (file?.detected as { kind?: string } | null)?.kind;
   const hasPageImages = (kind === "pdf" || kind === "png" || kind === "jpeg") && file?.status !== "PURGED";
   const stemFigures = q.figures.filter((f) => f.owner !== "OPTION");
@@ -253,6 +254,24 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
                 </li>
               ))}
             </ol>
+            {e.hi && (
+              <div lang="hi" className="flex flex-col gap-2 rounded border border-[var(--color-border)] p-2" data-testid="q-preview-hi">
+                <div className="text-xs font-semibold">
+                  हिंदी (Hindi version){e.hi.confirmedById ? " · checked by an administrator" : ` · reader confidence ${Math.round(e.hi.confidence * 100)}%${typeof e.hi.secondReadAgreement === "number" ? ` · second read ${Math.round(e.hi.secondReadAgreement * 100)}%` : ""}`}
+                </div>
+                <div className="whitespace-pre-line text-base">
+                  <RichText content={renderText(fmt, e.hi.stem)} />
+                </div>
+                <ol className="flex flex-col gap-1">
+                  {e.hi.options.map((o) => (
+                    <li key={o.label} data-testid="preview-option-hi">
+                      <span className="mr-2 font-semibold">{o.label}.</span>
+                      <RichText content={renderText(fmt, o.text)} />
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
             <div className="text-xs text-[var(--color-muted-foreground)]">
               Official key: {q.officialAnswerRaw ?? "—"}
               {q.officialKeyPage ? ` (key page ${q.officialKeyPage})` : ""} · printed in paper: {q.sourceAnswer.join(", ") || "—"} · AI opinion: {q.aiAnswer.length ? `${q.aiAnswer.join(", ")} (${q.aiAnswerModel})` : "—"}
@@ -362,6 +381,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             section: e.section ?? "",
             stem: e.stem,
             options: e.options.map((o) => ({ label: o.label, text: o.text })),
+            hi: bilingual ? { stem: e.hi?.stem ?? "", options: e.hi?.options.map((o) => o.text) ?? [], confirmed: !!e.hi?.confirmedById } : null,
             explanation: e.hints?.explanation ?? "",
             pages: e.pages?.length ? e.pages : q.pages,
             pageCount: file?.pageCount ?? Math.max(1, ...q.pages),

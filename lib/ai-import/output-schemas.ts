@@ -35,6 +35,8 @@ const extract = {
           confidence: { type: "number" },
           continues_on_next_page: { type: ["boolean", "null"] },
           continued_from_previous_page: { type: ["boolean", "null"] },
+          // Bilingual papers only (optional; English-only readings leave it out).
+          hi: { type: ["object", "null"], properties: { stem: { type: "string" }, options: { type: "array", items: { type: "object", properties: { label: str, text: { type: "string" } }, required: ["label", "text"] } }, confidence: { type: "number" }, unreadable: strList, same_option_order: { type: ["boolean", "null"] }, figures_differ: { type: ["boolean", "null"] } }, required: ["stem", "options"] },
         },
         required: ["number", "stem", "options", "printed_answer", "confidence"],
       },

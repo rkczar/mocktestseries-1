@@ -221,7 +221,7 @@ export async function getMockTestDetailForStudent(studentId: string, mockTestId:
   const mockTest = await prisma.mockTest.findFirst({
     where: { id: mockTestId, ...LIVE_MOCK_TEST_WHERE, exam: { isActive: true } },
     include: {
-      exam: { select: { id: true, name: true, instructions: true } },
+      exam: { select: { id: true, name: true, instructions: true, languageMode: true } },
       testSeries: { select: { id: true, name: true, instructions: true } },
       _count: { select: { questions: { where: { excludedAt: null, question: { status: QuestionStatus.PUBLISHED } } } } },
     },

@@ -82,6 +82,7 @@ export default async function AttemptRunPage({ params }: { params: Promise<{ att
       initialRemainingSeconds={remainingSeconds}
       instantMode={instantMode}
       questions={questions}
+      bilingual={attempt.exam.languageMode === "BILINGUAL" && questions.some((q) => q.hi)}
     />
   );
 }

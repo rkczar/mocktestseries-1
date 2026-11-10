@@ -391,6 +391,10 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   FORMULA_ISSUE: { label: "Formula needs checking", blocking: false, publishBlocking: true },
   OCR_UNCERTAIN: { label: "OCR unsure of some text", blocking: false, publishBlocking: true },
   SOURCE_TEXT_MISMATCH: { label: "Text differs from the page", blocking: true, publishBlocking: true },
+  /** Bilingual exams (lib/ai-import/bilingual.ts): the Hindi version is missing, does not match the English, or is uncertain. */
+  BILINGUAL_HINDI_MISSING: { label: "Hindi version missing", blocking: true, publishBlocking: true },
+  BILINGUAL_MISMATCH: { label: "Hindi and English versions differ", blocking: true, publishBlocking: true },
+  BILINGUAL_HINDI_UNCERTAIN: { label: "Hindi text uncertain", blocking: true, publishBlocking: true },
   STEM_HAS_OPTIONS: { label: "Options repeated in the question text", blocking: true, publishBlocking: true },
   NUMBERING_GAP: { label: "Numbering gap nearby", blocking: false, publishBlocking: false },
   DUPLICATE_EXISTING: { label: "Duplicate of an existing question", blocking: true, publishBlocking: true },

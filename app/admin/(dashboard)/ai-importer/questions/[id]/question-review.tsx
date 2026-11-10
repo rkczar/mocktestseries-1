@@ -62,6 +62,8 @@ export interface ReviewQ {
   section: string;
   stem: string;
   options: { label: string; text: string }[];
+  /** Bilingual exams: the Hindi version (option texts in the English option order); null for other exams. */
+  hi: { stem: string; options: string[]; confirmed: boolean } | null;
   explanation: string;
   pages: number[];
   pageCount: number;
@@ -255,6 +257,8 @@ export function QuestionReview({
     format: q.contentFormat,
     explanation: q.explanation,
     pages: q.pages.join(", "),
+    hiStem: q.hi?.stem ?? "",
+    hiOptions: q.hi?.options ?? [],
   };
   const [form, setForm] = useState(initial);
   const [answer, setAnswer] = useState<string[]>(q.finalAnswer);
@@ -268,6 +272,10 @@ export function QuestionReview({
   const [addCrop, setAddCrop] = useState<number | null>(null);
   const addRef = useRef<HTMLInputElement>(null);
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+  // Bilingual: the Hindi version is sent (and so confirmed) only when it was edited or explicitly marked as checked.
+  const [hiChecked, setHiChecked] = useState(false);
+  const canSave = dirty || (hiChecked && !q.hi?.confirmed);
+  const hiDirty = !!q.hi && (form.hiStem !== initial.hiStem || JSON.stringify(form.hiOptions) !== JSON.stringify(initial.hiOptions));
 
   const act = (fn: () => Promise<ActionResult>, ok: string | ((d: unknown) => string)) =>
     start(async () => {
@@ -294,6 +302,7 @@ export function QuestionReview({
   if (form.number && !/^\d{1,3}$/.test(form.number)) problems.push("The question number must be a whole number from 1 to 999.");
   const pageList = form.pages.split(/[,\s]+/).filter(Boolean).map(Number);
   if (!pageList.length || pageList.some((p) => !Number.isInteger(p) || p < 1 || p > q.pageCount)) problems.push(`Source pages must be numbers from 1 to ${q.pageCount}.`);
+  if (q.hi && (hiDirty || hiChecked) && !form.hiStem.trim()) problems.push("The Hindi question text cannot be empty.");
   form.options.forEach((o) => {
     if (!o.text.trim() && !q.figures.some((f) => f.owner === "OPTION" && f.optionLabel === o.label && f.mappingStatus !== "MISSING")) problems.push(`Option ${o.label} has neither text nor an image.`);
   });
@@ -311,6 +320,7 @@ export function QuestionReview({
           number: form.number ? Number(form.number) : null,
           explanation: form.explanation,
           pages: pageList,
+          ...(q.hi && (hiDirty || hiChecked) ? { hi: { stem: form.hiStem, options: form.options.map((_, k) => ({ text: form.hiOptions[k] ?? "" })) } } : {}),
         }),
       "Saved and re-checked. Approve it again when you are done.",
     );
@@ -427,9 +437,29 @@ export function QuestionReview({
               </Button>
             )}
           </div>
+          {q.hi && (
+            <div lang="hi" className="flex flex-col gap-2 rounded border border-[var(--color-border)] p-2" data-testid="rv-hi">
+              <Label htmlFor="rv-hi-stem">हिंदी प्रश्न (Hindi question text, exactly as printed)</Label>
+              <Textarea id="rv-hi-stem" rows={5} value={form.hiStem} onChange={(e) => setForm((f) => ({ ...f, hiStem: e.target.value }))} data-testid="rv-hi-stem" />
+              {form.options.map((o, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span className="mt-2 w-5 font-semibold">{o.label}</span>
+                  <Textarea rows={2} value={form.hiOptions[i] ?? ""} onChange={(e) => setForm((f) => ({ ...f, hiOptions: f.options.map((_, k) => (k === i ? e.target.value : (f.hiOptions[k] ?? ""))) }))} aria-label={`Hindi option ${o.label}`} data-testid={`rv-hi-option-${o.label}`} />
+                </div>
+              ))}
+              {q.hi.confirmed ? (
+                <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="rv-hi-confirmed">The Hindi version was checked by an administrator.</p>
+              ) : (
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={hiChecked} onChange={(e) => setHiChecked(e.target.checked)} data-testid="rv-hi-checked" />
+                  I compared the Hindi version with the page: it is complete, exact and in the same option order.
+                </label>
+              )}
+            </div>
+          )}
           <Label htmlFor="rv-explanation">Explanation (optional)</Label>
           <Textarea id="rv-explanation" rows={3} value={form.explanation} onChange={(e) => setForm((f) => ({ ...f, explanation: e.target.value }))} data-testid="rv-explanation" />
-          {dirty && problems.length > 0 && (
+          {canSave && problems.length > 0 && (
             <ul className="list-disc pl-5 text-sm text-[var(--color-error)]" role="alert" data-testid="rv-problems">
               {problems.map((p) => (
                 <li key={p}>{p}</li>
@@ -437,7 +467,7 @@ export function QuestionReview({
             </ul>
           )}
           <div className="flex gap-2">
-            <Button disabled={pending || !dirty || problems.length > 0} onClick={save} data-testid="rv-save">
+            <Button disabled={pending || !canSave || problems.length > 0} onClick={save} data-testid="rv-save">
               Save changes
             </Button>
             <Button variant="outline" disabled={pending || !dirty} onClick={() => setForm(initial)} data-testid="rv-cancel">

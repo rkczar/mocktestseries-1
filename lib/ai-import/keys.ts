@@ -73,8 +73,9 @@ function headerOf(h: { paper?: string | null; series?: string | null; set?: stri
 
 // A–E / 1–5 are read as printed: a value that is not one of the question's options becomes a KEY MISMATCH, never dropped.
 // "X" / "×" is how UPSC keys print a dropped item (CMS 2013, 2024).
+// (?!\d) after the number: a year in the title ("Exam - 2022") is not "Q202 = 2" (RPSC FSO 2022 key, 2026-11-10).
 const VALUE = String.raw`(?:[A-Ea-e1-5](?:\s*[,&/]\s*[A-Ea-e1-5]){0,3}|Bonus|BONUS|Dropped|DROPPED|Deleted|DELETED|Withdrawn|WITHDRAWN|X|×|\*)`;
-const PAIR = new RegExp(String.raw`(?:^|[\s|])Q?\.?\s*(\d{1,3})\s*[.):\-–=]?\s*\(?\s*(${VALUE})\s*\)?(?=[\s|,;]|$)`, "g");
+const PAIR = new RegExp(String.raw`(?:^|[\s|])Q?\.?\s*(\d{1,3})(?!\d)\s*[.):\-–=]?\s*\(?\s*(${VALUE})\s*\)?(?=[\s|,;]|$)`, "g");
 const TOKEN_VALUE = new RegExp(`^\\(?(${VALUE})\\)?$`);
 
 /** Parses key text: "1. B  2. (c)", "1-A, 2-B", or a numbers row followed by an answers row. */

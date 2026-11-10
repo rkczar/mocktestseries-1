@@ -144,9 +144,11 @@ export async function writeContent(tx: Prisma.TransactionClient, questionId: str
       matchSpec: content.matchSpec ? (content.matchSpec as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
     },
   });
+  // The Hindi option text (bilingual exams) is not part of the content snapshot: carried over by label, never dropped.
+  const keepHi = new Map((await tx.questionOption.findMany({ where: { questionId }, select: { label: true, textHi: true } })).map((o) => [o.label, o.textHi]));
   await tx.questionOption.deleteMany({ where: { questionId } });
   await tx.questionOption.createMany({
-    data: content.options.map((op, order) => ({ questionId, label: op.label, text: op.text, imageUrl: op.imageUrl, isCorrect: op.isCorrect, order })),
+    data: content.options.map((op, order) => ({ questionId, label: op.label, text: op.text, textHi: keepHi.get(op.label) ?? null, imageUrl: op.imageUrl, isCorrect: op.isCorrect, order })),
   });
 }
 

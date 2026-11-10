@@ -36,6 +36,8 @@
  *     SINGLE_CORRECT / MATCH_THE_FOLLOWING keep the radio path above unchanged.
  */
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { LanguageChoice, LanguageSwitch, useTestLanguage, type TestLanguage } from "@/components/student/test-language";
+import type { HindiView } from "@/lib/test-player-data";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, ChevronRight, Clock, Flag, Infinity as InfinityIcon, XCircle } from "lucide-react";
@@ -98,6 +100,15 @@ export interface PlayerQuestion {
   selectedLabels?: string[];
   /** MATCH_THE_FOLLOWING only: List I / List II. */
   match?: MatchView;
+  /** Bilingual exams only: the Hindi version (presentation only — same labels, same answer). */
+  hi?: HindiView;
+}
+
+/** The question as shown in the chosen language. Ids and labels never change, so answers and state are untouched. */
+function inLanguage(q: PlayerQuestion, lang: TestLanguage): PlayerQuestion {
+  if (lang !== "hi" || !q.hi) return q;
+  const hi = q.hi;
+  return { ...q, text: hi.text, options: q.options.map((o) => ({ ...o, text: hi.options[o.label] ?? o.text })), ...(hi.rich ? { rich: hi.rich } : {}) };
 }
 
 interface QuestionState {
@@ -205,15 +216,19 @@ export function TestPlayer({
   initialRemainingSeconds,
   instantMode = false,
   questions,
+  bilingual = false,
 }: {
   attemptId: string;
   title: string;
+  /** The exam is BILINGUAL and this attempt carries Hindi versions: language choice + switch are shown. */
+  bilingual?: boolean;
   /** null = unlimited time (no countdown, no time-based auto-submit). */
   initialRemainingSeconds: number | null;
   instantMode?: boolean;
   questions: PlayerQuestion[];
 }) {
   const router = useRouter();
+  const language = useTestLanguage(bilingual);
   const [current, setCurrent] = useState(0);
   const [remaining, setRemaining] = useState(initialRemainingSeconds);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -598,7 +613,7 @@ export function TestPlayer({
     );
   }
 
-  const question = questions[Math.min(current, questions.length - 1)];
+  const question = inLanguage(questions[Math.min(current, questions.length - 1)], language.lang);
   const state = states[question.questionId] ?? { selected: null, marked: false, visited: true };
   const reveal = reveals[question.questionId] ?? null;
   const checkingHere = checking?.questionId === question.questionId ? checking.label : null;
@@ -632,6 +647,7 @@ export function TestPlayer({
       <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 sm:gap-4 sm:px-6">
         <p className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--color-foreground)]">{title}</p>
         <div className="flex shrink-0 items-center gap-2">
+          {bilingual ? <LanguageSwitch lang={language.lang} onChange={language.choose} /> : null}
           <ThemeToggle />
           <TextSizeControl />
           <div
@@ -654,6 +670,12 @@ export function TestPlayer({
           </div>
         </div>
       </header>
+
+      {bilingual && !language.chosen ? (
+        <div className="border-b border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 sm:px-6" data-testid="language-gate">
+          <LanguageChoice lang={language.lang} chosen={false} onChoose={language.choose} />
+        </div>
+      ) : null}
 
       {problem ? (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-warning)]/50 bg-[var(--color-warning)]/10 px-4 py-3 sm:px-6">

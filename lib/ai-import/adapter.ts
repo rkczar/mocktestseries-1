@@ -105,6 +105,8 @@ async function packageImage(f: AiImportFigure): Promise<{ name: string; data: Bu
 interface BuiltPackage {
   zip: Buffer;
   codes: Map<string, string>;
+  /** Bilingual exams: the Hindi version of each question (by code), in the same text format as its English version. */
+  hindi: Map<string, { stem: string; options: Record<string, string> }>;
   expectedImages: Map<string, { question: number; options: Record<string, number> }>;
 }
 
@@ -112,6 +114,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
   const files = new Map<string, Buffer>();
   const codes = new Map<string, string>();
   const expectedImages: BuiltPackage["expectedImages"] = new Map();
+  const hindi: BuiltPackage["hindi"] = new Map();
   const questions: unknown[] = [];
   for (const q of rows) {
     const e: ExtractedQuestion = effective(q);
@@ -143,6 +146,12 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
     const type = q.questionType === "MULTIPLE_CORRECT" ? "MULTIPLE_CORRECT" : hasLists ? "MATCH_THE_FOLLOWING" : "SINGLE_CORRECT";
     const rich = e.contentFormat === "RICH_V1" || stemImages.length > 0 || options.some((o) => "images" in o);
     const flags = reviewFlags(q, settings);
+    // The Bulk Import package carries the English version; the Hindi version is written onto the same Question after it
+    // is created (importBatch), escaped exactly like the English text when the question becomes RICH_V1.
+    if (e.hi?.stem.trim()) {
+      const fix = (t: string) => (rich && e.contentFormat !== "RICH_V1" ? escapeForRich(t) : t);
+      hindi.set(code, { stem: fix(e.hi.stem), options: Object.fromEntries(e.hi.options.slice(0, 4).map((o) => [o.label, fix(o.text)])) });
+    }
     questions.push({
       code,
       // The Question Bank holds one number per paper: a section whose numbering restarts (S2, S3 …) keeps its
@@ -168,7 +177,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
   }
   const manifest = Buffer.from(JSON.stringify({ schema: JSON_IMPORT_SCHEMA, questions }, null, 1), "utf8");
   const entries: ZipWriteEntry[] = [{ name: JSON_PACKAGE_MANIFEST, data: manifest }, ...[...files].map(([name, data]) => ({ name, data, store: true }))];
-  return { zip: buildZip(entries), codes, expectedImages };
+  return { zip: buildZip(entries), codes, expectedImages, hindi };
 }
 
 /** Plain text gaining images must become RICH_V1; a literal "$" must then stay literal. */
@@ -267,13 +276,19 @@ async function importBatch(job: AiImportJob, rows: (AiImportQuestion & { figures
       const optOk = Object.entries(exp.options).every(([l, n]) => assets.filter((a) => a.role === "OPTION" && a.optionLabel === l).length === n);
       const filesOk = (await Promise.all(assets.map((a) => storage.exists(a.storageKey)))).every(Boolean);
       const roundTripOk = stemOk && optOk && filesOk;
-      await prisma.question.update({
-        where: { id: br.questionId },
-        data: {
-          answerVerification: answerVerification(q),
-          ...(roundTripOk ? {} : { reviewRequired: true, reviewReason: "AI importer: an image did not survive the import — check the question's images", editorialStage: EditorialStage.NEEDS_REVIEW }),
-        },
-      });
+      const hi = pkg.hindi.get(code);
+      await prisma.$transaction([
+        prisma.question.update({
+          where: { id: br.questionId },
+          data: {
+            answerVerification: answerVerification(q),
+            ...(hi ? { textHi: hi.stem } : {}),
+            ...(roundTripOk ? {} : { reviewRequired: true, reviewReason: "AI importer: an image did not survive the import — check the question's images", editorialStage: EditorialStage.NEEDS_REVIEW }),
+          },
+        }),
+        // One option row per label serves both languages: same id, same isCorrect, so a student's answer never depends on the language.
+        ...(hi ? Object.entries(hi.options).map(([label, text]) => prisma.questionOption.updateMany({ where: { questionId: br.questionId!, label }, data: { textHi: text } })) : []),
+      ]);
       await prisma.aiImportQuestion.update({
         where: { id: q.id },
         data: {

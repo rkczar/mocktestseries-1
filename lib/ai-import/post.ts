@@ -1,4 +1,5 @@
 import "server-only";
+import { bilingualFindings } from "@/lib/ai-import/bilingual";
 import { AiImportAnswerStatus, AiImportFileRole, AiImportPaperType, AiImportQuestionStatus, type AiImportQuestion, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
@@ -209,6 +210,8 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   // Confirmed paper memory of this exam / paper (PROPOSED, REJECTED, contradicted and other papers' rules are never used).
   const mem = await jobPaperMemory(job);
   const memRules = confirmedRulesFor(mem.rules, mem.paper);
+  // Bilingual exam: every question must carry a matching Hindi version (lib/ai-import/bilingual.ts).
+  const bilingual = (await prisma.exam.findUnique({ where: { id: job.examId }, select: { languageMode: true } }))?.languageMode === "BILINGUAL";
 
   // ---- Answer keys ----
   const keyRowsRaw = await prisma.aiImportKeyEntry.findMany({ where: { jobId: job.id }, orderBy: [{ keyFileId: "asc" }, { createdAt: "asc" }, { id: "asc" }] });
@@ -579,8 +582,10 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       if (diff) add("SOURCE_TEXT_MISMATCH", `The extracted text differs from the page's own reading: ${diff}. Compare with the page; nothing was changed automatically.`);
       if (e.stemHasOptions) add("STEM_HAS_OPTIONS", "The question text still contains option lines — remove them from the question text (the options are kept separately).");
     }
-    // Formulas
-    const richText = [e.stem, ...e.options.map((o) => o.text), ...(e.listI ?? []).map((x) => x.text), ...(e.listII ?? []).map((x) => x.text)];
+    // Hindi + English pair (bilingual exams only): missing, mismatched or uncertain → review, never merged silently.
+    if (bilingual) for (const f of bilingualFindings(e)) add(f.code, f.detail);
+    // Formulas (the Hindi version's formulas render the same way, so they are checked too)
+    const richText = [e.stem, ...e.options.map((o) => o.text), ...(e.listI ?? []).map((x) => x.text), ...(e.listII ?? []).map((x) => x.text), ...(e.hi ? [e.hi.stem, ...e.hi.options.map((o) => o.text)] : [])];
     const formulaWarnings = e.contentFormat === "RICH_V1" ? richText.flatMap((t, i) => lintRichSource(t, i === 0 ? "Question" : `Part ${i}`).warnings) : richText.some((t) => looksRich(t)) ? ["Formula markup in a plain question would show literally."] : [];
     if (formulaWarnings.length) add("FORMULA_ISSUE", formulaWarnings[0].slice(0, 300));
     // Digits, signs and exponents compared with the source (never corrected automatically).

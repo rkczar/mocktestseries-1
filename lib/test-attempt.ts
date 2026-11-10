@@ -74,6 +74,11 @@ export interface QuestionSnapshot {
   questionType?: QuestionTypeName;
   correctLabels?: string[];
   matchSpec?: MatchSpec | null;
+  /**
+   * Bilingual exams only: the Hindi version (same labels, same answer). Absent for every other question, so their
+   * snapshots are unchanged. Presentation only — never answer-key data.
+   */
+  hi?: { text: string; options: { label: string; text: string }[] };
 }
 
 export interface QuestionWithOptions {
@@ -82,7 +87,8 @@ export interface QuestionWithOptions {
   text: string;
   imageUrl: string | null;
   difficulty: string;
-  options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean; order?: number }[];
+  options: { label: string; text: string; imageUrl: string | null; isCorrect: boolean; order?: number; textHi?: string | null }[];
+  textHi?: string | null;
   contentFormat?: ContentFormat;
   explanation?: string | null;
   questionType?: string;
@@ -197,7 +203,14 @@ function needsSnapshotV2(question: QuestionWithOptions): boolean {
   return question.contentFormat === "RICH_V1" || (typeof question.explanation === "string" && question.explanation.trim() !== "");
 }
 
+/** The frozen snapshot of one question: the language-neutral snapshot plus, for a bilingual question, its Hindi version. */
 function toSnapshot(question: QuestionWithOptions, assets: SnapshotAsset[] = []): QuestionSnapshot {
+  const base = toBaseSnapshot(question, assets);
+  if (!question.textHi?.trim()) return base;
+  return { ...base, hi: { text: question.textHi, options: base.options.map((o) => ({ label: o.label, text: question.options.find((x) => x.label === o.label)?.textHi ?? "" })) } };
+}
+
+function toBaseSnapshot(question: QuestionWithOptions, assets: SnapshotAsset[] = []): QuestionSnapshot {
   // Options are frozen in their authored order (then label) — several start
   // paths load options without an orderBy, which previously froze e.g. B,A,C,D.
   const options = [...question.options].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.label.localeCompare(b.label));
@@ -476,6 +489,8 @@ export interface TestStartSummary {
   instructions: string | null;
   /** False = formal fixed exam: no choices are offered (studentConfigAllowed). */
   configurable: boolean;
+  /** The exam is BILINGUAL: the setup also asks for the preferred question language (display only). */
+  bilingual?: boolean;
 }
 
 /**
@@ -523,7 +538,7 @@ async function planMockTestStart(studentId: string, mockTestId: string, entryMod
     // it auto-saved as Draft (missing image / no correct answer), which stay
     // reserved in the test's order until an admin reviews and publishes them.
     include: {
-      exam: { select: { name: true, instructions: true } },
+      exam: { select: { name: true, instructions: true, languageMode: true } },
       testSeries: { select: { instructions: true } },
       questions: {
         where: SERVABLE_MOCK_MEMBERSHIP_WHERE,
@@ -577,6 +592,7 @@ async function planMockTestStart(studentId: string, mockTestId: string, entryMod
       id: mockTest.id,
       title: mockTest.title,
       examName: mockTest.exam.name,
+      ...(mockTest.exam.languageMode === "BILINGUAL" ? { bilingual: true } : {}),
       questionCount: uniqueQuestionCount(questions),
       standardMinutes: mockTest.durationMinutes,
       negativeMarking: mockTest.negativeMarking,
@@ -850,6 +866,7 @@ async function planPreviousYearPaperStart(studentId: string, paperId: string): P
       id: paper.id,
       title: paper.year ? `${paper.title} (${paper.year})` : paper.title,
       examName: paper.exam.name,
+      ...(paper.exam.languageMode === "BILINGUAL" ? { bilingual: true } : {}),
       questionCount: uniqueQuestionCount(questions),
       standardMinutes,
       negativeMarking: paper.exam.negativeMarking ?? 0,

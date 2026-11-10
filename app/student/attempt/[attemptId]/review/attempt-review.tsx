@@ -16,6 +16,8 @@ import { HumanExplanation } from "@/components/content/human-explanation";
 import type { ExplanationView, MatchView, RichQuestionView } from "@/lib/rich-content-types";
 import { MatchLists } from "@/components/content/match-lists";
 import { formatLabelSet, snapshotCorrectLabels, snapshotQuestionType } from "@/lib/question-types";
+import { LanguageSwitch, useTestLanguage, type TestLanguage } from "@/components/student/test-language";
+import type { HindiView } from "@/lib/test-player-data";
 
 export interface ReviewQuestionView {
   attemptId: string;
@@ -35,6 +37,8 @@ export interface ReviewQuestionView {
   selectedLabels?: string[];
   /** MATCH_THE_FOLLOWING (snapshot v3) only: server-rendered List I / List II. */
   match?: MatchView;
+  /** Bilingual exams only: the Hindi version (presentation only). */
+  hi?: HindiView;
   saveAction: () => Promise<void>;
   reportAction: (reportType: ReportType, message: string) => Promise<void>;
 }
@@ -47,12 +51,20 @@ export interface ReviewQuestionView {
  * of which question is showing (Section 13: review navigation never alters
  * submitted answers).
  */
-export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }) {
+/** The question as shown in the chosen language (same labels, same answer and correctness). */
+function inLanguage(q: ReviewQuestionView, lang: TestLanguage): ReviewQuestionView {
+  if (lang !== "hi" || !q.hi) return q;
+  const hi = q.hi;
+  return { ...q, snapshot: { ...q.snapshot, text: hi.text, options: q.snapshot.options.map((o) => ({ ...o, text: hi.options[o.label] ?? o.text })) }, ...(hi.rich ? { rich: hi.rich } : {}) };
+}
+
+export function AttemptReview({ questions, bilingual = false }: { questions: ReviewQuestionView[]; bilingual?: boolean }) {
   const [index, setIndex] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
   const firstRender = useRef(true);
   const total = questions.length;
-  const q = questions[index];
+  const language = useTestLanguage(bilingual);
+  const q = questions[index] ? inLanguage(questions[index], language.lang) : undefined;
 
   // After Prev/Next, bring the new question's heading back into view — but only
   // when the student had scrolled past it (deep in a long explanation), so a
@@ -82,6 +94,7 @@ export function AttemptReview({ questions }: { questions: ReviewQuestionView[] }
 
   return (
     <div className="flex flex-col gap-4">
+      {bilingual ? <LanguageSwitch className="self-end" lang={language.lang} onChange={language.choose} /> : null}
       <div ref={cardRef} className="scroll-mt-20">
         {/* key resets ReviewQuestionCard's Ask AI state (useAskAi) whenever Prev/Next swaps to a different question — the old per-question <div key=...> boundary, now scoped to the card itself. */}
         <ReviewQuestionCard key={q.attemptQuestionId} q={q} index={index} total={total} />
