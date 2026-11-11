@@ -24,7 +24,7 @@ function check(label, passed, detail) {
   console.log(`  ${passed ? "PASS" : "FAIL"}  ${label}${!passed && detail !== undefined ? `  → ${JSON.stringify(detail)}` : ""}`);
   if (!passed) failures++;
 }
-const answers = (attemptId) => JSON.parse(execFileSync("npx", ["tsx", "scripts/bilingual-player-ui-fixture.ts", "answers", attemptId], { encoding: "utf8", env: process.env }).trim().split("\n").pop());
+const answers = (attemptId) => JSON.parse(execFileSync("npx", ["tsx", "scripts/bilingual-player-ui-fixture.ts", "answers", attemptId], { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "--conditions=react-server" } }).trim().split("\n").pop());
 
 async function newPage(browser, token, mobile = false) {
   const ctx = await browser.newContext(mobile ? { ...devices["Pixel 7"] } : { viewport: { width: 1366, height: 900 } });
