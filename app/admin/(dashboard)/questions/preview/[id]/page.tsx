@@ -67,6 +67,7 @@ export default async function QuestionPreviewPage({ params }: { params: Promise<
         {q.answerVerification === "UNVERIFIED" ? <Badge variant="warning">Answer unverified (no official key)</Badge> : null}
         {q.answerVerification === "ADMIN_CONFIRMED" ? <Badge variant="info">Answer chosen by an administrator</Badge> : null}
         {q.answerVerification === "OFFICIAL_KEY" ? <Badge variant="success">Official answer key</Badge> : null}
+        {q.answerVerification === "PROVISIONAL_KEY" ? <Badge variant="warning" data-testid="badge-provisional-key">Provisional answer key (model key, not final)</Badge> : null}
         {q.answerVerification === "INDEPENDENTLY_VERIFIED" ? <Badge variant="success">Answer independently verified</Badge> : null}
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-xs sm:grid-cols-3" data-testid="question-facts">

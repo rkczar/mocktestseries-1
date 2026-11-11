@@ -772,6 +772,7 @@ export function AllQuestionsPanelClient({
                       {q.excludeFromPractice ? <Badge variant="info" data-testid="badge-practice-excluded" title={q.excludeFromPracticeReason || "Kept out of automatically generated practice; still in its PYQ paper and curated tests"}>Practice excluded</Badge> : null}
                       {q.answerVerification === "UNVERIFIED" ? <Badge variant="warning" title="Imported without an official answer key">Answer unverified</Badge> : null}
                       {q.answerVerification === "ADMIN_CONFIRMED" ? <Badge variant="info" title="Answer chosen by an administrator during AI import">Admin answer</Badge> : null}
+                      {q.answerVerification === "PROVISIONAL_KEY" ? <Badge variant="warning" data-testid="badge-provisional-key" title="Answer from a provisional (model) answer key, not the final key">Provisional key</Badge> : null}
                     </td>
                     <td className="py-2.5 pr-4">
                       <Link
