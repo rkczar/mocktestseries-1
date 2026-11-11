@@ -141,6 +141,11 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
   }
   routes = routes.filter((r) => (r.contextLength === null || r.contextLength >= inputTokens + p.maxOut) && (r.maxCompletionTokens === null || r.maxCompletionTokens >= p.maxOut));
   if (!routes.length) return fail("no eligible route has room for this task's request");
+  // 2026-11-11: a "priority" tier route is the same model at a premium for faster service (Gemini 4: 1.8×). The importer
+  // never needs it: when a normal route exists, priority routes are left out, so the reserved worst case and the
+  // request's max_price (which then excludes them at OpenRouter) follow the normal price.
+  const normal = routes.filter((r) => !/(^|\/)priority$/i.test(r.tag));
+  if (normal.length) routes = normal;
 
   // Highest price over the catalog price and every eligible route (OpenRouter may serve any of them).
   const catalogImage = inputImagePriceUsd(m) ?? 0;

@@ -660,8 +660,11 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
           { type: "text", text: userText },
           { type: "image_url", image_url: { url: image, detail: "high" } },
         ],
-        // Both language versions of every question (Devanagari costs several tokens per word).
-        maxOutputTokens: bilingual ? 16000 : 8000,
+        // Both language versions of every question (Devanagari costs several tokens per word). 2026-11-11: 10,000 —
+        // the largest real bilingual page read (FSO, 64 pages, google/gemini-4-carbon) was 3,695 output tokens; the
+        // worst case reserved before each request stays proportionate (a read that reaches the limit is "cut off", never
+        // accepted).
+        maxOutputTokens: bilingual ? 10000 : 8000,
         settings: ctx.settings,
         pageId: page.id,
         needsVision: true,

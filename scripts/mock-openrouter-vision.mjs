@@ -95,6 +95,8 @@ const REASON = {
   "mockreason/think": { p: 0.00000004, c: 0.00000028, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning"], thinks: true },
   "mockreason/mandatory": { p: 0.00000005, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning", "response_format", "structured_outputs"], mandatory: true, reasoningMeta: { mandatory: true, supported_efforts: ["high", "medium", "low"], default_effort: "medium" } },
   "mockreason/hidden": { p: 0.00000005, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning"], mandatory: true },
+  // 2026-11-11: a normal route and a 1.8× "priority" tier route (like Gemini 4) — the importer must price the normal one.
+  "mocktier/reader": { p: 0.00000005, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning", "response_format", "structured_outputs"], routes: [["mockprov/zdr", 1], ["mockprov/zdr/priority", 1.8]], reasoningMeta: { mandatory: true, supported_efforts: ["high", "medium", "low"] } },
   "mockanthropic/reader": { p: 0.00000006, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "reasoning", "response_format", "structured_outputs"], unionLimit: 16, reasoningMeta: { mandatory: false, supported_efforts: ["max", "xhigh", "high", "medium", "low", "none"] } },
 };
 /** Parameters with a type array / anyOf in a JSON Schema (how Anthropic counts toward its 16-union limit). */

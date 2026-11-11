@@ -188,7 +188,7 @@ async function upload(actor: string, jobId: string, file: string, role: AiImport
 async function setSettings(patch: (s: ImporterSettings) => ImporterSettings, actor: string) {
   await saveImporterSettings(patch(normalizeImporterSettings(await getImporterSettings())), actor);
 }
-const MODELS = ["mockreason/mandatory", "mockreason/hidden", "mockanthropic/reader", "mockvision/reader", "mocktext/classifier"];
+const MODELS = ["mockreason/mandatory", "mockreason/hidden", "mockanthropic/reader", "mockvision/reader", "mocktext/classifier", "mocktier/reader"];
 
 async function runPaper(actor: string, examId: string, extract: string, mockConfig: Record<string, unknown>, tag: string) {
   await mock("/__mock/reset", {});
@@ -258,6 +258,17 @@ async function partD(actor: string) {
   r = await runPaper(actor, exam.id, "mockreason/hidden", {}, "hidden");
   check("D5 provider refused effort none (₹0), the request was sent again without it, every page read", (r.stats.mandatoryRefused ?? 0) >= 1 && JSON.stringify(r.numbers) === "[1,2,3,4,5,6,7]", { refused: r.stats.mandatoryRefused, n: r.numbers });
   check("D5 a refused request is never charged", r.calls.filter((c) => !c.ok).every((c) => (c.costInr ?? 0) === 0), r.calls.map((c) => [c.ok, c.costInr]));
+
+  // D5b — a model with a normal and a 1.8× priority route is priced (and capped) at the normal route.
+  {
+    await mock("/__mock/config", { reasonModels: true });
+    const s = normalizeImporterSettings(await getImporterSettings());
+    const { refreshRoutes } = await import("@/lib/ai-import/routes");
+    await refreshRoutes(MODELS);
+    const plan = await computeModelPlan({ ...s, importerModels: MODELS, selection: { mode: "manual" }, models: { ...s.models, extract: "mocktier/reader" } }, { refresh: false });
+    const pr = plan.tasks.extract.price;
+    check("priority tier left out: the plan's price is the normal route's (not 1.8×), so max_price excludes the priority route", !!pr && Math.abs(pr.completion - 0.0000003) < 1e-12 && Math.abs(pr.prompt - 0.00000005) < 1e-12 && !(plan.tasks.extract.routes ?? []).some((r: string) => /priority/.test(r)), { price: pr, routes: plan.tasks.extract.routes });
+  }
 
   // D6 — Anthropic-like route: the json_schema is accepted (≤ 16 unions).
   r = await runPaper(actor, exam.id, "mockanthropic/reader", {}, "anthropic");
