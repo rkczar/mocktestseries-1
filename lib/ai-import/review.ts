@@ -1,6 +1,7 @@
 import "server-only";
+import { missingSlots, rescanTarget, type MissingSlot, type PlacedQuestion, type RescanTarget } from "@/lib/ai-import/rescan-target";
 import { ISSUE_DEFS } from "@/lib/ai-import/config";
-import { AiImportAnswerStatus, AiImportJobStatus, AiImportPageStatus, AiImportQuestionStatus, type Prisma } from "@prisma/client";
+import { AiImportAnswerStatus, AiImportJobStatus, AiImportPageStatus, AiImportQuestionStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logEvent, ImportJobError } from "@/lib/ai-import/jobs";
 import { importBlocker, type ImportMode, type ImportPlan } from "@/lib/ai-import/adapter";
@@ -10,7 +11,8 @@ import { cropFromRender, storeOriginalFigure, FigureError, MIN_CROP_SIDE } from 
 import { normalizeBox } from "@/lib/ai-import/figure-map";
 import { ensureRender } from "@/lib/ai-import/process";
 import { exists as vaultExists } from "@/lib/ai-import/vault";
-import type { RescanRequest } from "@/lib/ai-import/process";
+import { isPlaceholder, placeholderRow, type RescanRequest, type RescanView } from "@/lib/ai-import/process";
+import { gapPages } from "@/lib/ai-import/reading-checks";
 import type { SequenceAck } from "@/lib/ai-import/quality";
 import { jobQuality, settleJobStatus } from "@/lib/ai-import/summary";
 import { kickWorker } from "@/lib/ai-import/kick";
@@ -379,6 +381,24 @@ export async function setTaxonomy(id: string, actorId: string, subjectId: string
 }
 
 /**
+ * "Keep current" on a subject / topic suggestion: the administrator confirms the stored classification as their own
+ * decision (taxonomySource "admin"), so no suggestion is offered over it again. Content is unchanged, so an approval
+ * stays; the stored ids are validated against the exam's own taxonomy first.
+ */
+export async function keepTaxonomy(id: string, actorId: string): Promise<void> {
+  const q = await editable(id);
+  if (!q.subjectId) throw new ImportJobError("This question has no subject yet — choose one (there is nothing to keep).");
+  const tax = await getExamTaxonomy(prisma, q.job.examId);
+  const subject = tax.find((s) => s.id === q.subjectId);
+  const topic = q.topicId ? subject?.topics.find((t) => t.id === q.topicId) : null;
+  if (!subject || (q.topicId && !topic) || (q.subTopicId && !topic?.subTopics.some((st) => st.id === q.subTopicId))) throw new ImportJobError("The stored subject / topic is not part of this exam's taxonomy any more — choose it again.");
+  await prisma.aiImportQuestion.update({ where: { id }, data: { taxonomySource: "admin", taxonomyConfidence: 1 } });
+  await adminCheck(id, "Classification kept", `${subject.name} › ${topic?.name ?? "no topic"} kept by an administrator (the suggestion was not used).`);
+  await logEvent(q.jobId, "TAXONOMY_KEPT", `Q${q.sourceLabel}: ${subject.name} › ${topic?.name ?? "no topic"} kept (suggestion not used)`, { questionId: id, kept: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId }, previousSource: q.taxonomySource }, actorId);
+  await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_TAXONOMY_KEPT", entityType: "AiImportQuestion", entityId: id, metadata: { jobId: q.jobId, kept: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId }, previousSource: q.taxonomySource } } });
+}
+
+/**
  * Bulk subject / topic / subtopic correction of questions of ONE import, after an explicit confirmation of the exact
  * number of questions shown (a stale or scripted request cannot change more than was reviewed). Each question is
  * validated against its exam's own taxonomy by setTaxonomy (refusals are reported, nothing else is touched).
@@ -597,8 +617,8 @@ export type RescanScope = "question" | "page";
  * as a version to compare (lib/ai-import/process.ts saveQuestion). Refused — with the reason — when the
  * original is gone, the file was read exactly (Word / spreadsheet), or paid AI cannot run.
  */
-export async function rescanQuestions(ids: string[], scope: RescanScope, actorId: string): Promise<{ pages: number; questions: number }> {
-  const qs = await prisma.aiImportQuestion.findMany({ where: { id: { in: ids } }, select: { id: true, jobId: true, fileId: true, pages: true, status: true, sourceKey: true, sourceLabel: true, data: true } });
+export async function rescanQuestions(ids: string[], scope: RescanScope, actorId: string): Promise<{ pages: number; questions: number; reads: string[] }> {
+  const qs = await prisma.aiImportQuestion.findMany({ where: { id: { in: ids } }, select: { id: true, jobId: true, fileId: true, pages: true, status: true, sourceKey: true, sourceLabel: true, data: true, editedData: true } });
   if (!qs.length) throw new ImportJobError("Select the questions to re-scan.");
   const jobId = qs[0].jobId;
   if (qs.some((q) => q.jobId !== jobId)) throw new ImportJobError("Re-scan questions of one import at a time.");
@@ -620,15 +640,40 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
     if (kind === "docx" || kind === "xlsx" || kind === "csv") throw new ImportJobError(`${f.originalName} is a ${kind.toUpperCase()} file, read exactly (no AI): re-scanning would give the same result. Correct the question by hand.`);
     if (f.status === "PURGED" || !f.storageKey || !(await vaultExists(f.storageKey))) throw new ImportJobError(`The original file ${f.originalName} is no longer stored (removed after its retention period), so its pages cannot be re-scanned. Nothing was changed — correct the question by hand.`);
   }
-  const byPage = new Map<string, { fileId: string; page: number; keys: Set<string> }>();
+  // Where each question is read (lib/ai-import/rescan-target.ts): its own band, a band stacked with its continuation
+  // page, or — when its position is not stored — its whole page. Other questions of the paper are never saved from it.
+  const placed = new Map<string, PlacedQuestion[]>();
+  for (const fileId of new Set(open.map((q) => q.fileId))) {
+    const rows = await prisma.aiImportQuestion.findMany({ where: { fileId, status: { not: AiImportQuestionStatus.REJECTED } }, select: { id: true, pages: true, data: true, editedData: true } });
+    placed.set(fileId, rows.map((r) => {
+      const d = (r.editedData ?? r.data) as unknown as ExtractedQuestion;
+      return { id: r.id, section: d.section ?? "", number: d.number ?? null, pages: r.pages, region: d.region ?? null };
+    }));
+  }
+  const targets = new Map<string, RescanTarget>();
   for (const q of open) {
     if (!q.pages.length) throw new ImportJobError(`Q${q.sourceLabel} has no source page recorded. Set its source page (Edit) first.`);
-    for (const p of q.pages) {
+    const d = (q.editedData ?? q.data) as unknown as ExtractedQuestion;
+    const missing = isPlaceholder(d);
+    const others = (placed.get(q.fileId) ?? []).filter((o) => (o as { id?: string }).id !== q.id);
+    targets.set(q.id, scope === "page" ? { kind: "PAGES", pages: q.pages, why: "whole page requested" } : rescanTarget({ section: d.section ?? "", number: d.number ?? null, pages: q.pages, region: missing ? null : d.region ?? null }, others, missing));
+  }
+  const byPage = new Map<string, { fileId: string; page: number; keys: Set<string>; views: RescanView[] }>();
+  const reads: string[] = [];
+  for (const q of open) {
+    const t = targets.get(q.id)!;
+    // A STACK is read once, from its first page (the continuation page is part of the same image).
+    const readPages = t.kind === "STACK" ? [t.pages[0]] : t.kind === "REGION" ? [t.page] : t.pages;
+    for (const p of readPages) {
       const k = `${q.fileId}|${p}`;
-      const e = byPage.get(k) ?? { fileId: q.fileId, page: p, keys: new Set<string>() };
+      const e = byPage.get(k) ?? { fileId: q.fileId, page: p, keys: new Set<string>(), views: [] };
       e.keys.add(q.sourceKey);
+      if (t.kind === "REGION") e.views.push({ kind: "REGION", box: t.box });
+      else if (t.kind === "STACK") e.views.push({ kind: "STACK", pages: t.pages, boxes: t.boxes });
+      else e.views.push({ kind: "PAGE" });
       byPage.set(k, e);
     }
+    reads.push(`Q${q.sourceLabel}: ${t.kind === "REGION" ? `only its part of page ${t.page} (${t.why})` : t.kind === "STACK" ? `pages ${t.pages.join(" + ")} together (${t.why})` : `whole page ${t.pages.join(", ")} — ${t.why}`}`);
   }
   const now = new Date().toISOString();
   let pages = 0;
@@ -638,7 +683,11 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
     const raw = (page.rawOutput as Record<string, unknown> | null) ?? {};
     const prev = raw.rescan as RescanRequest | undefined;
     const keys = scope === "page" || (prev && prev.keys === null) ? null : [...new Set([...(prev?.keys ?? []), ...e.keys])];
-    await prisma.aiImportPage.update({ where: { id: page.id }, data: { status: AiImportPageStatus.PENDING, errorMessage: null, rawOutput: { ...raw, rescan: { keys, requestedById: actorId, requestedAt: now } } as Prisma.InputJsonValue } });
+    // A cut-out only when it is the page's single request; several questions of one page (or an earlier request still
+    // waiting) read the whole page, filtered by the keys.
+    const view: RescanView = keys && keys.length === 1 && e.views.length === 1 && !prev ? e.views[0] : { kind: "PAGE" };
+    if (view.kind === "PAGE" && e.views.some((v) => v.kind !== "PAGE")) reads.push(`Page ${e.page}: several questions are read from it, so the whole page is read (only the selected questions are saved).`);
+    await prisma.aiImportPage.update({ where: { id: page.id }, data: { status: AiImportPageStatus.PENDING, errorMessage: null, rawOutput: { ...raw, rescan: { keys, requestedById: actorId, requestedAt: now, view } } as Prisma.InputJsonValue } });
     pages++;
   }
   if (!pages) throw new ImportJobError("No readable source page was found for these questions.");
@@ -652,7 +701,7 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
   await logEvent(jobId, "RESCAN_REQUESTED", `Re-scan requested: ${scope === "page" ? `${pages} whole page(s)` : `${open.length} question(s) on ${pages} page(s)`} are read again from the original file. Manual corrections are kept; new results you have to choose from appear on each question.`, { scope, questionIds: open.map((q) => q.id), pages }, actorId);
   await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_RESCAN_REQUESTED", entityType: "AiImportJob", entityId: jobId, metadata: { scope, questionIds: open.map((q) => q.id) } } });
   kickWorker();
-  return { pages, questions: open.length };
+  return { pages, questions: open.length, reads };
 }
 
 /** Kept for the job page's "Reprocess with AI": a whole-page re-scan. */
@@ -676,6 +725,14 @@ export async function applyRescan(versionId: string, actorId: string, fields: st
   const nextFigs = (v.figures as unknown as FigureSnapshot[] | null) ?? [];
   const figs = await prisma.aiImportFigure.findMany({ where: { questionId: q.id } });
   const diffs = compareVersions(current, snapshotFigures(figs), next, nextFigs).filter((d) => take.has(d.field) && !d.same);
+  if (!diffs.length) {
+    // Nothing that differs was taken: the question (and its approval) stays exactly as it is.
+    await prisma.aiImportQuestionVersion.update({ where: { id: v.id }, data: { status: "APPLIED", decidedAt: new Date(), decidedById: actorId, note: "Saved with no change: the current question was kept." } });
+    await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { status: AiImportQuestionStatus.EXTRACTED } });
+    await adminCheck(q.id, "Re-scan decided", "Kept the current question; no field of the re-scan was taken.");
+    await logEvent(q.jobId, "RESCAN_APPLIED", `Q${q.sourceLabel}: re-scan result not used (no field taken)`, { questionId: q.id, versionId, fields: [] }, actorId);
+    return;
+  }
   await prisma.$transaction(async (tx) => {
     await tx.aiImportQuestionVersion.create({ data: { questionId: q.id, jobId: q.jobId, kind: "ADMIN_EDIT", data: current as unknown as Prisma.InputJsonValue, figures: snapshotFigures(figs) as unknown as Prisma.InputJsonValue, changes: diffs.map((d) => ({ field: d.label, before: d.current, after: d.rescan })) as unknown as Prisma.InputJsonValue, actorId, note: `Re-scan applied for: ${[...take].join(", ") || "nothing"}` } });
     if (take.has("figures")) {
@@ -776,6 +833,53 @@ export async function addMissingQuestion(input: { jobId: string; fileId: string;
   const row = await prisma.aiImportQuestion.create({ data: { jobId: job.id, fileId: file.id, sourceKey: key, sourceNumber: input.number, sourceLabel: String(input.number), pages: [input.page], orderIndex: after?.orderIndex ?? 0, status: AiImportQuestionStatus.EXTRACTED, data: data as unknown as Prisma.InputJsonValue, questionType: "SINGLE_CORRECT", optionCount: 4, confidence: 0, issueCodes: ["OPTIONS_INCOMPLETE"] } });
   await logEvent(job.id, "QUESTION_ADDED", `Missing question ${section ? `${section} ` : ""}Q${input.number} (page ${input.page}) added by an administrator`, { questionId: row.id }, input.actorId);
   return row.id;
+}
+
+/** Placeholder rows for the review list: reliably missing numbers of each question paper, with their predicted page(s). */
+export async function missingQuestionRows(jobId: string): Promise<{ slots: (MissingSlot & { fileName: string })[]; notes: string[] }> {
+  const files = await prisma.aiImportFile.findMany({ where: { jobId, role: "PAPER" }, select: { id: true, originalName: true, pageCount: true } });
+  if (!files.length) return { slots: [], notes: [] };
+  const rows = await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { fileId: true, pages: true, status: true, data: true, editedData: true } });
+  const quality = await jobQuality(jobId);
+  const { slots, notes } = missingSlots(
+    rows.map((r) => {
+      const e = (r.editedData ?? r.data) as unknown as ExtractedQuestion;
+      return { fileId: r.fileId, section: e.section ?? "", number: e.number ?? null, pages: r.pages, status: r.status };
+    }),
+    quality?.expected ?? null,
+    new Map(files.map((f) => [f.id, f.pageCount ?? 0])),
+    gapPages,
+  );
+  const name = new Map(files.map((f) => [f.id, f.originalName]));
+  return { slots: slots.map((s) => ({ ...s, fileName: name.get(s.fileId) ?? "" })), notes };
+}
+
+/**
+ * "Re-scan" on a missing-question row: an empty placeholder is created at the printed number and predicted page(s),
+ * and only that question is read again from the original file (its band between the neighbouring questions when their
+ * positions are stored). The reading waits as a candidate on the placeholder until an administrator saves it. Refused —
+ * nothing created — when the page cannot be established or the re-scan cannot run.
+ */
+export async function rescanMissingQuestion(input: { jobId: string; fileId: string; section: string; number: number; actorId: string }): Promise<{ questionId: string; reads: string[] }> {
+  const { slots } = await missingQuestionRows(input.jobId);
+  const slot = slots.find((s) => s.fileId === input.fileId && s.section === input.section && s.number === input.number);
+  if (!slot) throw new ImportJobError(`Q${input.number} is not a missing number of this paper (it may have been added or found meanwhile). Refresh the list.`);
+  if (!slot.pages.length) throw new ImportJobError(`The page of ${slot.label} could not be established from its neighbouring questions. Nothing was changed — add it by hand with its page (Quality panel → Add a missing question), then re-scan it.`);
+  const job = await prisma.aiImportJob.findUnique({ where: { id: input.jobId } });
+  if (!job) throw new ImportJobError("Import job not found.", 404);
+  if (BUSY.includes(job.status) || job.status === AiImportJobStatus.QUEUED || job.status === AiImportJobStatus.CANCELLED) throw new ImportJobError("The import is running or cancelled.");
+  const key = `${slot.section}#${slot.number}`;
+  const after = await prisma.aiImportQuestion.findFirst({ where: { fileId: slot.fileId, sourceNumber: { lt: slot.number } }, orderBy: { orderIndex: "desc" }, select: { orderIndex: true } });
+  const row = await prisma.aiImportQuestion.create({ data: placeholderRow(job.id, slot.fileId, key, { section: slot.section, number: slot.number, label: String(slot.number), pages: slot.pages }, after?.orderIndex ?? 0) });
+  try {
+    const r = await rescanQuestions([row.id], "question", input.actorId);
+    await logEvent(job.id, "QUESTION_ADDED", `Missing question ${slot.label} (page ${slot.pages.join(" / ")}) added as a placeholder for a re-scan`, { questionId: row.id }, input.actorId);
+    return { questionId: row.id, reads: r.reads };
+  } catch (e) {
+    // The re-scan could not be queued: the empty placeholder is removed again (nothing else was touched).
+    await prisma.aiImportQuestion.deleteMany({ where: { id: row.id, editedData: { equals: Prisma.DbNull }, versions: { none: {} } } });
+    throw e;
+  }
 }
 
 /** Refuses publishing while the paper is incomplete (QualityReport.publishBlocker); the refusal is logged. */

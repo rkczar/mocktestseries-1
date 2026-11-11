@@ -22,6 +22,8 @@ import {
   cropFigureFromPage,
   reclassifyQuestions,
   rescanQuestions,
+  rescanMissingQuestion,
+  keepTaxonomy,
   unapproveQuestions,
   type ApproveResult,
   type RescanScope,
@@ -474,7 +476,22 @@ export async function markImageMissingAction(questionId: string, owner: "STEM" |
   });
 }
 
-export async function rescanQuestionsAction(ids: string[], scope: RescanScope): Promise<ImporterResult<{ pages: number; questions: number }>> {
+/** "Keep current" on a subject / topic suggestion (no content change; an approval stays). */
+export async function keepTaxonomyAction(questionId: string): Promise<ImporterResult<null>> {
+  return run(await requireUse(), async (actorId) => {
+    await keepTaxonomy(String(questionId), actorId);
+    const jobId = await jobOf([String(questionId)]);
+    if (jobId) await revalidateQuestions(jobId, [String(questionId)]);
+    return null;
+  });
+}
+
+/** Row-level Re-scan of a missing number: placeholder + targeted re-scan (the result waits as a candidate). */
+export async function rescanMissingQuestionAction(input: { jobId: string; fileId: string; section: string; number: number }): Promise<ImporterResult<{ questionId: string; reads: string[] }>> {
+  return run(await requireUse(), async (actorId) => rescanMissingQuestion({ jobId: String(input.jobId), fileId: String(input.fileId), section: typeof input.section === "string" ? input.section : "", number: Number(input.number), actorId }));
+}
+
+export async function rescanQuestionsAction(ids: string[], scope: RescanScope): Promise<ImporterResult<{ pages: number; questions: number; reads: string[] }>> {
   return run(await requireUse(), async (actorId) => rescanQuestions(Array.isArray(ids) ? ids.slice(0, 500) : [], scope === "page" ? "page" : "question", actorId));
 }
 

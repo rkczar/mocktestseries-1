@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { Fragment, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
-import { approveFromListAction, approveQuestionsAction, bulkTaxonomyAction, publishFromListAction, importAction, reclassifyQuestionsAction, rejectQuestionsAction, rescanQuestionsAction, unapproveQuestionsAction } from "../actions";
+import { approveFromListAction, approveQuestionsAction, bulkTaxonomyAction, publishFromListAction, importAction, reclassifyQuestionsAction, rejectQuestionsAction, rescanMissingQuestionAction, rescanQuestionsAction, unapproveQuestionsAction } from "../actions";
 import { SelectNative } from "@/components/ui/select-native";
 import { statusVariant } from "@/lib/ai-import/config";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
@@ -14,6 +14,9 @@ import { callImporter } from "@/components/admin/ai-importer/call-importer";
 export interface ExceptionRow {
   id: string;
   jobId: string;
+  fileId: string;
+  /** Printed number (null = unnumbered); places missing-question rows. */
+  number: number | null;
   label: string;
   section: string;
   stem: string;
@@ -188,13 +191,47 @@ function RowActions({ row: r, canUse, canPublish, pending, act }: { row: Excepti
   );
 }
 
-export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = [], draft = null }: { rows: ExceptionRow[]; canUse: boolean; canPublish: boolean; jobId: string | null; taxonomy?: TaxonomyOption[]; /** This job's "Add approved to Question Bank (Draft)": how many it adds now, and whether the job is finished. */ draft?: { count: number; open: boolean } | null }) {
+export interface MissingRow {
+  fileId: string;
+  fileName: string;
+  section: string;
+  number: number;
+  pages: number[];
+  label: string;
+}
+
+export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = [], draft = null, missing = null }: { rows: ExceptionRow[]; canUse: boolean; canPublish: boolean; jobId: string | null; taxonomy?: TaxonomyOption[]; /** This job's "Add approved to Question Bank (Draft)": how many it adds now, and whether the job is finished. */ draft?: { count: number; open: boolean } | null; /** Reliably missing numbers of this job (placeholder rows), with why some are not shown. */ missing?: { slots: MissingRow[]; notes: string[] } | null }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const toggle = (id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
   const ids = [...selected];
+  // A missing number is shown just before the first listed question of the same paper and section with a higher number.
+  const placedBefore = (list: ExceptionRow[], m: MissingRow) => list.find((r) => r.fileId === m.fileId && r.section === m.section && r.number !== null && r.number > m.number)?.id ?? null;
+  const missingRow = (m: MissingRow) => (
+    <tr key={`missing-${m.fileId}-${m.section}-${m.number}`} className="border-t border-dashed border-[var(--color-border)] bg-[var(--color-warning)]/5 align-top" data-testid="missing-row" data-number={m.number}>
+      {canUse && <td className="py-1.5" />}
+      <td className="py-1.5 pr-2 whitespace-nowrap font-medium">{m.label}</td>
+      <td colSpan={6} className="py-1.5 pr-2">
+        <span className="font-medium text-[var(--color-warning)]">
+          {m.label} — Missing / Not Extracted
+        </span>
+        <span className="ml-1 text-xs text-[var(--color-muted-foreground)]">
+          · {m.pages.length ? `expected on page ${m.pages.join(" or ")}` : "page not established"} · {m.fileName}
+        </span>
+      </td>
+      <td className="py-1.5 pr-2 text-xs text-[var(--color-error)]">Not in the extraction</td>
+      <td className="py-1.5 pr-2 text-xs">
+        {canUse && jobId && m.pages.length > 0 && (
+          <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => rescanMissingQuestionAction({ jobId, fileId: m.fileId, section: m.section, number: m.number }), (d) => `${m.label}: a placeholder was added and the re-scan is queued — ${d.reads.join(" ")} The result waits on it as a candidate: open it, check it against the page and save.`)} data-testid="missing-rescan">
+            Re-scan question
+          </Button>
+        )}
+        {!m.pages.length && <span className="text-[var(--color-muted-foreground)]">Page unknown — add it by hand (Quality panel).</span>}
+      </td>
+    </tr>
+  );
   const act = <T,>(fn: () => Promise<{ ok: true; data: T } | { ok: false; error: string }>, ok: string | ((d: T) => string)) =>
     start(async () => {
       const r = await callImporter(fn);
@@ -258,6 +295,13 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
         </div>
       )}
       {msg && <p className={`text-sm ${msg.ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`} data-testid="bulk-msg">{msg.text}</p>}
+      {!!missing?.notes.length && (
+        <ul className="mb-2 list-disc pl-5 text-xs text-[var(--color-muted-foreground)]" data-testid="missing-notes">
+          {missing.notes.map((n) => (
+            <li key={n}>{n}</li>
+          ))}
+        </ul>
+      )}
       <table className="w-full min-w-[1200px] text-left text-sm" data-testid="exceptions-table">
         <thead className="text-xs text-[var(--color-muted-foreground)]">
           <tr>
@@ -270,11 +314,14 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
             <th className="py-1 pr-2 font-medium">Answer</th>
             <th className="py-1 pr-2 font-medium">Subject › Topic</th>
             <th className="py-1 pr-2 font-medium">Issues</th>
+            <th className="py-1 pr-2 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.id} className="border-t border-[var(--color-border)] align-top" data-testid="exception-row">
+            <Fragment key={r.id}>
+            {(missing?.slots ?? []).filter((m) => placedBefore(rows, m) === r.id).map((m) => missingRow(m))}
+            <tr className="border-t border-[var(--color-border)] align-top" data-testid="exception-row">
               {canUse && (
                 <td className="py-1.5">
                   <input type="checkbox" aria-label={`Select Q${r.label}`} checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
@@ -438,11 +485,30 @@ export function ExceptionsTable({ rows, canUse, canPublish, jobId, taxonomy = []
                   {!r.issues.length && !r.issueText.IMPORT && <li className="text-[var(--color-muted-foreground)]">none</li>}
                 </ul>
               </td>
+              <td className="py-1.5 pr-2 text-xs whitespace-nowrap" data-testid="row-actions">
+                <div className="flex flex-col items-start gap-1">
+                  <Link className="underline" href={`/admin/ai-importer/questions/${r.id}`} data-testid="row-view">
+                    View
+                  </Link>
+                  {!r.questionId && (
+                    <Link className="underline" href={`/admin/ai-importer/questions/${r.id}#edit`} data-testid="row-edit">
+                      Edit
+                    </Link>
+                  )}
+                  {canUse && !r.questionId && (
+                    <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => rescanQuestionsAction([r.id], "question"), (d) => `Re-scan of Q${r.label} queued — ${d.reads.join(" ")} The result waits as a candidate on the question; nothing is replaced.`)} data-testid="row-rescan">
+                      Re-scan
+                    </Button>
+                  )}
+                </div>
+              </td>
             </tr>
+            </Fragment>
           ))}
+          {(missing?.slots ?? []).filter((m) => !placedBefore(rows, m)).map((m) => missingRow(m))}
           {!rows.length && (
             <tr>
-              <td colSpan={9} className="py-4 text-[var(--color-muted-foreground)]">
+              <td colSpan={10} className="py-4 text-[var(--color-muted-foreground)]">
                 Nothing here.
               </td>
             </tr>

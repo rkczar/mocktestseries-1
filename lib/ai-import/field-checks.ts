@@ -18,6 +18,7 @@ const CODE_FIELD: Record<string, Field> = {
   STATEMENTS_MERGED: "text",
   ANSWER_IN_OPTION: "options",
   OPTIONS_INCOMPLETE: "options",
+  OPTION_FORMULA_IMAGE_DIFFERS: "options",
   EXTRACTION_UNCERTAIN: "source",
   UNREADABLE_TEXT: "source",
   FORMULA_ISSUE: "source",

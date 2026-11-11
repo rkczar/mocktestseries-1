@@ -24,6 +24,7 @@ import { CHECK_NAMES, CHECK_STATUS_LABELS } from "@/lib/ai-import/checks";
 import { DRAFT_IMPORT_STATUSES, approvedReadyCounts } from "@/lib/ai-import/summary";
 import { referenceStatusText } from "@/lib/ai-import/reference-status";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
+import { missingQuestionRows } from "@/lib/ai-import/review";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
 export const metadata = { title: "AI Import Review Exceptions — Mock Test Series.in Admin" };
@@ -112,6 +113,8 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
     return {
       id: r.id,
       jobId: r.jobId,
+      fileId: r.fileId,
+      number: e.number ?? null,
       label: r.sourceLabel,
       section: e.section,
       stem: e.stem.slice(0, 220),
@@ -177,6 +180,8 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const mapping = jobId ? await jobMapping(jobId) : null;
   const issueCounts = new Map<string, number>();
   for (const r of rows) for (const c of r.issueCodes) issueCounts.set(c, (issueCounts.get(c) ?? 0) + 1);
+  // Missing-question rows (placeholders with Re-scan): one job, unfiltered exception / full lists only.
+  const missing = jobId && !issue && !problem && !verify && (status === "exceptions" || status === null) ? await missingQuestionRows(jobId) : null;
   const link = (patch: Record<string, string | undefined>) => {
     const u = new URLSearchParams();
     for (const [k, v] of Object.entries({ job: jobId, status: sp.status, issue, verify, problem, ...patch })) if (v) u.set(k, v);
@@ -281,7 +286,7 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
           <CardDescription>Open a question to see its source page beside the extracted question, fix it, set the answer or topic, or confirm its figures.</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          <ExceptionsTable rows={view} canUse={canUse} canPublish={canPublish && canUse} jobId={jobId ?? null} taxonomy={taxonomy} draft={draft} />
+          <ExceptionsTable rows={view} canUse={canUse} canPublish={canPublish && canUse} jobId={jobId ?? null} taxonomy={taxonomy} draft={draft} missing={missing} />
         </CardContent>
       </Card>
     </div>

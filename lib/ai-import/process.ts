@@ -18,7 +18,8 @@ import { EXTRACT_SYSTEM, extractUserText, pageSchema, toExtracted, type PageOutp
 import { gapPages, incompleteReading } from "@/lib/ai-import/reading-checks";
 import { readVault, renderKey, putIntermediate, vaultPath, workDir, exists as vaultExists } from "@/lib/ai-import/vault";
 import { logEvent } from "@/lib/ai-import/jobs";
-import { sourceKeyOf, type ExtractedQuestion, type PageExtraction } from "@/lib/ai-import/types";
+import { sourceKeyOf, type ExtractedQuestion, type NBox, type PageExtraction } from "@/lib/ai-import/types";
+import { pixelRect, toPageBox, type ViewPart } from "@/lib/ai-import/rescan-target";
 import { ocrAvailable, ocrImageFile, ocrPdfPage } from "@/lib/ai-import/ocr";
 import { readOcrPage, type OcrPageResult } from "@/lib/ai-import/ocr-page";
 import { BLANK_INK_BELOW, type OcrPage } from "@/lib/ai-import/ocr-layout";
@@ -52,11 +53,21 @@ export interface StepContext {
   verifyMode?: VerifyMode;
 }
 
+/** What a re-scan sends to the reader: the whole page, a band of it, or a band stacked with the next page's band. */
+export type RescanView = { kind: "PAGE" } | { kind: "REGION"; box: NBox } | { kind: "STACK"; pages: [number, number]; boxes: [NBox, NBox] };
+
 /** A re-scan requested by an administrator: only these question keys (null = the whole page) are re-read. */
 export interface RescanRequest {
   keys: string[] | null;
   requestedById: string;
   requestedAt: string;
+  /** Absent on requests stored before cut-outs existed (= the whole page). */
+  view?: RescanView;
+}
+
+/** An empty question added for a missing number (by an administrator or a re-scan), not yet filled. */
+export function isPlaceholder(e: Pick<ExtractedQuestion, "method" | "stem" | "options">): boolean {
+  return e.method === "ADMIN" && !e.stem.trim() && e.options.every((o) => !o.text.trim());
 }
 
 type PageState = {
@@ -147,7 +158,7 @@ async function storeFigures(q: ExtractedQuestion, figureBytes: FigureBytes, page
     let mapping = f.confidence >= 0.8 ? "OK" : "UNCERTAIN";
     if (!stored) mapping = "MISSING";
     out.push({
-      pageNumber,
+      pageNumber: (f as { page?: number }).page ?? pageNumber,
       owner: f.owner,
       optionLabel: f.owner === "OPTION" ? (f.optionLabel ?? null) : null,
       sharedGroup: f.sharedGroup ?? null,
@@ -209,15 +220,16 @@ export async function saveQuestion(ctx: StepContext, file: AiImportFile, q: Extr
   }
   const manual = !!existing && manuallyCorrected(existing, existing.figures);
   if (existing && manual && !rescan) return "skipped";
-  if (existing && manual && rescan) {
+  // Owner decision 2026-11-11: EVERY re-scan result is a candidate. It never replaces a question (approved, corrected or
+  // untouched): it waits as a PENDING version until an administrator compares it and saves the fields to take.
+  if (rescan) {
+    // A number the re-scan found that has no row yet gets an empty placeholder row; the reading waits on it as a candidate.
+    const target = existing ?? (await prisma.aiImportQuestion.create({ data: placeholderRow(ctx.job.id, file.id, key, q, orderIndex) }));
     const figs = await storeFigures(q, figureBytes, pageNumber);
-    await prisma.aiImportQuestionVersion.updateMany({ where: { questionId: existing.id, kind: "RESCAN", status: "PENDING" }, data: { status: "DISCARDED", decidedAt: new Date(), note: "Replaced by a newer re-scan." } });
-    await recordVersion({ questionId: existing.id, jobId: ctx.job.id, kind: "RESCAN", status: "PENDING", data: q, figures: figs, model: rescan.model, note: "This question was corrected by an administrator, so the re-scan did not replace it. Compare and choose what to keep." });
-    await prisma.aiImportQuestion.update({ where: { id: existing.id }, data: { status: AiImportQuestionStatus.EXTRACTED } });
-    return "pending";
-  }
-  if (existing && rescan) {
-    await recordVersion({ questionId: existing.id, jobId: ctx.job.id, kind: "EXTRACTION", data: existing.data as unknown as ExtractedQuestion, figures: snapshotFigures(existing.figures), model: (existing.data as { model?: string | null }).model ?? null, note: "Extraction before the re-scan replaced it." });
+    await prisma.aiImportQuestionVersion.updateMany({ where: { questionId: target.id, kind: "RESCAN", status: "PENDING" }, data: { status: "DISCARDED", decidedAt: new Date(), note: "Replaced by a newer re-scan." } });
+    await recordVersion({ questionId: target.id, jobId: ctx.job.id, kind: "RESCAN", status: "PENDING", data: q, figures: figs, model: rescan.model, note: existing ? `Re-scan candidate${manual ? " (this question has manual corrections)" : ""}${existing.approvedById ? " (this question is approved)" : ""}: nothing was replaced. Compare and save the fields to take.` : "Found by the re-scan (it was not in the earlier extraction): review the candidate and save it to fill this question." });
+    await prisma.aiImportQuestion.update({ where: { id: target.id }, data: { status: AiImportQuestionStatus.EXTRACTED } });
+    return existing ? "pending" : "new";
   }
   const data = {
     jobId: ctx.job.id,
@@ -244,8 +256,13 @@ export async function saveQuestion(ctx: StepContext, file: AiImportFile, q: Extr
   const figs = await storeFigures(q, figureBytes, pageNumber);
   await prisma.aiImportFigure.deleteMany({ where: { questionId: row.id } });
   if (figs.length) await prisma.aiImportFigure.createMany({ data: figureRows(figs, { jobId: ctx.job.id, fileId: file.id, questionId: row.id }) });
-  if (rescan) await recordVersion({ questionId: row.id, jobId: ctx.job.id, kind: "RESCAN", status: existing ? "AUTO_APPLIED" : "APPLIED", data: q, figures: figs, model: rescan.model, note: existing ? "Applied automatically (the question had no manual corrections; the previous extraction is kept in its history)." : "Found by the re-scan (it was not in the earlier extraction)." });
   return existing ? "applied" : "new";
+}
+
+/** An empty question at a printed number, waiting for a re-scan candidate (or an administrator) to fill it. */
+export function placeholderRow(jobId: string, fileId: string, sourceKey: string, q: Pick<ExtractedQuestion, "section" | "number" | "label" | "pages">, orderIndex: number): Prisma.AiImportQuestionUncheckedCreateInput {
+  const data: ExtractedQuestion = { section: q.section, number: q.number, label: q.label, pages: q.pages, type: "SINGLE_CORRECT", stem: "", options: ["A", "B", "C", "D"].map((l) => ({ label: l, printed: l, text: "" })), printedAnswer: [], contentFormat: "PLAIN", confidence: 0, unreadable: [], figures: [], method: "ADMIN", notes: ["Placeholder for a question missing from the extraction — fill it from a re-scan candidate or by hand."] };
+  return { jobId, fileId, sourceKey, sourceNumber: q.number, sourceLabel: q.label, pages: q.pages, orderIndex, status: AiImportQuestionStatus.EXTRACTED, data: data as unknown as Prisma.InputJsonValue, questionType: "SINGLE_CORRECT", optionCount: 4, confidence: 0, issueCodes: ["OPTIONS_INCOMPLETE"] };
 }
 
 async function nextOrderIndex(fileId: string): Promise<number> {
@@ -636,6 +653,46 @@ function verificationOf(q: ExtractedQuestion, second: ExtractedQuestion[], model
   return { model, agree: v.agree, fields: v.fields, detail: v.detail, at: new Date().toISOString() };
 }
 
+/** The cut-out sent for a question-level re-scan: page band(s) from the renders, stacked top to bottom. */
+async function rescanImage(ctx: StepContext, file: AiImportFile, pageNumber: number, render: Buffer, view: Exclude<RescanView, { kind: "PAGE" }>): Promise<{ image: Buffer; parts: ViewPart[]; renders: Map<number, Buffer>; widths: Map<number, number> }> {
+  const specs = view.kind === "REGION" ? [{ page: pageNumber, box: view.box }] : view.pages.map((p, i) => ({ page: p, box: view.boxes[i] }));
+  const renders = new Map<number, Buffer>([[pageNumber, render]]);
+  const widths = new Map<number, number>();
+  const cuts: { page: number; box: NBox; buf: Buffer; w: number; h: number }[] = [];
+  for (const s of specs) {
+    if (!renders.has(s.page)) renders.set(s.page, await ensureRender(ctx.job, file, s.page, ctx.settings.limits.renderDpi));
+    const r = renders.get(s.page)!;
+    const m = await sharp(r).metadata();
+    widths.set(s.page, m.width ?? 0);
+    const rect = pixelRect(s.box, m.width ?? 1, m.height ?? 1);
+    cuts.push({ page: s.page, box: s.box, buf: await sharp(r).extract(rect).png().toBuffer(), w: rect.width, h: rect.height });
+  }
+  const W = Math.max(...cuts.map((c) => c.w));
+  const H = cuts.reduce((n, c) => n + c.h, 0);
+  const parts: ViewPart[] = [];
+  let y = 0;
+  for (const c of cuts) {
+    parts.push({ page: c.page, box: c.box, top: y / H, height: c.h / H, width: c.w / W });
+    y += c.h;
+  }
+  const image = cuts.length === 1 ? cuts[0].buf : await sharp({ create: { width: W, height: H, channels: 3, background: "#ffffff" } }).composite(cuts.map((c, i) => ({ input: c.buf, left: 0, top: Math.round(parts[i].top * H) }))).png().toBuffer();
+  return { image, parts, renders, widths };
+}
+
+/** Boxes the reader gave on a cut-out → boxes on the page they lie on (figures keep that page for their crop). */
+function toPageBoxes(qs: ExtractedQuestion[], parts: ViewPart[]): void {
+  for (const q of qs) {
+    if (q.region) q.region = toPageBox(q.region, parts).box;
+    for (const f of q.figures) {
+      if (!f.box) continue;
+      const m = toPageBox(f.box, parts);
+      f.box = m.box;
+      (f as { page?: number }).page = m.page;
+    }
+    if (parts.length > 1) q.pages = [...new Set(parts.map((p) => p.page))];
+  }
+}
+
 async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Promise<void> {
   const page = await prisma.aiImportPage.findUniqueOrThrow({ where: { id: pageId } });
   const total = file.pageCount ?? 1;
@@ -644,10 +701,15 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   const render = await ensureRender(ctx.job, file, page.pageNumber, ctx.settings.limits.renderDpi);
   const meta = await sharp(render).metadata();
   await prisma.aiImportPage.update({ where: { id: page.id }, data: { renderKey: renderKey(ctx.job.id, file.id, page.pageNumber), renderWidth: meta.width ?? null, renderHeight: meta.height ?? null } });
-  const image = await visionImage(render);
+  // A question-level re-scan may send only the question's band (or the band stacked with its continuation page).
+  const view = state.rescan?.view ?? { kind: "PAGE" as const };
+  const sent = view.kind === "PAGE" ? null : await rescanImage(ctx, file, page.pageNumber, render, view);
+  const image = await visionImage(sent?.image ?? render);
   // Confirmed paper memory of this exam / paper (empty when none applies): how the paper is printed, never content.
   const memory = await jobMemoryBrief(ctx.job, "extract");
-  const userText = extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: total, textLayer: page.textLayer, memory });
+  const userText =
+    extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: total, textLayer: sent ? null : page.textLayer, memory }) +
+    (sent ? `\n\nThis image is a CUT-OUT of ${view.kind === "STACK" ? `page ${view.pages[0]} (top part of the image) continued on page ${view.pages[1]} (lower part)` : `page ${page.pageNumber}`}, around one question. Read only what is visible; give boxes relative to THIS image.` : "");
   const bilingual = await jobIsBilingual(ctx.job);
   const call = async (models: string[], task: "extract" | "verify", stage?: string) => {
     const { value, result: r } = await importerAiCallChecked(
@@ -696,8 +758,9 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     await logEvent(ctx.job.id, "PAGE_READING_INCOMPLETE", `${file.originalName} page ${page.pageNumber}: still incomplete after ${INCOMPLETE_READ_RETRIES + 1} readings — sent to review; nothing from these readings was saved.`, { pageId: page.id, reasons: incomplete.slice(0, 10), final: true });
     throw new Error(`Incomplete reading after ${INCOMPLETE_READ_RETRIES + 1} attempts (${incomplete.slice(0, 2).join("; ")}). Nothing from it was saved — check the page and use Retry, or enter its questions by hand.`);
   }
-  if (!cached || reread) await prisma.aiImportPage.update({ where: { id: page.id }, data: { rawOutput: { ...state, primaryCache: { model: primary.model, out: primary.out, at: new Date().toISOString() } } as unknown as Prisma.InputJsonValue } });
+  if ((!cached || reread) && !state.rescan) await prisma.aiImportPage.update({ where: { id: page.id }, data: { rawOutput: { ...state, primaryCache: { model: primary.model, out: primary.out, at: new Date().toISOString() } } as unknown as Prisma.InputJsonValue } });
   const read = toExtracted(primary.out, page.pageNumber, primary.model);
+  if (sent) toPageBoxes(read, sent.parts);
   // Numbered instructions to candidates are never questions: kept in the page's reading, not saved, so they cannot take
   // the numbers of the real questions on the next page.
   const qs = read.filter((q) => !candidateInstruction(q));
@@ -730,6 +793,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       const v = await call([verifyModel], "verify");
       secondModel = v.model;
       second = toExtracted(v.out, page.pageNumber, v.model).filter((q) => !candidateInstruction(q));
+      if (sent) toPageBoxes(second, sent.parts);
       assignSections(second, state.startState);
     } catch (e) {
       // The page's first read is already paid for: a stop that only says "send nothing more" (rate-limit
@@ -752,7 +816,11 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   let order = await nextOrderIndex(file.id);
   const localOnPage = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id, pages: { has: page.pageNumber } }, select: { id: true, sourceKey: true, status: true, editedData: true, data: true } });
   const aiKeys = new Set<string>();
-  const figureBytes = pageFigureBytes(render, meta.width ?? 0, layout);
+  const pageBytes = pageFigureBytes(render, meta.width ?? 0, layout);
+  // A stacked re-scan crops each figure from the ORIGINAL render of the page it lies on (full quality, never the cut-out).
+  const otherBytes = new Map<number, FigureBytes>();
+  for (const pt of sent?.parts ?? []) if (pt.page !== page.pageNumber) otherBytes.set(pt.page, pageFigureBytes(sent!.renders.get(pt.page)!, sent!.widths.get(pt.page)!, null));
+  const figureBytes: FigureBytes = (f) => ((f as { page?: number }).page && otherBytes.has((f as { page?: number }).page!) ? otherBytes.get((f as { page?: number }).page!)!(f) : pageBytes(f));
   const pendingJoins: NonNullable<PageState["pendingJoins"]> = [];
   for (const q of qs) {
     if (q.continuedFromPreviousPage && !rescan) {
@@ -804,10 +872,11 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       outcomes.push({ key: l.sourceKey, outcome: "not_found" });
       await recordVersion({ questionId: l.id, jobId: ctx.job.id, kind: "RESCAN", status: "NOT_FOUND", data: l.data as unknown as ExtractedQuestion, model: primary.model, note: "The re-scan did not find this question on the page; nothing was changed." });
     }
-    if (l.editedData || l.status !== AiImportQuestionStatus.EXTRACTED) continue;
+    // A re-scan only records its result (NOT_FOUND version above); it never edits the existing question.
+    if (rescan || l.editedData || l.status !== AiImportQuestionStatus.EXTRACTED) continue;
     const d = l.data as unknown as ExtractedQuestion;
-    if (d.method !== "LOCAL_PDF" && d.method !== "LOCAL_OCR" && !rescan) continue;
-    d.notes = [...(d.notes ?? []), rescan ? "The re-scan of this page did not find this question; it is kept as it was." : "The AI read of this page did not return this question; kept from the text layer."];
+    if (d.method !== "LOCAL_PDF" && d.method !== "LOCAL_OCR") continue;
+    d.notes = [...(d.notes ?? []), "The AI read of this page did not return this question; kept from the text layer."];
     d.confidence = Math.min(d.confidence, 0.5);
     await prisma.aiImportQuestion.update({ where: { id: l.id }, data: { data: d as unknown as Prisma.InputJsonValue, confidence: d.confidence } });
   }
@@ -818,6 +887,14 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   void _cache;
   // A re-scan does not join continuations, so joins still waiting from the first read are kept.
   if (rescan && _joins?.length) pendingJoins.push(..._joins);
+  if (rescan) {
+    // A re-scan never replaces the page's own reading or outcome: its reading is appended to the page's re-scan log.
+    const log = Array.isArray((rest as { rescanReads?: unknown[] }).rescanReads) ? (rest as { rescanReads: unknown[] }).rescanReads : [];
+    await prisma.aiImportPage.update({
+      where: { id: page.id },
+      data: { status: AiImportPageStatus.DONE, processedAt: new Date(), errorMessage: null, rawOutput: { ...rest, ...(pendingJoins.length ? { pendingJoins } : {}), rescanReads: [...log.slice(-9), { at: new Date().toISOString(), model: primary.model, view: rescan.view ?? { kind: "PAGE" }, keys: rescan.keys, out: primary.out }] } as unknown as Prisma.InputJsonValue },
+    });
+  } else
   await prisma.aiImportPage.update({
     where: { id: page.id },
     data: { status: AiImportPageStatus.DONE, model: primary.model, outcome: "AI", outcomeReason: `${qs.length} question(s) read by ${primary.model}${page.ocrText ? " (checked against the local OCR reading)" : ""}`, processedAt: new Date(), errorMessage: null, rawOutput: { ...rest, ai: primary.out, ...(pendingJoins.length ? { pendingJoins } : {}), ...(second ? { secondRead: { model: secondModel, questions: second.length }, verified: { model: secondModel ?? "", at: new Date().toISOString(), extra } } : {}) } as unknown as Prisma.InputJsonValue },
@@ -825,11 +902,16 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   if (extra.length) await logEvent(ctx.job.id, "VERIFY_EXTRA", `${file.originalName} page ${page.pageNumber}: the independent read found ${extra.join(", ")}, which the primary read did not — check for missing questions.`, { pageId: page.id, extra });
   if (rescan) {
     const count = (o: string) => outcomes.filter((x) => x.outcome === o).length;
-    await logEvent(ctx.job.id, "RESCAN_DONE", `Re-scan of ${file.originalName} page ${page.pageNumber} (${primary.model}): ${count("applied")} replaced (previous extraction kept), ${count("pending")} waiting for your choice (manually corrected), ${count("new")} new, ${count("not_found")} not found again, ${count("stored")} already in the Question Bank.`, { pageId: page.id, outcomes, requestedById: rescan.requestedById });
+    await logEvent(ctx.job.id, "RESCAN_DONE", `Re-scan of ${file.originalName} page ${page.pageNumber} (${primary.model}): ${count("pending")} candidate(s) waiting for your choice, ${count("new")} new (placeholder + candidate), ${count("not_found")} not found again, ${count("stored")} already in the Question Bank.`, { pageId: page.id, outcomes, requestedById: rescan.requestedById });
   }
   // Answer-key tables printed on question-paper pages are kept for the key matcher — only from a page that holds no
   // questions (a key page). On a question page a "key" is a table or list of the questions themselves (seen 2026-10-31:
   // CMS 2024 page 6, Q25's "A: Myoglobinuria … 1, 2, 3" table became official answers for Q22–26 and displaced the real key).
+  // A re-scan never writes official answers (it reads one question, often a cut-out).
+  if (rescan) {
+    if (budgetStop) throw budgetStop;
+    return;
+  }
   if (primary.out.answer_key.length && !qs.length) {
     await saveKeyEntries(ctx, file.id, file.id, page.pageNumber, primary.out.answer_key.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: "", raw: e.answer })));
   } else if (primary.out.answer_key.length) {

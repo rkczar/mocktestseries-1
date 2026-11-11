@@ -145,7 +145,7 @@ export interface ClassificationRecord {
   /** The free local classifier's own result (shown next to the stored choice). */
   local: { status: string; subjectId: string | null; topicId: string | null; subTopicId: string | null; subjectConfidence: number; topicConfidence: number; method: string; reason: string; candidates: { subjectId: string; topicId: string | null; score: number }[]; evidenceQuestions: number } | null;
   /** The AI classifier's part: USED / REJECTED (its answer failed the guards) / FAILED / NO_RESULT. */
-  ai: { model: string | null; status: "USED" | "REJECTED" | "FAILED" | "NO_RESULT"; detail: string } | null;
+  ai: { model: string | null; status: "USED" | "REJECTED" | "FAILED" | "NO_RESULT"; detail: string; /** The classifier's own choice (exam ids; never applied over an existing one). */ subjectId?: string | null; topicId?: string | null; subTopicId?: string | null; confidence?: number | null } | null;
   /**
    * Other valid classifications of this exam's syllabus that the evidence supports (the local classifier's runners-up,
    * a Verify 2 / AI choice that differs), each with where it came from and why — shown for review, never applied.

@@ -398,7 +398,9 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   /** Bilingual exams (lib/ai-import/bilingual.ts): the Hindi version is missing, does not match the English, or is uncertain. */
   BILINGUAL_HINDI_MISSING: { label: "Hindi version missing", blocking: true, publishBlocking: true },
   BILINGUAL_MISMATCH: { label: "Hindi and English versions differ", blocking: true, publishBlocking: true },
-  BILINGUAL_HINDI_UNCERTAIN: { label: "Hindi text uncertain", blocking: true, publishBlocking: true },
+  BILINGUAL_HINDI_UNCERTAIN: { label: "Hindi text needs review", blocking: true, publishBlocking: true },
+  /** A structure option's formula text and its image description disagree (the image is what students see). */
+  OPTION_FORMULA_IMAGE_DIFFERS: { label: "Option formula text and image differ", blocking: false, publishBlocking: true },
   STEM_HAS_OPTIONS: { label: "Options repeated in the question text", blocking: true, publishBlocking: true },
   NUMBERING_GAP: { label: "Numbering gap nearby", blocking: false, publishBlocking: false },
   DUPLICATE_EXISTING: { label: "Duplicate of an existing question", blocking: true, publishBlocking: true },

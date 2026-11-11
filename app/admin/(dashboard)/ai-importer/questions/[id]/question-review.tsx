@@ -29,7 +29,9 @@ import {
   setFigureAction,
   setTaxonomyAction,
   unapproveQuestionsAction,
+  keepTaxonomyAction,
 } from "../../actions";
+import type { TaxSuggestion } from "@/lib/ai-import/taxonomy-suggest";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
 import { CropEditor } from "@/components/admin/ai-importer/crop-editor";
 
@@ -81,6 +83,12 @@ export interface ReviewQ {
   /** Pages of this question that have a page image to crop from. */
   pageImages: { page: number; pageId: string }[];
   rescanAllowed: { ok: boolean; reason: string | null };
+  /** Subject / topic suggestion from stored evidence (never applied by itself); null when none differs or the admin decided. */
+  suggestion: TaxSuggestion | null;
+  /** Bilingual exams: per-field language result of the Hindi version; null for other exams. */
+  languageChecks: { field: string; outcome: string; label: string; detail: string }[] | null;
+  /** Options shown to students as their original cropped image (the AI formula is alt text only). */
+  structureOptions: string[];
 }
 
 export interface RescanCompareView {
@@ -88,6 +96,9 @@ export interface RescanCompareView {
   model: string | null;
   createdAt: string;
   rows: { field: string; label: string; current: string; rescan: string; same: boolean }[];
+  /** The question is an empty placeholder for a missing number: every field the re-scan found is pre-ticked. */
+  placeholder: boolean;
+  approved: boolean;
 }
 
 export interface VersionView {
@@ -267,7 +278,7 @@ export function QuestionReview({
   const [subTopicId, setSubTopicId] = useState(q.subTopicId ?? "");
   // Off by default (Sprint A, 2026-11-06): remembering is an explicit decision, and it only proposes the example.
   const [rememberTax, setRememberTax] = useState(false);
-  const [take, setTake] = useState<Set<string>>(new Set());
+  const [take, setTake] = useState<Set<string>>(() => new Set(compare?.placeholder ? compare.rows.filter((r) => !r.same).map((r) => r.field) : []));
   const [addImg, setAddImg] = useState({ owner: "STEM", label: "A" });
   const [addCrop, setAddCrop] = useState<number | null>(null);
   const addRef = useRef<HTMLInputElement>(null);
@@ -338,7 +349,8 @@ export function QuestionReview({
           <CardHeader>
             <CardTitle>Re-scan result waiting for your choice</CardTitle>
             <CardDescription>
-              Read again from the original page{compare.model ? ` by ${compare.model}` : ""} on {compare.createdAt}. This question has manual corrections, so nothing was replaced. Tick the fields to take from the re-scan; everything else stays as it is now.
+              Read again from the original page{compare.model ? ` by ${compare.model}` : ""} on {compare.createdAt}. A re-scan never replaces a question: nothing was changed. {compare.placeholder ? "This question was missing from the extraction — the fields the re-scan found are ticked; check them against the page and save." : "Tick the fields to take from the re-scan; everything else stays as it is now."}
+              {compare.approved ? " This question is approved: saving any change withdraws the approval (approve it again after checking)." : ""}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 overflow-x-auto">
@@ -374,7 +386,7 @@ export function QuestionReview({
             </table>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" disabled={pending} onClick={() => act(() => applyRescanAction(compare.versionId, [...take]), take.size ? "Applied the ticked fields; everything else was kept." : "Kept the current question.")} data-testid="rv-compare-apply">
-                {take.size ? `Apply ${take.size} ticked field(s)` : "Keep the current question"}
+                {take.size ? `Save ${take.size} ticked field(s)` : "Keep the current question"}
               </Button>
               <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => discardRescanAction(compare.versionId), "Re-scan result discarded (kept in the history).")} data-testid="rv-compare-discard">
                 Discard re-scan result
@@ -384,7 +396,67 @@ export function QuestionReview({
         </Card>
       )}
 
-      <Card>
+      {q.suggestion && (
+        <Card className="xl:col-span-2" data-testid="rv-suggestion">
+          <CardHeader>
+            <CardTitle>Subject / topic suggestion</CardTitle>
+            <CardDescription>Nothing is changed unless you choose “Use suggestion”. Only this exam&apos;s own subjects and topics are suggested.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-sm">
+            <p data-testid="rv-suggestion-current">
+              <span className="text-[var(--color-muted-foreground)]">Current: </span>
+              {taxonomy.find((s) => s.id === q.subjectId)?.name ?? "no subject"} › {taxonomy.find((s) => s.id === q.subjectId)?.topics.find((t) => t.id === q.topicId)?.name ?? "no topic"}
+            </p>
+            <p data-testid="rv-suggestion-suggested">
+              <span className="text-[var(--color-muted-foreground)]">Suggested: </span>
+              <span className="font-medium">
+                {q.suggestion.subject} › {q.suggestion.topic ?? "no topic"}
+                {q.suggestion.subTopic ? ` › ${q.suggestion.subTopic}` : ""}
+              </span>
+              {q.suggestion.confidence !== null && <span className="ml-1 text-xs text-[var(--color-muted-foreground)]">({Math.round(q.suggestion.confidence * 100)}% · {q.suggestion.source})</span>}
+            </p>
+            <p className="text-xs">{q.suggestion.reason}</p>
+            {q.suggestion.evidence.length > 0 && (
+              <ul className="list-disc pl-5 text-xs text-[var(--color-muted-foreground)]" data-testid="rv-suggestion-evidence">
+                {q.suggestion.evidence.map((x, i) => (
+                  <li key={i}>{x}</li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" disabled={pending} onClick={() => act(() => setTaxonomyAction(q.id, q.suggestion!.subjectId!, q.suggestion!.topicId, q.suggestion!.subTopicId, false), "Suggestion used: subject/topic changed. The question needs approval again.")} data-testid="rv-suggestion-use">
+                Use suggestion
+              </Button>
+              <Button size="sm" variant="outline" disabled={pending || !q.subjectId} onClick={() => act(() => keepTaxonomyAction(q.id), "Kept the current subject/topic (recorded as your decision).")} data-testid="rv-suggestion-keep">
+                Keep current
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {(q.languageChecks || q.structureOptions.length > 0) && (
+        <Card className="xl:col-span-2" data-testid="rv-language">
+          <CardHeader>
+            <CardTitle>Language and option content checks</CardTitle>
+            <CardDescription>Each field is checked on its own: formulas, structures, numbers and English technical terms are not Hindi errors.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-1 text-sm">
+            {q.languageChecks?.map((c) => (
+              <p key={c.field} data-testid="rv-language-row" data-outcome={c.outcome} className={c.outcome === "OCR_UNCERTAIN" || c.outcome === "SOURCE_UNAVAILABLE" ? "text-[var(--color-warning)]" : ""}>
+                <span className="font-medium">{c.field}:</span> {c.label} — {c.detail}
+              </p>
+            ))}
+            {q.structureOptions.length > 0 && (
+              <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="rv-structure-note">
+                Option{q.structureOptions.length > 1 ? "s" : ""} {q.structureOptions.join(", ")}: students see the original cropped image. The AI-read formula is kept only as the image&apos;s alt text (for screen readers) and is not chemically verified.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Card id="edit" className="scroll-mt-20">
         <CardHeader>
           <CardTitle>Edit question</CardTitle>
           <CardDescription>Your edit is saved beside the original extraction, which is kept with every earlier version. Use $…$ for formulas and \ce{"{…}"} for chemistry with the “formulas” format.</CardDescription>

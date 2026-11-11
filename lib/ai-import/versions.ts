@@ -87,13 +87,19 @@ export function manuallyCorrected(q: { editedData: unknown }, figs: Pick<AiImpor
 // ---- Field-by-field comparison --------------------------------------------------------------------
 
 /** The fields a re-scan can change, in display order. Figures are compared and chosen as one set. */
-export const RESCAN_FIELDS = ["number", "type", "stem", "option:A", "option:B", "option:C", "option:D", "option:E", "printedAnswer", "figures"] as const;
+export const RESCAN_FIELDS = ["number", "type", "stem", "lists", "option:A", "option:B", "option:C", "option:D", "option:E", "hi:stem", "hi:option:A", "hi:option:B", "hi:option:C", "hi:option:D", "printedAnswer", "figures"] as const;
 export type RescanField = (typeof RESCAN_FIELDS)[number];
 
 export const FIELD_LABELS: Record<RescanField, string> = {
   number: "Question number",
   type: "Question type",
   stem: "Question text",
+  lists: "List I / List II",
+  "hi:stem": "Hindi question text",
+  "hi:option:A": "Hindi option A",
+  "hi:option:B": "Hindi option B",
+  "hi:option:C": "Hindi option C",
+  "hi:option:D": "Hindi option D",
   "option:A": "Option A",
   "option:B": "Option B",
   "option:C": "Option C",
@@ -103,9 +109,9 @@ export const FIELD_LABELS: Record<RescanField, string> = {
   figures: "Figures",
 };
 
-function figureSummary(f: Pick<FigureSnapshot, "owner" | "optionLabel" | "mappingStatus">[]): string {
+function figureSummary(f: (Pick<FigureSnapshot, "owner" | "optionLabel" | "mappingStatus"> & { description?: string | null })[]): string {
   if (!f.length) return "none";
-  return f.map((x) => `${x.owner === "OPTION" ? `option ${x.optionLabel}` : x.owner.toLowerCase()}${x.mappingStatus !== "OK" ? ` (${x.mappingStatus.toLowerCase()})` : ""}`).join(", ");
+  return f.map((x) => `${x.owner === "OPTION" ? `option ${x.optionLabel}` : x.owner.toLowerCase()}${x.mappingStatus !== "OK" ? ` (${x.mappingStatus.toLowerCase()})` : ""}${x.description ? `: ${x.description.slice(0, 80)}` : ""}`).join("\n");
 }
 
 export function fieldValue(q: ExtractedQuestion, field: RescanField, figs: Pick<FigureSnapshot, "owner" | "optionLabel" | "mappingStatus">[]): string {
@@ -120,6 +126,17 @@ export function fieldValue(q: ExtractedQuestion, field: RescanField, figs: Pick<
       return q.printedAnswer.join(", ") || "—";
     case "figures":
       return figureSummary(figs);
+    case "lists":
+      return q.listI?.length || q.listII?.length ? `List I: ${(q.listI ?? []).map((x) => `${x.key}. ${x.text}`).join(" | ")}\nList II: ${(q.listII ?? []).map((x) => `${x.key}. ${x.text}`).join(" | ")}` : "—";
+    case "hi:stem":
+      return q.hi?.stem || "—";
+    case "hi:option:A":
+    case "hi:option:B":
+    case "hi:option:C":
+    case "hi:option:D": {
+      const o = q.hi?.options.find((x) => x.label === field.slice(10));
+      return o ? o.text || "(empty / image only)" : "—";
+    }
     default: {
       const label = field.slice(7);
       const o = q.options.find((x) => x.label === label);
@@ -139,7 +156,9 @@ export interface FieldDiff {
 /** Every comparable field of the current question and a re-scan result, marking what differs. */
 export function compareVersions(current: ExtractedQuestion, currentFigs: Pick<FigureSnapshot, "owner" | "optionLabel" | "mappingStatus">[], next: ExtractedQuestion, nextFigs: Pick<FigureSnapshot, "owner" | "optionLabel" | "mappingStatus">[]): FieldDiff[] {
   const labels = new Set([...current.options.map((o) => o.label), ...next.options.map((o) => o.label)]);
-  return RESCAN_FIELDS.filter((f) => !f.startsWith("option:") || labels.has(f.slice(7))).map((field) => {
+  const hindi = !!current.hi || !!next.hi;
+  const lists = !!(current.listI?.length || current.listII?.length || next.listI?.length || next.listII?.length);
+  return RESCAN_FIELDS.filter((f) => (!f.startsWith("option:") || labels.has(f.slice(7))) && (!f.startsWith("hi:") || hindi) && (f !== "lists" || lists) && (!f.startsWith("hi:option:") || labels.has(f.slice(10)))).map((field) => {
     const a = fieldValue(current, field, currentFigs);
     const b = fieldValue(next, field, nextFigs);
     return { field, label: FIELD_LABELS[field], current: a, rescan: b, same: a.trim() === b.trim() };
@@ -172,6 +191,25 @@ export function mergeChoice(current: ExtractedQuestion, next: ExtractedQuestion,
     if (src) options.push({ ...src });
   }
   out.options = options;
+  if (take.has("lists")) {
+    out.listI = next.listI ? next.listI.map((x) => ({ ...x })) : null;
+    out.listII = next.listII ? next.listII.map((x) => ({ ...x })) : null;
+  }
+  const hiTaken = [...take].filter((f) => f.startsWith("hi:"));
+  if (hiTaken.length && next.hi) {
+    // Hindi fields not taken stay as they are now (empty when the question had no Hindi version yet).
+    const base = current.hi ? { ...current.hi, options: current.hi.options.map((o) => ({ ...o })) } : { ...next.hi, stem: "", options: next.hi.options.map((o) => ({ ...o, text: "" })) };
+    if (take.has("hi:stem")) base.stem = next.hi.stem;
+    for (const f of hiTaken.filter((x) => x.startsWith("hi:option:"))) {
+      const l = f.slice(10);
+      const src = next.hi.options.find((o) => o.label === l);
+      const i = base.options.findIndex((o) => o.label === l);
+      if (src && i >= 0) base.options[i] = { ...src };
+      else if (src) base.options.push({ ...src });
+    }
+    // Hindi text taken from a reading is not an administrator's confirmation; the reader's doubts come with it.
+    out.hi = { ...base, confirmedById: null, confidence: next.hi.confidence, unreadable: [...next.hi.unreadable], sameOptionOrder: next.hi.sameOptionOrder, figuresDiffer: next.hi.figuresDiffer, secondReadAgreement: next.hi.secondReadAgreement ?? null };
+  }
   out.notes = [...(current.notes ?? []), `Re-scan applied for: ${[...take].map((f) => FIELD_LABELS[f]).join(", ") || "nothing"}.`];
   return out;
 }

@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { classificationSuggestion } from "@/lib/ai-import/taxonomy-suggest";
+import { LANGUAGE_OUTCOME_LABELS, hindiFieldChecks } from "@/lib/ai-import/bilingual";
+import { structureOnlyText } from "@/lib/ai-import/script-text";
 import { notFound } from "next/navigation";
 import { RestrictedCard } from "@/components/admin/restricted-card";
 import { hasPermission } from "@/lib/rbac";
@@ -75,6 +78,8 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
         model: pendingRescan.model,
         createdAt: formatIst(pendingRescan.createdAt),
         rows: compareVersions(effective(q), snapshotFigures(q.figures), pendingRescan.data as unknown as ExtractedQuestion, (pendingRescan.figures as unknown as FigureSnapshot[] | null) ?? []),
+        placeholder: e.method === "ADMIN" && !e.stem.trim() && e.options.every((o) => !o.text.trim()) && !q.figures.length,
+        approved: !!q.approvedById,
       }
     : null;
   const history: VersionView[] = versions.map((v) => ({
@@ -127,6 +132,21 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     v2ClassCurrent ? v2TaxonomyChecks(v2Class, (x) => (x ? (taxNames.get(x) ?? null) : null)) : null,
   );
   const boardStale = vsNow.v1 === "stale" || vsNow.v2 === "stale" ? `The question changed after ${vsNow.v1 === "stale" && vsNow.v2 === "stale" ? "Verify 1 and Verify 2" : vsNow.v1 === "stale" ? "Verify 1" : "Verify 2"} ran — run it again; out-of-date results are not shown.` : null;
+  // Subject / topic suggestion (evidence only; applied only by "Use suggestion") and per-field language checks.
+  const sameTax = (c: { stored: { subjectId: string | null; topicId: string | null; subTopicId: string | null } } | null | undefined) => !!c && c.stored.subjectId === q.subjectId && c.stored.topicId === q.topicId && c.stored.subTopicId === q.subTopicId;
+  const v1Class = vsNow.v1 === "passed" || vsNow.v1 === "problems" ? vsNow.pv?.v1?.classification : null;
+  const suggestion = classificationSuggestion({
+    current: { subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId },
+    adminDecided: !!q.taxonomySource?.startsWith("admin"),
+    record: (q.data as unknown as ExtractedQuestion).classification,
+    v1: sameTax(v1Class) ? v1Class : null,
+    v2: v2ClassCurrent && vsNow.v2 !== "stale" && vsNow.v2 !== "none" ? v2Class : null,
+    tree: taxonomy,
+    name: (x) => (x ? (taxNames.get(x) ?? null) : null),
+  });
+  const optionImages = new Set(q.figures.filter((f) => f.owner === "OPTION" && f.optionLabel && f.mappingStatus !== "MISSING").map((f) => f.optionLabel!));
+  const languageChecks = bilingual ? hindiFieldChecks(e, optionImages) : null;
+  const structureOptions = e.options.filter((o) => optionImages.has(o.label) && structureOnlyText(o.text)).map((o) => o.label);
   const blockerImport = importBlocker(q, settings);
   const blockerPublish = q.questionId ? publishBlocker(q, settings) : blockerImport ?? publishBlocker(q, settings);
   // Complete figure at its stored aspect ratio (never cropped to a box), tap to zoom.
@@ -411,6 +431,9 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             figures: q.figures.map((f) => ({ id: f.id, owner: f.owner, optionLabel: f.optionLabel, mappingStatus: f.mappingStatus, source: f.source, confirmed: !!f.confirmedById, page: f.pageNumber, pageId: hasPageImages ? pageIdOf.get(f.pageNumber) ?? null : null, width: f.width, height: f.height, description: f.description, box: figureBox(f.box), reason: (f.box as { reason?: string } | null)?.reason ?? null, confidence: f.confidence })),
             pageImages: hasPageImages ? (e.pages?.length ? e.pages : q.pages).filter((n) => pageIdOf.has(n)).map((n) => ({ page: n, pageId: pageIdOf.get(n)! })) : [],
             rescanAllowed: { ok: !rescanBlocked, reason: rescanBlocked },
+            suggestion,
+            languageChecks: languageChecks?.map((c) => ({ ...c, label: LANGUAGE_OUTCOME_LABELS[c.outcome] })) ?? null,
+            structureOptions,
           }}
           taxonomy={taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((st) => ({ id: st.id, name: st.name })) })) }))}
           compare={compare}

@@ -1,4 +1,5 @@
 import "server-only";
+import { formulaPlain, structureOnlyText } from "@/lib/ai-import/script-text";
 import crypto from "node:crypto";
 import sharp from "sharp";
 import { AiImportAnswerStatus, AiImportQuestionStatus, BulkImportDuplicateStrategy, BulkImportMode, BulkImportRowStatus, EditorialStage, ImportRowSeverity, QuestionStatus, type AiImportFigure, type AiImportJob, type AiImportQuestion, type Prisma } from "@prisma/client";
@@ -138,12 +139,19 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
     for (const [i, f] of stemFigs.entries()) stemImages.push(await img(f, i));
     const options = [];
     const optionCounts: Record<string, number> = {};
+    // Owner decision 2026-11-11: an option that is a cropped structure image shows the ORIGINAL image; the AI's formula
+    // transcription is not chemically verified, so it becomes the image's alt text (screen readers), never the content.
+    const imageOnly = new Set<string>();
     for (const o of e.options.slice(0, 4)) {
       const of = usable.filter((f) => f.owner === "OPTION" && f.optionLabel === o.label);
       const images = [];
       for (const [i, f] of of.entries()) images.push(await img(f, i));
       optionCounts[o.label] = images.length;
-      options.push({ label: o.label, text: o.text, ...(images.length ? { images } : {}) });
+      if (images.length && structureOnlyText(o.text)) {
+        imageOnly.add(o.label);
+        images[0] = { ...images[0], alt: `Structure (AI transcription, unverified): ${formulaPlain(o.text)}`.slice(0, 300) };
+        options.push({ label: o.label, text: "", images });
+      } else options.push({ label: o.label, text: o.text, ...(images.length ? { images } : {}) });
     }
     expectedImages.set(code, { question: stemImages.length, options: optionCounts });
     const prefix = [e.instructions, e.passage].filter((x) => x && x.trim()).join("\n\n");
@@ -156,7 +164,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
     // is created (importBatch), escaped exactly like the English text when the question becomes RICH_V1.
     if (e.hi?.stem.trim()) {
       const fix = (t: string) => (rich && e.contentFormat !== "RICH_V1" ? escapeForRich(t) : t);
-      hindi.set(code, { stem: fix(e.hi.stem), options: Object.fromEntries(e.hi.options.slice(0, 4).map((o) => [o.label, fix(o.text)])) });
+      hindi.set(code, { stem: fix(e.hi.stem), options: Object.fromEntries(e.hi.options.slice(0, 4).map((o) => [o.label, imageOnly.has(o.label) && structureOnlyText(o.text) ? "" : fix(o.text)])) });
     }
     questions.push({
       code,

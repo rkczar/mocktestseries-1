@@ -1,5 +1,6 @@
 import "server-only";
 import { bilingualFindings } from "@/lib/ai-import/bilingual";
+import { atomCountDiff, structureOnlyText } from "@/lib/ai-import/script-text";
 import { AiImportAnswerStatus, AiImportFileRole, AiImportPaperType, AiImportQuestionStatus, type AiImportQuestion, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
@@ -13,7 +14,7 @@ import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
 import { SUBJECT_MIN_CONFIDENCE, SUBJECT_MISMATCH_CONFIDENCE, classifyUserText, decideClassification, taxonomyCodes, type ClassifyDecision } from "@/lib/ai-import/taxonomy-check";
-import { classifyPaper, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
+import { LOCAL_SUBJECT_MIN, classifyPaper, type LocalClassification } from "@/lib/ai-import/taxonomy-classify";
 import { classifierContext, headingResolver, jobPaperMemory } from "@/lib/ai-import/taxonomy-memory";
 import { confirmedRulesFor, confirmedSubjectScope, memoryBrief, memoryFindings } from "@/lib/ai-import/paper-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
@@ -101,7 +102,7 @@ export function sourceMayHoldImage(detected: unknown, pages: number[]): boolean 
  * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
  * approved — and an uncertain image placement is cleared only by confirming each figure's placement.
  */
-export const REVIEWABLE = ["OCR_UNCERTAIN", "SOURCE_TEXT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN"];
+export const REVIEWABLE = ["OCR_UNCERTAIN", "SOURCE_TEXT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN", "OPTION_FORMULA_IMAGE_DIFFERS"];
 
 interface Check {
   stage: number;
@@ -583,7 +584,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       if (e.stemHasOptions) add("STEM_HAS_OPTIONS", "The question text still contains option lines — remove them from the question text (the options are kept separately).");
     }
     // Hindi + English pair (bilingual exams only): missing, mismatched or uncertain → review, never merged silently.
-    if (bilingual) for (const f of bilingualFindings(e)) add(f.code, f.detail);
+    // Structure options: students see the cropped image; the AI formula is alt text only and never treated as verified.
+    // A formula whose atoms differ from the reader's description of that image is flagged for a person.
+    const formulaVsImage = e.options.flatMap((o) => {
+      if (!structureOnlyText(o.text)) return [];
+      const d = q.figures.filter((f) => f.owner === "OPTION" && f.optionLabel === o.label && f.description).map((f) => atomCountDiff(o.text, f.description!)).find(Boolean);
+      return d ? [`option ${o.label} (${d})`] : [];
+    });
+    if (formulaVsImage.length) add("OPTION_FORMULA_IMAGE_DIFFERS", `The formula text and the image description differ for ${formulaVsImage.join("; ")}. Students see the image; check that each image is the printed structure (the formula text is kept as alt text only).`.slice(0, 600));
+    if (bilingual) for (const f of bilingualFindings(e, new Set(q.figures.filter((f) => f.owner === "OPTION" && f.optionLabel && f.mappingStatus !== "MISSING").map((f) => f.optionLabel!)))) add(f.code, f.detail);
     // Formulas (the Hindi version's formulas render the same way, so they are checked too)
     const richText = [e.stem, ...e.options.map((o) => o.text), ...(e.listI ?? []).map((x) => x.text), ...(e.listII ?? []).map((x) => x.text), ...(e.hi ? [e.hi.stem, ...e.hi.options.map((o) => o.text)] : [])];
     const formulaWarnings = e.contentFormat === "RICH_V1" ? richText.flatMap((t, i) => lintRichSource(t, i === 0 ? "Question" : `Part ${i}`).warnings) : richText.some((t) => looksRich(t)) ? ["Formula markup in a plain question would show literally."] : [];
@@ -655,6 +664,11 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         if (subjectId && ai.subject && ai.subject !== subjectId && ai.confidence >= SUBJECT_MISMATCH_CONFIDENCE && taxSource !== "printed section") {
           add("SUBJECT_MISMATCH", `The classifier (${ai.explanation}) files this question under ${subjectById.get(ai.subject)?.name ?? "another subject"}, not ${subjectById.get(subjectId)?.name ?? "the paper's subject"} — check the subject.`);
           checks.push({ stage: 2, name: "Subject check", passed: false, severity: "WARNING", method: "AI", model: ai.model, detail: `The classifier thinks this question belongs to ${subjectById.get(ai.subject)?.name ?? "another subject"}, not the selected subject.` });
+        } else if (subjectId && ai.subject && ai.subject !== subjectId && ai.confidence >= SUBJECT_MISMATCH_CONFIDENCE && taxSource === "printed section" && loc?.subjectId === ai.subject && loc.subjectConfidence >= LOCAL_SUBJECT_MIN) {
+          // The printed section's subject is kept, but two INDEPENDENT classifiers agreeing on another subject is reported
+          // (audit 2026-11-11: a heading mapped to one subject silenced every disagreement).
+          add("SUBJECT_MISMATCH", `Printed under “${e.hints?.subject ?? "a section heading"}” (${subjectById.get(subjectId)?.name ?? "the section's subject"}), but both the AI classifier (${Math.round(ai.confidence * 100)}%) and the local classifier (${Math.round(loc.subjectConfidence * 100)}%) file it under ${subjectById.get(ai.subject)?.name ?? "another subject"} — check the subject.`);
+          checks.push({ stage: 2, name: "Subject check", passed: false, severity: "WARNING", method: "AI", model: ai.model, detail: `Section subject ${subjectById.get(subjectId)?.name ?? "?"}; both classifiers: ${subjectById.get(ai.subject)?.name ?? "?"}.` });
         }
         if (!subjectId && ai.subject) {
           subjectId = ai.subject;
@@ -742,7 +756,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       source: taxSource ?? null,
       reason: (kind === "ok" || kind === "admin" ? (q.taxonomySource?.startsWith("admin") ? "Chosen by an administrator." : taxSource === "selected subject" ? `The paper's selected subject${topicId ? `; topic: ${loc?.topicId === topicId ? loc.reason : aiUsed?.explanation ?? taxSource}` : ""}` : taxSource === "source column" ? "Printed in the source file's subject / topic column." : loc && (taxSource === "local classifier" || taxSource === "confirmed example") ? loc.reason : aiUsed ? aiUsed.explanation : (taxSource ?? "")) : why).slice(0, 700),
       local: loc ? { status: loc.status, subjectId: loc.subjectId, topicId: loc.topicId, subTopicId: loc.subTopicId, subjectConfidence: loc.subjectConfidence, topicConfidence: loc.topicConfidence, method: loc.method, reason: loc.reason.slice(0, 500), candidates: loc.candidates, evidenceQuestions } : (q.data as unknown as ExtractedQuestion).classification?.local ?? null,
-      ai: aiUsed ? { model: aiUsed.model, status: aiUsed.rejected && !aiUsed.subject ? "REJECTED" : "USED", detail: aiUsed.explanation.slice(0, 400) } : aiFail ? { model: aiFail.model, status: aiFail.status, detail: aiFail.detail.slice(0, 400) } : null,
+      ai: aiUsed ? { model: aiUsed.model, status: aiUsed.rejected && !aiUsed.subject ? "REJECTED" : "USED", detail: aiUsed.explanation.slice(0, 400), subjectId: aiUsed.subject ?? null, topicId: aiUsed.topic ?? null, subTopicId: aiUsed.subTopic ?? null, confidence: aiUsed.confidence } : aiFail ? { model: aiFail.model, status: aiFail.status, detail: aiFail.detail.slice(0, 400) } : null,
     };
     checks.push({ stage: 2, name: "Subject & topic", passed: !!subjectId && topicSure, severity: !subjectId ? "ERROR" : topicSure ? "INFO" : "WARNING", method: taxSource?.startsWith("AI") ? "AI" : taxSource?.startsWith("admin") ? "ADMIN" : "DETERMINISTIC", detail: `${subjectId ? subjectById.get(subjectId)?.name ?? "?" : "no subject"} › ${topicId ? topicById.get(topicId)?.name ?? "?" : "no topic"}${subTopicId ? ` › ${subTopicById.get(subTopicId)?.name ?? "?"}` : ""}${taxSource ? ` (${taxSource})` : ""}` });
 
