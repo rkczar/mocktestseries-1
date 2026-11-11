@@ -15,6 +15,7 @@ import { formulaDiff, sourceDiffSummary, sourceTextDiff } from "@/lib/ai-import/
 import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
 import { EXTRACT_SYSTEM, extractUserText, pageSchema, toExtracted, type PageOutput } from "@/lib/ai-import/prompts";
+import { gapPages, incompleteReading } from "@/lib/ai-import/reading-checks";
 import { readVault, renderKey, putIntermediate, vaultPath, workDir, exists as vaultExists } from "@/lib/ai-import/vault";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { sourceKeyOf, type ExtractedQuestion, type PageExtraction } from "@/lib/ai-import/types";
@@ -64,6 +65,8 @@ type PageState = {
   ai?: unknown;
   secondRead?: unknown;
   rescan?: RescanRequest;
+  /** Set when the page was read again because question numbers expected on it were missing (rereadGapPages). */
+  gapRetried?: boolean;
   verified?: { model: string; at: string; extra: string[] };
   /** The page's paid first read, kept until the page is finished: a stop during the second read never pays for it again. */
   primaryCache?: { model: string; out: PageOutput; at: string };
@@ -646,7 +649,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   const memory = await jobMemoryBrief(ctx.job, "extract");
   const userText = extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: total, textLayer: page.textLayer, memory });
   const bilingual = await jobIsBilingual(ctx.job);
-  const call = async (models: string[], task: "extract" | "verify") => {
+  const call = async (models: string[], task: "extract" | "verify", stage?: string) => {
     const { value, result: r } = await importerAiCallChecked(
       {
         jobId: ctx.job.id,
@@ -663,6 +666,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
         pageId: page.id,
         needsVision: true,
         jsonSchema: "extract",
+        ...(stage ? { stage } : {}),
       },
       (text) => parsePage(text)
     );
@@ -670,8 +674,26 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   };
   // A first read already paid for in an earlier run (the run stopped during the second read) is reused, never bought again.
   const cached = !state.rescan && state.primaryCache ? state.primaryCache : null;
-  const primary = cached ? { out: cached.out, model: cached.model, cost: 0 } : await call([ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks], "extract");
-  if (!cached) await prisma.aiImportPage.update({ where: { id: page.id }, data: { rawOutput: { ...state, primaryCache: { model: primary.model, out: primary.out, at: new Date().toISOString() } } as unknown as Prisma.InputJsonValue } });
+  let primary = cached ? { out: cached.out, model: cached.model, cost: 0 } : await call([ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks], "extract");
+  // A near-empty / incomplete reading (the model's notes instead of the page) is never accepted as processed: the page
+  // is read again by the confirmed reader, then by each configured fallback (approved models only), at most
+  // INCOMPLETE_READ_RETRIES more times; every attempt is a recorded, budgeted request. Still incomplete → the page
+  // fails with the reasons (Review → failed pages); nothing from such a reading is saved.
+  let incomplete = incompleteReading(toExtracted(primary.out, page.pageNumber, primary.model));
+  const retryModels = [ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks].filter((m, i, a) => !!m && a.indexOf(m) === i);
+  let reread = false;
+  for (let k = 0; incomplete.length && k < INCOMPLETE_READ_RETRIES; k++) {
+    const model = retryModels[Math.min(k, retryModels.length - 1)];
+    await logEvent(ctx.job.id, "PAGE_READING_INCOMPLETE", `${file.originalName} page ${page.pageNumber}: the reading by ${primary.model} is incomplete (${incomplete.slice(0, 3).join("; ")}) — reading the page again with ${model} (attempt ${k + 2} of ${INCOMPLETE_READ_RETRIES + 1}).`, { pageId: page.id, model: primary.model, reasons: incomplete.slice(0, 10), attempt: k + 1 });
+    primary = await call([model], "extract", "extract-retry-incomplete");
+    reread = true;
+    incomplete = incompleteReading(toExtracted(primary.out, page.pageNumber, primary.model));
+  }
+  if (incomplete.length) {
+    await logEvent(ctx.job.id, "PAGE_READING_INCOMPLETE", `${file.originalName} page ${page.pageNumber}: still incomplete after ${INCOMPLETE_READ_RETRIES + 1} readings — sent to review; nothing from these readings was saved.`, { pageId: page.id, reasons: incomplete.slice(0, 10), final: true });
+    throw new Error(`Incomplete reading after ${INCOMPLETE_READ_RETRIES + 1} attempts (${incomplete.slice(0, 2).join("; ")}). Nothing from it was saved — check the page and use Retry, or enter its questions by hand.`);
+  }
+  if (!cached || reread) await prisma.aiImportPage.update({ where: { id: page.id }, data: { rawOutput: { ...state, primaryCache: { model: primary.model, out: primary.out, at: new Date().toISOString() } } as unknown as Prisma.InputJsonValue } });
   const read = toExtracted(primary.out, page.pageNumber, primary.model);
   // Numbered instructions to candidates are never questions: kept in the page's reading, not saved, so they cannot take
   // the numbers of the real questions on the next page.
@@ -1030,6 +1052,60 @@ export async function runLocalPasses(ctx: StepContext): Promise<void> {
 }
 
 /** Vision extraction of pending pages, a bounded number at a time. Returns the pages it could not do without AI. */
+/**
+ * After every page of a paper was read successfully: a page that gave NO question although numbers are missing exactly
+ * around it (lib/ai-import/reading-checks.ts gapPages — the 2026-11-11 FSO page 2 case) is read once more by the
+ * confirmed reader, as a normal first reading (continuations join as usual); still nothing → the page goes to review
+ * (status FAILED naming the numbers). Deliberately narrow: pages that gave some questions keep the existing
+ * missing-number reporting, a file with a failed or unread page is left alone (its numbers are explained by that page),
+ * and papers whose numbering repeats (sections numbered from 1 again) are skipped.
+ */
+async function rereadGapPages(ctx: StepContext): Promise<void> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: ctx.job.id }, select: { expectedQuestions: true } });
+  const files = await prisma.aiImportFile.findMany({ where: { jobId: ctx.job.id, role: AiImportFileRole.PAPER } });
+  for (const file of files) {
+    if (!file.pageCount) continue;
+    const gapsNow = async () => {
+      const qs = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id }, select: { data: true, editedData: true, pages: true } });
+      const found = qs.map((q) => ({ number: ((q.editedData ?? q.data) as unknown as ExtractedQuestion).number, pages: q.pages })).filter((f): f is { number: number; pages: number[] } => typeof f.number === "number" && f.pages.length > 0);
+      if (new Set(found.map((f) => f.number)).size !== found.length) return new Map<number, number[]>();
+      return gapPages(found, files.length === 1 ? (job?.expectedQuestions ?? null) : null, file.pageCount!);
+    };
+    const gaps = await gapsNow();
+    if (!gaps.size) continue;
+    if (await prisma.aiImportPage.count({ where: { fileId: file.id, status: { not: AiImportPageStatus.DONE } } })) continue;
+    const withQuestions = new Set((await prisma.aiImportQuestion.findMany({ where: { fileId: file.id }, select: { pages: true } })).flatMap((q) => q.pages));
+    const pages = await prisma.aiImportPage.findMany({ where: { fileId: file.id, pageNumber: { in: [...gaps.keys()].filter((n) => !withQuestions.has(n)) }, status: AiImportPageStatus.DONE } });
+    for (const p of pages) {
+      const st = (p.rawOutput as PageState | null) ?? {};
+      if (st.gapRetried || p.kind === "BLANK" || p.kind === "DOCUMENT") continue;
+      if (!(await ctx.stillRunning())) return;
+      const missing = gaps.get(p.pageNumber)!;
+      await logEvent(ctx.job.id, "PAGE_NUMBERS_MISSING", `${file.originalName} page ${p.pageNumber}: question number(s) ${missing.join(", ")} should be on this page but were not read — reading the page once more.`, { pageId: p.id, missing });
+      const { primaryCache: _cached, ...fresh } = st;
+      await prisma.aiImportPage.update({ where: { id: p.id }, data: { status: AiImportPageStatus.PENDING, rawOutput: { ...fresh, gapRetried: true } as unknown as Prisma.InputJsonValue } });
+      try {
+        await aiPage(ctx, file, p.id);
+      } catch (e) {
+        if (e instanceof Error && (e.name === "ImporterBudgetError" || e instanceof ImporterAiUnavailable)) throw e;
+        await prisma.aiImportPage.update({ where: { id: p.id }, data: { status: AiImportPageStatus.FAILED, errorMessage: e instanceof Error ? e.message.slice(0, 300) : "extraction failed" } });
+        await logEvent(ctx.job.id, "PAGE_FAILED", `${file.originalName} page ${p.pageNumber}: ${e instanceof Error ? e.message.slice(0, 200) : "failed"}`, { pageId: p.id });
+      }
+    }
+    const still = await gapsNow();
+    const nowWith = new Set((await prisma.aiImportQuestion.findMany({ where: { fileId: file.id }, select: { pages: true } })).flatMap((q) => q.pages));
+    for (const p of await prisma.aiImportPage.findMany({ where: { fileId: file.id, pageNumber: { in: [...still.keys()].filter((n) => !nowWith.has(n)) }, status: AiImportPageStatus.DONE } })) {
+      if (!((p.rawOutput as PageState | null)?.gapRetried)) continue;
+      const missing = still.get(p.pageNumber)!;
+      await prisma.aiImportPage.update({ where: { id: p.id }, data: { status: AiImportPageStatus.FAILED, errorMessage: `Question number(s) ${missing.join(", ")} were not found on this page after it was read twice — check the page (Retry, or enter them by hand).`.slice(0, 300) } });
+      await logEvent(ctx.job.id, "PAGE_NUMBERS_MISSING", `${file.originalName} page ${p.pageNumber}: number(s) ${missing.join(", ")} still missing after a second reading — sent to review.`, { pageId: p.id, missing, final: true });
+    }
+  }
+}
+
+/** Extra readings of a page whose reading was incomplete (lib/ai-import/reading-checks.ts), and of a page missing numbers. */
+export const INCOMPLETE_READ_RETRIES = 1;
+
 export async function runAiPages(ctx: StepContext): Promise<{ skippedNoAi: number }> {
   const pending = await prisma.aiImportPage.findMany({ where: { jobId: ctx.job.id, status: AiImportPageStatus.PENDING }, orderBy: [{ fileId: "asc" }, { pageNumber: "asc" }], include: { file: true } });
   if (!pending.length) return { skippedNoAi: 0 };
@@ -1063,5 +1139,6 @@ export async function runAiPages(ctx: StepContext): Promise<{ skippedNoAi: numbe
   // Continuations read before their previous page finished are joined now that every page has settled.
   await joinPendingContinuations(ctx);
   if (stop) throw stop;
+  await rereadGapPages(ctx);
   return { skippedNoAi: 0 };
 }
