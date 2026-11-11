@@ -234,7 +234,7 @@ async function main() {
   await prisma.question.update({ where: { id: en.id }, data: { previousYearPaperId: enPaper.id } });
   const student = await prisma.student.create({ data: { studentId: `BI-${suffix}`, name: "BI Student", email: `bi-${suffix}@example.test`, authProvider: StudentAuthProvider.CREDENTIALS } });
   const started = await startPreviousYearPaperAttempt(student.id, pyq.id);
-  const attempt = await prisma.testAttempt.findUniqueOrThrow({ where: { id: (started as { id?: string; attemptId?: string }).id ?? (started as { attemptId: string }).attemptId }, include: { questions: { include: { answer: true }, orderBy: { order: "asc" } } } });
+  const attempt = await prisma.testAttempt.findUniqueOrThrow({ where: { id: started.id }, include: { questions: { include: { answer: true }, orderBy: { order: "asc" } } } });
   const snap = attempt.questions.map((t) => t.questionSnapshot as { text: string; hi?: { text: string; options: { label: string; text: string }[] }; correctLabel: string });
   check("bilingual snapshot carries both versions, one correctLabel", snap.length === 2 && snap.every((s) => !!s.hi?.text && !!s.correctLabel), snap.map((s) => Object.keys(s)));
   const player = toPlayerQuestions(attempt.questions, { instantMode: false });
@@ -251,7 +251,7 @@ async function main() {
   check("result: the correct label scores in whichever language it was chosen", (scored.correctCount ?? 0) === 1, { done, scored: [scored.correctCount, scored.score] });
 
   const enStart = await startPreviousYearPaperAttempt(student.id, enPaper.id);
-  const enAttempt = await prisma.testAttempt.findUniqueOrThrow({ where: { id: (enStart as { id?: string; attemptId?: string }).id ?? (enStart as { attemptId: string }).attemptId }, include: { questions: { include: { answer: true } } } });
+  const enAttempt = await prisma.testAttempt.findUniqueOrThrow({ where: { id: enStart.id }, include: { questions: { include: { answer: true } } } });
   const enSnap = enAttempt.questions[0].questionSnapshot as Record<string, unknown>;
   check("English-only exam: snapshot has exactly the v1 keys (unchanged)", JSON.stringify(Object.keys(enSnap).sort()) === JSON.stringify(["code", "correctLabel", "difficulty", "imageUrl", "options", "text"]), Object.keys(enSnap));
   check("English-only exam: player payload has no `hi` key", !("hi" in toPlayerQuestions(enAttempt.questions, { instantMode: false })[0]));
