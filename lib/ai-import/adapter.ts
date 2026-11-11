@@ -58,6 +58,9 @@ export function answerVerified(q: Pick<AiImportQuestion, "answerStatus" | "answe
  */
 export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] }, settings: ImporterSettings, opts: { ignoreApproval?: boolean } = {}): string | null {
   if (q.questionId) return "already imported";
+  // A question the official key DELETED (withdrawn / bonus) is kept in the import as a historical record only: never
+  // imported, so it can never reach a test or practice — whatever answer an administrator might set (2026-11-11).
+  if (q.answerStatus === AiImportAnswerStatus.WITHDRAWN) return "deleted in the official answer key (kept for the record, never imported)";
   if (q.status === AiImportQuestionStatus.REJECTED) return "rejected";
   if (q.status === AiImportQuestionStatus.NOT_IMPORTABLE) return "not importable";
   if (q.status === AiImportQuestionStatus.DUPLICATE && !q.allowDuplicate) return "duplicate";

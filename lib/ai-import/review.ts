@@ -1,6 +1,6 @@
 import "server-only";
 import { ISSUE_DEFS } from "@/lib/ai-import/config";
-import { AiImportJobStatus, AiImportPageStatus, AiImportQuestionStatus, type Prisma } from "@prisma/client";
+import { AiImportAnswerStatus, AiImportJobStatus, AiImportPageStatus, AiImportQuestionStatus, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logEvent, ImportJobError } from "@/lib/ai-import/jobs";
 import { importBlocker, type ImportMode, type ImportPlan } from "@/lib/ai-import/adapter";
@@ -302,6 +302,7 @@ export async function restoreQuestion(id: string, actorId: string) {
 /** The admin chooses the correct answer by hand (stored as admin-confirmed — never as "official"). */
 export async function setAnswer(id: string, actorId: string, labels: string[]) {
   const q = await editable(id);
+  if (q.answerStatus === AiImportAnswerStatus.WITHDRAWN) throw new ImportJobError("The official answer key deleted this question: it is kept for the record and is never imported, so no answer can be set.");
   const e = effective(q);
   const clean = [...new Set(labels.map((l) => l.toUpperCase()))].filter((l) => e.options.some((o) => o.label === l));
   if (!clean.length) throw new ImportJobError("Choose at least one of the question's options.");

@@ -20,7 +20,7 @@ import { saveImporterSettings, getImporterSettings } from "@/lib/ai-import/setti
 import { importBlocker } from "@/lib/ai-import/adapter";
 import { addFile, completeFile, confirmJob, createJob, putChunk, requestAnalysis, setExpectedQuestions } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
-import { approveQuestions, editQuestion, requestImport, revalidateQuestions, setFigure, setTaxonomy } from "@/lib/ai-import/review";
+import { approveQuestions, editQuestion, requestImport, revalidateQuestions, setAnswer, setFigure, setTaxonomy } from "@/lib/ai-import/review";
 import { effective } from "@/lib/ai-import/post";
 import { parseKeyText, keyLooksValid } from "@/lib/ai-import/keys";
 import { pageSchema, toExtracted, EXTRACT_SYSTEM } from "@/lib/ai-import/prompts";
@@ -189,6 +189,11 @@ async function main() {
   check("Q1 answer = official key (2) → B", q1.answerStatus === "OFFICIAL_MATCHED" && q1.finalAnswer.join() === "B", [q1.answerStatus, q1.finalAnswer]);
   const q7 = byNo(7);
   check("Q7 deleted in key → WITHDRAWN, no answer, never importable", q7.answerStatus === "WITHDRAWN" && !q7.finalAnswer.length && !!importBlocker(q7, await getImporterSettings(), { ignoreApproval: true }), [q7.answerStatus, q7.finalAnswer]);
+  let q7refused = "";
+  await setAnswer(q7.id, actor, ["A"]).catch((e: Error) => (q7refused = e.message));
+  const q7after = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: q7.id }, include: { figures: true } });
+  check("Q7 deleted in key: an administrator cannot set an answer on it", /deleted this question/.test(q7refused) && !q7after.finalAnswer.length, q7refused);
+  check("Q7 deleted in key: the import gate names the deletion even if an answer, approval and subject were present", /deleted in the official answer key/.test(importBlocker({ ...q7after, finalAnswer: ["A"], answerConfirmedById: actor, approvedById: actor, subjectId: subject.id }, await getImporterSettings()) ?? ""));
   for (const n of [2, 3, 5, 6]) check(`Q${n}: import blocked until the pair is fixed`, /Hindi/.test(importBlocker(byNo(n), await getImporterSettings(), { ignoreApproval: true }) ?? ""), importBlocker(byNo(n), await getImporterSettings(), { ignoreApproval: true }));
 
   section("E. Review: Hindi correction / confirmation");
