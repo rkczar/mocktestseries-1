@@ -83,6 +83,8 @@ try {
     const t1 = await timerSeconds(page);
     check("timer continues (not reset)", t0 !== null && t1 !== null && t1 <= t0 && t0 - t1 < 30, [t0, t1]);
     await page.getByRole("button", { name: /Mark for Review & Next/ }).first().click();
+    // settled() can return before the save starts, so wait for the move itself.
+    await page.waitForFunction(() => document.querySelector("[data-testid=test-player]")?.getAttribute("data-question-index") === "1", null, { timeout: 15000 }).catch(() => {});
     await settled(page);
     check("Mark for Review & Next → question 2", (await position(page)) === 1);
     await page.locator("[data-testid=lang-hi]").click();
