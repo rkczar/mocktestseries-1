@@ -39,6 +39,7 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search") || undefined;
     const hasImage = searchParams.get("hasImage") || undefined; // "true" | "false"
     const reviewRequiredParam = searchParams.get("reviewRequired") || undefined; // "true" | "false"
+    const excludeFromPracticeParam = searchParams.get("excludeFromPractice") || undefined; // "true" | "false"
     const importBatchId = searchParams.get("importBatchId") || undefined;
     const importedFrom = searchParams.get("importedFrom") || undefined; // ISO date, filters Question.createdAt
     const importedTo = searchParams.get("importedTo") || undefined;
@@ -67,6 +68,9 @@ export async function GET(request: NextRequest) {
     }
     if (reviewRequiredParam !== undefined) {
       where.reviewRequired = reviewRequiredParam === "true";
+    }
+    if (excludeFromPracticeParam === "true" || excludeFromPracticeParam === "false") {
+      where.excludeFromPractice = excludeFromPracticeParam === "true";
     }
     if (importBatchId) where.importBatchId = importBatchId;
     if (contentFormat === "PLAIN" || contentFormat === "RICH_V1") where.contentFormat = contentFormat;

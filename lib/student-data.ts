@@ -499,7 +499,7 @@ export async function getSubjectTestSetup(examId: string) {
 
   const years = await prisma.question.groupBy({
     by: ["examYear"],
-    where: { examId, status: QuestionStatus.PUBLISHED, examYear: { not: null } },
+    where: { examId, status: QuestionStatus.PUBLISHED, excludeFromPractice: false, examYear: { not: null } },
     _count: { _all: true },
     orderBy: { examYear: "desc" },
   });
@@ -1120,7 +1120,8 @@ export async function getExamSubjectsOverview(examId: string) {
 
   const counts = await prisma.question.groupBy({
     by: ["subjectId"],
-    where: { examId, subjectId: { in: subjects.map((s) => s.id) }, status: QuestionStatus.PUBLISHED },
+    // The practice pool (Test on the Go / Subject Test pickers): questions kept out of automatic practice not counted.
+    where: { examId, subjectId: { in: subjects.map((s) => s.id) }, status: QuestionStatus.PUBLISHED, excludeFromPractice: false },
     _count: { _all: true },
   });
   const countBySubject = new Map(counts.map((c) => [c.subjectId, c._count._all]));

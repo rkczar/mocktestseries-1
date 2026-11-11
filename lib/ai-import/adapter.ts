@@ -61,6 +61,9 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
   // A question the official key DELETED (withdrawn / bonus) is kept in the import as a historical record only: never
   // imported, so it can never reach a test or practice — whatever answer an administrator might set (2026-11-11).
   if (q.answerStatus === AiImportAnswerStatus.WITHDRAWN) return "deleted in the official answer key (kept for the record, never imported)";
+  // Subject / topic still under academic review (ambiguous or unmapped): never imported, so never published, until an
+  // academic decision clears the status (lib/ai-import/review.ts setAcademicReview).
+  if (q.academicReview) return `taxonomy pending academic review (${q.academicReview})`;
   if (q.status === AiImportQuestionStatus.REJECTED) return "rejected";
   if (q.status === AiImportQuestionStatus.NOT_IMPORTABLE) return "not importable";
   if (q.status === AiImportQuestionStatus.DUPLICATE && !q.allowDuplicate) return "duplicate";
@@ -286,6 +289,8 @@ async function importBatch(job: AiImportJob, rows: (AiImportQuestion & { figures
           data: {
             answerVerification: answerVerification(q),
             ...(hi ? { textHi: hi.stem } : {}),
+            // Kept out of automatically generated practice when the administrator marked it so in the import (2026-11-11).
+            ...(q.excludeFromPractice ? { excludeFromPractice: true, excludeFromPracticeReason: q.excludeFromPracticeReason } : {}),
             ...(roundTripOk ? {} : { reviewRequired: true, reviewReason: "AI importer: an image did not survive the import — check the question's images", editorialStage: EditorialStage.NEEDS_REVIEW }),
           },
         }),

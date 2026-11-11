@@ -37,6 +37,8 @@ export interface QuestionDefaults {
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   reviewRequired?: boolean;
   reviewReason?: string | null;
+  excludeFromPractice?: boolean;
+  excludeFromPracticeReason?: string | null;
   options: { label: string; text: string; imageUrl?: string | null; isCorrect: boolean }[];
   /** NEET Phase 4; absent = SINGLE_CORRECT. */
   questionType?: string;
@@ -118,6 +120,7 @@ export function QuestionForm({ exams, defaults, teacher }: { exams: ExamTree[]; 
   const optionImageUrl = (label: string) => defaults?.options.find((o) => o.label === label)?.imageUrl ?? null;
   const correctLabel = defaults?.options.find((o) => o.isCorrect)?.label ?? "A";
   const [reviewRequired, setReviewRequired] = useState(defaults?.reviewRequired ?? false);
+  const [excludeFromPractice, setExcludeFromPractice] = useState(defaults?.excludeFromPractice ?? false);
   const [questionType, setQuestionType] = useState<QuestionTypeName>(toQuestionType(defaults?.questionType));
   const multi = questionType === "MULTIPLE_CORRECT";
   const isCorrectDefault = (label: string) => defaults?.options.find((o) => o.label === label)?.isCorrect ?? false;
@@ -386,6 +389,27 @@ export function QuestionForm({ exams, defaults, teacher }: { exams: ExamTree[]; 
               name="reviewReason"
               defaultValue={defaults?.reviewReason ?? ""}
               placeholder="Why does this question need review?"
+            />
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label className="flex items-center gap-2">
+            <Checkbox
+              name="excludeFromPractice"
+              checked={excludeFromPractice}
+              onCheckedChange={(checked) => setExcludeFromPractice(checked === true)}
+              data-testid="exclude-from-practice"
+            />
+            Exclude from automatic practice
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Not drawn into Subject / Topic Tests, Test on the Go or student-built modules. Still served by its own Previous Year Paper and by tests or modules you curate by hand.
+          </p>
+          {excludeFromPractice ? (
+            <Input
+              name="excludeFromPracticeReason"
+              defaultValue={defaults?.excludeFromPracticeReason ?? ""}
+              placeholder="Why? e.g. historical current affairs (2019 paper)"
             />
           ) : null}
         </div>

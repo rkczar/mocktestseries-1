@@ -994,6 +994,11 @@ model Question {
   // orthogonal to status so nothing filtering by status silently changes.
   reviewRequired      Boolean            @default(false)
   reviewReason        String?
+  // Kept out of AUTOMATICALLY generated practice (Subject / Topic Test, Test on the Go, a student's filtered Custom
+  // Module — lib/question-selection.ts toQuestionWhere), e.g. historical current-affairs PYQs (FSO, 2026-11-11). Still
+  // served by its own Previous Year Paper and by any test or module an admin curated by hand (explicit membership).
+  excludeFromPractice       Boolean @default(false)
+  excludeFromPracticeReason String?
   importBatchId       String?
   importBatch         BulkImportRun?     @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   // Rich scientific content (NEET Phase 1). PLAIN = today's exact rendering:
@@ -3890,6 +3895,13 @@ model AiImportQuestion {
   status               AiImportQuestionStatus @default(EXTRACTED)
   /// Machine-readable flags (EXTRACTION_UNCERTAIN, IMAGE_MAPPING_UNCERTAIN, UNSUPPORTED_TYPE, TOPIC_UNCERTAIN, …).
   issueCodes           String[]
+  /// Carried to Question.excludeFromPractice on import (historical current affairs; set by an administrator).
+  excludeFromPractice       Boolean @default(false)
+  excludeFromPracticeReason String?
+  /// Taxonomy academic review: null = none pending; AMBIGUOUS_PENDING_ACADEMIC_REVIEW / UNMAPPED_PENDING_ACADEMIC_REVIEW
+  /// → never imported (lib/ai-import/adapter.ts importBlocker) until an academic decision clears it.
+  academicReview            String?
+  academicReviewNote        String?
   issues               Json?
   /// Extracted question (normalized): stem, options[], type, figures, printed answer, confidence.
   data                 Json

@@ -20,7 +20,7 @@ import { saveImporterSettings, getImporterSettings } from "@/lib/ai-import/setti
 import { importBlocker } from "@/lib/ai-import/adapter";
 import { addFile, completeFile, confirmJob, createJob, putChunk, requestAnalysis, setExpectedQuestions } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
-import { approveQuestions, editQuestion, requestImport, revalidateQuestions, setAnswer, setFigure, setTaxonomy } from "@/lib/ai-import/review";
+import { approveQuestions, editQuestion, requestImport, revalidateQuestions, setAcademicReview, setAnswer, setFigure, setPracticeExclusion, setTaxonomy } from "@/lib/ai-import/review";
 import { effective } from "@/lib/ai-import/post";
 import { parseKeyText, keyLooksValid } from "@/lib/ai-import/keys";
 import { pageSchema, toExtracted, EXTRACT_SYSTEM } from "@/lib/ai-import/prompts";
@@ -212,6 +212,8 @@ async function main() {
   for (const x of [q1, q4]) await setTaxonomy(x.id, actor, subject.id, topic.id);
   check("Q1's diagram placement waits for an administrator (never auto-trusted)", q1.issueCodes.includes("IMAGE_MAPPING_UNCERTAIN"), q1.issueCodes);
   for (const f of q1.figures) await setFigure(f.id, actor, "STEM", null);
+  // Q4 is marked historical current affairs before import; Q1 is not (2026-11-11 practice exclusion).
+  await setPracticeExclusion([q4.id], actor, true, "Historical current affairs (test)");
   const ap = await approveQuestions([q1.id, q4.id], actor);
   check("Q1 + Q4 approved", ap.approved === 2, ap.refused);
   await requestImport(jobId, actor, "DRAFT", [q1.id, q4.id]);
@@ -220,6 +222,14 @@ async function main() {
   check("both imported", imported.every((x) => x.status === "IMPORTED" && !!x.questionId), imported.map((x) => [x.status, x.issues]));
   const bq1 = await prisma.question.findUniqueOrThrow({ where: { id: imported.find((x) => x.id === q1.id)!.questionId! }, include: { options: { orderBy: { order: "asc" } }, assets: true } });
   check("Question.text = English, Question.textHi = Hindi", bq1.text.includes("Example of Gel is") && bq1.textHi === "जैल का उदाहरण है", [bq1.text, bq1.textHi]);
+  const bq4 = await prisma.question.findUniqueOrThrow({ where: { id: imported.find((x) => x.id === q4.id)!.questionId! } });
+  check("practice exclusion carried on import: Q4 excluded with its reason, Q1 not", bq4.excludeFromPractice && bq4.excludeFromPracticeReason === "Historical current affairs (test)" && !bq1.excludeFromPractice, [bq4.excludeFromPractice, bq4.excludeFromPracticeReason, bq1.excludeFromPractice]);
+  {
+    const held = byNo(5);
+    await setAcademicReview([held.id], actor, "UNMAPPED_PENDING_ACADEMIC_REVIEW", "test hold");
+    const h = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: held.id }, include: { figures: true } });
+    check("an import question under academic review is refused by the import gate (stays in staging, visible)", h.academicReview === "UNMAPPED_PENDING_ACADEMIC_REVIEW" && /taxonomy pending academic review/.test(importBlocker(h, await getImporterSettings(), { ignoreApproval: true }) ?? ""));
+  }
   check("4 option rows, each with English + Hindi text, one correct (B)", bq1.options.length === 4 && bq1.options.map((o) => o.textHi).join() === "धुआँ,कोहरा,दूध,मक्खन" && bq1.options.filter((o) => o.isCorrect).map((o) => o.label).join() === "B", bq1.options);
   check("the diagram is stored once on the question (shared by both languages)", bq1.assets.filter((a) => a.role === "QUESTION").length === 1, bq1.assets.length);
   check("imported as DRAFT, never published by the import", bq1.status === "DRAFT");

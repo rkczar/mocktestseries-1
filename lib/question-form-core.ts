@@ -50,6 +50,9 @@ export const questionSchema = z
     matchListII: z.string().optional().default(""),
     reviewRequired: z.string().optional(),
     reviewReason: z.string().trim().max(500).optional().default(""),
+    // Admin form only: "on" keeps the question out of automatically generated practice (lib/question-selection.ts).
+    excludeFromPractice: z.string().optional(),
+    excludeFromPracticeReason: z.string().trim().max(300).optional().default(""),
   })
   .superRefine((data, ctx) => {
     const pairs: [(typeof OPTION_LABELS)[number], string, string][] = [
@@ -147,6 +150,8 @@ export function parseQuestionForm(formData: FormData) {
     matchListII: formData.get("matchListII") || "",
     reviewRequired: formData.get("reviewRequired") || undefined,
     reviewReason: formData.get("reviewReason") || undefined,
+    excludeFromPractice: formData.get("excludeFromPractice") || undefined,
+    excludeFromPracticeReason: formData.get("excludeFromPracticeReason") || "",
   });
 }
 

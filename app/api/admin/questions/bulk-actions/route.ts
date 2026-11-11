@@ -16,7 +16,7 @@ import { publishQuestions, summarizeBlocks } from "@/lib/question-publish-policy
  * other question mutation — FULL_ADMIN (view-only on the Question Bank) must
  * get a 403 here even if a client somehow still shows the buttons.
  */
-const ACTIONS = ["PUBLISH", "DRAFT", "ARCHIVE", "DELETE", "SET_REVIEW_REQUIRED"] as const;
+const ACTIONS = ["PUBLISH", "DRAFT", "ARCHIVE", "DELETE", "SET_REVIEW_REQUIRED", "SET_EXCLUDE_FROM_PRACTICE"] as const;
 type BulkAction = (typeof ACTIONS)[number];
 
 const MAX_IDS = 5000;
@@ -32,11 +32,13 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json().catch(() => ({}));
-    const { action, ids, reviewRequired, reviewReason } = body as {
+    const { action, ids, reviewRequired, reviewReason, excludeFromPractice, excludeFromPracticeReason } = body as {
       action?: string;
       ids?: string[];
       reviewRequired?: boolean;
       reviewReason?: string;
+      excludeFromPractice?: boolean;
+      excludeFromPracticeReason?: string;
     };
 
     if (!action || !ACTIONS.includes(action as BulkAction)) {
@@ -55,7 +57,7 @@ export async function POST(request: NextRequest) {
     // Delete / review-flag changes never touch them (PUBLISH reports them as
     // blocked: RETIRED; ARCHIVE is a no-op for them — they are already archived).
     const retiredIds =
-      act === "DRAFT" || act === "DELETE" || act === "SET_REVIEW_REQUIRED"
+      act === "DRAFT" || act === "DELETE" || act === "SET_REVIEW_REQUIRED" || act === "SET_EXCLUDE_FROM_PRACTICE"
         ? new Set((await prisma.question.findMany({ where: { id: { in: requestedIds }, retiredAt: { not: null } }, select: { id: true } })).map((q) => q.id))
         : new Set<string>();
     const uniqueIds = requestedIds.filter((id) => !retiredIds.has(id));
@@ -104,6 +106,22 @@ export async function POST(request: NextRequest) {
       });
 
       return NextResponse.json({ success: true, action: act, updatedCount: result.count });
+    }
+
+    if (act === "SET_EXCLUDE_FROM_PRACTICE") {
+      const exclude = excludeFromPractice ?? true;
+      const reason = exclude ? (typeof excludeFromPracticeReason === "string" ? excludeFromPracticeReason.trim().slice(0, 300) : "") || null : null;
+      const result = await prisma.question.updateMany({ where: { id: { in: uniqueIds } }, data: { excludeFromPractice: exclude, excludeFromPracticeReason: reason } });
+      await prisma.auditLog.create({
+        data: { actorId: session.user.id, action: "QUESTION_BULK_SET_EXCLUDE_FROM_PRACTICE", entityType: "Question", entityId: null, metadata: { ids: uniqueIds, count: result.count, excludeFromPractice: exclude, reason } },
+      });
+      return NextResponse.json({
+        success: true,
+        action: act,
+        updatedCount: result.count,
+        retiredSkippedCount: retiredIds.size,
+        message: `${exclude ? "Excluded" : "Included"} ${result.count} question(s) ${exclude ? "from" : "in"} automatically generated practice.${retiredIds.size ? ` ${retiredIds.size} retired question(s) left unchanged.` : ""}`,
+      });
     }
 
     if (act === "SET_REVIEW_REQUIRED") {

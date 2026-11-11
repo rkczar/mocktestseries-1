@@ -47,6 +47,8 @@ export async function createQuestionAction(
     status,
     reviewRequired,
     reviewReason,
+    excludeFromPractice,
+    excludeFromPracticeReason,
   } = parsed.data;
 
   const hierarchyError = await assertHierarchyConsistency(prisma, { examId, subjectId, topicId, subTopicId });
@@ -91,6 +93,8 @@ export async function createQuestionAction(
         examYear: finalYear,
         reviewRequired: isReviewRequired,
         reviewReason: isReviewRequired ? reviewReason || null : null,
+        excludeFromPractice: excludeFromPractice === "on",
+        excludeFromPracticeReason: excludeFromPractice === "on" ? excludeFromPracticeReason || null : null,
         questionType: parsed.data.questionType,
         matchSpec: match.spec ? (match.spec as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
       },
@@ -152,6 +156,8 @@ export async function updateQuestionAction(
     status,
     reviewRequired,
     reviewReason,
+    excludeFromPractice,
+    excludeFromPracticeReason,
   } = parsed.data;
 
   const hierarchyError = await assertHierarchyConsistency(prisma, { examId, subjectId, topicId, subTopicId });
@@ -204,6 +210,8 @@ export async function updateQuestionAction(
         status: publishNow ? before!.status : status,
         reviewRequired: isReviewRequired,
         reviewReason: isReviewRequired ? reviewReason || null : null,
+        excludeFromPractice: excludeFromPractice === "on",
+        excludeFromPracticeReason: excludeFromPractice === "on" ? excludeFromPracticeReason || null : null,
         questionType: parsed.data.questionType,
         matchSpec: match.spec ? (match.spec as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
       },

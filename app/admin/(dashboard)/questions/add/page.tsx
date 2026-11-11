@@ -45,6 +45,8 @@ export default async function AddQuestionPage({
       status: question.status,
       reviewRequired: question.reviewRequired,
       reviewReason: question.reviewReason,
+      excludeFromPractice: question.excludeFromPractice,
+      excludeFromPracticeReason: question.excludeFromPracticeReason,
       options: question.options,
       questionType: question.questionType,
       matchSpec: question.matchSpec,

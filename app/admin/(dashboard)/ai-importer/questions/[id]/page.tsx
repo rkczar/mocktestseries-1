@@ -283,6 +283,13 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
               {" · "}
               <span className={blockerPublish ? "text-[var(--color-warning)]" : "text-[var(--color-success)]"}>Publish: {blockerPublish ? `not eligible — ${blockerPublish}` : "eligible"}</span>
             </div>
+            {q.academicReview || q.excludeFromPractice ? (
+              <div className="text-xs" data-testid="taxonomy-practice-status">
+                {q.academicReview ? <span className="text-[var(--color-warning)]">Taxonomy: {q.academicReview}{q.academicReviewNote ? ` — ${q.academicReviewNote}` : ""}</span> : null}
+                {q.academicReview && q.excludeFromPractice ? " · " : null}
+                {q.excludeFromPractice ? <span>Practice: excluded from automatic practice{q.excludeFromPracticeReason ? ` (${q.excludeFromPracticeReason})` : ""}</span> : null}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       </div>

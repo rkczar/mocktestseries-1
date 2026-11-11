@@ -131,6 +131,11 @@ function toQuestionWhere(filters: QuestionSelectionFilters) {
     status: QuestionStatus.PUBLISHED,
     // Never a retired question (lib/question-servable.ts); retired rows are ARCHIVED too.
     retiredAt: null,
+    // Never a question kept out of automatic practice (historical current affairs, 2026-11-11): every automatically
+    // generated pool (Subject / Topic Test, Test on the Go, a student's filtered Custom Module, their counts) is built
+    // here, server-side. Explicit memberships — its PYQ paper, a curated mock / grand / live test, an admin module —
+    // do not pass through this filter and still serve it.
+    excludeFromPractice: false,
     examYear: filters.year ?? undefined,
     subjectId: filters.subjectId ?? undefined,
     topicId: filters.topicId ?? undefined,
@@ -272,6 +277,7 @@ export async function distinctYears(filters: QuestionSelectionFilters): Promise<
     where: {
       examId: filters.examId,
       status: QuestionStatus.PUBLISHED,
+      excludeFromPractice: false,
       subjectId: filters.subjectId ?? undefined,
       examYear: { not: null },
     },

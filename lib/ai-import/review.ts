@@ -313,6 +313,46 @@ export async function setAnswer(id: string, actorId: string, labels: string[]) {
   await logEvent(q.jobId, "ANSWER_SET", `Q${q.sourceLabel}: answer ${clean.join(", ")} set by an administrator`, { questionId: id }, actorId);
 }
 
+/** Taxonomy academic-review statuses an import question can be held under (never imported while set). */
+export const ACADEMIC_REVIEW_STATUSES = ["AMBIGUOUS_PENDING_ACADEMIC_REVIEW", "UNMAPPED_PENDING_ACADEMIC_REVIEW"] as const;
+export type AcademicReviewStatus = (typeof ACADEMIC_REVIEW_STATUSES)[number];
+
+/**
+ * Holds questions under taxonomy academic review (or clears it with null after the academic decision). While held,
+ * importBlocker refuses them, so they never reach the Question Bank and can never be published. Recorded in the
+ * question's checks, the job's events and the audit log. Extracted text and answers are not touched.
+ */
+export async function setAcademicReview(ids: string[], actorId: string, status: AcademicReviewStatus | null, note: string | null = null): Promise<number> {
+  if (status !== null && !ACADEMIC_REVIEW_STATUSES.includes(status)) throw new ImportJobError("Unknown academic-review status.");
+  let n = 0;
+  for (const id of ids) {
+    const q = await editable(id);
+    await prisma.aiImportQuestion.update({ where: { id }, data: { academicReview: status, academicReviewNote: status ? (note?.trim().slice(0, 500) || null) : null, ...UNAPPROVE } });
+    await adminCheck(id, status ? "Academic review pending" : "Academic review cleared", status ? `${status}${note ? `: ${note.trim().slice(0, 200)}` : ""}` : "Taxonomy academic review cleared by an administrator.");
+    await logEvent(q.jobId, status ? "ACADEMIC_REVIEW_SET" : "ACADEMIC_REVIEW_CLEARED", `Q${q.sourceLabel}: ${status ?? "academic review cleared"}`, { questionId: id, status }, actorId);
+    n++;
+  }
+  if (n) await prisma.auditLog.create({ data: { actorId, action: status ? "AI_IMPORT_ACADEMIC_REVIEW_SET" : "AI_IMPORT_ACADEMIC_REVIEW_CLEARED", entityType: "AiImportQuestion", entityId: null, metadata: { ids, status, note } } });
+  return n;
+}
+
+/**
+ * Marks import questions to be kept out of automatically generated practice once imported (historical current
+ * affairs, 2026-11-11) — carried to Question.excludeFromPractice by the import. Approval is not withdrawn: it does not
+ * change what the question says or its answer.
+ */
+export async function setPracticeExclusion(ids: string[], actorId: string, exclude: boolean, reason: string | null = null): Promise<number> {
+  let n = 0;
+  for (const id of ids) {
+    const q = await editable(id);
+    await prisma.aiImportQuestion.update({ where: { id }, data: { excludeFromPractice: exclude, excludeFromPracticeReason: exclude ? (reason?.trim().slice(0, 300) || null) : null } });
+    await logEvent(q.jobId, "PRACTICE_EXCLUSION_SET", `Q${q.sourceLabel}: ${exclude ? "kept out of automatic practice" : "included in automatic practice"}${exclude && reason ? ` (${reason.trim().slice(0, 120)})` : ""}`, { questionId: id, exclude }, actorId);
+    n++;
+  }
+  if (n) await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_PRACTICE_EXCLUSION_SET", entityType: "AiImportQuestion", entityId: null, metadata: { ids, exclude, reason } } });
+  return n;
+}
+
 /**
  * Subject / topic / sub-topic from the exam's own taxonomy only (existing ids; nothing is created). Recorded in the
  * question's checks, the job's events and the audit log; with `remember` the confirmed mapping is stored as a reusable

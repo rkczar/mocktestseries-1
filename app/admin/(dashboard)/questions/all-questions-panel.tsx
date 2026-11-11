@@ -14,6 +14,7 @@ export async function AllQuestionsPanel({
   isPyq,
   hasImage,
   reviewRequired,
+  excludeFromPractice,
   importBatchId,
   importedFrom,
   importedTo,
@@ -31,6 +32,7 @@ export async function AllQuestionsPanel({
   isPyq?: string;
   hasImage?: string;
   reviewRequired?: string;
+  excludeFromPractice?: string;
   importBatchId?: string;
   importedFrom?: string;
   importedTo?: string;
@@ -75,6 +77,7 @@ export async function AllQuestionsPanel({
     isPyq: isPyq || "",
     hasImage: hasImage || "",
     reviewRequired: reviewRequired || "",
+    excludeFromPractice: excludeFromPractice || "",
     importBatchId: importBatchId || "",
     contentFormat: "",
     editorialStage: "",

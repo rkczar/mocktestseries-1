@@ -34,6 +34,9 @@ interface Question {
   examYear: number | null;
   source: string;
   reviewRequired: boolean;
+  /** Kept out of automatically generated practice (Subject / Topic Test, Test on the Go, student modules). */
+  excludeFromPractice?: boolean;
+  excludeFromPracticeReason?: string | null;
   /** AI Question Importer answer provenance (null for every other question). */
   answerVerification?: string | null;
   createdAt: string;
@@ -106,6 +109,7 @@ export function AllQuestionsPanelClient({
   const [isPyq, setIsPyq] = useState(initialFilters.isPyq || "");
   const [hasImage, setHasImage] = useState(initialFilters.hasImage || "");
   const [reviewRequired, setReviewRequired] = useState(initialFilters.reviewRequired || "");
+  const [excludeFromPractice, setExcludeFromPractice] = useState(initialFilters.excludeFromPractice || "");
   const [importBatchId, setImportBatchId] = useState(initialFilters.importBatchId || "");
   const [contentFormat, setContentFormat] = useState(initialFilters.contentFormat || "");
   const [editorialStage, setEditorialStage] = useState(initialFilters.editorialStage || "");
@@ -135,6 +139,7 @@ export function AllQuestionsPanelClient({
         isPyq,
         hasImage,
         reviewRequired,
+        excludeFromPractice,
         importBatchId,
         contentFormat,
         editorialStage,
@@ -157,6 +162,7 @@ export function AllQuestionsPanelClient({
       isPyq,
       hasImage,
       reviewRequired,
+      excludeFromPractice,
       importBatchId,
       contentFormat,
       editorialStage,
@@ -268,6 +274,9 @@ export function AllQuestionsPanelClient({
     if (bulkAction === "SET_REVIEW_REQUIRED" && !confirm(`Flag ${ids.length} question(s) as needing manual review?`)) {
       return;
     }
+    if (bulkAction === "SET_EXCLUDE_FROM_PRACTICE" && !confirm(`Keep ${ids.length} question(s) out of automatically generated practice (Subject / Topic Tests, Test on the Go)? Their PYQ papers and hand-curated tests still include them.`)) {
+      return;
+    }
     if (bulkAction === "CLEAR_REVIEW_REQUIRED" && !confirm(`Mark ${ids.length} question(s) as reviewed? This clears their review flag so they can be published.`)) {
       return;
     }
@@ -279,7 +288,11 @@ export function AllQuestionsPanelClient({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          bulkAction === "CLEAR_REVIEW_REQUIRED" ? { action: "SET_REVIEW_REQUIRED", ids, reviewRequired: false } : { action: bulkAction, ids }
+          bulkAction === "CLEAR_REVIEW_REQUIRED"
+            ? { action: "SET_REVIEW_REQUIRED", ids, reviewRequired: false }
+            : bulkAction === "SET_EXCLUDE_FROM_PRACTICE" || bulkAction === "CLEAR_EXCLUDE_FROM_PRACTICE"
+              ? { action: "SET_EXCLUDE_FROM_PRACTICE", ids, excludeFromPractice: bulkAction === "SET_EXCLUDE_FROM_PRACTICE" }
+              : { action: bulkAction, ids }
         ),
       });
       const data = await response.json();
@@ -528,6 +541,20 @@ export function AllQuestionsPanelClient({
             </select>
 
             <select
+              value={excludeFromPractice}
+              onChange={(e) => {
+                setExcludeFromPractice(e.target.value);
+                setPage(1);
+              }}
+              className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
+              aria-label="Practice"
+            >
+              <option value="">Practice: any</option>
+              <option value="true">Excluded from practice</option>
+              <option value="false">In practice</option>
+            </select>
+
+            <select
               value={contentFormat}
               onChange={(e) => {
                 setContentFormat(e.target.value);
@@ -638,6 +665,8 @@ export function AllQuestionsPanelClient({
                 <option value="ARCHIVE">Archive</option>
                 <option value="SET_REVIEW_REQUIRED">Set Review Required</option>
                 <option value="CLEAR_REVIEW_REQUIRED">Mark Reviewed (clear flag)</option>
+                <option value="SET_EXCLUDE_FROM_PRACTICE">Exclude from practice</option>
+                <option value="CLEAR_EXCLUDE_FROM_PRACTICE">Include in practice</option>
                 <option value="DELETE">Delete</option>
               </select>
               <Button onClick={handleBulkAction} disabled={!bulkAction || selectedIds.size === 0 || bulkBusy} size="sm">
@@ -736,6 +765,7 @@ export function AllQuestionsPanelClient({
                     </td>
                     <td className="py-2.5 pr-4">
                       {q.reviewRequired ? <Badge variant="warning">Review</Badge> : null}
+                      {q.excludeFromPractice ? <Badge variant="info" title={q.excludeFromPracticeReason || "Kept out of automatically generated practice; still in its PYQ paper and curated tests"}>Practice excluded</Badge> : null}
                       {q.answerVerification === "UNVERIFIED" ? <Badge variant="warning" title="Imported without an official answer key">Answer unverified</Badge> : null}
                       {q.answerVerification === "ADMIN_CONFIRMED" ? <Badge variant="info" title="Answer chosen by an administrator during AI import">Admin answer</Badge> : null}
                     </td>
