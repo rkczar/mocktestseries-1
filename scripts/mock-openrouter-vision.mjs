@@ -133,7 +133,8 @@ const routesOf = (id) => {
 const zdrRoute = (id) => !config.zdrRemoved.includes(id) && routesOf(id).some((r) => r.tag !== "mockprov/std");
 const DEFAULT_CONFIG = { classifyKeep: null, classifyShift: false, classifyNoAbout: false, keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, reasonModels: false, batchModels: false, script: {}, keyHeader: null, rateLimit: {}, badRequest: {}, failTask: {} };
 const config = structuredClone(DEFAULT_CONFIG);
-const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170]];
+// 7 and 8 (2026-11-11, scripts/importer-recovery-fixtures.ts): far from every older colour, so older fixtures decode as before.
+const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170], [255, 230, 0], [120, 60, 20]];
 const markerRgb = (n) => ({ r: PALETTE[n][0], g: PALETTE[n][1], b: PALETTE[n][2] });
 
 const stats = { chat: 0, byModel: {}, byTask: {}, byMarker: {}, privacy: [], zdr: [], requireParams: [], reasoning: [], routeReads: 0, bodies: 0, attempts: {}, rateLimited: 0, responseFormat: [], inflight: 0, maxInflight: 0, memory: {}, temperature: {} };

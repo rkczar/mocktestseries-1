@@ -372,15 +372,21 @@ async function main() {
   const pend = await prisma.aiImportQuestionVersion.findFirst({ where: { questionId: s1q.id, kind: "RESCAN", status: "PENDING" } });
   check("the re-scan result waits as a version to compare", !!pend && (pend.data as unknown as ExtractedQuestion).stem === e1.stem, pend?.data);
   check("…and blocks approval until decided", s1r.issueCodes.includes("RESCAN_PENDING") && (await approveQuestions([s1q.id], actor)).refused.some((x) => /re-scan result is waiting/.test(x.reason)));
-  check("an untouched question is replaced by the re-scan", (s2r.data as unknown as ExtractedQuestion).stem === "Special Senses: Which layer is labelled X?", (s2r.data as unknown as ExtractedQuestion).stem);
+  // Owner decision 2026-11-11 (importer recovery, Phase B): EVERY re-scan result is a candidate — an untouched question
+  // is no longer replaced automatically; it waits for the administrator's Save like a corrected one.
+  check("an untouched question is NOT replaced by the re-scan (owner decision 2026-11-11)", (s2r.data as unknown as ExtractedQuestion).stem === "Garbled extraction of question two" && !s2r.editedData, (s2r.data as unknown as ExtractedQuestion).stem);
   const v2 = await prisma.aiImportQuestionVersion.findMany({ where: { questionId: s2q.id }, orderBy: { createdAt: "asc" } });
-  check("…with its previous extraction kept in its history", v2.some((v) => v.kind === "EXTRACTION" && (v.data as unknown as ExtractedQuestion).stem === "Garbled extraction of question two") && v2.some((v) => v.kind === "RESCAN" && v.status === "AUTO_APPLIED"), v2.map((v) => [v.kind, v.status]));
+  const s2pend = v2.find((v) => v.kind === "RESCAN" && v.status === "PENDING");
+  check("…its re-scan reading waits as a PENDING candidate", !!s2pend && (s2pend.data as unknown as ExtractedQuestion).stem === "Special Senses: Which layer is labelled X?" && !v2.some((v) => v.status === "AUTO_APPLIED"), v2.map((v) => [v.kind, v.status]));
   // The content is compared; the classification and check records (rewritten by every check run since 2026-10-23 /
   // importer-reliability-3) are not content.
   const content = (d: unknown) => JSON.stringify({ ...(d as Record<string, unknown>), classification: undefined, checks: undefined });
   check("a question outside the re-scan scope is untouched", content(s3r.data) === content(JSON.parse(s3before)) && !(await prisma.aiImportQuestionVersion.count({ where: { questionId: s3q.id, kind: "RESCAN" } })));
   const done = await prisma.aiImportEvent.findFirst({ where: { jobId: j2, type: "RESCAN_DONE" } });
-  check("the re-scan attempt and its outcome are recorded", !!done && /1 replaced/.test(done.message) && /1 waiting for your choice/.test(done.message), done?.message);
+  check("the re-scan attempt and its outcome are recorded", !!done && /2 candidate\(s\) waiting for your choice/.test(done.message), done?.message);
+  // The administrator saves the candidate's fields for Q2 (explicit Save): the garbled extraction stays in `data`.
+  await applyRescan(s2pend!.id, actor, compareVersions(effective(s2r), [], s2pend!.data as unknown as ExtractedQuestion, []).filter((c) => !c.same).map((c) => c.field));
+  check("saving the candidate fills Q2; the extraction stays in its history", effective(await q(j2, "2")).stem === "Special Senses: Which layer is labelled X?" && ((await q(j2, "2")).data as unknown as ExtractedQuestion).stem === "Garbled extraction of question two");
   check("the re-scan read the original page again (one more reader call, no extra checker call needed)", ((await (await fetch(`${MOCK}/__mock/stats`)).json()) as { byModel: Record<string, number> }).byModel["mockvision/reader"] > (stats.byModel["mockvision/reader"] ?? 0));
   const cmp = compareVersions(effective(s1r), [], pend!.data as unknown as ExtractedQuestion, []);
   check("comparison shows the stem as different (manual vs re-scan)", cmp.some((c) => c.field === "stem" && !c.same));
