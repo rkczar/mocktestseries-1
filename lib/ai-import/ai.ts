@@ -12,6 +12,7 @@ import { budgetBlock, capsOf, type BudgetBlock, type ImporterCaps } from "@/lib/
 import { FAILURE_ADVICE, failureMessage, kindOfCategory, type FailureKind } from "@/lib/ai-import/failure";
 import { computeModelPlan, evaluateModel, planOf, requestUsd } from "@/lib/ai-import/select";
 import { OUTPUT_SCHEMAS, type OutputSchemaName } from "@/lib/ai-import/output-schemas";
+import { asReasoningMeta, reasoningParam, requestProblem } from "@/lib/ai-import/request-params";
 import { freshRouteSnapshot } from "@/lib/ai-import/routes";
 import { importerModelHealth } from "@/lib/ai-import/health";
 import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
@@ -565,13 +566,24 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   const feature = importerFeature(input.task);
 
   let lastError: OpenRouterError | null = null;
+  // Set when a provider says reasoning cannot be switched off although the catalog did not say so (catalog not synced
+  // since the reasoning column existed): the request is sent once more without an effort word. Never billed twice:
+  // the refused request is released (no generation).
+  let mandatoryLearned = false;
   // One attempt; at most ONE retry, only after a transient error (any, when enabled; a dropped connection —
   // "terminated" — always) — never a loop, never after a timeout.
   const attempts = REQUEST_ATTEMPTS;
   let replacements = 0;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const requested = choice.model!;
-    const requestKey = `qi:${input.jobId}:${requestId}:${attempt}${replacements ? `r${replacements}` : ""}`;
+    // Provider-specific parameters, from what each model of the request publishes (lib/ai-import/request-params.ts),
+    // checked before anything is reserved or sent.
+    const rows = [...(await loadModels([requested, ...choice.fallbacks])).values()];
+    const reasoning = reasoningRoutes ? reasoningParam(rows.map((m) => (mandatoryLearned ? { mandatory: true } : asReasoningMeta(m.reasoning))), input.reasoningEffort ?? "none") : null;
+    const schema = input.jsonSchema && structuredRoutes ? OUTPUT_SCHEMAS[input.jsonSchema] : null;
+    const problem = requestProblem({ models: rows.map((m) => ({ id: m.id, reasoning: asReasoningMeta(m.reasoning), supportedParameters: m.supportedParameters })), reasoning, schema });
+    if (problem) throw new ImporterAiFailure(failureMessage("bad_request", `${problem}. Nothing was sent`), "bad_request", requested);
+    const requestKey = `qi:${input.jobId}:${requestId}:${attempt}${replacements ? `r${replacements}` : ""}${mandatoryLearned ? "m" : ""}`;
     await reserve({ jobId: input.jobId, requestKey, feature, amountInr: cost.worstInr });
     const started = Date.now();
     try {
@@ -594,10 +606,12 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         // gemma-4 publish no max_tokens support and default to high effort): 205 requests used the whole output limit
         // thinking. OpenRouter's effort level is honoured by every provider (mapped to a budget where needed): no thinking
         // for reading / structuring / classification, a little for an answer opinion.
-        ...(reasoningRoutes ? { reasoning: { effort: input.reasoningEffort ?? "none", exclude: true } } : {}),
+        // 2026-11-11: the effort is the lowest one every model of the request publishes (never "none" for a model whose
+        // reasoning is mandatory — Gemini 4, Claude Opus 5.5); see reasoningParam.
+        ...(reasoning ? { reasoning } : {}),
         // Structured output where a route supports it: a JSON Schema of the expected answer, else JSON mode. The answer
         // is parsed and validated exactly as before (require_parameters keeps only routes that honour it).
-        ...(input.jsonSchema && structuredRoutes ? { responseFormat: { type: "json_schema" as const, json_schema: { name: `importer_${input.jsonSchema}`, strict: false, schema: OUTPUT_SCHEMAS[input.jsonSchema] } } } : input.jsonSchema && jsonModeRoutes ? { responseFormat: { type: "json_object" as const } } : {}),
+        ...(input.jsonSchema && schema ? { responseFormat: { type: "json_schema" as const, json_schema: { name: `importer_${input.jsonSchema}`, strict: false, schema } } } : input.jsonSchema && jsonModeRoutes ? { responseFormat: { type: "json_object" as const } } : {}),
         provider: {
           // The highest prompt / completion price the plan was confirmed with: no route above it is used.
           max_price: { prompt: cost.price.prompt * 1e6 * PRICE_MARGIN, completion: cost.price.completion * 1e6 * PRICE_MARGIN },
@@ -656,6 +670,11 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       }
       // Credits exhausted / key spending limit reached at OpenRouter: every model is served through the same key, so no
       // fallback can help. The job pauses with the provider's reason; pages not yet read stay pending for Resume.
+      if (!mandatoryLearned && reasoning?.effort === "none" && /reasoning is mandatory/i.test(e.message) && !billedUnknown) {
+        mandatoryLearned = true;
+        attempt--;
+        continue;
+      }
       if (e.category === "insufficient_credits") throw new ImporterAiUnavailable(`OpenRouter refused the request: ${describeCategory(e.category)} No other model can be used with this key, so processing paused. Pages not read yet stay pending — add credit at OpenRouter, then click Resume.`);
       if (!TRANSIENT_OPENROUTER_ERRORS.includes(e.category)) break;
       if (!input.settings.budget.retryTransient && !DROPPED_CONNECTION.test(e.message)) break;

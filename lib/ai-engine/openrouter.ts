@@ -209,7 +209,7 @@ export interface ChatParams {
   /** OpenRouter Auto: plugin settings. */
   autoRouter?: { costTier: "low" | "medium" | "high"; allowedModels?: string[] };
   /** Optional reasoning control for models whose routes accept `reasoning` (AI Question Importer only). */
-  reasoning?: { effort: "none" | "minimal" | "low" | "medium" | "high"; exclude?: boolean } | { max_tokens: number; exclude?: boolean };
+  reasoning?: { effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; exclude?: boolean } | { max_tokens: number; exclude?: boolean };
   /** Optional structured output (AI Question Importer only): JSON mode or a JSON Schema, sent only to routes that accept it. */
   responseFormat?: { type: "json_object" } | { type: "json_schema"; json_schema: { name: string; strict: boolean; schema: unknown } };
   /** The timeout also covers reading the answer body (AI Engine features). The importer keeps headers-only. */
@@ -321,6 +321,8 @@ export interface RawModel {
   supported_parameters?: string[] | Record<string, unknown>;
   expiration_date?: string | null;
   endpoints?: string;
+  /** Reasoning support as published: whether it can be switched off and which effort levels exist. */
+  reasoning?: { mandatory?: boolean; supported_efforts?: string[]; default_effort?: string; default_enabled?: boolean } | null;
 }
 
 export async function listTextModels(apiKey: string | null): Promise<RawModel[]> {

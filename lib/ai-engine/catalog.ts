@@ -68,6 +68,13 @@ export async function refreshImagePrice(id: string, apiKey?: string | null): Pro
   });
 }
 
+/** The published reasoning block, kept only in its known shape (anything else → DbNull: treated as unknown). */
+function reasoningMeta(r: RawModel["reasoning"]): Prisma.InputJsonValue | typeof Prisma.DbNull {
+  if (!r || typeof r !== "object") return Prisma.DbNull;
+  const efforts = Array.isArray(r.supported_efforts) ? r.supported_efforts.filter((e): e is string => typeof e === "string").slice(0, 12) : null;
+  return { mandatory: r.mandatory === true, ...(efforts ? { supported_efforts: efforts } : {}), ...(typeof r.default_effort === "string" ? { default_effort: r.default_effort } : {}) };
+}
+
 export async function syncCatalog(): Promise<SyncResult> {
   const apiKey = await getOpenRouterApiKey(); // the Models API is public; the key (if any) is sent for accurate availability
   let text: RawModel[];
@@ -95,6 +102,7 @@ export async function syncCatalog(): Promise<SyncResult> {
       inputModalities: strArr(m.architecture?.input_modalities),
       outputModalities: strArr(m.architecture?.output_modalities),
       supportedParameters: params(m.supported_parameters),
+      reasoning: reasoningMeta(m.reasoning),
       promptPrice: parsePrice(p.prompt),
       completionPrice: parsePrice(p.completion),
       reasoningPrice: parsePrice(p.internal_reasoning),

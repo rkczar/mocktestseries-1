@@ -3417,6 +3417,8 @@ model AiModel {
   inputModalities     String[]
   outputModalities    String[]
   supportedParameters String[]
+  /// OpenRouter `reasoning` block {mandatory, supported_efforts, default_effort}; null = not published / not synced yet.
+  reasoning           Json?
   /// USD per token (OpenRouter `pricing.prompt` / `completion` / `internal_reasoning`); null = not published.
   promptPrice         Float?
   completionPrice     Float?

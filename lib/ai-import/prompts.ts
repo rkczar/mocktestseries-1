@@ -68,7 +68,8 @@ ${ctx.text.slice(0, 12000)}
 // toExtracted lowers the confidence of a question whose option labels had to be taken from their position.
 const num = z.preprocess((v) => (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : v), z.number());
 const text = z.preprocess((v) => (v === null || v === undefined ? "" : typeof v === "number" ? String(v) : v), z.string());
-const optText = z.preprocess((v) => (typeof v === "number" ? String(v) : v), z.string().nullable().optional());
+// A blank optional text is "nothing printed", the same as null (structured output leaves no room for null since 2026-11-11).
+const optText = z.preprocess((v) => (typeof v === "number" ? String(v) : typeof v === "string" && v.trim() === "" ? null : v), z.string().nullable().optional());
 const strList = z.preprocess((v) => (v === null || v === undefined ? [] : typeof v === "string" || typeof v === "number" ? [v] : v), z.array(z.union([z.string(), z.number()]).transform(String)));
 const boxSchema = z.object({ x: num, y: num, w: num, h: num });
 const figureSchema = z.object({
