@@ -53,7 +53,11 @@ export const SELECTION_TASK_LABELS: Record<SelectionTask, string> = {
 // Owner decision 2026-11-05 (final): ₹1,500 per IST month and an initial paid-test cap of ₹200 in total (all importer
 // spend ever recorded). NO per-job or per-request cap: every paid operation runs only after its cost is confirmed, and a
 // job never spends past the maximum confirmed for it (lib/ai-import/budget-guard.ts).
-export const PILOT_LIMITS = { totalInr: 200, monthlyInr: 1500, minKeyReserveUsd: 5 } as const;
+// 2026-11-11 (owner, Phase 2): the ₹200 total is no longer a ceiling fixed in code — it is the DEFAULT of the configurable
+// all-time hard limit (a stored ₹200 stays ₹200; a Master Admin may set up to the technical ceiling below). It is
+// still enforced for every request, with the request's worst case reserved under one database lock (ai.ts reserve()).
+export const DEFAULT_TOTAL_INR = 200;
+export const PILOT_LIMITS = { totalInr: 100_000, monthlyInr: 1500, minKeyReserveUsd: 5 } as const;
 /** Bounds of the stored legacy per-job / per-request figures: kept readable, NOT enforced and not shown in Settings. */
 const LEGACY_FIGURES = { maxJobInr: 8, maxRequestInr: 1 } as const;
 
@@ -88,7 +92,7 @@ export interface ImporterSettings {
     defaultJobCapInr: number;
     /** NOT ENFORCED since 2026-11-05 (owner, final: no per-job cap — only the maximum confirmed for each import applies). */
     maxJobInr: number;
-    /** ENFORCED (2026-11-05): all importer AI spend ever recorded — the initial paid-test cap (at most ₹200). */
+    /** ENFORCED (2026-11-05): all importer AI spend ever recorded — the configurable all-time hard limit (default ₹200). */
     totalInr: number;
     /** NOT ENFORCED since 2026-11-05 (owner, final: no per-request cap). */
     maxRequestInr: number;
@@ -143,7 +147,7 @@ export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   importerModels: [],
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
   privacy: { dataCollection: "deny", zdr: true },
-  budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: LEGACY_FIGURES.maxJobInr, maxJobInr: LEGACY_FIGURES.maxJobInr, totalInr: PILOT_LIMITS.totalInr, maxRequestInr: LEGACY_FIGURES.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
+  budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: LEGACY_FIGURES.maxJobInr, maxJobInr: LEGACY_FIGURES.maxJobInr, totalInr: DEFAULT_TOTAL_INR, maxRequestInr: LEGACY_FIGURES.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
   limits: { maxFileMb: 100, maxPagesPerFile: 300, maxFilesPerJob: 10, renderDpi: 150, concurrency: 2 },
   verification: { secondReadBelow: 0.8, independentAnswer: false, topicMinConfidence: 0.7, nearDuplicateAt: 0.85 },
   publish: { allowUnverifiedAnswers: false, requireTopic: true },
@@ -205,7 +209,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
       defaultJobCapInr: Math.min(maxJobInr, clamp(r.budget?.defaultJobCapInr, SETTINGS_BOUNDS.defaultJobCapInr, d.budget.defaultJobCapInr)),
       maxJobInr,
       // Never "no cap": an absent or empty value means the pilot ceiling.
-      totalInr: clamp(r.budget?.totalInr, SETTINGS_BOUNDS.totalInr, PILOT_LIMITS.totalInr),
+      totalInr: clamp(r.budget?.totalInr, SETTINGS_BOUNDS.totalInr, d.budget.totalInr),
       maxRequestInr: clamp(r.budget?.maxRequestInr, SETTINGS_BOUNDS.maxRequestInr, d.budget.maxRequestInr),
       keyReserveUsd: clamp(r.budget?.keyReserveUsd, SETTINGS_BOUNDS.keyReserveUsd, d.budget.keyReserveUsd),
       retryTransient: r.budget?.retryTransient === true,

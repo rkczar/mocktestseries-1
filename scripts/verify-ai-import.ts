@@ -872,8 +872,9 @@ async function sectionT(actor: string, examId: string) {
   check("…an explicit ZDR off is respected (not silently changed)", legacy.privacy.zdr === false);
   const n2 = normalizeImporterSettings({ budget: { maxJobInr: 200, defaultJobCapInr: 200, totalInr: "1000", keyReserveUsd: 0, monthlyInr: 99 } });
   // Owner 2026-11-05 (final): ₹1,500 per month, ₹200 initial paid-test cap (all time); no per-job or per-request cap.
-  check("values above the ceilings are clamped; the Ask AI reserve never below $5", n2.budget.totalInr === 200 && n2.budget.keyReserveUsd === 5 && n2.budget.monthlyInr === 99, n2.budget);
-  check("the ceilings: ₹1,500/month, ₹200 all-time (initial paid-test cap), $5 Ask AI reserve — nothing per job or per request", PILOT_LIMITS.totalInr === 200 && PILOT_LIMITS.monthlyInr === 1500 && PILOT_LIMITS.minKeyReserveUsd === 5 && !("maxJobInr" in PILOT_LIMITS) && !("maxRequestInr" in PILOT_LIMITS));
+  // 2026-11-11 (owner, Phase 2): the all-time limit is configurable (default ₹200) up to a technical ceiling.
+  check("a total within the ceiling is kept (₹1,000); the Ask AI reserve never below $5", n2.budget.totalInr === 1000 && n2.budget.keyReserveUsd === 5 && n2.budget.monthlyInr === 99, n2.budget);
+  check("the ceilings: ₹1,500/month, all-time configurable (default ₹200, at most ₹1,00,000), $5 Ask AI reserve — nothing per job or per request", PILOT_LIMITS.totalInr === 100_000 && normalizeImporterSettings({}).budget.totalInr === 200 && PILOT_LIMITS.monthlyInr === 1500 && PILOT_LIMITS.minKeyReserveUsd === 5 && !("maxJobInr" in PILOT_LIMITS) && !("maxRequestInr" in PILOT_LIMITS));
   // Written straight into the database (bypassing the form and its validation): still clamped when used.
   await prisma.setting.update({ where: { key: "ai.importer" }, data: { value: { ...(normalizeImporterSettings(await getImporterSettings()) as object), budget: { monthlyInr: 15000, totalInr: null, maxJobInr: 200, defaultJobCapInr: 200, maxRequestInr: 50, keyReserveUsd: 0 } } as never } });
   const raw1 = await getImporterSettings();
@@ -1089,7 +1090,7 @@ async function sectionT(actor: string, examId: string) {
   check("the displayed maximum equals the runtime reservation formula", !!rd.costs?.extract && Math.abs(rd.costs.extract.maxUsd - worstCaseUsd([reader], rd.costs.extract.inputTokens, 8000, 1) * PRICE_MARGIN) < 1e-12);
   check("text-only model has no extraction cost line and a vision problem", (() => { const c = cat.options.find((o) => o.id === "mocktext/classifier")!; return c.costs?.extract === null && /cannot read images/.test(c.visionProblem ?? ""); })());
   check("counts: approved vision models usable", cat.catalog.usableVision >= 4 && cat.catalog.models >= 8, cat.catalog);
-  check("payload has the plan, route status and the pilot ceilings", !!cat.plan.tasks.extract && cat.routes.fetchedAt !== null && cat.pilot.totalInr === 200 && cat.pilot.monthlyInr === 1500);
+  check("payload has the plan, route status and the pilot ceilings", !!cat.plan.tasks.extract && cat.routes.fetchedAt !== null && cat.pilot.totalInr === 100_000 && cat.pilot.monthlyInr === 1500);
   await mockConfig({ modelsStatus: 503 });
   let syncErr: unknown = null;
   await syncCatalog().catch((e) => (syncErr = e));
