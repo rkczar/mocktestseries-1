@@ -249,7 +249,8 @@ export interface PaperVerification {
    * Verification passes this question has had (at most MAX_VERIFY_PASSES, lib/ai-import/verify-core.ts): 1 = Verify 1
    * (free, recorded once), then each paid targeted pass — a Verify 2 read that was sent, or a re-scan.
    */
-  passes?: { kind: "v1" | "v2" | "rescan"; at: string; model?: string | null }[];
+  /** `ref` = the re-scan request (its requestedAt) this pass belongs to: one request is never counted twice. */
+  passes?: { kind: "v1" | "v2" | "rescan"; at: string; model?: string | null; ref?: string }[];
   /** Verify 1 — deterministic full-paper verification (no AI). */
   v1?: {
     fingerprint: string;

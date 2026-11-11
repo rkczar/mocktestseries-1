@@ -128,10 +128,12 @@ export function passCount(pv: PaperVerification | null | undefined): number {
 }
 
 /** The pass log with one more pass (Verify 1 only once; older questions get their earlier passes recorded first). */
-export function withPass(pv: PaperVerification | null | undefined, kind: "v1" | "v2" | "rescan", model: string | null = null, at = new Date().toISOString()): NonNullable<PaperVerification["passes"]> {
+export function withPass(pv: PaperVerification | null | undefined, kind: "v1" | "v2" | "rescan", model: string | null = null, at = new Date().toISOString(), ref?: string): NonNullable<PaperVerification["passes"]> {
   const log = pv?.passes ? [...pv.passes] : [...(pv?.v1 ? [{ kind: "v1" as const, at: pv.v1.at }] : []), ...(pv?.v2 && V2_RESULT_STATUSES.includes(pv.v2.status) ? [{ kind: "v2" as const, at: pv.v2.at, model: pv.v2.model }] : [])];
   if (kind === "v1" && log.some((p) => p.kind === "v1")) return log;
-  return [...log, { kind, at, model }];
+  // A pass with a reference (one re-scan request) is counted once, however often the worker saves that request's reading.
+  if (ref && log.some((p) => p.ref === ref)) return log;
+  return [...log, { kind, at, model, ...(ref ? { ref } : {}) }];
 }
 
 /**

@@ -24,6 +24,7 @@ import {
   rescanQuestions,
   rescanMissingQuestion,
   keepTaxonomy,
+  clearAcademicReview,
   unapproveQuestions,
   type ApproveResult,
   type RescanScope,
@@ -480,6 +481,20 @@ export async function markImageMissingAction(questionId: string, owner: "STEM" |
 export async function keepTaxonomyAction(questionId: string): Promise<ImporterResult<null>> {
   return run(await requireUse(), async (actorId) => {
     await keepTaxonomy(String(questionId), actorId);
+    const jobId = await jobOf([String(questionId)]);
+    if (jobId) await revalidateQuestions(jobId, [String(questionId)]);
+    return null;
+  });
+}
+
+/**
+ * Clears a taxonomy academic-review hold after an explicit academic decision (Master Admin only; a tick confirming the
+ * decision and a reason are required). Approval is not given here; the question is approved separately.
+ */
+export async function clearAcademicReviewAction(questionId: string, input: { confirmed: boolean; note: string }): Promise<ImporterResult<null>> {
+  return run(await requireMasterAdmin(), async (actorId) => {
+    if (input?.confirmed !== true) throw new ImportJobError("Tick the confirmation first: clearing a hold records your academic decision.");
+    await clearAcademicReview(String(questionId), actorId, typeof input.note === "string" ? input.note.slice(0, 500) : "");
     const jobId = await jobOf([String(questionId)]);
     if (jobId) await revalidateQuestions(jobId, [String(questionId)]);
     return null;

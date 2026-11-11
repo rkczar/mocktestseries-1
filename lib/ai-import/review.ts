@@ -22,7 +22,8 @@ import { planOf } from "@/lib/ai-import/select";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { headingResolver, promoteExamples, quarantineProposals, rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
-import { MAX_VERIFY_PASSES, contentCurrent, contentPartOf, fingerprintsOf, passCount, withPass } from "@/lib/ai-import/verify-core";
+import { MAX_VERIFY_PASSES, contentCurrent, contentPartOf, fingerprintsOf, passCount } from "@/lib/ai-import/verify-core";
+import { importerBudgetBlock } from "@/lib/ai-import/ai";
 import { learnFromCorrections } from "@/lib/ai-import/paper-learn";
 
 /**
@@ -329,13 +330,29 @@ export async function setAcademicReview(ids: string[], actorId: string, status: 
   let n = 0;
   for (const id of ids) {
     const q = await editable(id);
-    await prisma.aiImportQuestion.update({ where: { id }, data: { academicReview: status, academicReviewNote: status ? (note?.trim().slice(0, 500) || null) : null, ...UNAPPROVE } });
-    await adminCheck(id, status ? "Academic review pending" : "Academic review cleared", status ? `${status}${note ? `: ${note.trim().slice(0, 200)}` : ""}` : "Taxonomy academic review cleared by an administrator.");
-    await logEvent(q.jobId, status ? "ACADEMIC_REVIEW_SET" : "ACADEMIC_REVIEW_CLEARED", `Q${q.sourceLabel}: ${status ?? "academic review cleared"}`, { questionId: id, status }, actorId);
+    // Setting a hold withdraws an approval; clearing one never touches approval fields (a held question was never
+    // approvable, so its approval history stays exactly as recorded).
+    const was = { status: q.academicReview, note: q.academicReviewNote };
+    await prisma.aiImportQuestion.update({ where: { id }, data: { academicReview: status, academicReviewNote: status ? (note?.trim().slice(0, 500) || null) : null, ...(status ? UNAPPROVE : {}) } });
+    await adminCheck(id, status ? "Academic review pending" : "Academic review cleared", status ? `${status}${note ? `: ${note.trim().slice(0, 200)}` : ""}` : `Taxonomy academic review (${was.status ?? "none"}) cleared by an administrator${note?.trim() ? `: ${note.trim().slice(0, 200)}` : ""}.`);
+    await logEvent(q.jobId, status ? "ACADEMIC_REVIEW_SET" : "ACADEMIC_REVIEW_CLEARED", `Q${q.sourceLabel}: ${status ?? `academic review cleared (was ${was.status ?? "none"})${note?.trim() ? ` — ${note.trim().slice(0, 200)}` : ""}`}`, { questionId: id, status, previous: was, note: note?.trim() || null }, actorId);
     n++;
   }
   if (n) await prisma.auditLog.create({ data: { actorId, action: status ? "AI_IMPORT_ACADEMIC_REVIEW_SET" : "AI_IMPORT_ACADEMIC_REVIEW_CLEARED", entityType: "AiImportQuestion", entityId: null, metadata: { ids, status, note } } });
   return n;
+}
+
+/**
+ * An administrator's explicit academic decision on ONE held question: the subject / topic now stored is accepted and
+ * the hold is cleared. Never called automatically; refused when nothing is held or no subject is set (an unmapped
+ * question needs a subject chosen first). Approval is not given here — the question is approved separately.
+ */
+export async function clearAcademicReview(id: string, actorId: string, note: string): Promise<void> {
+  const q = await editable(id);
+  if (!q.academicReview) throw new ImportJobError("This question has no academic-review hold.");
+  if (!q.subjectId) throw new ImportJobError("Choose the subject (and topic) first: a hold is cleared only for a mapping you have decided.");
+  if (!note.trim()) throw new ImportJobError("Write a short reason for the academic decision; it is kept in the audit history.");
+  await setAcademicReview([id], actorId, null, note);
 }
 
 /**
@@ -628,7 +645,13 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
   if (!job.confirmedAt) throw new ImportJobError("This import was never processed, so there is nothing to re-scan.");
   const settings = await getImporterSettings();
   if (!settings.aiEnabled) throw new ImportJobError("Re-scanning reads the original page again with AI, and paid AI is switched off in Import Settings. Nothing was changed — correct the question by hand, or switch paid AI on first.");
-  if (!planOf(job.config)?.tasks.extract.model) throw new ImportJobError("This import's confirmed model plan has no page-reading model, so its pages cannot be read again. Nothing was changed — use Reconfigure Models, or correct the question by hand.");
+  const plan = planOf(job.config);
+  if (!plan?.tasks.extract.model) throw new ImportJobError("This import's confirmed model plan has no page-reading model, so its pages cannot be read again. Nothing was changed — use Reconfigure Models, or correct the question by hand.");
+  // Budget preflight: a request the importer budget cannot pay for is refused here, before anything is queued (no
+  // stored request, no pass used). One page = the plan's worst case for a page read plus its independent read.
+  const perPage = (plan.tasks.extract.maxInr ?? 0) + (plan.tasks.verify?.model ? (plan.tasks.verify.maxInr ?? 0) : 0);
+  const blocked = await importerBudgetBlock(jobId, settings, { beforeConfirmation: true, amountInr: perPage });
+  if (blocked) throw new ImportJobError(`Re-scan not started: ${blocked.message} Nothing was queued and no verification pass was used.`);
   const open = qs.filter((q) => !LOCKED.includes(q.status));
   if (!open.length) throw new ImportJobError("These questions are already in the Question Bank — edit them there.");
   // A re-scan is a paid verification pass: a question that already had MAX_VERIFY_PASSES is decided by hand.
@@ -693,11 +716,8 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
   if (!pages) throw new ImportJobError("No readable source page was found for these questions.");
   const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: job.status }, data: { status: AiImportJobStatus.QUEUED, finishedAt: null, errorMessage: null } });
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
-  const model = planOf(job.config)?.tasks.extract.model ?? null;
-  for (const q of open) {
-    const d = q.data as unknown as ExtractedQuestion;
-    await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { data: { ...d, paperVerify: { ...(d.paperVerify ?? {}), passes: withPass(d.paperVerify, "rescan", model) } } as unknown as Prisma.InputJsonValue } });
-  }
+  // No pass is used by the request: the worker counts one when a reading of the question is saved as a candidate
+  // (lib/ai-import/process.ts saveQuestion), once per request, with the model that actually read it.
   await logEvent(jobId, "RESCAN_REQUESTED", `Re-scan requested: ${scope === "page" ? `${pages} whole page(s)` : `${open.length} question(s) on ${pages} page(s)`} are read again from the original file. Manual corrections are kept; new results you have to choose from appear on each question.`, { scope, questionIds: open.map((q) => q.id), pages }, actorId);
   await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_RESCAN_REQUESTED", entityType: "AiImportJob", entityId: jobId, metadata: { scope, questionIds: open.map((q) => q.id) } } });
   kickWorker();

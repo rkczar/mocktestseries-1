@@ -30,6 +30,7 @@ import {
   setTaxonomyAction,
   unapproveQuestionsAction,
   keepTaxonomyAction,
+  clearAcademicReviewAction,
 } from "../../actions";
 import type { TaxSuggestion } from "@/lib/ai-import/taxonomy-suggest";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
@@ -89,6 +90,8 @@ export interface ReviewQ {
   languageChecks: { field: string; outcome: string; label: string; detail: string }[] | null;
   /** Options shown to students as their original cropped image (the AI formula is alt text only). */
   structureOptions: string[];
+  /** Taxonomy academic-review hold (null = none): why it is held, the evidence, and whether this administrator may decide. */
+  academicHold: { label: string; status: string; note: string | null; current: string; evidence: string[]; canDecide: boolean } | null;
 }
 
 export interface RescanCompareView {
@@ -251,6 +254,8 @@ export function QuestionReview({
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const [holdNote, setHoldNote] = useState("");
+  const [holdConfirmed, setHoldConfirmed] = useState(false);
   const [msg, setMsgState] = useState<ReviewMsg | null>(() => {
     const kept = carriedMsg.get(q.id);
     carriedMsg.delete(q.id);
@@ -392,6 +397,54 @@ export function QuestionReview({
                 Discard re-scan result
               </Button>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {q.academicHold && (
+        <Card className="xl:col-span-2" data-testid="rv-academic">
+          <CardHeader>
+            <CardTitle>Academic review hold</CardTitle>
+            <CardDescription>This question cannot be approved or imported while it is held. The hold is cleared only by your explicit academic decision; choosing a subject or topic does not clear it.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-sm">
+            <p data-testid="rv-academic-question">
+              <span className="text-[var(--color-muted-foreground)]">Question: </span>
+              {q.academicHold.label}
+            </p>
+            <p data-testid="rv-academic-reason">
+              <span className="text-[var(--color-muted-foreground)]">Reason: </span>
+              <span className="font-medium">{q.academicHold.status}</span>
+              {q.academicHold.note ? ` — ${q.academicHold.note}` : ""}
+            </p>
+            <p data-testid="rv-academic-current">
+              <span className="text-[var(--color-muted-foreground)]">Current mapping: </span>
+              {q.academicHold.current}
+            </p>
+            {q.academicHold.evidence.length > 0 && (
+              <ul className="list-disc pl-5 text-xs text-[var(--color-muted-foreground)]" data-testid="rv-academic-evidence">
+                {q.academicHold.evidence.map((x, i) => (
+                  <li key={i}>{x}</li>
+                ))}
+              </ul>
+            )}
+            {q.academicHold.canDecide ? (
+              <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-2">
+                <Label htmlFor="rv-academic-note">Reason for your decision (kept in the audit history)</Label>
+                <Textarea id="rv-academic-note" rows={2} maxLength={500} value={holdNote} onChange={(ev) => setHoldNote(ev.target.value)} data-testid="rv-academic-note" />
+                <label className="flex items-start gap-2 text-xs">
+                  <input type="checkbox" checked={holdConfirmed} onChange={(ev) => setHoldConfirmed(ev.target.checked)} data-testid="rv-academic-confirm" />
+                  <span>I have reviewed the subject and topic above and accept them as academically correct.</span>
+                </label>
+                <div>
+                  <Button size="sm" disabled={pending || !holdConfirmed || !holdNote.trim()} onClick={() => act(() => clearAcademicReviewAction(q.id, { confirmed: holdConfirmed, note: holdNote }), "Academic hold cleared. The question still needs your approval.")} data-testid="rv-academic-clear">
+                    Clear hold — mapping confirmed
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="rv-academic-readonly">Only a Master Admin can clear an academic-review hold.</p>
+            )}
           </CardContent>
         </Card>
       )}

@@ -287,13 +287,14 @@ async function importerSpendTx(tx: Tx, istMonth: string): Promise<{ monthInr: nu
  * without a lock: the worker uses it to run a job local-only from the start instead of stopping halfway. The gateway
  * check in reserve() stays the authority for every single request.
  */
-export async function importerBudgetBlock(jobId: string, settings: ImporterSettings, opts: { beforeConfirmation?: boolean } = {}): Promise<BudgetBlock | null> {
+export async function importerBudgetBlock(jobId: string, settings: ImporterSettings, opts: { beforeConfirmation?: boolean; amountInr?: number } = {}): Promise<BudgetBlock | null> {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { spentInr: true, budgetInr: true } });
   if (!job) return null;
   // A cost preview comes BEFORE the confirmation that raises the job's confirmed maximum: only the budget itself counts.
-  // Probe with ₹0: blocked only when a limit is already used up (a job confirmed for a ₹0 model has a ₹0 maximum and
-  // must still run). Every real request is checked again at reserve() with its own worst case.
-  return budgetBlock({ amountInr: 0, caps: importerCaps(settings), job: { spentInr: job.spentInr, inFlightInr: await jobInFlight(prisma, jobId), confirmedMaxInr: opts.beforeConfirmation ? null : job.budgetInr }, spend: await importerSpendTx(prisma, istDayMonth().istMonth) });
+  // Probe with ₹0 by default: blocked only when a limit is already used up (a job confirmed for a ₹0 model has a ₹0
+  // maximum and must still run). A caller may probe with one request's worst case (re-scan preflight). Every real
+  // request is checked again at reserve() with its own worst case.
+  return budgetBlock({ amountInr: Math.max(0, opts.amountInr ?? 0), caps: importerCaps(settings), job: { spentInr: job.spentInr, inFlightInr: await jobInFlight(prisma, jobId), confirmedMaxInr: opts.beforeConfirmation ? null : job.budgetInr }, spend: await importerSpendTx(prisma, istDayMonth().istMonth) });
 }
 
 /** Test hook only (scripts/verify-ai-import-reliability3.ts): the gateway's budget reservation, exactly as every request makes it. */
@@ -809,7 +810,10 @@ export function parseModelJson(text: string): unknown {
   const start = body.indexOf("{");
   const end = body.lastIndexOf("}");
   if (start < 0 || end <= start) throw new ImporterAiFailure(failureMessage("model_output", "the model did not return JSON"), "model_output");
-  const json = body.slice(start, end + 1);
+  // A LaTeX command a model wrote with ONE backslash (\text, \frac, \beta, \nu, \rho …) is valid JSON for the wrong
+  // reason — \t, \f, \b, \n, \r are JSON escapes — so it would silently become a TAB / form feed / backspace / newline /
+  // carriage return (seen 2026-11-11: FSO 2019 Q63, Q136, Q139). Such commands are escaped before parsing.
+  const json = escapeLatexCommands(body.slice(start, end + 1));
   try {
     return JSON.parse(json);
   } catch {
@@ -822,6 +826,22 @@ export function parseModelJson(text: string): unknown {
       throw new ImporterAiFailure(failureMessage("model_output", "the model returned malformed JSON"), "model_output");
     }
   }
+}
+
+// Commands whose first letter is a JSON escape letter. \b, \f and \r followed by a letter are never wanted in a model's
+// answer, so they are always a LaTeX command; \t and \n are also real TABs / line breaks, so only these exact names count
+// (a line break before "i)" or "e" is kept: \ni and \ne are deliberately absent).
+const LATEX_T = new Set(["times", "theta", "tau", "tan", "tanh", "tilde", "to", "top", "triangle", "triangleleft", "triangleright", "triangledown", "therefore", "tfrac", "tbinom", "textstyle", "thinspace", "thicksim", "twoheadrightarrow"]);
+const LATEX_N = new Set(["nu", "neq", "nabla", "neg", "not", "notin", "nmid", "newline", "nless", "ngtr", "nleq", "ngeq", "nexists", "ncong", "nsim", "nparallel", "natural", "nearrow", "nwarrow", "nolimits", "normalsize"]);
+
+/** Doubles the backslash of a LaTeX command written with a single one (\text → \\text); escaped pairs are kept as they are. */
+export function escapeLatexCommands(json: string): string {
+  return json.replace(/\\\\|\\([bfnrt])([A-Za-z]*)/g, (m, esc: string | undefined, rest: string | undefined) => {
+    if (!esc) return m;
+    const name = esc + rest;
+    const latex = esc === "b" || esc === "f" || esc === "r" ? !!rest : esc === "t" ? name.startsWith("text") || LATEX_T.has(name) : LATEX_N.has(name);
+    return latex ? `\\${m}` : m;
+  });
 }
 
 /** Removes trailing commas and doubles backslashes that do not start a valid JSON escape (outside and inside strings). */

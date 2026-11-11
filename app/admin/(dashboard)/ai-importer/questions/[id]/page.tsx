@@ -4,7 +4,7 @@ import { LANGUAGE_OUTCOME_LABELS, hindiFieldChecks } from "@/lib/ai-import/bilin
 import { structureOnlyText } from "@/lib/ai-import/script-text";
 import { notFound } from "next/navigation";
 import { RestrictedCard } from "@/components/admin/restricted-card";
-import { hasPermission } from "@/lib/rbac";
+import { getAdminSession, hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
@@ -147,6 +147,22 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
   const optionImages = new Set(q.figures.filter((f) => f.owner === "OPTION" && f.optionLabel && f.mappingStatus !== "MISSING").map((f) => f.optionLabel!));
   const languageChecks = bilingual ? hindiFieldChecks(e, optionImages) : null;
   const structureOptions = e.options.filter((o) => optionImages.has(o.label) && structureOnlyText(o.text)).map((o) => o.label);
+  // Academic-review hold: the stored reason, the classifier evidence, and whether this account may decide (Master Admin).
+  const holdRec = (q.data as unknown as ExtractedQuestion).classification;
+  const academicHold = q.academicReview
+    ? {
+        label: `Q${q.sourceLabel} · page ${q.pages.join(", ") || "—"}`,
+        status: q.academicReview,
+        note: q.academicReviewNote,
+        current: `${(q.subjectId && taxNames.get(q.subjectId)) || "no subject"} › ${(q.topicId && taxNames.get(q.topicId)) || "no topic"}${q.taxonomySource ? ` (${q.taxonomySource})` : ""}`,
+        evidence: [
+          ...(holdRec?.reason ? [`Classifier: ${holdRec.reason}`] : []),
+          ...(holdRec?.local?.reason ? [`Local classifier: ${holdRec.local.reason}`] : []),
+          ...(holdRec?.local?.candidates ?? []).slice(0, 3).filter((c) => c.subjectId).map((c, i) => `Candidate ${i + 1}: ${taxNames.get(c.subjectId!) ?? "?"} › ${(c.topicId && taxNames.get(c.topicId)) || "no topic"} (score ${c.score})`),
+        ].slice(0, 6),
+        canDecide: canUse && (await getAdminSession())?.user.role === "MASTER_ADMIN",
+      }
+    : null;
   const blockerImport = importBlocker(q, settings);
   const blockerPublish = q.questionId ? publishBlocker(q, settings) : blockerImport ?? publishBlocker(q, settings);
   // Complete figure at its stored aspect ratio (never cropped to a box), tap to zoom.
@@ -434,6 +450,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             suggestion,
             languageChecks: languageChecks?.map((c) => ({ ...c, label: LANGUAGE_OUTCOME_LABELS[c.outcome] })) ?? null,
             structureOptions,
+            academicHold,
           }}
           taxonomy={taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((st) => ({ id: st.id, name: st.name })) })) }))}
           compare={compare}

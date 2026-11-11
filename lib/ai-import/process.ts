@@ -27,6 +27,7 @@ import type { ImporterSettings, VerifyMode } from "@/lib/ai-import/config";
 import { figureRows, manuallyCorrected, recordVersion, snapshotFigures, type FigureSnapshot } from "@/lib/ai-import/versions";
 import { mkdir } from "node:fs/promises";
 import { BILINGUAL_RULES, hindiAgreement, mergeHindi } from "@/lib/ai-import/bilingual";
+import { withPass } from "@/lib/ai-import/verify-core";
 
 /**
  * Extraction stage of the worker. Question papers are read LOCALLY first
@@ -189,7 +190,7 @@ export type RescanOutcome = "applied" | "pending" | "new" | "stored" | "skipped"
  * untouched question is replaced after its previous extraction is kept as a version; a manually
  * corrected one is left as it is and the new read waits as a PENDING version for the administrator.
  */
-export async function saveQuestion(ctx: StepContext, file: AiImportFile, q: ExtractedQuestion, orderIndex: number, figureBytes: FigureBytes, pageNumber: number, rescan?: { model: string | null } | null): Promise<RescanOutcome> {
+export async function saveQuestion(ctx: StepContext, file: AiImportFile, q: ExtractedQuestion, orderIndex: number, figureBytes: FigureBytes, pageNumber: number, rescan?: { model: string | null; ref?: string } | null): Promise<RescanOutcome> {
   // Every method: no printed number and no copied option list inside the stem (flagged when it cannot be removed exactly).
   cleanStem(q);
   // Formatting only (a leading "Question:" label, numbered statements run together): the text as read is kept with it.
@@ -228,7 +229,11 @@ export async function saveQuestion(ctx: StepContext, file: AiImportFile, q: Extr
     const figs = await storeFigures(q, figureBytes, pageNumber);
     await prisma.aiImportQuestionVersion.updateMany({ where: { questionId: target.id, kind: "RESCAN", status: "PENDING" }, data: { status: "DISCARDED", decidedAt: new Date(), note: "Replaced by a newer re-scan." } });
     await recordVersion({ questionId: target.id, jobId: ctx.job.id, kind: "RESCAN", status: "PENDING", data: q, figures: figs, model: rescan.model, note: existing ? `Re-scan candidate${manual ? " (this question has manual corrections)" : ""}${existing.approvedById ? " (this question is approved)" : ""}: nothing was replaced. Compare and save the fields to take.` : "Found by the re-scan (it was not in the earlier extraction): review the candidate and save it to fill this question." });
-    await prisma.aiImportQuestion.update({ where: { id: target.id }, data: { status: AiImportQuestionStatus.EXTRACTED } });
+    // The one place a re-scan uses a verification pass: a reading of this question was saved as a candidate. Counted
+    // with the model that read it, once per request (`ref`), so a worker retry of the same request never counts twice.
+    const td = target.data as unknown as ExtractedQuestion;
+    const passes = withPass(td.paperVerify, "rescan", rescan.model, undefined, rescan.ref ?? undefined);
+    await prisma.aiImportQuestion.update({ where: { id: target.id }, data: { status: AiImportQuestionStatus.EXTRACTED, ...(passes.length !== (td.paperVerify?.passes?.length ?? -1) ? { data: { ...td, paperVerify: { ...(td.paperVerify ?? {}), passes } } as unknown as Prisma.InputJsonValue } : {}) } });
     return existing ? "pending" : "new";
   }
   const data = {
@@ -862,7 +867,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
       if (twin?.ocr) q.ocr = twin.ocr;
     }
     aiKeys.add(sourceKeyOf(q));
-    const outcome = await saveQuestion(ctx, file, q, existingLocal ? (await prisma.aiImportQuestion.findUnique({ where: { id: existingLocal.id }, select: { orderIndex: true } }))!.orderIndex : order++, figureBytes, page.pageNumber, rescan ? { model: primary.model } : null);
+    const outcome = await saveQuestion(ctx, file, q, existingLocal ? (await prisma.aiImportQuestion.findUnique({ where: { id: existingLocal.id }, select: { orderIndex: true } }))!.orderIndex : order++, figureBytes, page.pageNumber, rescan ? { model: primary.model, ref: rescan.requestedAt } : null);
     if (rescan) outcomes.push({ key: sourceKeyOf(q), outcome });
   }
   // Local questions on this page the AI did not return are KEPT and flagged — never silently dropped.
