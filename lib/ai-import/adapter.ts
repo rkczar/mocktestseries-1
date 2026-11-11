@@ -64,7 +64,8 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
   if (q.answerStatus === AiImportAnswerStatus.WITHDRAWN) return "deleted in the official answer key (kept for the record, never imported)";
   // Subject / topic still under academic review (ambiguous or unmapped): never imported, so never published, until an
   // academic decision clears the status (lib/ai-import/review.ts setAcademicReview).
-  if (q.academicReview) return `taxonomy pending academic review (${q.academicReview})`;
+  // The refusal says how to clear it: choosing a subject / topic alone does not (2026-11-11: 68 refusals on 29 FSO questions).
+  if (q.academicReview) return `taxonomy pending academic review (${q.academicReview}) — choosing a subject/topic does not clear this hold: a Master Admin confirms the mapping with "Clear hold — mapping confirmed" in the Academic review hold card on this question's page, then approves`;
   if (q.status === AiImportQuestionStatus.REJECTED) return "rejected";
   if (q.status === AiImportQuestionStatus.NOT_IMPORTABLE) return "not importable";
   if (q.status === AiImportQuestionStatus.DUPLICATE && !q.allowDuplicate) return "duplicate";

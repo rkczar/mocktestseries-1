@@ -14,7 +14,7 @@ import { checkFigureMapping, overlappingRegions } from "@/lib/ai-import/figure-m
 import { formulaDiff, sourceDiffSummary, sourceTextDiff } from "@/lib/ai-import/fidelity";
 import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
-import { EXTRACT_SYSTEM, extractUserText, pageSchema, toExtracted, type PageOutput } from "@/lib/ai-import/prompts";
+import { EXTRACT_SYSTEM, RESCAN_RULES, extractUserText, pageSchema, toExtracted, type PageOutput } from "@/lib/ai-import/prompts";
 import { gapPages, incompleteReading } from "@/lib/ai-import/reading-checks";
 import { readVault, renderKey, putIntermediate, vaultPath, workDir, exists as vaultExists } from "@/lib/ai-import/vault";
 import { logEvent } from "@/lib/ai-import/jobs";
@@ -714,7 +714,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   const memory = await jobMemoryBrief(ctx.job, "extract");
   const userText =
     extractUserText({ exam: ctx.examName, subject: ctx.subjectName, page: page.pageNumber, pages: total, textLayer: sent ? null : page.textLayer, memory }) +
-    (sent ? `\n\nThis image is a CUT-OUT of ${view.kind === "STACK" ? `page ${view.pages[0]} (top part of the image) continued on page ${view.pages[1]} (lower part)` : `page ${page.pageNumber}`}, around one question. Read only what is visible; give boxes relative to THIS image.` : "");
+    (sent ? `\n\nThis image is a CUT-OUT of ${view.kind === "STACK" ? `page ${view.pages[0]} (top part of the image) continued on page ${view.pages[1]} (lower part)` : `page ${page.pageNumber}`}, around one question. Read only what is visible; give boxes relative to THIS image.\n${RESCAN_RULES}` : "");
   const bilingual = await jobIsBilingual(ctx.job);
   const call = async (models: string[], task: "extract" | "verify", stage?: string) => {
     const { value, result: r } = await importerAiCallChecked(

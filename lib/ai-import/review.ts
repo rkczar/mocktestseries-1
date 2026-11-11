@@ -198,7 +198,7 @@ export interface ApproveResult {
  * numbering gap, topic, independent-read disagreement) are cleared by this decision and recorded.
  */
 /** Findings a bulk approval never clears: each needs an administrator's look at that one question. */
-export const DECIDE_INDIVIDUALLY = ["VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "REFERENCE_CONFLICT"];
+export const DECIDE_INDIVIDUALLY = ["VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "REFERENCE_CONFLICT", "FORMULA_NEEDS_MANUAL_VERIFICATION"];
 /**
  * An approval from a LIST row (Exceptions table, one-page list — the question is not opened) is refused for every
  * unresolved conflict: the individual decisions above, and open answer / subject-topic / section conflicts. Those are

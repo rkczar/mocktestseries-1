@@ -22,6 +22,8 @@ const CODE_FIELD: Record<string, Field> = {
   EXTRACTION_UNCERTAIN: "source",
   UNREADABLE_TEXT: "source",
   FORMULA_ISSUE: "source",
+  FORMULA_TEXT_CORRUPT: "source",
+  FORMULA_NEEDS_MANUAL_VERIFICATION: "source",
   IMAGE_MISSING: "source",
   IMAGE_MAPPING_UNCERTAIN: "source",
   IMAGE_REFERENCE_UNCERTAIN: "source",

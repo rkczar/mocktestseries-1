@@ -18,7 +18,8 @@ import { LOCAL_SUBJECT_MIN, classifyPaper, type LocalClassification } from "@/li
 import { classifierContext, headingResolver, jobPaperMemory } from "@/lib/ai-import/taxonomy-memory";
 import { confirmedRulesFor, confirmedSubjectScope, memoryBrief, memoryFindings } from "@/lib/ai-import/paper-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
-import { PRINTED_DROPPED, candidateInstruction, formatStem, mergedAnswerIn, mergedStatements, numberSequenceProblems, statementCodeQuestion, statementsOf } from "@/lib/ai-import/local-parse";
+import { controlCharFindings } from "@/lib/ai-import/formula-check";
+import { PRINTED_DROPPED, candidateInstruction, formatStem, mergedAnswerIn, mergedStatements, notationRisk, numberSequenceProblems, statementCodeQuestion, statementsOf } from "@/lib/ai-import/local-parse";
 
 const ROMAN_INDEX: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
 import { lostSuperscript, numbersMissingFromSource, optionProblems, parseKeyAnswer, placeholderStem, sourceDiffSummary } from "@/lib/ai-import/fidelity";
@@ -102,7 +103,7 @@ export function sourceMayHoldImage(detected: unknown, pages: number[]): boolean 
  * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
  * approved — and an uncertain image placement is cleared only by confirming each figure's placement.
  */
-export const REVIEWABLE = ["OCR_UNCERTAIN", "SOURCE_TEXT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN", "OPTION_FORMULA_IMAGE_DIFFERS"];
+export const REVIEWABLE = ["OCR_UNCERTAIN", "SOURCE_TEXT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "FORMULA_NEEDS_MANUAL_VERIFICATION", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN", "OPTION_FORMULA_IMAGE_DIFFERS"];
 
 interface Check {
   stage: number;
@@ -597,6 +598,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const richText = [e.stem, ...e.options.map((o) => o.text), ...(e.listI ?? []).map((x) => x.text), ...(e.listII ?? []).map((x) => x.text), ...(e.hi ? [e.hi.stem, ...e.hi.options.map((o) => o.text)] : [])];
     const formulaWarnings = e.contentFormat === "RICH_V1" ? richText.flatMap((t, i) => lintRichSource(t, i === 0 ? "Question" : `Part ${i}`).warnings) : richText.some((t) => looksRich(t)) ? ["Formula markup in a plain question would show literally."] : [];
     if (formulaWarnings.length) add("FORMULA_ISSUE", formulaWarnings[0].slice(0, 300));
+    // Control characters = a LaTeX command eaten in transport (FSO 2019 Q63/Q136/Q139). Re-checked after admin edits too.
+    const damaged = richText.map((t) => controlCharFindings(t)).filter((f) => f.spots.length);
+    if (damaged.length) add("FORMULA_TEXT_CORRUPT", `Hidden control characters in the text (a lost LaTeX backslash): ${damaged.flatMap((f) => f.spots).slice(0, 3).map((s) => `“${s}”`).join(", ")}. Correct the text (Edit or a re-scan); it cannot be approved as it is.${damaged[0].suggestion ? ` Suggested: “${damaged[0].suggestion.slice(0, 200)}”.` : ""}`.slice(0, 600));
+    // Formula question read without a vision model, or with symbols the reader could not read: a person checks it against the page.
+    const formulaHeavy = richText.some((t) => /\$|\\ce\{/.test(t) || notationRisk(t).length > 0);
+    if (!q.editedData && formulaHeavy && (e.method === "LOCAL_OCR" || e.method === "LOCAL_PDF" || e.unreadable.length > 0))
+      add("FORMULA_NEEDS_MANUAL_VERIFICATION", `Formula question ${e.unreadable.length ? `with unreadable symbols (${e.unreadable.join("; ").slice(0, 160)})` : `read by ${e.method === "LOCAL_OCR" ? "local OCR" : "the PDF text layer"}`} — compare every formula with the page, then approve this question on its own page (valid formula markup is not proof).`);
     // Digits, signs and exponents compared with the source (never corrected automatically).
     if (!q.editedData) {
       if (e.contentFormat !== "RICH_V1") {

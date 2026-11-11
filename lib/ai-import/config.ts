@@ -393,6 +393,10 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   ANSWER_UNVERIFIED: { label: "Answer unverified", blocking: true, publishBlocking: true },
   POSSIBLE_WITHDRAWN: { label: "Possible withdrawn question", blocking: false, publishBlocking: true },
   FORMULA_ISSUE: { label: "Formula needs checking", blocking: false, publishBlocking: true },
+  /** Control characters in the text (a LaTeX command eaten by JSON: \text → TAB). Cleared only by correcting the text; approval never clears it. */
+  FORMULA_TEXT_CORRUPT: { label: "Formula text damaged (control characters)", blocking: true, publishBlocking: true },
+  /** A formula question read by OCR / a PDF text layer, or with unreadable symbols: an administrator checks it against the page, one question at a time. */
+  FORMULA_NEEDS_MANUAL_VERIFICATION: { label: "Formula needs manual verification against the page", blocking: false, publishBlocking: true },
   OCR_UNCERTAIN: { label: "OCR unsure of some text", blocking: false, publishBlocking: true },
   SOURCE_TEXT_MISMATCH: { label: "Text differs from the page", blocking: true, publishBlocking: true },
   /** Bilingual exams (lib/ai-import/bilingual.ts): the Hindi version is missing, does not match the English, or is uncertain. */

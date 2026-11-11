@@ -128,7 +128,11 @@ async function run<T>(actorId: string | null, fn: (actorId: string) => Promise<T
     for (const p of paths) revalidatePath(p, "layout");
     return { ok: true, data };
   } catch (error) {
-    if (error instanceof ImportJobError) return { ok: false, error: error.message };
+    if (error instanceof ImportJobError) {
+      // Expected refusals are logged too, so an error an administrator reports can be traced in the pm2 log.
+      console.warn("[ai-importer] refused:", error.message.slice(0, 200));
+      return { ok: false, error: error.message };
+    }
     console.error("[ai-importer]", error instanceof Error ? error.message.slice(0, 200) : "error");
     return { ok: false, error: "Something went wrong. Nothing was changed." };
   }

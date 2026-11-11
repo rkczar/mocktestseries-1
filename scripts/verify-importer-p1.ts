@@ -18,7 +18,7 @@ import { saveImporterSettings, getImporterSettings } from "@/lib/ai-import/setti
 import { importBlocker } from "@/lib/ai-import/adapter";
 import { addFile, completeFile, confirmJob, createJob, putChunk, requestAnalysis, resumeJob, setExpectedQuestions } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
-import { approveQuestions, clearAcademicReview, rescanQuestions, revalidateQuestions, setAcademicReview, setAnswer, setTaxonomy } from "@/lib/ai-import/review";
+import { approveQuestions, clearAcademicReview, editQuestion, rescanQuestions, revalidateQuestions, setAcademicReview, setAnswer, setTaxonomy } from "@/lib/ai-import/review";
 import { effective } from "@/lib/ai-import/post";
 import { escapeLatexCommands, parseModelJson } from "@/lib/ai-import/ai";
 import { passCount, withPass } from "@/lib/ai-import/verify-core";
@@ -266,6 +266,42 @@ async function main() {
   check("…earlier approval history kept (the original approval event is still there, unchanged)", JSON.stringify(await prisma.aiImportEvent.findUnique({ where: { id: firstApproval.id } })) === JSON.stringify(firstApproval));
   const ap2 = await approveQuestions([q5.id], actor);
   check("…and the question is approvable again (approval is a separate, explicit step)", ap2.approved === 1, ap2);
+
+  check("the hold refusal tells the admin how to clear it (Clear hold card), keeping the code", /AMBIGUOUS_PENDING_ACADEMIC_REVIEW\) — choosing a subject\/topic does not clear this hold: .*Clear hold — mapping confirmed/.test(ap1.refused[0]?.reason ?? ""), ap1.refused[0]);
+
+  section("4. Formula damage + manual formula verification (2026-11-11)");
+  const fq = await byNo(3);
+  const enStem = effective(fq).stem;
+  await setTaxonomy(fq.id, actor, bio.id, cellT.id);
+  await setAnswer(fq.id, actor, ["A"]);
+  // A formula question read by local OCR (synthetic flag on scratch data): checked against the page, one question at a time.
+  const fd3 = fq.data as unknown as ExtractedQuestion;
+  await prisma.aiImportQuestion.update({ where: { id: fq.id }, data: { data: { ...fd3, method: "LOCAL_OCR" } as never } });
+  await revalidateQuestions(jobId, [fq.id]);
+  let fr3 = await byNo(3);
+  check("formula question read by OCR → FORMULA_NEEDS_MANUAL_VERIFICATION (not blocking)", fr3.issueCodes.includes("FORMULA_NEEDS_MANUAL_VERIFICATION"), fr3.issueCodes);
+  const bulk = await approveQuestions([fq.id, q5.id], actor);
+  check("…a bulk approval refuses it (decide on its own page)", bulk.refused.some((x) => x.id === fq.id && /decide it on its own/.test(x.reason)), bulk);
+  const single = await approveQuestions([fq.id], actor);
+  check("…an individual approval (the admin's check) approves it", single.approved === 1, single);
+  // The FSO Q136 failure: \text eaten into TAB + "ext" in the stored English stem.
+  const damaged = enStem.replace("\\text", "\text");
+  await prisma.aiImportQuestion.update({ where: { id: fq.id }, data: { data: { ...fd3, method: "AI_VISION", stem: damaged } as never } });
+  await revalidateQuestions(jobId, [fq.id]);
+  fr3 = await byNo(3);
+  check("TAB-damaged formula → FORMULA_TEXT_CORRUPT (blocking) with a visible spot + suggestion", fr3.issueCodes.includes("FORMULA_TEXT_CORRUPT") && /⟨TAB⟩ext/.test((fr3.issues as Record<string, string>).FORMULA_TEXT_CORRUPT ?? "") && (fr3.issues as Record<string, string>).FORMULA_TEXT_CORRUPT.includes(enStem), fr3.issues);
+  check("…import gate blocks it even though it was approved earlier", !!importBlocker({ ...fr3, figures: [] }, await getImporterSettings()));
+  const ap3 = await approveQuestions([fq.id], actor);
+  check("…approval refused (approval never clears it)", ap3.approved === 0 && /Formula text damaged/.test(ap3.refused[0]?.reason ?? ""), ap3);
+  const before = { stem: effective(fr3).stem, data: JSON.stringify(fr3.data) };
+  check("…nothing was rewritten automatically", before.stem === damaged);
+  const fe3 = effective(fr3);
+  await editQuestion(fq.id, actor, { stem: enStem, options: fe3.options.map((o) => ({ label: o.label, text: o.text })), type: fe3.type, contentFormat: fe3.contentFormat });
+  fr3 = await byNo(3);
+  check("explicit admin correction stores the fixed text (as an audited edit)", effective(fr3).stem === enStem);
+  const ap4 = await approveQuestions([fq.id], actor); // approval re-checks first (no AI)
+  fr3 = await byNo(3);
+  check("…the re-check clears the damage flag and the corrected question is approvable", ap4.approved === 1 && !fr3.issueCodes.includes("FORMULA_TEXT_CORRUPT"), { ap4, codes: fr3.issueCodes });
 
   check("no real network host was contacted", blockedHosts.size === 0, [...blockedHosts]);
 }

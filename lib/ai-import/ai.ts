@@ -829,18 +829,30 @@ export function parseModelJson(text: string): unknown {
 }
 
 // Commands whose first letter is a JSON escape letter. \b, \f and \r followed by a letter are never wanted in a model's
-// answer, so they are always a LaTeX command; \t and \n are also real TABs / line breaks, so only these exact names count
-// (a line break before "i)" or "e" is kept: \ni and \ne are deliberately absent).
+// answer, so they are always a LaTeX command. Outside $…$ maths, \t and \n are also real TABs / line breaks, so only these
+// exact names count (a line break before "i)" or "e" is kept). INSIDE a $…$ span of the same JSON string any \t / \n followed
+// by letters is LaTeX (\ne, \ni, \tag, \nRightarrow …) — a real TAB or line break before letters never occurs inside a formula.
+// \u not followed by 4 hex digits (\underline, \uparrow, \upsilon) is always LaTeX: as JSON it would fail the whole page read.
 const LATEX_T = new Set(["times", "theta", "tau", "tan", "tanh", "tilde", "to", "top", "triangle", "triangleleft", "triangleright", "triangledown", "therefore", "tfrac", "tbinom", "textstyle", "thinspace", "thicksim", "twoheadrightarrow"]);
 const LATEX_N = new Set(["nu", "neq", "nabla", "neg", "not", "notin", "nmid", "newline", "nless", "ngtr", "nleq", "ngeq", "nexists", "ncong", "nsim", "nparallel", "natural", "nearrow", "nwarrow", "nolimits", "normalsize"]);
 
 /** Doubles the backslash of a LaTeX command written with a single one (\text → \\text); escaped pairs are kept as they are. */
 export function escapeLatexCommands(json: string): string {
-  return json.replace(/\\\\|\\([bfnrt])([A-Za-z]*)/g, (m, esc: string | undefined, rest: string | undefined) => {
-    if (!esc) return m;
-    const name = esc + rest;
-    const latex = esc === "b" || esc === "f" || esc === "r" ? !!rest : esc === "t" ? name.startsWith("text") || LATEX_T.has(name) : LATEX_N.has(name);
-    return latex ? `\\${m}` : m;
+  // Each JSON string literal is scanned on its own, so a $ toggles maths only within that string.
+  return json.replace(/"(?:[^"\\]|\\[\s\S])*"/g, (str) => {
+    let math = false;
+    // \\$ / \$ = a literal dollar (no toggle); \\\\ = an escaped backslash (kept).
+    return str.replace(/\\{1,2}\$|\\\\|\\u(?![0-9a-fA-F]{4})|\$|\\([bfnrt])([A-Za-z]*)/g, (m, esc: string | undefined, rest: string | undefined) => {
+      if (m === "$") {
+        math = !math;
+        return m;
+      }
+      if (m === "\\u") return "\\\\u";
+      if (!esc) return m;
+      const name = esc + rest;
+      const latex = esc === "b" || esc === "f" || esc === "r" ? !!rest : math ? !!rest : esc === "t" ? name.startsWith("text") || LATEX_T.has(name) : LATEX_N.has(name);
+      return latex ? `\\${m}` : m;
+    });
   });
 }
 

@@ -17,7 +17,7 @@ BILINGUAL PAPER (this exam prints every question in Hindi AND English):
 - Transcribe the Hindi exactly as printed in Devanagari, including matras, half letters, conjuncts, nukta, punctuation and any English words or symbols printed inside the Hindi text. NEVER translate the English into Hindi or the Hindi into English, never transliterate, never fill a gap in one language from the other. If a Hindi part is unreadable, keep what is readable, name the doubt in hi.unreadable and lower hi.confidence.
 - Hindi options: in printed order with their printed labels. same_option_order: true only if Hindi option (1) is the same option as English option (1), (2) as (2), and so on; false if they differ in order, count or meaning; leave it out if you cannot tell.
 - If only one language version of a number is on this page: Hindi missing → leave "hi" out and say so in "unreadable"; English missing → put the Hindi in "hi", leave "stem" "" and "options" [] and say so in "unreadable".
-- Formulas, chemistry and symbols: write them the same way in both versions (same $...$ / \\ce{...} notation).
+- Formulas, chemistry and symbols: write them the same way in both versions (same $...$ / \\ce{...} notation); never translate or re-type symbols, and never put Devanagari inside $...$.
 - Figures, diagrams and tables drawn as images are shared by both versions: report each figure ONCE in "figures". Set hi.figures_differ true if a figure appears in only one language version.
 - IGNORE HANDWRITING: ticks, circles, crosses, underlines, scribbles, numbers or notes added by a candidate in pen or pencil are not part of the paper. Never copy them and never treat them as an answer (printed_answer stays [] unless the paper itself PRINTS the answer).`;
 
