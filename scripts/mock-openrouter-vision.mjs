@@ -54,6 +54,12 @@
  * Full-paper verification fixtures (2026-10-22): a page fixture may carry `byModel: {id: {questions}}` (what that model
  * reads); `text: [{match, questions, checker?, byModel?}]` answers page-reading requests WITHOUT an image (Verify 2 of a
  * DOCX / sheet) with the first entry whose `match` string occurs in the request text.
+ * Provider-parameter fixtures (2026-11-11, config {reasonModels: true}): mockreason/mandatory publishes
+ * reasoning {mandatory: true, supported_efforts: [low, medium, high]} and refuses effort "none" with HTTP 400
+ * "Reasoning is mandatory…" (like Gemini 4 / Claude Opus 5.5); mockreason/hidden refuses it the same way but publishes
+ * no reasoning block (a catalog not synced yet); mockanthropic/reader accepts json_schema but refuses one with more than
+ * 16 union-typed parameters (Anthropic's limit). Script modes "degenerate" (one question, one option whose label is the
+ * model's own notes — the 2026-11-11 FSO failure) and "zero" (no questions at all).
  */
 import http from "node:http";
 import { readFileSync } from "node:fs";
@@ -87,7 +93,12 @@ const EXTRA = {
 };
 const REASON = {
   "mockreason/think": { p: 0.00000004, c: 0.00000028, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning"], thinks: true },
+  "mockreason/mandatory": { p: 0.00000005, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning", "response_format", "structured_outputs"], mandatory: true, reasoningMeta: { mandatory: true, supported_efforts: ["high", "medium", "low"], default_effort: "medium" } },
+  "mockreason/hidden": { p: 0.00000005, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "temperature", "reasoning"], mandatory: true },
+  "mockanthropic/reader": { p: 0.00000006, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "reasoning", "response_format", "structured_outputs"], unionLimit: 16, reasoningMeta: { mandatory: false, supported_efforts: ["max", "xhigh", "high", "medium", "low", "none"] } },
 };
+/** Parameters with a type array / anyOf in a JSON Schema (how Anthropic counts toward its 16-union limit). */
+const unionCount = (x) => (Array.isArray(x) ? x.reduce((a, v) => a + unionCount(v), 0) : x && typeof x === "object" ? (Array.isArray(x.type) || "anyOf" in x || "oneOf" in x ? 1 : 0) + Object.values(x).reduce((a, v) => a + unionCount(v), 0) : 0);
 /** importer-reliability-2: a vision model whose routes accept structured outputs (json_schema / JSON mode). */
 const STRUCT = {
   "mockstruct/reader": { p: 0.00000006, c: 0.0000003, vision: true, json: true, params: ["max_tokens", "temperature", "response_format", "structured_outputs"] },
@@ -208,7 +219,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && p === "/models") {
     if (config.modelsStatus) return err(res, config.modelsStatus, "mock: models unavailable");
     return json(res, 200, {
-      data: Object.entries(M()).map(([id, m]) => ({ id, name: id, context_length: 200000, architecture: { input_modalities: m.vision ? ["text", "image"] : ["text"], output_modalities: ["text"] }, pricing: { prompt: String(m.p), completion: String(m.c), ...(m.image ? { image: m.image } : {}) }, top_provider: { max_completion_tokens: 16000 }, supported_parameters: paramsOf(m) })),
+      data: Object.entries(M()).map(([id, m]) => ({ id, name: id, context_length: 200000, architecture: { input_modalities: m.vision ? ["text", "image"] : ["text"], output_modalities: ["text"] }, pricing: { prompt: String(m.p), completion: String(m.c), ...(m.image ? { image: m.image } : {}) }, top_provider: { max_completion_tokens: 16000 }, supported_parameters: paramsOf(m), ...(m.reasoningMeta ? { reasoning: m.reasoningMeta } : {}) })),
     });
   }
   if (req.method === "GET" && p === "/images/models") return json(res, 200, { data: [] });
@@ -260,6 +271,16 @@ const server = http.createServer(async (req, res) => {
         if (rl > 0) config.rateLimit[id] = rl - 1;
         stats.rateLimited++;
         last = [429, "Provider returned error"];
+        continue;
+      }
+      if (m.mandatory && body.reasoning?.effort === "none") {
+        stats.mandatoryRefused = (stats.mandatoryRefused ?? 0) + 1;
+        last = [400, "Reasoning is mandatory for this endpoint and cannot be disabled."];
+        continue;
+      }
+      if (m.unionLimit && body.response_format?.type === "json_schema" && unionCount(body.response_format.json_schema?.schema) > m.unionLimit) {
+        stats.schemaRefused = (stats.schemaRefused ?? 0) + 1;
+        last = [400, `Schemas contains too many parameters with union types (${unionCount(body.response_format.json_schema.schema)} parameters with type arrays or anyOf). (limit: ${m.unionLimit} parameters with unions).`];
         continue;
       }
       if (config.badRequest[id]) {
@@ -341,6 +362,8 @@ const server = http.createServer(async (req, res) => {
       // 2026-10-25: a connection the provider drops mid-request, and a classification list with one malformed entry.
       if (mode === "terminated") return err(res, 502, "terminated");
       if (mode === "baditem" && out.results) content = JSON.stringify({ results: [{ bogus: true }, ...out.results.slice(1)] });
+      else if (mode === "degenerate" && out.questions) content = JSON.stringify({ questions: out.questions.slice(0, 1).map((q) => ({ number: q.number, stem: q.stem, options: [{ label: "(1 Supplementary ? No, wait: (1))", text: "..." }], confidence: 1, printed_answer: [] })) });
+      else if (mode === "zero" && out.questions) content = JSON.stringify({ questions: [] });
       else if (mode === "refusal") content = "I'm sorry, but I can't help with transcribing this document.";
       else if (mode === "empty") {
         content = "";
