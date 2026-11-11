@@ -656,6 +656,8 @@ export function AllQuestionsPanelClient({
               <select
                 value={bulkAction}
                 onChange={(e) => setBulkAction(e.target.value)}
+                data-testid="bulk-action"
+                aria-label="Bulk action"
                 disabled={selectedIds.size === 0}
                 className="h-9 rounded-[var(--radius-button)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm"
               >
@@ -669,7 +671,7 @@ export function AllQuestionsPanelClient({
                 <option value="CLEAR_EXCLUDE_FROM_PRACTICE">Include in practice</option>
                 <option value="DELETE">Delete</option>
               </select>
-              <Button onClick={handleBulkAction} disabled={!bulkAction || selectedIds.size === 0 || bulkBusy} size="sm">
+              <Button onClick={handleBulkAction} disabled={!bulkAction || selectedIds.size === 0 || bulkBusy} size="sm" data-testid="bulk-apply">
                 {bulkBusy ? "Applying…" : "Apply"}
               </Button>
               <Button onClick={() => setSelectedIds(new Set())} variant="outline" size="sm">
@@ -717,11 +719,13 @@ export function AllQuestionsPanelClient({
               </thead>
               <tbody>
                 {questions.map((q) => (
-                  <tr key={q.id} className="border-b border-[var(--color-border)] last:border-0 align-top">
+                  <tr key={q.id} className="border-b border-[var(--color-border)] last:border-0 align-top" data-testid="question-row" data-question-id={q.id}>
                     <td className="py-2.5 pr-4">
                       <Checkbox
                         checked={selectedIds.has(q.id)}
                         onCheckedChange={() => handleToggleSelect(q.id)}
+                        aria-label={`Select ${q.code}`}
+                        data-testid="select-question"
                       />
                     </td>
                     <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">
@@ -765,7 +769,7 @@ export function AllQuestionsPanelClient({
                     </td>
                     <td className="py-2.5 pr-4">
                       {q.reviewRequired ? <Badge variant="warning">Review</Badge> : null}
-                      {q.excludeFromPractice ? <Badge variant="info" title={q.excludeFromPracticeReason || "Kept out of automatically generated practice; still in its PYQ paper and curated tests"}>Practice excluded</Badge> : null}
+                      {q.excludeFromPractice ? <Badge variant="info" data-testid="badge-practice-excluded" title={q.excludeFromPracticeReason || "Kept out of automatically generated practice; still in its PYQ paper and curated tests"}>Practice excluded</Badge> : null}
                       {q.answerVerification === "UNVERIFIED" ? <Badge variant="warning" title="Imported without an official answer key">Answer unverified</Badge> : null}
                       {q.answerVerification === "ADMIN_CONFIRMED" ? <Badge variant="info" title="Answer chosen by an administrator during AI import">Admin answer</Badge> : null}
                     </td>
