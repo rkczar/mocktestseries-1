@@ -45,15 +45,27 @@ async function setup() {
   const post = await createFixtureTopic(prisma, { subjectId: food.id, name: `P1UI Post-harvest ${sfx}` });
   const jobId = await createJob({ actorId: master.id, title: `P1UI paper ${sfx}`, examId: exam.id, paperType: AiImportPaperType.FULL_PAPER, subjectId: null, year: 2024, paperCode: null, previousYearPaperId: null, budgetInr: 8 });
   const file = await prisma.aiImportFile.create({ data: { jobId, originalName: "p1ui-paper.pdf", ext: "pdf", role: "PAPER", status: "PROCESSED", pageCount: 1, detected: { kind: "pdf" }, mime: "application/pdf", declaredBytes: 1000, bytes: 1000, uploadedById: master.id } });
-  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: "NEEDS_REVIEW", confirmedAt: new Date(), expectedQuestions: 2 } });
+  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: "NEEDS_REVIEW", confirmedAt: new Date(), expectedQuestions: 5 } });
   const rows: Record<string, string> = {};
   for (const [key, n, stem, hi] of [["qa", 1, "The enzymatic browning in cut surface of fruits is due to", "फलों की कटी सतह पर भूरापन किसके कारण है"], ["qb", 2, "Which packaging is used for butter?", "मक्खन की पैकिंग में क्या प्रयुक्त होता है"]] as const) {
     const e = eq(n, stem, hi);
-    const r = await prisma.aiImportQuestion.create({ data: { jobId, fileId: file.id, sourceKey: `#${n}`, sourceNumber: n, sourceLabel: String(n), pages: [1], orderIndex: n, data: e as never, questionType: e.type, optionCount: 4, contentFormat: "PLAIN", confidence: 0.95, subjectId: food.id, topicId: post.id, taxonomySource: "admin", officialAnswer: ["A"], officialAnswerRaw: "1", finalAnswer: ["A"], answerStatus: "OFFICIAL_MATCHED" } });
+    const r = await prisma.aiImportQuestion.create({ data: { jobId, fileId: file.id, sourceKey: `#${n}`, sourceNumber: n, sourceLabel: String(n), pages: [1], orderIndex: n, data: e as never, questionType: e.type, optionCount: 4, contentFormat: "PLAIN", confidence: 0.95, subjectId: food.id, topicId: post.id, taxonomySource: "admin", officialAnswer: ["A"], officialAnswerRaw: "1", finalAnswer: ["A"], answerStatus: "OFFICIAL_MATCHED", answerConfirmedById: master.id } });
     rows[key] = r.id;
   }
+  // 2026-11-11 formula checks: QC = copy of the FSO Q136 damage (\text eaten into a TAB in an option; approved before the
+  // check existed), QD = a formula question read by local OCR, QE = a clean question. Synthetic text only.
+  const formula = async (key: string, n: number, stem: string, options: string[], method: string, approved: boolean) => {
+    const e = { ...eq(n, stem, `${stem} (हिंदी)`), options: L(options), contentFormat: "RICH_V1", method } as unknown as ExtractedQuestion;
+    (e as unknown as { hi: { options: unknown } }).hi.options = L(options);
+    const r = await prisma.aiImportQuestion.create({ data: { jobId, fileId: file.id, sourceKey: `#${n}`, sourceNumber: n, sourceLabel: String(n), pages: [1], orderIndex: n, data: e as never, questionType: e.type, optionCount: 4, contentFormat: "RICH_V1", confidence: 0.95, subjectId: food.id, topicId: post.id, taxonomySource: "admin", officialAnswer: ["A"], officialAnswerRaw: "1", finalAnswer: ["A"], answerStatus: "OFFICIAL_MATCHED", answerConfirmedById: master.id, ...(approved ? { approvedById: master.id, approvedAt: new Date(), reviewedById: master.id, reviewedAt: new Date() } : {}) } });
+    rows[key] = r.id;
+  };
+  // "\t" below is a real TAB: the stored damage exactly as FSO Q136 holds it.
+  await formula("qc", 3, "The ISRO launch was on", ["$13^{\text{th}}$ February, 1986", "$22^{\text{nd}}$ July, 2019", "$1^{\text{st}}$ May", "$4^{\text{th}}$ June"], "AI_VISION", true);
+  await formula("qd", 4, "The formula for standard deviation is", ["$\\sigma = \\frac{\\sum(X-\\bar{X})}{N}$", "$\\sigma = \\sqrt{\\frac{\\sum(x-\\bar{x})^2}{N}}$", "$\\sigma = \\sqrt{\\frac{\\sum(X-\\bar{X})}{N}}$", "$\\sigma = \\sqrt{\\frac{\\sum X}{N}}$"], "LOCAL_OCR", false);
+  await formula("qe", 5, "Water boils at", ["$100^{\\circ}\\text{C}$", "$90^{\\circ}\\text{C}$", "$80^{\\circ}\\text{C}$", "$70^{\\circ}\\text{C}$"], "AI_VISION", false);
   await revalidateQuestions(jobId, Object.values(rows));
-  await setAcademicReview(Object.values(rows), master.id, "AMBIGUOUS_PENDING_ACADEMIC_REVIEW", "Primary S08-T03 vs alternative: S03-T02 Biochemistry (test)");
+  await setAcademicReview([rows.qa, rows.qb], master.id, "AMBIGUOUS_PENDING_ACADEMIC_REVIEW", "Primary S08-T03 vs alternative: S03-T02 Biochemistry (test)");
   console.log(JSON.stringify({ sfx, jobId, rows, accounts: { master: { username: master.username, password: master.password }, full: { username: full.username, password: full.password } } }, null, 1));
 }
 
@@ -61,10 +73,11 @@ async function state(fxPath: string) {
   const F = JSON.parse(readFileSync(fxPath, "utf8"));
   const qs = await prisma.aiImportQuestion.findMany({ where: { jobId: F.jobId } });
   const out = {
-    rows: Object.fromEntries(qs.map((q) => [q.id, { hold: q.academicReview, note: q.academicReviewNote, approved: !!q.approvedById, reviewedAt: q.reviewedAt?.toISOString() ?? null, subjectId: q.subjectId, topicId: q.topicId }])),
+    rows: Object.fromEntries(qs.map((q) => [q.id, { hold: q.academicReview, note: q.academicReviewNote, approved: !!q.approvedById, codes: q.issueCodes, data: JSON.stringify(((d) => [d.stem, d.options.map((o) => o.text), d.hi?.stem ?? null, d.hi?.options.map((o) => o.text) ?? null])(q.data as unknown as ExtractedQuestion)), edited: q.editedData !== null, questionId: q.questionId, reviewedAt: q.reviewedAt?.toISOString() ?? null, subjectId: q.subjectId, topicId: q.topicId }])),
     cleared: await prisma.aiImportEvent.count({ where: { jobId: F.jobId, type: "ACADEMIC_REVIEW_CLEARED" } }),
     clearedNote: ((await prisma.aiImportEvent.findFirst({ where: { jobId: F.jobId, type: "ACADEMIC_REVIEW_CLEARED" }, orderBy: { createdAt: "desc" } }))?.data as { note?: string } | null)?.note ?? null,
     audit: await prisma.auditLog.count({ where: { action: "AI_IMPORT_ACADEMIC_REVIEW_CLEARED" } }),
+    bankQuestions: await prisma.question.count(),
   };
   console.log(JSON.stringify(out));
 }

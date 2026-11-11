@@ -76,6 +76,74 @@ async function main() {
   check("…the card is gone and import is no longer blocked by a hold", (await m.page.locator("[data-testid=rv-academic]").count()) === 0 && !/taxonomy pending academic review/.test(await m.page.locator("body").innerText()));
   await shot(m.page, "02-after-clear");
 
+  const msgAfterApprove = async (page) => {
+    await page.locator("[data-testid=rv-approve]").click();
+    // The message renders after the server action returns and the page refreshes: wait for its text, not just the element.
+    await page.waitForFunction(() => (document.querySelector("[data-testid=review-msg]")?.textContent ?? "").trim().length > 0, null, { timeout: 30000 }).catch(() => {});
+    await settle(page);
+    return (await page.locator("[data-testid=review-msg]").innerText().catch(() => "")).trim();
+  };
+
+  console.log("\n=== Academic hold: refusal explains the fix; valid mapping approves after an explicit clear");
+  await open(m.page, F.rows.qb);
+  const holdMsg = await msgAfterApprove(m.page);
+  await shot(m.page, "05-hold-refusal");
+  check("approving a held question is refused with the code AND how to clear it", /AMBIGUOUS_PENDING_ACADEMIC_REVIEW\) — choosing a subject\/topic does not clear this hold/.test(holdMsg) && /Clear hold — mapping confirmed/.test(holdMsg), holdMsg);
+  check("…QB still held and not approved", (() => { const r = state().rows[F.rows.qb]; return r.hold === "AMBIGUOUS_PENDING_ACADEMIC_REVIEW" && !r.approved; })());
+  await open(m.page, F.rows.qa);
+  const qaMsg = await msgAfterApprove(m.page);
+  check("QA (hold cleared, valid exam→subject→topic) approves only when the admin clicks Approve", /^Approved\./.test(qaMsg) && state().rows[F.rows.qa].approved, qaMsg);
+
+  console.log("\n=== Formula text damaged (copy of FSO Q136) — blocking, never repaired automatically");
+  await open(m.page, F.rows.qc);
+  await shot(m.page, "06-formula-damaged");
+  const qcBody = await m.page.locator("[data-testid=q-issues]").innerText().catch(() => "");
+  check("flag shown with its label", /Formula text damaged \(control characters\)/.test(qcBody), qcBody.slice(0, 400));
+  check("…the hidden TAB is shown visibly (⟨TAB⟩ext) with a suggested repair", /⟨TAB⟩ext/.test(qcBody) && /Suggested: “\$13\^\{\\text\{th\}\}\$/.test(qcBody), qcBody.slice(0, 600));
+  // Like prod Q136, QC was approved before the check existed: the page offers "withdraw", and import is blocked.
+  check("…already-approved QC shows import blocked by the damage", /blocked — Formula text damaged/.test(await m.page.locator("body").innerText()), (await m.page.locator("body").innerText()).match(/blocked[^\n]*/)?.[0]);
+  if (await m.page.locator("[data-testid=rv-unapprove]").count()) {
+    await m.page.locator("[data-testid=rv-unapprove]").click();
+    await m.page.locator("[data-testid=rv-approve]").waitFor({ timeout: 20000 }).catch(() => {});
+    await settle(m.page);
+  }
+  const qcMsg = await msgAfterApprove(m.page);
+  check("Approve refused: Formula text damaged", /^Not approved: .*Formula text damaged/.test(qcMsg), qcMsg);
+  const qcAfter = state().rows[F.rows.qc];
+  check("…stored text untouched (no automatic repair, no edit)", qcAfter.data === s0.rows[F.rows.qc].data && !qcAfter.edited && JSON.parse(qcAfter.data)[1][0] === "$13^{\text{th}}$ February, 1986", qcAfter);
+
+  console.log("\n=== Formula needs manual verification (formula read by local OCR)");
+  await open(m.page, F.rows.qd);
+  await shot(m.page, "07-formula-manual");
+  const qdBody = await m.page.locator("[data-testid=q-issues]").innerText().catch(() => "");
+  check("flag shown with its label and reason", /Formula needs manual verification against the page/.test(qdBody) && /local OCR/.test(qdBody), qdBody.slice(0, 400));
+  check("…not repaired or edited", !state().rows[F.rows.qd].edited);
+  await m.page.goto(`${BASE}/admin/ai-importer/exceptions?job=${F.jobId}&status=all`);
+  await settle(m.page);
+  const rowOf = (n) => m.page.locator("[data-testid=exception-row]").filter({ has: m.page.locator(`input[aria-label="Select Q${n}"]`) });
+  check("QC, QD and QE listed on the exceptions page", (await rowOf(3).count()) === 1 && (await rowOf(4).count()) === 1 && (await rowOf(5).count()) === 1);
+  for (const n of [3, 4, 5]) await m.page.locator(`input[aria-label="Select Q${n}"]`).check();
+  await m.page.locator("[data-testid=bulk-approve]").click();
+  await m.page.locator("[data-testid=bulk-msg]").waitFor({ timeout: 20000 }).catch(() => {});
+  await settle(m.page);
+  await shot(m.page, "08-bulk-approve");
+  const bulkMsg = (await m.page.locator("[data-testid=bulk-msg]").innerText().catch(() => "")).trim();
+  const sb = state();
+  check("bulk approval: clean QE approved; QD refused (decide on its own page); QC refused (damaged)", /^1 approved; 2 not approved/.test(bulkMsg) && /Q4: unresolved formula needs manual verification against the page — open the question and decide it on its own/.test(bulkMsg) && /Q3: Formula text damaged/.test(bulkMsg) && sb.rows[F.rows.qe].approved && !sb.rows[F.rows.qd].approved, bulkMsg);
+  await open(m.page, F.rows.qd);
+  const qdMsg = await msgAfterApprove(m.page);
+  check("individual approval on QD's own page (the admin's check) → Approved", /^Approved\./.test(qdMsg) && state().rows[F.rows.qd].approved, qdMsg);
+  const sEnd = state();
+  check("no question imported or published by any of this (Question Bank count unchanged)", sEnd.bankQuestions === s0.bankQuestions && Object.values(sEnd.rows).every((r) => !r.questionId), { before: s0.bankQuestions, after: sEnd.bankQuestions });
+
+  console.log("\n=== Refusal logging");
+  if (actionReq && process.env.SERVER_LOG) {
+    await m.page.evaluate(async ({ url, action, tree, body }) => { await fetch(url, { method: "POST", headers: { "next-action": action, "content-type": "text/plain;charset=UTF-8", accept: "text/x-component", ...(tree ? { "next-router-state-tree": tree } : {}) }, body }); }, { url: actionReq.url, action: actionReq.headers["next-action"], tree: actionReq.headers["next-router-state-tree"], body: actionReq.body.replace(F.rows.qa, F.rows.qe) });
+    await m.page.waitForTimeout(1500);
+    const log = fs.readFileSync(process.env.SERVER_LOG, "utf8");
+    check("an expected refusal (clear on a question with no hold) is written to the server log", /\[ai-importer\] refused: .*no academic-review hold/.test(log), log.split("\n").filter((l) => /ai-importer/.test(l)).slice(-3));
+  } else check("refusal logging checked (needs SERVER_LOG and a captured action)", false, { SERVER_LOG: !!process.env.SERVER_LOG, actionReq: !!actionReq });
+
   console.log("\n=== Full Admin (not Master Admin): no decision, server refuses");
   const f = await login(browser, F.accounts.full);
   check("Full Admin logs in", f.ok, f.page.url());

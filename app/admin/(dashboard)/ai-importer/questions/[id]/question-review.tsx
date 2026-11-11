@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -258,9 +258,13 @@ export function QuestionReview({
   const [holdConfirmed, setHoldConfirmed] = useState(false);
   const [msg, setMsgState] = useState<ReviewMsg | null>(() => {
     const kept = carriedMsg.get(q.id);
-    carriedMsg.delete(q.id);
     return kept && Date.now() - kept.at < 60_000 ? kept.msg : null;
   });
+  // Consumed only once this mount is committed: React may run the initializer of a discarded render attempt first, and
+  // deleting there lost the Approve / refusal message (seen intermittently in the browser test, 2026-11-11).
+  useEffect(() => {
+    carriedMsg.delete(q.id);
+  }, [q.id]);
   const setMsg = (m: ReviewMsg | null) => {
     if (m) carriedMsg.set(q.id, { msg: m, at: Date.now() });
     setMsgState(m);

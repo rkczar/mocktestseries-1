@@ -3,7 +3,7 @@
  *   npx tsx scripts/verify-formula-check.ts
  */
 import { escapeLatexCommands, parseModelJson } from "@/lib/ai-import/ai";
-import { controlCharFindings, showControlChars } from "@/lib/ai-import/formula-check";
+import { controlCharFindings, showControlChars, unbalancedChemistry } from "@/lib/ai-import/formula-check";
 import { BILINGUAL_RULES } from "@/lib/ai-import/bilingual";
 import { EXTRACT_SYSTEM, RESCAN_RULES, extractUserText } from "@/lib/ai-import/prompts";
 
@@ -55,6 +55,10 @@ check("\\$ literal dollar does not open maths", controlCharFindings("costs \\$5\
 check("clean LaTeX not flagged", controlCharFindings(R`$\sigma = \sqrt{\frac{\sum (x-\bar{x})^2}{N}}$`).spots.length === 0);
 check("Hindi + formula not flagged", controlCharFindings(R`मानक विचलन का सूत्र $\sigma$ है`).spots.length === 0);
 check("showControlChars", showControlChars("a\tb\fc") === "a⟨TAB⟩b⟨FF⟩c");
+
+check("FSO 2022 Q35 pattern: unbalanced bracket in \\ce found", unbalancedChemistry(R`\ce{Na2[Fe(CN)5NO}`).length === 1);
+check("balanced chemistry not flagged", unbalancedChemistry(R`\ce{Na2[Fe(CN)5NO]} and \ce{H2SO4}`).length === 0);
+check("maths half-open interval not flagged", unbalancedChemistry(R`$x \in [0, 1)$`).length === 0);
 
 // 3. Prompts
 check("system prompt teaches doubled backslashes", EXTRACT_SYSTEM.includes(R`"$\\frac{1}{2}$"`));

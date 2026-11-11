@@ -78,6 +78,12 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
   if (!q.subjectId) return "no subject";
   const e = effective(q);
   if (!IMPORTABLE.has(q.questionType) || e.options.length !== 4) return "not a 4-option question";
+  // Same rule as Bulk Import (lib/json-import.ts matchList): one bad list item refuses the WHOLE package, so it is caught
+  // here, per question (2026-11-11: FSO 2022 Q109's keyless List I stopped the import of all 108 approved questions).
+  if (q.questionType === "MATCH_THE_FOLLOWING" && e.listI?.length && e.listII?.length) {
+    const bad = [...e.listI.map((x) => ["List I", x] as const), ...e.listII.map((x) => ["List II", x] as const)].find(([, x]) => !/^([A-Za-z]{1,4}|\d{1,2})$/.test((x.key ?? "").trim()) || /[|\r\n]|@@/.test(x.text ?? ""));
+    if (bad) return `${bad[0]} item "${(bad[1].text ?? "").slice(0, 40)}" needs a key such as A, I or 1 and one line of text — correct the lists (Edit) first`;
+  }
   const stemImgs = q.figures.filter((f) => f.owner !== "OPTION").length;
   if (stemImgs > 8) return "more than 8 question images";
   for (const l of ["A", "B", "C", "D"]) if (q.figures.filter((f) => f.owner === "OPTION" && f.optionLabel === l).length > 3) return `more than 3 images on option ${l}`;

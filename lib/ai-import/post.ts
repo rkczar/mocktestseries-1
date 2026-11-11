@@ -18,7 +18,7 @@ import { LOCAL_SUBJECT_MIN, classifyPaper, type LocalClassification } from "@/li
 import { classifierContext, headingResolver, jobPaperMemory } from "@/lib/ai-import/taxonomy-memory";
 import { confirmedRulesFor, confirmedSubjectScope, memoryBrief, memoryFindings } from "@/lib/ai-import/paper-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
-import { controlCharFindings } from "@/lib/ai-import/formula-check";
+import { controlCharFindings, unbalancedChemistry } from "@/lib/ai-import/formula-check";
 import { PRINTED_DROPPED, candidateInstruction, formatStem, mergedAnswerIn, mergedStatements, notationRisk, numberSequenceProblems, statementCodeQuestion, statementsOf } from "@/lib/ai-import/local-parse";
 
 const ROMAN_INDEX: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
@@ -603,8 +603,10 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (damaged.length) add("FORMULA_TEXT_CORRUPT", `Hidden control characters in the text (a lost LaTeX backslash): ${damaged.flatMap((f) => f.spots).slice(0, 3).map((s) => `“${s}”`).join(", ")}. Correct the text (Edit or a re-scan); it cannot be approved as it is.${damaged[0].suggestion ? ` Suggested: “${damaged[0].suggestion.slice(0, 200)}”.` : ""}`.slice(0, 600));
     // Formula question read without a vision model, or with symbols the reader could not read: a person checks it against the page.
     const formulaHeavy = richText.some((t) => /\$|\\ce\{/.test(t) || notationRisk(t).length > 0);
-    if (!q.editedData && formulaHeavy && (e.method === "LOCAL_OCR" || e.method === "LOCAL_PDF" || e.unreadable.length > 0))
-      add("FORMULA_NEEDS_MANUAL_VERIFICATION", `Formula question ${e.unreadable.length ? `with unreadable symbols (${e.unreadable.join("; ").slice(0, 160)})` : `read by ${e.method === "LOCAL_OCR" ? "local OCR" : "the PDF text layer"}`} — compare every formula with the page, then approve this question on its own page (valid formula markup is not proof).`);
+    const chem = richText.flatMap(unbalancedChemistry);
+    const whyManual = e.unreadable.length ? `with unreadable symbols (${e.unreadable.join("; ").slice(0, 160)})` : chem.length ? `with unbalanced brackets in chemistry (${chem.slice(0, 2).join(", ")})` : formulaWarnings.length ? "with a formula that does not render" : e.method === "LOCAL_OCR" ? "read by local OCR" : e.method === "LOCAL_PDF" ? "read by the PDF text layer" : null;
+    if (!q.editedData && formulaHeavy && whyManual)
+      add("FORMULA_NEEDS_MANUAL_VERIFICATION", `Formula question ${whyManual} — compare every formula with the page, then approve this question on its own page (valid formula markup is not proof).`);
     // Digits, signs and exponents compared with the source (never corrected automatically).
     if (!q.editedData) {
       if (e.contentFormat !== "RICH_V1") {

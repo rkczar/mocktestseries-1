@@ -51,3 +51,16 @@ export function controlCharFindings(text: string): { spots: string[]; suggestion
   }
   return { spots, suggestion: spots.length && repairable ? out : null };
 }
+
+/**
+ * Chemistry with unbalanced ( ) or [ ] inside \ce{…} (FSO 2022 Q35: "Na2[Fe(CN)5NO"): mhchem renders it without any error,
+ * so nothing else notices. Maths is not checked — half-open intervals like [0, 1) are legitimate there.
+ */
+export function unbalancedChemistry(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\\ce\{((?:[^{}]|\{[^{}]*\})*)\}/g)) {
+    const c = (ch: string) => m[1].split(ch).length - 1;
+    if (c("(") !== c(")") || c("[") !== c("]")) out.push(m[0].slice(0, 60));
+  }
+  return out;
+}

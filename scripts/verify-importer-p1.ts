@@ -11,9 +11,10 @@
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { AiImportPaperType } from "@prisma/client";
+import { AiImportPaperType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { CHUNK_BYTES, normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
+import { CHUNK_BYTES, ISSUE_DEFS, normalizeImporterSettings, type ImporterSettings } from "@/lib/ai-import/config";
+import { controlCharFindings } from "@/lib/ai-import/formula-check";
 import { saveImporterSettings, getImporterSettings } from "@/lib/ai-import/settings";
 import { importBlocker } from "@/lib/ai-import/adapter";
 import { addFile, completeFile, confirmJob, createJob, putChunk, requestAnalysis, resumeJob, setExpectedQuestions } from "@/lib/ai-import/jobs";
@@ -27,7 +28,7 @@ import { saveOpenRouterKey, setOpenRouterEnabled } from "@/lib/ai-engine/setting
 import { syncCatalog } from "@/lib/ai-engine/catalog";
 import { testOpenRouterConnection } from "@/lib/ai-engine/manage";
 import { istDayMonth } from "@/lib/ai-engine/budget";
-import { createFixtureSubject, createFixtureTopic } from "./fixture-taxonomy";
+import { createFixtureSubTopic, createFixtureSubject, createFixtureTopic } from "./fixture-taxonomy";
 
 const CONFIRM_ANY = 1_000_000;
 if (/mocktestseries(\?|$)/.test(process.env.DATABASE_URL ?? "") || !/\/mts_[a-z0-9_]+(\?|$)/.test(process.env.DATABASE_URL ?? "")) {
@@ -302,6 +303,78 @@ async function main() {
   const ap4 = await approveQuestions([fq.id], actor); // approval re-checks first (no AI)
   fr3 = await byNo(3);
   check("…the re-check clears the damage flag and the corrected question is approvable", ap4.approved === 1 && !fr3.issueCodes.includes("FORMULA_TEXT_CORRUPT"), { ap4, codes: fr3.issueCodes });
+
+  section("5. FSO failure patterns (synthetic copies built from the audit descriptions; no production data)");
+  // Each pattern is written into a spare fixture row, re-checked by the production post-processing (no AI), then approved.
+  const pattern = async (n: number, name: string, patch: Partial<ExtractedQuestion>) => {
+    const row = await byNo(n);
+    const base = row.data as unknown as ExtractedQuestion;
+    const data = { ...base, ...patch } as ExtractedQuestion;
+    await prisma.aiImportQuestion.update({ where: { id: row.id }, data: { data: data as never, editedData: Prisma.DbNull, contentFormat: data.contentFormat } });
+    await setTaxonomy(row.id, actor, bio.id, cellT.id);
+    await setAnswer(row.id, actor, ["A"]);
+    await revalidateQuestions(jobId, [row.id]);
+    const after = await byNo(n);
+    const ap = await approveQuestions([row.id], actor);
+    const final = await byNo(n);
+    console.log(`    ${name}: codes=${after.issueCodes.join(",")} approve=${ap.approved ? "approved" : `refused (${ap.refused[0]?.reason.slice(0, 90)})`}`);
+    // Content only: the checks legitimately record their own results in the stored record.
+    const content = (x: ExtractedQuestion) => JSON.stringify([x.stem, x.options.map((o) => o.text), x.hi?.stem ?? null, x.hi?.options.map((o) => o.text) ?? null]);
+    return { after, ap, unchanged: content(final.data as unknown as ExtractedQuestion) === content(data) && final.editedData === null };
+  };
+  const opt = (xs: string[]) => xs.map((t, i) => ({ label: "ABCD"[i], printed: `(${i + 1})`, text: t }));
+  const hiOf = (stem: string, xs: string[]) => ({ stem, options: opt(xs), confidence: 0.95, unreadable: [], sameOptionOrder: true, figuresDiffer: false } as unknown as ExtractedQuestion["hi"]);
+  // Q37: never read — empty stem, empty options, no Hindi.
+  const p37 = await pattern(6, "Q37 empty", { stem: "", options: opt(["", "", "", ""]), hi: null as never, contentFormat: "PLAIN" });
+  check("Q37 pattern (empty question): blocked, not approvable", p37.ap.approved === 0 && p37.after.issueCodes.some((c) => ISSUE_DEFS[c]?.blocking), p37.after.issueCodes);
+  check("…no false formula-damage flag on an empty row; nothing filled in automatically", !p37.after.issueCodes.includes("FORMULA_TEXT_CORRUPT") && p37.unchanged);
+  // Q63: \text eaten into TAB three times in BOTH the English and the Hindi stem.
+  const t63 = "$16 - 26\text{ }^\text{o}\text{C}$";
+  const p63 = await pattern(7, "Q63 TAB en+hi", { stem: `The crop grows between ${t63} and in soil pH $6 - 7$?`, options: opt(["Wheat", "Rice", "Maize", "Barley"]), hi: hiOf(`फसल ${t63} तथा मृदा pH $6 - 7$ में उगती है?`, ["गेहूँ", "धान", "मक्का", "जौ"]), contentFormat: "RICH_V1" });
+  check("Q63 pattern: FORMULA_TEXT_CORRUPT, refused, text not repaired automatically", p63.after.issueCodes.includes("FORMULA_TEXT_CORRUPT") && p63.ap.approved === 0 && /Formula text damaged/.test(p63.ap.refused[0]?.reason ?? "") && p63.unchanged, p63.after.issueCodes);
+  check("…the Hindi stem's damage is detected on its own too", controlCharFindings(`फसल ${t63}`).spots.length === 3);
+  // Q44: ordinals 1st–4th stored as plain 1–4 (no markup, no control characters).
+  const p44 = await pattern(9, "Q44 plain ordinals", { stem: "Which stage comes first?", options: opt(["1", "2", "3", "4"]), hi: hiOf("कौन सा चरण पहले आता है?", ["1", "2", "3", "4"]), contentFormat: "PLAIN" });
+  check("Q44 pattern: no false formula flag on plain numbers (lost ordinals need the page — reported as a limit)", !p44.after.issueCodes.some((c) => c.startsWith("FORMULA_")) && p44.unchanged, p44.after.issueCodes);
+  // FSO 2022 Q35: wrong / broken chemistry (unbalanced bracket) that mhchem renders without an error.
+  const ce = ["\\ce{Na2[Fe(CN)5NO}", "\\ce{K4[Fe(CN)6]}", "\\ce{Fe(SCN)3}", "\\ce{FeSO4}"];
+  const p35 = await pattern(11, "2022 Q35 chemistry", { stem: "Which reagent gives a violet colour with sulphide ions?", options: opt(ce), hi: hiOf("सल्फाइड आयनों के साथ बैंगनी रंग कौन देता है?", ce), contentFormat: "RICH_V1" });
+  check("2022 Q35 pattern: FORMULA_NEEDS_MANUAL_VERIFICATION names the unbalanced chemistry", p35.after.issueCodes.includes("FORMULA_NEEDS_MANUAL_VERIFICATION") && /unbalanced brackets in chemistry/.test((p35.after.issues as Record<string, string>).FORMULA_NEEDS_MANUAL_VERIFICATION ?? ""), p35.after.issues);
+  check("…a single approval on its own page is the admin's check (bulk is refused — section 4); text not changed", p35.unchanged);
+
+  section("6. Taxonomy relationships (exam → subject → topic → sub-topic)");
+  const other = await prisma.exam.create({ data: { name: `P1 Other ${suffix}`, code: `P1O-${suffix}`, isActive: true } });
+  const foreign = await createFixtureSubject(prisma, { examId: other.id, name: `P1 Foreign ${suffix}` });
+  const sub = await createFixtureSubTopic(prisma, { topicId: cellT.id, name: `P1 Mitochondria ${suffix}` });
+  const sub2 = await createFixtureSubTopic(prisma, { topicId: organic.id, name: `P1 Alcohols ${suffix}` });
+  const t5 = await byNo(5);
+  const keep = { s: t5.subjectId, t: t5.topicId, st: t5.subTopicId, ap: t5.approvedById };
+  await expectError("subject of another exam refused", () => setTaxonomy(t5.id, actor, foreign.id, null), /not configured for this exam/);
+  await expectError("topic under another subject refused", () => setTaxonomy(t5.id, actor, bio.id, organic.id), /does not belong to the subject/);
+  await expectError("sub-topic under another topic refused", () => setTaxonomy(t5.id, actor, bio.id, cellT.id, sub2.id), /sub-topic does not belong to the topic/);
+  await expectError("unknown (stale) subject id refused", () => setTaxonomy(t5.id, actor, "cl_stale_subject_id_000000", null), /not configured for this exam/);
+  const t5b = await byNo(5);
+  check("…every refusal left the question exactly as it was (mapping + approval)", t5b.subjectId === keep.s && t5b.topicId === keep.t && t5b.subTopicId === keep.st && t5b.approvedById === keep.ap);
+  await setTaxonomy(t5.id, actor, bio.id, cellT.id, sub.id);
+  const t5c = await byNo(5);
+  check("valid exam→subject→topic→sub-topic accepted; the change withdraws approval (no automatic approval)", t5c.subjectId === bio.id && t5c.topicId === cellT.id && t5c.subTopicId === sub.id && !t5c.approvedById);
+  const ap6 = await approveQuestions([t5.id], actor);
+  check("…approves only on an explicit Approve", ap6.approved === 1 && !(await byNo(5)).questionId, ap6);
+  await prisma.aiImportQuestion.update({ where: { id: t5.id }, data: { subjectId: null, topicId: null, subTopicId: null } });
+  const ap7 = await approveQuestions([t5.id], actor);
+  check("missing subject → refused with a reason", ap7.approved === 0 && /subject/i.test(ap7.refused[0]?.reason ?? ""), ap7);
+  // FSO 2022 Q109 pattern: a match question whose List I items have no key. Bulk Import refuses the WHOLE package for it.
+  await setTaxonomy(t5.id, actor, bio.id, cellT.id);
+  const m5 = (await byNo(5)).data as unknown as ExtractedQuestion;
+  check("Q5 is a match question with keyed lists (baseline)", (m5.listI?.length ?? 0) > 0 && m5.listI!.every((x) => x.key));
+  await prisma.aiImportQuestion.update({ where: { id: t5.id }, data: { data: { ...m5, listI: m5.listI!.map((x) => ({ ...x, key: "" })) } as never } });
+  const ap8 = await approveQuestions([t5.id], actor);
+  check("keyless List I (FSO 2022 Q109 pattern) → refused at Approve with an actionable reason", ap8.approved === 0 && /List I item .* needs a key such as A, I or 1/.test(ap8.refused[0]?.reason ?? ""), ap8);
+  check("…and excluded by the import gate even if approved earlier (so it cannot stop the other questions' import)", !!importBlocker({ ...(await byNo(5)), approvedById: actor, figures: [] }, await getImporterSettings()));
+  await prisma.aiImportQuestion.update({ where: { id: t5.id }, data: { data: m5 as never } });
+  const ap9 = await approveQuestions([t5.id], actor);
+  check("…with keys restored it approves again", ap9.approved === 1, ap9);
+  check("no Question Bank row written by any approval in this suite", (await prisma.aiImportQuestion.count({ where: { jobId, questionId: { not: null } } })) === 0);
 
   check("no real network host was contacted", blockedHosts.size === 0, [...blockedHosts]);
 }
