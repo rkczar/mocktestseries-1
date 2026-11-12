@@ -124,7 +124,7 @@ export async function findPracticeOmrSheet(preferExamId?: string | null) {
   const features = await getExamFeaturesMap(all.flatMap((s) => (s.examId ? [s.examId] : [])));
   const sheets = all
     .filter((s) => !s.examId || (s.exam?.isActive && features.get(s.examId)?.omrDownloadEnabled))
-    .map(({ exam: _exam, ...s }) => s);
+    .map((s) => ({ id: s.id, title: s.title, questionCount: s.questionCount, examId: s.examId }));
   // With an exam context, never fall back to ANOTHER exam's sheet (a 150-question 1–4 FSO sheet must
   // never reach RUHS MO, nor the reverse): that exam's sheet, else an exam-neutral one, else none.
   if (preferExamId) return sheets.find((s) => s.examId === preferExamId) ?? sheets.find((s) => !s.examId) ?? null;
