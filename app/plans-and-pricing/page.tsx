@@ -386,7 +386,8 @@ export default async function PlansAndPricingPage() {
               ))}
 
               {/* Group Discount Offer (Admin switch, default OFF) sits right under the first exam's plan cards. */}
-              {gi === 0 && catalog.showPrices && groupDiscountHref ? <GroupDiscountCard whatsappHref={groupDiscountHref} /> : null}
+              {/* Pinned to the Premium policy exam (RUHS MO today) so a second exam's plans never carry it. */}
+              {(premium ? premium.examId === g.exam.id : gi === 0) && catalog.showPrices && groupDiscountHref ? <GroupDiscountCard whatsappHref={groupDiscountHref} /> : null}
 
               {catalog.showPrices && premium && premium.examId === g.exam.id ? (
                 <div className="mt-8">

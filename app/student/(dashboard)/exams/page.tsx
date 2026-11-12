@@ -5,6 +5,8 @@ import { getActiveExamsCatalog } from "@/lib/student-data";
 import { Card, CardContent } from "@/components/ui/card";
 import { BackButton } from "@/components/student/back-button";
 import { EnrollToggle } from "./enroll-toggle";
+import { getStudentExamAccessSummaries } from "@/lib/payments/student-access";
+import { formatInr } from "@/lib/payments/money";
 
 export const metadata = { title: "My Exams — Mock Test Series.in" };
 
@@ -13,6 +15,11 @@ export default async function MyExamsPage({ searchParams }: { searchParams: Prom
   const { filter } = await searchParams;
   const allExams = await getActiveExamsCatalog(student.id);
   const exams = filter === "enrolled" ? allExams.filter((e) => e.isEnrolled) : allExams;
+  // Per-exam access state for enrolled exams (each exam has its own products and entitlements).
+  const summaries = new Map(
+    (await getStudentExamAccessSummaries(student.id, allExams.filter((e) => e.isEnrolled))).map((a) => [a.exam.id, a])
+  );
+  const fmtDay = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
 
   return (
     <div className="flex flex-col gap-6">
@@ -72,7 +79,21 @@ export default async function MyExamsPage({ searchParams }: { searchParams: Prom
                   </div>
                 </CardContent>
               </Link>
-              <div className="mt-auto px-5 pb-5">
+              <div className="mt-auto flex flex-col gap-2 px-5 pb-5">
+                {(() => {
+                  const a = summaries.get(exam.id);
+                  if (!a) return null;
+                  if (a.state === "ACTIVE")
+                    return <p className="text-xs font-medium text-[var(--color-success)]">Access active{a.entitlement?.expiresAt ? ` till ${fmtDay(a.entitlement.expiresAt)}` : ""}</p>;
+                  if (a.state === "EXPIRED") return <p className="text-xs font-medium text-[var(--color-warning)]">Access expired</p>;
+                  if (a.state === "FREE" && a.checkoutHref)
+                    return (
+                      <Link href={a.checkoutHref} className="text-xs font-medium text-[var(--color-primary)] underline underline-offset-2">
+                        Buy access{a.offer?.showPrice ? ` — ${formatInr(a.offer.price.pricePaise)}` : ""}
+                      </Link>
+                    );
+                  return null;
+                })()}
                 <EnrollToggle examId={exam.id} initialEnrolled={exam.isEnrolled} />
               </div>
             </Card>

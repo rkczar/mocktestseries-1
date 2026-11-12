@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatInr } from "@/lib/payments/money";
 import { applyCouponAction, createOrderAction, verifyPaymentAction } from "../actions";
+import { trackEvent } from "@/lib/analytics-events";
 
 interface Props {
   product: { id: string; code: string; name: string; description: string | null; accessLabel: string; examName: string | null; couponsAllowed?: boolean };
@@ -141,6 +142,7 @@ export function CheckoutClient({ product, price, access, renewal, gatewayReady, 
         return;
       }
       const order = r.data;
+      if (order.environment === "LIVE") trackEvent("begin_checkout", { currency: "INR", value: order.amountPaise / 100, item_id: product.code });
       const loaded = await loadCheckoutScript();
       if (!loaded || !window.Razorpay) {
         setError("Couldn't load the payment window. Check your connection and try again.");

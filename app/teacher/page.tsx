@@ -4,6 +4,7 @@ import { getTeacher } from "@/lib/teacher/session";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { teacherMobileStatus } from "@/lib/teacher/auth";
 import { MobileVerify } from "./mobile-verify";
+import { getTeacherExamPages } from "@/lib/teacher/exam-pages";
 
 const weekAgo = () => new Date(Date.now() - 7 * 86400_000);
 
@@ -22,6 +23,8 @@ export default async function TeacherDashboard() {
     prisma.teacherContentRequest.count({ where: { teacherId: scope.teacherId, status: { in: ["APPROVED", "REJECTED"] }, decidedAt: { gte: weekAgo() } } }),
     teacherMobileStatus(scope.teacherId),
   ]);
+  // Exams come from the teacher's live assignments only (scope.examIds); a revoked exam disappears here.
+  const examPages = await Promise.all(exams.map(async (exam) => ({ exam, links: await getTeacherExamPages(exam.id) })));
   return (
     <>
       <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Welcome, {scope.name}</h1>
@@ -55,6 +58,33 @@ export default async function TeacherDashboard() {
               ))}
             </ul>
           )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle>Access Your Exam Pages</CardTitle></CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {examPages.length === 0 ? (
+            <p className="text-sm text-[var(--color-muted-foreground)]">Pages of your assigned exams appear here.</p>
+          ) : (
+            examPages.map(({ exam, links }) => (
+              <div key={exam.id} className="flex flex-col gap-2">
+                <p className="text-sm font-medium">{exam.name}</p>
+                <ul className="grid grid-cols-1 gap-1.5 text-sm sm:grid-cols-2">
+                  {links.map((l) => (
+                    <li key={l.label} className="flex items-center justify-between gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-1.5">
+                      {l.href ? (
+                        <a className="underline" href={l.href} target="_blank" rel="noopener noreferrer">{l.label}</a>
+                      ) : (
+                        <span className="text-[var(--color-muted-foreground)]">{l.label}</span>
+                      )}
+                      <span className="text-xs text-[var(--color-muted-foreground)]">{l.status === "LIVE" ? "Live" : l.status === "OFF" ? "Off" : "Not published"}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))
+          )}
+          <p className="text-xs text-[var(--color-muted-foreground)]">Links only. Pages are published by the Master Admin.</p>
         </CardContent>
       </Card>
       <p className="text-xs text-[var(--color-muted-foreground)]">

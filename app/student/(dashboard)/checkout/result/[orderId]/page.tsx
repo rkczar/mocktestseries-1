@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { TrackOnce } from "@/components/analytics/track-once";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { prisma } from "@/lib/prisma";
 import { productHref } from "@/lib/payments/product-links";
@@ -26,7 +27,7 @@ export default async function OrderResultPage({
       amountPaise: true,
       couponCode: true,
       environment: true,
-      product: { select: { code: true, name: true, productType: true, examId: true, mockTestId: true } },
+      product: { select: { code: true, name: true, productType: true, examId: true, mockTestId: true, exam: { select: { code: true } } } },
       paidAt: true,
       entitlement: { select: { startsAt: true, expiresAt: true, status: true } },
       payments: { where: { status: { in: ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"] } }, select: { gatewayPaymentId: true, method: true }, take: 1 },
@@ -35,7 +36,17 @@ export default async function OrderResultPage({
   });
   if (!order) notFound();
 
+  // GA4 purchase: once per order, LIVE money only, from the server-confirmed status (never the browser callback).
+  const tracked = order.environment === "LIVE" && (order.status === "PAID" || order.status === "PARTIALLY_REFUNDED");
   return (
+    <>
+      {tracked ? (
+        <TrackOnce
+          event="purchase"
+          onceKey={`purchase:${order.id}`}
+          params={{ transaction_id: order.orderNumber, value: order.amountPaise / 100, currency: "INR", item_id: order.product.code, exam_code: order.product.exam?.code ?? null }}
+        />
+      ) : null}
     <OrderResultClient
       order={{
         id: order.id,
@@ -57,5 +68,6 @@ export default async function OrderResultPage({
       }}
       verifyFailed={sp.verify === "failed"}
     />
+    </>
   );
 }

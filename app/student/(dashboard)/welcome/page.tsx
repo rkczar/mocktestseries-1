@@ -4,6 +4,8 @@ import { getActiveExamsCatalog } from "@/lib/student-data";
 import { examShortName } from "@/lib/exam-editorial-facts";
 import { Card, CardContent } from "@/components/ui/card";
 import { ChooseExamButton } from "./choose-exam-button";
+import { TrackOnce } from "@/components/analytics/track-once";
+import { recentSignup } from "@/lib/signup-tracking";
 
 export const metadata = { title: "Choose your exam — Mock Test Series.in" };
 
@@ -19,8 +21,10 @@ export default async function WelcomePage({ searchParams }: { searchParams: Prom
   const preferred = hint ? exams.find((e) => e.publicSlug === hint || e.code === hint || e.id === hint) : undefined;
   const ordered = preferred ? [preferred, ...exams.filter((e) => e.id !== preferred.id)] : exams;
 
+  const signup = await recentSignup(student.id);
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
+      {signup ? <TrackOnce event="sign_up" onceKey={`sign_up:${student.id}`} params={{ exam_code: preferred?.code ?? null }} /> : null}
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">
           {preferred ? `Start preparing for ${examShortName(preferred.code, preferred.name)}` : "Choose your exam"}
@@ -43,9 +47,9 @@ export default async function WelcomePage({ searchParams }: { searchParams: Prom
                   <p className="text-xs text-[var(--color-muted-foreground)]">{exam.name}</p>
                 </div>
                 {exam.isEnrolled ? (
-                  <ChooseExamButton examId={exam.id} label="Open" />
+                  <ChooseExamButton examId={exam.id} examCode={exam.code} label="Open" />
                 ) : (
-                  <ChooseExamButton examId={exam.id} label={exam.id === preferred?.id ? "Start" : "Choose"} />
+                  <ChooseExamButton examId={exam.id} examCode={exam.code} label={exam.id === preferred?.id ? "Start" : "Choose"} />
                 )}
               </CardContent>
             </Card>
