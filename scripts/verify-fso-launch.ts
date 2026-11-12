@@ -141,6 +141,57 @@ async function main() {
     const expected = right - wrong / 3;
     check(`S4 score = correct − wrong/3 (${right} right, ${wrong} wrong → ${expected.toFixed(2)})`, Math.abs((done.score ?? NaN) - expected) < 1e-9, `got ${done.score}`);
 
+    // ---------------------------------------------------------------- 7 RPSC-deleted questions: excluded, records unchanged
+    const fp = async () => {
+      const rows = await prisma.question.findMany({
+        where: { examId: fso.id, OR: [{ previousYearPaper: { year: 2019 }, paperQuestionNumber: 71 }, { previousYearPaper: { year: 2022 }, paperQuestionNumber: { in: [16, 43, 50, 72, 106, 130] } }] },
+        orderBy: { id: "asc" },
+        select: { id: true, code: true, text: true, textHi: true, status: true, updatedAt: true, paperQuestionNumber: true, options: { orderBy: { id: "asc" }, select: { id: true, label: true, text: true, textHi: true, isCorrect: true, order: true } } },
+      });
+      return { n: rows.length, hash: createHash("sha256").update(JSON.stringify(rows)).digest("hex") };
+    };
+    const fpBefore = await fp();
+    check("K1 fixture has the 7 deleted-key questions stored PUBLISHED", fpBefore.n === 7);
+    const snaps = attempt.questions.map((q) => ({ qid: q.questionId, snap: q.questionSnapshot as { withdrawn?: boolean; correctLabel?: string } }));
+    const deletedIds2022 = (await prisma.question.findMany({ where: { previousYearPaperId: fsoPaper2022.id, paperQuestionNumber: { in: facts.deleted } }, select: { id: true } })).map((q) => q.id);
+    check("K2 2022 attempt: the 6 deleted questions are frozen as withdrawn (no answer key)", deletedIds2022.length === 6 && deletedIds2022.every((id) => snaps.find((x) => x.qid === id)?.snap.withdrawn === true && snaps.find((x) => x.qid === id)?.snap.correctLabel === ""));
+    check("K3 2022 attempt keeps all 149 stored questions in place but scores 143", attempt.questions.length === 149 && attempt.totalQuestions === 143, `${attempt.questions.length}/${attempt.totalQuestions}`);
+    const answerRows = await prisma.answer.count({ where: { attemptId, questionId: { in: deletedIds2022 } } });
+    check("K4 no Answer rows for deleted questions", answerRows === 0);
+    check("K5 maxScore = 143 and done.totalQuestions unchanged", done.maxScore === 143 && done.totalQuestions === 143, `${done.maxScore}`);
+    const accuracy = done.correctCount != null && done.incorrectCount != null ? done.correctCount / (done.correctCount + done.incorrectCount) : null;
+    check("K6 correct / incorrect / accuracy count only scored questions", done.correctCount === right && done.incorrectCount === wrong && accuracy !== null && Math.abs(accuracy - right / (right + wrong)) < 1e-9, `${done.correctCount}/${done.incorrectCount}`);
+    const b2 = await newStudent("fsobuyer2");
+    await prisma.studentEntitlement.create({ data: { studentId: b2.id, productId: fsoProduct.id, status: "ACTIVE", source: "ADMIN_GRANT", startsAt: new Date(Date.now() - 1000), expiresAt: new Date(Date.now() + 86400_000) } });
+    const a2 = (await startPreviousYearPaperAttempt(b2.id, fsoPaper2022.id)) as { id?: string; attemptId?: string };
+    const a2id = a2.attemptId ?? a2.id ?? (await prisma.testAttempt.findFirstOrThrow({ where: { studentId: b2.id }, orderBy: { startedAt: "desc" } })).id;
+    let refused = false;
+    try {
+      await saveAnswer(a2id, b2.id, deletedIds2022[0], "A", false);
+    } catch {
+      refused = true;
+    }
+    check("K7 answering a deleted question is refused", refused);
+    // All 6 deleted questions "answered with the stored key A" would have scored +6 before this fix; now 0.
+    await submitAttempt(a2id, b2.id);
+    const d2 = await prisma.testAttempt.findUniqueOrThrow({ where: { id: a2id } });
+    check("K8 a blank attempt scores 0 (deleted questions never add marks)", d2.score === 0 && d2.correctCount === 0, `${d2.score}`);
+    const paper2019 = await prisma.previousYearPaper.findFirstOrThrow({ where: { examId: fso.id, year: 2019 } });
+    const a3 = (await startPreviousYearPaperAttempt(b2.id, paper2019.id)) as { id?: string; attemptId?: string };
+    const a3id = a3.attemptId ?? a3.id ?? (await prisma.testAttempt.findFirstOrThrow({ where: { studentId: b2.id, previousYearPaperId: paper2019.id } })).id;
+    const at3 = await prisma.testAttempt.findUniqueOrThrow({ where: { id: a3id } });
+    check("K9 2019 attempt: 150 shown, 149 scored (Q71 deleted)", at3.totalQuestions === 149);
+    const fpAfter = await fp();
+    check(`K10 the 7 question records are byte-identical before/after (${fpBefore.hash.slice(0, 12)})`, fpAfter.hash === fpBefore.hash && fpAfter.n === 7);
+    const ruhsPaper = await prisma.previousYearPaper.findFirst({ where: { examId: ruhs.id, isActive: true } });
+    if (ruhsPaper) {
+      const ruhsPublished = await prisma.question.count({ where: { previousYearPaperId: ruhsPaper.id, status: "PUBLISHED", retiredAt: null } });
+      const r = (await startPreviousYearPaperAttempt(a.id, ruhsPaper.id)) as { id?: string; attemptId?: string };
+      const rid = r.attemptId ?? r.id ?? (await prisma.testAttempt.findFirstOrThrow({ where: { studentId: a.id, previousYearPaperId: ruhsPaper.id } })).id;
+      const ra = await prisma.testAttempt.findUniqueOrThrow({ where: { id: rid }, include: { questions: true } });
+      check("K11 RUHS-like PYQ: nothing withdrawn, every published question scored", ra.totalQuestions === ruhsPublished && ra.questions.every((q) => !(q.questionSnapshot as { withdrawn?: boolean }).withdrawn), `${ra.totalQuestions}/${ruhsPublished}`);
+    } else check("K11 RUHS-like PYQ exists", false);
+
     // ---------------------------------------------------------------- OMR isolation + layout
     const ruhsSheet = await prisma.testResource.findFirstOrThrow({ where: { type: "OMR_TEMPLATE", examId: ruhs.id, mockTestId: null } });
     const fsoSheet = await prisma.testResource.create({

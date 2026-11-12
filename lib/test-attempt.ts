@@ -44,6 +44,7 @@ import {
   type MatchSpec,
   type QuestionTypeName,
 } from "@/lib/question-types";
+import { officialPaperFacts } from "@/lib/fso-official";
 
 export { remainingSecondsFor, InsufficientQuestionsError, TestEngineError, MAX_CUSTOM_DURATION_MINUTES };
 export type { AttemptConfigChoice } from "@/lib/attempt-config";
@@ -212,10 +213,11 @@ function needsSnapshotV2(question: QuestionWithOptions): boolean {
 }
 
 /** The frozen snapshot of one question: the language-neutral snapshot plus, for a bilingual question, its Hindi version. */
-function toSnapshot(question: QuestionWithOptions, assets: SnapshotAsset[] = []): QuestionSnapshot {
+function toSnapshot(question: QuestionWithOptions, assets: SnapshotAsset[] = [], keyDeleted = false): QuestionSnapshot {
   const scored = toBaseSnapshot(question, assets);
   // A withdrawn question carries no answer key into the attempt: nothing to score, nothing to reveal.
-  const base: QuestionSnapshot = question.status === "WITHDRAWN" ? { ...scored, correctLabel: "", ...(scored.correctLabels ? { correctLabels: [] } : {}), withdrawn: true } : scored;
+  // keyDeleted = deleted by the official answer key but still PUBLISHED in the bank (lib/fso-official.ts): same treatment.
+  const base: QuestionSnapshot = question.status === "WITHDRAWN" || keyDeleted ? { ...scored, correctLabel: "", ...(scored.correctLabels ? { correctLabels: [] } : {}), withdrawn: true } : scored;
   if (!question.textHi?.trim()) return base;
   return { ...base, hi: { text: question.textHi, options: base.options.map((o) => ({ label: o.label, text: question.options.find((x) => x.label === o.label)?.textHi ?? "" })) } };
 }
@@ -299,9 +301,16 @@ async function createAttemptFromQuestions(params: {
    * is exactly the legacy FIXED admin duration + EXAM mode.
    */
   studentConfig?: AttemptConfigChoice;
+  /**
+   * Previous Year Paper only: questions the official answer key DELETED while the bank keeps them PUBLISHED and
+   * unchanged (lib/fso-official.ts). Frozen exactly like WITHDRAWN ones — shown in place, never answerable,
+   * never scored, not in totalQuestions — and the commit guard still requires them to be PUBLISHED.
+   */
+  keyDeletedQuestionIds?: string[];
 }) {
   // Withdrawn questions only ever reach an attempt through their own Previous Year Paper, and never alone.
-  const isWithdrawn = (q: QuestionWithOptions) => q.status === "WITHDRAWN";
+  const keyDeleted = new Set(params.sourceType === AttemptSourceType.PREVIOUS_YEAR_PAPER ? (params.keyDeletedQuestionIds ?? []) : []);
+  const isWithdrawn = (q: QuestionWithOptions) => q.status === "WITHDRAWN" || keyDeleted.has(q.id);
   if (params.questions.some(isWithdrawn) && params.sourceType !== AttemptSourceType.PREVIOUS_YEAR_PAPER) {
     throw new TestEngineError("UNAVAILABLE", "This test was just updated. Please start it again.");
   }
@@ -320,6 +329,8 @@ async function createAttemptFromQuestions(params: {
   const questions = params.questions.filter((q, i, all) => all.findIndex((x) => x.id === q.id) === i);
   const scoredCount = questions.filter((q) => !isWithdrawn(q)).length;
   const withdrawnIds = questions.filter(isWithdrawn).map((q) => q.id);
+  // Only bank-WITHDRAWN rows must still be WITHDRAWN at commit; key-deleted ones must still be PUBLISHED.
+  const dbWithdrawnIds = questions.filter((q) => q.status === "WITHDRAWN").map((q) => q.id);
 
   // Formal-test policy overrides any practice capability a caller passes:
   // Mock / PYQ / Grand / Live run in EXAM mode on their fixed timing unless
@@ -395,7 +406,7 @@ async function createAttemptFromQuestions(params: {
     const servable = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM "Question"
       WHERE id = ANY(${ids}::text[]) AND "retiredAt" IS NULL
-        AND (CASE WHEN id = ANY(${withdrawnIds}::text[]) THEN status = 'WITHDRAWN' ELSE status = 'PUBLISHED' END)
+        AND (CASE WHEN id = ANY(${dbWithdrawnIds}::text[]) THEN status = 'WITHDRAWN' ELSE status = 'PUBLISHED' END)
       FOR SHARE`;
     if (servable.length !== ids.length) {
       throw new TestEngineError("UNAVAILABLE", "This test was just updated. Please start it again.");
@@ -428,7 +439,7 @@ async function createAttemptFromQuestions(params: {
         attemptId: created.id,
         questionId: q.id,
         order,
-        questionSnapshot: toSnapshot(q, snapshotAssets.get(q.id)) as never,
+        questionSnapshot: toSnapshot(q, snapshotAssets.get(q.id), keyDeleted.has(q.id)) as never,
       })),
     });
     const rows = await tx.testAttemptQuestion.findMany({ where: { attemptId: created.id }, select: { id: true, questionId: true } });
@@ -864,11 +875,19 @@ async function planPreviousYearPaperStart(studentId: string, paperId: string): P
   // whose numbers are unknown. Never sampled or shuffled.
   // The paper's full printed structure: its servable questions plus the ones the official key WITHDREW, which are
   // shown in place with a WITHDRAWN label and never scored (createAttemptFromQuestions).
-  const questions = (await prisma.question.findMany({
+  const paperRows = await prisma.question.findMany({
     where: { previousYearPaperId: paperId, retiredAt: null, status: { in: [QuestionStatus.PUBLISHED, QuestionStatus.WITHDRAWN] } },
     orderBy: [{ paperQuestionNumber: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { code: "asc" }],
     include: { options: true },
-  })) as unknown as QuestionWithOptions[];
+  });
+  const questions = paperRows as unknown as QuestionWithOptions[];
+
+  // Questions the official key deleted but the bank still holds PUBLISHED (records are never changed for this):
+  // frozen as withdrawn — shown in place, unanswerable, unscored (createAttemptFromQuestions).
+  const keyDeletedNumbers = new Set(officialPaperFacts(paper.exam.code, paper.year)?.deleted ?? []);
+  const keyDeletedQuestionIds = paperRows
+    .filter((q) => q.status === QuestionStatus.PUBLISHED && q.paperQuestionNumber != null && keyDeletedNumbers.has(q.paperQuestionNumber))
+    .map((q) => q.id);
 
   // Paper-level duration wins; frozen onto the NEW attempt only (history is immutable).
   const standardMinutes = paper.durationMinutes ?? paper.exam.durationMinutes ?? 120;
@@ -882,6 +901,7 @@ async function planPreviousYearPaperStart(studentId: string, paperId: string): P
       durationMinutes: standardMinutes,
       negativeMarking: paper.exam.negativeMarking ?? 0,
       questions,
+      ...(keyDeletedQuestionIds.length > 0 ? { keyDeletedQuestionIds } : {}),
     },
     summary: {
       kind: "PREVIOUS_YEAR_PAPER",
@@ -889,7 +909,7 @@ async function planPreviousYearPaperStart(studentId: string, paperId: string): P
       title: paper.year ? `${paper.title} (${paper.year})` : paper.title,
       examName: paper.exam.name,
       ...(paper.exam.languageMode === "BILINGUAL" ? { bilingual: true } : {}),
-      questionCount: uniqueQuestionCount(questions.filter((q) => q.status !== QuestionStatus.WITHDRAWN)),
+      questionCount: uniqueQuestionCount(questions.filter((q) => q.status !== QuestionStatus.WITHDRAWN && !keyDeletedQuestionIds.includes(q.id))),
       standardMinutes,
       negativeMarking: paper.exam.negativeMarking ?? 0,
       instructions: paper.exam.instructions ?? null,
