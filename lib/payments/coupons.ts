@@ -22,6 +22,26 @@ export function normalizeCouponCode(input: unknown): string | null {
   return COUPON_CODE_RE.test(code) ? code : null;
 }
 
+/**
+ * Admin-side exam scope check for a coupon. ALL = every exam (empty examIds, the legacy meaning of
+ * "no restriction"); SELECTED = only the listed exams, at least one. A product or test series picked
+ * alongside SELECTED exams must belong to one of them, so a coupon can never reach another exam
+ * through a product/series pick. Products with couponsAllowed=false refuse every coupon at checkout.
+ */
+export function validateCouponExamScope(input: {
+  examScope: "ALL" | "SELECTED";
+  examIds: string[];
+  products: { id: string; examId: string | null }[];
+  series: { id: string; examId: string }[];
+}): string | null {
+  if (input.examScope === "ALL") return null;
+  if (input.examIds.length === 0) return "Pick at least one exam, or choose All exams.";
+  const inScope = new Set(input.examIds);
+  if (input.products.some((p) => !p.examId || !inScope.has(p.examId))) return "Every selected product must belong to one of the selected exams.";
+  if (input.series.some((s) => !inScope.has(s.examId))) return "Every selected test series must belong to one of the selected exams.";
+  return null;
+}
+
 export type CouponRejection =
   | "INVALID"
   | "INACTIVE"
@@ -72,7 +92,7 @@ export async function evaluateCoupon(
   input: {
     code: string;
     studentId: string;
-    product: Pick<Product, "id" | "examId" | "testSeriesId">;
+    product: Pick<Product, "id" | "examId" | "testSeriesId" | "couponsAllowed">;
     pricePaise: number;
     now: Date;
     excludeOrderId?: string;
@@ -84,6 +104,7 @@ export async function evaluateCoupon(
   if (coupon.validFrom && input.now < coupon.validFrom) return { ok: false, reason: "NOT_STARTED" };
   if (coupon.validUntil && input.now >= coupon.validUntil) return { ok: false, reason: "EXPIRED" };
   if (input.pricePaise <= 0) return { ok: false, reason: "NOT_NEEDED" };
+  if (!input.product.couponsAllowed) return { ok: false, reason: "PRODUCT_MISMATCH" };
 
   if (coupon.productIds.length > 0 && !coupon.productIds.includes(input.product.id)) return { ok: false, reason: "PRODUCT_MISMATCH" };
   if (coupon.examIds.length > 0 && (!input.product.examId || !coupon.examIds.includes(input.product.examId)))

@@ -22,7 +22,7 @@ import { logPaymentAudit } from "@/lib/payments/audit";
 import { rupeesToPaise } from "@/lib/payments/money";
 import { validatePricingConfig } from "@/lib/payments/pricing";
 import { validateProductTarget } from "@/lib/payments/product-targets";
-import { COUPON_CODE_RE } from "@/lib/payments/coupons";
+import { COUPON_CODE_RE, validateCouponExamScope } from "@/lib/payments/coupons";
 import {
   getInvoiceSettings,
   getPaymentMode,
@@ -214,6 +214,8 @@ export async function saveProductAction(_prev: FormState, fd: FormData): Promise
       isActive: bool(fd, "isActive"),
       isVisible: bool(fd, "isVisible"),
       purchaseEnabled: bool(fd, "purchaseEnabled"),
+      // Only a form that renders the checkbox may change it (absent field = keep the stored value).
+      couponsAllowed: fd.has("couponsAllowedField") ? bool(fd, "couponsAllowed") : undefined,
       mrpPaise: paise(fd, "mrp", "MRP") ?? 0,
       sellingPricePaise: accessType === "FREE" ? 0 : (paise(fd, "sellingPrice", "Selling price") ?? 0),
       saleEnabled,
@@ -260,8 +262,8 @@ export async function saveProductAction(_prev: FormState, fd: FormData): Promise
       if (!before) return { error: "Product not found." };
       await prisma.product.update({ where: { id }, data });
       await logPaymentAudit(session.user.id, "PRODUCT_UPDATED", "Product", id, {
-        before: { accessType: before.accessType, mrpPaise: before.mrpPaise, sellingPricePaise: before.sellingPricePaise, saleEnabled: before.saleEnabled, isActive: before.isActive, purchaseEnabled: before.purchaseEnabled },
-        after: { accessType: data.accessType, mrpPaise: data.mrpPaise, sellingPricePaise: data.sellingPricePaise, saleEnabled: data.saleEnabled, isActive: data.isActive, purchaseEnabled: data.purchaseEnabled },
+        before: { accessType: before.accessType, mrpPaise: before.mrpPaise, sellingPricePaise: before.sellingPricePaise, saleEnabled: before.saleEnabled, isActive: before.isActive, purchaseEnabled: before.purchaseEnabled, couponsAllowed: before.couponsAllowed },
+        after: { accessType: data.accessType, mrpPaise: data.mrpPaise, sellingPricePaise: data.sellingPricePaise, saleEnabled: data.saleEnabled, isActive: data.isActive, purchaseEnabled: data.purchaseEnabled, couponsAllowed: data.couponsAllowed },
       });
     } else {
       const created = await prisma.product.create({ data: { ...data, createdByAdminId: session.user.id } });
@@ -338,6 +340,16 @@ export async function saveCouponAction(_prev: FormState, fd: FormData): Promise<
       commissionValue,
     };
     if (data.validFrom && data.validUntil && data.validUntil <= data.validFrom) return { error: "Valid until must be after valid from." };
+    // Exam scope: an explicit "All exams" clears the exam list; "Selected exams" must name at least one.
+    // A form without the field (older client) keeps the stored meaning: listed exams, or all when empty.
+    const examScope = str(fd, "examScope") === "ALL" ? "ALL" : str(fd, "examScope") === "SELECTED" || data.examIds.length > 0 ? "SELECTED" : "ALL";
+    if (examScope === "ALL") data.examIds = [];
+    const [scopeProducts, scopeSeries] = await Promise.all([
+      prisma.product.findMany({ where: { id: { in: data.productIds } }, select: { id: true, examId: true } }),
+      prisma.testSeries.findMany({ where: { id: { in: data.testSeriesIds } }, select: { id: true, examId: true } }),
+    ]);
+    const scopeError = validateCouponExamScope({ examScope, examIds: data.examIds, products: scopeProducts, series: scopeSeries });
+    if (scopeError) return { error: scopeError };
     if (id) {
       const before = await prisma.coupon.findUnique({ where: { id } });
       if (!before) return { error: "Coupon not found." };
@@ -351,8 +363,9 @@ export async function saveCouponAction(_prev: FormState, fd: FormData): Promise<
           totalUsageLimit: before.totalUsageLimit,
           commissionType: before.commissionType,
           commissionValue: before.commissionValue,
+          examIds: before.examIds,
         },
-        after: { isActive: data.isActive, discountType, discountValue, totalUsageLimit: data.totalUsageLimit, commissionType, commissionValue },
+        after: { isActive: data.isActive, discountType, discountValue, totalUsageLimit: data.totalUsageLimit, commissionType, commissionValue, examIds: data.examIds },
       });
     } else {
       const c = await prisma.coupon.create({ data: { ...data, createdByAdminId: session.user.id } });

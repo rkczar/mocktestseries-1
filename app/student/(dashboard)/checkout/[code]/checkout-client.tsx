@@ -12,7 +12,7 @@ import { formatInr } from "@/lib/payments/money";
 import { applyCouponAction, createOrderAction, verifyPaymentAction } from "../actions";
 
 interface Props {
-  product: { id: string; code: string; name: string; description: string | null; accessLabel: string; examName: string | null };
+  product: { id: string; code: string; name: string; description: string | null; accessLabel: string; examName: string | null; couponsAllowed?: boolean };
   price: { isFree: boolean; mrpPaise: number; pricePaise: number; discountPercent: number; savingsPaise: number; saleEndsAt: string | null };
   /** coveredBy: name of another product that already unlocks this one (e.g. Complete Series covering a single mock). */
   access: { status: string; mode: string; purchasesPaused: boolean; expiresAt: string | null; coveredBy?: string | null };
@@ -235,7 +235,7 @@ export function CheckoutClient({ product, price, access, renewal, gatewayReady, 
           ) : null}
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {canBuy ? (
+          {canBuy && product.couponsAllowed !== false ? (
             <div className="flex flex-col gap-2">
               {coupon ? (
                 <div className="flex items-center justify-between rounded-[var(--radius-card)] border border-[var(--color-success)]/40 bg-[var(--color-success)]/10 px-3 py-2 text-sm">

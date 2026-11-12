@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { getGroupDiscountEnabled } from "@/lib/group-discount";
 import { getWhatsAppSupportConfig } from "@/lib/whatsapp-support";
 import { setGroupDiscountOfferAction, toggleCouponAction } from "../actions";
+import { examShortName } from "@/lib/exam-editorial-facts";
 
 /** Show Group Discount Offer — a display-only card under the plan cards on /plans-and-pricing. */
 export async function GroupDiscountPanel({ canManage }: { canManage: boolean }) {
@@ -137,7 +138,10 @@ export async function ProductsPanel({ canManage }: { canManage: boolean }) {
 
 export async function CouponsPanel({ canManage }: { canManage: boolean }) {
   const now = new Date();
-  const coupons = await prisma.coupon.findMany({ orderBy: { createdAt: "desc" }, take: 300 });
+  const [coupons, examNames] = await Promise.all([
+    prisma.coupon.findMany({ orderBy: { createdAt: "desc" }, take: 300 }),
+    prisma.exam.findMany({ select: { id: true, code: true, name: true } }).then((rows) => new Map(rows.map((e) => [e.id, examShortName(e.code, e.name)]))),
+  ]);
   const stats = await prisma.couponRedemption.groupBy({
     by: ["couponId", "status"],
     _count: true,
@@ -177,12 +181,13 @@ export async function CouponsPanel({ canManage }: { canManage: boolean }) {
         {coupons.length === 0 ? (
           <Empty>No coupons yet.</Empty>
         ) : (
-          <TableShell minWidth={1100}>
+          <TableShell minWidth={1200}>
             <thead>
               <tr>
                 <Th>Code</Th>
                 <Th>Discount</Th>
                 <Th>Validity</Th>
+                <Th>Exam scope</Th>
                 <Th right>Used / limit</Th>
                 <Th right>Paid orders</Th>
                 <Th right>Collected</Th>
@@ -212,6 +217,10 @@ export async function CouponsPanel({ canManage }: { canManage: boolean }) {
                       <div className="text-xs">
                         {fmtDate(c.validFrom)} → {fmtDate(c.validUntil)}
                       </div>
+                    </Td>
+                    <Td>
+                      <div className="text-xs">{c.examIds.length === 0 ? "All exams" : c.examIds.map((id) => examNames.get(id) ?? "Removed exam").join(", ")}</div>
+                      {c.productIds.length || c.testSeriesIds.length ? <div className="text-[10px] text-[var(--color-muted-foreground)]">+ product/series limits</div> : null}
                     </Td>
                     <Td right>
                       {consumed(c.id)}

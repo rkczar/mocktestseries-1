@@ -113,7 +113,7 @@ function productSnapshot(product: Product, price: ProductPrice) {
 // ---------------------------------------------------------------------------
 
 export interface CheckoutQuote {
-  product: { id: string; code: string; name: string; description: string | null; accessLabel: string; examName: string | null };
+  product: { id: string; code: string; name: string; description: string | null; accessLabel: string; examName: string | null; couponsAllowed: boolean };
   price: ProductPrice;
   coupon: { code: string; discountPaise: number; label: string | null } | null;
   couponError: string | null;
@@ -179,6 +179,7 @@ export async function getCheckoutQuote(studentId: string, productCode: string, c
         ? `${TILL_EXAM_LABEL} — ${TILL_EXAM_SUPPORT_TEXT}`
         : describeAccessDuration(product),
       examName: product.exam?.name ?? null,
+      couponsAllowed: product.couponsAllowed,
     },
     price,
     coupon,

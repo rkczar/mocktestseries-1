@@ -179,7 +179,8 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
       />
       <FloatingWhatsAppSupport surface="dashboard" />
       {/* Keyed: arriving at ?premium=locked from the dashboard itself must remount it, or the once-per-mount claim never runs. */}
-      <TrialPopup key={premiumLocked ? "locked" : "entry"} force={premiumLocked} />
+      {/* The trial belongs to the Premium policy exam: never prompt on another exam's dashboard. */}
+      {!activeExamId || !premiumPolicy.examId || activeExamId === premiumPolicy.examId ? <TrialPopup key={premiumLocked ? "locked" : "entry"} force={premiumLocked} /> : null}
     </div>
   );
 }

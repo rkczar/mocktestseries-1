@@ -2538,6 +2538,8 @@ model Product {
   accessDurationType AccessDurationType @default(DAYS)
   accessDays         Int?
   accessExpiresAt    DateTime?
+  // false = no coupon of any scope (even "All exams") applies to this product (e.g. Rajasthan FSO ₹200).
+  couponsAllowed     Boolean            @default(true)
   order              Int                @default(0)
   createdByAdminId   String?
   createdAt          DateTime           @default(now())

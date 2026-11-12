@@ -93,12 +93,20 @@ export async function CouponForm({ coupon, readOnly }: { coupon: Coupon | null; 
       </div>
 
       <div className="md:col-span-2 border-t border-[var(--color-border)] pt-3 text-sm font-medium">
-        Applicability <span className="font-normal text-[var(--color-muted-foreground)]">(leave all empty = any product; Ctrl/Cmd-click to multi-select)</span>
+        Applicability <span className="font-normal text-[var(--color-muted-foreground)]">(empty products and series = any product in the exam scope; Ctrl/Cmd-click to multi-select)</span>
       </div>
       <F label="Products" name="productIds">
         {multi("productIds", products, c?.productIds ?? [])}
       </F>
-      <F label="Exams" name="examIds">
+      <F label="Exams" name="examIds" hint="All exams = every exam whose product allows coupons. Selected = only the exams picked here.">
+        <div className="flex gap-4 text-sm">
+          <label className="flex items-center gap-2">
+            <input type="radio" name="examScope" value="ALL" defaultChecked={(c?.examIds.length ?? 0) === 0} /> All exams
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="radio" name="examScope" value="SELECTED" defaultChecked={(c?.examIds.length ?? 0) > 0} /> Selected exams
+          </label>
+        </div>
         {multi("examIds", exams, c?.examIds ?? [])}
       </F>
       <F label="Test Series" name="testSeriesIds">

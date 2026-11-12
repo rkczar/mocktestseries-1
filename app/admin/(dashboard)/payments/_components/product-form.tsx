@@ -197,6 +197,10 @@ export async function ProductForm({ product, readOnly }: { product: Product | nu
         <label className="flex items-center gap-2">
           <input type="checkbox" name="purchaseEnabled" defaultChecked={p?.purchaseEnabled ?? true} /> Purchase enabled
         </label>
+        <label className="flex items-center gap-2">
+          <input type="hidden" name="couponsAllowedField" value="1" />
+          <input type="checkbox" name="couponsAllowed" defaultChecked={p?.couponsAllowed ?? true} /> Coupons allowed
+        </label>
       </div>
       <F label="Sort order" name="order">
         <Input id="p-order" name="order" type="number" min={0} defaultValue={p?.order ?? 0} />
