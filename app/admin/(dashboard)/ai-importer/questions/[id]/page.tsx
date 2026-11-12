@@ -436,11 +436,13 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           )}
         </CardContent>
       </Card>
-      {/* Not yet in the Question Bank (a rejected extraction artifact is not an original question). */}
-      {canUse && !q.questionId && q.status !== "REJECTED" && (
+      {/* Not a rejected extraction artifact. Once stored, the same card stays mounted and shows the stored state, so the
+          result message of FORCE TO PUBLISH survives the page refresh the action triggers. */}
+      {canUse && q.status !== "REJECTED" && (
         <ForcePublishCard
           questionId={q.id}
           label={`Q${q.sourceLabel}`}
+          stored={q.questionId ? await prisma.question.findUnique({ where: { id: q.questionId }, select: { code: true, status: true } }) : null}
           normalBlocker={importBlocker(q, settings, { ignoreApproval: true })}
           bypassed={bypassedBlockers(q, settings)}
           canForce={(await getAdminSession())?.user.role === "MASTER_ADMIN"}

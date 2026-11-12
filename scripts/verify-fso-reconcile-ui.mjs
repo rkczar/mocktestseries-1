@@ -106,6 +106,8 @@ try {
     await page.waitForSelector("[data-testid=publish-message]", { timeout: 60000 });
     const msg = await page.locator("[data-testid=publish-message]").innerText();
     check("FORCE TO PUBLISH succeeds: PUBLISHED, blockers recorded", /PUBLISHED/.test(msg) && /bypassed and recorded/.test(msg), msg);
+    await page.waitForSelector("[data-testid=publish-stored]", { timeout: 30000 });
+    check("after the page refresh the card stays and shows the stored state (PUBLISHED), buttons gone", /PUBLISHED/.test(await page.locator("[data-testid=publish-stored]").innerText()) && (await page.locator("[data-testid=force-publish-button]").count()) === 0 && (await page.locator("[data-testid=publish-message]").count()) === 1);
     await page.goto(`${BASE}/admin/ai-importer/questions/${F.wdId}`);
     await page.waitForSelector("[data-testid=publish-actions]");
     check("a key-withdrawn question offers ADD TO PAPER AS WITHDRAWN", (await page.locator("[data-testid=add-withdrawn-button]").count()) === 1);
