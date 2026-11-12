@@ -360,8 +360,26 @@ export async function clearAcademicReview(id: string, actorId: string, note: str
   const q = await editable(id);
   if (!q.academicReview) throw new ImportJobError("This question has no academic-review hold.");
   if (!q.subjectId) throw new ImportJobError("Choose the subject (and topic) first: a hold is cleared only for a mapping you have decided.");
-  if (!note.trim()) throw new ImportJobError("Write a short reason for the academic decision; it is kept in the audit history.");
+  if (!academicNoteOk(note)) throw new ImportJobError("Write a short reason for the academic decision (at least 5 letters or digits, e.g. \"topic checked against syllabus\"); it is kept in the audit history.");
+  // The accepted mapping becomes the admin's decision (same write as keepTaxonomy), so a later re-classify cannot erase it.
+  await prisma.aiImportQuestion.update({ where: { id }, data: { taxonomySource: "admin", taxonomyConfidence: 1 } });
   await setAcademicReview([id], actorId, null, note);
+}
+
+/** A hold-clearing reason needs at least 5 non-space characters ("." or "," is not a reason). */
+export const academicNoteOk = (note: string) => note.replace(/\s/g, "").length >= 5;
+
+/**
+ * Hold notes name package codes "Sxx-Tyy" (subject displayOrder position, topic position, both 1-based, in
+ * getExamTaxonomy order). Shown with names; a code that resolves to nothing is kept and marked "unknown".
+ * shortcut: positions are read against today's order, so a re-ordered taxonomy shows wrong names; store names in future hold notes.
+ */
+export function holdNoteNames(note: string, tax: { name: string; topics: { name: string }[] }[]): string {
+  return note.replace(/\bS(\d{1,3})-T(\d{1,3})\b/g, (code, si: string, ti: string) => {
+    const s = tax[Number(si) - 1];
+    const t = s?.topics[Number(ti) - 1];
+    return s && t ? `${s.name} › ${t.name} (${code})` : `${code} (unknown)`;
+  });
 }
 
 /**

@@ -28,6 +28,7 @@ import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { fingerprintOf } from "@/lib/ai-import/paper-verify";
 import { verifyState } from "@/lib/ai-import/verify-core";
 import { approvalOutdatedBy, utc } from "@/lib/ai-import/checks";
+import { holdNoteNames } from "@/lib/ai-import/review";
 import { listReferences } from "@/lib/ai-import/reference";
 import { fieldBoard, v2TaxonomyChecks } from "@/lib/ai-import/field-checks";
 import { FieldVerification } from "@/components/admin/ai-importer/field-verification";
@@ -154,7 +155,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     ? {
         label: `Q${q.sourceLabel} · page ${q.pages.join(", ") || "—"}`,
         status: q.academicReview,
-        note: q.academicReviewNote,
+        note: q.academicReviewNote ? holdNoteNames(q.academicReviewNote, taxonomy) : null,
         current: `${(q.subjectId && taxNames.get(q.subjectId)) || "no subject"} › ${(q.topicId && taxNames.get(q.topicId)) || "no topic"}${q.taxonomySource ? ` (${q.taxonomySource})` : ""}`,
         evidence: [
           ...(holdRec?.reason ? [`Classifier: ${holdRec.reason}`] : []),
@@ -330,7 +331,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             </div>
             {q.academicReview || q.excludeFromPractice ? (
               <div className="text-xs" data-testid="taxonomy-practice-status">
-                {q.academicReview ? <span className="text-[var(--color-warning)]">Taxonomy: {q.academicReview}{q.academicReviewNote ? ` — ${q.academicReviewNote}` : ""}</span> : null}
+                {q.academicReview ? <span className="text-[var(--color-warning)]">Taxonomy: {q.academicReview}{q.academicReviewNote ? ` — ${holdNoteNames(q.academicReviewNote, taxonomy)}` : ""}</span> : null}
                 {q.academicReview && q.excludeFromPractice ? " · " : null}
                 {q.excludeFromPractice ? <span>Practice: excluded from automatic practice{q.excludeFromPracticeReason ? ` (${q.excludeFromPracticeReason})` : ""}</span> : null}
               </div>

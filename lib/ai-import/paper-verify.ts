@@ -27,6 +27,7 @@ import { assignSections, ensureRender, mergeContinuation, parsePage, readsAgree,
 import { exhaustedModels, importerAiCall, importerBudgetBlock, modelFamily, parseModelJson, preferReliable, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import { failureCheckStatus, failureMessage } from "@/lib/ai-import/failure";
 import { mergePaperVerify } from "@/lib/ai-import/checks";
+import { FORMULA_CODES } from "@/lib/ai-import/review-filters";
 import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, documentTextUserText, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
 import { computeModelPlan, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
 import { compareWithReference, listReferences, referenceOnly, textSimilarity, type ReferencePaper } from "@/lib/ai-import/reference";
@@ -1369,7 +1370,7 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
     structureIssues: active.filter((q) => has(q, STRUCTURE_CODES)).length,
     classificationIssues: active.filter((q) => has(q, TAXONOMY_CODES)).length,
     classification: { subjectUnknown: active.filter((q) => has(q, ["SUBJECT_UNKNOWN"])).length, subjectMismatch: active.filter((q) => has(q, ["SUBJECT_MISMATCH"])).length, topicMissing: active.filter((q) => has(q, ["TOPIC_UNCERTAIN"])).length, classificationFailed: active.filter((q) => has(q, ["CLASSIFICATION_FAILED"])).length, disagreements: active.filter((q) => has(q, ["TAXONOMY_DISAGREES"])).length },
-    formulaIssues: active.filter((q) => has(q, ["FORMULA_ISSUE", "UNREADABLE_TEXT", "EXTRACTION_UNCERTAIN", "QUESTION_TEXT_SUSPECT"])).length,
+    formulaIssues: active.filter((q) => has(q, [...FORMULA_CODES, "UNREADABLE_TEXT", "EXTRACTION_UNCERTAIN", "QUESTION_TEXT_SUSPECT"])).length,
     figureIssues: active.filter((q) => has(q, ["IMAGE_MISSING", "IMAGE_MAPPING_UNCERTAIN", "IMAGE_REFERENCE_UNCERTAIN"])).length,
     unresolved: active.filter((q) => has(q, ["VERIFY2_DISAGREES", "VERIFY_DISAGREES", "REFERENCE_CONFLICT"])).length,
     eligible: [],

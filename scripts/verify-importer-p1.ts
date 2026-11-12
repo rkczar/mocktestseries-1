@@ -19,7 +19,7 @@ import { saveImporterSettings, getImporterSettings } from "@/lib/ai-import/setti
 import { importBlocker } from "@/lib/ai-import/adapter";
 import { addFile, completeFile, confirmJob, createJob, putChunk, requestAnalysis, resumeJob, setExpectedQuestions } from "@/lib/ai-import/jobs";
 import { runWorker } from "@/lib/ai-import/worker";
-import { approveQuestions, clearAcademicReview, editQuestion, rescanQuestions, revalidateQuestions, setAcademicReview, setAnswer, setTaxonomy } from "@/lib/ai-import/review";
+import { academicNoteOk, approveQuestions, clearAcademicReview, editQuestion, holdNoteNames, reclassifyQuestions, rescanQuestions, revalidateQuestions, setAcademicReview, setAnswer, setTaxonomy } from "@/lib/ai-import/review";
 import { effective } from "@/lib/ai-import/post";
 import { escapeLatexCommands, parseModelJson } from "@/lib/ai-import/ai";
 import { passCount, withPass } from "@/lib/ai-import/verify-core";
@@ -119,6 +119,15 @@ function parserChecks() {
   check("a cut-off answer is still an error (nothing invented)", threw);
 }
 
+function holdUnitChecks() {
+  check("F2 pure: \".\" and \" , \" and 4 chars are not reasons", !academicNoteOk(".") && !academicNoteOk(" , ") && !academicNoteOk("a b c d"));
+  check("F2 pure: 5 non-space characters is a reason", academicNoteOk("a b c d e") && academicNoteOk("Organic"));
+  const tax = [{ name: "Biology", topics: [{ name: "Cell" }, { name: "Genetics" }] }, { name: "Chemistry", topics: [{ name: "Organic" }] }];
+  check("F4 pure: codes resolve to names in order", holdNoteNames("Primary S01-T02 vs alternative: S02-T01", tax) === "Primary Biology › Genetics (S01-T02) vs alternative: Chemistry › Organic (S02-T01)", holdNoteNames("Primary S01-T02 vs alternative: S02-T01", tax));
+  check("F4 pure: unresolvable codes are kept and marked unknown", holdNoteNames("S03-T01, S01-T09", tax) === "S03-T01 (unknown), S01-T09 (unknown)", holdNoteNames("S03-T01, S01-T09", tax));
+  check("F4 pure: text without codes is unchanged", holdNoteNames("no codes here", tax) === "no codes here");
+}
+
 function passUnitChecks() {
   section("2a. Pass log (pure)");
   const a = withPass(null, "rescan", "m1", "2026-01-01T00:00:00Z", "req-1");
@@ -143,6 +152,8 @@ const totalCalls = async () => Object.values((await mockCalls()).byModel).reduce
 async function main() {
   parserChecks();
   passUnitChecks();
+  holdUnitChecks();
+  if (process.env.P1_PURE_ONLY === "1") return;
   if (!FX) throw new Error("fixture directory missing");
   const suffix = Date.now().toString(36);
   const admin = await prisma.adminUser.findFirstOrThrow({ where: { role: { name: "MASTER_ADMIN" } }, select: { id: true } });
@@ -254,11 +265,20 @@ async function main() {
   await setTaxonomy(q5.id, actor, chem.id, organic.id);
   const q4 = await byNo(4);
   await expectError("clearing a question that is not held is refused", () => clearAcademicReview(q4.id, actor, "decided"), /no academic-review hold/);
+  await expectError("F2: a reason of \".\" is refused", () => clearAcademicReview(q5.id, actor, "."), /at least 5 letters/);
+  await expectError("F2: a reason of 4 non-space characters is refused", () => clearAcademicReview(q5.id, actor, " o k a y "), /at least 5 letters/);
+  check("F2: the refused reasons left the hold in place", (await byNo(5)).academicReview === "AMBIGUOUS_PENDING_ACADEMIC_REVIEW");
+  // F1: the mapping under the hold came from the local classifier (synthetic), not from an administrator.
+  await prisma.aiImportQuestion.update({ where: { id: q5.id }, data: { taxonomySource: "local classifier", taxonomyConfidence: 0.4 } });
   r5 = await byNo(5);
   const reviewedAt = r5.reviewedAt?.toISOString() ?? null;
   await clearAcademicReview(q5.id, actor, "Organic chemistry per syllabus unit I (test decision)");
   r5 = await byNo(5);
   check("explicit decision clears the hold", r5.academicReview === null && r5.academicReviewNote === null);
+  check("F1: clearing saves the mapping as the admin's decision (source admin, confidence 1, ids unchanged)", r5.taxonomySource === "admin" && r5.taxonomyConfidence === 1 && r5.subjectId === chem.id && r5.topicId === organic.id, { source: r5.taxonomySource, conf: r5.taxonomyConfidence });
+  await expectError("F1: a later re-classify is refused (settled)", () => reclassifyQuestions([q5.id], actor), /Every selected question is settled/);
+  r5 = await byNo(5);
+  check("F1: …and the mapping is unchanged after it", r5.subjectId === chem.id && r5.topicId === organic.id && r5.taxonomySource === "admin");
   check("…approval fields untouched by the clear (still not approved; reviewedAt unchanged)", !r5.approvedById && (r5.reviewedAt?.toISOString() ?? null) === reviewedAt);
   const ev = await prisma.aiImportEvent.findFirst({ where: { jobId, type: "ACADEMIC_REVIEW_CLEARED" }, orderBy: { createdAt: "desc" } });
   const evData = ev?.data as { previous?: { status?: string; note?: string }; note?: string } | null;

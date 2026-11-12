@@ -329,6 +329,17 @@ function toRow(q: Json, index: number, d: Obj, mode: ImportParseMode, problems: 
 }
 
 /**
+ * The structural problems of ONE question object — exactly the rule `parseJsonQuestions` refuses a file with
+ * ([] = accepted). Messages read "Question 1 › <field>: …". Used by the AI importer to check each question before
+ * it enters a package, so one bad question can never refuse the others (2026-11-12, FSO 2022 Q109).
+ */
+export function questionProblems(q: unknown, mode: ImportParseMode = "RICH"): string[] {
+  const problems: string[] = [];
+  toRow(q as Json, 0, {}, mode, problems);
+  return problems;
+}
+
+/**
  * Parses a JSON question document into BulkImportRow[] (rowNumber = position
  * in `questions`, 1-based). Throws JsonImportError listing every structural
  * problem; never returns a partial file.

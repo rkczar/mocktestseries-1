@@ -279,7 +279,7 @@ async function importJob(job: AiImportJob): Promise<void> {
   await runPostProcessing(ctx);
   // Image processing for a large batch can take a while: hold the lease for it.
   await prisma.aiImportJob.update({ where: { id: job.id }, data: { leaseUntil: new Date(Date.now() + 60 * 60_000), heartbeatAt: new Date() } });
-  const r = await runImport(job, plan, settings);
+  const { items, ...r } = await runImport(job, plan, settings);
   await reconcileJob(job.id);
   // The final quality gate: "Completed" only when every expected question is accounted for and nothing
   // waits for a decision; warnings (acknowledged differences, unsupported or duplicate questions,
@@ -287,7 +287,7 @@ async function importJob(job: AiImportJob): Promise<void> {
   const quality = await jobQuality(job.id);
   const status = quality?.state === "COMPLETED" && r.notPublished === 0 ? AiImportJobStatus.COMPLETED : quality?.state === "COMPLETED" || quality?.state === "COMPLETED_WITH_WARNINGS" ? AiImportJobStatus.COMPLETED_WITH_ISSUES : AiImportJobStatus.NEEDS_REVIEW;
   const latest = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { config: true } });
-  const config = { ...((latest.config as Record<string, unknown>) ?? {}), importPlan: null, lastImport: { ...plan, result: r, finishedAt: new Date().toISOString() } };
+  const config = { ...((latest.config as Record<string, unknown>) ?? {}), importPlan: null, lastImport: { ...plan, result: r, items, finishedAt: new Date().toISOString() } };
   await transition(job.id, [AiImportJobStatus.IMPORTING], { status, finishedAt: new Date(), config: config as Prisma.InputJsonValue });
   if (quality) await logEvent(job.id, "QUALITY_GATE", `${r.imported} question(s) stored as Draft. Quality: ${quality.state.toLowerCase().replace(/_/g, " ")}${quality.blockers.length ? ` — ${quality.blockers.join(" ")}` : ""}`, { state: quality.state, blockers: quality.blockers, warnings: quality.warnings });
 }

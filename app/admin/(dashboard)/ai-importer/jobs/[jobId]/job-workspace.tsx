@@ -16,6 +16,7 @@ import type { ContinueCost, ResetCheck } from "@/lib/ai-import/jobs";
 import { ContinueCostConfirm } from "@/components/admin/ai-importer/continue-cost";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { JobSummary } from "@/lib/ai-import/summary";
+import type { ImportItem } from "@/lib/ai-import/adapter";
 import { JobControls, type JobControlState } from "@/components/admin/ai-importer/job-controls";
 import { JobContextFields, type ExamOption } from "../../new-import-form";
 import { analyzeJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resetJobAction, resumeJobAction } from "../../actions";
@@ -51,7 +52,7 @@ export interface JobView {
   files: { id: string; name: string; role: string; status: string; bytes: number; pages: number | null; error: string | null; kind: string | null; identicalTo: string | null; paperFileId: string | null; keyEntries: number | null }[];
   events: { id: string; at: string; type: string; message: string }[];
   summary: JobSummary;
-  lastImport: { mode: string; result: Record<string, number>; finishedAt: string } | null;
+  lastImport: { mode: string; result: Record<string, number>; items?: ImportItem[]; finishedAt: string } | null;
   runIds: string[];
   aiEnabled: boolean;
   allowUnverified: boolean;
@@ -877,6 +878,37 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
                 Last import ({job.lastImport.mode.replace(/_/g, " ").toLowerCase()}, {job.lastImport.finishedAt.slice(0, 16).replace("T", " ")} UTC): {Object.entries(job.lastImport.result).map(([k, v]) => `${k} ${v}`).join(" · ")}
               </p>
             )}
+            {job.lastImport?.items?.length ? (
+              <div className="w-full text-xs" data-testid="last-import-items">
+                {(
+                  [
+                    ["imported", "Imported"],
+                    ["awaiting", "Awaiting correction (approved, not imported)"],
+                    ["failed", "Failed"],
+                    ["skipped", "Skipped"],
+                  ] as const
+                ).map(([outcome, title]) => {
+                  const list = job.lastImport!.items!.filter((i) => i.outcome === outcome);
+                  return list.length ? (
+                    <details key={outcome} open={outcome === "awaiting" || outcome === "failed"} data-testid={`last-import-${outcome}`}>
+                      <summary className="cursor-pointer font-medium">
+                        {title}: {list.length}
+                      </summary>
+                      <ul className="ml-4 list-disc">
+                        {list.map((i) => (
+                          <li key={i.id}>
+                            <Link className="underline" href={`/admin/ai-importer/questions/${i.id}`}>
+                              {i.label}
+                            </Link>{" "}
+                            — {i.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null;
+                })}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       )}

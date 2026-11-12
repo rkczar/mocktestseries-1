@@ -17,6 +17,7 @@ import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
 import { PageManifest, type ManifestRow } from "@/components/admin/ai-importer/page-manifest";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
+import type { ImportItem } from "@/lib/ai-import/adapter";
 import { JobWorkspace, type JobView } from "./job-workspace";
 import type { ExamOption } from "../../new-import-form";
 
@@ -115,7 +116,7 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     })),
     events: job.events.map((e) => ({ id: e.id, at: formatIst(e.createdAt), type: e.type, message: e.message })),
     summary,
-    lastImport: (job.config as { lastImport?: { mode: string; result: Record<string, number>; finishedAt: string } } | null)?.lastImport ?? null,
+    lastImport: (job.config as { lastImport?: { mode: string; result: Record<string, number>; items?: ImportItem[]; finishedAt: string } } | null)?.lastImport ?? null,
     runIds: runs.map((r) => r.bulkImportRunId!).filter(Boolean),
     aiEnabled: settings.aiEnabled,
     allowUnverified: settings.publish.allowUnverifiedAnswers,

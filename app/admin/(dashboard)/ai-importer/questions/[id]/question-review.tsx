@@ -446,13 +446,16 @@ export function QuestionReview({
             {q.academicHold.canDecide ? (
               <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-2">
                 <Label htmlFor="rv-academic-note">Reason for your decision (kept in the audit history)</Label>
-                <Textarea id="rv-academic-note" rows={2} maxLength={500} value={holdNote} onChange={(ev) => setHoldNote(ev.target.value)} data-testid="rv-academic-note" />
+                <Textarea id="rv-academic-note" rows={2} maxLength={500} value={holdNote} onChange={(ev) => setHoldNote(ev.target.value)} aria-describedby="rv-academic-note-help" data-testid="rv-academic-note" />
+                <p id="rv-academic-note-help" className="text-xs text-[var(--color-muted-foreground)]" data-testid="rv-academic-note-help">
+                  {holdNote.replace(/\s/g, "").length < 5 ? "Write at least 5 letters or digits (e.g. \"topic checked against syllabus\") to enable the button." : "Clearing also saves the subject and topic above as your decision, so a later re-classify will not change them."}
+                </p>
                 <label className="flex items-start gap-2 text-xs">
                   <input type="checkbox" checked={holdConfirmed} onChange={(ev) => setHoldConfirmed(ev.target.checked)} data-testid="rv-academic-confirm" />
                   <span>I have reviewed the subject and topic above and accept them as academically correct.</span>
                 </label>
                 <div>
-                  <Button size="sm" disabled={pending || !holdConfirmed || !holdNote.trim()} onClick={() => act(() => clearAcademicReviewAction(q.id, { confirmed: holdConfirmed, note: holdNote }), "Academic hold cleared. The question still needs your approval.")} data-testid="rv-academic-clear">
+                  <Button size="sm" disabled={pending || !holdConfirmed || holdNote.replace(/\s/g, "").length < 5} onClick={() => act(() => clearAcademicReviewAction(q.id, { confirmed: holdConfirmed, note: holdNote }), "Academic hold cleared. The question still needs your approval.")} data-testid="rv-academic-clear">
                     Clear hold — mapping confirmed
                   </Button>
                 </div>
