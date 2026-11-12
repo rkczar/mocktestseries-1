@@ -11,6 +11,8 @@ import {
 } from "pdf-lib";
 import { prisma } from "@/lib/prisma";
 import { BRAND_NAME } from "@/lib/brand";
+import { getExamFeaturesMap } from "@/lib/exam-features";
+import { resolveDefaultExam } from "@/lib/default-enrollment";
 
 /**
  * The one canonical Practice OMR pipeline. Every OMR download on the site —
@@ -107,17 +109,28 @@ export async function getOfficialInstagram(): Promise<{ url: string; handle: str
 
 /**
  * The OMR sheet the Homepage and Student Dashboard cards download: the
- * student's active exam's global OMR when there is one, otherwise the first
- * active global OMR by admin order. Global = not tied to a single mock test,
- * so the download route serves it without a login.
+ * student's active exam's global OMR, else an exam-neutral one — never another
+ * exam's. Without an exam context: the default exam's sheet. Global = not tied
+ * to a single mock test, so the download route serves it without a login.
  */
 export async function findPracticeOmrSheet(preferExamId?: string | null) {
-  const sheets = await prisma.testResource.findMany({
+  const all = await prisma.testResource.findMany({
     where: { type: "OMR_TEMPLATE", isActive: true, mockTestId: null },
     orderBy: [{ order: "asc" }, { createdAt: "desc" }],
-    select: { id: true, title: true, questionCount: true, examId: true },
+    select: { id: true, title: true, questionCount: true, examId: true, exam: { select: { isActive: true } } },
   });
-  return (preferExamId ? sheets.find((s) => s.examId === preferExamId) : undefined) ?? sheets[0] ?? null;
+  // Exam isolation: a sheet tied to an exam is offered only while that exam is active AND its OMR
+  // download switch is ON (the same rule the download route enforces).
+  const features = await getExamFeaturesMap(all.flatMap((s) => (s.examId ? [s.examId] : [])));
+  const sheets = all
+    .filter((s) => !s.examId || (s.exam?.isActive && features.get(s.examId)?.omrDownloadEnabled))
+    .map(({ exam: _exam, ...s }) => s);
+  // With an exam context, never fall back to ANOTHER exam's sheet (a 150-question 1–4 FSO sheet must
+  // never reach RUHS MO, nor the reverse): that exam's sheet, else an exam-neutral one, else none.
+  if (preferExamId) return sheets.find((s) => s.examId === preferExamId) ?? sheets.find((s) => !s.examId) ?? null;
+  // No exam context (public homepage, students without an exam): the default exam's sheet first.
+  const defaultExam = await resolveDefaultExam().catch(() => null);
+  return (defaultExam ? sheets.find((s) => s.examId === defaultExam.id) : undefined) ?? sheets.find((s) => !s.examId) ?? sheets[0] ?? null;
 }
 
 function addLink(pdf: PDFDocument, page: PDFPage, rect: [number, number, number, number], url: string) {

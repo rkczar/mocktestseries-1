@@ -6,6 +6,7 @@ import TopicsPage from "./topics/page";
 import SyllabusPage from "./syllabus/page";
 import PreviousYearPapersPage from "./previous-year-papers/page";
 import TestSeriesPage from "./test-series/page";
+import ExamDownloadsPanel from "./downloads/page";
 
 export const metadata = { title: "Exams — Mock Test Series.in Admin" };
 
@@ -53,6 +54,11 @@ export default async function ExamsControlCenter({
             value: "test-series",
             label: "Test Series",
             content: <TestSeriesPage searchParams={Promise.resolve({ examId })} />,
+          },
+          {
+            value: "downloads",
+            label: "Downloads",
+            content: <ExamDownloadsPanel searchParams={Promise.resolve({ examId })} />,
           },
         ]}
       />

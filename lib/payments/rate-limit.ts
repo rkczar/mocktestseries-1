@@ -13,6 +13,8 @@ export const PAYMENT_RATE_LIMITS = {
   verify: { max: 20, windowMs: 10 * 60_000 },
   status: { max: 60, windowMs: 10 * 60_000 },
   webhook: { max: 600, windowMs: 60_000 },
+  // Paid paper PDF downloads: 20 per student per 24 h (hits older than 24 h are pruned below).
+  "paper-download": { max: 20, windowMs: 24 * 3600_000 },
 } as const;
 
 export type PaymentRateBucket = keyof typeof PAYMENT_RATE_LIMITS;

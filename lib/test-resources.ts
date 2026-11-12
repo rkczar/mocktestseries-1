@@ -1,5 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { storageRootDir } from "@/lib/question-images";
 
@@ -48,4 +49,12 @@ export function resolveTestResourcePath(url: string): string | null {
   if (!rest || rest.includes("/") || rest.includes("\\") || rest.includes("..")) return null;
   if (!/^[a-zA-Z0-9-]+\.pdf$/i.test(rest)) return null;
   return path.join(testResourcesDir(), rest);
+}
+
+/** Stores a server-generated PDF (never a user upload) under a fresh random name; returns its fileUrl. */
+export async function saveGeneratedResourcePdf(bytes: Uint8Array): Promise<string> {
+  const filename = randomResourceFilename("application/pdf")!;
+  await mkdir(testResourcesDir(), { recursive: true });
+  await writeFile(path.join(testResourcesDir(), filename), bytes);
+  return publicResourceUrlFor(filename);
 }

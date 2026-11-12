@@ -9,6 +9,7 @@ import { canAccessTestResource } from "@/lib/test-resources-access";
 import { resolveTestResourcePath } from "@/lib/test-resources";
 import { getContentAccess, accessDeniedMessage } from "@/lib/payments/access";
 import { brandOmrPdf, getOfficialInstagram, OMR_DOWNLOAD_FILENAME } from "@/lib/omr-sheet";
+import { getExamFeatures } from "@/lib/exam-features";
 
 /**
  * The only enforcement point for TestResource downloads — every request re-
@@ -25,6 +26,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!resource) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const isPublicOmr = resource.type === "OMR_TEMPLATE" && !resource.mockTestId;
+
+  // Exam-level files are gated per exam before anything else (lib/exam-features.ts):
+  // - a public OMR tied to an exam is served only while that exam is active and its OMR switch is ON;
+  // - an exam-level Paper/Solution PDF (no mock test) is never served here: paper PDFs are sold, so
+  //   they go only through /api/student/paper-download (login + entitlement + switch + log).
+  if (resource.examId && !resource.mockTestId) {
+    if (resource.type !== "OMR_TEMPLATE") return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const exam = await prisma.exam.findUnique({ where: { id: resource.examId }, select: { isActive: true } });
+    if (!exam?.isActive || !(await getExamFeatures(resource.examId)).omrDownloadEnabled)
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
   let studentId: string | null = null;
   if (!isPublicOmr) {
