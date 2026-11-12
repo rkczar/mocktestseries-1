@@ -241,7 +241,7 @@ export async function forceImportQuestion(input: {
       : null;
     const forcedRun =
       !!run &&
-      run.label.includes(
+      (run.label ?? "").includes(
         kind === "PUBLISH" ? "(Force to Publish Q" : "(Withdrawn Q",
       );
     if (existing?.status === QuestionStatus.DRAFT && forcedRun)
