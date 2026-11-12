@@ -261,6 +261,8 @@ export async function getAiUsageStatusAction() {
  * explanation from before a type change would claim a single answer).
  */
 async function aiUnsupportedTypeMessage(questionId: string): Promise<string | null> {
-  const row = await prisma.question.findUnique({ where: { id: questionId }, select: { questionType: true } });
+  const row = await prisma.question.findUnique({ where: { id: questionId }, select: { questionType: true, status: true } });
+  // Withdrawn in the official key: there is no answer to explain (and no paid call for it).
+  if (row?.status === "WITHDRAWN") return "This question was withdrawn in the official answer key, so there is no answer to explain.";
   return row && row.questionType !== "SINGLE_CORRECT" ? AI_UNSUPPORTED_TYPE_MESSAGE : null;
 }

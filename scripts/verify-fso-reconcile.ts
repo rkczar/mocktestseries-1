@@ -212,6 +212,8 @@ async function main() {
   check("stale approval / verification snapshot does not block", r4.status === "PUBLISHED", r4);
   const r5 = await forceImportQuestion({ ...ok, importQuestionId: mtf.id, kind: "PUBLISH" });
   const b5 = await prisma.question.findUniqueOrThrow({ where: { id: r5.questionId }, include: { options: true } });
+  check("QA M4: the Match downgrade is recorded in the audit as an adaptation", ((await prisma.auditLog.findFirstOrThrow({ where: { action: "AI_IMPORT_FORCE_TO_PUBLISH", entityId: r5.questionId } })).metadata as { adaptations: string[] }).adaptations.some((a) => /single-correct/.test(a)));
+  check("QA M3: the job lease is released after a forced import", (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id } })).leaseOwner === null);
   check("keyless Match lists do not block: stored single-correct, list text kept, nothing invented", r5.status === "PUBLISHED" && b5.questionType === "SINGLE_CORRECT" && b5.text.includes("Tuberculosis") && b5.text.includes("Bacteria") && b5.options.length === 4, { type: b5.questionType, text: b5.text });
   const r6 = await forceImportQuestion({ ...ok, importQuestionId: dup.id, kind: "PUBLISH" });
   const b6 = await prisma.question.findUniqueOrThrow({ where: { id: r6.questionId } });
@@ -236,27 +238,36 @@ async function main() {
   check("no correct option is stored for it (the placeholder was cleared)", bw.options.every((o) => !o.isCorrect) && bw.answerVerification === "WITHDRAWN_IN_OFFICIAL_KEY");
   check("audit ADD_AS_WITHDRAWN written", (await prisma.auditLog.count({ where: { action: "AI_IMPORT_ADD_AS_WITHDRAWN", entityId: bw.id } })) === 1);
   check("never served outside its paper (practice / mocks use PUBLISHED only)", (await prisma.question.count({ where: { id: bw.id, ...SERVABLE_QUESTION_WHERE } })) === 0);
+  const pubErr = await refusal(forceImportQuestion({ ...ok, importQuestionId: wd.id, kind: "PUBLISH" }));
+  check("QA B1: FORCE TO PUBLISH on a question already added as WITHDRAWN is refused (no keyless publish)", /already in the Question Bank/.test(pubErr ?? "") && (await prisma.question.findUniqueOrThrow({ where: { id: bw.id } })).status === QuestionStatus.WITHDRAWN, pubErr);
+  const wAgain = await forceImportQuestion({ ...ok, importQuestionId: wd.id, kind: "WITHDRAWN" });
+  check("repeating Add as WITHDRAWN is an idempotent no-op", wAgain.alreadyDone && wAgain.questionId === bw.id);
+  const wk = await mk(11, q({ stem: `Withdrawn with an old key ${suffix}` }), { status: "NEEDS_CORRECTION", answerStatus: AiImportAnswerStatus.WITHDRAWN, officialAnswer: [], finalAnswer: ["C"], answerConfirmedById: master.id });
+  const wk2 = await forceImportQuestion({ ...ok, importQuestionId: wk.id, kind: "WITHDRAWN" });
+  const bwk = await prisma.question.findUniqueOrThrow({ where: { id: wk2.questionId }, include: { options: true } });
+  check("QA M2: a withdrawn question that carried an answer keeps NO correct option", bwk.status === QuestionStatus.WITHDRAWN && bwk.options.every((o) => !o.isCorrect) && bwk.answerVerification === "WITHDRAWN_IN_OFFICIAL_KEY", bwk.options.map((o) => [o.label, o.isCorrect]));
   const oldAfter = await prisma.testAttempt.findUniqueOrThrow({ where: { id: old.id }, include: { questions: true } });
   check("historical attempt unchanged: same score, max marks, question count, no withdrawn row", oldAfter.score === oldBefore.score && oldAfter.maxScore === oldBefore.maxScore && oldAfter.totalQuestions === oldBefore.totalQuestions && oldAfter.questions.every((t) => t.questionId !== bw.id), { before: [oldBefore.score, oldBefore.maxScore], after: [oldAfter.score, oldAfter.maxScore] });
 
   const published = await prisma.question.count({ where: { previousYearPaperId: paper.id, status: QuestionStatus.PUBLISHED } });
+  const withdrawnN = await prisma.question.count({ where: { previousYearPaperId: paper.id, status: QuestionStatus.WITHDRAWN } });
   const at = await startPreviousYearPaperAttempt(student.id, paper.id);
   const att = await prisma.testAttempt.findUniqueOrThrow({ where: { id: at.id }, include: { questions: { include: { answer: true }, orderBy: { order: "asc" } } } });
   const wtq = att.questions.find((t) => t.questionId === bw.id);
-  check("the withdrawn question is in the attempt, in printed order", !!wtq && att.questions.map((t) => t.questionId).indexOf(bw.id) === att.questions.length - 1 && att.questions.length === published + 1, att.questions.length);
+  check("the withdrawn question is in the attempt, in printed order", !!wtq && withdrawnN === 2 && att.questions.length === published + withdrawnN && att.questions.map((t) => t.questionId).slice(-2).join() === [bw.id, bwk.id].join(), att.questions.length);
   check("max marks / totalQuestions exclude it", att.totalQuestions === published, { total: att.totalQuestions, published });
-  check("it has no Answer row (not unanswered, not anything)", wtq?.answer === null && (await prisma.answer.count({ where: { attemptId: att.id } })) === published);
+  check("it has no Answer row (not unanswered, not anything)", att.questions.filter((t) => t.answer === null).length === withdrawnN && wtq?.answer === null && (await prisma.answer.count({ where: { attemptId: att.id } })) === published);
   const ws = wtq?.questionSnapshot as { withdrawn?: boolean; correctLabel?: string; hi?: unknown };
   check("snapshot: withdrawn flag, no answer key, Hindi kept", ws.withdrawn === true && ws.correctLabel === "" && !!ws.hi);
   const player = toPlayerQuestions(att.questions, { instantMode: false });
   const pw = player.find((p) => p.questionId === bw.id)!;
-  check("player payload: withdrawn label flag, original text, no reveal", pw.withdrawn === true && pw.text === `Withdrawn question text ${suffix}` && pw.reveal === null && player.filter((p) => p.withdrawn).length === 1);
+  check("player payload: withdrawn label flag, original text, no reveal", pw.withdrawn === true && pw.text === `Withdrawn question text ${suffix}` && pw.reveal === null && player.filter((p) => p.withdrawn).length === withdrawnN);
   const saveErr = await refusal(saveAnswer(at.id, student.id, bw.id, "A", false, 1));
   check("answering it is refused by the server", /withdrawn/.test(saveErr ?? ""), saveErr);
   const markErr = await refusal(saveAnswer(at.id, student.id, bw.id, null, true, 2));
   check("marking it for review is refused too", /withdrawn/.test(markErr ?? ""));
   // Answer every scored question: first correct, second wrong, rest unanswered.
-  const scored = att.questions.filter((t) => t.questionId !== bw.id);
+  const scored = att.questions.filter((t) => !(t.questionSnapshot as { withdrawn?: boolean }).withdrawn);
   const key = (t: (typeof scored)[number]) => (t.questionSnapshot as { correctLabel: string }).correctLabel;
   await saveAnswer(at.id, student.id, scored[0].questionId, key(scored[0]), false, 3);
   await saveAnswer(at.id, student.id, scored[1].questionId, key(scored[1]) === "A" ? "B" : "A", false, 4);
@@ -268,8 +279,8 @@ async function main() {
   section("E. Job reconciliation after the actions (DB)");
   const rec = (await jobPaperReconciliation(job.id))!;
   const bucket = (n: number) => rec.rows.find((x) => x.number === n)?.bucket;
-  check("expected 12; numbers 11 and 12 reported missing", rec.expected === 12 && JSON.stringify(rec.missing) === "[11,12]", rec.missing);
-  check("forced ones are PUBLISHED, withdrawn one WITHDRAWN_IN_PAPER, no-key one BLOCKED", [3, 4, 5, 6, 7, 8].every((n) => bucket(n) === "PUBLISHED") && bucket(10) === "WITHDRAWN_IN_PAPER" && bucket(9) === "BLOCKED", rec.rows.map((x) => [x.number, x.bucket]));
+  check("expected 12; number 12 reported missing", rec.expected === 12 && JSON.stringify(rec.missing) === "[12]", rec.missing);
+  check("forced ones are PUBLISHED, withdrawn one WITHDRAWN_IN_PAPER, no-key one BLOCKED", [3, 4, 5, 6, 7, 8].every((n) => bucket(n) === "PUBLISHED") && bucket(10) === "WITHDRAWN_IN_PAPER" && bucket(11) === "WITHDRAWN_IN_PAPER" && bucket(9) === "BLOCKED", rec.rows.map((x) => [x.number, x.bucket]));
   check("approved Needs-correction question 1 stays BLOCKED, Ready+approved 2 is APPROVED_IMPORTABLE", bucket(1) === "BLOCKED" && bucket(2) === "APPROVED_IMPORTABLE");
 
   check("no network request was attempted", blockedHosts.size === 0, [...blockedHosts]);

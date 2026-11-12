@@ -166,7 +166,7 @@ async function lockQuestion(tx: Prisma.TransactionClient, questionId: string) {
 export async function saveQuestionEdit(scope: TeacherScope, questionId: string, formData: FormData): Promise<Result<{ outcome: SaveOutcome }>> {
   try {
     const q = await questionInScope(scope, questionId);
-    if (q.retiredAt || q.status === QuestionStatus.ARCHIVED) throw new TeacherError("This question is archived or retired and is read-only.");
+    if (q.retiredAt || q.status === QuestionStatus.ARCHIVED || q.status === QuestionStatus.WITHDRAWN) throw new TeacherError("This question is archived, withdrawn or retired and is read-only.");
     const baseVersion = String(formData.get("baseVersion") ?? "");
     if (!baseVersion) throw new TeacherError("Reload the page and try again (the editor's version is missing).");
     const row = await prisma.question.findUniqueOrThrow({ where: { id: q.id }, select: CONTENT_SELECT });

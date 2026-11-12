@@ -105,7 +105,7 @@ type Level = "exam" | "subject" | "topic" | "subTopic" | "all";
  * chosen Exam/Paper/Subject but not under the chosen Topic itself).
  */
 export function bankWhere(f: BankFilters, upTo: Level = "all"): Prisma.QuestionWhereInput {
-  const and: Prisma.QuestionWhereInput[] = [{ status: f.status ? f.status : { not: QuestionStatus.ARCHIVED } }];
+  const and: Prisma.QuestionWhereInput[] = [{ status: f.status ? f.status : { notIn: [QuestionStatus.ARCHIVED, QuestionStatus.WITHDRAWN] } }];
   if (f.examId) and.push({ examId: f.examId });
   if (f.paperId) and.push({ previousYearPaperId: f.paperId });
   if (f.source === "PYQ") and.push({ previousYearPaperId: { not: null } });

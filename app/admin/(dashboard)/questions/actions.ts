@@ -25,6 +25,8 @@ export interface QuestionFormState {
   success?: boolean;
 }
 
+const WITHDRAWN_ONLY_KEPT = "WITHDRAWN is set only by the AI importer (Add to paper as WITHDRAWN); choose another status.";
+
 export async function createQuestionAction(
   _prev: QuestionFormState,
   formData: FormData
@@ -32,6 +34,7 @@ export async function createQuestionAction(
   const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
   const parsed = parseQuestionForm(formData);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  if (parsed.data.status === "WITHDRAWN") return { error: WITHDRAWN_ONLY_KEPT };
 
   const {
     examId,
@@ -141,6 +144,8 @@ export async function updateQuestionAction(
   if (await isRetiredQuestion(questionId)) return { error: RETIRED_READ_ONLY };
   const parsed = parseQuestionForm(formData);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  // WITHDRAWN is set only by the importer's Master Admin action (audited); the form can keep it, never newly set it.
+  if (parsed.data.status === "WITHDRAWN" && (await prisma.question.findUnique({ where: { id: questionId }, select: { status: true } }))?.status !== "WITHDRAWN") return { error: WITHDRAWN_ONLY_KEPT };
 
   const {
     examId,

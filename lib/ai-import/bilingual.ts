@@ -64,8 +64,9 @@ export function numbersIn(text: string): string[] {
 // A translation may spell a small number out ("The 3 new reserves" / "तीन नए रिज़र्व", FSO 2022 Q20). A number word only
 // ever explains a digit missing on the other side — it never creates a mismatch ("दो" is also a verb).
 const NUMBER_WORDS: Record<string, string> = {
-  one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10",
-  एक: "1", दो: "2", तीन: "3", चार: "4", पाँच: "5", पांच: "5", छह: "6", "छः": "6", छ: "6", सात: "7", आठ: "8", नौ: "9", दस: "10",
+  two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10",
+  // Not एक ("a") or दो ("give") or "one": everyday words that would explain away a genuinely missing 1 or 2.
+  तीन: "3", चार: "4", पाँच: "5", पांच: "5", छह: "6", "छः": "6", छ: "6", सात: "7", आठ: "8", नौ: "9", दस: "10",
   // Ordinals ("1st" / "पहला", FSO 2019 Q44).
   first: "1", second: "2", third: "3", fourth: "4", fifth: "5",
   पहला: "1", पहली: "1", पहले: "1", प्रथम: "1", दूसरा: "2", दूसरी: "2", दूसरे: "2", द्वितीय: "2", तीसरा: "3", तीसरी: "3", तीसरे: "3", तृतीय: "3",

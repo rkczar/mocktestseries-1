@@ -204,6 +204,7 @@ function StatTile({ icon, label, value }: { icon: React.ReactNode; label: string
 
 type AttemptQuestionRow = {
   questionId: string;
+  questionSnapshot?: unknown;
   answer: { isCorrect: boolean | null; selectedOptionLabel: string | null; selectedLabels?: string[] | null } | null;
 };
 
@@ -248,6 +249,7 @@ function buildPerformanceBreakdown(questions: AttemptQuestionRow[], meta: Questi
   const byTopic = new Map<string, { correct: number; attempted: number }>();
 
   for (const q of questions) {
+    if ((q.questionSnapshot as { withdrawn?: boolean } | undefined)?.withdrawn) continue; // never scored, never counted
     const m = metaById.get(q.questionId);
     const subjectName = m?.subject?.name ?? "Uncategorized";
     // MULTIPLE_CORRECT (NEET Phase 4) answers live in selectedLabels; selectedOptionLabel stays null for them.

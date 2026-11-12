@@ -51,7 +51,7 @@ const MAX_ROWS_PER_RUN = 500;
  */
 export type ForceKind = "PUBLISH" | "WITHDRAWN";
 /** Placeholder key a WITHDRAWN question needs to pass the Bulk Import schema; cleared right after (force-publish.ts). */
-export const WITHDRAWN_PLACEHOLDER_KEY = "A";
+const WITHDRAWN_PLACEHOLDER_KEY = "A";
 /** Rich-import warnings that do not need a human (papers have no explanations). Anything else keeps the review flag. */
 const BENIGN_ROW_WARNINGS = [/^Explanation: missing/];
 
@@ -468,6 +468,8 @@ async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batc
 
 /** One question imported past the normal gates (force-publish.ts does the authorization, audit and status change). */
 export async function importForced(job: AiImportJob, row: Row, settings: ImporterSettings, actorId: string, force: ForceKind): Promise<ImportItem> {
+  // An earlier run that stored this question but died before linking it is linked first: never a second copy (ADD_AS_NEW).
+  if (row.bulkImportRunId && (await reconcileInterrupted(job, [row], settings, force))) return { id: row.id, label: itemLabel(row), outcome: "imported", reason: "linked to the question an interrupted earlier run had stored" };
   const items = await importBatch(job, [row], { mode: "DRAFT", questionIds: [row.id], requestedById: actorId, requestedAt: new Date().toISOString() }, 0, settings, force);
   return items.find((i) => i.id === row.id) ?? { id: row.id, label: itemLabel(row), outcome: "failed", reason: "The Bulk Import returned no row for this question." };
 }
@@ -476,14 +478,14 @@ export async function importForced(job: AiImportJob, row: Row, settings: Importe
  * A worker that died after the Bulk Import wrote a question but before it was linked back leaves the importer row
  * unlinked. Linking it first means a retry never re-stages it (which would mark it a duplicate of itself).
  */
-async function reconcileInterrupted(job: AiImportJob, rows: Row[], settings: ImporterSettings): Promise<number> {
+async function reconcileInterrupted(job: AiImportJob, rows: Row[], settings: ImporterSettings, force?: ForceKind): Promise<number> {
   const pending = rows.filter((q) => q.bulkImportRunId && !q.questionId);
   let linked = 0;
   for (const runId of new Set(pending.map((q) => q.bulkImportRunId!))) {
     const mine = pending.filter((q) => q.bulkImportRunId === runId);
     const done = await prisma.bulkImportRow.findMany({ where: { runId, status: BulkImportRowStatus.SUCCESS, questionId: { not: null }, OR: mine.map((q) => ({ rawData: { path: ["questionCode"], equals: `AIQ-${q.id}` } })) }, select: { id: true, status: true, questionId: true, errors: true, errorMessage: true, rawData: true } });
     if (!done.length) continue;
-    const { pkg } = await packageFor(job, mine, settings);
+    const { pkg } = await packageFor(job, mine, settings, force);
     linked += (await reconcileRows(mine, pkg, done)).length;
   }
   return linked;

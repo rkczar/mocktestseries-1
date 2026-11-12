@@ -71,7 +71,8 @@ export const questionSchema = z
       }
     }
     const correct = correctLabelsOf(data);
-    const issue = correctCountIssue(data.questionType, correct.length, OPTION_LABELS.length);
+    // A WITHDRAWN question (official key withdrew it) has no correct option: saving its content never forces one.
+    const issue = data.status === QuestionStatus.WITHDRAWN && correct.length === 0 ? null : correctCountIssue(data.questionType, correct.length, OPTION_LABELS.length);
     if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ["correctOption"] });
     if (data.questionType === "MULTIPLE_CORRECT" && new Set(data.correctOptions).size !== data.correctOptions.length) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A correct option is listed twice.", path: ["correctOptions"] });
