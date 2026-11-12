@@ -4,7 +4,10 @@
  *   BASE=http://localhost:3581 FIXTURE=fx.json DATABASE_URL=<scratch> NODE_PATH=<playwright> node scripts/verify-fso-reconcile-ui.mjs
  */
 import fs from "node:fs";
-import { chromium, devices } from "playwright";
+import { createRequire } from "node:module";
+
+// Playwright is resolved through NODE_PATH (same as the other UI suites).
+const { chromium, devices } = createRequire(import.meta.url)("playwright");
 
 const BASE = process.env.BASE || "http://localhost:3581";
 const F = JSON.parse(fs.readFileSync(process.env.FIXTURE, "utf8"));
@@ -40,9 +43,12 @@ async function adminPage(browser, acct) {
 
 const browser = await chromium.launch();
 try {
+  // One browser context (one registered device for the student); the phone pass resizes to a Pixel 7 viewport.
+  const playerPage = await studentPage(browser, F.runToken, false);
   for (const mobile of [false, true]) {
-    console.log(`\n--- Test Player with a withdrawn question (${mobile ? "Pixel 7" : "desktop"}) ---`);
-    const page = await studentPage(browser, F.runToken, mobile);
+    console.log(`\n--- Test Player with a withdrawn question (${mobile ? "phone 412x915" : "desktop"}) ---`);
+    const page = playerPage;
+    if (mobile) await page.setViewportSize({ width: 412, height: 915 });
     await page.goto(`${BASE}/student/attempt/${F.runAttemptId}/run`);
     await page.waitForSelector("[data-testid=test-player]");
     if (await page.locator("[data-testid=language-gate]").count()) await page.locator("[data-testid=choose-lang-en]").click();
@@ -63,8 +69,9 @@ try {
     const dialog = await page.locator("[role=dialog]").innerText();
     check("submit dialog counts 3 scored questions and names the withdrawn one", /answered 0 of 3 questions/.test(dialog) && /1 withdrawn question\(s\) are not scored/.test(dialog), dialog);
     check("no client errors", page.errors.length === 0, page.errors.slice(0, 3));
-    await page.context().close();
+    await page.keyboard.press("Escape");
   }
+  await playerPage.context().close();
 
   console.log("\n--- Post-test review and result ---");
   {
