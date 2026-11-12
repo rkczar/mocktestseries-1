@@ -19,6 +19,7 @@ import { blockerOnceApproved, importBlocker } from "@/lib/ai-import/adapter";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { jobPaperReconciliation, jobSummary } from "@/lib/ai-import/summary";
 import { forceImportQuestion } from "@/lib/ai-import/force-publish";
+import { resumeJob } from "@/lib/ai-import/jobs";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { SERVABLE_QUESTION_WHERE } from "@/lib/question-servable";
 import { saveAnswer, startPreviousYearPaperAttempt, submitAttempt, TestEngineError } from "@/lib/test-attempt";
@@ -246,6 +247,20 @@ async function main() {
   const wk2 = await forceImportQuestion({ ...ok, importQuestionId: wk.id, kind: "WITHDRAWN" });
   const bwk = await prisma.question.findUniqueOrThrow({ where: { id: wk2.questionId }, include: { options: true } });
   check("QA M2: a withdrawn question that carried an answer keeps NO correct option", bwk.status === QuestionStatus.WITHDRAWN && bwk.options.every((o) => !o.isCorrect) && bwk.answerVerification === "WITHDRAWN_IN_OFFICIAL_KEY", bwk.options.map((o) => [o.label, o.isCorrect]));
+  // QA2 MAJOR 1: a forced run that stored the question but died before its final step is finished by a retry.
+  await prisma.question.update({ where: { id: bwk.id }, data: { status: QuestionStatus.DRAFT } });
+  await prisma.questionOption.updateMany({ where: { questionId: bwk.id, label: "A" }, data: { isCorrect: true } });
+  const resumed = await forceImportQuestion({ ...ok, importQuestionId: wk.id, kind: "WITHDRAWN" });
+  const bwk2 = await prisma.question.findUniqueOrThrow({ where: { id: bwk.id }, include: { options: true } });
+  check("QA2: an interrupted forced WITHDRAWN (left DRAFT with key A) is finished on retry, key cleared", resumed.questionId === bwk.id && bwk2.status === QuestionStatus.WITHDRAWN && bwk2.options.every((o) => !o.isCorrect), { s: bwk2.status, o: bwk2.options.map((o) => o.isCorrect) });
+  const draftOther = await prisma.question.update({ where: { id: r2.questionId }, data: { status: QuestionStatus.DRAFT } });
+  check("…but a DRAFT stored by a different action is never re-stated (B1 still holds)", /already in the Question Bank/.test((await refusal(forceImportQuestion({ ...ok, importQuestionId: hold.id, kind: "WITHDRAWN" }))) ?? "") || /only for a question/.test((await refusal(forceImportQuestion({ ...ok, importQuestionId: hold.id, kind: "WITHDRAWN" }))) ?? ""));
+  await prisma.question.update({ where: { id: draftOther.id }, data: { status: QuestionStatus.PUBLISHED } });
+  // QA2 MAJOR 2: Resume never wipes a live lease (a forced import may hold it).
+  await prisma.aiImportJob.update({ where: { id: job.id }, data: { status: "FAILED", leaseOwner: "force:test", leaseUntil: new Date(Date.now() + 60_000) } });
+  const resumeErr = await refusal(resumeJob(job.id, master.id, 1_000_000));
+  check("QA2: Resume refuses while a live lease is held, and leaves the lease", /busy/.test(resumeErr ?? "") && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id } })).leaseOwner === "force:test", resumeErr);
+  await prisma.aiImportJob.update({ where: { id: job.id }, data: { status: "NEEDS_REVIEW", leaseOwner: null, leaseUntil: null } });
   const oldAfter = await prisma.testAttempt.findUniqueOrThrow({ where: { id: old.id }, include: { questions: true } });
   check("historical attempt unchanged: same score, max marks, question count, no withdrawn row", oldAfter.score === oldBefore.score && oldAfter.maxScore === oldBefore.maxScore && oldAfter.totalQuestions === oldBefore.totalQuestions && oldAfter.questions.every((t) => t.questionId !== bw.id), { before: [oldBefore.score, oldBefore.maxScore], after: [oldAfter.score, oldAfter.maxScore] });
 

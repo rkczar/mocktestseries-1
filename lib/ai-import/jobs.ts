@@ -434,7 +434,9 @@ export async function resumeJob(jobId: string, actorId: string, confirmedMaxInr?
   // Within the confirmed maximum Resume starts at once; beyond it the remaining cost is shown and must be confirmed.
   const cost = await authorizeRemaining(job, actorId, confirmedMaxInr);
   if (cost) return { started: false, cost };
-  await prisma.aiImportJob.update({ where: { id: jobId }, data: { status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, leaseOwner: null, leaseUntil: null } });
+  // Never wipes a live lease (a forced import, lib/ai-import/force-publish.ts, may hold it).
+  const resumed = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: job.status, OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }] }, data: { status: AiImportJobStatus.QUEUED, pauseReason: null, errorMessage: null, leaseOwner: null, leaseUntil: null } });
+  if (!resumed.count) throw new ImportJobError("The import is busy (a step is still running on it). Try again in a minute.", 409);
   // Failed pages get one more attempt on resume (never automatically in a loop).
   await prisma.aiImportPage.updateMany({ where: { jobId, status: "FAILED" }, data: { status: "PENDING", errorMessage: null } });
   await logEvent(jobId, "RESUMED", "Resumed", undefined, actorId);
@@ -482,7 +484,7 @@ export async function retryJob(jobId: string, actorId: string, confirmedMaxInr?:
     if (cost) return { started: false, cost };
   }
   const r = await prisma.aiImportJob.updateMany({
-    where: { id: jobId, status: AiImportJobStatus.CANCELLED },
+    where: { id: jobId, status: AiImportJobStatus.CANCELLED, OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }] },
     data: toQueue ? { status: AiImportJobStatus.QUEUED, cancelledAt: null, errorMessage: null, pauseReason: null, finishedAt: null, leaseOwner: null, leaseUntil: null } : { status: AiImportJobStatus.DRAFT, cancelledAt: null, errorMessage: null, analysis: Prisma.DbNull, estimate: Prisma.DbNull, estCostInr: null, estCostUsd: null },
   });
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);

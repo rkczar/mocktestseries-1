@@ -246,6 +246,8 @@ export async function updateQuestionAction(
 export async function setQuestionStatusAction(questionId: string, status: QuestionStatus): Promise<{ error?: string } | void> {
   const session = await requirePermission(PERMISSIONS.QUESTIONS_MANAGE);
   if (await isRetiredQuestion(questionId)) return { error: RETIRED_READ_ONLY };
+  // WITHDRAWN is entered and left only through the importer's audited Master Admin action.
+  if (status === QuestionStatus.WITHDRAWN || (await prisma.question.findUnique({ where: { id: questionId }, select: { status: true } }))?.status === QuestionStatus.WITHDRAWN) return { error: "A WITHDRAWN question's status is not changed here (it was withdrawn in the official answer key)." };
   if (status === QuestionStatus.PUBLISHED) {
     const refusal = await publishRefusal(questionId);
     if (refusal) return { error: refusal };

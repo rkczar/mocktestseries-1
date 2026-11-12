@@ -11,7 +11,7 @@ export function StatusSelect({ questionId, status }: { questionId: string; statu
   return (
     <SelectNative
       value={status}
-      disabled={pending}
+      disabled={pending || status === "WITHDRAWN"}
       onChange={(e) => {
         const next = e.target.value as QuestionStatus;
         startTransition(async () => {
@@ -25,6 +25,7 @@ export function StatusSelect({ questionId, status }: { questionId: string; statu
       <option value="DRAFT">Draft</option>
       <option value="PUBLISHED">Published</option>
       <option value="ARCHIVED">Archived</option>
+      {status === "WITHDRAWN" ? <option value="WITHDRAWN">Withdrawn</option> : null}
     </SelectNative>
   );
 }

@@ -93,7 +93,8 @@ export async function POST(request: NextRequest) {
     if (act === "DRAFT" || act === "ARCHIVE") {
       const status = act === "DRAFT" ? QuestionStatus.DRAFT : QuestionStatus.ARCHIVED;
 
-      const result = await prisma.question.updateMany({ where: { id: { in: uniqueIds } }, data: { status } });
+      // A WITHDRAWN question keeps its status (it can never be set again from here).
+      const result = await prisma.question.updateMany({ where: { id: { in: uniqueIds }, status: { not: QuestionStatus.WITHDRAWN } }, data: { status } });
 
       await prisma.auditLog.create({
         data: {
