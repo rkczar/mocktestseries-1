@@ -123,8 +123,11 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
   const multi = snapshotQuestionType(q.snapshot) === "MULTIPLE_CORRECT";
   const correctSet = multi ? snapshotCorrectLabels(q.snapshot) : [];
   const selectedSet = multi ? (q.selectedLabels ?? []) : [];
+  // Withdrawn by the official key: shown with its label, no answer key, no verdict, no AI explanation.
+  const withdrawn = q.snapshot.withdrawn === true;
   // Ask AI explains single-correct questions only (the server refuses the rest too).
-  const askAiAllowed = snapshotQuestionType(q.snapshot) === "SINGLE_CORRECT";
+  const askAiAllowed = snapshotQuestionType(q.snapshot) === "SINGLE_CORRECT" && !withdrawn;
+  const verdict = withdrawn ? "Withdrawn — not scored" : q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered";
   const panelRef = useRef<HTMLDivElement>(null);
   const panelOpen = askAiPanel !== null;
 
@@ -161,7 +164,7 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
               q.isCorrect === null && "bg-[var(--color-border)] text-[var(--color-muted-foreground)]"
             )}
           >
-            {q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered"}
+            {verdict}
           </span>
         </div>
       </div>
@@ -179,6 +182,12 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
       </div>
 
       <div className="max-md:contents md:col-span-2 md:row-start-2 md:p-5">
+        {withdrawn ? (
+          <div role="note" data-testid="review-withdrawn" className="mb-3 rounded-[var(--radius-card)] border-2 border-[var(--color-warning)] bg-[var(--color-warning)]/10 p-3 text-sm text-[var(--color-foreground)] max-md:order-2 max-md:mx-4 max-md:mt-4">
+            <p className="font-bold uppercase tracking-wide text-[var(--color-warning)]">Withdrawn question</p>
+            <p className="mt-1">Withdrawn in the official answer key. Shown as printed; not counted in your score or maximum marks.</p>
+          </div>
+        ) : null}
         <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)] max-md:order-2 max-md:px-4 max-md:pt-4 max-md:text-[length:calc(1.0625rem*var(--text-scale))] max-md:leading-[1.65]">
           <RichText text={q.snapshot.text} html={q.rich?.textHtml} />
         </p>
@@ -280,13 +289,13 @@ function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index:
             ) : (
               <MinusCircle className="h-4 w-4" aria-hidden />
             )}
-            {q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered"}
+            {verdict}
           </p>
           <div className="max-md:order-6 max-md:mt-4 max-md:px-4 max-md:[&_button]:h-10 max-md:[&_button]:flex-1">{askAiAllowed ? askAiActions : null}</div>
         </div>
         <div className="mt-2 flex flex-col gap-2 max-md:contents">
           <div className="empty:hidden max-md:order-7 max-md:mt-2 max-md:px-4">{askAiAllowed ? usageNotice : null}</div>
-          {multi ? (
+          {withdrawn ? null : multi ? (
             <div className="text-sm font-medium max-md:order-5 max-md:mt-2 max-md:px-4" data-testid="review-answer-sets">
               <p className="text-[var(--color-foreground)]">Your answer: {selectedSet.length ? formatLabelSet(selectedSet) : "Not answered"}</p>
               <p className="text-[var(--color-success)]">Correct answer: {formatLabelSet(correctSet)}</p>

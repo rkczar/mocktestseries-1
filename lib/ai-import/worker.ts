@@ -239,7 +239,7 @@ async function processJob(job: AiImportJob): Promise<void> {
           : null;
     if (!(await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), errorMessage: why }))) return;
     const summary = await reconcileJob(job.id);
-    await logEvent(job.id, "PROCESSED", `Processing finished${failedPages ? ` (${failedPages} page(s) failed)` : ""}. ${summary.extracted} question(s) extracted, ${summary.eligibleImport} ready to import.`);
+    await logEvent(job.id, "PROCESSED", `Processing finished${failedPages ? ` (${failedPages} page(s) failed)` : ""}. ${summary.extracted} question(s) extracted, ${summary.readyAwaitingApproval} ready for approval, ${summary.eligibleImport} approved and importable.`);
     await removeVaultDir("work", job.id).catch(() => undefined);
     // Nothing enters the Question Bank before an administrator approves it. An older job confirmed with
     // "import automatically" is not imported either: its request is recorded as replaced by approval.

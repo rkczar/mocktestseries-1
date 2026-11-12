@@ -61,6 +61,35 @@ export function numbersIn(text: string): string[] {
   return (t.match(/\d+(?:\.\d+)?/g) ?? []).sort();
 }
 
+// A translation may spell a small number out ("The 3 new reserves" / "तीन नए रिज़र्व", FSO 2022 Q20). A number word only
+// ever explains a digit missing on the other side — it never creates a mismatch ("दो" is also a verb).
+const NUMBER_WORDS: Record<string, string> = {
+  one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10",
+  एक: "1", दो: "2", तीन: "3", चार: "4", पाँच: "5", पांच: "5", छह: "6", "छः": "6", छ: "6", सात: "7", आठ: "8", नौ: "9", दस: "10",
+  // Ordinals ("1st" / "पहला", FSO 2019 Q44).
+  first: "1", second: "2", third: "3", fourth: "4", fifth: "5",
+  पहला: "1", पहली: "1", पहले: "1", प्रथम: "1", दूसरा: "2", दूसरी: "2", दूसरे: "2", द्वितीय: "2", तीसरा: "3", तीसरी: "3", तीसरे: "3", तृतीय: "3",
+  चौथा: "4", चौथी: "4", चौथे: "4", चतुर्थ: "4", पाँचवाँ: "5", पांचवां: "5", पाँचवीं: "5", पांचवीं: "5", पंचम: "5",
+};
+const wordNumbers = (text: string) => new Set(text.toLowerCase().split(/[\s,.;:!?()[\]{}"'“”‘’–—\-/|।]+/).map((w) => NUMBER_WORDS[w]).filter(Boolean));
+// Line-start enumerators ("35. …" — the question's own number — or "1. / (2) / 3)" statement labels) are layout, not
+// content: one column printing them and the other not is not a translation difference (FSO 2019 Q35, Q44).
+const stripEnumerators = (text: string) => text.replace(/^[ \t]*[([]?[0-9०-९]{1,3}[.)\]][ \t]+/gm, "");
+
+/**
+ * The numbers of the two versions differ in a way a translation cannot explain; null = they agree. Compared as sets:
+ * a value printed twice in one column (a repeated year in List I and in the options, FSO 2022 Q61/Q132) is not a
+ * different number. A digit is matched by the same value spelled out on the other side.
+ */
+export function numberMismatch(hiText: string, enText: string): string | null {
+  const nh = new Set(numbersIn(stripEnumerators(hiText)));
+  const ne = new Set(numbersIn(stripEnumerators(enText)));
+  const onlyEn = [...ne].filter((n) => !nh.has(n) && !wordNumbers(hiText).has(n));
+  const onlyHi = [...nh].filter((n) => !ne.has(n) && !wordNumbers(enText).has(n));
+  if (!onlyEn.length && !onlyHi.length) return null;
+  return `the numbers differ (only in Hindi: ${onlyHi.join(" ") || "none"}; only in English: ${onlyEn.join(" ") || "none"})`;
+}
+
 /** Character-bigram similarity (Dice, 0..1) of two texts with whitespace removed — for two reads of the same Hindi text. */
 export function textSimilarity(a: string, b: string): number {
   const grams = (s: string) => {
@@ -211,9 +240,8 @@ export function bilingualFindings(e: ExtractedQuestion, imageOptions?: Set<strin
     const img = (imageOptions ?? new Set((e.figures ?? []).filter((f) => f.owner === "OPTION").map((f) => f.optionLabel))).has(label);
     if (!o.text.trim() && e.options[k]?.text.trim() && !img) mismatch.push(`Hindi option ${label} is empty`);
   });
-  const nh = numbersIn(hindiText(h)).join(" ");
-  const ne = numbersIn(englishText(e)).join(" ");
-  if (nh !== ne) mismatch.push(`the numbers differ (Hindi: ${nh || "none"}; English: ${ne || "none"})`);
+  const numbers = numberMismatch(hindiText(h), englishText(e));
+  if (numbers) mismatch.push(numbers);
   if (h.sameOptionOrder === false) mismatch.push("the reader reports that the Hindi options are not in the same order / meaning as the English options");
   if (h.figuresDiffer === true) mismatch.push("a figure appears in only one language version");
   if (mismatch.length) out.push({ code: "BILINGUAL_MISMATCH", detail: `Hindi and English versions do not match: ${mismatch.join("; ")}. Compare both columns with the page; the English version is authoritative, the Hindi text is kept as printed.`.slice(0, 600) });

@@ -20,7 +20,7 @@ export default async function EditTeacherQuestion({ params, searchParams }: { pa
   const filters = parseQuestionListFilters(new URLSearchParams(sp.from ?? ""));
   const from = questionListQuery(filters);
   const q = await inScopeOr404(() => questionInScope(scope, id));
-  if (q.retiredAt || q.status === "ARCHIVED") notFound();
+  if (q.retiredAt || q.status === "ARCHIVED" || q.status === "WITHDRAWN") notFound();
   // Version first: if anything changes while the page renders, the save is refused rather than overwriting it.
   const version = await editVersion(q.id);
   const [row, rev, tree] = await Promise.all([

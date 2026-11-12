@@ -21,6 +21,7 @@ const STATUS_BADGE = {
   PUBLISHED: { label: "In Question Bank", variant: "success" as const },
   DRAFT: { label: "Draft — needs review", variant: "warning" as const },
   ARCHIVED: { label: "Archived", variant: "warning" as const },
+  WITHDRAWN: { label: "Withdrawn", variant: "warning" as const },
 };
 
 /**

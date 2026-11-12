@@ -52,7 +52,7 @@ export interface ImportedQuestionRow {
   rollbackReason: string | null;
   question: {
     text: string;
-    status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+    status: "DRAFT" | "PUBLISHED" | "ARCHIVED" | "WITHDRAWN";
     exam: string | null;
     subject: string | null;
     topic: string | null;

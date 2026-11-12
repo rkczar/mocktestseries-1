@@ -43,6 +43,15 @@ export interface ImportPlan {
 }
 
 const MAX_ROWS_PER_RUN = 500;
+
+/**
+ * An explicit Master Admin import of ONE question past the normal gates (lib/ai-import/force-publish.ts):
+ * PUBLISH = FORCE TO PUBLISH; WITHDRAWN = the question the official key withdrew, added to its paper as WITHDRAWN.
+ * The stored content is packaged as-is; only what the Question Bank schema cannot hold is adapted (and reported).
+ */
+export type ForceKind = "PUBLISH" | "WITHDRAWN";
+/** Placeholder key a WITHDRAWN question needs to pass the Bulk Import schema; cleared right after (force-publish.ts). */
+export const WITHDRAWN_PLACEHOLDER_KEY = "A";
 /** Rich-import warnings that do not need a human (papers have no explanations). Anything else keeps the review flag. */
 const BENIGN_ROW_WARNINGS = [/^Explanation: missing/];
 
@@ -111,6 +120,22 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
   return null;
 }
 
+/**
+ * The REAL import gate minus the approval itself: why this question would still not be imported if an administrator
+ * approved it now (null = approving makes it importable). Unlike importBlocker(…, { ignoreApproval: true }) a question
+ * whose status is Needs correction is NOT importable once approved — approval never changes the status (2026-11-12:
+ * "Eligible for import" counted Needs-correction questions).
+ */
+export function blockerOnceApproved(q: AiImportQuestion & { figures: AiImportFigure[] }, settings: ImporterSettings): string | null {
+  const why = importBlocker(q, settings, { ignoreApproval: true });
+  if (why) return why;
+  if (q.status === AiImportQuestionStatus.READY) return null;
+  const checks = (q.data as unknown as ExtractedQuestion).checks ?? null;
+  if (q.status === AiImportQuestionStatus.IMPORT_FAILED && checksAllowReady(checks) && !q.issueCodes.some((c) => ISSUE_DEFS[c]?.publishBlocking)) return null;
+  const failing = checks ? (["content", "answer", "taxonomy", "independent"] as const).filter((k) => checks[k].required && checks[k].status !== "PASSED").map((k) => `${CHECK_NAMES[k]}: ${CHECK_STATUS_LABELS[checks[k].status].toLowerCase()}`) : [];
+  return `status is ${q.status.toLowerCase().replace(/_/g, " ")}${failing.length ? ` (${failing.join("; ")})` : ""}`;
+}
+
 /** The first list item Bulk Import would refuse (lib/json-import.ts questionProblems), as an actionable reason; null = valid. */
 export function matchListProblem(listI: { key?: unknown; text?: unknown }[], listII: { key?: unknown; text?: unknown }[]): string | null {
   const strip = (l: { key?: unknown; text?: unknown }[]) => l.map((x) => ({ key: x.key ?? "", text: x.text ?? "" }));
@@ -156,7 +181,7 @@ interface BuiltPackage {
   refused: { id: string; reason: string }[];
 }
 
-async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figures: AiImportFigure[] })[], names: { subjects: Map<string, string>; topics: Map<string, string>; subTopics: Map<string, string> }, settings: ImporterSettings, paperCode: string | null): Promise<BuiltPackage> {
+async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figures: AiImportFigure[] })[], names: { subjects: Map<string, string>; topics: Map<string, string>; subTopics: Map<string, string> }, settings: ImporterSettings, paperCode: string | null, force?: ForceKind): Promise<BuiltPackage> {
   const files = new Map<string, Buffer>();
   const codes = new Map<string, string>();
   const expectedImages: BuiltPackage["expectedImages"] = new Map();
@@ -197,11 +222,22 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
         } else options.push({ label: o.label, text: o.text, ...(images.length ? { images } : {}) });
       }
       const prefix = [e.instructions, e.passage].filter((x) => x && x.trim()).join("\n\n");
-      const stem = prefix ? `${prefix}\n\n${e.stem}` : e.stem;
-      const hasLists = q.questionType === "MATCH_THE_FOLLOWING" && e.listI?.length && e.listII?.length;
+      let stem = prefix ? `${prefix}\n\n${e.stem}` : e.stem;
+      let hasLists = q.questionType === "MATCH_THE_FOLLOWING" && !!e.listI?.length && !!e.listII?.length;
+      // Forced only: lists the Question Bank cannot store (missing / keyless items, FSO 2022 Q109/Q132) are not invented —
+      // the question is stored single-correct with the list text kept in the question text (the options name the items).
+      if (force && q.questionType === "MATCH_THE_FOLLOWING" && (!hasLists || matchListProblem(e.listI ?? [], e.listII ?? []))) {
+        const lines = [...(e.listI ?? []), ...(e.listII ?? [])].filter((x) => x.text?.trim() && !stem.includes(x.text.trim()));
+        if (lines.length) stem = `${stem}\n\nList I: ${(e.listI ?? []).map((x) => `${x.key ? `${x.key}. ` : ""}${x.text}`).join("; ")}\nList II: ${(e.listII ?? []).map((x) => `${x.key ? `${x.key}. ` : ""}${x.text}`).join("; ")}`;
+        hasLists = false;
+      }
       // A match question without both lists is refused by importBlocker; never downgraded to single-correct here.
-      if (q.questionType === "MATCH_THE_FOLLOWING" && !hasLists) throw new Error("match question without List I / List II");
+      else if (q.questionType === "MATCH_THE_FOLLOWING" && !hasLists) throw new Error("match question without List I / List II");
       const type = q.questionType === "MULTIPLE_CORRECT" ? "MULTIPLE_CORRECT" : hasLists ? "MATCH_THE_FOLLOWING" : "SINGLE_CORRECT";
+      // Never an invented answer: a forced publish needs the stored key; a withdrawn question gets a placeholder the
+      // caller clears in the same step (the official key withdrew it, so it has no answer to keep).
+      if (force === "PUBLISH" && !q.finalAnswer.length) throw new Error("no answer key is stored for this question — the Question Bank needs one correct option to publish it; set the answer (official key or your confirmation) first");
+      const correct = force === "WITHDRAWN" && !q.finalAnswer.length ? [WITHDRAWN_PLACEHOLDER_KEY] : q.finalAnswer;
       const rich = e.contentFormat === "RICH_V1" || stemImages.length > 0 || options.some((o) => "images" in o);
       const flags = reviewFlags(q, settings);
       const item = {
@@ -218,12 +254,12 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
         contentFormat: rich ? "RICH_V1" : "PLAIN",
         question: stemImages.length ? { text: rich && e.contentFormat !== "RICH_V1" ? escapeForRich(stem) : stem, images: stemImages } : rich && e.contentFormat !== "RICH_V1" ? escapeForRich(stem) : stem,
         options: rich && e.contentFormat !== "RICH_V1" ? options.map((o) => ({ ...o, text: escapeForRich(o.text) })) : options,
-        correct: q.finalAnswer,
+        correct,
         difficulty: e.hints?.difficulty && ["EASY", "MEDIUM", "HARD"].includes(e.hints.difficulty.toUpperCase()) ? e.hints.difficulty.toUpperCase() : "MEDIUM",
         ...(job.previousYearPaperId ? { source: "PYQ" } : {}),
         // A section heading is never stored as a question's explanation (2026-10-26: two headings were read as explanations).
         ...(e.hints?.explanation && !explanationIsHeading(e.hints.explanation) ? { explanation: e.hints.explanation } : {}),
-        ...(flags.length ? { review: { required: true, reason: `AI importer: ${flags.join(", ")}`.slice(0, 480) } } : {}),
+        ...(force ? { review: { required: true, reason: `${force === "PUBLISH" ? "FORCE TO PUBLISH" : "WITHDRAWN"} by Master Admin — content as stored, to be corrected later${flags.length ? `: ${flags.join(", ")}` : ""}`.slice(0, 480) } } : flags.length ? { review: { required: true, reason: `AI importer: ${flags.join(", ")}`.slice(0, 480) } } : {}),
         ...(hasLists ? { matchLists: { listI: e.listI!.map((x) => ({ key: x.key, text: x.text })), listII: e.listII!.map((x) => ({ key: x.key, text: x.text })) } } : {}),
       };
       const problems = questionProblems(item, "RICH");
@@ -277,7 +313,7 @@ const itemLabel = (q: Pick<AiImportQuestion, "sourceNumber" | "orderIndex">) => 
 const ITEMS_MAX = 500;
 
 /** The package of `rows` (names resolved), plus the job with its paper's year. */
-async function packageFor(job: AiImportJob, rows: Row[], settings: ImporterSettings): Promise<{ job: AiImportJob; pkg: BuiltPackage }> {
+async function packageFor(job: AiImportJob, rows: Row[], settings: ImporterSettings, force?: ForceKind): Promise<{ job: AiImportJob; pkg: BuiltPackage }> {
   const subjectIds = [...new Set(rows.map((r) => r.subjectId!))];
   const topicIds = [...new Set(rows.map((r) => r.topicId).filter((x): x is string => !!x))];
   const subTopicIds = [...new Set(rows.map((r) => r.subTopicId).filter((x): x is string => !!x))];
@@ -291,7 +327,7 @@ async function packageFor(job: AiImportJob, rows: Row[], settings: ImporterSetti
   // A linked paper is the only source of the year (jobs created before this rule may lack it).
   if (paper) job = { ...job, year: paper.year };
   const names = { subjects: new Map(subjects.map((s) => [s.id, s.name])), topics: new Map(topics.map((t) => [t.id, t.name])), subTopics: new Map(subTopics.map((t) => [t.id, t.name])) };
-  return { job, pkg: await buildPackage(job, rows, names, settings, paper?.paperCode ?? null) };
+  return { job, pkg: await buildPackage(job, rows, names, settings, paper?.paperCode ?? null, force) };
 }
 
 type BulkRow = { id: string; status: BulkImportRowStatus; questionId: string | null; errors: Prisma.JsonValue; errorMessage: string | null; rawData: Prisma.JsonValue };
@@ -353,8 +389,8 @@ async function reconcileRows(rows: Row[], pkg: BuiltPackage, bulkRows: BulkRow[]
 }
 
 /** Runs one import batch through the existing pipeline and reconciles every row back. */
-async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batchNo: number, settings: ImporterSettings): Promise<ImportItem[]> {
-  const built = await packageFor(job, rows, settings);
+async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batchNo: number, settings: ImporterSettings, force?: ForceKind): Promise<ImportItem[]> {
+  const built = await packageFor(job, rows, settings, force);
   job = built.job;
   const pkg = built.pkg;
   // A question the package left out is recorded like a row the Bulk Import refused; its content and approval are not touched.
@@ -372,7 +408,7 @@ async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batc
   // The package bytes are part of the key: a question edited after an interrupted or refused attempt gets a new run, so the
   // Question Bank never receives the text from before the edit (Agent 7 D1/D2, 2026-11-12). Same content → same run (retry-safe).
   const zipHash = crypto.createHash("sha256").update(pkg.zip).digest("hex");
-  const idKey = `aiimp-${crypto.createHash("sha256").update(`${job.id}|${batchNo}|${included.map((r) => r.id).sort().join(",")}|${zipHash}`).digest("hex").slice(0, 40)}`;
+  const idKey = `aiimp-${crypto.createHash("sha256").update(`${job.id}|${batchNo}|${included.map((r) => r.id).sort().join(",")}|${zipHash}${force ? `|force:${force}` : ""}`).digest("hex").slice(0, 40)}`;
 
   // Retry-safe: the idempotency key returns the run created by an interrupted earlier attempt.
   let runId: string;
@@ -384,13 +420,15 @@ async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batc
       const staged = await stageImportRun({
         actorId: plan.requestedById,
         file: null,
-        label: `AI Importer — ${job.title}${batchNo > 1 ? ` (part ${batchNo})` : ""}`.slice(0, 190),
+        label: `AI Importer — ${job.title}${force ? ` (${force === "PUBLISH" ? "Force to Publish" : "Withdrawn"} Q${rows[0]?.sourceLabel ?? ""})` : batchNo > 1 ? ` (part ${batchNo})` : ""}`.slice(0, 190),
         examId: job.examId,
         examYear: job.year,
         previousYearPaperId: job.previousYearPaperId,
         mockTestId: null,
         importSource: "QUESTION_BANK",
-        duplicateStrategy: BulkImportDuplicateStrategy.SKIP,
+        // Forced: the administrator chose to store this question for its paper even if the same text exists elsewhere
+        // (a PYQ repeated across years, FSO 2022 Q92 = 2019 Q43): a new row, never a replacement of the other one.
+        duplicateStrategy: force ? BulkImportDuplicateStrategy.ADD_AS_NEW : BulkImportDuplicateStrategy.SKIP,
         importMode: BulkImportMode.RICH,
         bundleId,
         jsonPackage: true,
@@ -426,6 +464,12 @@ async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batc
   const n = (o: ImportItem["outcome"]) => items.filter((i) => i.outcome === o).length;
   await logEvent(job.id, "IMPORT_DONE", `Batch ${batchNo}: ${n("imported")} imported as draft, ${n("skipped")} skipped as duplicates, ${n("failed")} not accepted (reasons on the job page)`, { runId, imported: n("imported"), skipped: n("skipped"), failed: n("failed") }, plan.requestedById);
   return items;
+}
+
+/** One question imported past the normal gates (force-publish.ts does the authorization, audit and status change). */
+export async function importForced(job: AiImportJob, row: Row, settings: ImporterSettings, actorId: string, force: ForceKind): Promise<ImportItem> {
+  const items = await importBatch(job, [row], { mode: "DRAFT", questionIds: [row.id], requestedById: actorId, requestedAt: new Date().toISOString() }, 0, settings, force);
+  return items.find((i) => i.id === row.id) ?? { id: row.id, label: itemLabel(row), outcome: "failed", reason: "The Bulk Import returned no row for this question." };
 }
 
 /**

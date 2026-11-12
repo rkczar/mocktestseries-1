@@ -98,6 +98,8 @@ export interface PlayerQuestion {
   questionType?: "MULTIPLE_CORRECT" | "MATCH_THE_FOLLOWING";
   /** MULTIPLE_CORRECT only: the saved label set. */
   selectedLabels?: string[];
+  /** Withdrawn by the official answer key: original content with a WITHDRAWN label; never answerable or scored. */
+  withdrawn?: true;
   /** MATCH_THE_FOLLOWING only: List I / List II. */
   match?: MatchView;
   /** Bilingual exams only: the Hindi version (presentation only — same labels, same answer). */
@@ -128,7 +130,7 @@ interface RevealState {
 
 const isAnswered = (s: QuestionState | undefined) => !!s && (!!s.selected || (s.labels?.length ?? 0) > 0);
 
-type Status = "current" | "answered-marked" | "marked" | "answered" | "visited" | "not-visited";
+type Status = "current" | "answered-marked" | "marked" | "answered" | "visited" | "not-visited" | "withdrawn";
 
 const SAVE_TIMEOUT_MS = 12_000;
 const SUBMIT_FLUSH_TIMEOUT_MS = 10_000;
@@ -201,6 +203,7 @@ const STATUS_STYLES: Record<Status, string> = {
   answered: "bg-[var(--color-success)] text-white",
   visited: "border border-[var(--color-error)]/40 bg-[var(--color-error)]/15 text-[var(--color-error)]",
   "not-visited": "border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)]",
+  withdrawn: "border border-dashed border-[var(--color-muted-foreground)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)] line-through",
 };
 
 type Problem =
@@ -459,6 +462,7 @@ export function TestPlayer({
   // ---- Answer + navigation handlers (pure state, side effects after) ---------
   const setAnswer = (questionId: string, patch: Partial<Pick<QuestionState, "selected" | "marked" | "labels">>) => {
     if (submittedRef.current || (reveals[questionId] && (patch.selected !== undefined || patch.labels !== undefined))) return;
+    if (questions.find((q) => q.questionId === questionId)?.withdrawn) return; // never answerable, never saved
     const prev = statesRef.current[questionId];
     const next = { ...prev, ...patch };
     const sameLabels = (next.labels ?? []).join() === (prev.labels ?? []).join();
@@ -617,8 +621,10 @@ export function TestPlayer({
   const state = states[question.questionId] ?? { selected: null, marked: false, visited: true };
   const reveal = reveals[question.questionId] ?? null;
   const checkingHere = checking?.questionId === question.questionId ? checking.label : null;
+  /** Withdrawn in the official key: shown as printed, but nothing can be selected, marked, checked or saved. */
+  const withdrawn = question.withdrawn === true;
   /** Practice Mode question waiting for its first committed answer: options are the check action. */
-  const practiceOpen = instantMode && !reveal && !question.malformed;
+  const practiceOpen = instantMode && !reveal && !question.malformed && !withdrawn;
   const qSave = saveStatus[question.questionId];
   const isLast = current === questions.length - 1;
 
@@ -627,12 +633,15 @@ export function TestPlayer({
   const timeLow = remaining !== null && remaining <= 60;
 
   const answeredCount = questions.filter((q) => isAnswered(states[q.questionId])).length;
+  const withdrawnCount = questions.filter((q) => q.withdrawn).length;
+  const scoredTotal = questions.length - withdrawnCount;
   const multi = question.questionType === "MULTIPLE_CORRECT";
   const markedCount = questions.filter((q) => states[q.questionId]?.marked).length;
   const unsavedCount = Object.values(saveStatus).filter((s) => s !== "saving").length;
 
   function statusFor(q: PlayerQuestion, i: number): Status {
     if (i === current) return "current";
+    if (q.withdrawn) return "withdrawn";
     const s = states[q.questionId];
     if (!s) return "not-visited";
     if (s.marked && isAnswered(s)) return "answered-marked";
@@ -741,6 +750,15 @@ export function TestPlayer({
               </div>
             </div>
 
+            {withdrawn ? (
+              <div role="note" data-testid="withdrawn-question" className="mb-4 rounded-[var(--radius-card)] border-2 border-[var(--color-warning)] bg-[var(--color-warning)]/10 p-3 text-sm text-[var(--color-foreground)]">
+                <p className="font-bold uppercase tracking-wide text-[var(--color-warning)]">Withdrawn question</p>
+                <p className="mt-1">
+                  This question was withdrawn in the official answer key. It is shown as printed for the record — it cannot be
+                  answered and is not counted in your score or maximum marks.
+                </p>
+              </div>
+            ) : null}
             <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)]">
               <RichText text={question.text} html={question.rich?.textHtml} />
             </p>
@@ -766,8 +784,8 @@ export function TestPlayer({
                 position={current + 1}
                 labels={state.labels ?? []}
                 correctLabels={reveal?.correctLabels ?? null}
-                disabled={!!reveal || !!checking || submitting}
-                onToggle={(label) => toggleLabel(question, label)}
+                disabled={!!reveal || !!checking || submitting || withdrawn}
+                onToggle={(label) => (withdrawn ? undefined : toggleLabel(question, label))}
               />
             ) : (
               <div className="mt-5 flex flex-col gap-2.5" role="radiogroup" aria-label={`Question ${current + 1} options`}>
@@ -782,7 +800,7 @@ export function TestPlayer({
                       data-label={opt.label}
                       className={cn(
                         "flex items-start gap-3 rounded-[var(--radius-card)] border p-3 transition-colors",
-                        reveal || checkingHere ? "cursor-default" : "cursor-pointer",
+                        reveal || checkingHere || withdrawn ? "cursor-default" : "cursor-pointer",
                         isCorrect
                           ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
                           : isWrongPick
@@ -798,11 +816,11 @@ export function TestPlayer({
                         value={opt.label}
                         className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
                         checked={selected}
-                        disabled={!!reveal || !!checking || submitting}
+                        disabled={!!reveal || !!checking || submitting || withdrawn}
                         // Practice Mode commits on the tap itself (also a tap on an option a
                         // legacy attempt pre-selected without checking). Exam Mode only selects.
                         onClick={practiceOpen ? () => checkAnswer(question.questionId, opt.label) : undefined}
-                        onChange={practiceOpen ? () => {} : () => setAnswer(question.questionId, { selected: opt.label })}
+                        onChange={practiceOpen || withdrawn ? () => {} : () => setAnswer(question.questionId, { selected: opt.label })}
                       />
                       <span className="min-w-0 text-sm text-[var(--color-foreground)]">
                         <span className="font-semibold">{opt.label}.</span> <RichText text={opt.text} html={question.rich?.optionHtml[opt.label]} />
@@ -831,7 +849,7 @@ export function TestPlayer({
               </div>
             )}
 
-            {instantMode && !question.malformed && multi ? (
+            {instantMode && !question.malformed && !withdrawn && multi ? (
               <div className="mt-4 flex flex-col gap-2" data-testid="instant-panel">
                 {reveal ? (
                   <RevealedReviewTools
@@ -863,7 +881,7 @@ export function TestPlayer({
                   <p className="text-sm text-[var(--color-error)]">{revealError.message}</p>
                 ) : null}
               </div>
-            ) : instantMode && !question.malformed ? (
+            ) : instantMode && !question.malformed && !withdrawn ? (
               <div className="mt-4 flex flex-col gap-2" data-testid="instant-panel">
                 {reveal ? (
                   <RevealedReviewTools
@@ -911,13 +929,13 @@ export function TestPlayer({
             <Button
               variant="outline"
               onClick={() => setAnswer(question.questionId, multi ? { labels: [], marked: false } : { selected: null, marked: false })}
-              disabled={!!reveal || !!checking || submitting || question.malformed}
+              disabled={!!reveal || !!checking || submitting || question.malformed || withdrawn}
             >
               Clear Response
             </Button>
             <Button
               variant="outline"
-              disabled={submitting || !!checkingHere}
+              disabled={submitting || !!checkingHere || withdrawn}
               onClick={() => {
                 setAnswer(question.questionId, { marked: !state.marked });
                 goTo(current + 1);
@@ -943,6 +961,11 @@ export function TestPlayer({
               <span className="flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-full border border-[var(--color-border)]" /> Not visited
               </span>
+              {withdrawnCount ? (
+                <span className="flex items-center gap-1.5" data-testid="legend-withdrawn">
+                  <span className="h-2.5 w-2.5 rounded-full border border-dashed border-[var(--color-muted-foreground)]" /> Withdrawn — not scored ({withdrawnCount})
+                </span>
+              ) : null}
             </div>
             <div className="grid grid-cols-6 gap-2 sm:grid-cols-5 lg:grid-cols-6" data-testid="palette">
               {questions.map((q, i) => (
@@ -950,7 +973,7 @@ export function TestPlayer({
                   key={q.questionId}
                   type="button"
                   onClick={() => goTo(i)}
-                  aria-label={`Go to question ${i + 1}`}
+                  aria-label={`Go to question ${i + 1}${q.withdrawn ? " (withdrawn)" : ""}`}
                   className={cn(
                     "flex h-9 w-9 items-center justify-center rounded-[var(--radius-button)] text-xs font-semibold transition-colors",
                     STATUS_STYLES[statusFor(q, i)]
@@ -996,7 +1019,8 @@ export function TestPlayer({
               <AlertTriangle className="h-4 w-4 text-[var(--color-warning)]" aria-hidden /> Submit test?
             </DialogTitle>
             <DialogDescription>
-              You have answered {answeredCount} of {questions.length} questions.
+              You have answered {answeredCount} of {scoredTotal} questions.
+              {withdrawnCount ? ` ${withdrawnCount} withdrawn question(s) are not scored.` : ""}
               {unsavedCount > 0 ? ` ${unsavedCount} answer(s) are still being saved.` : ""} Once submitted, you cannot change your
               answers.
             </DialogDescription>

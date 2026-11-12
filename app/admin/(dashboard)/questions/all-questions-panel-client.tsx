@@ -30,7 +30,7 @@ interface Question {
   text: string;
   imageUrl: string | null;
   difficulty: "EASY" | "MEDIUM" | "HARD";
-  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED" | "WITHDRAWN";
   examYear: number | null;
   source: string;
   reviewRequired: boolean;
@@ -484,6 +484,7 @@ export function AllQuestionsPanelClient({
               <option value="DRAFT">Draft</option>
               <option value="PUBLISHED">Published</option>
               <option value="ARCHIVED">Archived</option>
+              <option value="WITHDRAWN">Withdrawn</option>
             </select>
 
             <select

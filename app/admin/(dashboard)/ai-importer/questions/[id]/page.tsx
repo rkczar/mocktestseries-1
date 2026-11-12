@@ -32,6 +32,8 @@ import { holdNoteNames } from "@/lib/ai-import/review";
 import { listReferences } from "@/lib/ai-import/reference";
 import { fieldBoard, v2TaxonomyChecks } from "@/lib/ai-import/field-checks";
 import { FieldVerification } from "@/components/admin/ai-importer/field-verification";
+import { ForcePublishCard } from "./force-publish-card";
+import { bypassedBlockers } from "@/lib/ai-import/force-publish";
 
 export const metadata = { title: "Review Question — AI Question Importer" };
 export const dynamic = "force-dynamic";
@@ -434,6 +436,17 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           )}
         </CardContent>
       </Card>
+      {/* Not yet in the Question Bank (a rejected extraction artifact is not an original question). */}
+      {canUse && !q.questionId && q.status !== "REJECTED" && (
+        <ForcePublishCard
+          questionId={q.id}
+          label={`Q${q.sourceLabel}`}
+          normalBlocker={importBlocker(q, settings, { ignoreApproval: true })}
+          bypassed={bypassedBlockers(q, settings)}
+          canForce={(await getAdminSession())?.user.role === "MASTER_ADMIN"}
+          withdrawnInKey={q.answerStatus === "WITHDRAWN" && !q.questionId}
+        />
+      )}
       {canUse && q.status !== "IMPORTED" && q.status !== "PUBLISHED" && (
         <QuestionReview
           // Remount when the stored question changes outside this form (e.g. a suggestion taken in Field verification),

@@ -35,6 +35,7 @@ export interface SnapshotLike {
   correctLabels?: unknown;
   matchSpec?: unknown;
   hi?: unknown;
+  withdrawn?: unknown;
 }
 
 export interface AttemptQuestionLike {
@@ -64,6 +65,8 @@ export interface SerializedPlayerQuestion {
   match?: MatchView;
   /** Bilingual questions only: the Hindi version (presentation only; same labels, same answer). */
   hi?: HindiView;
+  /** Withdrawn by the official answer key: shown with a WITHDRAWN label, options not selectable, never scored. */
+  withdrawn?: true;
 }
 
 /** The Hindi version of a bilingual question as the student sees it. An option without Hindi text falls back to English. */
@@ -137,6 +140,7 @@ export function toPlayerQuestions(
       ...(multi ? { selectedLabels: tq.answer?.selectedLabels ?? [] } : {}),
       ...(match ? { match } : {}),
       ...(hi ? { hi } : {}),
+      ...(snapshot.withdrawn === true ? { withdrawn: true as const } : {}),
     };
   });
 }

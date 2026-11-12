@@ -2,7 +2,8 @@ import "server-only";
 import { AiImportAnswerStatus, AiImportQuestionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
+import { blockerOnceApproved, importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
+import { reconcilePaper, type PaperReconciliation } from "@/lib/ai-import/paper-reconciliation";
 import { qualityReport, type ExpectedSource, type QualityReport, type SequenceAck } from "@/lib/ai-import/quality";
 import { printedQuestionTotal, type KeyHeader } from "@/lib/ai-import/keys";
 import { readDocx } from "@/lib/ai-import/docx";
@@ -50,6 +51,8 @@ export interface JobSummary {
   pendingDecision: number;
   /** Approved and importable, not yet in the Question Bank. */
   approvedReady: number;
+  /** Not approved yet; approving would make it importable (status Ready, every gate clear). */
+  readyAwaitingApproval: number;
   /** Still in a working state (EXTRACTED) — must be 0 for a finished job. */
   unaccounted: number;
   pages: { total: number; done: number; failed: number; skipped: number; pending: number };
@@ -68,8 +71,10 @@ export async function jobSummary(jobId: string): Promise<JobSummary> {
   const answerStatus: Record<string, number> = {};
   for (const q of qs) answerStatus[q.answerStatus] = (answerStatus[q.answerStatus] ?? 0) + 1;
   const pageCount = (s: string) => pages.find((p) => p.status === s)?._count._all ?? 0;
-  // Importable once approved (approval itself is counted separately).
-  const eligibleImport = qs.filter((q) => !q.questionId && !importBlocker(q, settings, { ignoreApproval: true })).length;
+  // The actual import gate (approval, status, checks, holds, duplicates): what an Import would take now. Needs-correction
+  // questions are never counted, whatever their other checks say (2026-11-12).
+  const eligibleImport = qs.filter((q) => !q.questionId && !importBlocker(q, settings)).length;
+  const readyAwaitingApproval = qs.filter((q) => !q.questionId && !q.approvedById && !blockerOnceApproved(q, settings)).length;
   // "Published" = published in the Question Bank (import rows stay IMPORTED when an admin publishes there).
   const storedIds = qs.filter((q) => q.questionId && (q.status === AiImportQuestionStatus.IMPORTED || q.status === AiImportQuestionStatus.PUBLISHED)).map((q) => q.questionId!);
   const publishedInBank = storedIds.length ? await prisma.question.count({ where: { id: { in: storedIds }, status: "PUBLISHED" } }) : 0;
@@ -89,6 +94,7 @@ export async function jobSummary(jobId: string): Promise<JobSummary> {
     imageIssues: qs.filter((q) => q.issueCodes.some((c) => c === "IMAGE_MISSING" || c === "IMAGE_MAPPING_UNCERTAIN" || c === "IMAGE_REFERENCE_UNCERTAIN")).length,
     pendingDecision: qs.filter((q) => q.status === AiImportQuestionStatus.READY && !q.questionId).length,
     approvedReady: qs.filter((q) => !q.questionId && !!q.approvedById && !importBlocker(q, settings)).length,
+    readyAwaitingApproval,
     unaccounted: count(AiImportQuestionStatus.EXTRACTED),
     pages: { total: pages.reduce((a, p) => a + p._count._all, 0), done: pageCount("DONE"), failed: pageCount("FAILED"), skipped: pageCount("SKIPPED"), pending: pageCount("PENDING") },
     answerStatus,
@@ -211,4 +217,32 @@ export async function settleJobStatus(jobId: string): Promise<string | null> {
   const r = await prisma.aiImportJob.updateMany({ where: { id: jobId, status: job.status as never }, data: { status: target as never, ...(target !== "NEEDS_REVIEW" ? { finishedAt: new Date() } : {}) } });
   if (r.count) await prisma.aiImportEvent.create({ data: { jobId, type: "STATUS_SETTLED", message: `Status: ${target.toLowerCase().replace(/_/g, " ")} (quality: ${q.state.toLowerCase().replace(/_/g, " ")})`, data: { state: q.state, blockers: q.blockers } } });
   return target;
+}
+
+/** The 1..expected question-number reconciliation of one job's paper (lib/ai-import/paper-reconciliation.ts). */
+export async function jobPaperReconciliation(jobId: string): Promise<PaperReconciliation | null> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { expectedQuestions: true } });
+  const qs = await prisma.aiImportQuestion.findMany({ where: { jobId }, include: { figures: true }, orderBy: { orderIndex: "asc" } });
+  if (!qs.length) return null;
+  const settings = await getImporterSettings();
+  const bankIds = qs.map((q) => q.questionId).filter((x): x is string => !!x);
+  const bank = new Map((await prisma.question.findMany({ where: { id: { in: bankIds } }, select: { id: true, status: true } })).map((b) => [b.id, b.status as string]));
+  const numbered = qs.filter((q) => q.sourceNumber !== null).map((q) => q.sourceNumber!);
+  const expected = job?.expectedQuestions ?? (numbered.length ? Math.max(...numbered) : 0);
+  return reconcilePaper(
+    expected,
+    qs.map((q) => ({
+      id: q.id,
+      // Numbered sections restart: only the first section's numbers are the paper's question numbers.
+      number: (q.data as { section?: string | null }).section ? null : q.sourceNumber,
+      status: q.status,
+      answerStatus: q.answerStatus,
+      approved: !!q.approvedById,
+      questionId: q.questionId,
+      bankStatus: q.questionId ? (bank.get(q.questionId) ?? null) : null,
+      gate: q.questionId ? null : importBlocker(q, settings),
+      gateOnceApproved: q.questionId ? null : blockerOnceApproved(q, settings),
+      pages: q.pages,
+    }))
+  );
 }

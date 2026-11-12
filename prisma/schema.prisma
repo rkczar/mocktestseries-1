@@ -866,6 +866,10 @@ enum QuestionStatus {
   DRAFT
   PUBLISHED
   ARCHIVED
+  // Withdrawn (deleted / cancelled) by the official answer key: kept in its Previous Year Paper at its printed
+  // position with a WITHDRAWN label, never answerable, never scored, never served anywhere else
+  // (lib/question-servable.ts serves PUBLISHED only). Content is preserved as-is (2026-11-12).
+  WITHDRAWN
 }
 
 /**

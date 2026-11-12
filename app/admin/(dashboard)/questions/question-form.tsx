@@ -34,7 +34,7 @@ export interface QuestionDefaults {
   text: string;
   imageUrl: string | null;
   difficulty: "EASY" | "MEDIUM" | "HARD";
-  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED" | "WITHDRAWN";
   reviewRequired?: boolean;
   reviewReason?: string | null;
   excludeFromPractice?: boolean;
@@ -372,6 +372,8 @@ export function QuestionForm({ exams, defaults, teacher }: { exams: ExamTree[]; 
             <option value="DRAFT">Draft</option>
             <option value="PUBLISHED">Published</option>
             <option value="ARCHIVED">Archived</option>
+            {/* Only kept, never offered: the select must hold the current value or saving would silently change it. */}
+            {defaults?.status === "WITHDRAWN" ? <option value="WITHDRAWN">Withdrawn (official key)</option> : null}
           </SelectNative>
         </div>
 

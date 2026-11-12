@@ -63,6 +63,7 @@ import { applySourceReread, sourceRereadPreview, type RereadChoice, type RereadP
 import { learnPaperMemory } from "@/lib/ai-import/paper-learn";
 import { decidePaperRule } from "@/lib/ai-import/taxonomy-memory";
 import { getUsdInr } from "@/lib/ai-engine/fx";
+import { forceImportQuestion, type ForceResult } from "@/lib/ai-import/force-publish";
 
 /**
  * AI Question Importer Server Actions. USE (upload, process, review, import,
@@ -915,5 +916,18 @@ export async function decidePaperRuleAction(examId: string, id: string, decision
     if (typeof examId !== "string" || !examId || typeof id !== "string" || !id || (decision !== "CONFIRMED" && decision !== "REJECTED")) throw new ImportJobError("Choose the rule and a decision.");
     await decidePaperRule(examId, actorId, id, decision, typeof note === "string" ? note : null);
     return null;
+  });
+}
+
+/**
+ * FORCE TO PUBLISH / Add as WITHDRAWN (Master Admin only, server-side role re-checked in lib/ai-import/force-publish.ts):
+ * publishes the stored content of ONE question past every normal validation blocker after an explicit confirmation and a
+ * reason; every bypassed blocker is written to the audit trail. A genuine technical failure is reported as such.
+ */
+export async function forcePublishQuestionAction(questionId: string, input: { kind: "PUBLISH" | "WITHDRAWN"; reason: string; confirmed: boolean }): Promise<ImporterResult<ForceResult>> {
+  return run(await requireMasterAdmin(), async (actorId) => {
+    const r = await forceImportQuestion({ importQuestionId: String(questionId), actorId, reason: typeof input?.reason === "string" ? input.reason : "", kind: input?.kind === "WITHDRAWN" ? "WITHDRAWN" : "PUBLISH", confirmed: input?.confirmed === true });
+    revalidatePath("/admin/questions", "layout");
+    return r;
   });
 }

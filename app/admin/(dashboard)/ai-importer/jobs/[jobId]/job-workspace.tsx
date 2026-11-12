@@ -782,6 +782,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6" data-testid="batch-summary">
               <Stat label="Questions extracted" value={s.extracted} />
               <Stat label="Eligible for import" value={s.eligibleImport} />
+              <Stat label="Ready — awaiting approval" value={s.readyAwaitingApproval} />
               <Stat label="Imported" value={s.imported} tone={s.imported ? "ok" : undefined} />
               <Stat label="Eligible for publishing" value={s.eligiblePublish} />
               <Stat label="Published" value={s.published} tone={s.published ? "ok" : undefined} />

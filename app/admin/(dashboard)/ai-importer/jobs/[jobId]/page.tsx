@@ -12,7 +12,8 @@ import { planOf } from "@/lib/ai-import/select";
 import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { jobCards, jobMapping } from "@/lib/ai-import/job-view";
 import { importerSpendSummary } from "@/lib/ai-import/ledger";
-import { jobQuality } from "@/lib/ai-import/summary";
+import { jobPaperReconciliation, jobQuality } from "@/lib/ai-import/summary";
+import { PaperReconciliationPanel } from "@/components/admin/ai-importer/paper-reconciliation-panel";
 import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { QualityPanel } from "@/components/admin/ai-importer/quality-panel";
 import { PageManifest, type ManifestRow } from "@/components/admin/ai-importer/page-manifest";
@@ -130,12 +131,14 @@ export default async function AiImportJobPage({ params }: { params: Promise<{ jo
     nextAction: card.nextAction,
   };
   const finished = ["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(job.status);
+  const recon = finished ? await jobPaperReconciliation(job.id) : null;
   return (
     <div className="flex flex-col gap-4">
       {mapping && <PaperMapping m={mapping} />}
       {finished && quality && (
         <QualityPanel jobId={job.id} report={quality} canUse={canUse} jobStatus={job.status} files={job.files.filter((f) => f.role === "PAPER" && f.status !== "REJECTED").map((f) => ({ id: f.id, name: f.originalName, pageCount: f.pageCount }))} runIds={view.runIds} />
       )}
+      {recon && recon.expected > 0 && <PaperReconciliationPanel r={recon} />}
       {manifest.length > 0 && <PageManifest rows={manifest} />}
       <JobWorkspace job={view} exams={examOptions} canUse={canUse} canPublish={canPublish && canUse} />
     </div>

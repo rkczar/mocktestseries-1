@@ -17,6 +17,7 @@ import {
   AttemptStatus,
   CustomModuleStatus,
   GrandTestStatus,
+  QuestionStatus,
   TestType,
   type Prisma,
 } from "@prisma/client";
@@ -29,7 +30,7 @@ import { selectPublishedQuestions, type QuestionSelectionFilters, InsufficientQu
 import { accessDeniedMessage, assertContentAccess, attemptGraceAllows, getAttemptAnswerAccess, loadAccessContext, PaymentRequiredError, type ContentDescriptor } from "@/lib/payments/access";
 import { assertExamLive } from "@/lib/exam-live";
 import { TestEngineError } from "@/lib/test-engine-log";
-import { SERVABLE_MEMBERSHIP_WHERE, SERVABLE_MOCK_MEMBERSHIP_WHERE, SERVABLE_QUESTION_WHERE } from "@/lib/question-servable";
+import { SERVABLE_MEMBERSHIP_WHERE, SERVABLE_MOCK_MEMBERSHIP_WHERE } from "@/lib/question-servable";
 import { MAX_CUSTOM_DURATION_MINUTES, type AttemptConfigChoice } from "@/lib/attempt-config";
 import { explanationView, toSnapshotAssets, type SnapshotAsset } from "@/lib/rich-content";
 import type { ContentFormat, ExplanationView } from "@/lib/rich-content-types";
@@ -79,6 +80,12 @@ export interface QuestionSnapshot {
    * snapshots are unchanged. Presentation only — never answer-key data.
    */
   hi?: { text: string; options: { label: string; text: string }[] };
+  /**
+   * WITHDRAWN by the official answer key (Previous Year Paper only, 2026-11-12): shown at its printed position with
+   * its original content and a WITHDRAWN label, never answerable, never scored (no Answer row, not in totalQuestions /
+   * maxScore). Absent on every other snapshot, so older attempts are read exactly as before.
+   */
+  withdrawn?: true;
 }
 
 export interface QuestionWithOptions {
@@ -93,6 +100,7 @@ export interface QuestionWithOptions {
   explanation?: string | null;
   questionType?: string;
   matchSpec?: unknown;
+  status?: string;
 }
 
 /**
@@ -205,7 +213,9 @@ function needsSnapshotV2(question: QuestionWithOptions): boolean {
 
 /** The frozen snapshot of one question: the language-neutral snapshot plus, for a bilingual question, its Hindi version. */
 function toSnapshot(question: QuestionWithOptions, assets: SnapshotAsset[] = []): QuestionSnapshot {
-  const base = toBaseSnapshot(question, assets);
+  const scored = toBaseSnapshot(question, assets);
+  // A withdrawn question carries no answer key into the attempt: nothing to score, nothing to reveal.
+  const base: QuestionSnapshot = question.status === "WITHDRAWN" ? { ...scored, correctLabel: "", ...(scored.correctLabels ? { correctLabels: [] } : {}), withdrawn: true } : scored;
   if (!question.textHi?.trim()) return base;
   return { ...base, hi: { text: question.textHi, options: base.options.map((o) => ({ label: o.label, text: question.options.find((x) => x.label === o.label)?.textHi ?? "" })) } };
 }
@@ -290,7 +300,12 @@ async function createAttemptFromQuestions(params: {
    */
   studentConfig?: AttemptConfigChoice;
 }) {
-  if (params.questions.length === 0) {
+  // Withdrawn questions only ever reach an attempt through their own Previous Year Paper, and never alone.
+  const isWithdrawn = (q: QuestionWithOptions) => q.status === "WITHDRAWN";
+  if (params.questions.some(isWithdrawn) && params.sourceType !== AttemptSourceType.PREVIOUS_YEAR_PAPER) {
+    throw new TestEngineError("UNAVAILABLE", "This test was just updated. Please start it again.");
+  }
+  if (params.questions.filter((q) => !isWithdrawn(q)).length === 0) {
     throw new TestEngineError("UNAVAILABLE", "This test has no questions yet. Please try again later.");
   }
   // Inactive (private / pre-launch) exams never get a new attempt, whatever
@@ -303,6 +318,8 @@ async function createAttemptFromQuestions(params: {
   await assertPlatformOpen("tests");
   // Never silently duplicate a question to pad a set.
   const questions = params.questions.filter((q, i, all) => all.findIndex((x) => x.id === q.id) === i);
+  const scoredCount = questions.filter((q) => !isWithdrawn(q)).length;
+  const withdrawnIds = questions.filter(isWithdrawn).map((q) => q.id);
 
   // Formal-test policy overrides any practice capability a caller passes:
   // Mock / PYQ / Grand / Live run in EXAM mode on their fixed timing unless
@@ -328,7 +345,7 @@ async function createAttemptFromQuestions(params: {
       durationMinutes =
         durationMode === AttemptDurationMode.FIXED
           ? params.durationMinutes
-          : practiceDurationMinutes(durationMode, questions.length, choice.customMinutes);
+          : practiceDurationMinutes(durationMode, scoredCount, choice.customMinutes);
     }
   }
 
@@ -374,9 +391,11 @@ async function createAttemptFromQuestions(params: {
     // commit time. FOR SHARE waits for a Retire / Replace that is retiring one
     // of them, so a start racing a retirement can never freeze old content.
     const ids = questions.map((q) => q.id);
+    // A withdrawn question frozen as withdrawn must still be WITHDRAWN at commit (never a question that changed state).
     const servable = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM "Question"
-      WHERE id = ANY(${ids}::text[]) AND status = 'PUBLISHED' AND "retiredAt" IS NULL
+      WHERE id = ANY(${ids}::text[]) AND "retiredAt" IS NULL
+        AND (CASE WHEN id = ANY(${withdrawnIds}::text[]) THEN status = 'WITHDRAWN' ELSE status = 'PUBLISHED' END)
       FOR SHARE`;
     if (servable.length !== ids.length) {
       throw new TestEngineError("UNAVAILABLE", "This test was just updated. Please start it again.");
@@ -399,7 +418,8 @@ async function createAttemptFromQuestions(params: {
       durationMode,
       answerMode,
       negativeMarking: params.negativeMarking,
-      totalQuestions: questions.length,
+      // Scored questions only: a withdrawn question is in the paper's structure but not in its maximum marks.
+      totalQuestions: scoredCount,
       entryMode: params.entryMode ?? AttemptEntryMode.ONLINE,
     },
   });
@@ -413,7 +433,7 @@ async function createAttemptFromQuestions(params: {
     });
     const rows = await tx.testAttemptQuestion.findMany({ where: { attemptId: created.id }, select: { id: true, questionId: true } });
     await tx.answer.createMany({
-      data: rows.map((r) => ({
+      data: rows.filter((r) => !withdrawnIds.includes(r.questionId)).map((r) => ({
         attemptId: created.id,
         attemptQuestionId: r.id,
         studentId: params.studentId,
@@ -842,8 +862,10 @@ async function planPreviousYearPaperStart(studentId: string, paperId: string): P
   // Full-paper integrity: the whole servable paper in its printed order —
   // paperQuestionNumber, then import order (createdAt), then code for papers
   // whose numbers are unknown. Never sampled or shuffled.
+  // The paper's full printed structure: its servable questions plus the ones the official key WITHDREW, which are
+  // shown in place with a WITHDRAWN label and never scored (createAttemptFromQuestions).
   const questions = (await prisma.question.findMany({
-    where: { previousYearPaperId: paperId, ...SERVABLE_QUESTION_WHERE },
+    where: { previousYearPaperId: paperId, retiredAt: null, status: { in: [QuestionStatus.PUBLISHED, QuestionStatus.WITHDRAWN] } },
     orderBy: [{ paperQuestionNumber: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { code: "asc" }],
     include: { options: true },
   })) as unknown as QuestionWithOptions[];
@@ -867,7 +889,7 @@ async function planPreviousYearPaperStart(studentId: string, paperId: string): P
       title: paper.year ? `${paper.title} (${paper.year})` : paper.title,
       examName: paper.exam.name,
       ...(paper.exam.languageMode === "BILINGUAL" ? { bilingual: true } : {}),
-      questionCount: uniqueQuestionCount(questions),
+      questionCount: uniqueQuestionCount(questions.filter((q) => q.status !== QuestionStatus.WITHDRAWN)),
       standardMinutes,
       negativeMarking: paper.exam.negativeMarking ?? 0,
       instructions: paper.exam.instructions ?? null,
@@ -1019,6 +1041,9 @@ async function loadEditableQuestion(attemptId: string, studentId: string, questi
     select: { id: true, questionSnapshot: true, answer: { select: { selectedOptionLabel: true, selectedLabels: true, revealedAt: true, status: true } } },
   });
   if (!attemptQuestion) throw new TestEngineError("NOT_IN_ATTEMPT", "Question does not belong to this attempt.");
+  if ((attemptQuestion.questionSnapshot as unknown as QuestionSnapshot)?.withdrawn) {
+    throw new TestEngineError("NOT_ALLOWED", "This question was withdrawn in the official answer key. It is not answered and not scored.");
+  }
   if (label !== null) {
     const snapshot = attemptQuestion.questionSnapshot as unknown as QuestionSnapshot;
     if (!Array.isArray(snapshot?.options) || !snapshot.options.some((o) => o.label === label)) {
@@ -1296,6 +1321,8 @@ export async function submitAttempt(attemptId: string, studentId: string) {
   const creates: Prisma.PrismaPromise<unknown>[] = [];
   for (const tq of attempt.questions) {
     const snapshot = tq.questionSnapshot as unknown as QuestionSnapshot;
+    // Withdrawn: not correct, not incorrect, not unanswered — outside the score entirely (no Answer row).
+    if (snapshot?.withdrawn) continue;
     const answer = tq.answer;
     const selected = answer?.selectedOptionLabel ?? null;
     let isCorrect: boolean | null = null;
