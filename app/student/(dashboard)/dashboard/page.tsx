@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { getPublicTelegramChannel } from "@/lib/telegram-channel";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import {
@@ -57,11 +58,13 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
   if (!enrolledExams.some((e) => e.isActive)) {
     const outcome = await ensureDefaultExamEnrollment(student.id);
     if (outcome.status === "ENROLLED") enrolledExams = await getEnrolledExams(student.id);
+    // Two or more active exams and no enrollment yet: the student chooses (never auto-enrolled).
+    if (outcome.status === "NEEDS_CHOICE") redirect("/student/welcome");
   }
 
   // If only one Exam is enrolled it's auto-selected; if multiple, the cookie
   // (last switch, if it's still one of this student's enrollments) wins;
-  // otherwise the first enrolled exam is a safe default (Section 1).
+  // otherwise the oldest active enrollment (getEnrolledExams order) is the default.
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
@@ -139,6 +142,7 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
       <ActiveExamDashboard
         enrolledExams={enrolledExams.map((e) => ({
           id: e.id,
+          code: e.code,
           name: e.name,
           examDate: (e.examDate ?? e.upcomingDate)?.toISOString() ?? null,
         }))}

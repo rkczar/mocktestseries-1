@@ -2,7 +2,8 @@ import { AttemptSourceType } from "@prisma/client";
 import Link from "next/link";
 import { History as HistoryIcon } from "lucide-react";
 import { requireStudentOrLogin } from "@/lib/student-session";
-import { getStudentAttemptHistory } from "@/lib/student-data";
+import { getEnrolledExams, getStudentAttemptHistory } from "@/lib/student-data";
+import { ExamFilterChips } from "@/components/student/exam-filter-chips";
 import { attemptTitle } from "@/lib/attempt-title";
 import { isMockResultReleased } from "@/lib/mock-test-schedule";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -31,12 +32,22 @@ const TYPE_FILTERS: { label: string; value: string }[] = [
 export default async function StudentHistoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ type?: string }>;
+  searchParams: Promise<{ type?: string; exam?: string }>;
 }) {
-  const { type } = await searchParams;
+  const { type, exam } = await searchParams;
   const student = await requireStudentOrLogin();
   const sourceType = TYPE_FILTERS.some((f) => f.value === type) ? (type as AttemptSourceType) : undefined;
-  const attempts = await getStudentAttemptHistory(student.id, { sourceType });
+  const enrolledExams = await getEnrolledExams(student.id);
+  // Only an enrolled active exam can filter; otherwise every attempt is listed (the one-exam view).
+  const examId = enrolledExams.length > 1 && enrolledExams.some((e) => e.id === exam) ? exam : undefined;
+  const attempts = await getStudentAttemptHistory(student.id, { sourceType, examId });
+  const qs = (t: string | undefined, e: string | undefined) => {
+    const p = new URLSearchParams();
+    if (t) p.set("type", t);
+    if (e) p.set("exam", e);
+    const q = p.toString();
+    return q ? `/student/history?${q}` : "/student/history";
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -46,11 +57,13 @@ export default async function StudentHistoryPage({
         <p className="text-sm text-[var(--color-muted-foreground)]">Every test you have started or completed.</p>
       </div>
 
+      <ExamFilterChips exams={enrolledExams} selectedExamId={examId} hrefFor={(id) => qs(sourceType, id ?? undefined)} />
+
       <nav className="flex flex-wrap gap-2" aria-label="Filter by type">
         {TYPE_FILTERS.map((f) => (
           <Link
             key={f.label}
-            href={f.value ? `/student/history?type=${f.value}` : "/student/history"}
+            href={qs(f.value || undefined, examId)}
             className={cn(
               "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
               (sourceType ?? "") === f.value

@@ -10,6 +10,8 @@ import { prisma } from "@/lib/prisma";
  *   - row present, examId set  → that exam (only while it is isActive)
  *   - row present, examId null → auto-enrollment explicitly disabled
  *   - row absent               → the sole active exam, if exactly one exists
+ * Multi-exam rule (FSO launch): whenever two or more exams are active, nobody is auto-enrolled —
+ * not even into a configured default — and the student picks on /student/welcome (NEEDS_CHOICE).
  * So today (RUHS MO is the only active exam) every new student is enrolled
  * into it; once a second exam is activated without choosing a default,
  * auto-enrollment simply stops and the Dashboard's existing "Enroll in an
@@ -58,7 +60,9 @@ export type DefaultEnrollmentOutcome =
   | { status: "ENROLLED"; examId: string }
   | { status: "ALREADY_ENROLLED" }
   | { status: "OPTED_OUT"; examId: string }
-  | { status: "NO_DEFAULT_EXAM" };
+  | { status: "NO_DEFAULT_EXAM" }
+  // Two or more exams are active: the student picks on /student/welcome — nobody is auto-enrolled.
+  | { status: "NEEDS_CHOICE" };
 
 /**
  * Enroll the student into the default exam unless they already have an
@@ -73,6 +77,8 @@ export async function ensureDefaultExamEnrollment(studentId: string): Promise<De
     select: { id: true },
   });
   if (hasActiveEnrollment) return { status: "ALREADY_ENROLLED" };
+
+  if ((await prisma.exam.count({ where: { isActive: true } })) > 1) return { status: "NEEDS_CHOICE" };
 
   const exam = await resolveDefaultExam();
   if (!exam) return { status: "NO_DEFAULT_EXAM" };

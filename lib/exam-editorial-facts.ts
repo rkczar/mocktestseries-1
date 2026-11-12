@@ -8,6 +8,7 @@
 
 const EXAM_SHORT_NAMES: Record<string, string> = {
   RUHSMO: "RUHS MO",
+  "RUHS-FSO": "Rajasthan FSO",
 };
 
 /** "RUHS MO" for RUHSMO; otherwise the caller's fallback (usually the display name without its year). */

@@ -89,13 +89,17 @@ export async function isStudentEnrolledInExam(studentId: string, examId: string)
   return row !== null;
 }
 
-export async function enrollInExam(studentId: string, examId: string) {
+/** Students can only enroll in an ACTIVE exam; returns false (no write) for an inactive or unknown one. */
+export async function enrollInExam(studentId: string, examId: string): Promise<boolean> {
+  const exam = await prisma.exam.findFirst({ where: { id: examId, isActive: true }, select: { id: true } });
+  if (!exam) return false;
   await prisma.studentExamEnrollment.upsert({
     where: { studentId_examId: { studentId, examId } },
     update: {},
     create: { studentId, examId },
   });
   await logActivity(studentId, "EXAM_ENROLLED", { examId });
+  return true;
 }
 
 export async function unenrollFromExam(studentId: string, examId: string) {
@@ -103,10 +107,14 @@ export async function unenrollFromExam(studentId: string, examId: string) {
   await logActivity(studentId, "EXAM_UNENROLLED", { examId });
 }
 
+/**
+ * The student's enrolled ACTIVE exams, oldest enrollment first: inactive (draft) exams never reach
+ * the switcher, and a student who adds a second exam keeps their original exam as the default view.
+ */
 export async function getEnrolledExams(studentId: string) {
   const enrollments = await prisma.studentExamEnrollment.findMany({
-    where: { studentId },
-    orderBy: { createdAt: "desc" },
+    where: { studentId, exam: { isActive: true } },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     include: { exam: true },
   });
   return enrollments.map((e) => e.exam);
@@ -154,8 +162,13 @@ export async function getExamDetailForStudent(examId: string) {
 export async function getScheduledMockTestsForStudent(studentId: string) {
   const { deriveMockTestAvailability } = await import("@/lib/mock-test-schedule");
 
+  // Exam isolation: never a draft (inactive) exam's mocks; scoped to the student's enrolled active
+  // exams; a student with no active enrollment sees every active exam.
+  const enrolledIds = (
+    await prisma.studentExamEnrollment.findMany({ where: { studentId, exam: { isActive: true } }, select: { examId: true } })
+  ).map((e) => e.examId);
   const mockTests = await prisma.mockTest.findMany({
-    where: LIVE_MOCK_TEST_WHERE,
+    where: { AND: [LIVE_MOCK_TEST_WHERE, { exam: { isActive: true } }, enrolledIds.length > 0 ? { examId: { in: enrolledIds } } : {}] },
     orderBy: [{ order: "asc" }, { createdAt: "desc" }],
     // Students only ever receive PUBLISHED questions (startMockTestAttempt),
     // so the count they see is that number, not the admin's attached total.
@@ -785,11 +798,11 @@ export interface SavedQuestionView {
  * legitimately reviewed, the field is absent from the data itself — never
  * merely hidden by the page.
  */
-export async function getSavedQuestions(studentId: string): Promise<SavedQuestionView[]> {
+export async function getSavedQuestions(studentId: string, examId?: string): Promise<SavedQuestionView[]> {
   const rows = await prisma.savedQuestion.findMany({
     // A retired question is never shown again, not even from a bookmark
     // (docs/QUESTION-RETIREMENT.md); the bookmark row itself is kept.
-    where: { studentId, question: { retiredAt: null } },
+    where: { studentId, question: { retiredAt: null, ...(examId ? { examId } : {}) } },
     orderBy: { createdAt: "desc" },
     select: {
       question: {

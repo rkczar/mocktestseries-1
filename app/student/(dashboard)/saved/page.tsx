@@ -2,7 +2,8 @@ import Link from "next/link";
 import { Bookmark, Lock } from "lucide-react";
 import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 import { requireStudentOrLogin } from "@/lib/student-session";
-import { getSavedQuestions } from "@/lib/student-data";
+import { getEnrolledExams, getSavedQuestions } from "@/lib/student-data";
+import { ExamFilterChips } from "@/components/student/exam-filter-chips";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
@@ -17,9 +18,13 @@ import { unsaveQuestionAction, reportSavedQuestionAction } from "./actions";
 
 export const metadata = { title: "Saved Questions — Mock Test Series.in" };
 
-export default async function SavedQuestionsPage() {
+export default async function SavedQuestionsPage({ searchParams }: { searchParams: Promise<{ exam?: string }> }) {
   const student = await requireStudentOrLogin();
-  const saved = await getSavedQuestions(student.id);
+  const enrolledExams = await getEnrolledExams(student.id);
+  const { exam } = await searchParams;
+  // Only an enrolled active exam can filter; anything else shows every saved question (the one-exam view).
+  const examId = enrolledExams.length > 1 && enrolledExams.some((e) => e.id === exam) ? exam : undefined;
+  const saved = await getSavedQuestions(student.id, examId);
 
   return (
     <div className="flex flex-col gap-6">
@@ -28,6 +33,7 @@ export default async function SavedQuestionsPage() {
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Saved Questions</h1>
         <p className="text-sm text-[var(--color-muted-foreground)]">Questions you bookmarked for later review.</p>
       </div>
+      <ExamFilterChips exams={enrolledExams} selectedExamId={examId} hrefFor={(id) => (id ? `/student/saved?exam=${id}` : "/student/saved")} />
 
       {saved.length === 0 ? (
         <Card>

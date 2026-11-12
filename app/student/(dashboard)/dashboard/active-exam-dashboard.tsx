@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ACTIVE_EXAM_COOKIE } from "@/lib/active-exam";
 import { formatIst } from "@/lib/ist-time";
+import { examShortName } from "@/lib/exam-editorial-facts";
 import { getActiveExamDashboardDataAction } from "./actions";
 import { TestOnTheGo } from "./test-on-the-go";
 import type { DashboardMetricsView } from "./metrics-view";
@@ -96,6 +97,7 @@ function Countdown({ target }: { target: Date }) {
 
 interface ExamOption {
   id: string;
+  code: string;
   name: string;
   examDate: string | null; // ISO — Exam.examDate (or upcomingDate), shown only when set
 }
@@ -436,7 +438,7 @@ export function ActiveExamDashboard({
                           : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
                       )}
                     >
-                      {exam.name}
+                      {examShortName(exam.code, exam.name)}
                     </button>
                   ))}
                 </div>
