@@ -4,7 +4,7 @@ import { ISSUE_DEFS } from "@/lib/ai-import/config";
 import { AiImportAnswerStatus, AiImportJobStatus, AiImportPageStatus, AiImportQuestionStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logEvent, ImportJobError } from "@/lib/ai-import/jobs";
-import { importBlocker, type ImportMode, type ImportPlan } from "@/lib/ai-import/adapter";
+import { blockerOnceApproved, importBlocker, type ImportMode, type ImportPlan } from "@/lib/ai-import/adapter";
 import { REVIEWABLE } from "@/lib/ai-import/post";
 import { compareVersions, figureRows, mergeChoice, recordVersion, snapshotFigures, RESCAN_FIELDS, type FigureSnapshot, type RescanField } from "@/lib/ai-import/versions";
 import { cropFromRender, storeOriginalFigure, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
@@ -248,6 +248,23 @@ export async function approveQuestions(ids: string[], actorId: string, opts: { f
     await adminCheck(id, "Approved", `Approved for the Question Bank by an administrator${q.issueCodes.length ? ` (with flags reviewed: ${q.issueCodes.filter((c) => REVIEWABLE.includes(c)).join(", ") || "none"})` : ""}.`);
     done.push(id);
     out.approved++;
+  }
+  // Approval is not academic verification: it settles only what an administrator's decision can settle (reviewable
+  // flags, a Verify 2 disagreement). The deterministic re-check (no AI) runs now; a question that is still not Ready
+  // (a failed check, a blocking flag) keeps no approval and is refused with the exact reason (2026-11-12). The import
+  // gate (importBlocker) stays independently enforced either way.
+  if (done.length) {
+    for (const j of jobIds) await revalidateQuestions(j, done);
+    const after = await prisma.aiImportQuestion.findMany({ where: { id: { in: done } }, include: { figures: true } });
+    for (const r of after) {
+      // EXTRACTED = not re-checked yet (a running job defers the re-check); the import gate still requires READY.
+      if (r.questionId || r.status === AiImportQuestionStatus.READY || r.status === AiImportQuestionStatus.EXTRACTED) continue;
+      await prisma.aiImportQuestion.update({ where: { id: r.id }, data: UNAPPROVE });
+      await adminCheck(r.id, "Approval refused", "Not approved: the re-check after approval still finds a problem an approval cannot settle.");
+      done.splice(done.indexOf(r.id), 1);
+      out.approved--;
+      out.refused.push({ id: r.id, label: r.sourceLabel, reason: `still needs correction after the re-check — ${blockerOnceApproved(r, settings) ?? `status is ${r.status.toLowerCase().replace(/_/g, " ")}`}` });
+    }
   }
   const jobId = (await prisma.aiImportQuestion.findUnique({ where: { id: ids[0] ?? "" }, select: { jobId: true } }))?.jobId;
   if (jobId && (out.approved || out.refused.length)) {

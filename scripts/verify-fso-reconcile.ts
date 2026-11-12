@@ -20,6 +20,8 @@ import { getImporterSettings } from "@/lib/ai-import/settings";
 import { jobPaperReconciliation, jobSummary } from "@/lib/ai-import/summary";
 import { forceImportQuestion } from "@/lib/ai-import/force-publish";
 import { resumeJob } from "@/lib/ai-import/jobs";
+import { approveQuestions } from "@/lib/ai-import/review";
+import { fingerprintsOf, stampOf } from "@/lib/ai-import/verify-core";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { SERVABLE_QUESTION_WHERE } from "@/lib/question-servable";
 import { saveAnswer, startPreviousYearPaperAttempt, submitAttempt, TestEngineError } from "@/lib/test-attempt";
@@ -297,6 +299,25 @@ async function main() {
   check("expected 12; number 12 reported missing", rec.expected === 12 && JSON.stringify(rec.missing) === "[12]", rec.missing);
   check("forced ones are PUBLISHED, withdrawn one WITHDRAWN_IN_PAPER, no-key one BLOCKED", [3, 4, 5, 6, 7, 8].every((n) => bucket(n) === "PUBLISHED") && bucket(10) === "WITHDRAWN_IN_PAPER" && bucket(11) === "WITHDRAWN_IN_PAPER" && bucket(9) === "BLOCKED", rec.rows.map((x) => [x.number, x.bucket]));
   check("approved Needs-correction question 1 stays BLOCKED, Ready+approved 2 is APPROVED_IMPORTABLE", bucket(1) === "BLOCKED" && bucket(2) === "APPROVED_IMPORTABLE");
+
+  section("F. Approve selected never leaves a Needs-correction question approved");
+  const job2 = await prisma.aiImportJob.create({ data: { title: `FSO Rec approve ${suffix}`, status: "NEEDS_REVIEW", examId: exam.id, year: 2022, previousYearPaperId: paper.id, expectedQuestions: 2, createdById: master.id, budgetInr: 0 } });
+  const file2 = await prisma.aiImportFile.create({ data: { jobId: job2.id, originalName: "paper2.pdf", ext: "pdf", declaredBytes: 1, uploadedById: master.id, status: "PROCESSED", pageCount: 1 } });
+  const mk2 = (n: number, e: ExtractedQuestion, over: Partial<Prisma.AiImportQuestionUncheckedCreateInput> = {}) =>
+    prisma.aiImportQuestion.create({ data: { jobId: job2.id, fileId: file2.id, sourceKey: `#${n}`, sourceNumber: n, sourceLabel: String(n), pages: [1], orderIndex: n, status: "NEEDS_CORRECTION", data: { ...e, number: n, label: String(n) } as unknown as Prisma.InputJsonValue, questionType: "SINGLE_CORRECT", optionCount: 4, subjectId: subject.id, taxonomySource: "admin", answerStatus: "OFFICIAL_MATCHED", officialAnswer: ["B"], finalAnswer: ["B"], ...over } });
+  // Verify 2 FAILED on the current content (an engine failure is no result): an approval cannot settle it.
+  const e1 = q({ stem: `Verify two failed ${suffix}` }, { stem: `सत्यापन दो विफल ${suffix}` });
+  const fp1 = fingerprintsOf({ e: { ...e1, number: 1, label: "1" } as ExtractedQuestion, finalAnswer: ["B"], subjectId: subject.id, topicId: null, subTopicId: null, figures: [] });
+  const unsure = await mk2(1, { ...e1, paperVerify: { v2: { status: "FAILED", at: new Date().toISOString(), model: "mock/v2", detail: "the request timed out", error: { kind: "TIMEOUT", message: "the request timed out" }, findings: [], ...stampOf(fp1) } } } as unknown as ExtractedQuestion, { answerConfirmedById: master.id });
+  // Only a reviewable flag (extraction uncertain): approving it is the administrator's decision → Ready.
+  const reviewable = await mk2(2, q({ stem: `Reviewable flag ${suffix}` }, { stem: `समीक्षा योग्य ${suffix}` }), { issueCodes: ["EXTRACTION_UNCERTAIN"], answerConfirmedById: master.id });
+  const ar = await approveQuestions([unsure.id, reviewable.id], master.id);
+  const u2 = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: unsure.id } });
+  const r2b = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: reviewable.id } });
+  check("the Verify-2-failed question is refused after the re-check and keeps NO approval", u2.approvedById === null && u2.status === "NEEDS_CORRECTION" && ar.refused.some((x) => x.id === unsure.id && /still needs correction/.test(x.reason)), { status: u2.status, approved: u2.approvedById, refused: ar.refused });
+  check("the reviewable-flag question is approved and becomes Ready (existing workflow kept)", r2b.approvedById === master.id && r2b.status === "READY" && ar.approved === 1, { status: r2b.status, issues: r2b.issueCodes, ar });
+  const u2f = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: unsure.id }, include: { figures: true } });
+  check("the import gate independently refuses the refused question", !!importBlocker(u2f, settings));
 
   check("no network request was attempted", blockedHosts.size === 0, [...blockedHosts]);
   console.log(`\n${pass} passed, ${fail} failed`);
