@@ -599,7 +599,8 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     const formulaWarnings = e.contentFormat === "RICH_V1" ? richText.flatMap((t, i) => lintRichSource(t, i === 0 ? "Question" : `Part ${i}`).warnings) : richText.some((t) => looksRich(t)) ? ["Formula markup in a plain question would show literally."] : [];
     if (formulaWarnings.length) add("FORMULA_ISSUE", formulaWarnings[0].slice(0, 300));
     // Control characters = a LaTeX command eaten in transport (FSO 2019 Q63/Q136/Q139). Re-checked after admin edits too.
-    const damaged = richText.map((t) => controlCharFindings(t)).filter((f) => f.spots.length);
+    // Instructions, passage and explanation enter the Question Bank too (prefixed to the stem / stored), so they are scanned as well (Agent 7 D3).
+    const damaged = [...richText, e.instructions ?? "", e.passage ?? "", e.hints?.explanation ?? ""].map((t) => controlCharFindings(t)).filter((f) => f.spots.length);
     if (damaged.length) add("FORMULA_TEXT_CORRUPT", `Hidden control characters in the text (a lost LaTeX backslash): ${damaged.flatMap((f) => f.spots).slice(0, 3).map((s) => `“${s}”`).join(", ")}. Correct the text (Edit or a re-scan); it cannot be approved as it is.${damaged[0].suggestion ? ` Suggested: “${damaged[0].suggestion.slice(0, 200)}”.` : ""}`.slice(0, 600));
     // Formula question read without a vision model, or with symbols the reader could not read: a person checks it against the page.
     const formulaHeavy = richText.some((t) => /\$|\\ce\{/.test(t) || notationRisk(t).length > 0);

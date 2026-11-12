@@ -137,7 +137,8 @@ export function questionChecks(input: {
 // ---- Version-aware verification (importer master 2026-11-12) ------------------------------------------------
 
 /** "2026-11-11 23:27 UTC" (server and client render the same text). */
-export const utc = (t: Date | string): string => new Date(t).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+// A missing / invalid time reads "unknown time" instead of throwing (a throw inside importBlocker failed a whole job).
+export const utc = (t: Date | string | null | undefined): string => (t && Number.isFinite(new Date(t).getTime()) ? new Date(t).toISOString().slice(0, 16).replace("T", " ") + " UTC" : "unknown time");
 
 /** The approval was given after the result (a missing / invalid time never counts as after). */
 export function approvedAfter(approvedAt: Date | string | null | undefined, resultAt: string | null | undefined): boolean {

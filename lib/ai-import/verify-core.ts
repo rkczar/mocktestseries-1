@@ -23,7 +23,7 @@ export function contentFingerprint(input: {
     s: [e.instructions ?? "", e.passage ?? "", e.stem],
     o: e.options.map((o) => [o.label, o.text]),
     l: [(e.listI ?? []).map((x) => [x.key, x.text]), (e.listII ?? []).map((x) => [x.key, x.text])],
-    p: [...e.printedAnswer].sort(),
+    p: [...(e.printedAnswer ?? [])].sort(),
     a: [...input.finalAnswer].sort(),
     x: [input.subjectId, input.topicId, input.subTopicId],
     f: input.figures.map((f) => [f.originalSha256, f.owner, f.optionLabel, f.mappingStatus, !!f.confirmedById]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
@@ -44,7 +44,7 @@ export function fingerprintParts(input: FpInput): FingerprintParts {
   const e = input.e;
   return {
     content: hash({ n: [e.section ?? "", e.number ?? null], t: e.type, s: [e.instructions ?? "", e.passage ?? "", stripAnnotationTail(e.stem)], o: e.options.map((o) => [o.label, stripAnnotationTail(o.text)]), l: [(e.listI ?? []).map((x) => [x.key, x.text]), (e.listII ?? []).map((x) => [x.key, x.text])] }),
-    answer: hash({ p: [...e.printedAnswer].sort(), a: [...input.finalAnswer].sort() }),
+    answer: hash({ p: [...(e.printedAnswer ?? [])].sort(), a: [...input.finalAnswer].sort() }),
     taxonomy: hash([input.subjectId, input.topicId, input.subTopicId]),
     figures: hash(input.figures.map((f) => [f.originalSha256, f.owner, f.optionLabel, f.mappingStatus, !!f.confirmedById]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))),
   };

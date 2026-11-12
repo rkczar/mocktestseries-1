@@ -369,7 +369,10 @@ async function importBatch(job: AiImportJob, rows: Row[], plan: ImportPlan, batc
     await logEvent(job.id, "IMPORT_DONE", `Batch ${batchNo}: 0 imported — ${pkg.refused.length} question(s) could not be packaged (reasons on the job page)`, { refused: pkg.refused.length }, plan.requestedById);
     return items;
   }
-  const idKey = `aiimp-${crypto.createHash("sha256").update(`${job.id}|${batchNo}|${included.map((r) => r.id).sort().join(",")}`).digest("hex").slice(0, 40)}`;
+  // The package bytes are part of the key: a question edited after an interrupted or refused attempt gets a new run, so the
+  // Question Bank never receives the text from before the edit (Agent 7 D1/D2, 2026-11-12). Same content → same run (retry-safe).
+  const zipHash = crypto.createHash("sha256").update(pkg.zip).digest("hex");
+  const idKey = `aiimp-${crypto.createHash("sha256").update(`${job.id}|${batchNo}|${included.map((r) => r.id).sort().join(",")}|${zipHash}`).digest("hex").slice(0, 40)}`;
 
   // Retry-safe: the idempotency key returns the run created by an interrupted earlier attempt.
   let runId: string;
@@ -455,7 +458,7 @@ export async function runImport(job: AiImportJob, plan: ImportPlan, settings: Im
   for (const q of all) {
     if (q.questionId) continue;
     const why = importBlocker(q, settings);
-    if (why) items.push({ id: q.id, label: itemLabel(q), outcome: q.approvedById && q.status !== AiImportQuestionStatus.REJECTED ? "awaiting" : "skipped", reason: why });
+    if (why) items.push({ id: q.id, label: itemLabel(q), outcome: q.approvedById && q.status !== AiImportQuestionStatus.REJECTED && q.answerStatus !== AiImportAnswerStatus.WITHDRAWN ? "awaiting" : "skipped", reason: why });
   }
   const notImported = items.length;
   const done: ImportItem[] = [];
