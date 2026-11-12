@@ -289,8 +289,7 @@ export default async function SubjectWiseWeightagePage({ params }: { params: Pro
               ))}
             </ul>
             <p className="mt-4 max-w-3xl text-sm leading-relaxed text-[var(--color-muted-foreground)]">
-              Low counts here partly reflect classification: a question that spans two subjects is filed under only one of them. These subjects
-              are still part of the MBBS syllabus the exam draws on.
+              {`Low counts here partly reflect classification: a question that spans two subjects is filed under only one of them. These subjects are still part of the ${exam.code === "RUHSMO" ? "MBBS syllabus" : "official syllabus"} the exam draws on.`}
             </p>
           </ExamSection>
         ) : null}

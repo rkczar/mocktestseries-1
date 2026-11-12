@@ -11,6 +11,7 @@ import { OfferPrice } from "@/components/public-exam/mock-series-promo";
 import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 import { isSafeInternalRoute } from "@/lib/safe-route";
 import { StatCountUp } from "./stat-count-up";
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 type SectionProps = {
   content: Record<string, unknown>;
@@ -723,7 +724,7 @@ export function TestSeriesSection({ content, resolved }: SectionProps) {
                       <Clock className="h-3.5 w-3.5" aria-hidden /> {t.durationMinutes} min
                     </span>
                     {t.negativeMarking !== 0 ? (
-                      <span className="flex items-center gap-1">−{t.negativeMarking} marking</span>
+                      <span className="flex items-center gap-1">−{formatNegativeMarking(t.negativeMarking)} marking</span>
                     ) : null}
                   </div>
                   <Badge variant={t.status === "PUBLISHED" ? "success" : "info"} className="mt-1 w-fit">

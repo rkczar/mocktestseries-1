@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/student/back-button";
 import { ShareModuleControl } from "./share-module-control";
 import { moduleDurationLabel } from "@/lib/module-duration-label";
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 export const metadata = { title: "Custom Module — Mock Test Series.in" };
 
@@ -69,7 +70,7 @@ export default async function CustomModuleDetailPage({ params }: { params: Promi
             <div>
               <p className="text-xs text-[var(--color-muted-foreground)]">Negative Marking</p>
               <p className="font-semibold text-[var(--color-foreground)]">
-                {m.negativeMarking > 0 ? `-${m.negativeMarking} per wrong` : "None"}
+                {m.negativeMarking > 0 ? `-${formatNegativeMarking(m.negativeMarking)} per wrong` : "None"}
               </p>
             </div>
           </div>

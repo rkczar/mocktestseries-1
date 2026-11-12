@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
 import { BackButton } from "@/components/student/back-button";
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 export const metadata = { title: "Test Instructions — Mock Test Series.in" };
 
@@ -67,7 +68,7 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
             <div>
               <p className="text-xs text-[var(--color-muted-foreground)]">Negative Marking</p>
               <p className="font-semibold text-[var(--color-foreground)]">
-                {attempt.negativeMarking > 0 ? `-${attempt.negativeMarking} per wrong` : "None"}
+                {attempt.negativeMarking > 0 ? `-${formatNegativeMarking(attempt.negativeMarking)} per wrong` : "None"}
               </p>
             </div>
           </div>
@@ -107,7 +108,7 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
                 <li>You can navigate between questions and change answers until you submit.</li>
               </>
             )}
-            {attempt.negativeMarking > 0 ? <li>Each wrong answer deducts {attempt.negativeMarking} mark(s).</li> : null}
+            {attempt.negativeMarking > 0 ? <li>Each wrong answer deducts {formatNegativeMarking(attempt.negativeMarking)} mark(s).</li> : null}
           </ul>
         </CardContent>
       </Card>

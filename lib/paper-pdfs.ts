@@ -42,3 +42,17 @@ export async function upsertPaperPdfEntry(examId: string, entry: PaperPdfEntry):
   const value = { entries: [...entries, entry] } as unknown as Prisma.InputJsonValue;
   await prisma.setting.upsert({ where: { key: paperPdfIndexKey(examId) }, create: { key: paperPdfIndexKey(examId), value }, update: { value } });
 }
+
+/** Languages a public page may offer for these papers: switch ON, file current and active. Empty otherwise. */
+export async function getPublicPaperDownloads(examId: string, paperIds: string[]): Promise<{ paperId: string; lang: PaperPdfLang }[]> {
+  const { getExamFeatures } = await import("@/lib/exam-features");
+  if (!(await getExamFeatures(examId)).paperDownloadEnabled) return [];
+  const entries = (await getPaperPdfIndex(examId)).filter((e) => paperIds.includes(e.paperId));
+  const active = new Set(
+    (await prisma.testResource.findMany({ where: { id: { in: entries.map((e) => e.resourceId) }, isActive: true }, select: { id: true } })).map((r) => r.id)
+  );
+  return entries
+    .filter((e) => active.has(e.resourceId))
+    .sort((a, b) => PAPER_PDF_LANGS.indexOf(a.lang) - PAPER_PDF_LANGS.indexOf(b.lang))
+    .map((e) => ({ paperId: e.paperId, lang: e.lang }));
+}

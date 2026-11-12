@@ -6,6 +6,7 @@ import { requireStudentOrLogin } from "@/lib/student-session";
 import { getOwnedAttempt } from "@/lib/student-data";
 import { attemptTitle } from "@/lib/attempt-title";
 import { prisma } from "@/lib/prisma";
+import { getExamFeatures } from "@/lib/exam-features";
 import { getAttemptRanking } from "@/lib/leaderboard";
 import { isMockResultReleased, mockResultReleaseInstant } from "@/lib/mock-test-schedule";
 import { formatIst } from "@/lib/ist-time";
@@ -318,7 +319,8 @@ async function resolveOmrResource(mockTestId: string, examId: string): Promise<s
     where: { type: "OMR_TEMPLATE", isActive: true, examId, mockTestId: null },
     select: { id: true },
   });
-  if (byExam) return byExam.id;
+  // The exam's own sheet only while its OMR switch is ON (otherwise the download route would 404).
+  if (byExam && (await getExamFeatures(examId)).omrDownloadEnabled) return byExam.id;
 
   const global = await prisma.testResource.findFirst({
     where: { type: "OMR_TEMPLATE", isActive: true, examId: null, testSeriesId: null, mockTestId: null },

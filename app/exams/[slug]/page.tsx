@@ -19,7 +19,12 @@ import { displayExamName } from "@/lib/exam-display";
 import { examPageMetadata } from "@/lib/exam-seo";
 import { formatShare, getExamPyqInsights, pyqYearPath } from "@/lib/exam-pyq-insights";
 import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
-import { getOfficialSources } from "@/lib/exam-editorial-facts";
+import { getOfficialSources, examAuthorityShort } from "@/lib/exam-editorial-facts";
+import { availableEditorialPaths } from "@/lib/exam-important-topics";
+import { getExamFeatures } from "@/lib/exam-features";
+
+const EDITORIAL_LINK_LABELS: Record<string, string> = { eligibility: "Eligibility & qualification", recruitment: "Recruitment history & status", "important-topics": "Important topics" };
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 type PublicExam = NonNullable<Awaited<ReturnType<typeof getPublicExamBySlug>>>;
 
@@ -48,7 +53,7 @@ function patternFacts(exam: PublicExam) {
   if (exam.totalMarks) facts.push({ label: "Total marks", value: String(exam.totalMarks) });
   if (exam.durationMinutes) facts.push({ label: "Duration", value: `${exam.durationMinutes} minutes` });
   if (exam.negativeMarking != null) {
-    facts.push({ label: "Negative marking", value: exam.negativeMarking === 0 ? "None" : `${exam.negativeMarking} per wrong answer` });
+    facts.push({ label: "Negative marking", value: exam.negativeMarking === 0 ? "None" : `${formatNegativeMarking(exam.negativeMarking)} per wrong answer` });
   }
   return facts;
 }
@@ -57,6 +62,7 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
   const { slug } = await params;
   const exam = await getPublicExamBySlug(slug);
   if (!exam) notFound();
+  const extraPages = await availableEditorialPaths(exam);
 
   const [stats, subjects, insights, siteUrl, session, omrResource, mockSeriesSummary] = await Promise.all([
     getExamPublicStats(exam.id),
@@ -64,10 +70,12 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
     getExamPyqInsights(exam.id),
     getSiteUrl(),
     getStudentSession(),
-    prisma.testResource.findFirst({
-      where: { type: "OMR_TEMPLATE", isActive: true, examId: exam.id, mockTestId: null },
-      select: { id: true },
-    }),
+    // The exam's own OMR, only while its OMR download switch is ON (the download route enforces the same).
+    getExamFeatures(exam.id).then((f) =>
+      f.omrDownloadEnabled
+        ? prisma.testResource.findFirst({ where: { type: "OMR_TEMPLATE", isActive: true, examId: exam.id, mockTestId: null }, select: { id: true } })
+        : null
+    ),
     getExamMockSeriesSummary(exam),
   ]);
   const name = displayExamName(exam.name);
@@ -273,11 +281,27 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
           )}
         </ExamSection>
 
+        {extraPages.length > 0 ? (
+          <ExamSection id="more-pages" title="More for this exam">
+            <ul className="flex flex-wrap gap-2">
+              {extraPages.map((p) => (
+                <li key={p}>
+                  <Link
+                    href={`/exams/${exam.publicSlug}/${p}`}
+                    className="inline-flex rounded-[var(--radius-badge)] border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-1.5 text-sm text-[var(--color-foreground)] hover:border-[var(--color-primary)]/60"
+                  >
+                    {EDITORIAL_LINK_LABELS[p] ?? p}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </ExamSection>
+        ) : null}
+
         {getOfficialSources(exam.code).length > 0 ? (
-          <ExamSection id="official-sources" title="Official RUHS notices and sources">
+          <ExamSection id="official-sources" title={`Official ${examAuthorityShort(exam.code) ? `${examAuthorityShort(exam.code)} ` : ""}notices and sources`}>
             <p className="max-w-3xl text-sm leading-relaxed text-[var(--color-muted-foreground)]">
-              Facts on this page come from these official documents. Dates marked tentative are not yet confirmed by RUHS; check the
-              official sites and your admit card before the exam.
+              {`Facts on this page come from these official documents. Dates marked tentative are not yet confirmed by ${examAuthorityShort(exam.code) ?? "the conducting authority"}; check the official sites and your admit card before the exam.`}
             </p>
             <ul className="mt-4 grid gap-3">
               {getOfficialSources(exam.code).map((s) => (

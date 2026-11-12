@@ -1,9 +1,11 @@
 import { safeJsonLd } from "@/lib/json-ld";
 import type { Metadata } from "next";
+import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BarChart3, BookOpen, CalendarClock, CheckCircle2, Clock, FileDown, FileText, ListChecks, Sparkles, Target } from "lucide-react";
 import { prisma } from "@/lib/prisma";
+import { getExamFeatures } from "@/lib/exam-features";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { PublicPageShell } from "@/components/homepage/public-page-shell";
 import { getPublicExamBySlug, getExamPapers } from "@/lib/exam-public";
@@ -26,6 +28,7 @@ import { PlanComparison } from "@/components/payments/plan-comparison";
 import { PLANS_AND_PRICING_PATH } from "@/lib/plans-path";
 import { getExamPyqInsights } from "@/lib/exam-pyq-insights";
 import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 /**
  * Canonical Mock Test Series landing page (/exams/[slug]/mock-test-series).
@@ -65,7 +68,8 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     title,
     description,
     alternates: { canonical: url },
-    robots: seo.siteIndexable ? { index: true, follow: true } : { index: false, follow: false },
+    // No live mock test yet (e.g. a newly launched exam): the landing page stays noindex until one exists.
+    robots: seo.siteIndexable && (await prisma.mockTest.count({ where: { examId: exam.id, ...LIVE_MOCK_TEST_WHERE } })) > 0 ? { index: true, follow: true } : { index: false, follow: false },
     ...socialMetadata({ title, description, url, seo, image: examSocialImage(siteUrl, exam, displayExamName(exam.name)) ?? defaultSocialImage(seo, siteUrl) }),
   };
 }
@@ -78,7 +82,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
   const { mockSeries, offer } = summary;
   const examSlug = exam.publicSlug!;
 
-  const [siteUrl, session, papers, comparison, subjects, omr] = await Promise.all([
+  const [siteUrl, session, papers, comparison, subjects, omrRow] = await Promise.all([
     getSiteUrl(),
     getStudentSession(),
     getExamPapers(exam.id),
@@ -95,9 +99,11 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
         ],
       },
       orderBy: [{ testSeriesId: { sort: "asc", nulls: "last" } }, { order: "asc" }],
-      select: { id: true, title: true, questionCount: true },
+      select: { id: true, title: true, questionCount: true, examId: true },
     }),
   ]);
+  // An exam-level sheet is offered only while the exam's OMR download switch is ON (same rule as the download route).
+  const omr = omrRow?.examId && !(await getExamFeatures(omrRow.examId)).omrDownloadEnabled ? null : omrRow;
   const studentId = session?.user?.studentId ? (session.user.id ?? null) : null;
   const cta = await getSeriesCta(studentId, offer);
   const hasAnalysis = hasPyqAnalysis(await getExamPyqInsights(exam.id));
@@ -121,7 +127,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
   if (exam.totalQuestions) patternBits.push(`${exam.totalQuestions} questions`);
   if (exam.durationMinutes) patternBits.push(`${exam.durationMinutes} minutes`);
   if (exam.negativeMarking !== null && exam.negativeMarking !== undefined)
-    patternBits.push(exam.negativeMarking > 0 ? `−${exam.negativeMarking} per wrong answer` : "no negative marking");
+    patternBits.push(exam.negativeMarking > 0 ? `−${formatNegativeMarking(exam.negativeMarking)} per wrong answer` : "no negative marking");
   if (exam.examMode) patternBits.push(exam.examMode);
 
   const faqs: { q: string; a: string }[] = [

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
 import { BackButton } from "@/components/student/back-button";
 import { PreTestSetup } from "@/components/student/pre-test-setup";
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 export const metadata = { title: "Start Test — Mock Test Series.in" };
 
@@ -100,7 +101,7 @@ export default async function ResumeAttemptPage({
             <div>
               <p className="text-xs text-[var(--color-muted-foreground)]">Negative Marking</p>
               <p className="font-semibold text-[var(--color-foreground)]">
-                {summary.negativeMarking > 0 ? `-${summary.negativeMarking} per wrong` : "None"}
+                {summary.negativeMarking > 0 ? `-${formatNegativeMarking(summary.negativeMarking)} per wrong` : "None"}
               </p>
             </div>
           </div>
@@ -124,7 +125,7 @@ export default async function ResumeAttemptPage({
         questionCount={summary.questionCount}
         standardMinutes={summary.standardMinutes}
         bilingual={summary.bilingual}
-        notes={summary.negativeMarking > 0 ? <li>Each wrong answer deducts {summary.negativeMarking} mark(s).</li> : null}
+        notes={summary.negativeMarking > 0 ? <li>Each wrong answer deducts {formatNegativeMarking(summary.negativeMarking)} mark(s).</li> : null}
       />
     </div>
   );

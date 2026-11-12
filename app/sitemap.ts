@@ -1,5 +1,7 @@
 import type { MetadataRoute } from "next";
 import { prisma } from "@/lib/prisma";
+import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
+import { availableEditorialPaths } from "@/lib/exam-important-topics";
 import { getSiteUrl } from "@/lib/site-url";
 import { getSeoSettings } from "@/lib/seo-settings";
 import { getPageVisibilityMap } from "@/lib/page-visibility";
@@ -44,19 +46,26 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     entries.push({ url: `${siteUrl}/exams`, changeFrequency: "weekly", priority: 0.8 });
 
     const exams = await prisma.exam.findMany({
-      where: { publicPageEnabled: true, publicSlug: { not: null } },
-      select: { id: true, publicSlug: true, updatedAt: true },
+      where: { publicPageEnabled: true, isActive: true, publicSlug: { not: null } },
+      select: { id: true, code: true, publicSlug: true, updatedAt: true },
     });
 
     for (const exam of exams) {
       entries.push({ url: `${siteUrl}/exams/${exam.publicSlug}`, lastModified: exam.updatedAt, changeFrequency: "weekly", priority: 0.9 });
+      // The mock test landing page is noindex until the exam has a live mock (same rule as the page).
+      const hasLiveMock = (await prisma.mockTest.count({ where: { examId: exam.id, ...LIVE_MOCK_TEST_WHERE } })) > 0;
       for (const deep of DEEP_PAGES) {
+        if (deep === "mock-test-series" && !hasLiveMock) continue;
         entries.push({
           url: `${siteUrl}/exams/${exam.publicSlug}/${deep}`,
           lastModified: exam.updatedAt,
           changeFrequency: "weekly",
           priority: 0.6,
         });
+      }
+      // Hand-written pages only some exams have (none for RUHS MO); Important Topics only above its data gate.
+      for (const extra of await availableEditorialPaths(exam)) {
+        entries.push({ url: `${siteUrl}/exams/${exam.publicSlug}/${extra}`, lastModified: exam.updatedAt, changeFrequency: "monthly", priority: 0.5 });
       }
       // Year pages exist only where the paper clears the non-thin threshold;
       // the page itself 404s otherwise, so the sitemap uses the same rule.

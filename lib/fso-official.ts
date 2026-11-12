@@ -85,3 +85,8 @@ export const FSO_PAPERS: Record<2019 | 2022, FsoPaperFacts> = {
 export function fsoPaperFacts(year: number): FsoPaperFacts | null {
   return year === 2019 || year === 2022 ? FSO_PAPERS[year] : null;
 }
+
+/** Official paper facts by exam code + year (only the Rajasthan FSO papers are recorded). */
+export function officialPaperFacts(examCode: string, year: number): FsoPaperFacts | null {
+  return examCode === "RUHS-FSO" ? fsoPaperFacts(year) : null;
+}

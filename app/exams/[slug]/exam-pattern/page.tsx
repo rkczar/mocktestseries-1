@@ -14,6 +14,7 @@ import { MockSeriesPromo } from "@/components/public-exam/mock-series-promo";
 import { getExamMockSeriesSummary } from "@/lib/mock-series";
 import { getExamPyqInsights } from "@/lib/exam-pyq-insights";
 import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -44,7 +45,7 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
   if (exam.totalMarks) confirmedFacts.push({ label: "Total Marks", value: String(exam.totalMarks) });
   if (exam.durationMinutes) confirmedFacts.push({ label: "Duration", value: `${exam.durationMinutes} minutes` });
   if (exam.negativeMarking != null) {
-    confirmedFacts.push({ label: "Negative Marking", value: exam.negativeMarking === 0 ? "None" : `${exam.negativeMarking} per wrong answer` });
+    confirmedFacts.push({ label: "Negative Marking", value: exam.negativeMarking === 0 ? "None" : `${formatNegativeMarking(exam.negativeMarking)} per wrong answer` });
   }
   if (exam.examMode) confirmedFacts.push({ label: "Exam Mode", value: exam.examMode });
 

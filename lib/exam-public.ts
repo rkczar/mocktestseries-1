@@ -14,7 +14,9 @@ import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 
 export async function getPublicExamBySlug(slug: string) {
   return prisma.exam.findFirst({
-    where: { publicSlug: slug, publicPageEnabled: true },
+    // An inactive (draft) exam never has public pages, even with its page switch on (it would otherwise be
+    // indexable while absent from /exams and impossible to enrol in).
+    where: { publicSlug: slug, publicPageEnabled: true, isActive: true },
   });
 }
 

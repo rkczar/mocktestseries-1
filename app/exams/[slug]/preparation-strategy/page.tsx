@@ -15,6 +15,7 @@ import { getExamPublicStats } from "@/lib/exam-public";
 import { formatShare } from "@/lib/exam-pyq-insights";
 import { BRAND_NAME } from "@/lib/brand";
 import { examInsightPath, loadPublicExamAnalysis, type SubjectSpread } from "@/lib/exam-pyq-analysis";
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 /**
  * Preparation strategy for an exam, built on its previous-year-paper data
@@ -85,7 +86,7 @@ export default async function PreparationStrategyPage({ params }: { params: Prom
     exam.totalMarks ? `${exam.totalMarks} marks` : null,
     exam.durationMinutes ? `${exam.durationMinutes} minutes` : null,
     exam.examMode ? exam.examMode.toLowerCase().replace(/\(omr-based\)/i, "(OMR)") : null,
-    exam.negativeMarking != null ? (noNegative ? "no negative marking" : `${exam.negativeMarking} negative marking per wrong answer`) : null,
+    exam.negativeMarking != null ? (noNegative ? "no negative marking" : `${formatNegativeMarking(exam.negativeMarking)} negative marking per wrong answer`) : null,
   ].filter(Boolean);
 
   const steps: { id: string; title: string; body: React.ReactNode }[] = [
@@ -212,7 +213,7 @@ export default async function PreparationStrategyPage({ params }: { params: Prom
       ? [
           {
             question: `Is there negative marking in ${short}?`,
-            answer: `The ${short} exam pattern page lists ${noNegative ? "no negative marking" : `${exam.negativeMarking} marks deducted per wrong answer`}, with its sources. Confirm it in the current official notification before the exam.`,
+            answer: `The ${short} exam pattern page lists ${noNegative ? "no negative marking" : `${formatNegativeMarking(exam.negativeMarking)} marks deducted per wrong answer`}, with its sources. Confirm it in the current official notification before the exam.`,
           },
         ]
       : []),

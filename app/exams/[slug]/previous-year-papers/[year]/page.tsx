@@ -15,6 +15,8 @@ import { examPageMetadata } from "@/lib/exam-seo";
 import { formatShare, getExamPyqInsights, pyqYearPath, type PaperInsight } from "@/lib/exam-pyq-insights";
 import { examShortName, getPaperNote } from "@/lib/exam-editorial-facts";
 import { examInsightPath, hasPyqAnalysis } from "@/lib/exam-pyq-analysis";
+import { officialPaperFacts } from "@/lib/fso-official";
+import { getPublicPaperDownloads, PAPER_PDF_LANG_LABEL } from "@/lib/paper-pdfs";
 
 /**
  * One previous year's paper(s) for an exam. Exists only for years whose
@@ -88,6 +90,10 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
   const baseline = new Map(insights.weightage.map((w) => [w.name, w.share]));
   const otherYears = insights.indexableYears.filter((y) => y !== year);
   const note = getPaperNote(exam.code, year);
+  // Official answer key facts (only exams recorded in lib/fso-official.ts) and, when the exam's Paper PDF
+  // switch is ON, the active typeset PDFs. No question, option or answer is shown on this public page.
+  const official = officialPaperFacts(exam.code, year);
+  const downloads = official ? await getPublicPaperDownloads(exam.id, papers.map((p) => p.id)) : [];
   const short = examShortName(exam.code, baseName);
   const hasAnalysis = hasPyqAnalysis(insights);
 
@@ -215,6 +221,26 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
             </div>
           );
         })}
+
+        {official ? (
+          <ExamSection id="answer-key" title="Official answer key and deleted questions">
+            <p className="max-w-3xl text-sm leading-relaxed text-[var(--color-muted-foreground)]">
+              {`${official.keyLabel}. ${official.deleted.length ? `Deleted by RPSC (not scored): ${official.deleted.map((n) => `Q${n}`).join(", ")}.` : "No question was deleted."} Negative marking: ${official.negativeMarking.toLowerCase()}.`}
+            </p>
+            {downloads.length > 0 ? (
+              <div id="download" className="mt-4 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-[var(--color-foreground)]">Download the typeset paper (PDF, login and purchase required):</span>
+                {downloads.map((d) => (
+                  <Button key={d.lang} asChild size="sm" variant="outline">
+                    <Link href={`/student/papers/download?paperId=${d.paperId}&lang=${d.lang}`} rel="nofollow">
+                      {PAPER_PDF_LANG_LABEL[d.lang]}
+                    </Link>
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+          </ExamSection>
+        ) : null}
 
         {otherYears.length > 0 ? (
           <ExamSection id="other-years" title="Other years" action={{ href: `${base}/previous-year-papers`, label: "All previous year papers" }}>

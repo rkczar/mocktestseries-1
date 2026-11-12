@@ -25,6 +25,7 @@ import { PreTestSetup } from "@/components/student/pre-test-setup";
 import { studentConfigAllowed } from "@/lib/test-attempt";
 import { AttemptSourceType } from "@prisma/client";
 import { accessLockLabel } from "@/lib/payments/access-labels";
+import { formatNegativeMarking } from "@/lib/negative-marking";
 
 export const metadata = { title: "Mock Test — Mock Test Series.in" };
 
@@ -85,7 +86,7 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
     studentConfigAllowed(AttemptSourceType.MOCK_TEST, mockTest);
   const testRules = (
     <>
-      {mockTest.negativeMarking > 0 ? <li>Each wrong answer deducts {mockTest.negativeMarking} mark(s).</li> : null}
+      {mockTest.negativeMarking > 0 ? <li>Each wrong answer deducts {formatNegativeMarking(mockTest.negativeMarking)} mark(s).</li> : null}
       {mockTest.attemptPolicy === "SINGLE_ATTEMPT" ? <li>Only one attempt is allowed for this test.</li> : null}
     </>
   );
@@ -287,7 +288,7 @@ export default async function MockTestDetailsPage({ params }: { params: Promise<
             <div>
               <p className="text-xs text-[var(--color-muted-foreground)]">Negative Marking</p>
               <p className="font-semibold text-[var(--color-foreground)]">
-                {mockTest.negativeMarking > 0 ? `-${mockTest.negativeMarking} per wrong` : "None"}
+                {mockTest.negativeMarking > 0 ? `-${formatNegativeMarking(mockTest.negativeMarking)} per wrong` : "None"}
               </p>
             </div>
           </div>
