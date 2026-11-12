@@ -18,6 +18,8 @@ import { readVault } from "@/lib/ai-import/vault";
 import { effective, IMPORTABLE } from "@/lib/ai-import/post";
 import { logEvent } from "@/lib/ai-import/jobs";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
+import { CHECK_NAMES, CHECK_STATUS_LABELS, approvalOutdatedBy, checksAllowReady } from "@/lib/ai-import/checks";
+import { fingerprintsOf, verifyState } from "@/lib/ai-import/verify-core";
 
 /**
  * THE integration contract with the existing Bulk Import (docs: AI-IMPORTER.md).
@@ -69,6 +71,12 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
   if (q.status === AiImportQuestionStatus.REJECTED) return "rejected";
   if (q.status === AiImportQuestionStatus.NOT_IMPORTABLE) return "not importable";
   if (q.status === AiImportQuestionStatus.DUPLICATE && !q.allowDuplicate) return "duplicate";
+  // An approval older than the current failing Verify 1 / Verify 2 result does not cover it (2026-11-12: 77 FSO 2022
+  // questions were approved before Verify 2 disagreed). Nothing is changed on the question: it is only not imported.
+  if (!opts.ignoreApproval && q.approvedById) {
+    const outdated = approvalOutdatedBy(q.approvedAt, verifyState(q.data, fingerprintsOf({ e: effective(q), finalAnswer: q.finalAnswer, subjectId: q.subjectId, topicId: q.topicId, subTopicId: q.subTopicId, figures: q.figures })));
+    if (outdated) return outdated;
+  }
   const blocking = q.issueCodes.filter((c) => ISSUE_DEFS[c]?.blocking && !(q.allowDuplicate && c.startsWith("DUPLICATE")));
   if (blocking.length) return blocking.map(issueLabel).join(", ");
   if (!q.finalAnswer.length) return "no answer";
@@ -88,6 +96,16 @@ export function importBlocker(q: AiImportQuestion & { figures: AiImportFigure[] 
   if (stemImgs > 8) return "more than 8 question images";
   for (const l of ["A", "B", "C", "D"]) if (q.figures.filter((f) => f.owner === "OPTION" && f.optionLabel === l).length > 3) return `more than 3 images on option ${l}`;
   if (!opts.ignoreApproval && !q.approvedById) return "not approved yet";
+  // Only a question whose last re-check made it Ready is imported (an approval does not override Needs correction).
+  // A failed import attempt keeps IMPORT_FAILED; it may be retried while its stored checks would allow Ready.
+  if (!opts.ignoreApproval && q.status !== AiImportQuestionStatus.READY) {
+    const checks = (q.data as unknown as ExtractedQuestion).checks ?? null;
+    if (q.status === AiImportQuestionStatus.IMPORT_FAILED && checksAllowReady(checks) && !q.issueCodes.some((c) => ISSUE_DEFS[c]?.publishBlocking)) return null;
+    if (q.status === AiImportQuestionStatus.EXTRACTED) return "not re-checked since the last change — open the import (the re-check runs) and try again";
+    const failing = checks ? (["content", "answer", "taxonomy", "independent"] as const).filter((k) => checks[k].required && checks[k].status !== "PASSED").map((k) => `${CHECK_NAMES[k]}: ${CHECK_STATUS_LABELS[checks[k].status].toLowerCase()}`) : [];
+    const flags = q.issueCodes.filter((c) => ISSUE_DEFS[c]?.publishBlocking).map(issueLabel);
+    return `status is ${q.status.toLowerCase().replace(/_/g, " ")}${failing.length || flags.length ? ` (${[...failing, ...flags].join("; ")})` : ""} — only a question that is Ready after its last check is imported: decide the open checks on its page, then approve it again`;
+  }
   return null;
 }
 

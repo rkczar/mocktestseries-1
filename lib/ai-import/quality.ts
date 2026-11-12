@@ -8,6 +8,8 @@
  * still completes "with warnings", never silently.
  */
 
+import { DUPLICATE_CODES, IMAGE_CODES, awaitingApproval as awaitingRule, unresolved as unresolvedRule } from "@/lib/ai-import/review-filters";
+
 export interface QualityQuestion {
   fileId: string;
   section: string;
@@ -155,6 +157,8 @@ export interface QualityReport {
   rescanPending: number;
   /** Importable, not yet approved. */
   awaitingApproval: number;
+  /** Live questions not in the Question Bank that are not approved-and-ready: what still needs a decision. */
+  unresolved: number;
   /** Awaiting approval with no flag at all (what "Approve all questions without flags" approves). */
   awaitingCleanApproval: number;
   /** Approved, not yet in the Question Bank. */
@@ -222,6 +226,7 @@ export function qualityReport(input: QualityInput): QualityReport {
   const by = (f: (q: QualityQuestion) => boolean) => qs.filter(f).length;
   const rejected = by((q) => q.status === "REJECTED");
   const live = qs.filter((q) => q.status !== "REJECTED");
+  const liveBy = (f: (q: QualityQuestion) => boolean) => live.filter(f).length;
   const numbered = new Set(qs.filter((q) => q.number !== null).map((q) => `${q.fileId}|${q.section}|${q.number}`));
   const counted = numbered.size + live.filter((q) => q.number === null).length;
   // Missing = numbers the extraction never found (a rejected question was found, so it is not missing).
@@ -258,7 +263,10 @@ export function qualityReport(input: QualityInput): QualityReport {
   const stored = by((q) => q.stored);
   const approved = by((q) => q.approved || q.stored);
   const importable = live.filter((q) => !q.stored && !q.importBlocker);
-  const awaitingApproval = importable.filter((q) => !q.approved).length;
+  // Displayed counters use the same rules as the Review Exceptions filters (review-filters.ts); REJECTED rows never count.
+  const awaitingApproval = live.filter((q) => awaitingRule(q)).length;
+  const unresolved = live.filter((q) => unresolvedRule(q)).length;
+  const awaitingImportable = importable.filter((q) => !q.approved).length;
   const awaitingCleanApproval = importable.filter((q) => !q.approved && q.status === "READY" && q.issueCodes.length === 0).length;
   const approvedNotStored = live.filter((q) => q.approved && !q.stored && !q.importBlocker).length;
   const needsCorrection = by((q) => q.status === "NEEDS_CORRECTION");
@@ -272,31 +280,32 @@ export function qualityReport(input: QualityInput): QualityReport {
     publishBlocker: null,
     extracted: qs.length,
     counted,
-    verified: by((q) => q.verified === true),
-    verifyDisagreed: by((q) => q.verified === false),
-    unverified: by((q) => q.verified === null),
+    verified: liveBy((q) => q.verified === true),
+    verifyDisagreed: liveBy((q) => q.verified === false),
+    unverified: liveBy((q) => q.verified === null),
     approved,
     stored,
     rejected,
     notImportable: by((q) => q.status === "NOT_IMPORTABLE"),
     needsCorrection,
     importFailed,
-    duplicateCandidates: by((q) => q.status === "DUPLICATE" || has(q, "DUPLICATE_NEAR") || has(q, "DUPLICATE_IN_BATCH") || has(q, "DUPLICATE_EXISTING")),
+    duplicateCandidates: liveBy((q) => q.status === "DUPLICATE" || DUPLICATE_CODES.some((c) => has(q, c))),
     rescanPending,
     awaitingApproval,
+    unresolved,
     awaitingCleanApproval,
     approvedNotStored,
     answerKey: {
-      official: by((q) => q.answerStatus === "OFFICIAL_MATCHED"),
-      independentlyVerified: by((q) => q.answerStatus === "INDEPENDENTLY_VERIFIED"),
-      unverified: by((q) => q.answerStatus === "UNVERIFIED"),
-      missing: by((q) => q.answerStatus === "KEY_MISSING"),
-      mismatch: by((q) => q.answerStatus === "KEY_MISMATCH" || q.answerStatus === "AMBIGUOUS_MAPPING"),
+      official: liveBy((q) => q.answerStatus === "OFFICIAL_MATCHED"),
+      independentlyVerified: liveBy((q) => q.answerStatus === "INDEPENDENTLY_VERIFIED"),
+      unverified: liveBy((q) => q.answerStatus === "UNVERIFIED"),
+      missing: liveBy((q) => q.answerStatus === "KEY_MISSING"),
+      mismatch: liveBy((q) => q.answerStatus === "KEY_MISMATCH" || q.answerStatus === "AMBIGUOUS_MAPPING"),
       unmatchedEntries: input.unmatchedKeyEntries,
       failedFiles: input.failedKeyFiles,
     },
-    imageIssues: by((q) => has(q, "IMAGE_MISSING") || has(q, "IMAGE_MAPPING_UNCERTAIN") || has(q, "IMAGE_REFERENCE_UNCERTAIN")),
-    topicUncertain: by((q) => has(q, "TOPIC_UNCERTAIN") || has(q, "SUBJECT_UNKNOWN") || has(q, "CLASSIFICATION_FAILED")),
+    imageIssues: liveBy((q) => IMAGE_CODES.some((c) => has(q, c))),
+    topicUncertain: liveBy((q) => has(q, "TOPIC_UNCERTAIN") || has(q, "SUBJECT_UNKNOWN") || has(q, "CLASSIFICATION_FAILED")),
     pages,
     missing,
     duplicateNumbers: duplicateNumbers(qs),
@@ -356,7 +365,7 @@ export function qualityReport(input: QualityInput): QualityReport {
 
   if (!input.processed) report.state = "PROCESSING";
   else if (b.length) report.state = "NEEDS_CORRECTION";
-  else if (awaitingApproval > 0) report.state = live.some((q) => !q.stored && !q.importBlocker && !q.approved && q.issueCodes.length > 0) ? "READY_FOR_REVIEW" : "READY_FOR_APPROVAL";
+  else if (awaitingImportable > 0) report.state = live.some((q) => !q.stored && !q.importBlocker && !q.approved && q.issueCodes.length > 0) ? "READY_FOR_REVIEW" : "READY_FOR_APPROVAL";
   else if (approvedNotStored > 0) report.state = "APPROVED";
   else report.state = w.length || report.notImportable || report.rejected ? "COMPLETED_WITH_WARNINGS" : "COMPLETED";
   return report;

@@ -26,6 +26,7 @@ import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
 import { assignSections, ensureRender, mergeContinuation, parsePage, readsAgree, type StepContext } from "@/lib/ai-import/process";
 import { exhaustedModels, importerAiCall, importerBudgetBlock, modelFamily, parseModelJson, preferReliable, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import { failureCheckStatus, failureMessage } from "@/lib/ai-import/failure";
+import { mergePaperVerify } from "@/lib/ai-import/checks";
 import { CLASSIFY_SYSTEM, EXTRACT_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, documentTextUserText, extractUserText, toExtracted } from "@/lib/ai-import/prompts";
 import { computeModelPlan, profileInputTokens, requestUsd } from "@/lib/ai-import/select";
 import { compareWithReference, listReferences, referenceOnly, textSimilarity, type ReferencePaper } from "@/lib/ai-import/reference";
@@ -83,9 +84,22 @@ async function finishedJob(jobId: string) {
   return job;
 }
 
-async function savePaperVerify(q: { id: string; data: Prisma.JsonValue }, patch: PaperVerification): Promise<void> {
-  const d = q.data as unknown as ExtractedQuestion;
-  await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { data: { ...d, paperVerify: { ...(d.paperVerify ?? {}), ...patch } } as unknown as Prisma.InputJsonValue } });
+/**
+ * Saves a Verify 1 / Verify 2 result: ONLY data.paperVerify is written (jsonb_set on the locked row), merged with the
+ * stored verification read fresh — never the whole question JSON from an earlier copy, so a classification, checks
+ * or image decision written meanwhile is kept. The result is stamped with the question version it checked and the flags
+ * open then; the result it replaces is kept in the capped history (checks.ts mergePaperVerify).
+ * shortcut: the version id is read at save time, so a question edited during a long run gets the newer id (its
+ * fingerprint still marks the result out of date); record it with the snapshot if that ever matters.
+ */
+async function savePaperVerify(q: { id: string }, patch: PaperVerification): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ pv: PaperVerification | null; codes: string[] }[]>`SELECT "data"->'paperVerify' AS pv, "issueCodes" AS codes FROM "AiImportQuestion" WHERE "id" = ${q.id} FOR UPDATE`;
+    if (!rows.length) return;
+    const ver = await tx.aiImportQuestionVersion.findFirst({ where: { questionId: q.id, kind: { in: ["EXTRACTION", "ADMIN_EDIT"] } }, orderBy: { createdAt: "desc" }, select: { id: true, createdAt: true } });
+    const next = mergePaperVerify(rows[0].pv, patch, { versionId: ver?.id ?? "original", versionAt: ver?.createdAt.toISOString() ?? null, flags: rows[0].codes ?? [] });
+    await tx.$executeRaw`UPDATE "AiImportQuestion" SET "data" = jsonb_set("data", '{paperVerify}', ${JSON.stringify(next)}::jsonb, true) WHERE "id" = ${q.id}`;
+  });
 }
 
 const nrm = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[\s.,;:()[\]{}'"`]/g, "");

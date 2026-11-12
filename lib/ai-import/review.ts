@@ -58,6 +58,9 @@ export interface QuestionEdit {
   listII?: { key: string; text: string }[] | null;
   /** Original question number as printed (undefined = unchanged). */
   number?: number | null;
+  /** Instructions printed before the question / its shared passage (undefined = unchanged, "" = none). Both are part of the question text in the Question Bank. */
+  instructions?: string | null;
+  passage?: string | null;
   /** Explanation stored with the question (undefined = unchanged, "" = none). */
   explanation?: string | null;
   /** Source page reference (pages of the paper file the question is printed on). */
@@ -102,6 +105,8 @@ export async function editProblems(q: { id: string; jobId: string; fileId: strin
     if (!edit.pages.length || edit.pages.some((p) => !Number.isInteger(p) || p < 1 || p > max)) errors.push(`Source pages must be between 1 and ${max}.`);
   }
   if ((edit.explanation ?? "").length > 20_000) errors.push("The explanation is too long (20,000 characters at most).");
+  if ([edit.instructions, edit.passage].some((v) => v !== undefined && v !== null && typeof v !== "string")) errors.push("The instructions and passage must be text.");
+  else if ((edit.instructions ?? "").length > 20_000 || (edit.passage ?? "").length > 20_000) errors.push("The instructions or passage are too long (20,000 characters each at most).");
   return errors;
 }
 
@@ -116,6 +121,8 @@ function changedFields(before: ExtractedQuestion, after: ExtractedQuestion): { f
   add("Question number", before.number, after.number);
   add("Question type", before.type, after.type);
   add("Text format", before.contentFormat, after.contentFormat);
+  add("Instructions", before.instructions ?? "", after.instructions ?? "");
+  add("Passage", before.passage ?? "", after.passage ?? "");
   add("Question text", before.stem, after.stem);
   const labels = [...new Set([...before.options.map((o) => o.label), ...after.options.map((o) => o.label)])].sort();
   for (const l of labels) add(`Option ${l}`, before.options.find((o) => o.label === l)?.text ?? "(none)", after.options.find((o) => o.label === l)?.text ?? "(none)");
@@ -134,7 +141,7 @@ function changedFields(before: ExtractedQuestion, after: ExtractedQuestion): { f
 export async function editQuestion(questionId: string, actorId: string, edit: QuestionEdit, opts: { note?: string } = {}) {
   const q = await editable(questionId);
   const base = effective(q);
-  const figs = await prisma.aiImportFigure.findMany({ where: { questionId }, select: { owner: true, optionLabel: true, mappingStatus: true } });
+  const figs = await prisma.aiImportFigure.findMany({ where: { questionId } });
   const figureOptions = new Set(figs.filter((f) => f.owner === "OPTION" && f.mappingStatus !== "MISSING" && f.optionLabel).map((f) => f.optionLabel!));
   const problems = await editProblems(q, base, edit, figureOptions);
   if (problems.length) throw new ImportJobError(`Not saved: ${problems.join(" ")}`);
@@ -144,6 +151,8 @@ export async function editQuestion(questionId: string, actorId: string, edit: Qu
     ...base,
     number,
     label: number === null ? base.label : String(number),
+    instructions: edit.instructions === undefined ? base.instructions ?? null : edit.instructions?.trim().slice(0, 20_000) || null,
+    passage: edit.passage === undefined ? base.passage ?? null : edit.passage?.trim().slice(0, 20_000) || null,
     stem: edit.stem.trim().slice(0, 20_000),
     options: edit.options.map((o, i) => ({ label: String.fromCharCode(65 + i), printed: base.options[i]?.printed ?? String.fromCharCode(65 + i), text: o.text.trim().slice(0, 5_000) })),
     type: edit.type,
@@ -178,7 +187,7 @@ export async function editQuestion(questionId: string, actorId: string, edit: Qu
   if (!changes.length) throw new ImportJobError("Nothing changed — the question is exactly as before.");
   await prisma.$transaction([
     prisma.aiImportQuestion.update({ where: { id: q.id }, data: { editedData: next as unknown as Prisma.InputJsonValue, sourceLabel: next.label, pages: next.pages, reviewedById: actorId, reviewedAt: new Date(), ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED, questionType: next.type, optionCount: next.options.length, contentFormat: next.contentFormat } }),
-    prisma.aiImportQuestionVersion.create({ data: { questionId: q.id, jobId: q.jobId, kind: "ADMIN_EDIT", data: base as unknown as Prisma.InputJsonValue, changes: changes as unknown as Prisma.InputJsonValue, actorId, note: `Changed: ${changes.map((c) => c.field).join(", ")}${opts.note ? ` — ${opts.note}` : ""}`.slice(0, 500) } }),
+    prisma.aiImportQuestionVersion.create({ data: { questionId: q.id, jobId: q.jobId, kind: "ADMIN_EDIT", data: base as unknown as Prisma.InputJsonValue, figures: snapshotFigures(figs) as unknown as Prisma.InputJsonValue, changes: changes as unknown as Prisma.InputJsonValue, actorId, note: `Changed: ${changes.map((c) => c.field).join(", ")}${opts.note ? ` — ${opts.note}` : ""}`.slice(0, 500) } }),
   ]);
   await adminCheck(q.id, "Edited", `Corrected by an administrator: ${changes.map((c) => c.field).join(", ")}.`);
   await logEvent(q.jobId, "QUESTION_EDITED", `Q${base.label} corrected (${changes.map((c) => c.field).join(", ")})`, { questionId: q.id, fields: changes.map((c) => c.field) }, actorId);

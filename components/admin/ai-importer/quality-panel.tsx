@@ -23,12 +23,12 @@ const TONE: Record<QualityReport["state"], "success" | "warning" | "error" | "in
   COMPLETED_WITH_WARNINGS: "warning",
 };
 
-function Stat({ label, value, tone, testId, hint }: { label: string; value: React.ReactNode; tone?: "ok" | "warn" | "err"; testId: string; hint?: string }) {
+function Stat({ label, value, tone, testId, hint, href }: { label: string; value: React.ReactNode; tone?: "ok" | "warn" | "err"; testId: string; hint?: string; href?: string }) {
   const color = tone === "ok" ? "text-[var(--color-success)]" : tone === "warn" ? "text-[var(--color-warning)]" : tone === "err" ? "text-[var(--color-error)]" : "";
   return (
-    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-2.5" data-testid={testId} data-value={typeof value === "number" ? value : undefined}>
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-2.5" data-testid={testId} data-value={typeof value === "number" ? value : undefined} title={hint}>
       <div className="text-xs text-[var(--color-muted-foreground)]">{label}</div>
-      <div className={`text-xl font-semibold ${color}`}>{value}</div>
+      <div className={`text-xl font-semibold ${color}`}>{href ? <Link className="underline decoration-dotted underline-offset-4" href={href}>{value}</Link> : value}</div>
       {hint ? <div className="text-[11px] text-[var(--color-muted-foreground)]">{hint}</div> : null}
     </div>
   );
@@ -77,22 +77,32 @@ export function QualityPanel({
           {QUALITY_STATE_LABELS[r.state]}
         </Badge>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Expected" value={r.expected ?? "—"} testId="q-expected" tone={r.expected === null || r.expectedConflict ? "warn" : undefined} hint={r.expectedFrom ?? (r.expectedSources.length ? undefined : "not printed on the paper or key")} />
-        <Stat label="Extracted" value={r.extracted} testId="q-extracted" hint={r.rejected ? `${r.rejected} rejected` : undefined} />
-        <Stat label="Independently verified" value={r.verified} testId="q-verified" tone={r.verifyDisagreed ? "warn" : undefined} hint={r.verifyDisagreed ? `${r.verifyDisagreed} disagree` : r.unverified ? `${r.unverified} not verified` : undefined} />
-        <Stat label="Approved" value={r.approved} testId="q-approved" hint={r.awaitingApproval ? `${r.awaitingApproval} awaiting approval` : undefined} />
-        <Stat label="In Question Bank" value={r.stored} tone="ok" testId="q-stored" />
-        <Stat label="Missing numbers" value={r.missing.length} tone={r.missing.length && !r.ackValid ? "err" : r.missing.length ? "warn" : undefined} testId="q-missing" />
-        <Stat label="Duplicate candidates" value={r.duplicateCandidates} tone={r.duplicateCandidates ? "warn" : undefined} testId="q-duplicates" />
-        <Stat label="Failed pages" value={r.pages.failed} tone={r.pages.failed ? "err" : undefined} testId="q-failed-pages" hint={`${r.pages.completed} of ${r.pages.total} pages done${r.pages.retrying ? ` · ${r.pages.retrying} retrying` : ""}`} />
-        <Stat label="Needs correction" value={r.needsCorrection + r.importFailed} tone={r.needsCorrection + r.importFailed ? "err" : undefined} testId="q-needs-correction" />
-        <Stat label="Image problems" value={r.imageIssues} tone={r.imageIssues ? "warn" : undefined} testId="q-images" />
-        <Stat label="Answer key" value={`${r.answerKey.official} official`} testId="q-key" hint={`${r.answerKey.independentlyVerified} verified · ${r.answerKey.unverified} unverified · ${r.answerKey.missing} missing${r.answerKey.mismatch ? ` · ${r.answerKey.mismatch} mismatch` : ""}`} />
-        <Stat label="Subject / topic uncertain" value={r.topicUncertain} tone={r.topicUncertain ? "warn" : undefined} testId="q-topics" />
+      {/* The nine question counters: each is a count of questions (never a sum of flags), REJECTED rows excluded except where stated. */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5" data-testid="q-counters">
+        <Stat label="Expected original questions" value={r.expected ?? "—"} testId="q-expected" tone={r.expected === null || r.expectedConflict ? "warn" : undefined} hint={r.expectedFrom ? `How many the paper should have — ${r.expectedFrom}.` : r.expectedSources.length ? "How many the paper should have — printed totals disagree." : "How many the paper should have — not printed on the paper or key; enter it."} />
+        <Stat label="Unique source questions identified" value={r.counted} testId="q-counted" hint="Different question numbers found in the paper (a number read twice counts once)." />
+        <Stat label="Extracted records" value={r.extracted} testId="q-extracted" hint={`Every record the importer created, including ${r.rejected} rejected and any repeats.`} />
+        <Stat label="Rejected records" value={r.rejected} testId="q-rejected" href={`/admin/ai-importer/exceptions?job=${jobId}&status=REJECTED`} hint="Rejected by an admin (junk, repeats); never enter the Question Bank." />
+        <Stat label="Approved questions" value={r.approved} testId="q-approved" hint="Approved by an admin, including those already in the Question Bank." />
+        <Stat label="Awaiting review" value={r.awaitingApproval} testId="q-awaiting" href={`/admin/ai-importer/exceptions?job=${jobId}&status=approval`} hint="Ready (passed every mandatory check), only need your approval." />
+        <Stat label="Needs correction" value={r.needsCorrection + r.importFailed} tone={r.needsCorrection + r.importFailed ? "err" : undefined} testId="q-needs-correction" hint="Blocked by a problem you must fix or decide before approval (incl. import failed)." />
+        <Stat label="Imported into Question Bank" value={r.stored} tone="ok" testId="q-stored" href={`/admin/ai-importer/exceptions?job=${jobId}&status=imported`} hint="Saved in the Question Bank (draft or published)." />
+        <Stat label="Unresolved questions" value={r.unresolved} tone={r.unresolved ? "warn" : "ok"} testId="q-unresolved" href={`/admin/ai-importer/exceptions?job=${jobId}&status=unresolved`} hint="What needs your attention now: not in the Question Bank and not approved-and-ready." />
       </div>
+      <details className="rounded-[var(--radius-card)] border border-[var(--color-border)] p-2.5 text-sm" data-testid="q-other-checks">
+        <summary className="cursor-pointer text-xs font-medium">Other checks (problem flags overlap — one question can be in several)</summary>
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          <Stat label="Answer cross-check agreed" value={r.verified} testId="q-verified" tone={r.verifyDisagreed ? "warn" : undefined} hint={`The extraction-time second read agreed (not Verify 2)${r.verifyDisagreed ? `; ${r.verifyDisagreed} disagree` : ""}${r.unverified ? `; ${r.unverified} not checked` : ""}.`} />
+          <Stat label="Missing numbers" value={r.missing.length} tone={r.missing.length && !r.ackValid ? "err" : r.missing.length ? "warn" : undefined} testId="q-missing" hint="Question numbers never found in the paper." />
+          <Stat label="Duplicate candidates" value={r.duplicateCandidates} tone={r.duplicateCandidates ? "warn" : undefined} testId="q-duplicates" hint="Duplicate status or possible duplicate flag." />
+          <Stat label="Failed pages" value={r.pages.failed} tone={r.pages.failed ? "err" : undefined} testId="q-failed-pages" hint={`${r.pages.completed} of ${r.pages.total} pages done${r.pages.retrying ? ` · ${r.pages.retrying} retrying` : ""}`} />
+          <Stat label="Image problems" value={r.imageIssues} tone={r.imageIssues ? "warn" : undefined} testId="q-images" hint="Image missing or placement not confirmed." />
+          <Stat label="Answer key" value={`${r.answerKey.official} official`} testId="q-key" hint={`${r.answerKey.independentlyVerified} verified · ${r.answerKey.unverified} unverified · ${r.answerKey.missing} missing${r.answerKey.mismatch ? ` · ${r.answerKey.mismatch} mismatch` : ""}`} />
+          <Stat label="Subject / topic uncertain" value={r.topicUncertain} tone={r.topicUncertain ? "warn" : undefined} testId="q-topics" hint="Subject unknown, topic uncertain or classifier failed." />
+        </div>
+      </details>
       <p className="text-sm" data-testid="q-completeness">
-        <b>{r.expected ?? "?"} expected / {r.counted} extracted{r.countDifference !== null && r.countDifference > 0 ? ` / ${r.countDifference} missing` : ""}</b>
+        <b>{r.expected ?? "?"} expected / {r.counted} identified{r.countDifference !== null && r.countDifference > 0 ? ` / ${r.countDifference} missing` : ""}</b>
         {r.expectedSources.length > 0 && <span className="text-[var(--color-muted-foreground)]"> · printed: {r.expectedSources.map((x) => `${x.value} (${x.source})`).join("; ")}</span>}
         {r.publishBlocker ? <span className="block text-[var(--color-error)]" data-testid="q-publish-blocked">Publishing is blocked: {r.publishBlocker}</span> : null}
       </p>

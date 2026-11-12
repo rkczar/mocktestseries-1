@@ -801,7 +801,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
             </div>
             <div className="flex flex-wrap gap-2">
               <Link className="text-sm underline" href={`/admin/ai-importer/exceptions?job=${job.id}`} data-testid="exceptions-link">
-                Review exceptions ({s.needsCorrection + s.notImportable + s.duplicates + s.importFailed})
+                Review exceptions ({s.needsCorrection + s.notImportable + s.duplicates + s.importFailed + s.unaccounted})
               </Link>
               <Link className="text-sm underline" href={`/admin/ai-importer/exceptions?job=${job.id}&status=all`}>
                 All questions

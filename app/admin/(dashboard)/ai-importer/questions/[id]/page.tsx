@@ -27,6 +27,7 @@ import { formatIst } from "@/lib/ist-time";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { fingerprintOf } from "@/lib/ai-import/paper-verify";
 import { verifyState } from "@/lib/ai-import/verify-core";
+import { approvalOutdatedBy, utc } from "@/lib/ai-import/checks";
 import { listReferences } from "@/lib/ai-import/reference";
 import { fieldBoard, v2TaxonomyChecks } from "@/lib/ai-import/field-checks";
 import { FieldVerification } from "@/components/admin/ai-importer/field-verification";
@@ -164,6 +165,14 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
       }
     : null;
   const blockerImport = importBlocker(q, settings);
+  // An ADMIN "Approved" row is current only for the approval in force now; earlier ones were withdrawn by a later change.
+  const approvalCurrent = (c: { name: string; method: string; createdAt: Date }) => !(c.method === "ADMIN" && c.name === "Approved") || (!!q.approvedAt && c.createdAt.getTime() >= q.approvedAt.getTime());
+  // Every Verify 1 / Verify 2 result: the stored ones (current or out of date) and the earlier ones (historical).
+  const verifyRuns = [
+    ...(vsNow.pv?.history ?? []).map((h) => ({ key: `h-${h.kind}-${h.at}`, kind: h.kind, at: h.at, model: h.model, versionId: h.versionId, outcome: h.outcome, summary: h.summary, label: `historical (replaced ${utc(h.supersededAt)})` })),
+    ...(vsNow.pv?.v1 ? [{ key: "v1", kind: "v1" as const, at: vsNow.pv.v1.at, model: null, versionId: vsNow.pv.v1.versionId ?? null, outcome: vsNow.pv.v1.passed ? "PASSED" : "PROBLEMS", summary: vsNow.pv.v1.problems.map((p) => p.detail).join(" · ").slice(0, 300), label: vsNow.v1 === "stale" ? "historical (the question changed after it)" : "current" }] : []),
+    ...(vsNow.pv?.v2 ? [{ key: "v2", kind: "v2" as const, at: vsNow.pv.v2.at, model: vsNow.pv.v2.model, versionId: vsNow.pv.v2.versionId ?? null, outcome: vsNow.pv.v2.status, summary: vsNow.pv.v2.detail.slice(0, 300), label: vsNow.v2 === "stale" ? (["VERIFIED", "DISAGREE", "NOT_FOUND"].includes(vsNow.pv.v2.status) ? "re-verification needed (the question changed after it)" : "historical (the question changed after it)") : "current" }] : []),
+  ].sort((a, b) => b.at.localeCompare(a.at));
   const blockerPublish = q.questionId ? publishBlocker(q, settings) : blockerImport ?? publishBlocker(q, settings);
   // Complete figure at its stored aspect ratio (never cropped to a box), tap to zoom.
   const figureImg = (f: (typeof q.figures)[number]) =>
@@ -387,13 +396,32 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
         </CardHeader>
         <CardContent>
           <ul className="flex flex-col gap-1 text-xs" data-testid="q-checks">
-            {q.checks.map((c) => (
-              <li key={c.id}>
-                <Badge variant={c.passed ? "success" : c.severity === "ERROR" ? "error" : "warning"}>Stage {c.stage}</Badge> <span className="font-medium">{c.name}</span> — {c.detail}
-                {c.method !== "DETERMINISTIC" ? ` [${c.method}${c.model ? ` · ${c.model}` : ""}]` : ""}
-              </li>
-            ))}
+            {q.checks.map((c) =>
+              approvalCurrent(c) ? (
+                <li key={c.id}>
+                  <Badge variant={c.passed ? "success" : c.severity === "ERROR" ? "error" : "warning"}>Stage {c.stage}</Badge> <span className="font-medium">{c.name}</span> — {c.detail}
+                  {c.method !== "DETERMINISTIC" ? ` [${c.method}${c.model ? ` · ${c.model}` : ""}]` : ""} <span className="text-[var(--color-muted-foreground)]">· {formatIst(c.createdAt)}</span>
+                </li>
+              ) : (
+                <li key={c.id} className="text-[var(--color-muted-foreground)]" data-testid="q-check-historical">
+                  <Badge variant="neutral">Historical</Badge> <span className="font-medium">{c.name}</span> (withdrawn by a later change) — {c.detail} [{c.method}] · {formatIst(c.createdAt)}
+                </li>
+              ),
+            )}
           </ul>
+          {verifyRuns.length > 0 && (
+            <div className="mt-3" data-testid="q-verify-history">
+              <p className="text-xs font-medium">Verification history</p>
+              <ul className="flex flex-col gap-0.5 text-xs">
+                {verifyRuns.map((r) => (
+                  <li key={r.key} className={r.label === "current" ? "" : "text-[var(--color-muted-foreground)]"} data-current={r.label === "current" ? "true" : "false"}>
+                    {r.kind === "v1" ? "Verify 1" : `Verify 2${r.model ? ` (${r.model})` : ""}`} · {utc(r.at)} · {r.outcome.toLowerCase().replace(/_/g, " ")} · checked version {r.versionId ? (r.versionId === "original" ? "original" : r.versionId.slice(-8)) : "not recorded"} · <span className="font-medium">{r.label}</span>
+                    {r.summary ? ` — ${r.summary}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {q.issueCodes.length > 0 && (
             <ul className="mt-3 flex flex-col gap-0.5 text-xs" data-testid="q-issues">
               {q.issueCodes.map((c) => (
@@ -422,6 +450,8 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             contentFormat: fmt,
             number: e.number,
             section: e.section ?? "",
+            instructions: e.instructions ?? "",
+            passage: e.passage ?? "",
             stem: e.stem,
             options: e.options.map((o) => ({ label: o.label, text: o.text })),
             hi: bilingual ? { stem: e.hi?.stem ?? "", options: e.hi?.options.map((o) => o.text) ?? [], confirmed: !!e.hi?.confirmedById } : null,
@@ -444,6 +474,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             duplicate: q.duplicateKind,
             approved: !!q.approvedById,
             approvedBy: q.approvedById ? actors.get(q.approvedById) ?? "an administrator" : null,
+            approvalOutdated: q.approvedById ? approvalOutdatedBy(q.approvedAt, vsNow) : null,
             figures: q.figures.map((f) => ({ id: f.id, owner: f.owner, optionLabel: f.optionLabel, mappingStatus: f.mappingStatus, source: f.source, confirmed: !!f.confirmedById, page: f.pageNumber, pageId: hasPageImages ? pageIdOf.get(f.pageNumber) ?? null : null, width: f.width, height: f.height, description: f.description, box: figureBox(f.box), reason: (f.box as { reason?: string } | null)?.reason ?? null, confidence: f.confidence })),
             pageImages: hasPageImages ? (e.pages?.length ? e.pages : q.pages).filter((n) => pageIdOf.has(n)).map((n) => ({ page: n, pageId: pageIdOf.get(n)! })) : [],
             rescanAllowed: { ok: !rescanBlocked, reason: rescanBlocked },

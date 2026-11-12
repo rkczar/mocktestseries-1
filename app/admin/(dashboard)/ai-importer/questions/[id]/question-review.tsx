@@ -63,6 +63,9 @@ export interface ReviewQ {
   contentFormat: "PLAIN" | "RICH_V1";
   number: number | null;
   section: string;
+  /** Text printed before the question and its shared passage (both prefixed to the question text in the Question Bank). */
+  instructions: string;
+  passage: string;
   stem: string;
   options: { label: string; text: string }[];
   /** Bilingual exams: the Hindi version (option texts in the English option order); null for other exams. */
@@ -80,6 +83,8 @@ export interface ReviewQ {
   duplicate: string | null;
   approved: boolean;
   approvedBy: string | null;
+  /** The approval is older than a current failing Verify 1 / Verify 2 result (why), so it is not current; null = it is. */
+  approvalOutdated: string | null;
   figures: ReviewFigure[];
   /** Pages of this question that have a page image to crop from. */
   pageImages: { page: number; pageId: string }[];
@@ -271,6 +276,8 @@ export function QuestionReview({
   };
   const initial = {
     number: q.number === null ? "" : String(q.number),
+    instructions: q.instructions,
+    passage: q.passage,
     stem: q.stem,
     options: q.options.length ? q.options : ["A", "B", "C", "D"].map((label) => ({ label, text: "" })),
     type: q.type,
@@ -300,7 +307,9 @@ export function QuestionReview({
   const act = (fn: () => Promise<ActionResult>, ok: string | ((d: unknown) => string)) =>
     start(async () => {
       const r = await callImporter(fn as () => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>);
-      setMsg(r.ok ? { ok: true, text: typeof ok === "function" ? ok(r.data) : ok } : { ok: false, text: r.error ?? "Failed" });
+      // A committed change whose follow-up step failed comes back as ok with a warning: shown as a warning, never as success.
+      const warning = r.ok ? (r.data as { warning?: string } | null | undefined)?.warning : undefined;
+      setMsg(r.ok ? (warning ? { ok: false, text: warning } : { ok: true, text: typeof ok === "function" ? ok(r.data) : ok }) : { ok: false, text: r.error ?? "Failed" });
       if (r.ok) router.refresh();
     });
   const upload = (file: File, owner: "STEM" | "OPTION", label: string | null, replace: string | null) =>
@@ -338,6 +347,8 @@ export function QuestionReview({
           type: form.type as never,
           contentFormat: form.format,
           number: form.number ? Number(form.number) : null,
+          ...(form.instructions !== initial.instructions ? { instructions: form.instructions } : {}),
+          ...(form.passage !== initial.passage ? { passage: form.passage } : {}),
           explanation: form.explanation,
           pages: pageList,
           ...(q.hi && (hiDirty || hiChecked) ? { hi: { stem: form.hiStem, options: form.options.map((_, k) => ({ text: form.hiOptions[k] ?? "" })) } } : {}),
@@ -546,6 +557,10 @@ export function QuestionReview({
               <Input id="rv-pages" className="w-28" value={form.pages} onChange={(e) => setForm((f) => ({ ...f, pages: e.target.value }))} data-testid="rv-pages" />
             </div>
           </div>
+          <Label htmlFor="rv-instructions">Instructions printed before the question (usually empty)</Label>
+          <Textarea id="rv-instructions" rows={2} value={form.instructions} onChange={(e) => setForm((f) => ({ ...f, instructions: e.target.value }))} data-testid="rv-instructions" />
+          <Label htmlFor="rv-passage">Passage shared with other questions (usually empty)</Label>
+          <Textarea id="rv-passage" rows={2} value={form.passage} onChange={(e) => setForm((f) => ({ ...f, passage: e.target.value }))} data-testid="rv-passage" />
           <Label htmlFor="rv-stem">Question text</Label>
           <Textarea id="rv-stem" rows={5} value={form.stem} onChange={(e) => setForm((f) => ({ ...f, stem: e.target.value }))} data-testid="rv-stem" />
           {form.options.map((o, i) => (
@@ -613,17 +628,27 @@ export function QuestionReview({
             <CardDescription>Only approved questions are added to the Question Bank (as Draft). Any later change withdraws the approval.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center gap-2">
-            {q.approved ? <Badge variant="success" data-testid="rv-approved">Approved{q.approvedBy ? ` by ${q.approvedBy}` : ""}</Badge> : <Badge variant="neutral" data-testid="rv-not-approved">Not approved</Badge>}
+            {q.approved && q.approvalOutdated ? (
+              <>
+                <Badge variant="warning" data-testid="rv-approval-outdated">Approval out of date</Badge>
+                <span className="w-full text-xs text-[var(--color-warning)]">{q.approvalOutdated}.</span>
+              </>
+            ) : q.approved ? (
+              <Badge variant="success" data-testid="rv-approved">Approved{q.approvedBy ? ` by ${q.approvedBy}` : ""}</Badge>
+            ) : (
+              <Badge variant="neutral" data-testid="rv-not-approved">Not approved</Badge>
+            )}
             {q.status !== "REJECTED" ? (
               <>
-                {!q.approved ? (
+                {!q.approved || q.approvalOutdated ? (
                   <Button size="sm" disabled={pending || dirty} onClick={() => act(() => approveQuestionsAction([q.id]), (d) => {
                     const r = d as { approved: number; refused: { reason: string }[] };
                     return r.approved ? "Approved." : `Not approved: ${r.refused[0]?.reason ?? "it has a problem to fix first"}.`;
                   })} data-testid="rv-approve">
-                    Approve
+                    {q.approved ? "Approve again" : "Approve"}
                   </Button>
-                ) : (
+                ) : null}
+                {q.approved && (
                   <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => unapproveQuestionsAction([q.id]), "Approval withdrawn.")} data-testid="rv-unapprove">
                     Withdraw approval
                   </Button>

@@ -70,13 +70,16 @@ export async function jobSummary(jobId: string): Promise<JobSummary> {
   const pageCount = (s: string) => pages.find((p) => p.status === s)?._count._all ?? 0;
   // Importable once approved (approval itself is counted separately).
   const eligibleImport = qs.filter((q) => !q.questionId && !importBlocker(q, settings, { ignoreApproval: true })).length;
+  // "Published" = published in the Question Bank (import rows stay IMPORTED when an admin publishes there).
+  const storedIds = qs.filter((q) => q.questionId && (q.status === AiImportQuestionStatus.IMPORTED || q.status === AiImportQuestionStatus.PUBLISHED)).map((q) => q.questionId!);
+  const publishedInBank = storedIds.length ? await prisma.question.count({ where: { id: { in: storedIds }, status: "PUBLISHED" } }) : 0;
   return {
     detected: qs.length,
     extracted: qs.length,
     eligibleImport,
     imported: qs.filter((q) => q.questionId && (q.status === AiImportQuestionStatus.IMPORTED || q.status === AiImportQuestionStatus.PUBLISHED)).length,
     eligiblePublish: qs.filter((q) => q.status === AiImportQuestionStatus.IMPORTED && !publishBlocker(q, settings)).length,
-    published: count(AiImportQuestionStatus.PUBLISHED),
+    published: publishedInBank,
     needsCorrection: count(AiImportQuestionStatus.NEEDS_CORRECTION),
     duplicates: count(AiImportQuestionStatus.DUPLICATE),
     notImportable: count(AiImportQuestionStatus.NOT_IMPORTABLE),

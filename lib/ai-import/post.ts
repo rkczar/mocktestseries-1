@@ -9,7 +9,7 @@ import { lintRichSource, looksRich } from "@/lib/rich-import/manifest";
 import { ISSUE_DEFS, KEY_MIN_COVERAGE } from "@/lib/ai-import/config";
 import { importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
 import { failureCheckStatus, failureMessage } from "@/lib/ai-import/failure";
-import { CHECK_STATUS_LABELS, checksAllowReady, questionChecks } from "@/lib/ai-import/checks";
+import { CHECK_STATUS_LABELS, checksAllowReady, questionChecks, reviewClearsFlag, utc } from "@/lib/ai-import/checks";
 import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { CLASSIFY_SYSTEM, SOLVE_SYSTEM, CLASSIFY_BATCH, classifyAnswerOf, labelFromPrinted, solveSchema, solveUserText } from "@/lib/ai-import/prompts";
@@ -916,26 +916,45 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     // A check's subject / topic findings describe the ids it saw: after a re-classification they no longer apply.
     const sameIds = (x: { subjectId: string | null; topicId: string | null; subTopicId: string | null } | null | undefined) => !!x && x.subjectId === subjectId && x.topicId === topicId && x.subTopicId === subTopicId;
     const v1TaxCurrent = vs.pv?.v1 ? (vs.pv.v1.classification ? sameIds(vs.pv.v1.classification.stored) : taxonomyCurrent(vs.pv.v1, fingerprint)) : false;
+    // When the verification result that raised a review flag was saved: an approval only clears it if given later.
+    const verifyAt = new Map<string, string>();
+    const ranOn = (r: { at: string; versionId?: string | null }) => `ran ${utc(r.at)}${r.versionId ? ` on version ${r.versionId === "original" ? "original" : r.versionId.slice(-8)}` : ""}`;
     if (vs.pv?.v1) {
-      if (vs.v1 === "stale") checks.push({ stage: 5, name: "Verify 1 — full paper", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: "Out of date: the question changed after Verify 1 ran. Run Verify 1 again." });
+      if (vs.v1 === "stale") checks.push({ stage: 5, name: "Verify 1 — full paper", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: `Historical — out of date: Verify 1 ${ranOn(vs.pv.v1)}, and the question changed after that (its verdict then: ${vs.pv.v1.passed ? "passed" : `${vs.pv.v1.problems.length} finding(s)`}). Run Verify 1 again.` });
       else {
-        for (const p of vs.pv.v1.problems) if (v1TaxCurrent || !TAXONOMY_FINDINGS.includes(p.code)) addMore(p.code, p.detail);
-        checks.push({ stage: 5, name: "Verify 1 — full paper", passed: vs.v1 === "passed", severity: vs.v1 === "passed" ? "INFO" : "WARNING", method: "DETERMINISTIC", detail: `${vs.v1 === "passed" ? "Passed" : `${vs.pv.v1.problems.length} finding(s): ${vs.pv.v1.problems.map((p) => p.detail).join(" · ").slice(0, 400) || "see the flags"}`}${vs.pv.v1.fixes.length ? ` · corrected: ${vs.pv.v1.fixes.map((f) => `${f.field} (${f.evidence})`).join("; ").slice(0, 300)}` : ""}${vs.pv.v1.reference ? ` · reference “${vs.pv.v1.reference.name}”: ${vs.pv.v1.reference.matched ?? "no matching question"}` : ""}` });
+        for (const p of vs.pv.v1.problems)
+          if (v1TaxCurrent || !TAXONOMY_FINDINGS.includes(p.code)) {
+            addMore(p.code, p.detail);
+            verifyAt.set(p.code, vs.pv.v1.at);
+          }
+        // "Not passed" with no finding of its own = flags open when it ran (flagsAtRun); the current flags decide now.
+        const openThen = vs.pv.v1.flagsAtRun?.length ? `flags open when it ran: ${vs.pv.v1.flagsAtRun.join(", ")}` : "flags open when it ran";
+        checks.push({ stage: 5, name: "Verify 1 — full paper", passed: vs.v1 === "passed", severity: vs.v1 === "passed" ? "INFO" : "WARNING", method: "DETERMINISTIC", detail: `${vs.v1 === "passed" ? "Passed" : vs.pv.v1.problems.length ? `${vs.pv.v1.problems.length} finding(s): ${vs.pv.v1.problems.map((p) => p.detail).join(" · ").slice(0, 400)}` : `Not passed only because of the ${openThen} — the current flags below decide`} (${ranOn(vs.pv.v1)})${vs.pv.v1.fixes.length ? ` · corrected: ${vs.pv.v1.fixes.map((f) => `${f.field} (${f.evidence})`).join("; ").slice(0, 300)}` : ""}${vs.pv.v1.reference ? ` · reference “${vs.pv.v1.reference.name}”: ${vs.pv.v1.reference.matched ?? "no matching question"}` : ""}` });
       }
     }
     if (vs.pv?.v2) {
       const v2 = vs.pv.v2;
-      if (vs.v2 === "stale") checks.push({ stage: 6, name: "Verify 2 — independent model", passed: false, severity: "WARNING", method: "AI", model: v2.model, detail: "Out of date: the question changed after Verify 2 ran. Run Verify 2 again." });
+      if (vs.v2 === "stale") checks.push({ stage: 6, name: "Verify 2 — independent model", passed: false, severity: "WARNING", method: "AI", model: v2.model, detail: `${["VERIFIED", "DISAGREE", "NOT_FOUND"].includes(v2.status) ? "Re-verification needed" : "Historical"} — out of date: Verify 2 ${ranOn(v2)}, and the question changed after that (its result then: ${v2.status.toLowerCase().replace(/_/g, " ")} — ${v2.detail.slice(0, 200)}). Run Verify 2 again.` });
       else {
-        if (vs.v2 === "disagree" || vs.v2 === "not_found") add("VERIFY2_DISAGREES", `${v2.model}: ${v2.detail}`.slice(0, 600));
+        if (vs.v2 === "disagree" || vs.v2 === "not_found") {
+          add("VERIFY2_DISAGREES", `${v2.model}: ${v2.detail}`.slice(0, 600));
+          verifyAt.set("VERIFY2_DISAGREES", v2.at);
+        }
         // A subject mismatch is its own finding (not a missing topic): the second model files the question elsewhere.
-        if (vs.v2 === "disagree" && v2.fields.includes("subject")) add("SUBJECT_MISMATCH", `Verify 2 (${v2.model}): ${v2.detail}`.slice(0, 600));
+        if (vs.v2 === "disagree" && v2.fields.includes("subject")) {
+          add("SUBJECT_MISMATCH", `Verify 2 (${v2.model}): ${v2.detail}`.slice(0, 600));
+          verifyAt.set("SUBJECT_MISMATCH", v2.at);
+        }
         // The independent subject / topic check is its own result: a disagreement is a taxonomy finding, a failed check
         // is shown (never agreement), and neither changes the text read's verdict.
         const vc = v2.classification && sameIds(v2.classification.stored) ? v2.classification : null;
         if (vc?.status === "DISAGREEMENT" && !q.taxonomySource?.startsWith("admin")) {
           add("TAXONOMY_DISAGREES", `Verify 2 (${vc.method}): ${vc.findings.join(" · ")}`.slice(0, 600));
-          if (vc.found?.subjectId && vc.found.subjectId !== subjectId) add("SUBJECT_MISMATCH", `Verify 2 (${vc.method}): ${vc.findings[0] ?? "another subject"}`.slice(0, 600));
+          verifyAt.set("TAXONOMY_DISAGREES", v2.at);
+          if (vc.found?.subjectId && vc.found.subjectId !== subjectId) {
+            add("SUBJECT_MISMATCH", `Verify 2 (${vc.method}): ${vc.findings[0] ?? "another subject"}`.slice(0, 600));
+            verifyAt.set("SUBJECT_MISMATCH", v2.at);
+          }
         }
         if (vc) checks.push({ stage: 6, name: "Verify 2 — subject / topic", passed: vc.status === "AGREED", severity: vc.status === "AGREED" ? "INFO" : vc.status === "DISAGREEMENT" ? "ERROR" : "WARNING", method: "AI", model: vc.method, detail: `${vc.status.replace(/_/g, " ").toLowerCase()}${vc.comparedWithV1 === "AGREES" ? " · agrees with Verify 1" : vc.comparedWithV1 === "DIFFERS" ? " · differs from Verify 1" : ""}: ${vc.findings.join(" · ")}`.slice(0, 1000) });
         // A check that produced no answer is its own finding: never agreement, never a disagreement, never hidden by the
@@ -946,14 +965,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         }
         const noResult = vs.v2 === "failed" || vs.v2 === "unavailable";
         if (vs.v2 === "failed") add("VERIFY2_FAILED", `Verify 2 gave no independent result (${CHECK_STATUS_LABELS[failureCheckStatus(v2.error?.message ?? v2.detail)].toLowerCase()}, ${v2.model}): ${(v2.error?.message ?? v2.detail).slice(0, 300)} — not counted as agreement.`);
-        checks.push({ stage: 6, name: "Verify 2 — independent model", passed: vs.v2 === "verified", severity: vs.v2 === "verified" ? "INFO" : noResult ? "WARNING" : "ERROR", method: "AI", model: v2.model, detail: `${v2.status === "VERIFIED" ? "Agrees" : v2.status === "FAILED" ? "Failed — no independent result (not counted as agreement)" : v2.status === "UNAVAILABLE" ? "Unavailable — nothing was read independently (not counted as agreement)" : v2.status === "NOT_FOUND" ? "Not found by the second read" : "Disagrees"}: ${v2.detail}${v2.resolvedBySource ? ` · settled by the source: ${v2.resolvedBySource}` : ""}`.slice(0, 1000) });
+        checks.push({ stage: 6, name: "Verify 2 — independent model", passed: vs.v2 === "verified", severity: vs.v2 === "verified" ? "INFO" : noResult ? "WARNING" : "ERROR", method: "AI", model: v2.model, detail: `${v2.status === "VERIFIED" ? "Agrees" : v2.status === "FAILED" ? "Failed — no independent result (not counted as agreement)" : v2.status === "UNAVAILABLE" ? "Unavailable — nothing was read independently (not counted as agreement)" : v2.status === "NOT_FOUND" ? "Not found by the second read" : "Disagrees"} (${ranOn(v2)}): ${v2.detail}${v2.resolvedBySource ? ` · settled by the source: ${v2.resolvedBySource}` : ""}`.slice(0, 1000) });
       }
     }
 
     // Admin decisions persist across re-runs: a reviewed question drops the
     // "needs a human look" flags (never structural ones), an admin-chosen
-    // answer settles the answer flags.
-    if (q.reviewedById) for (const c of REVIEWABLE) issues.delete(c);
+    // answer settles the answer flags. A flag a Verify 1 / Verify 2 result raised is cleared only by an approval given
+    // after that result (an earlier review or an edit never hides a later verification).
+    for (const c of REVIEWABLE) if (reviewClearsFlag(q, verifyAt.get(c))) issues.delete(c);
     if (q.answerConfirmedById && finalAnswer.length && typeOk(finalAnswer) && !adminVsKey) for (const c of ["ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "POSSIBLE_WITHDRAWN", "ANSWER_UNVERIFIED", "ANSWER_MISSING", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "AI_OPINION_DIFFERS"]) issues.delete(c);
     if (q.allowDuplicate) {
       issues.delete("DUPLICATE_EXISTING");
@@ -984,7 +1004,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     }
 
     // The separate checks Ready depends on (owner decision 7, 2026-11-05), stored as machine-readable statuses.
-    const qChecks = questionChecks({ codes: [...issues.keys()], answerStatus, answerConfirmed: !!q.answerConfirmedById && finalAnswer.length > 0 && !adminVsKey, subjectId, topicId, adminTaxonomy: !!q.taxonomySource?.startsWith("admin"), v2: vs.v2 === "stale" ? null : vs.pv?.v2 ?? null, v2Classification: vs.pv?.v2?.classification && sameIds(vs.pv.v2.classification.stored) ? vs.pv.v2.classification : null, v1Ran: !!vs.pv?.v1 && vs.v1 !== "stale", issues });
+    const qChecks = questionChecks({ codes: [...issues.keys()], answerStatus, answerConfirmed: !!q.answerConfirmedById && finalAnswer.length > 0 && !adminVsKey, subjectId, topicId, adminTaxonomy: !!q.taxonomySource?.startsWith("admin"), v2: vs.v2 === "stale" ? null : vs.pv?.v2 ?? null, v2Stale: vs.v2 === "stale" ? vs.pv?.v2 ?? null : null, approvedAt: q.approvedAt, v2Classification: vs.pv?.v2?.classification && sameIds(vs.pv.v2.classification.stored) ? vs.pv.v2.classification : null, v1Ran: !!vs.pv?.v1 && vs.v1 !== "stale", issues });
 
     // Status
     const codes = [...issues.keys()];

@@ -158,8 +158,9 @@ export interface ClassificationRecord {
  * MODEL_ERROR (provider error, invalid / unusable output), TIMEOUT and OUTPUT_TRUNCATED say the check produced no answer;
  * DISAGREEMENT says it produced a different answer; NEEDS_REVIEW says a person must decide; NOT_RUN says it did not run.
  */
-export type CheckStatus = "NOT_RUN" | "PASSED" | "FAILED" | "DISAGREEMENT" | "MODEL_ERROR" | "TIMEOUT" | "OUTPUT_TRUNCATED" | "NEEDS_REVIEW";
-export const CHECK_STATUSES: CheckStatus[] = ["NOT_RUN", "PASSED", "FAILED", "DISAGREEMENT", "MODEL_ERROR", "TIMEOUT", "OUTPUT_TRUNCATED", "NEEDS_REVIEW"];
+/** STALE = a Verify 2 result exists but the question changed after it ran ("Re-verification needed"; never "not required"). */
+export type CheckStatus = "NOT_RUN" | "PASSED" | "FAILED" | "DISAGREEMENT" | "MODEL_ERROR" | "TIMEOUT" | "OUTPUT_TRUNCATED" | "NEEDS_REVIEW" | "STALE";
+export const CHECK_STATUSES: CheckStatus[] = ["NOT_RUN", "PASSED", "FAILED", "DISAGREEMENT", "MODEL_ERROR", "TIMEOUT", "OUTPUT_TRUNCATED", "NEEDS_REVIEW", "STALE"];
 
 export interface CheckResult {
   status: CheckStatus;
@@ -244,7 +245,35 @@ export interface FieldCheck {
   by: "V1" | "V2" | "MEMORY";
 }
 
+/**
+ * Which question version a Verify 1 / Verify 2 result checked (importer master 2026-11-12): the latest content version
+ * row (AiImportQuestionVersion EXTRACTION / ADMIN_EDIT, "original" when none) when the result was saved, and the flags
+ * open on the question at that moment (Verify 1's "not passed" can come from them).
+ */
+export interface VerifyRunStamp {
+  versionId?: string | null;
+  versionAt?: string | null;
+  flagsAtRun?: string[];
+}
+
+/** An earlier Verify 1 / Verify 2 result replaced by a newer run: kept for the record, never counted (historical). */
+export interface VerifyHistoryEntry {
+  kind: "v1" | "v2";
+  at: string;
+  model: string | null;
+  versionId: string | null;
+  parts: FingerprintParts | null;
+  /** v1: PASSED / PROBLEMS · v2: its status. */
+  outcome: string;
+  summary: string;
+  flagsAtRun: string[];
+  /** When a newer result replaced it. */
+  supersededAt: string;
+}
+
 export interface PaperVerification {
+  /** Earlier results (newest last, capped — lib/ai-import/checks.ts VERIFY_HISTORY_MAX), each marked historical. */
+  history?: VerifyHistoryEntry[];
   /**
    * Verification passes this question has had (at most MAX_VERIFY_PASSES, lib/ai-import/verify-core.ts): 1 = Verify 1
    * (free, recorded once), then each paid targeted pass — a Verify 2 read that was sent, or a re-scan.
@@ -252,7 +281,7 @@ export interface PaperVerification {
   /** `ref` = the re-scan request (its requestedAt) this pass belongs to: one request is never counted twice. */
   passes?: { kind: "v1" | "v2" | "rescan"; at: string; model?: string | null; ref?: string }[];
   /** Verify 1 — deterministic full-paper verification (no AI). */
-  v1?: {
+  v1?: VerifyRunStamp & {
     fingerprint: string;
     /** importer-reliability-2: content / answer / taxonomy / figure fingerprints (absent on older results). */
     parts?: FingerprintParts | null;
@@ -278,7 +307,7 @@ export interface PaperVerification {
     memoryRules?: string[];
   };
   /** Verify 2 — independent second read by a separately selected model. */
-  v2?: {
+  v2?: VerifyRunStamp & {
     fingerprint: string;
     parts?: FingerprintParts | null;
     /** An older result (single fingerprint) whose content was proven unchanged and given its parts (see paper-verify.ts rebuildLegacy). */

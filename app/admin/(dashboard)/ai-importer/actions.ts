@@ -319,11 +319,17 @@ async function jobOf(questionIds: string[]): Promise<string | null> {
   return q?.jobId ?? null;
 }
 
-export async function editQuestionAction(questionId: string, edit: QuestionEdit): Promise<ImporterResult<null>> {
+export async function editQuestionAction(questionId: string, edit: QuestionEdit): Promise<ImporterResult<{ warning: string } | null>> {
   return run(await requireUse(), async (actorId) => {
     await editQuestion(questionId, actorId, edit);
-    const jobId = await jobOf([questionId]);
-    if (jobId) await revalidateQuestions(jobId, [questionId]);
+    // The edit is committed above: a failing re-check must never be reported as "Nothing was changed".
+    try {
+      const jobId = await jobOf([questionId]);
+      if (jobId) await revalidateQuestions(jobId, [questionId]);
+    } catch (error) {
+      console.error("[ai-importer] re-check after a saved edit failed:", error instanceof Error ? error.message.slice(0, 200) : "error");
+      return { warning: "Your edit WAS saved, but the automatic re-check failed — the status and flags shown may be out of date. Reload the page; any later action or import re-checks the question." };
+    }
     return null;
   });
 }

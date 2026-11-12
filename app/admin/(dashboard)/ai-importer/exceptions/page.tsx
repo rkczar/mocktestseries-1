@@ -5,7 +5,6 @@ import { getAdminSession, hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
 import { effective } from "@/lib/ai-import/post";
@@ -15,7 +14,9 @@ import { jobMapping } from "@/lib/ai-import/job-view";
 import { PaperVerifyBar } from "@/components/admin/ai-importer/paper-verify-bar";
 import { SourceRereadPanel } from "@/components/admin/ai-importer/source-reread-panel";
 import { ReferencePanel } from "@/components/admin/ai-importer/reference-panel";
-import { STRUCTURE_CODES, TAXONOMY_CODES, fingerprintOf, paperSummary, scannedPagesOf } from "@/lib/ai-import/paper-verify";
+import { fingerprintOf, paperSummary, scannedPagesOf } from "@/lib/ai-import/paper-verify";
+import { chipCounts, dbWhere, isStored, matches, parseFilters, type FilterRow } from "@/lib/ai-import/review-filters";
+import { ReviewFilters } from "@/components/admin/ai-importer/review-filters";
 import { mergedAnswerIn, statementsOf } from "@/lib/ai-import/local-parse";
 import { fieldBoard } from "@/lib/ai-import/field-checks";
 import { listReferences } from "@/lib/ai-import/reference";
@@ -30,7 +31,7 @@ import type { ExtractedQuestion } from "@/lib/ai-import/types";
 export const metadata = { title: "AI Import Review Exceptions — Mock Test Series.in Admin" };
 export const dynamic = "force-dynamic";
 
-const EXCEPTION_STATUSES = ["NEEDS_CORRECTION", "NOT_IMPORTABLE", "DUPLICATE", "IMPORT_FAILED", "EXTRACTED"] as const;
+const ROW_CAP = 1000;
 
 /**
  * Admin → AI Question Importer → Review Exceptions: only the questions that
@@ -44,37 +45,56 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const canManage = session?.user?.role === "MASTER_ADMIN";
   const canManageImporter = await hasPermission(PERMISSIONS.AI_IMPORTER_MANAGE);
   const jobs = await prisma.aiImportJob.findMany({ orderBy: { updatedAt: "desc" }, take: 100, select: { id: true, title: true, status: true, examId: true } });
-  const jobId = sp.job && jobs.some((j) => j.id === sp.job) ? sp.job : undefined;
-  const status = sp.status === "all" ? null : sp.status === "approval" ? "approval" : sp.status && sp.status in QUESTION_STATUS_LABELS ? sp.status : "exceptions";
-  const issue = sp.issue && sp.issue in ISSUE_DEFS ? sp.issue : undefined;
-  const VERIFY_FILTERS = { verified: "Verified (1 + 2)", eligible: "Eligible to publish", "v1-problems": "Verify 1 findings", "v2-disagree": "Verify 2 disagreements", "v2-noresult": "Verify 2 failed / unavailable", "v2-notrun": "Verify 2 not run / out of date", unverified: "Not verified yet", "field-problems": "Field problems (any check)", memory: "Paper-memory findings" } as const;
-  const verify = sp.verify && sp.verify in VERIFY_FILTERS ? (sp.verify as keyof typeof VERIFY_FILTERS) : undefined;
-  const PROBLEM_FILTERS = { structure: "Structure errors (stem / option / answer boundaries)", taxonomy: "Subject / topic errors", "subject-mismatch": "Subject mismatch", "taxonomy-disagree": "Subject / topic check disagrees (Verify 1 / 2)", "classifier-failed": "Classifier failed (no answer)", "model-failure": "Model failures (error, timeout, cut off)", answer: "Answer-key / type", "answer-unverified": "Answer unverified / AI disagrees", reference: "Reference differences", ocr: "OCR unsure of text", "source-mismatch": "Text differs from the page", "stem-options": "Options repeated in question text", bilingual: "Hindi / English pair problems" } as const;
-  const PROBLEM_CODES: Record<keyof typeof PROBLEM_FILTERS, string[]> = { structure: STRUCTURE_CODES, taxonomy: TAXONOMY_CODES, "subject-mismatch": ["SUBJECT_MISMATCH"], "taxonomy-disagree": ["TAXONOMY_DISAGREES"], "classifier-failed": ["CLASSIFICATION_FAILED"], "model-failure": ["TAXONOMY_CHECK_FAILED", "VERIFY2_FAILED", "CLASSIFICATION_FAILED"], "answer-unverified": ["ANSWER_UNVERIFIED", "AI_OPINION_DIFFERS"], answer: ["ANSWER_MISSING", "ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT", "POSSIBLE_WITHDRAWN", "UNSUPPORTED_TYPE"], reference: ["REFERENCE_CONFLICT"], ocr: ["OCR_UNCERTAIN"], "source-mismatch": ["SOURCE_TEXT_MISMATCH"], "stem-options": ["STEM_HAS_OPTIONS"], bilingual: ["BILINGUAL_HINDI_MISSING", "BILINGUAL_MISMATCH", "BILINGUAL_HINDI_UNCERTAIN"] };
-  const problem = sp.problem && sp.problem in PROBLEM_FILTERS ? (sp.problem as keyof typeof PROBLEM_FILTERS) : undefined;
-  const where: Prisma.AiImportQuestionWhereInput = {
-    ...(jobId ? { jobId } : {}),
-    ...(status === "exceptions" ? { status: { in: [...EXCEPTION_STATUSES] } } : status === "approval" ? { status: "READY", approvedById: null, questionId: null } : status ? { status: status as never } : {}),
-    ...(issue ? { issueCodes: { has: issue } } : problem ? { issueCodes: { hasSome: PROBLEM_CODES[problem] } } : {}),
-  };
-  const job = jobId ? jobs.find((j) => j.id === jobId)! : null;
+  // The paper is looked up by id (not only among the latest 100); an unknown id is an error, never "all papers".
+  const job = sp.job ? (jobs.find((j) => j.id === sp.job) ?? (await prisma.aiImportJob.findUnique({ where: { id: sp.job }, select: { id: true, title: true, status: true, examId: true } }))) : null;
+  if (sp.job && !job) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col gap-2 py-4 text-sm" role="alert" data-testid="job-not-found">
+          <p className="text-[var(--color-error)]">No import paper with id “{sp.job}” was found — it may have been deleted.</p>
+          <Link className="underline" href="/admin/ai-importer/exceptions">Choose a paper</Link>
+        </CardContent>
+      </Card>
+    );
+  }
+  const jobId = job?.id;
+  const f = parseFilters(sp);
+  const { status, verify, problem, issue } = f;
   const summary = jobId ? await paperSummary(jobId) : null;
   const draft = job ? { count: (await approvedReadyCounts([job.id])).get(job.id) ?? 0, open: DRAFT_IMPORT_STATUSES.includes(job.status) } : null;
-  const allRows = await prisma.aiImportQuestion.findMany({ where, orderBy: [{ jobId: "asc" }, { fileId: "asc" }, { orderIndex: "asc" }], take: 1000, include: { figures: true } });
+  // One paper: load all of its rows and filter in memory (counts and list from the same rows). All papers: coarse
+  // database filter, capped, then the same in-memory match.
+  const baseWhere: Prisma.AiImportQuestionWhereInput = jobId ? { jobId } : (dbWhere(f) as Prisma.AiImportQuestionWhereInput);
+  const [loaded, totalLoaded] = await Promise.all([
+    prisma.aiImportQuestion.findMany({ where: baseWhere, orderBy: [{ jobId: "asc" }, { fileId: "asc" }, { orderIndex: "asc" }], ...(jobId ? {} : { take: ROW_CAP }), include: { figures: true } }),
+    jobId ? Promise.resolve(0) : prisma.aiImportQuestion.count({ where: baseWhere }),
+  ]);
   // Eligibility to publish is the server's own rule (paper-verify.ts eligibleForPublish), for every job shown.
   const eligible = new Set(summary?.eligible ?? []);
-  for (const j of new Set(allRows.map((r) => r.jobId))) if (j !== jobId) for (const id of (await paperSummary(j))?.eligible ?? []) eligible.add(id);
+  if (verify === "eligible") for (const j of new Set(loaded.map((r) => r.jobId))) if (j !== jobId) for (const id of (await paperSummary(j))?.eligible ?? []) eligible.add(id);
   // Verification filters are judged against each question's current content (an out-of-date result does not count).
-  const rows = verify
-    ? allRows.filter((r) => {
-        const s = verifyState(r.data, fingerprintOf(r));
-        if (verify === "field-problems" || verify === "memory") {
-          const checks = [...(s.v1 === "passed" || s.v1 === "problems" ? (s.pv?.v1?.fieldChecks ?? []) : []), ...(s.v2 === "verified" || s.v2 === "disagree" || s.v2 === "not_found" ? (s.pv?.v2?.fieldChecks ?? []) : [])];
-          return checks.some((c) => c.status === "PROBLEM" && (verify === "field-problems" || c.by === "MEMORY"));
-        }
-        return verify === "verified" ? s.v1 === "passed" && s.v2 === "verified" : verify === "eligible" ? eligible.has(r.id) : verify === "v1-problems" ? s.v1 === "problems" : verify === "v2-disagree" ? s.v2 === "disagree" || s.v2 === "not_found" : verify === "v2-noresult" ? s.v2 === "failed" || s.v2 === "unavailable" : verify === "v2-notrun" ? s.v2 === "none" || s.v2 === "stale" : s.v1 !== "passed" || s.v2 !== "verified";
-      })
-    : allRows;
+  const filterRow = (r: (typeof loaded)[number]): FilterRow => {
+    const s = verifyState(r.data, fingerprintOf(r));
+    const checks = [...(s.v1 === "passed" || s.v1 === "problems" ? (s.pv?.v1?.fieldChecks ?? []) : []), ...(s.v2 === "verified" || s.v2 === "disagree" || s.v2 === "not_found" ? (s.pv?.v2?.fieldChecks ?? []) : [])];
+    return {
+      status: r.status,
+      answerStatus: r.answerStatus,
+      issueCodes: r.issueCodes,
+      approved: !!r.approvedById,
+      stored: isStored(r),
+      importBlocker: r.questionId ? null : importBlocker(r, settings, { ignoreApproval: true }),
+      v1: s.v1,
+      v2: s.v2,
+      eligible: eligible.has(r.id),
+      fieldProblem: checks.some((c) => c.status === "PROBLEM"),
+      memoryProblem: checks.some((c) => c.status === "PROBLEM" && c.by === "MEMORY"),
+    };
+  };
+  const judged = loaded.map((r) => ({ r, fr: filterRow(r) }));
+  // Counts: only for one paper, over ALL of its rows, each chip on its own.
+  const counts = jobId ? chipCounts(judged.map((x) => x.fr)) : null;
+  const rows = judged.filter((x) => matches(x.fr, f)).map((x) => x.r);
+  const capped = !jobId && totalLoaded > ROW_CAP;
   const taxonomy = job ? (await getExamTaxonomy(prisma, job.examId)).map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((u) => ({ id: u.id, name: u.name })) })) })) : [];
   const references = jobId ? (await listReferences(jobId)).map((r) => ({ refId: r.refId, name: r.name, questions: r.questions.length, key: r.key.length, note: r.note, ocrAvailable: !r.ocr && scannedPagesOf(r) > 0, status: (() => { const s = summary?.references.find((x) => x.refId === r.refId)?.status; return s ? referenceStatusText(s) : null; })() })) : [];
   // Names of every subject / topic / subtopic shown: the stored ones and what Verify 1 / Verify 2 found.
@@ -178,13 +198,11 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
     };
   });
   const mapping = jobId ? await jobMapping(jobId) : null;
-  const issueCounts = new Map<string, number>();
-  for (const r of rows) for (const c of r.issueCodes) issueCounts.set(c, (issueCounts.get(c) ?? 0) + 1);
   // Missing-question rows (placeholders with Re-scan): one job, unfiltered exception / full lists only.
   const missing = jobId && !issue && !problem && !verify && (status === "exceptions" || status === null) ? await missingQuestionRows(jobId) : null;
   const link = (patch: Record<string, string | undefined>) => {
     const u = new URLSearchParams();
-    for (const [k, v] of Object.entries({ job: jobId, status: sp.status, issue, verify, problem, ...patch })) if (v) u.set(k, v);
+    for (const [k, v] of Object.entries({ job: jobId, status: sp.status === "all" || (status && status !== "exceptions") ? sp.status : undefined, issue, verify, problem: issue ? undefined : problem, ...patch })) if (v) u.set(k, v);
     return `/admin/ai-importer/exceptions?${u}`;
   };
   return (
@@ -210,9 +228,14 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
       )}
       {mapping && <PaperMapping m={mapping} compact />}
       <Card>
-        <CardContent className="flex flex-col gap-2 py-3 text-sm">
-          <div className="flex flex-wrap gap-2">
-            <span className="text-[var(--color-muted-foreground)]">Job:</span>
+        <CardContent className="flex flex-col gap-3 py-3 text-sm">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center" data-testid="job-scope">
+            <span className="font-medium">Paper: {job ? job.title : "All papers"}</span>
+            {!job && <span className="text-xs text-[var(--color-warning)]" data-testid="choose-paper">Choose a paper to see counts — without one, the list mixes every paper.</span>}
+            {job && <span className="text-xs text-[var(--color-muted-foreground)]">Counts are for this paper only.</span>}
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="text-[var(--color-muted-foreground)]">Papers:</span>
             <Link className={!jobId ? "font-semibold underline" : "underline"} href={link({ job: undefined })}>
               All
             </Link>
@@ -222,67 +245,17 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
               </Link>
             ))}
           </div>
-          <div className="flex flex-wrap gap-2">
-            <span className="text-[var(--color-muted-foreground)]">Show:</span>
-            <Link className={status === "exceptions" ? "font-semibold underline" : "underline"} href={link({ status: undefined })}>
-              Exceptions
-            </Link>
-            <Link className={status === "approval" ? "font-semibold underline" : "underline"} href={link({ status: "approval" })} data-testid="filter-approval">
-              Awaiting approval
-            </Link>
-            <Link className={status === null ? "font-semibold underline" : "underline"} href={link({ status: "all" })}>
-              All questions
-            </Link>
-            {Object.entries(QUESTION_STATUS_LABELS).map(([k, v]) => (
-              <Link key={k} className={status === k ? "font-semibold underline" : "underline"} href={link({ status: k })}>
-                {v}
-              </Link>
-            ))}
-          </div>
-          {jobId && (
-            <div className="flex flex-wrap gap-2" data-testid="verify-filters">
-              <span className="text-[var(--color-muted-foreground)]">Verification:</span>
-              <Link className={!verify ? "font-semibold underline" : "underline"} href={link({ verify: undefined })}>
-                any
-              </Link>
-              {Object.entries(VERIFY_FILTERS).map(([k, v]) => (
-                <Link key={k} className={verify === k ? "font-semibold underline" : "underline"} href={link({ verify: k, status: "all" })}>
-                  {v}
-                </Link>
-              ))}
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2" data-testid="problem-filters">
-            <span className="text-[var(--color-muted-foreground)]">Problem:</span>
-            <Link className={!problem ? "font-semibold underline" : "underline"} href={link({ problem: undefined })}>
-              any
-            </Link>
-            {Object.entries(PROBLEM_FILTERS).map(([k, v]) => (
-              <Link key={k} className={problem === k ? "font-semibold underline" : "underline"} href={link({ problem: k, issue: undefined, status: "all" })} data-testid={`problem-${k}`}>
-                {v}
-              </Link>
-            ))}
-          </div>
-          {issueCounts.size > 0 && (
-            <div className="flex flex-wrap gap-2">
-              <span className="text-[var(--color-muted-foreground)]">Issue:</span>
-              {issue && (
-                <Link className="underline" href={link({ issue: undefined })}>
-                  any
-                </Link>
-              )}
-              {[...issueCounts].map(([c, n]) => (
-                <Link key={c} className={issue === c ? "font-semibold underline" : "underline"} href={link({ issue: c })}>
-                  {ISSUE_DEFS[c]?.label ?? c} ({n})
-                </Link>
-              ))}
-            </div>
-          )}
+          <ReviewFilters f={f} counts={counts} link={link} issueCodes={[...new Set(rows.flatMap((r) => r.issueCodes))]} />
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>{rows.length} question(s)</CardTitle>
+          <CardTitle>{rows.length} question(s){job ? " in this paper" : " across all papers"}</CardTitle>
+          {capped && (
+            <p className="text-sm text-[var(--color-warning)]" role="status" data-testid="row-cap">
+              Only the first {ROW_CAP} of {totalLoaded} matching records were loaded — choose a paper to see all of them.
+            </p>
+          )}
           <CardDescription>Open a question to see its source page beside the extracted question, fix it, set the answer or topic, or confirm its figures.</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">

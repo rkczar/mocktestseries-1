@@ -144,7 +144,8 @@ export function v1FieldChecks(i: { e: ExtractedQuestion; problems: VerifyProblem
   for (const code of i.issueCodes) {
     if (seen.has(code) || code === "VERIFY2_DISAGREES" || code === "VERIFY_DISAGREES") continue;
     const f = fieldOf(code, "");
-    if (f && f !== "source") list.push({ field: f, status: "PROBLEM", problem: i.issueLabel(code), by: "V1" });
+    // A flag copied from the question is what was open WHEN Verify 1 ran (it may have been cleared since): said so.
+    if (f && f !== "source") list.push({ field: f, status: "PROBLEM", problem: `${i.issueLabel(code)} (flag open when Verify 1 ran)`, by: "V1" });
   }
   // Paper-memory findings stay their own entries (one per field), so each note keeps its source.
   const checks = [...merge(list), ...merge(i.memory.map((m): FieldCheck => ({ field: m.field, status: "PROBLEM", problem: m.detail.slice(0, 600), by: "MEMORY" })))];
