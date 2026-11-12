@@ -113,11 +113,16 @@ export async function loadPrintedQuestions(examId: string, facts: FsoPaperFacts)
       problems.push(`Q${n}: not in the question bank.`);
       continue;
     }
+    // A reused question is printed in THIS booklet's option order (lib/fso-official.ts optionOrder).
+    const options =
+      reuse?.optionOrder && sourceNote.startsWith("stored once")
+        ? reuse.optionOrder.map((k) => row!.options[k - 1]).filter(Boolean)
+        : row.options;
     const flags: string[] = [];
     if (row.contentFormat !== "PLAIN") flags.push("rich-format");
     if (/\$|\\\(|\\\[/.test(row.text)) flags.push("math-markup");
     if (row.imageUrl || row._count.assets > 0 || row.options.some((o) => o.imageUrl)) flags.push("has-image(not printed)");
-    if (row.options.length !== 4) problems.push(`Q${n}: ${row.options.length} options (expected 4).`);
+    if (options.length !== 4) problems.push(`Q${n}: ${options.length} options (expected 4).`);
     questions.push({
       number: n,
       questionId: row.id,
@@ -125,7 +130,7 @@ export async function loadPrintedQuestions(examId: string, facts: FsoPaperFacts)
       status: row.status,
       en: row.text,
       hi: row.textHi,
-      options: row.options.map((o) => ({ en: o.text, hi: o.textHi, isCorrect: o.isCorrect })),
+      options: options.map((o) => ({ en: o.text, hi: o.textHi, isCorrect: o.isCorrect })),
       flags,
     });
   }

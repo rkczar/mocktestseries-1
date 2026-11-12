@@ -28,8 +28,11 @@ export interface FsoPaperFacts {
    * Printed question numbers whose question is stored ONCE in the bank under another paper (the
    * identical question appeared in both papers). Source: production question-bank audit 2026-11-12
    * (2022 Q92 = 2019 Q43), not an RPSC document; the builder prints the stored question at this number.
+   * optionOrder[i] = which stored (other-paper) option is printed as option i+1 in THIS booklet, read from
+   * both RPSC scans: 2019 Q43 = (1) Striga (2) Orobanche (3) Cuscuta (4) Loranthus; 2022 Q92 = (1) Orobanche
+   * (2) Striga (3) Cuscuta (4) Loranthus (checked 2026-11-12).
    */
-  reused?: Record<number, { year: number; question: number }>;
+  reused?: Record<number, { year: number; question: number; optionOrder?: number[] }>;
 }
 
 const parseKey = (s: string) => s.trim().split(/\s+/).map((t) => (t === "*" ? 0 : Number(t)));
@@ -70,7 +73,7 @@ export const FSO_PAPERS: Record<2019 | 2022, FsoPaperFacts> = {
     keyIssuedOn: "29-07-2024",
     keyLabel: "RPSC Final Answer Key, published 29-07-2024",
     deleted: [16, 43, 50, 72, 106, 130],
-    reused: { 92: { year: 2019, question: 43 } },
+    reused: { 92: { year: 2019, question: 43, optionOrder: [2, 1, 3, 4] } },
     answers: parseKey(`
       2 1 4 3 4 2 1 3 3 2 2 3 4 3 2 * 2 4 2 2 4 1 3 4 3 1 2 4 3 3 3 1 1 3 3 2 1 4 1 3 3 3 * 4 2 4 2 2 4 *
       2 2 2 2 2 1 3 2 3 3 3 1 4 4 1 1 1 4 2 1 4 * 3 3 3 4 1 1 4 3 4 2 4 3 4 1 3 1 3 4 1 1 2 1 4 2 1 1 2 2

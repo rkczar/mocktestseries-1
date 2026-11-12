@@ -181,9 +181,13 @@ async function main() {
       check(`B${year}b Hindi, English and bilingual all supported`, supportedLangs(questions).length === 3);
       const mm = keyMismatches(questions, f);
       if (year === 2019) check("B2019c every stored answer matches the RPSC key (deleted Q71 skipped)", mm.length === 0, JSON.stringify(mm));
-      else check("B2022c reused Q92 (stored as 2019 Q43) is flagged against the 2022 key", mm.length === 1 && mm[0].number === 92, JSON.stringify(mm));
+      else check("B2022c reused Q92 (stored as 2019 Q43) printed in 2022 option order → matches the 2022 key", mm.length === 0, JSON.stringify(mm));
     }
     const fake = [{ number: 1, questionId: "x", sourceNote: "", status: "PUBLISHED", en: "E", hi: null, options: [{ en: "a", hi: null, isCorrect: true }], flags: [] }];
+    const q92 = (await loadPrintedQuestions(fso.id, FSO_PAPERS[2022])).questions.find((q) => q.number === 92)!;
+    check("B3 2022 Q92 options are the 2019 Q43 options with 1 and 2 swapped", q92.options[0].en.includes("Option 2 for 2019 Q43") && q92.options[1].en.includes("Option 1 for 2019 Q43"));
+    const noOrder = keyMismatches([{ ...q92, options: [q92.options[1], q92.options[0], q92.options[2], q92.options[3]] }], FSO_PAPERS[2022]);
+    check("B4 without the verified order the key check would block the build", noOrder.length === 1 && noOrder[0].number === 92);
     check("B1 a question without Hindi → English only", JSON.stringify(supportedLangs(fake)) === JSON.stringify(["ENGLISH"]));
     const blank = await PDFDocument.create();
     blank.addPage([595, 842]);
