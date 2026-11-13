@@ -110,7 +110,9 @@ export interface PlayerQuestion {
 function inLanguage(q: PlayerQuestion, lang: TestLanguage): PlayerQuestion {
   if (lang !== "hi" || !q.hi) return q;
   const hi = q.hi;
-  return { ...q, text: hi.text, options: q.options.map((o) => ({ ...o, text: hi.options[o.label] ?? o.text })), ...(hi.rich ? { rich: hi.rich } : {}) };
+  // Match the Following: the Hindi text carries its own Hindi List I / List II; the English lists (matchSpec) would repeat them.
+  // shortcut: assumes every bilingual match question's textHi includes its lists (all 11 FSO rows, 2026-11-13); revisit if matchSpec gains Hindi.
+  return { ...q, text: hi.text, options: q.options.map((o) => ({ ...o, text: hi.options[o.label] ?? o.text })), ...(hi.rich ? { rich: hi.rich } : {}), match: undefined };
 }
 
 interface QuestionState {

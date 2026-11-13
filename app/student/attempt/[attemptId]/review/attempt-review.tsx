@@ -55,7 +55,8 @@ export interface ReviewQuestionView {
 function inLanguage(q: ReviewQuestionView, lang: TestLanguage): ReviewQuestionView {
   if (lang !== "hi" || !q.hi) return q;
   const hi = q.hi;
-  return { ...q, snapshot: { ...q.snapshot, text: hi.text, options: q.snapshot.options.map((o) => ({ ...o, text: hi.options[o.label] ?? o.text })) }, ...(hi.rich ? { rich: hi.rich } : {}) };
+  // Match the Following: the Hindi text carries its own Hindi lists; the English lists (matchSpec) would repeat them (same rule as the player).
+  return { ...q, snapshot: { ...q.snapshot, text: hi.text, options: q.snapshot.options.map((o) => ({ ...o, text: hi.options[o.label] ?? o.text })) }, ...(hi.rich ? { rich: hi.rich } : {}), match: undefined };
 }
 
 export function AttemptReview({ questions, bilingual = false }: { questions: ReviewQuestionView[]; bilingual?: boolean }) {
