@@ -1,0 +1,10 @@
+# Copy to /etc/mocktestseries-watchdog.conf (root:root 0600). KEY=VALUE, read by mocktestseries-watchdog.py.
+# The Resend API key and sender are NOT set here: they are read from the app's shared .env
+# (RESEND_API_KEY, EMAIL_FROM). Without ALERT_TO the watchdog only logs (no email).
+ALERT_TO=
+# Optional overrides (defaults shown):
+# DISK_WARN_PCT=85
+# CERT_WARN_DAYS=14
+# REMIND_EVERY_H=24
+# EXPECTED_WORKERS=2
+# EMAIL_MODE=send
