@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { LIVE_MOCK_TEST_WHERE } from "@/lib/mock-test-schedule";
+
+// Featured Tests: a published mock of an inactive (private / pre-launch) exam is never advertised.
+const FEATURED_MOCK_WHERE = { ...LIVE_MOCK_TEST_WHERE, exam: { isActive: true } };
 import type { HomepageConfig, HomepageSection, Exam, PreviousYearPaper, TestSeries, MockTest } from "@prisma/client";
 import {
   normalizeStatMetrics,
@@ -460,13 +463,13 @@ export async function resolveHomepage(
           const rows: { mockTest: MockTest; questionCount: number; examName: string }[] = [];
           if (showLiveTests) {
             const baseQuery = {
-              where: LIVE_MOCK_TEST_WHERE,
+              where: FEATURED_MOCK_WHERE,
               include: { _count: { select: { questions: true } }, exam: { select: { id: true, name: true } } },
               orderBy: { createdAt: "desc" as const },
               take: Math.max(maxTests, explicitTestIds.length),
             };
             if (explicitTestIds.length > 0) {
-              const explicit = await prisma.mockTest.findMany({ ...baseQuery, where: { id: { in: explicitTestIds }, ...LIVE_MOCK_TEST_WHERE } });
+              const explicit = await prisma.mockTest.findMany({ ...baseQuery, where: { id: { in: explicitTestIds }, ...FEATURED_MOCK_WHERE } });
               const byId = new Map(explicit.map((t) => [t.id, t]));
               explicitTestIds.forEach((id) => {
                 const t = byId.get(id);
@@ -476,7 +479,7 @@ export async function resolveHomepage(
               const remaining = maxTests - rows.length;
               if (remaining > 0) {
                 const extra = await prisma.mockTest.findMany({
-                  where: { ...LIVE_MOCK_TEST_WHERE, id: { notIn: explicitTestIds } },
+                  where: { ...FEATURED_MOCK_WHERE, id: { notIn: explicitTestIds } },
                   include: { _count: { select: { questions: true } }, exam: { select: { id: true, name: true } } },
                   orderBy: { createdAt: "desc" },
                   take: remaining,
