@@ -73,7 +73,7 @@ export const FSO_PAPERS: Record<2019 | 2022, FsoPaperFacts> = {
     keyIssuedOn: "29-07-2024",
     keyLabel: "RPSC Final Answer Key, published 29-07-2024",
     deleted: [16, 43, 50, 72, 106, 130],
-    reused: { 92: { year: 2019, question: 43, optionOrder: [2, 1, 3, 4] } },
+    // Q92 (same question as 2019 Q43) has its own 2022 record since the C1–C4 correction (2026-11-13): no `reused` mapping.
     answers: parseKey(`
       2 1 4 3 4 2 1 3 3 2 2 3 4 3 2 * 2 4 2 2 4 1 3 4 3 1 2 4 3 3 3 1 1 3 3 2 1 4 1 3 3 3 * 4 2 4 2 2 4 *
       2 2 2 2 2 1 3 2 3 3 3 1 4 4 1 1 1 4 2 1 4 * 3 3 3 4 1 1 4 3 4 2 4 3 4 1 3 1 3 4 1 1 2 1 4 2 1 1 2 2

@@ -23,7 +23,7 @@ select * from (values
  ('C4 product access end date (D11)', case when (select "accessExpiresAt" is not null from prod) then 'PASS' else 'OPEN' end, coalesce((select "accessExpiresAt"::text from prod), 'not set: purchase refused until set')),
  -- Content
  ('Q1 PYQ 2019 active, 150 published', case when exists (select 1 from papers where year = 2019 and "isActive" and n = 150) then 'PASS' else 'FAIL' end, (select string_agg(year || ':' || n, ' ') from papers)),
- ('Q2 PYQ 2022 active, 149 published (+Q92 reused)', case when exists (select 1 from papers where year = 2022 and "isActive" and n = 149) then 'PASS' else 'FAIL' end, ''),
+ ('Q2 PYQ 2022 active, 150 published (Q92 own record)', case when exists (select 1 from papers where year = 2022 and "isActive" and n = 150) then 'PASS' else 'FAIL' end, ''),
  ('Q3 2019 Q145/Q148 defect assets removed', case when exists (select 1 from "QuestionAsset" where id in ('cmwcl40vj01l4kwkzihm7sgf8', 'cmwcl40w801likwkzlcg2w7q2')) then 'OPEN' else 'PASS' end, 'correction proposal fso-2019-corrections awaits owner'),
  ('Q4 FSO mock tests published', case when (select count(*) from "MockTest" where "examId" = (select id from fso) and status = 'PUBLISHED') > 0 then 'PASS' else 'OPEN' end, (select count(*) from "MockTest" where "examId" = (select id from fso))::text || ' FSO mocks (needs content decision)'),
  -- Downloads

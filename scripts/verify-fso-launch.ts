@@ -18,6 +18,7 @@ import { getExamFeatures, setExamFeature } from "@/lib/exam-features";
 import { FSO_PAPERS } from "@/lib/fso-official";
 import { keyMismatches, loadPrintedQuestions, supportedLangs } from "./build-paper-pdfs";
 import { startPreviousYearPaperAttempt, saveAnswer, submitAttempt } from "@/lib/test-attempt";
+import { selectPublishedQuestions } from "@/lib/question-selection";
 import { formatNegativeMarking } from "@/lib/negative-marking";
 import { teacherScope } from "@/lib/teacher/scope";
 import { getPublicExamBySlug } from "@/lib/exam-public";
@@ -155,10 +156,10 @@ async function main() {
     const snaps = attempt.questions.map((q) => ({ qid: q.questionId, snap: q.questionSnapshot as { withdrawn?: boolean; correctLabel?: string } }));
     const deletedIds2022 = (await prisma.question.findMany({ where: { previousYearPaperId: fsoPaper2022.id, paperQuestionNumber: { in: facts.deleted } }, select: { id: true } })).map((q) => q.id);
     check("K2 2022 attempt: the 6 deleted questions are frozen as withdrawn (no answer key)", deletedIds2022.length === 6 && deletedIds2022.every((id) => snaps.find((x) => x.qid === id)?.snap.withdrawn === true && snaps.find((x) => x.qid === id)?.snap.correctLabel === ""));
-    check("K3 2022 attempt keeps all 149 stored questions in place but scores 143", attempt.questions.length === 149 && attempt.totalQuestions === 143, `${attempt.questions.length}/${attempt.totalQuestions}`);
+    check("K3 2022 attempt keeps all 150 stored questions in place but scores 144", attempt.questions.length === 150 && attempt.totalQuestions === 144, `${attempt.questions.length}/${attempt.totalQuestions}`);
     const answerRows = await prisma.answer.count({ where: { attemptId, questionId: { in: deletedIds2022 } } });
     check("K4 no Answer rows for deleted questions", answerRows === 0);
-    check("K5 maxScore = 143 and done.totalQuestions unchanged", done.maxScore === 143 && done.totalQuestions === 143, `${done.maxScore}`);
+    check("K5 maxScore = 144 and done.totalQuestions unchanged", done.maxScore === 144 && done.totalQuestions === 144, `${done.maxScore}`);
     const accuracy = done.correctCount != null && done.incorrectCount != null ? done.correctCount / (done.correctCount + done.incorrectCount) : null;
     check("K6 correct / incorrect / accuracy count only scored questions", done.correctCount === right && done.incorrectCount === wrong && accuracy !== null && Math.abs(accuracy - right / (right + wrong)) < 1e-9, `${done.correctCount}/${done.incorrectCount}`);
     const b2 = await newStudent("fsobuyer2");
@@ -232,11 +233,19 @@ async function main() {
       check(`B${year}b Hindi, English and bilingual all supported`, supportedLangs(questions).length === 3);
       const mm = keyMismatches(questions, f);
       if (year === 2019) check("B2019c every stored answer matches the RPSC key (deleted Q71 skipped)", mm.length === 0, JSON.stringify(mm));
-      else check("B2022c reused Q92 (stored as 2019 Q43) printed in 2022 option order → matches the 2022 key", mm.length === 0, JSON.stringify(mm));
+      else check("B2022c every stored answer matches the RPSC key (6 deleted skipped; Q92 from its own 2022 record)", mm.length === 0, JSON.stringify(mm));
     }
     const fake = [{ number: 1, questionId: "x", sourceNote: "", status: "PUBLISHED", en: "E", hi: null, options: [{ en: "a", hi: null, isCorrect: true }], flags: [] }];
     const q92 = (await loadPrintedQuestions(fso.id, FSO_PAPERS[2022])).questions.find((q) => q.number === 92)!;
-    check("B3 2022 Q92 options are the 2019 Q43 options with 1 and 2 swapped", q92.options[0].en.includes("Option 2 for 2019 Q43") && q92.options[1].en.includes("Option 1 for 2019 Q43"));
+    const q92Row = await prisma.question.findUniqueOrThrow({ where: { id: q92.questionId }, select: { previousYearPaperId: true, excludeFromPractice: true, subjectId: true } });
+    const q43Row = await prisma.question.findFirstOrThrow({ where: { previousYearPaper: { examId: fso.id, year: 2019 }, paperQuestionNumber: 43 }, select: { id: true, excludeFromPractice: true, options: { where: { isCorrect: true }, select: { label: true } } } });
+    const practiceIds = (await selectPublishedQuestions({ examId: fso.id, subjectId: q92Row.subjectId, count: 500, allowFewer: true })).questions.map((q) => q.id);
+    check(
+      "B3 2022 Q92 is its own 2022 record (option 1 correct, excluded from practice); 2019 Q43 separate, answer 2, in practice",
+      q92Row.previousYearPaperId === fsoPaper2022.id && q92.sourceNote === "2022 paper Q92" && q92.options[0].en.includes("Option 1 for 2022 Q92") && q92.options[0].isCorrect && q92Row.excludeFromPractice &&
+        !practiceIds.includes(q92.questionId) && q43Row.id !== q92.questionId && !q43Row.excludeFromPractice && q43Row.options.map((o) => o.label).join() === "B" && practiceIds.includes(q43Row.id),
+      `${q92.sourceNote} practice=${practiceIds.length}`
+    );
     const noOrder = keyMismatches([{ ...q92, options: [q92.options[1], q92.options[0], q92.options[2], q92.options[3]] }], FSO_PAPERS[2022]);
     check("B4 without the verified order the key check would block the build", noOrder.length === 1 && noOrder[0].number === 92);
     check("B1 a question without Hindi → English only", JSON.stringify(supportedLangs(fake)) === JSON.stringify(["ENGLISH"]));
@@ -244,6 +253,20 @@ async function main() {
     blank.addPage([595, 842]);
     const stamped = await stampPaperPdf(await blank.save(), "98******21");
     check("B2 per-download stamp keeps page count and changes bytes", (await PDFDocument.load(stamped)).getPageCount() === 1);
+    const { paperHtml, richPara } = await import("./build-paper-pdfs");
+    const pic = { src: "data:image/webp;base64,", width: 300, height: 200 };
+    const imgQ = fake.map((q) => ({ ...q, hi: q.hi ?? "प्रश्न", options: q.options.map((o) => ({ ...o, en: "", hi: "", images: [pic] })) }));
+    check("B6 image-only options count for every language (structure diagrams)", JSON.stringify([...supportedLangs(imgQ)].sort()) === JSON.stringify(["BILINGUAL", "ENGLISH", "HINDI"]));
+    const rich = richPara("B. $\\text{L}_{6}$ & <x>\nnext");
+    check("B5 rich text: formula typeset by KaTeX, no raw markup, text escaped, line break kept", rich.includes("katex") && !rich.includes("$") && rich.includes("&amp; &lt;x&gt;<br>next"));
+    const matchQ = [{ ...fake[0], hi: "सूची-I | सूची-II", match: { v: 1 as const, listI: [{ key: "A", text: "VflListOneA" }], listII: [{ key: "I", text: "VflListTwoI" }] } }];
+    const htmlBy = Object.fromEntries((["ENGLISH", "HINDI", "BILINGUAL"] as const).map((l) => [l, paperHtml(FSO_PAPERS[2022], matchQ, l)]));
+    const count = (s: string, t: string) => s.split(t).length - 1;
+    check(
+      "B7 match lists printed once in English and bilingual, never in the Hindi column",
+      count(htmlBy.ENGLISH, "VflListOneA") === 1 && count(htmlBy.BILINGUAL, "VflListTwoI") === 1 && count(htmlBy.HINDI, "VflListOneA") === 0
+    );
+    check("B8 fonts embedded as data: URLs (no file:// font that a setContent page cannot load)", !htmlBy.BILINGUAL.includes("file://") && htmlBy.BILINGUAL.includes("font/ttf;base64") && htmlBy.BILINGUAL.includes("font/woff2;base64"));
 
     // ---------------------------------------------------------------- public pages + teacher
     await prisma.exam.update({ where: { id: fso.id }, data: { isActive: false } });

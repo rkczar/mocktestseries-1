@@ -5,7 +5,7 @@
  *   - exam RUHS-FSO (inactive, BILINGUAL) with 2019 / 2022 PYQ papers of 150 numbered questions,
  *     Hindi on every question/option, stored answers equal to the official keys (lib/fso-official.ts)
  *     except the 7 deleted questions, which are stored PUBLISHED with option 1 correct — as in production;
- *     2022 Q92 is NOT stored (it is 2019 Q43), as in production;
+ *     2022 Q92 (same question as 2019 Q43) is its own 2022 record, excluded from practice — as in production after C1–C4;
  *   - coupons shaped like production: LIMITED10 (₹100, unrestricted), GROUP20 (product-scoped);
  *   - the ₹200 FSO EXAM_ACCESS product, hidden, purchase disabled, couponsAllowed=false, FIXED_DATE without a date.
  * Refuses to run unless the database name starts with "mts_fsol".
@@ -53,6 +53,7 @@ async function main() {
           paperQuestionNumber: n,
           source: "PYQ",
           status: "PUBLISHED",
+          ...(year === 2022 && n === 92 ? { excludeFromPractice: true, excludeFromPracticeReason: "Repeat of RPSC FSO 2019 Q43 (synthetic)" } : {}),
           text: `Synthetic ${year} question ${n}: which option is correct?`,
           textHi: `कृत्रिम ${year} प्रश्न ${n}: कौन सा विकल्प सही है? (खाद्य सुरक्षा)`,
           options: {
@@ -96,7 +97,7 @@ async function main() {
       accessExpiresAt: null,
     },
   });
-  console.log(`FSO fixture: exam ${fso.id}, 2 papers (2019: 150, 2022: 149 stored), 4 coupons, hidden ₹200 product.`);
+  console.log(`FSO fixture: exam ${fso.id}, 2 papers (2019: 150, 2022: 150 stored), 4 coupons, hidden ₹200 product.`);
 }
 
 main()

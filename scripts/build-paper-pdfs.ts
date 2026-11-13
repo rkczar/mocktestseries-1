@@ -16,13 +16,16 @@
  */
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PDFDocument, PDFString } from "pdf-lib";
 import { prisma } from "@/lib/prisma";
 import { FSO_PAPERS, fsoPaperFacts, type FsoPaperFacts } from "@/lib/fso-official";
 import { PAPER_PDF_LANGS, PAPER_PDF_LANG_LABEL, upsertPaperPdfEntry, type PaperPdfLang } from "@/lib/paper-pdfs";
 import { saveGeneratedResourcePdf } from "@/lib/test-resources";
+import { parseRich, renderRichHtml } from "@/lib/rich-content";
+import { isContentAddressedKey, mediaRootDir } from "@/lib/media-storage";
+import { readMatchSpec, type MatchSpec } from "@/lib/question-types";
 
 const SITE = "https://mocktestseries.in/";
 const FONT_DIR = path.join(process.cwd(), "assets", "fonts");
@@ -53,10 +56,17 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
+/** An embedded image (data URI) with its stored pixel size, printed at its own proportions. */
+export interface PrintedImage {
+  src: string;
+  width: number;
+  height: number;
+}
 export interface PrintedOption {
   en: string;
   hi: string | null;
   isCorrect: boolean;
+  images?: PrintedImage[];
 }
 export interface PrintedQuestion {
   number: number;
@@ -65,12 +75,33 @@ export interface PrintedQuestion {
   status: string;
   en: string;
   hi: string | null;
+  images?: PrintedImage[];
+  /** MATCH_THE_FOLLOWING: List I / List II (stored once, in English; the Hindi text carries its own Hindi lists). */
+  match?: MatchSpec;
   options: PrintedOption[];
   flags: string[];
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const para = (s: string) => esc(s.trim()).replace(/\r?\n/g, "<br>");
+/** RICH_V1 text: formulas typeset with KaTeX exactly as the site renders them; line breaks kept in the text parts. */
+export const richPara = (s: string) =>
+  parseRich(s.trim())
+    .map((seg) => (seg.kind === "text" ? esc(seg.value).replace(/\r?\n/g, "<br>") : renderRichHtml(seg.display ? `$$${seg.value}$$` : `$${seg.value}$`)))
+    .join("");
+// Fonts are embedded as data: URLs: a setContent page (about:blank) never loads file:// fonts, so Chromium fell back to
+// system FreeSans / Liberation Serif. KaTeX keeps only its woff2 source (the woff/ttf fallbacks are never needed by Chromium).
+// Hindi inside a formula (\text{…}) is drawn with Noto Sans Devanagari through a unicode-range KaTeX_Main face.
+const dataUrl = (file: string, mime: string) => `url(data:${mime};base64,${readFileSync(file).toString("base64")})`;
+const KATEX_DIST = path.join(process.cwd(), "node_modules", "katex", "dist");
+const katexCss = () => {
+  const css = readFileSync(path.join(KATEX_DIST, "katex.min.css"), "utf8").replace(
+    /url\(fonts\/([\w-]+)\.woff2\) format\("woff2"\),url\(fonts\/[\w-]+\.woff\) format\("woff"\),url\(fonts\/[\w-]+\.ttf\) format\("truetype"\)/g,
+    (_, name: string) => `${dataUrl(path.join(KATEX_DIST, "fonts", `${name}.woff2`), "font/woff2")} format("woff2")`
+  );
+  if (css.includes("url(fonts/")) throw new Error("katex.min.css font sources changed: update the builder's font embedding.");
+  return css;
+};
 
 /** Loads the paper's 150 printed questions (with the documented reused-question mapping). */
 export async function loadPrintedQuestions(examId: string, facts: FsoPaperFacts): Promise<{ questions: PrintedQuestion[]; problems: string[] }> {
@@ -86,8 +117,10 @@ export async function loadPrintedQuestions(examId: string, facts: FsoPaperFacts)
     imageUrl: true,
     contentFormat: true,
     paperQuestionNumber: true,
-    options: { orderBy: { order: "asc" as const }, select: { text: true, textHi: true, isCorrect: true, imageUrl: true } },
-    _count: { select: { assets: true } },
+    questionType: true,
+    matchSpec: true,
+    options: { orderBy: { order: "asc" as const }, select: { label: true, text: true, textHi: true, isCorrect: true, imageUrl: true } },
+    assets: { orderBy: { order: "asc" as const }, select: { role: true, optionLabel: true, storageKey: true, mime: true, width: true, height: true, sha256: true } },
   };
   const rows = await prisma.question.findMany({ where: { previousYearPaperId: paperId, retiredAt: null }, select, orderBy: { paperQuestionNumber: "asc" } });
   const byNumber = new Map<number, (typeof rows)[number]>();
@@ -121,8 +154,23 @@ export async function loadPrintedQuestions(examId: string, facts: FsoPaperFacts)
     const flags: string[] = [];
     if (row.contentFormat !== "PLAIN") flags.push("rich-format");
     if (/\$|\\\(|\\\[/.test(row.text)) flags.push("math-markup");
-    if (row.imageUrl || row._count.assets > 0 || row.options.some((o) => o.imageUrl)) flags.push("has-image(not printed)");
     if (options.length !== 4) problems.push(`Q${n}: ${options.length} options (expected 4).`);
+    const match = row.questionType === "MATCH_THE_FOLLOWING" ? readMatchSpec(row.matchSpec) : null;
+    if (row.questionType === "MATCH_THE_FOLLOWING" && !match) problems.push(`Q${n}: Match the Following without readable List I / List II.`);
+    // Images: QuestionAsset QUESTION/OPTION rows, read from media storage and checked against their sha256.
+    // Anything the builder cannot print faithfully stops this paper (legacy imageUrl, list/other asset roles, missing or altered file).
+    if (row.imageUrl || row.options.some((o) => o.imageUrl)) problems.push(`Q${n}: legacy imageUrl image (not supported by the builder).`);
+    const img = (a: (typeof row.assets)[number]): PrintedImage | null => {
+      const file = isContentAddressedKey(a.storageKey) ? path.join(mediaRootDir(), a.storageKey) : null;
+      const bytes = file && existsSync(file) ? readFileSync(file) : null;
+      if (!bytes) return problems.push(`Q${n}: image ${a.storageKey} missing from media storage.`), null;
+      if (createHash("sha256").update(bytes).digest("hex") !== a.sha256) return problems.push(`Q${n}: image ${a.storageKey} does not match its sha256.`), null;
+      return { src: `data:${a.mime};base64,${bytes.toString("base64")}`, width: a.width, height: a.height };
+    };
+    for (const a of row.assets) if (a.role !== "QUESTION" && a.role !== "OPTION" && a.role !== "EXPLANATION") problems.push(`Q${n}: ${a.role} image (not supported by the builder).`);
+    const stemImages = row.assets.filter((a) => a.role === "QUESTION").map(img).filter((x): x is PrintedImage => !!x);
+    const optionImages = (label: string) => row!.assets.filter((a) => a.role === "OPTION" && a.optionLabel === label).map(img).filter((x): x is PrintedImage => !!x);
+    if (stemImages.length || row.assets.some((a) => a.role === "OPTION")) flags.push("has-image");
     questions.push({
       number: n,
       questionId: row.id,
@@ -130,7 +178,9 @@ export async function loadPrintedQuestions(examId: string, facts: FsoPaperFacts)
       status: row.status,
       en: row.text,
       hi: row.textHi,
-      options: options.map((o) => ({ en: o.text, hi: o.textHi, isCorrect: o.isCorrect })),
+      images: stemImages,
+      ...(match ? { match } : {}),
+      options: options.map((o) => ({ en: o.text, hi: o.textHi, isCorrect: o.isCorrect, images: optionImages(o.label) })),
       flags,
     });
   }
@@ -139,8 +189,10 @@ export async function loadPrintedQuestions(examId: string, facts: FsoPaperFacts)
 
 /** Which language versions the bank fully supports (EN always needs text; HI needs textHi on every question and option). */
 export function supportedLangs(questions: PrintedQuestion[]): PaperPdfLang[] {
-  const hasHi = questions.length > 0 && questions.every((q) => q.hi?.trim() && q.options.every((o) => o.hi?.trim()));
-  const hasEn = questions.length > 0 && questions.every((q) => q.en.trim() && q.options.every((o) => o.en.trim()));
+  // An image-only option (a printed structure) is language-neutral: it counts for both languages.
+  const opt = (o: PrintedOption, t: string | null) => !!t?.trim() || !!o.images?.length;
+  const hasHi = questions.length > 0 && questions.every((q) => q.hi?.trim() && q.options.every((o) => opt(o, o.hi)));
+  const hasEn = questions.length > 0 && questions.every((q) => q.en.trim() && q.options.every((o) => opt(o, o.en)));
   return PAPER_PDF_LANGS.filter((l) => (l === "ENGLISH" ? hasEn : l === "HINDI" ? hasHi : hasEn && hasHi));
 }
 
@@ -158,16 +210,28 @@ export function keyMismatches(questions: PrintedQuestion[], facts: FsoPaperFacts
 }
 
 export function paperHtml(facts: FsoPaperFacts, questions: PrintedQuestion[], lang: PaperPdfLang): string {
-  const font = (f: string) => `url("file://${path.join(FONT_DIR, f)}")`;
+  const font = (f: string) => dataUrl(path.join(FONT_DIR, f), "font/ttf");
   const showHi = lang !== "ENGLISH";
   const showEn = lang !== "HINDI";
   const deleted = new Set(facts.deleted);
+  const txt = (q: PrintedQuestion, s: string) => (q.flags.includes("rich-format") ? richPara(s) : para(s));
+  // Printed at ~150 dpi of the stored pixels (never upscaled past the column), height follows the aspect ratio.
+  const imgs = (list: PrintedImage[] | undefined, cls: string) =>
+    (list ?? []).map((m) => `<img class="${cls}" src="${m.src}" alt="" style="width:${(m.width / 6).toFixed(1)}mm;max-width:100%;height:auto">`).join("");
+  // Match lists come from matchSpec (English) and are printed in the English column only: the stored Hindi text already
+  // contains its Hindi List I / List II, so the Hindi column would otherwise print the lists twice.
+  const lists = (q: PrintedQuestion) =>
+    q.match
+      ? `<div class="ml">${(["I", "II"] as const)
+          .map((l) => `<div><div class="mlh">List ${l}</div>${(l === "I" ? q.match!.listI : q.match!.listII).map((e) => `<div class="mli"><span class="on">${esc(e.key)}.</span> ${txt(q, e.text)}</div>`).join("")}</div>`)
+          .join("")}</div>`
+      : "";
   const opts = (q: PrintedQuestion, l: "en" | "hi") =>
-    `<ol class="opts">${q.options.map((o, i) => `<li><span class="on">(${i + 1})</span> ${para((l === "hi" ? o.hi : o.en) ?? "")}</li>`).join("")}</ol>`;
+    `<ol class="opts">${q.options.map((o, i) => `<li><span class="on">(${i + 1})</span> ${txt(q, (l === "hi" ? o.hi : o.en) ?? "")}${imgs(o.images, "oimg")}</li>`).join("")}</ol>`;
   const block = (q: PrintedQuestion) => {
     const del = deleted.has(q.number) ? `<div class="del">Deleted by RPSC in the official answer key — not scored</div>` : "";
-    const hi = showHi ? `<div class="col hi" lang="hi">${para(q.hi ?? "")}${opts(q, "hi")}</div>` : "";
-    const en = showEn ? `<div class="col en" lang="en">${para(q.en)}${opts(q, "en")}</div>` : "";
+    const hi = showHi ? `<div class="col hi" lang="hi">${txt(q, q.hi ?? "")}${imgs(q.images, "qimg")}${opts(q, "hi")}</div>` : "";
+    const en = showEn ? `<div class="col en" lang="en">${txt(q, q.en)}${imgs(q.images, "qimg")}${lists(q)}${opts(q, "en")}</div>` : "";
     return `<section class="q"><div class="qn">${q.number}.</div><div class="body">${del}<div class="cols ${lang === "BILINGUAL" ? "two" : ""}">${hi}${en}</div></div></section>`;
   };
   const keyCells = facts.answers
@@ -181,11 +245,13 @@ export function paperHtml(facts: FsoPaperFacts, questions: PrintedQuestion[], la
     .join("");
   const langLabel = PAPER_PDF_LANG_LABEL[lang];
   const englishPrevails = showHi ? `<li>In case of any difference between the Hindi and English versions, the English version prevails (as printed on the RPSC booklet).</li>` : "";
-  return `<!doctype html><html><head><meta charset="utf-8"><title>RPSC FSO ${facts.year} — ${esc(langLabel)}</title><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>RPSC FSO ${facts.year} — ${esc(langLabel)}</title><style>${katexCss()}</style><style>
 @font-face{font-family:Body;src:${font("LiberationSans-Regular.ttf")};font-weight:400}
 @font-face{font-family:Body;src:${font("LiberationSans-Bold.ttf")};font-weight:700}
 @font-face{font-family:Deva;src:${font("NotoSansDevanagari-Regular.ttf")};font-weight:400}
 @font-face{font-family:Deva;src:${font("NotoSansDevanagari-Bold.ttf")};font-weight:700}
+@font-face{font-family:KaTeX_Main;src:${font("NotoSansDevanagari-Regular.ttf")};font-weight:400;unicode-range:U+0900-097F,U+1CD0-1CFF,U+200C-200D,U+25CC,U+A8E0-A8FF}
+@font-face{font-family:KaTeX_Main;src:${font("NotoSansDevanagari-Bold.ttf")};font-weight:700;unicode-range:U+0900-097F,U+1CD0-1CFF,U+200C-200D,U+25CC,U+A8E0-A8FF}
 @page{size:A4;margin:18mm 14mm 18mm 14mm}
 html,body{margin:0}
 *{box-sizing:border-box}
@@ -208,7 +274,11 @@ h1{font-size:15pt;margin:0 0 4mm}
 .cols.two{display:grid;grid-template-columns:1fr 1fr;gap:5mm}
 .opts{list-style:none;margin:1.2mm 0 0;padding:0}
 .opts li{margin:.6mm 0}
+.qimg{display:block;margin:1.5mm 0}
+.oimg{display:inline-block;vertical-align:middle;margin:.5mm 0 .5mm 1.5mm}
 .on{font-weight:700}
+.ml{display:grid;grid-template-columns:1fr 1fr;gap:3mm;margin:1.2mm 0}
+.mlh{font-weight:700;text-decoration:underline}
 .del{display:inline-block;font-size:8pt;font-weight:700;border:1px solid #b00;color:#b00;padding:.4mm 1.6mm;margin-bottom:1.2mm}
 .key{border-collapse:collapse;width:100%;table-layout:fixed;font-size:9pt;break-inside:auto}
 .key td{border:1px solid #bbb;padding:1mm 1.5mm;text-align:center}
