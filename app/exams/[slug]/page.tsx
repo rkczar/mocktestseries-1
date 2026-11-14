@@ -23,7 +23,7 @@ import { getOfficialSources, examAuthorityShort } from "@/lib/exam-editorial-fac
 import { availableEditorialPaths } from "@/lib/exam-important-topics";
 import { getExamFeatures } from "@/lib/exam-features";
 
-const EDITORIAL_LINK_LABELS: Record<string, string> = { eligibility: "Eligibility & qualification", recruitment: "Recruitment history & status", "important-topics": "Important topics" };
+const EDITORIAL_LINK_LABELS: Record<string, string> = { eligibility: "Eligibility & qualification", recruitment: "Recruitment history & status", "important-topics": "Important topics", "preparation-strategy": "Preparation strategy" };
 import { formatNegativeMarking } from "@/lib/negative-marking";
 
 type PublicExam = NonNullable<Awaited<ReturnType<typeof getPublicExamBySlug>>>;

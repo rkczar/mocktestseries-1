@@ -35,7 +35,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     exam,
     path: `/exams/${exam.publicSlug}/syllabus`,
     title: `${syllabusName(exam)} Syllabus: Subject & Topic-wise List`,
-    description: `${name} syllabus, subject and topic-wise: ${stats.subjects} subjects and ${stats.topics} topics, each with practice questions. Confirm the official syllabus in the notification.`,
+    description: `${name} syllabus, subject and topic-wise: ${stats.subjects} subjects and ${stats.topics} topics with practice questions. Check the official notification.`,
   });
 }
 

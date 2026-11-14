@@ -105,6 +105,8 @@ export interface ResolvedExamSummary {
   questions: number;
   subjects: number;
   links: ResolvedExamLink[];
+  /** Other active exams with a public hub, linked from the featured exam card. */
+  otherExams?: { label: string; href: string }[];
 }
 
 export interface ResolvedOffer {
@@ -547,10 +549,15 @@ async function buildExamSummary(
     },
   });
   if (!exam || !exam.isActive) return null;
-  const [series, papers, insights] = await Promise.all([
+  const [series, papers, insights, others] = await Promise.all([
     seriesFor(examId),
     prisma.previousYearPaper.findMany({ where: { examId, isActive: true }, select: { year: true } }),
     getExamPyqInsights(examId),
+    prisma.exam.findMany({
+      where: { id: { not: examId }, isActive: true, publicPageEnabled: true, publicSlug: { not: null } },
+      select: { name: true, publicSlug: true },
+      orderBy: [{ order: "asc" }, { name: "asc" }],
+    }),
   ]);
   const ms = series?.mockSeries ?? null;
   const freeMocks = ms ? ms.tests.filter((t) => t.accessType === "FREE").length : 0;
@@ -580,6 +587,7 @@ async function buildExamSummary(
           href: `${hubHref}/${l.segment}`,
         }))
       : [],
+    otherExams: others.map((o) => ({ label: displayExamName(o.name), href: `/exams/${o.publicSlug}` })),
   };
 }
 

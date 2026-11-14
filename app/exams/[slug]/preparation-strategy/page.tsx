@@ -16,6 +16,17 @@ import { formatShare } from "@/lib/exam-pyq-insights";
 import { BRAND_NAME } from "@/lib/brand";
 import { examInsightPath, loadPublicExamAnalysis, type SubjectSpread } from "@/lib/exam-pyq-analysis";
 import { formatNegativeMarking } from "@/lib/negative-marking";
+import { getPublicExamBySlug } from "@/lib/exam-public";
+import { displayExamName } from "@/lib/exam-display";
+import { getEditorialPage } from "@/lib/exam-editorial-pages";
+import { EditorialExamPage } from "@/components/public-exam/editorial-page";
+
+/** Exams below the PYQ-analysis gate may have a hand-written strategy page instead (lib/exam-editorial-pages.ts). */
+async function loadEditorial(slug: string) {
+  const exam = await getPublicExamBySlug(slug);
+  const page = exam ? getEditorialPage(exam.code, "preparation-strategy") : null;
+  return exam && page ? { exam, page } : null;
+}
 
 /**
  * Preparation strategy for an exam, built on its previous-year-paper data
@@ -46,7 +57,10 @@ function tiers(spreads: SubjectSpread[], papers: number) {
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
   const data = await loadPublicExamAnalysis(slug);
-  if (!data) return {};
+  if (!data) {
+    const ed = await loadEditorial(slug);
+    return ed ? examPageMetadata({ exam: ed.exam, path: `/exams/${ed.exam.publicSlug}/preparation-strategy`, absoluteTitle: ed.page.metaTitle, description: ed.page.metaDescription }) : {};
+  }
   const { exam, analysis: a, short } = data;
   const yr = exam.year ? ` ${exam.year}` : "";
   return examPageMetadata({
@@ -60,7 +74,11 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 export default async function PreparationStrategyPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const data = await loadPublicExamAnalysis(slug);
-  if (!data) notFound();
+  if (!data) {
+    const ed = await loadEditorial(slug);
+    if (!ed) notFound();
+    return <EditorialExamPage siteUrl={await getSiteUrl()} examName={displayExamName(ed.exam.name)} slug={ed.exam.publicSlug!} crumb="Preparation strategy" page={ed.page} />;
+  }
   const { exam, analysis: a, meta, name, baseName, short } = data;
   const [siteUrl, mockSeriesSummary, stats] = await Promise.all([getSiteUrl(), getExamMockSeriesSummary(exam), getExamPublicStats(exam.id)]);
   const base = `/exams/${data.slug}`;

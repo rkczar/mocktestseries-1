@@ -292,6 +292,20 @@ export function FeaturedExamSection({ content, resolved }: SectionProps) {
               </Button>
             ) : null}
           </div>
+          {summary?.otherExams?.length ? (
+            <p className="text-sm text-[var(--color-muted-foreground)]">
+              Also preparing for{" "}
+              {summary.otherExams.map((o, i) => (
+                <span key={o.href}>
+                  {i > 0 ? ", " : ""}
+                  <Link href={o.href} className="font-medium text-[var(--color-foreground)] underline underline-offset-4 hover:text-[var(--color-primary)]">
+                    {o.label}
+                  </Link>
+                </span>
+              ))}
+              ?
+            </p>
+          ) : null}
         </div>
 
         {links.length > 0 ? (

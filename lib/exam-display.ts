@@ -16,11 +16,14 @@ export function formatExamDate(date: Date): string {
  * dropped, short acronyms (RUHS, NEET, UG, MO) and numbers are kept, other
  * all-caps words are title-cased. Mixed-case names are left as typed.
  */
+// Short all-caps words in exam names that are ordinary words, not acronyms.
+const NOT_ACRONYMS = new Set(["FOOD"]);
+
 export function displayExamName(name: string): string {
   const cleaned = name.replace(/\bEXAM\b/gi, " ").replace(/\s+/g, " ").trim();
   if (cleaned !== cleaned.toUpperCase()) return cleaned;
   return cleaned
     .split(" ")
-    .map((w) => (/^[A-Z]{1,4}$/.test(w) || /\d/.test(w) ? w : w.toLowerCase().replace(/[a-z]/, (c) => c.toUpperCase())))
+    .map((w) => ((/^[A-Z]{1,4}$/.test(w) && !NOT_ACRONYMS.has(w)) || /\d/.test(w) ? w : w.toLowerCase().replace(/[a-z]/, (c) => c.toUpperCase())))
     .join(" ");
 }

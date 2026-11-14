@@ -61,7 +61,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const title = applyTitleTemplate(seo.titleTemplate, available > 0 ? `${short}: ${available} Mock Tests Live` : name);
   const description =
     summary.mockSeries
-      ? `${name}: ${planned > 0 ? `${planned} exam-pattern mock tests planned, ` : ""}${summary.mockSeries.available} available now, with previous year papers, practice OMR, AI explanations and performance analytics.`
+      ? `${short}: ${planned > 0 ? `${planned} mock tests planned, ` : ""}${summary.mockSeries.available} available now, with previous year papers, practice OMR and AI explanations.`
       : `Mock tests for ${exam.name} with previous year papers, practice OMR and AI-powered explanations.`;
   const url = `${siteUrl}${mockSeriesPath(exam.publicSlug!)}`;
   return {

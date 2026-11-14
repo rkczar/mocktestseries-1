@@ -35,10 +35,10 @@ import { getPlanStates, getPublicPlanCatalog, type CatalogPlan, type PlanCatalog
  * test series" head term stays with /exams/[slug]/mock-test-series.
  */
 
-const SEO_TITLE = "RUHS MO 2026 Test Series Price & Plans";
+const SEO_TITLE = "RUHS MO & Rajasthan FSO Test Series: Price & Plans";
 const SEO_DESCRIPTION =
   "Compare RUHS MO 2026 test series plans: complete mock test series, single mock tests, previous year papers and subject-wise practice, with current prices.";
-const H1 = "RUHS MO 2026 Test Series — Plans & Pricing";
+const H1 = "Test Series Plans & Pricing — RUHS MO and Rajasthan FSO";
 
 export async function generateMetadata(): Promise<Metadata> {
   const [seo, siteUrl, catalog] = await Promise.all([getSeoSettings(), getSiteUrl(), getPublicPlanCatalog()]);

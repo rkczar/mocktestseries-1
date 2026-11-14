@@ -59,7 +59,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
       ? `${short} ${data.year} Question Paper (Held ${note.heldOn})`
       : `${short} ${data.year} Question Paper – Subject-wise Analysis`,
     description: note
-      ? `${short} ${data.year} paper (${note.cycle}, held ${note.heldOn}): ${questions} questions, ${subjects} subjects, led by ${top}. Attempt online; official answer key linked.`
+      ? `${short} ${data.year} paper (held ${note.heldOn}): ${questions} questions, ${subjects} subjects. Attempt online with the official answer key linked.`
       : `${short} ${data.year} question paper: ${questions} questions across ${subjects} subjects, led by ${top}. Subject-wise analysis and an online attempt.`,
   });
 }

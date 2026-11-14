@@ -27,7 +27,7 @@ const RPSC = "https://rpsc.rajasthan.gov.in";
 const ADVT_2022 = { label: "RPSC Detailed Advertisement No. 11/2022-23 (21-10-2022)", url: `${RPSC}/Static/RecruitmentAdvertisements/AEF2AEAF0A7645B785B846E207D99386.pdf` };
 const ADVT_2019 = { label: "RPSC Advertisement No. 04/2019-20 (05-08-2019)", url: `${RPSC}/Static/RecruitmentAdvertisements/69A75E0E09D2489B8AAA118769D4EE82.pdf` };
 
-export type EditorialPageKey = "eligibility" | "recruitment";
+export type EditorialPageKey = "eligibility" | "recruitment" | "preparation-strategy";
 
 const PAGES: Record<string, Partial<Record<EditorialPageKey, EditorialPage>>> = {
   "RUHS-FSO": {
@@ -100,6 +100,56 @@ const PAGES: Record<string, Partial<Record<EditorialPageKey, EditorialPage>>> = 
       ],
       sources: [ADVT_2022, ADVT_2019, { label: "RPSC website", url: `${RPSC}/` }],
       checkedOn: "12 November 2026",
+    },
+    // Hand-written: FSO has two past papers, below the data-driven strategy page's 3-paper gate.
+    "preparation-strategy": {
+      title: "How to Prepare for Rajasthan FSO",
+      metaTitle: "How to Prepare for RPSC FSO: Study Plan from Past Papers",
+      metaDescription:
+        "An RPSC Food Safety Officer study plan based on the official exam pattern, syllabus and the 2019 and 2022 papers: what to study first and how to practise.",
+      intro:
+        "This plan is built on what RPSC has published: the exam pattern and negative marking of the 2022 examination, the syllabus subjects, and the two past papers (2019 and 2022). RPSC has not announced a new FSO examination yet, so use the time to cover the syllabus fully and practise with past papers.",
+      blocks: [
+        {
+          heading: "1. Know the paper",
+          bullets: [
+            "2022 examination: one paper, 150 questions, 150 marks, 2 hours 30 minutes.",
+            "Part A, General Knowledge of Rajasthan: 40 questions. Part B, Concerned Subject: 110 questions.",
+            "One-third of a question's marks is deducted for each wrong answer (an incorrect answer or more than one answer), so skip questions you cannot narrow down.",
+          ],
+        },
+        {
+          heading: "2. Cover the Part B subjects first",
+          paragraphs: [
+            "Part B carries 110 of the 150 marks. Its syllabus covers chemistry, food microbiology and fermentation, biochemistry, nutrition and toxicology, biology and human physiology, biotechnology and statistics, agriculture with reference to Rajasthan, livestock and dairy, and food technology, food laws and hygiene.",
+            "Start with the subjects closest to your degree, then fill the gaps. Food laws and hygiene (the Food Safety and Standards Act and its regulations) is common to every background and worth reading from the official text.",
+          ],
+        },
+        {
+          heading: "3. Prepare Part A alongside",
+          paragraphs: [
+            "Part A is 40 questions on Rajasthan: history, culture and heritage; geography, natural resources and socio-economic development; and current events of Rajasthan and India. Give it a fixed daily slot rather than leaving it to the end, and keep current-affairs notes from now until the exam.",
+          ],
+        },
+        {
+          heading: "4. Use the past papers",
+          bullets: [
+            "Attempt the 2019 and 2022 papers under time, then review every wrong and skipped question.",
+            "Use the Important Topics page to see which syllabus areas the two papers asked about most. With only two papers, treat it as a guide, not a forecast.",
+            "Practise subject-wise from the question bank for the subjects where you lose most marks.",
+          ],
+        },
+        {
+          heading: "5. Before the exam",
+          bullets: [
+            "Read the new RPSC advertisement as soon as it is published: the pattern, syllabus or eligibility can change.",
+            "Practise filling an OMR sheet within the time limit.",
+            "In the last weeks, revise your notes and re-attempt the past papers instead of starting new material.",
+          ],
+        },
+      ],
+      sources: [ADVT_2022, { label: "RPSC website", url: `${RPSC}/` }],
+      checkedOn: "14 November 2026",
     },
   },
 };
