@@ -6,6 +6,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { NameCorrectionDialog } from "./name-correction-dialog";
+import { DeleteStudentDialog } from "../delete-student-dialog";
 import { StudentPaymentProfile } from "@/app/admin/(dashboard)/payments/_components/student-payment-profile";
 import { DeviceAccessSection } from "./device-access-section";
 import { StudentTestHistory } from "@/components/admin/student-test-history";
@@ -37,6 +38,8 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
   // A deleted row is anonymized; its person is named by the retained deletion
   // audit record, shown only to admins allowed to see that record.
   const canViewDeletion = Boolean(session?.user?.permissions?.includes(PERMISSIONS.STUDENT_DELETION_VIEW));
+  // Delete Student Account: MASTER_ADMIN only (re-checked by the server action).
+  const canDelete = !deleted && Boolean(session?.user?.permissions?.includes(PERMISSIONS.STUDENT_DELETION_MANAGE));
   const displayName =
     deleted && latestDeletionRequest?.status === "APPROVED"
       ? canViewDeletion
@@ -52,7 +55,10 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
           <p className="text-sm text-[var(--color-muted-foreground)] font-mono">{student.studentId}</p>
           {deleted ? <Badge variant="error" className="mt-1">Account Deleted</Badge> : null}
         </div>
-        {canCorrectName ? <NameCorrectionDialog studentId={student.id} name={student.name} /> : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {canCorrectName ? <NameCorrectionDialog studentId={student.id} name={student.name} /> : null}
+          {canDelete ? <DeleteStudentDialog studentDbId={student.id} afterDelete="/admin/students?tab=deleted" size="default" /> : null}
+        </div>
       </div>
 
       <Card>

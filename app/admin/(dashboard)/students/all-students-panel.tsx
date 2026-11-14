@@ -4,7 +4,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SelectNative } from "@/components/ui/select-native";
-import { PAGE_SIZES, loadStudentList, type StudentListParams, type StudentListScope } from "@/lib/admin-students-list";
+import { PAGE_SIZES, loadExamEnrollmentCounts, loadStudentList, type StudentListParams, type StudentListScope } from "@/lib/admin-students-list";
+import { displayExamName } from "@/lib/exam-display";
+import { hasPermission } from "@/lib/rbac";
+import { PERMISSIONS } from "@/lib/permissions";
+import { DeleteStudentDialog } from "./delete-student-dialog";
 
 /**
  * Teacher Portal reuse: the same list, scoped to the teacher's exams, linking
@@ -34,6 +38,9 @@ function hrefFor(p: StudentListParams, patch: Partial<StudentListParams>, basePa
   if (n.access !== "all") sp.set("access", n.access);
   if (n.sort !== "newest") sp.set("sort", n.sort);
   if (n.perPage !== 50) sp.set("per", String(n.perPage));
+  if (n.exam) sp.set("exam", n.exam);
+  if (n.from) sp.set("from", n.from);
+  if (n.to) sp.set("to", n.to);
   if (n.page > 1) sp.set("page", String(n.page));
   return `${basePath ?? "/admin/students"}?${sp.toString()}`;
 }
@@ -54,13 +61,17 @@ export async function AllStudentsPanel({ params, teacher }: { params: StudentLis
   // Approved deletions leave an anonymized "Deleted Student" row behind for
   // retained attempt/payment history; it is not an active student. Who it
   // was lives in the deletion audit record (Deletion Requests tab).
-  const { total, filtered, page, pageCount, perPage, rows } = await loadStudentList(params, undefined, teacher?.scope);
+  const [{ total, filtered, page, pageCount, perPage, rows }, examCounts, canDelete] = await Promise.all([
+    loadStudentList(params, undefined, teacher?.scope),
+    teacher ? null : loadExamEnrollmentCounts(),
+    teacher ? false : hasPermission(PERMISSIONS.STUDENT_DELETION_MANAGE),
+  ]);
   const p = { ...params, page };
   const base = teacher?.basePath;
   const href = (q: StudentListParams, patch: Partial<StudentListParams>) => hrefFor(q, patch, base);
   const from = filtered === 0 ? 0 : (page - 1) * perPage + 1;
   const to = Math.min(page * perPage, filtered);
-  const filtering = Boolean(params.q) || params.account !== "all" || params.access !== "all";
+  const filtering = Boolean(params.q || params.exam || params.from || params.to) || params.account !== "all" || params.access !== "all";
 
   return (
     <Card>
@@ -71,6 +82,18 @@ export async function AllStudentsPanel({ params, teacher }: { params: StudentLis
           {filtering ? ` · ${filtered.toLocaleString("en-IN")} match the filters` : ""}
           {teacher ? " in your exams" : " · deleted accounts are listed under Deleted Students"}
         </CardDescription>
+        {examCounts ? (
+          <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--color-muted-foreground)]" data-testid="students-exam-counts">
+            {examCounts.exams.map((e) => (
+              <Link key={e.id} href={href(params, { exam: e.id, page: 1 })} className="hover:underline" data-exam-id={e.id}>
+                {displayExamName(e.name)}: <span className="font-semibold text-[var(--color-foreground)]">{e.students.toLocaleString("en-IN")}</span>
+              </Link>
+            ))}
+            <Link href={href(params, { exam: "none", page: 1 })} className="hover:underline">
+              No exam selected: <span className="font-semibold text-[var(--color-foreground)]">{examCounts.noExam.toLocaleString("en-IN")}</span>
+            </Link>
+          </p>
+        ) : null}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <form method="get" action={base ?? "/admin/students"} className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6" data-testid="students-filters">
@@ -82,6 +105,24 @@ export async function AllStudentsPanel({ params, teacher }: { params: StudentLis
             aria-label="Search students"
             className="sm:col-span-2"
           />
+          {examCounts ? (
+            <SelectNative name="exam" defaultValue={params.exam} aria-label="Exam">
+              <option value="">All exams</option>
+              {examCounts.exams.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {displayExamName(e.name)}
+                  {e.isActive ? "" : " (inactive)"} ({e.students})
+                </option>
+              ))}
+              <option value="none">No exam selected ({examCounts.noExam})</option>
+            </SelectNative>
+          ) : null}
+          {examCounts ? (
+            <div className="flex gap-2 sm:col-span-2">
+              <Input type="date" name="from" defaultValue={params.from} aria-label="Registered from" title="Registered from" />
+              <Input type="date" name="to" defaultValue={params.to} aria-label="Registered to" title="Registered to" />
+            </div>
+          ) : null}
           <SelectNative name="account" defaultValue={params.account} aria-label="Account status">
             <option value="all">All accounts</option>
             <option value="active">Active</option>
@@ -113,7 +154,7 @@ export async function AllStudentsPanel({ params, teacher }: { params: StudentLis
           </div>
         </form>
         {filtering ? (
-          <Link href={href(params, { q: "", account: "all", access: "all", page: 1 })} className="w-fit text-xs text-[var(--color-primary)] hover:underline">
+          <Link href={href(params, { q: "", account: "all", access: "all", exam: "", from: "", to: "", page: 1 })} className="w-fit text-xs text-[var(--color-primary)] hover:underline">
             Clear filters
           </Link>
         ) : null}
@@ -130,11 +171,13 @@ export async function AllStudentsPanel({ params, teacher }: { params: StudentLis
                   <th className="py-2 pr-4">Student ID</th>
                   <th className="py-2 pr-4">Name</th>
                   {teacher ? null : <th className="py-2 pr-4">Email / Mobile</th>}
+                  {teacher ? null : <th className="py-2 pr-4">Exams</th>}
                   <th className="py-2 pr-4">Registered</th>
                   <th className="py-2 pr-4">Last Activity</th>
                   <th className="py-2 pr-4">Attempts</th>
                   {teacher ? null : <th className="py-2 pr-4">Access</th>}
                   <th className="py-2 pr-4">Status</th>
+                  {canDelete ? <th className="py-2 pr-4">Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -152,6 +195,11 @@ export async function AllStudentsPanel({ params, teacher }: { params: StudentLis
                       {s.email && s.mobile ? <span className="block text-xs">{s.mobile}</span> : null}
                     </td>
                     )}
+                    {teacher ? null : (
+                    <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]" data-testid="student-exams">
+                      {s.examEnrollments.length ? s.examEnrollments.map((e) => displayExamName(e.exam.name)).join(", ") : "—"}
+                    </td>
+                    )}
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{fmtDate(s.createdAt)}</td>
                     <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{s.lastActivity ? fmtDate(s.lastActivity) : "Never"}</td>
                     <td className="py-2.5 pr-4">{s._count.testAttempts}</td>
@@ -163,6 +211,11 @@ export async function AllStudentsPanel({ params, teacher }: { params: StudentLis
                     <td className="py-2.5 pr-4">
                       <Badge variant={STATUS_VARIANT[s.status]}>{s.status.replace(/_/g, " ")}</Badge>
                     </td>
+                    {canDelete ? (
+                      <td className="py-2.5 pr-4">
+                        <DeleteStudentDialog studentDbId={s.id} />
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>

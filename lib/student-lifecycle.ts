@@ -157,6 +157,35 @@ export async function createDeletionRequest(studentDbId: string, reason: string 
 type AdminActor = { id: string; name: string | null | undefined };
 
 /**
+ * Admin-initiated deletion (Admin → Students, MASTER_ADMIN via STUDENT_DELETION_MANAGE, checked by the caller).
+ * Files a request into the SAME queue a student's own request uses — same identity snapshot, same audit trail —
+ * so approval goes through approveStudentDeletion unchanged. An existing PENDING request is reused (never a
+ * second one). A SUSPENDED account may be deleted by an admin too; a DELETED one never.
+ */
+export async function createAdminDeletionRequest(studentDbId: string, admin: AdminActor, reason: string) {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const student = await tx.student.findUnique({ where: { id: studentDbId }, include: SNAPSHOT_INCLUDE });
+      if (!student || student.status === StudentStatus.DELETED) throw new DeletionLifecycleError("This account has already been deleted.");
+      const pending = await tx.deletionRequest.findFirst({ where: { studentId: studentDbId, status: DeletionRequestStatus.PENDING } });
+      if (pending) return pending;
+      const request = await tx.deletionRequest.create({
+        data: { studentId: studentDbId, reason: `Admin-initiated by ${admin.name ?? "admin"}: ${reason}`.slice(0, 1000), ...identitySnapshot(student) },
+      });
+      await tx.student.updateMany({ where: { id: studentDbId, status: StudentStatus.ACTIVE }, data: { status: StudentStatus.DELETION_REQUESTED } });
+      await tx.studentActivity.create({ data: { studentId: studentDbId, activity: "DELETION_REQUESTED", metadata: { requestId: request.id, byAdmin: admin.id } } });
+      await tx.auditLog.create({
+        data: { actorId: admin.id, action: "STUDENT_DELETION_REQUESTED", entityType: "DeletionRequest", entityId: request.id, metadata: { studentCode: student.studentId, adminInitiated: true } },
+      });
+      return request;
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new DeletionLifecycleError("A deletion request for this student is already pending — refresh and try again.");
+    throw error;
+  }
+}
+
+/**
  * Approve = one transaction. The PENDING -> APPROVED claim is a conditional
  * update that also writes the final audit snapshot, so a double-click / two
  * admins racing resolves to exactly one approval (the loser's WHERE

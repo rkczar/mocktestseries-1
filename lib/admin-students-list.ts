@@ -23,7 +23,16 @@ export interface StudentListParams {
   sort: SortOrder;
   page: number;
   perPage: PageSize;
+  /** "" = all exams; an Exam id = enrolled in that exam (StudentExamEnrollment); "none" = enrolled in no exam. */
+  exam: string;
+  /** Registration date range, inclusive, "YYYY-MM-DD" in IST ("" = open). */
+  from: string;
+  to: string;
 }
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** IST calendar day → its first instant (the admin panel shows dates in Asia/Kolkata). */
+const istDayStart = (day: string) => new Date(`${day}T00:00:00+05:30`);
 
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 
@@ -39,6 +48,9 @@ export function parseStudentListParams(sp: Record<string, string | string[] | un
     sort: one(sp.sort) === "oldest" ? "oldest" : "newest",
     page: Number.isFinite(page) && page >= 1 ? page : 1,
     perPage: (PAGE_SIZES as readonly number[]).includes(per) ? (per as PageSize) : 50,
+    exam: /^[a-z0-9]{1,40}$/i.test(one(sp.exam)) ? one(sp.exam) : "",
+    from: ISO_DAY.test(one(sp.from)) ? one(sp.from) : "",
+    to: ISO_DAY.test(one(sp.to)) ? one(sp.to) : "",
   };
 }
 
@@ -75,6 +87,13 @@ export async function buildStudentWhere(p: StudentListParams, now: Date, scope?:
   if (scope) and.push(scope.where);
   if (p.account === "active") and.push({ status: StudentStatus.ACTIVE });
   if (p.account === "inactive") and.push({ status: { in: [StudentStatus.SUSPENDED, StudentStatus.DELETION_REQUESTED] } });
+
+  // Exam = the student's own enrollment (StudentExamEnrollment: chosen on /student/welcome or the single-exam
+  // default) — not test participation, purchases or exam availability.
+  if (p.exam === "none") and.push({ examEnrollments: { none: {} } });
+  else if (p.exam) and.push({ examEnrollments: { some: { examId: p.exam } } });
+  if (p.from) and.push({ createdAt: { gte: istDayStart(p.from) } });
+  if (p.to) and.push({ createdAt: { lt: new Date(istDayStart(p.to).getTime() + 86_400_000) } });
 
   if (p.q) {
     const or: Prisma.StudentWhereInput[] = [
@@ -127,6 +146,7 @@ export async function loadStudentList(p: StudentListParams, now: Date = new Date
       createdAt: true,
       lastLoginAt: true,
       _count: { select: { testAttempts: true } },
+      examEnrollments: { select: { exam: { select: { id: true, name: true } } }, orderBy: { createdAt: "asc" } },
       premiumTrial: { select: { startedAt: true, endsAt: true } },
     },
   });
@@ -159,4 +179,19 @@ export async function loadStudentList(p: StudentListParams, now: Date = new Date
   });
 
   return { total, filtered, page, pageCount, perPage: p.perPage, rows };
+}
+
+/**
+ * Exams for the All Students filter, with how many (non-deleted) students are enrolled in each and how many are in
+ * none. One GROUP BY; @@unique([studentId, examId]) means a student counts once per exam and is never double-counted.
+ */
+export async function loadExamEnrollmentCounts(scope?: StudentListScope) {
+  const studentWhere: Prisma.StudentWhereInput = { AND: [{ status: { not: StudentStatus.DELETED } }, ...(scope ? [scope.where] : [])] };
+  const [exams, grouped, noExam] = await Promise.all([
+    prisma.exam.findMany({ select: { id: true, name: true, isActive: true }, orderBy: [{ isActive: "desc" }, { name: "asc" }] }),
+    prisma.studentExamEnrollment.groupBy({ by: ["examId"], where: { student: studentWhere }, _count: { _all: true } }),
+    prisma.student.count({ where: { AND: [studentWhere, { examEnrollments: { none: {} } }] } }),
+  ]);
+  const byExam = new Map(grouped.map((g) => [g.examId, g._count._all]));
+  return { exams: exams.map((e) => ({ ...e, students: byExam.get(e.id) ?? 0 })), noExam };
 }
