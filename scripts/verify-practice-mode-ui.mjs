@@ -208,6 +208,8 @@ async function main() {
       check("23. refresh: still no countdown", (await timerSeconds(page)) === null);
       const p2 = await payloadReveals(page, 100);
       check("23. refresh payload: exactly Q1 + Q3 revealed", p2.revealed === 2 && p2.hidden === 98, p2);
+      check("23. refresh: resumes on the last question (Q2)", (await position(page)) === 1);
+      await page.getByRole("button", { name: "Go to question 1", exact: true }).tap();
       check("23. refresh: Q1 locked + revealed", new RegExp(`Incorrect — correct answer: ${k1}`).test((await verdict(page)) ?? "") && (await isPicked(page, w1)) && (await option(page, k1).locator("input").isDisabled()));
       await page.getByRole("button", { name: "Go to question 2", exact: true }).tap();
       check("23. refresh: Q2 unrevealed + open", (await verdict(page)) === null && (await page.locator("[data-testid=option] input:not([disabled])").count()) === 4);
@@ -347,6 +349,8 @@ async function main() {
       check(`${flow}: next question unrevealed`, (await verdict(page)) === null && (await payloadReveals(page, 5)).revealed === 1);
       await page.reload();
       await page.waitForSelector("[data-testid=test-player]");
+      check(`${flow}: refresh resumes on Q2, still unrevealed`, (await position(page)) === 1 && (await verdict(page)) === null);
+      await page.getByRole("button", { name: /Previous/ }).tap();
       check(`${flow}: refresh keeps Q1 revealed only`, (await payloadReveals(page, 5)).revealed === 1 && (await verdict(page)) !== null);
       const r = inspect(ids[flow]);
       check(`${flow}: INSTANT + UNLIMITED frozen`, r.answerMode === "INSTANT" && r.durationMode === "UNLIMITED" && r.answers[0].revealed && r.answers[0].selected === "A", r);

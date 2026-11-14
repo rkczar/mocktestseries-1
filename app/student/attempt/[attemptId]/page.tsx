@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AttemptStatus } from "@prisma/client";
 import { ClipboardList, Clock, ListChecks, AlertTriangle } from "lucide-react";
@@ -8,6 +7,7 @@ import { getOwnedAttempt } from "@/lib/student-data";
 import { attemptTitle, attemptInstructions } from "@/lib/attempt-title";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { StartTestLink } from "@/components/student/exam-fullscreen";
 import { AccessibilityControls } from "@/components/student/accessibility-controls";
 import { BackButton } from "@/components/student/back-button";
 import { formatNegativeMarking } from "@/lib/negative-marking";
@@ -114,7 +114,7 @@ export default async function AttemptInstructionsPage({ params }: { params: Prom
       </Card>
 
       <Button asChild size="lg" className="w-full">
-        <Link href={`/student/attempt/${attemptId}/run`}>Start Test</Link>
+        <StartTestLink href={`/student/attempt/${attemptId}/run`}>Start Test</StartTestLink>
       </Button>
     </div>
   );

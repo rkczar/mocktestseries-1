@@ -112,6 +112,7 @@ async function main() {
       await page.reload();
       await page.waitForSelector("[data-testid=test-player]");
       check("refresh: still no countdown", (await timerSeconds(page)) === null);
+      await page.getByRole("button", { name: /Previous/ }).click();
       check("refresh: reveal of Q1 persists", (await page.locator("[data-testid=reveal-result]").count()) === 1);
 
       await page.goto(`${BASE}/student/test-series/${F.mockId}`);

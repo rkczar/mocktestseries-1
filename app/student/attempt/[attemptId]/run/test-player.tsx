@@ -40,7 +40,8 @@ import { LanguageChoice, LanguageSwitch, useTestLanguage, type TestLanguage } fr
 import type { HindiView } from "@/lib/test-player-data";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, ChevronRight, Clock, Flag, Infinity as InfinityIcon, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronRight, Clock, Flag, Infinity as InfinityIcon, LogOut, Maximize, X, XCircle } from "lucide-react";
+import { exitExamFullscreen, fullscreenSupported, requestExamFullscreen, useFullscreen } from "@/components/student/exam-fullscreen";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -238,6 +239,16 @@ export function TestPlayer({
   const [remaining, setRemaining] = useState(initialRemainingSeconds);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // ---- Distraction-free exam mode (Phase 10): fullscreen + leave/back/close guards. UI only — never touches
+  // answers, the timer or submission; leaving never submits (the attempt stays resumable until its deadline).
+  const fullscreen = useFullscreen();
+  const [fsNoticeHidden, setFsNoticeHidden] = useState(false);
+  const [fsDenied, setFsDenied] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaveBusy, setLeaveBusy] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const leavingRef = useRef(false);
+  const leaveOpenRef = useRef(false);
   const [, startSubmitTransition] = useTransition();
   const [states, setStates] = useState<Record<string, QuestionState>>(() =>
     Object.fromEntries(
@@ -438,7 +449,8 @@ export function TestPlayer({
   useEffect(() => {
     const onOnline = () => retryAllSaves();
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!submittedRef.current && queueRef.current && !queueRef.current.idle()) e.preventDefault();
+      // Phase 10: warn for the whole active attempt (browsers show their own generic text), not only while saves are pending.
+      if (!submittedRef.current && !leavingRef.current) e.preventDefault();
     };
     window.addEventListener("online", onOnline);
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -447,6 +459,66 @@ export function TestPlayer({
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, [retryAllSaves]);
+
+  // Resume on the same question after a reload / accidental exit (this tab only; answers + time come from the server).
+  useEffect(() => {
+    try {
+      const i = Number(window.sessionStorage.getItem(`mts-q:${attemptId}`));
+      if (Number.isInteger(i) && i > 0 && i < questions.length) queueMicrotask(() => setCurrent(i));
+    } catch {
+      // Storage blocked: start at question 1 as before.
+    }
+    // Mount-only restore.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(`mts-q:${attemptId}`, String(current));
+    } catch {
+      // Storage blocked: nothing to remember.
+    }
+  }, [attemptId, current]);
+
+  // Browser Back: one guard history entry; Back shows the Leave dialog and re-arms the guard ONCE. A second Back
+  // while the dialog is already open is let through (never a history trap).
+  useEffect(() => {
+    leaveOpenRef.current = leaveOpen;
+  }, [leaveOpen]);
+  useEffect(() => {
+    window.history.pushState(window.history.state, "", window.location.href);
+    const onPop = () => {
+      if (submittedRef.current || leavingRef.current || leaveOpenRef.current) return;
+      window.history.pushState(window.history.state, "", window.location.href);
+      setLeaveError(null);
+      setLeaveOpen(true);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  /** "Yes, Leave Exam": save what is pending, then leave WITHOUT submitting (today's leave behaviour). */
+  const leaveExam = useCallback(async () => {
+    if (leavingRef.current || submittedRef.current) return;
+    setLeaveBusy(true);
+    setLeaveError(null);
+    const flushed = await getQueue().flush(SUBMIT_FLUSH_TIMEOUT_MS);
+    if (!flushed) {
+      setLeaveBusy(false);
+      setLeaveError("Some answers are still being saved. Check your connection and try again — they are kept on this device.");
+      return;
+    }
+    leavingRef.current = true;
+    exitExamFullscreen();
+    router.push("/student/dashboard");
+  }, [getQueue, router]);
+
+  /** Links inside question content open in a new tab instead of leaving the exam. */
+  const keepLinksInNewTab = (e: React.MouseEvent) => {
+    const a = (e.target as HTMLElement | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+    if (!a || a.target === "_blank" || (a.getAttribute("href") ?? "").startsWith("#")) return;
+    e.preventDefault();
+    window.open(a.href, "_blank", "noopener,noreferrer");
+  };
 
   // After Previous / Next from the bottom bar, bring the new question's heading back into view — only when the
   // student had scrolled past it (deep in a long question), so a press from the top doesn't jump.
@@ -654,8 +726,11 @@ export function TestPlayer({
   }
 
   return (
-    <div className="flex min-h-screen flex-col" data-testid="test-player" data-question-index={current}>
+    <div className="flex min-h-screen flex-col" data-testid="test-player" data-question-index={current} data-fullscreen={fullscreen ? "on" : "off"} onClickCapture={keepLinksInNewTab}>
       <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 sm:gap-4 sm:px-6">
+        <span className="hidden shrink-0 text-xs font-semibold tracking-tight text-[var(--color-muted-foreground)] sm:inline" aria-hidden>
+          MockTestSeries
+        </span>
         <p className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--color-foreground)]">{title}</p>
         <div className="flex shrink-0 items-center gap-2">
           {bilingual ? <LanguageSwitch lang={language.lang} onChange={language.choose} /> : null}
@@ -679,8 +754,46 @@ export function TestPlayer({
               </>
             )}
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setLeaveError(null);
+              setLeaveOpen(true);
+            }}
+            data-testid="leave-exam"
+            aria-label={fullscreen ? "Leave full screen" : "Leave exam"}
+          >
+            <LogOut className="h-4 w-4" aria-hidden />
+            <span className="hidden sm:inline">{fullscreen ? "Leave Full Screen" : "Leave Exam"}</span>
+          </Button>
         </div>
       </header>
+      {fullscreen === false && !fsNoticeHidden && !submitting ? (
+        <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-card)] px-4 py-2 sm:px-6" data-testid="fullscreen-notice">
+          <p className="text-sm text-[var(--color-foreground)]">
+            {fullscreenSupported() && !fsDenied
+              ? "Full screen is off. Your test continues — your answers and remaining time are safe."
+              : "Full screen isn't available in this browser. Your test continues here — your answers and remaining time are safe."}
+          </p>
+          <div className="flex items-center gap-2">
+            {fullscreenSupported() && !fsDenied ? (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void requestExamFullscreen().then((r) => setFsDenied(r !== "ok"))}
+                data-testid="enter-fullscreen"
+              >
+                <Maximize className="h-4 w-4" aria-hidden /> Enter full screen
+              </Button>
+            ) : null}
+            <Button type="button" size="sm" variant="ghost" onClick={() => setFsNoticeHidden(true)} aria-label="Dismiss full screen notice">
+              <X className="h-4 w-4" aria-hidden />
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {bilingual && !language.chosen ? (
         <div className="border-b border-[var(--color-border)] bg-[var(--color-card)] px-4 py-4 sm:px-6" data-testid="language-gate">
@@ -1033,6 +1146,35 @@ export function TestPlayer({
             </DialogClose>
             <Button variant="danger" onClick={() => void finish("manual")} disabled={submitting}>
               {submitting ? "Submitting…" : "Submit Test"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={leaveOpen} onOpenChange={(o) => !leaveBusy && setLeaveOpen(o)}>
+        <DialogContent data-testid="leave-dialog">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-[var(--color-warning)]" aria-hidden /> Are you sure you want to leave the exam?
+            </DialogTitle>
+            <DialogDescription>
+              Leaving the exam may end your current test session. Your saved answers, remaining time and submission status will be handled
+              according to the exam rules.
+            </DialogDescription>
+          </DialogHeader>
+          {leaveError ? (
+            <p role="alert" className="text-sm text-[var(--color-error)]">
+              {leaveError}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" autoFocus disabled={leaveBusy} data-testid="leave-continue">
+                No, Continue Exam
+              </Button>
+            </DialogClose>
+            <Button variant="danger" onClick={() => void leaveExam()} disabled={leaveBusy} data-testid="leave-confirm">
+              {leaveBusy ? "Saving…" : "Yes, Leave Exam"}
             </Button>
           </DialogFooter>
         </DialogContent>

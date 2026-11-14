@@ -2,6 +2,7 @@
 
 import { LanguageChoice, useTestLanguage } from "@/components/student/test-language";
 import { useActionState, useState } from "react";
+import { requestExamFullscreen } from "@/components/student/exam-fullscreen";
 import { useFormStatus } from "react-dom";
 import { AlertTriangle, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -56,7 +57,8 @@ export function PreTestSetup({
   const [state, formAction] = useActionState<PreTestSetupState, FormData>(startConfiguredTestAction, {});
   const [answerMode, setAnswerMode] = useState<AnswerReviewMode>("EXAM");
   return (
-    <form action={formAction} className="flex flex-col gap-4" data-testid="pre-test-setup">
+    // Phase 10: ask for fullscreen inside the Start Test submit gesture (browsers refuse it later); the test starts either way.
+    <form action={formAction} onSubmit={() => void requestExamFullscreen()} className="flex flex-col gap-4" data-testid="pre-test-setup">
       <input type="hidden" name="kind" value={kind} />
       <input type="hidden" name="testId" value={testId} />
       <Card>

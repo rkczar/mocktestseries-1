@@ -147,6 +147,8 @@ async function main() {
       await settled(page);
       await page.reload();
       await page.waitForSelector("[data-testid=test-player]");
+      check("2q: refresh resumes on the last question (Q2)", (await position(page)) === 1);
+      await page.getByRole("button", { name: "Go to question 1", exact: true }).click();
       check("2q: refresh restores Q1 = B", await isPicked(page, "B"));
       await page.getByRole("button", { name: "Go to question 2" }).click();
       check("2q: refresh restores Q2 = D", await isPicked(page, "D"));
@@ -154,6 +156,7 @@ async function main() {
       await settled(page);
       await page.reload();
       await page.waitForSelector("[data-testid=test-player]");
+      await page.getByRole("button", { name: "Go to question 1", exact: true }).click();
       const q2Cls = await page.getByRole("button", { name: "Go to question 2" }).getAttribute("class");
       check("2q: Mark for Review persisted (palette colour after reload)", /color-info/.test(q2Cls || ""), q2Cls);
       await submit(page);
@@ -190,6 +193,7 @@ async function main() {
       await page.goBack();
       await page.waitForSelector("[data-testid=test-player]");
       check("10q: browser back returns to a working player", (await option(page, "A").count()) === 1);
+      await page.getByRole("button", { name: "Go to question 1", exact: true }).click();
       check("10q: Q1 answer (C) survived navigation", await isPicked(page, "C"));
       await page.getByRole("button", { name: "Go to question 7" }).click();
       check("10q: Q7 answer (D) survived navigation", await isPicked(page, "D"));
@@ -272,6 +276,8 @@ async function main() {
       await settled(page);
       await page.reload();
       await page.waitForSelector("[data-testid=test-player]");
+      check(`${label}: resume reopens the last question (Q2)`, (await position(page)) === 1);
+      await page.getByRole("button", { name: "Go to question 1", exact: true }).click();
       check(`${label}: resume restores Q1`, await isPicked(page, "A"));
       await submit(page);
       check(`${label}: submit → result`, /\/result$/.test(page.url()));
