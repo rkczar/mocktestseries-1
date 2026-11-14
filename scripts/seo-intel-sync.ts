@@ -15,6 +15,23 @@
  * secret or report row.
  */
 import "dotenv/config";
+import { renameSync, writeFileSync } from "node:fs";
+
+/**
+ * One-line status for the watchdog (ops/monitoring/mocktestseries-watchdog.py, check_seo_intel):
+ *   <ISO time> <OK|FAIL|SKIPPED> streak=<consecutive Google sync failures> <reason>
+ * Reasons are fixed words only — never a token, key, secret or Google error text.
+ */
+const STATUS_FILE = process.env.SEO_INTEL_STATUS_FILE || "/var/log/mocktestseries/seo-intel-status.txt";
+function writeStatus(state: "OK" | "FAIL" | "SKIPPED", streak: number, reason: string) {
+  try {
+    const tmp = `${STATUS_FILE}.tmp`;
+    writeFileSync(tmp, `${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")} ${state} streak=${streak} ${reason}\n`, { mode: 0o644 });
+    renameSync(tmp, STATUS_FILE);
+  } catch {
+    console.error(`${new Date().toISOString()} seo-intel-sync: could not write the status file`);
+  }
+}
 
 async function main() {
   const { prisma } = await import("../lib/prisma");
@@ -22,15 +39,27 @@ async function main() {
   const { getConnectionView } = await import("../lib/seo-intel/google");
   const { runSync } = await import("../lib/seo-intel/sync");
   const { getKeyView, runPageSpeed } = await import("../lib/seo-intel/pagespeed");
+  const { getSnapshot } = await import("../lib/seo-intel/sync");
   const stamp = () => new Date().toISOString();
+  const problems: string[] = [];
+  let finished = false;
   try {
     const settings = await getIntelSettings();
-    if (!settings.autoSyncEnabled) return console.log(`${stamp()} seo-intel-sync: skipped (daily sync is OFF)`);
+    if (!settings.autoSyncEnabled) {
+      finished = true;
+      writeStatus("SKIPPED", 0, "daily-sync-off");
+      return console.log(`${stamp()} seo-intel-sync: skipped (daily sync is OFF)`);
+    }
 
     // 1. Search Console + GA4 (needs the Google connection).
     const conn = await getConnectionView();
-    if (!conn.connected) console.log(`${stamp()} seo-intel-sync: google skipped (Google not connected)`);
-    else if (conn.needsReconnect) console.log(`${stamp()} seo-intel-sync: google skipped (connection needs a Master Admin to reconnect)`);
+    if (!conn.connected) {
+      problems.push("google-not-connected");
+      console.log(`${stamp()} seo-intel-sync: google skipped (Google not connected)`);
+    } else if (conn.needsReconnect) {
+      problems.push("google-needs-reconnect");
+      console.log(`${stamp()} seo-intel-sync: google skipped (connection needs a Master Admin to reconnect)`);
+    }
     else {
       const r = await runSync(null, "scheduled");
       if (r.skipped) console.log(`${stamp()} seo-intel-sync: google skipped (${r.message})`);
@@ -47,7 +76,10 @@ async function main() {
         console.log(
           `${stamp()} seo-intel-sync: google ${r.ok ? "ok" : "FAILED"} gsc=${r.gscError ? "error" : "ok"} ga4=${r.ga4Error ? "error" : "ok"} history=${r.historyDate ?? "none"} pruned=${r.pruned ?? 0}`
         );
-        if (!r.ok) process.exitCode = 1;
+        if (!r.ok) {
+          process.exitCode = 1;
+          problems.push((await getConnectionView()).needsReconnect ? "google-needs-reconnect" : `google-sync-failed${r.gscError ? "-gsc" : ""}${r.ga4Error ? "-ga4" : ""}`);
+        }
       }
     }
 
@@ -61,10 +93,21 @@ async function main() {
           data: { actorId: null, action: "SEO_PAGESPEED_RUN", entityType: "Setting", entityId: "seo.intel.pagespeed", metadata: { source: "scheduled", ok: p.ok, errors: p.errors } },
         });
         console.log(`${stamp()} seo-intel-sync: pagespeed ${p.ok ? "ok" : "FAILED"} errors=${p.errors}`);
-        if (!p.ok) process.exitCode = 1;
+        if (!p.ok) {
+          process.exitCode = 1;
+          problems.push("pagespeed-failed");
+        }
       }
     }
+    const streak = (await getSnapshot()).lastSync?.failStreak ?? 0;
+    finished = true;
+    writeStatus(problems.length ? "FAIL" : "OK", streak, problems.join(",") || "ok");
+  } catch (e) {
+    finished = true;
+    writeStatus("FAIL", 0, "sync-crashed");
+    throw e;
   } finally {
+    if (!finished) writeStatus("FAIL", 0, "sync-crashed");
     await prisma.$disconnect();
   }
 }

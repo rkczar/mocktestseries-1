@@ -119,7 +119,8 @@ class Fixture:
                  PM2_BIN=os.path.join(self.bin, "pm2"), PG_ISREADY=os.path.join(self.bin, "pg_isready"),
                  PSQL=os.path.join(self.bin, "psql"), DISK_PATH=self.root, DISK_WARN_PCT="101",
                  ALERT_TO="owner@example.test", EMAIL_MODE="outbox", OUTBOX_DIR=os.path.join(self.root, "outbox"),
-                 NOW=NOW.isoformat())
+                 NOW=NOW.isoformat(), SEO_CRON_FILE=os.path.join(self.root, "cron.d", "mocktestseries-seo-intel"),
+                 SEO_STATUS_FILE=os.path.join(self.root, "log", "seo-intel-status.txt"))
         c.update(over)
         return c
 
@@ -133,6 +134,10 @@ class Fixture:
 
     def status(self):
         return open(os.path.join(self.root, "log", "watchdog-status.txt")).read()
+
+
+def seo_line(t, state, streak, reason):
+    return f"{ts(t)} {state} streak={streak} {reason}\n"
 
 
 class WatchdogTests(unittest.TestCase):
@@ -441,6 +446,75 @@ class WatchdogTests(unittest.TestCase):
         for word in ['"restart"', '"reload"', "systemctl", "os.system", "shell=True", '"stop"', "kill"]:
             self.assertNotIn(word, src)
 
+
+    # --- G. SEO Intelligence daily sync ---------------------------------------------------------
+    def seo_setup(self, line=None, cron_mtime=None):
+        cron = os.path.join(self.tmp, "cron.d", "mocktestseries-seo-intel")
+        self.f.write(cron, "40 21 * * * root true\n", cron_mtime or (NOW - dt.timedelta(days=3)))
+        if line is not None:
+            self.f.write(os.path.join(self.tmp, "log", "seo-intel-status.txt"), line)
+
+    def last_run(self):
+        return (NOW - dt.timedelta(days=1)).replace(hour=21, minute=40, second=5)
+
+    def test_seo_silent_without_cron(self):
+        self.assertEqual(self.run_wd(), 0)
+        self.assertEqual(self.open_keys(), [])
+
+    def test_seo_ok(self):
+        self.seo_setup(seo_line(self.last_run(), "OK", 0, "ok"))
+        self.assertEqual(self.run_wd(), 0)
+
+    def test_seo_daily_sync_off_is_not_an_alert(self):
+        self.seo_setup(seo_line(self.last_run(), "SKIPPED", 0, "daily-sync-off"))
+        self.assertEqual(self.run_wd(), 0)
+
+    def test_seo_missing_status_after_first_scheduled_run(self):
+        self.seo_setup()
+        self.assertEqual(self.run_wd(), 1)
+        self.assertIn("seo.status", self.open_keys())
+
+    def test_seo_missing_status_before_first_run_is_fine(self):
+        self.seo_setup(cron_mtime=NOW - dt.timedelta(hours=2))
+        self.assertEqual(self.run_wd(), 0)
+
+    def test_seo_missed_run(self):
+        self.seo_setup(seo_line(self.last_run() - dt.timedelta(days=2), "OK", 0, "ok"))
+        self.run_wd()
+        self.assertIn("seo.missed", self.open_keys())
+
+    def test_seo_single_failure_tolerated(self):
+        self.seo_setup(seo_line(self.last_run(), "FAIL", 1, "google-sync-failed-gsc"))
+        self.assertEqual(self.run_wd(), 0)
+
+    def test_seo_second_consecutive_failure_alerts(self):
+        self.seo_setup(seo_line(self.last_run(), "FAIL", 2, "google-sync-failed-gsc"))
+        self.run_wd()
+        self.assertIn("seo.failing", self.open_keys())
+        self.assertEqual(len(self.f.outbox()), 1)
+
+    def test_seo_reconnect_alerts_immediately(self):
+        self.seo_setup(seo_line(self.last_run(), "FAIL", 1, "google-needs-reconnect"))
+        self.run_wd()
+        self.assertIn("seo.google", self.open_keys())
+
+    def test_seo_alert_clears_when_sync_recovers(self):
+        self.seo_setup(seo_line(self.last_run(), "FAIL", 3, "google-sync-failed-ga4"))
+        self.run_wd()
+        self.seo_setup(seo_line(self.last_run() + dt.timedelta(minutes=30), "OK", 0, "ok"))
+        self.run_wd(at=NOW + dt.timedelta(minutes=10))
+        self.assertEqual(self.open_keys(), [])
+        self.assertTrue(any("resolved" in json.dumps(m).lower() or "cleared" in json.dumps(m).lower() for m in self.f.outbox()))
+
+    def test_seo_garbage_status(self):
+        self.seo_setup("not a status line\n")
+        self.run_wd()
+        self.assertIn("seo.status", self.open_keys())
+
+    def test_seo_alert_never_contains_secrets(self):
+        self.seo_setup(seo_line(self.last_run(), "FAIL", 2, "google-sync-failed-gsc"))
+        self.run_wd()
+        self.assertNotIn(FAKE_KEY, json.dumps(self.f.outbox()) + self.f.status())
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

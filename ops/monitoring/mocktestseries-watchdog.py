@@ -12,6 +12,9 @@ Checks
   Full package      the newest packages/mocktestseries-full-*.tar hashes to the SHA-256 recorded
                     when the Backup Center verified it (read-only DB query).
   Server            /api/health, pg_isready, PM2 workers, disk usage, TLS certificate expiry.
+  SEO sync          only once /etc/cron.d/mocktestseries-seo-intel is installed: seo-intel-status.txt is from
+                    the latest 21:40 UTC run; alert on Google needs-reconnect / not connected at once, and on
+                    a sync failure from the 2nd consecutive failed day.
 Hashing (dump, mirrors, package) runs again only when the file changes or every HEAVY_EVERY_H hours.
 
 Alerts: one email (Resend) when a problem starts, a reminder every REMIND_EVERY_H hours while it
@@ -53,6 +56,9 @@ DEFAULTS = {
     "CERT_WARN_DAYS": "14",
     "DB_RUN_AT": "02:00",
     "FILES_RUN_AT": "02:15",
+    "SEO_STATUS_FILE": "/var/log/mocktestseries/seo-intel-status.txt",
+    "SEO_CRON_FILE": "/etc/cron.d/mocktestseries-seo-intel",
+    "SEO_RUN_AT": "21:40",
     "RUN_GRACE_MIN": "120",
     "MAX_AGE_H": "26",
     "HEAVY_EVERY_H": "24",
@@ -317,7 +323,33 @@ def check_tls(c, state, now):
     return [("tls.expiry", f"TLS certificate of {c['TLS_HOST']} expires in {int(days)} days")] if days < int(c["CERT_WARN_DAYS"]) else []
 
 
-CHECKS = [check_db_backup, check_file_backup, check_full_package, check_health, check_postgres, check_pm2, check_disk, check_tls]
+def check_seo_intel(c, state, now):
+    """Daily SEO Intelligence sync (scripts/seo-intel-sync.ts writes one status line). Silent until its cron is installed."""
+    cron = c["SEO_CRON_FILE"]
+    if not os.path.exists(cron):
+        return []
+    expected = last_scheduled(now, c["SEO_RUN_AT"], int(c["RUN_GRACE_MIN"]))
+    try:
+        ts_s, state_s, streak_s, *rest = read_text(c["SEO_STATUS_FILE"]).split(maxsplit=3)
+        ts = dt.datetime.fromisoformat(ts_s.replace("Z", "+00:00"))
+        streak = int(streak_s.split("=", 1)[1])
+    except (OSError, ValueError, IndexError):
+        # No status yet: fine until the first scheduled run after the cron was installed.
+        installed = dt.datetime.fromtimestamp(os.path.getmtime(cron), dt.timezone.utc)
+        return [("seo.status", "SEO sync status file is missing or unreadable")] if installed < expected else []
+    reason = (rest[0].strip() if rest else "")[:200]
+    problems = []
+    if ts < expected:
+        problems.append(("seo.missed", f"scheduled SEO sync of {iso(expected)} did not run (last result {iso(ts)})"))
+    if state_s == "FAIL":
+        if "google-needs-reconnect" in reason or "google-not-connected" in reason:
+            problems.append(("seo.google", f"SEO sync: Google connection needs a Master Admin ({reason})"))
+        elif "sync-crashed" in reason or streak >= 2:
+            problems.append(("seo.failing", f"SEO sync failing ({reason}; {streak} consecutive Google sync failures)"))
+    return problems
+
+
+CHECKS = [check_db_backup, check_file_backup, check_full_package, check_health, check_postgres, check_pm2, check_disk, check_tls, check_seo_intel]
 
 
 def plan_notifications(c, state, problems, now):
