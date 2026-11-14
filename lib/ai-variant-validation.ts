@@ -14,6 +14,31 @@ export interface GeneratedVariant {
   explanation: string;
   /** Per-incorrect-option reasons, keyed by label. */
   optionAnalysis: Record<string, string>;
+  /** Bilingual sources only: the Hindi version (same labels; correctness comes from `options`). Dropped if incomplete. */
+  hi?: { text: string; options: { label: string; text: string }[]; explanation: string; optionAnalysis: Record<string, string> };
+}
+
+/** The optional Hindi block of a bilingual candidate: all four labels with non-empty text, else null (never half-translated). */
+function validateHindiBlock(value: unknown, labels: Set<string>): GeneratedVariant["hi"] | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as { text?: unknown; options?: unknown; explanation?: unknown; optionAnalysis?: unknown };
+  if (typeof obj.text !== "string" || !obj.text.trim() || !Array.isArray(obj.options)) return null;
+  const options: { label: string; text: string }[] = [];
+  for (const raw of obj.options) {
+    const o = (raw ?? {}) as { label?: unknown; text?: unknown };
+    if (typeof o.label !== "string" || !labels.has(o.label) || typeof o.text !== "string" || !o.text.trim()) return null;
+    if (options.some((x) => x.label === o.label)) return null;
+    options.push({ label: o.label, text: o.text.trim() });
+  }
+  if (options.length !== labels.size) return null;
+  options.sort((a, b) => a.label.localeCompare(b.label));
+  const optionAnalysis: Record<string, string> = {};
+  if (obj.optionAnalysis && typeof obj.optionAnalysis === "object") {
+    for (const [label, reason] of Object.entries(obj.optionAnalysis as Record<string, unknown>)) {
+      if (labels.has(label) && typeof reason === "string" && reason.trim()) optionAnalysis[label] = reason.trim();
+    }
+  }
+  return { text: obj.text.trim(), options, explanation: typeof obj.explanation === "string" ? obj.explanation.trim() : "", optionAnalysis };
 }
 
 /** Minimal shape duplicate detection compares against — the source question, stored siblings, and candidates accepted earlier in the same run. */
@@ -84,7 +109,7 @@ export function isNearDuplicate(candidate: ComparableQuestion, other: Comparable
 /** Validates one parsed candidate object. Returns null for anything that must not enter the Question Bank. */
 export function validateCandidate(value: unknown): GeneratedVariant | null {
   if (!value || typeof value !== "object") return null;
-  const obj = value as { text?: unknown; options?: unknown; explanation?: unknown; optionAnalysis?: unknown };
+  const obj = value as { text?: unknown; options?: unknown; explanation?: unknown; optionAnalysis?: unknown; hi?: unknown };
   if (typeof obj.text !== "string" || obj.text.trim().length === 0) return null;
   if (!Array.isArray(obj.options) || obj.options.length !== VARIANT_OPTION_LABELS.length) return null;
 
@@ -116,11 +141,13 @@ export function validateCandidate(value: unknown): GeneratedVariant | null {
     }
   }
 
+  const hi = obj.hi === undefined ? null : validateHindiBlock(obj.hi, labels);
   return {
     text: obj.text.trim(),
     options,
     explanation: typeof obj.explanation === "string" ? obj.explanation.trim() : "",
     optionAnalysis,
+    ...(hi ? { hi } : {}),
   };
 }
 

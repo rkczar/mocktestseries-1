@@ -59,7 +59,8 @@ function trackOnce(name: string, source: AskAiSource) {
  * `reviewAttemptId` is passed only by a submitted attempt's Review page, so
  * the server judges the question in that attempt's context.
  */
-export function useAskAi(questionId: string, source: AskAiSource, reviewAttemptId?: string) {
+/** `lang`: the language the student is reading the question in (bilingual exams); the server makes the final call. Callers key the card by language so switching never shows the other language's cached result. */
+export function useAskAi(questionId: string, source: AskAiSource, reviewAttemptId?: string, lang?: "en" | "hi") {
   const usage = useAiUsage();
   const [isPending, startTransition] = useTransition();
   const [, startStyleTransition] = useTransition();
@@ -104,7 +105,7 @@ export function useAskAi(questionId: string, source: AskAiSource, reviewAttemptI
       trackEvent("ai_generation_failed", { ...usageParams(source), ai_kind: "question_variant", reason: "timeout" });
       setQuestionVariants({ kind: "error", message: "This is taking longer than expected.", canRetry: true });
     }, QUESTION_VARIANTS_TIMEOUT_MS);
-    getQuestionVariantsAction(questionId, reviewAttemptId)
+    getQuestionVariantsAction(questionId, reviewAttemptId, lang)
       .then((outcome) => {
         if (settled) return;
         finish();
@@ -148,7 +149,7 @@ export function useAskAi(questionId: string, source: AskAiSource, reviewAttemptI
     startTransition(async () => {
       let outcome: ExplanationResult;
       try {
-        outcome = await getExplanationAction(questionId, reviewAttemptId);
+        outcome = await getExplanationAction(questionId, reviewAttemptId, lang);
       } catch {
         outcome = { ok: false, error: "Couldn't reach the server." };
       }
@@ -210,7 +211,7 @@ export function useAskAi(questionId: string, source: AskAiSource, reviewAttemptI
     startStyleTransition(async () => {
       let outcome: VariantResult;
       try {
-        outcome = await getExplanationVariantAction(questionId, variantId, reviewAttemptId);
+        outcome = await getExplanationVariantAction(questionId, variantId, reviewAttemptId, lang);
       } catch {
         outcome = { ok: false, error: "Couldn't reach the server." };
       }

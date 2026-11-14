@@ -2,7 +2,8 @@
 
 import { requireStudentOrLogin } from "@/lib/student-session";
 import { getOrCreateExplanation, AiNotConfiguredError, AiGenerationInProgressError, type ExplanationContent } from "@/lib/ai-explanation";
-import { getOrCreateExplanationVariant } from "@/lib/ai-explanation-variants";
+import { getOrCreateExplanationVariant, HINDI_DEFAULT_STYLE } from "@/lib/ai-explanation-variants";
+import { hindiVariantKey, resolveAiLanguage, type AiLang } from "@/lib/ai-language";
 import { EXPLANATION_VARIANTS } from "@/lib/ai-explanation-variants-catalog";
 import { ensureQuestionVariants, getActiveVariants, getDefaultVariantTarget, InvalidVariantSourceError, type VariantView } from "@/lib/ai-variant";
 import {
@@ -18,6 +19,17 @@ import {
   isQuestionReviewableInAttempt,
 } from "@/lib/student-data";
 import { prisma } from "@/lib/prisma";
+
+/** Server-side output language for this question (the client can only ask for Hindi; see lib/ai-language.ts). */
+async function aiLanguageFor(questionId: string, requested: unknown): Promise<AiLang> {
+  if (requested !== "hi") {
+    // Fast path for every English request: only a Hindi-only question overrides it.
+    const q = await prisma.question.findUnique({ where: { id: questionId }, select: { text: true } });
+    return q ? resolveAiLanguage(q, requested) : "en";
+  }
+  const q = await prisma.question.findUnique({ where: { id: questionId }, select: { text: true, textHi: true } });
+  return q ? resolveAiLanguage(q, requested) : "en";
+}
 import { AI_UNSUPPORTED_TYPE_MESSAGE } from "@/lib/question-types";
 import { getPaymentModeForStudent } from "@/lib/payments/settings";
 import { computeProductPrice } from "@/lib/payments/pricing";
@@ -61,7 +73,7 @@ async function answerLockMessage(studentId: string, questionId: unknown, reviewA
  * (attempt review, Saved Questions) — the explanation is cached per Question,
  * not per attempt or per page, so one action serves all of them.
  */
-export async function getExplanationAction(questionId: string, reviewAttemptId?: string) {
+export async function getExplanationAction(questionId: string, reviewAttemptId?: string, lang?: AiLang) {
   const student = await requireStudentOrLogin();
 
   // Neither caller carries an attemptId, so this is the one place that can
@@ -80,7 +92,9 @@ export async function getExplanationAction(questionId: string, reviewAttemptId?:
     return { ok: false as const, error: "Daily AI limit reached.", limitReached: true as const };
   }
 
-  const cached = await getStoredAiExplanation(questionId);
+  // Hindi: its own cache row ("default@hi"); the English AIExplanation row is never read or overwritten for it.
+  const outLang = await aiLanguageFor(questionId, lang);
+  const cached = outLang === "hi" ? await getStoredAiExplanationVariant(questionId, hindiVariantKey(HINDI_DEFAULT_STYLE)) : await getStoredAiExplanation(questionId);
   const isNewGeneration = cached?.status !== "COMPLETED";
 
   if (isNewGeneration && (await isAiGenerationRateLimited(student.id))) {
@@ -88,9 +102,9 @@ export async function getExplanationAction(questionId: string, reviewAttemptId?:
   }
 
   try {
-    const explanation = await getOrCreateExplanation(questionId);
-    if (isNewGeneration) await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId });
-    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: explanation.provider, model: explanation.model, feature: "EXPLANATION" });
+    const explanation = outLang === "hi" ? await getOrCreateExplanationVariant(questionId, HINDI_DEFAULT_STYLE, "hi") : await getOrCreateExplanation(questionId);
+    if (isNewGeneration) await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId, ...(outLang === "hi" ? { lang: "hi" } : {}) });
+    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: explanation.provider, model: explanation.model, feature: outLang === "hi" ? "EXPLANATION:hi" : "EXPLANATION" });
 
     return {
       ok: true as const,
@@ -113,7 +127,7 @@ export async function getExplanationAction(questionId: string, reviewAttemptId?:
  * target differs (lib/ai-explanation-variants.ts, keyed by question+variant
  * instead of just question).
  */
-export async function getExplanationVariantAction(questionId: string, variantId: string, reviewAttemptId?: string) {
+export async function getExplanationVariantAction(questionId: string, variantId: string, reviewAttemptId?: string, lang?: AiLang) {
   const student = await requireStudentOrLogin();
 
   if (!EXPLANATION_VARIANTS.some((v) => v.id === variantId)) {
@@ -130,7 +144,8 @@ export async function getExplanationVariantAction(questionId: string, variantId:
     return { ok: false as const, error: "Daily AI limit reached.", limitReached: true as const };
   }
 
-  const cached = await getStoredAiExplanationVariant(questionId, variantId);
+  const outLang = await aiLanguageFor(questionId, lang);
+  const cached = await getStoredAiExplanationVariant(questionId, outLang === "hi" ? hindiVariantKey(variantId) : variantId);
   const isNewGeneration = cached?.status !== "COMPLETED";
 
   if (isNewGeneration && (await isAiGenerationRateLimited(student.id))) {
@@ -138,9 +153,9 @@ export async function getExplanationVariantAction(questionId: string, variantId:
   }
 
   try {
-    const variant = await getOrCreateExplanationVariant(questionId, variantId);
-    if (isNewGeneration) await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId, variantId });
-    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: variant.provider, model: variant.model, feature: `EXPLANATION_VARIANT:${variantId}` });
+    const variant = await getOrCreateExplanationVariant(questionId, variantId, outLang);
+    if (isNewGeneration) await logActivity(student.id, "AI_EXPLANATION_GENERATED", { questionId, variantId, ...(outLang === "hi" ? { lang: "hi" } : {}) });
+    await logAiAccess(student.id, questionId, { cacheHit: !isNewGeneration, provider: variant.provider, model: variant.model, feature: `EXPLANATION_VARIANT:${variantId}${outLang === "hi" ? ":hi" : ""}` });
 
     return {
       ok: true as const,
@@ -165,7 +180,7 @@ export async function getExplanationVariantAction(questionId: string, variantId:
  * All metadata (exam/subject/topic, codes, answers) is derived server-side
  * from the source row — the client supplies only the question id.
  */
-export async function getQuestionVariantsAction(questionId: string, reviewAttemptId?: string) {
+export async function getQuestionVariantsAction(questionId: string, reviewAttemptId?: string, lang?: AiLang) {
   const student = await requireStudentOrLogin();
   if (typeof questionId !== "string" || questionId.length === 0 || questionId.length > 64) {
     return { ok: false as const, error: "Unknown question." };
@@ -201,9 +216,11 @@ export async function getQuestionVariantsAction(questionId: string, reviewAttemp
     }
     await logAiAccess(student.id, questionId, { cacheHit: result.providerCalls === 0, provider: result.provider, model: result.model, feature: "QUESTION_VARIANTS" });
 
+    // Generation is global and stores both languages for bilingual sources; only the view follows the reader's language.
+    const outLang = await aiLanguageFor(questionId, lang);
     return {
       ok: true as const,
-      variants: result.variants satisfies VariantView[],
+      variants: (outLang === "hi" ? await getActiveVariants(questionId, "hi") : result.variants) satisfies VariantView[],
       requested: result.requested,
       generatedNow: result.generatedNow,
       remainingToday: quota.remainingToday,

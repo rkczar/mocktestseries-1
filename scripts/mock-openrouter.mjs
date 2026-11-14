@@ -65,7 +65,7 @@ function evalAnswer(prompt) {
 }
 
 export function startMockOpenRouter(port) {
-  const stats = { chat: 0, images: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], authHeaders: 0 };
+  const stats = { chat: 0, images: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], prompts: [], authHeaders: 0 };
   const fx = { rate: 95.5, status: 200 };
   const generations = new Map();
   let seq = 0;
@@ -80,9 +80,9 @@ export function startMockOpenRouter(port) {
     } catch {
       return err(res, 400, "bad json");
     }
-    if (url.pathname === "/__mock/stats") return json(res, 200, { ...stats, bodies: stats.bodies.slice(-20) });
+    if (url.pathname === "/__mock/stats") return json(res, 200, { ...stats, bodies: stats.bodies.slice(-20), prompts: stats.prompts.slice(-20) });
     if (url.pathname === "/__mock/reset") {
-      Object.assign(stats, { chat: 0, images: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], authHeaders: 0 });
+      Object.assign(stats, { chat: 0, images: 0, key: 0, models: 0, generation: 0, fx: 0, bodies: [], prompts: [], authHeaders: 0 });
       retry429Calls = 0;
       return json(res, 200, { ok: true });
     }
@@ -145,6 +145,7 @@ export function startMockOpenRouter(port) {
       if (scenario === "nocredit") return err(res, 402, "Insufficient credits. Add more using https://openrouter.ai/credits");
       const c0 = body.messages?.[0]?.content;
       const prompt = Array.isArray(c0) ? c0.filter((x) => x?.type === "text").map((x) => x.text).join("\n") : String(c0 ?? "");
+      stats.prompts.push(prompt.slice(0, 8000)); // lets suites assert what the app asked for (e.g. Hindi output)
       let order = Array.isArray(body.models) && body.models.length ? body.models : [body.model];
       if (body.model === "openrouter/auto") {
         const allowed = body.plugins?.find((x) => x.id === "auto-router")?.allowed_models ?? Object.keys(TEXT_MODELS);

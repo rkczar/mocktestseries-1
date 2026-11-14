@@ -98,7 +98,7 @@ export function AttemptReview({ questions, bilingual = false }: { questions: Rev
       {bilingual ? <LanguageSwitch className="self-end" lang={language.lang} onChange={language.choose} /> : null}
       <div ref={cardRef} className="scroll-mt-20">
         {/* key resets ReviewQuestionCard's Ask AI state (useAskAi) whenever Prev/Next swaps to a different question — the old per-question <div key=...> boundary, now scoped to the card itself. */}
-        <ReviewQuestionCard key={q.attemptQuestionId} q={q} index={index} total={total} />
+        <ReviewQuestionCard key={`${q.attemptQuestionId}:${language.lang}`} q={q} index={index} total={total} lang={language.lang} />
       </div>
 
       <QuestionBottomNav
@@ -117,8 +117,8 @@ export function AttemptReview({ questions, bilingual = false }: { questions: Rev
   );
 }
 
-function ReviewQuestionCard({ q, index, total }: { q: ReviewQuestionView; index: number; total: number }) {
-  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(q.questionId, "attempt_review", q.attemptId);
+function ReviewQuestionCard({ q, index, total, lang }: { q: ReviewQuestionView; index: number; total: number; lang: TestLanguage }) {
+  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(q.questionId, "attempt_review", q.attemptId, lang);
   const correctOption = q.snapshot.options.find((opt) => opt.label === q.snapshot.correctLabel);
   // MULTIPLE_CORRECT (NEET Phase 4): the frozen correct SET vs the submitted set. SINGLE_CORRECT / MATCH use the lines above.
   const multi = snapshotQuestionType(q.snapshot) === "MULTIPLE_CORRECT";

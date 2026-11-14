@@ -7,6 +7,7 @@ import { generateForFeature, isFeatureConfigured, type GatewayContext } from "@/
 import { isPlatformOpen } from "@/lib/platform-controls";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, type ExplanationContent } from "@/lib/ai-explanation";
 import { getAiSettings } from "@/lib/ai-settings";
+import { HINDI_OUTPUT_INSTRUCTION, hindiVariantKey, isMostlyHindi, type AiLang } from "@/lib/ai-language";
 import { STRUCTURED_MESSAGES, isClassifierVerdict, type OutputCheck } from "@/lib/ai-engine/structured";
 import { parseCandidateBatch, screenCandidates, validateCandidate, type ComparableQuestion, type GeneratedVariant } from "@/lib/ai-variant-validation";
 
@@ -127,7 +128,25 @@ Rules:
 - "optionAnalysis": one short reason per INCORRECT option label.
 
 Respond with ONLY a JSON object (no markdown fences) shaped exactly like:
-{"variants": [{"text": "...", "options": [{"label":"A","text":"...","isCorrect":false},{"label":"B","text":"...","isCorrect":true},{"label":"C","text":"...","isCorrect":false},{"label":"D","text":"...","isCorrect":false}], "explanation": "...", "optionAnalysis": {"A":"...","C":"...","D":"..."}}]}`;
+{"variants": [{"text": "...", "options": [{"label":"A","text":"...","isCorrect":false},{"label":"B","text":"...","isCorrect":true},{"label":"C","text":"...","isCorrect":false},{"label":"D","text":"...","isCorrect":false}], "explanation": "...", "optionAnalysis": {"A":"...","C":"...","D":"..."}}]}${languageInstruction(source)}`;
+}
+
+/**
+ * Language rules, appended only for Hindi content so every English prompt stays byte-identical:
+ * a Hindi-only source gets Hindi variants; a bilingual source (has textHi) gets each variant in BOTH languages,
+ * so students reading in either language see the same question with the same answer.
+ */
+function languageInstruction(source: SourceQuestion): string {
+  if (isMostlyHindi(source.text)) return `\n${HINDI_OUTPUT_INSTRUCTION}`;
+  if (!source.textHi?.trim()) return "";
+  const hiOptions = source.options.map((o) => `${o.label}. ${o.textHi || o.text}`).join("\n");
+  return `
+
+The source question also has an official Hindi version:
+${source.textHi}
+${hiOptions}
+
+BILINGUAL: add to EVERY variant a "hi" object with the same question in standard Hindi (Devanagari): {"hi": {"text": "...", "options": [{"label":"A","text":"..."},{"label":"B","text":"..."},{"label":"C","text":"..."},{"label":"D","text":"..."}], "explanation": "...", "optionAnalysis": {"A":"...","C":"...","D":"..."}}}. It must be a faithful translation of that variant: same meaning, same option order and labels, so the same option is correct. Keep accepted English technical terms where Hindi-medium papers use them. Do not add facts.`;
 }
 
 async function loadSource(sourceQuestionId: string): Promise<SourceQuestion> {
@@ -140,27 +159,39 @@ async function loadSource(sourceQuestionId: string): Promise<SourceQuestion> {
   return source;
 }
 
-function toView(row: Prisma.QuestionGetPayload<{ include: { options: true; aiExplanation: true } }>): VariantView {
-  const content = (row.aiExplanation?.status === AiGenerationStatus.COMPLETED ? row.aiExplanation.content : null) as Partial<ExplanationContent> | null;
+type VariantRow = Prisma.QuestionGetPayload<{ include: { options: true; aiExplanation: true } }> & {
+  aiExplanationVariants?: { content: Prisma.JsonValue; status: AiGenerationStatus }[];
+};
+
+function toView(row: VariantRow, lang: AiLang = "en"): VariantView {
+  // Hindi view: only when this variant really has its Hindi version; otherwise the stored text as before.
+  const hi = lang === "hi" && Boolean(row.textHi);
+  const hiExplanation = hi ? row.aiExplanationVariants?.find((v) => v.status === AiGenerationStatus.COMPLETED) : undefined;
+  const source = hi ? (hiExplanation ?? null) : row.aiExplanation?.status === AiGenerationStatus.COMPLETED ? row.aiExplanation : null;
+  const content = (source ? source.content : null) as Partial<ExplanationContent> | null;
   return {
     id: row.id,
     code: row.code,
     slot: row.aiSlot as AiSlot,
-    text: row.text,
-    options: [...row.options].sort((a, b) => a.order - b.order).map((o) => ({ label: o.label, text: o.text, isCorrect: o.isCorrect })),
+    text: hi ? row.textHi! : row.text,
+    options: [...row.options].sort((a, b) => a.order - b.order).map((o) => ({ label: o.label, text: hi ? o.textHi || o.text : o.text, isCorrect: o.isCorrect })),
     explanation: typeof content?.concept === "string" ? content.concept : "",
     optionAnalysis: content?.optionAnalysis && typeof content.optionAnalysis === "object" ? content.optionAnalysis : {},
   };
 }
 
 /** Active (COMPLETED, not archived) variants of a source, in slot order. Pure DB read. */
-export async function getActiveVariants(sourceQuestionId: string): Promise<VariantView[]> {
+export async function getActiveVariants(sourceQuestionId: string, lang: AiLang = "en"): Promise<VariantView[]> {
   const rows = await prisma.question.findMany({
     where: { parentQuestionId: sourceQuestionId, ...ACTIVE_VARIANT_WHERE },
-    include: { options: true, aiExplanation: true },
+    include: {
+      options: true,
+      aiExplanation: true,
+      ...(lang === "hi" ? { aiExplanationVariants: { where: { variantId: hindiVariantKey("default") }, select: { content: true, status: true } } } : {}),
+    },
     orderBy: { aiSlot: "asc" },
   });
-  return rows.map(toView);
+  return rows.map((r) => toView(r, lang));
 }
 
 /**
@@ -255,6 +286,8 @@ async function persistVariants(source: SourceQuestion, accepted: GeneratedVarian
       const variant = accepted[i];
       const data = {
         text: variant.text,
+        // Bilingual sources: the Hindi version (null otherwise, as for every non-bilingual question).
+        textHi: variant.hi?.text ?? null,
         examId: source.examId,
         subjectId: source.subjectId,
         topicId: source.topicId,
@@ -283,7 +316,14 @@ async function persistVariants(source: SourceQuestion, accepted: GeneratedVarian
 
       await tx.questionOption.deleteMany({ where: { questionId: row.id } });
       await tx.questionOption.createMany({
-        data: variant.options.map((o, order) => ({ questionId: row.id, label: o.label, text: o.text, isCorrect: o.isCorrect, order })),
+        data: variant.options.map((o, order) => ({
+          questionId: row.id,
+          label: o.label,
+          text: o.text,
+          textHi: variant.hi?.options.find((h) => h.label === o.label)?.text ?? null,
+          isCorrect: o.isCorrect,
+          order,
+        })),
       });
       // The variant's explanation is stored as that question's own Ask AI
       // explanation (the existing AIExplanation cache), so Ask AI on the
@@ -308,6 +348,20 @@ async function persistVariants(source: SourceQuestion, accepted: GeneratedVarian
         isStale: false,
       };
       await tx.aIExplanation.upsert({ where: { questionId: row.id }, update: explanationData, create: { questionId: row.id, ...explanationData } });
+      // Hindi Ask AI on this variant reads "default@hi" (lib/ai-explanation-variants.ts): store the Hindi explanation
+      // there — the bilingual "hi" block, or the main one when the source (hence the prompt) is Hindi-only.
+      const hiContent: ExplanationContent | null = variant.hi
+        ? { ...content, concept: variant.hi.explanation, optionAnalysis: variant.hi.optionAnalysis }
+        : isMostlyHindi(source.text)
+          ? content
+          : null;
+      if (hiContent) {
+        // AIExplanationVariant has no promptVersion column.
+        const { promptVersion: _promptVersion, ...rest } = explanationData;
+        const hiData = { ...rest, content: hiContent as unknown as Prisma.InputJsonValue };
+        const hiKey = { questionId_variantId: { questionId: row.id, variantId: hindiVariantKey("default") } };
+        await tx.aIExplanationVariant.upsert({ where: hiKey, update: hiData, create: { questionId: row.id, variantId: hindiVariantKey("default"), ...hiData } });
+      }
     }
     return slots.length;
   });

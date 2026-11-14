@@ -7,6 +7,7 @@ import { generateForFeature, isFeatureConfigured } from "@/lib/ai-gateway";
 import { getAiSettings, type AiSettings } from "@/lib/ai-settings";
 import { AiGenerationInProgressError, STALE_GENERATION_MS, validateExplanationContent, isTruncatedOrMalformedJson, explanationCheck, type ExplanationContent, type QuestionForExplanation } from "@/lib/ai-explanation";
 import { EXPLANATION_VARIANTS, getVariantDef, type ExplanationVariantDef } from "@/lib/ai-explanation-variants-catalog";
+import { HINDI_OUTPUT_INSTRUCTION, hindiVariantKey, type AiLang } from "@/lib/ai-language";
 
 export { EXPLANATION_VARIANTS, getVariantDef, type ExplanationVariantDef };
 
@@ -19,10 +20,11 @@ export { EXPLANATION_VARIANTS, getVariantDef, type ExplanationVariantDef };
  * lib/ai-explanation.ts's cache semantics.
  */
 
-function buildVariantPrompt(question: QuestionForExplanation, settings: AiSettings, variant: ExplanationVariantDef): string {
+function buildVariantPrompt(question: QuestionForExplanation, settings: AiSettings, variant: ExplanationVariantDef, lang: AiLang = "en"): string {
   const optionsText = question.options.map((o) => `${o.label}. ${o.text}`).join("\n");
   const sections = ['- "concept": why the correct option is right (under 60 words)'];
-  if (settings.generateOptionAnalysis) {
+  // Hindi output always explains why each other option is wrong (owner requirement for bilingual exams).
+  if (settings.generateOptionAnalysis || lang === "hi") {
     sections.push(
       '- "optionAnalysis": an object with one key per INCORRECT option label, each value a short reason that option is wrong (under 40 words)'
     );
@@ -39,7 +41,7 @@ function buildVariantPrompt(question: QuestionForExplanation, settings: AiSettin
   }
   sections.push('- "examinerVariation": one short sentence on how an examiner could plausibly change this question (empty string if not applicable)');
 
-  return `You are an expert exam tutor helping a student understand a multiple-choice question. ${variant.instruction} The stored correct answer is canonical and must never be second-guessed — if you believe it is wrong, still explain it as correct but note the discrepancy in "examinerVariation" prefixed with "CONFLICT:".
+  return `You are an expert exam tutor helping a student understand a multiple-choice question.${variant.instruction ? ` ${variant.instruction}` : ""} The stored correct answer is canonical and must never be second-guessed — if you believe it is wrong, still explain it as correct but note the discrepancy in "examinerVariation" prefixed with "CONFLICT:".
 
 Question:
 ${question.text}
@@ -52,10 +54,10 @@ The correct answer is ${question.correctLabel}.
 Respond with ONLY a JSON object (no markdown fences) with these keys:
 ${sections.join("\n")}
 
-Keep the tone encouraging and exam-focused. Never fabricate citations or references.`;
+Keep the tone encouraging and exam-focused. Never fabricate citations or references.${lang === "hi" ? HINDI_OUTPUT_INSTRUCTION : ""}`;
 }
 
-async function loadCanonicalQuestion(questionId: string): Promise<QuestionForExplanation> {
+async function loadCanonicalQuestion(questionId: string, lang: AiLang = "en"): Promise<QuestionForExplanation> {
   const question = await prisma.question.findUnique({
     where: { id: questionId },
     include: { options: { orderBy: { order: "asc" } } },
@@ -68,16 +70,17 @@ async function loadCanonicalQuestion(questionId: string): Promise<QuestionForExp
   if (!correct) throw new Error("This question has no correct option configured.");
   return {
     code: question.code,
-    text: question.text,
-    options: question.options.map((o) => ({ label: o.label, text: o.text })),
+    // Hindi: the question's Hindi version when it has one (bilingual), else its own text (a Hindi-only question).
+    text: lang === "hi" ? question.textHi || question.text : question.text,
+    options: question.options.map((o) => ({ label: o.label, text: lang === "hi" ? o.textHi || o.text : o.text })),
     correctLabel: correct.label,
   };
 }
 
-async function runAndPersist(questionId: string, variant: ExplanationVariantDef, question: QuestionForExplanation, settings: AiSettings) {
-  const key = { questionId_variantId: { questionId, variantId: variant.id } };
+async function runAndPersist(questionId: string, variantId: string, variant: ExplanationVariantDef, question: QuestionForExplanation, settings: AiSettings, lang: AiLang) {
+  const key = { questionId_variantId: { questionId, variantId } };
   try {
-    const result: AiGenerationResult = await generateForFeature("explanation", buildVariantPrompt(question, settings, variant), { temperature: 0.4, maxOutputTokens: 1400, json: true, check: explanationCheck });
+    const result: AiGenerationResult = await generateForFeature("explanation", buildVariantPrompt(question, settings, variant, lang), { temperature: 0.4, maxOutputTokens: 1400, json: true, check: explanationCheck });
     if (isTruncatedOrMalformedJson(result.text) || !explanationCheck(result.text).ok) {
       throw new Error("AI returned truncated or malformed JSON (likely hit the output token limit) — please retry.");
     }
@@ -146,9 +149,12 @@ async function claimVariantGeneration(
  * question+variant (from the same student or a different one) is a pure
  * cache read with zero provider calls, per the owner's explicit requirement.
  */
-export async function getOrCreateExplanationVariant(questionId: string, variantId: string) {
-  const variant = getVariantDef(variantId);
+export async function getOrCreateExplanationVariant(questionId: string, styleId: string, lang: AiLang = "en") {
+  // "default" = the plain explanation; only its Hindi copy lives here (English stays the AIExplanation row).
+  const variant = lang === "hi" && styleId === HINDI_DEFAULT_STYLE ? HINDI_DEFAULT_DEF : getVariantDef(styleId);
   if (!variant) throw new Error("Unknown AI variant.");
+  // English rows keep their original key; Hindi rows are separate ("<style>@hi"), so neither language can serve the other.
+  const variantId = lang === "hi" ? hindiVariantKey(styleId) : styleId;
 
   const existing = await prisma.aIExplanationVariant.findUnique({ where: { questionId_variantId: { questionId, variantId } } });
   if (existing?.status === AiGenerationStatus.COMPLETED) return existing;
@@ -164,8 +170,12 @@ export async function getOrCreateExplanationVariant(questionId: string, variantI
     throw new AiGenerationInProgressError("This variant is being generated — please try again in a few seconds.");
   }
 
-  const question = await loadCanonicalQuestion(questionId);
-  return runAndPersist(questionId, variant, question, settings);
+  const question = await loadCanonicalQuestion(questionId, lang);
+  return runAndPersist(questionId, variantId, variant, question, settings, lang);
 }
+
+/** Style id of the plain Hindi explanation (stored as "default@hi"). */
+export const HINDI_DEFAULT_STYLE = "default";
+const HINDI_DEFAULT_DEF: ExplanationVariantDef = { id: HINDI_DEFAULT_STYLE, label: "Explanation (Hindi)", instruction: "" };
 
 export type { ExplanationContent };

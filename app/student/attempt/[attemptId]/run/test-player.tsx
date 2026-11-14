@@ -1000,8 +1000,9 @@ export function TestPlayer({
               <div className="mt-4 flex flex-col gap-2" data-testid="instant-panel">
                 {reveal ? (
                   <RevealedReviewTools
-                    key={question.questionId}
+                    key={`${question.questionId}:${language.lang}`}
                     questionId={question.questionId}
+                    lang={language.lang}
                     correctOption={question.options.find((o) => o.label === reveal.correctLabel) ?? null}
                     correctOptionHtml={question.rich?.optionHtml[reveal.correctLabel] ?? null}
                     explanation={reveal.explanation ?? null}
@@ -1200,8 +1201,11 @@ function RevealedReviewTools({
   shareText,
   askAi = true,
   result,
+  lang,
 }: {
   questionId: string;
+  /** Bilingual exams: Ask AI answers in the language the question is being read in. */
+  lang?: TestLanguage;
   correctOption: PlayerOption | null;
   /** RICH_V1 only: the correct option's rendered text. */
   correctOptionHtml: RenderedHtml | null;
@@ -1213,7 +1217,7 @@ function RevealedReviewTools({
   /** The Correct / Incorrect line — shares its row with the AI actions. */
   result: React.ReactNode;
 }) {
-  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(questionId, "practice_player");
+  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(questionId, "practice_player", undefined, lang);
   return (
     <div className="flex flex-col gap-3" data-testid="revealed-review-tools">
       {/* Correct ✓ on the left, the AI actions on the right — wrapping under it on narrow screens. */}
