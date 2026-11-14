@@ -37,6 +37,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { LanguageChoice, LanguageSwitch, useTestLanguage, type TestLanguage } from "@/components/student/test-language";
+import { QuestionPalette } from "@/components/student/question-palette";
 import type { HindiView } from "@/lib/test-player-data";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -1083,22 +1084,14 @@ export function TestPlayer({
                 </span>
               ) : null}
             </div>
-            <div className="grid grid-cols-6 gap-2 sm:grid-cols-5 lg:grid-cols-6" data-testid="palette">
-              {questions.map((q, i) => (
-                <button
-                  key={q.questionId}
-                  type="button"
-                  onClick={() => goTo(i)}
-                  aria-label={`Go to question ${i + 1}${q.withdrawn ? " (withdrawn)" : ""}`}
-                  className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-[var(--radius-button)] text-xs font-semibold transition-colors",
-                    STATUS_STYLES[statusFor(q, i)]
-                  )}
-                >
-                  {i + 1}
-                </button>
-              ))}
-            </div>
+            <QuestionPalette
+              onSelect={goTo}
+              cells={questions.map((q, i) => ({
+                key: q.questionId,
+                ariaLabel: `Go to question ${i + 1}${q.withdrawn ? " (withdrawn)" : ""}`,
+                className: STATUS_STYLES[statusFor(q, i)],
+              }))}
+            />
           </div>
 
           <Button variant="danger" onClick={() => setConfirmOpen(true)} disabled={submitting}>

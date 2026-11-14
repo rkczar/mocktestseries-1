@@ -5,6 +5,7 @@ import type { ReportType } from "@prisma/client";
 import { CheckCircle2, MinusCircle, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QuestionBottomNav } from "@/components/student/question-bottom-nav";
+import { QuestionPalette } from "@/components/student/question-palette";
 import { SaveQuestionButton } from "@/components/student/save-question-button";
 import { ReportQuestionDialog } from "@/components/student/report-question-dialog";
 import { useAskAi } from "@/components/student/explanation-panel";
@@ -96,6 +97,7 @@ export function AttemptReview({ questions, bilingual = false }: { questions: Rev
   return (
     <div className="flex flex-col gap-4">
       {bilingual ? <LanguageSwitch className="self-end" lang={language.lang} onChange={language.choose} /> : null}
+      <ReviewPalette questions={questions} current={index} onSelect={setIndex} />
       <div ref={cardRef} className="scroll-mt-20">
         {/* key resets ReviewQuestionCard's Ask AI state (useAskAi) whenever Prev/Next swaps to a different question — the old per-question <div key=...> boundary, now scoped to the card itself. */}
         <ReviewQuestionCard key={`${q.attemptQuestionId}:${language.lang}`} q={q} index={index} total={total} lang={language.lang} />
@@ -113,6 +115,68 @@ export function AttemptReview({ questions, bilingual = false }: { questions: Rev
         previousAriaLabel="Previous question"
         nextAriaLabel="Next question"
       />
+    </div>
+  );
+}
+
+type ReviewStatus = "correct" | "incorrect" | "unanswered" | "withdrawn";
+const REVIEW_STATUS_STYLES: Record<ReviewStatus, string> = {
+  correct: "bg-[var(--color-success)] text-white",
+  incorrect: "bg-[var(--color-error)] text-white",
+  unanswered: "border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)]",
+  withdrawn: "border border-dashed border-[var(--color-muted-foreground)] text-[var(--color-muted-foreground)]",
+};
+const REVIEW_STATUS_LABEL: Record<ReviewStatus, string> = { correct: "correct", incorrect: "incorrect", unanswered: "not answered", withdrawn: "withdrawn" };
+// Same verdict rule as the question card below.
+const reviewStatus = (q: ReviewQuestionView): ReviewStatus =>
+  q.snapshot.withdrawn === true ? "withdrawn" : q.isCorrect === true ? "correct" : q.isCorrect === false ? "incorrect" : "unanswered";
+
+/**
+ * Read-only jump grid for a submitted attempt: changes only which question is shown (no save, timer or answer
+ * state exists here). Always visible from md up; collapsible on phones so a 100-question review stays compact.
+ */
+function ReviewPalette({ questions, current, onSelect }: { questions: ReviewQuestionView[]; current: number; onSelect: (i: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const statuses = questions.map(reviewStatus);
+  const count = (s: ReviewStatus) => statuses.filter((x) => x === s).length;
+  const withdrawn = count("withdrawn");
+  return (
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-3 sm:p-4" data-testid="review-palette-card">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between text-sm font-medium text-[var(--color-foreground)] md:hidden"
+        aria-expanded={open}
+        aria-controls="review-palette-body"
+        onClick={() => setOpen((o) => !o)}
+        data-testid="review-palette-toggle"
+      >
+        <span>All questions · {current + 1} / {questions.length}</span>
+        <span className="text-xs text-[var(--color-muted-foreground)]">{open ? "Hide" : "Show"}</span>
+      </button>
+      <div id="review-palette-body" className={cn("flex-col gap-3 md:flex", open ? "mt-3 flex md:mt-0" : "hidden")}>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--color-muted-foreground)]">
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[var(--color-success)]" /> Correct ({count("correct")})</span>
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[var(--color-error)]" /> Incorrect ({count("incorrect")})</span>
+          <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-[var(--color-border)]" /> Not answered ({count("unanswered")})</span>
+          {withdrawn ? (
+            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-dashed border-[var(--color-muted-foreground)]" /> Withdrawn ({withdrawn})</span>
+          ) : null}
+        </div>
+        <QuestionPalette
+          testId="review-palette"
+          className="grid-cols-[repeat(auto-fill,minmax(2.25rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(2.25rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(2.25rem,1fr))]"
+          current={current}
+          onSelect={(i) => {
+            onSelect(i);
+            setOpen(false);
+          }}
+          cells={questions.map((q, i) => ({
+            key: q.attemptQuestionId,
+            ariaLabel: `Go to question ${i + 1} (${REVIEW_STATUS_LABEL[statuses[i]]})`,
+            className: cn(REVIEW_STATUS_STYLES[statuses[i]], i === current && "ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--color-card)]"),
+          }))}
+        />
+      </div>
     </div>
   );
 }
