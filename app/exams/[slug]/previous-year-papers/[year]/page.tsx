@@ -98,7 +98,7 @@ export default async function PreviousYearPaperYearPage({ params }: { params: Pr
   const hasAnalysis = hasPyqAnalysis(insights);
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">
         <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
           <ExamBreadcrumbs

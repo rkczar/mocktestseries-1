@@ -71,7 +71,7 @@ export default async function PreviousYearPaperAnalysisPage({ params }: { params
   const notes = a.papers.map((p) => ({ year: p.year, note: getPaperNote(exam.code, p.year) })).filter((x) => x.note);
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       <InsightJsonLd siteUrl={siteUrl} path={path} name={h1} description={description} dateModified={meta.dataAsOf} examName={name} />
 
       <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">

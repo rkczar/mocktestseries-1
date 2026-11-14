@@ -38,13 +38,15 @@ export const BG_SCOPE_LABELS: Record<BgScope, string> = {
   HOMEPAGE_AND_DASHBOARD: "Homepage + Student Dashboard",
 };
 /** Where a background can be mounted. Each surface asks whether the saved scope covers it. */
-export type BgSurface = "HOMEPAGE" | "PUBLIC" | "STUDENT";
+export type BgSurface = "HOMEPAGE" | "PUBLIC" | "STUDENT" | "EXAM";
+// EXAM = the public exam pages (/exams, /exams/[slug]/*): every exam (RUHS MO, FSO, …) is part of the main site, so
+// they show the background wherever the homepage does — no separate setting, nothing else changes.
 const SCOPE_SURFACES: Record<BgScope, readonly BgSurface[]> = {
-  HOMEPAGE: ["HOMEPAGE"],
+  HOMEPAGE: ["HOMEPAGE", "EXAM"],
   // "Public Website" includes the homepage.
-  PUBLIC: ["HOMEPAGE", "PUBLIC"],
+  PUBLIC: ["HOMEPAGE", "PUBLIC", "EXAM"],
   STUDENT_DASHBOARD: ["STUDENT"],
-  HOMEPAGE_AND_DASHBOARD: ["HOMEPAGE", "STUDENT"],
+  HOMEPAGE_AND_DASHBOARD: ["HOMEPAGE", "STUDENT", "EXAM"],
 };
 export const scopeCovers = (scope: BgScope, surface: BgSurface) => SCOPE_SURFACES[scope].includes(surface);
 

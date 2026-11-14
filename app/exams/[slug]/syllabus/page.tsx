@@ -62,7 +62,7 @@ export default async function ExamSyllabusPage({ params }: { params: Promise<{ s
   const name = displayExamName(exam.name);
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">
         <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
           <ExamBreadcrumbs

@@ -33,7 +33,7 @@ export default async function ExamsDirectoryPage() {
   const seriesByExam = new Map(await Promise.all(exams.map(async (e) => [e.id, await getExamMockSeries(e.id)] as const)));
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
         <ExamBreadcrumbs baseUrl={siteUrl} crumbs={[{ label: "Home", href: "/" }, { label: "Exams" }]} />
 

@@ -50,7 +50,7 @@ export default async function ExamPatternPage({ params }: { params: Promise<{ sl
   if (exam.examMode) confirmedFacts.push({ label: "Exam Mode", value: exam.examMode });
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">
         <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
           <ExamBreadcrumbs

@@ -74,7 +74,7 @@ export default async function SubjectWiseWeightagePage({ params }: { params: Pro
   };
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       <InsightJsonLd siteUrl={siteUrl} path={path} name={h1} description={description} dateModified={meta.dataAsOf} examName={name} />
 
       <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">

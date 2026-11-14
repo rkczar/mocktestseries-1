@@ -202,7 +202,7 @@ export default async function MockTestSeriesPage({ params }: { params: Promise<{
   }
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       {jsonLd.map((j, i) => (
         <script key={i} type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(j) }} />
       ))}

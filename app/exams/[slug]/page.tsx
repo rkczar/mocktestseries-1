@@ -157,7 +157,7 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
   ];
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(webPageJsonLd) }} />
 
       {/* HERO */}
@@ -462,7 +462,8 @@ export default async function ExamPillarPage({ params }: { params: Promise<{ slu
 function StatItem({ icon, value, label }: { icon: React.ReactNode; value: number; label: string }) {
   return (
     <span className="flex items-center gap-1.5 text-[var(--color-muted-foreground)]">
-      {icon}
+      {/* Same accent as the homepage stat icons (components/homepage/sections.tsx). */}
+      <span className="text-[var(--color-primary)]">{icon}</span>
       <span className="font-semibold text-[var(--color-foreground)]">{value}</span> {label}
     </span>
   );

@@ -5,6 +5,7 @@ import { SiteFooter } from "./site-footer";
 import { getFooterLastUpdated } from "@/lib/site-last-updated";
 import { getBackgroundEffectsFor } from "@/lib/background-effects-settings";
 import { BackgroundEffectsLayer } from "@/components/background-effects/layer";
+import type { BgSurface } from "@/lib/background-effects";
 
 /**
  * Same canonical Header/Footer used by the homepage (components/homepage/
@@ -25,11 +26,20 @@ export async function getPublicChrome() {
   };
 }
 
-export async function PublicPageShell({ children, studentSignedIn = false }: { children: React.ReactNode; studentSignedIn?: boolean }) {
+export async function PublicPageShell({
+  children,
+  studentSignedIn = false,
+  surface = "PUBLIC",
+}: {
+  children: React.ReactNode;
+  studentSignedIn?: boolean;
+  /** Background Effects surface; exam pages pass "EXAM" (follows the homepage). */
+  surface?: BgSurface;
+}) {
   const [{ header, footer, contactInfo }, lastUpdated, backgroundEffects] = await Promise.all([
     getPublicChrome(),
     getFooterLastUpdated(),
-    getBackgroundEffectsFor("PUBLIC"),
+    getBackgroundEffectsFor(surface),
   ]);
   const growWithUsEnabled = (contactInfo?.content as Record<string, unknown> | undefined)?.growWithUsEnabled !== false;
 

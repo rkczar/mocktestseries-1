@@ -220,7 +220,7 @@ export default async function PreparationStrategyPage({ params }: { params: Prom
   ];
 
   return (
-    <PublicPageShell>
+    <PublicPageShell surface="EXAM">
       <InsightJsonLd
         siteUrl={siteUrl}
         path={path}
