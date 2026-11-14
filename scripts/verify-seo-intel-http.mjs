@@ -62,7 +62,7 @@ async function login(who) {
   await page.goto(`${BASE}/admin/login`);
   await page.fill("input[name=username]", F.admins[who].username);
   await page.fill("input[name=password]", F.admins[who].password);
-  await Promise.all([page.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), page.locator("form button[type=submit]").click()]);
+  await Promise.all([page.waitForURL(/\/(admin(?!\/login)|teacher)/, { timeout: 30000 }), page.locator("form button[type=submit]").click()]);
   return { ctx, page };
 }
 async function open(page, url = PAGE) {
@@ -408,7 +408,7 @@ await form().locator("input[name=historyDays]").evaluate((el) => {
   el.value = "10";
 });
 await form().getByRole("button", { name: "Save" }).click();
-await form().getByText("Keep history for 30–1095 days.").waitFor({ timeout: 15000 });
+await form().getByText("Keep history for 30–1095 days, or 0 to keep it forever.").waitFor({ timeout: 15000 });
 check("retention outside 30–1095 is refused server-side", !(await setting("seo.intel.settings")));
 await open(master.page);
 await form().locator("input[name=autoSyncEnabled]").check();

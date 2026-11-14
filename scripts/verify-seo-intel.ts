@@ -108,7 +108,7 @@ async function main() {
   // History, retention and settings
   await prisma.setting.deleteMany({ where: { OR: [{ key: { startsWith: HISTORY_PREFIX } }, { key: INTEL_SETTINGS_KEY }] } });
   const def = await getIntelSettings();
-  check("settings default: daily sync OFF, 400 days", def.autoSyncEnabled === false && def.historyDays === 400);
+  check("settings default: daily sync OFF, history kept forever (0)", def.autoSyncEnabled === false && def.historyDays === 0);
   check("historyDays clamped to 30–1095", (await saveIntelSettings({ historyDays: 5 })).historyDays === 30 && (await saveIntelSettings({ historyDays: 99999 })).historyDays === 1095);
   await saveIntelSettings({ autoSyncEnabled: true, historyDays: 60 });
   const s2 = await getIntelSettings();

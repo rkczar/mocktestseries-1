@@ -8,7 +8,7 @@ import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { STATE_COOKIE, STATE_COOKIE_PATH, STATE_TTL_SECONDS, SeoIntelError, beginAuthorization, disconnect } from "@/lib/seo-intel/google";
 import { runSync } from "@/lib/seo-intel/sync";
-import { HISTORY_DAYS_MAX, HISTORY_DAYS_MIN, PAGESPEED_PATHS_MAX, normalisePagespeedPath, pruneHistory, saveIntelSettings } from "@/lib/seo-intel/history";
+import { HISTORY_DAYS_MAX, HISTORY_DAYS_MIN, HISTORY_KEEP_FOREVER, PAGESPEED_PATHS_MAX, normalisePagespeedPath, pruneHistory, saveIntelSettings } from "@/lib/seo-intel/history";
 import { runPageSpeed } from "@/lib/seo-intel/pagespeed";
 
 export interface SeoIntelActionState {
@@ -84,8 +84,8 @@ export async function syncGoogleAction(): Promise<SeoIntelActionState> {
 export async function saveIntelSettingsAction(_prev: SeoIntelActionState, formData: FormData): Promise<SeoIntelActionState> {
   const session = await requirePermission(PERMISSIONS.SEO_INTEL_MANAGE);
   const days = Number(formData.get("historyDays"));
-  if (!Number.isInteger(days) || days < HISTORY_DAYS_MIN || days > HISTORY_DAYS_MAX) {
-    return { ok: false, message: `Keep history for ${HISTORY_DAYS_MIN}–${HISTORY_DAYS_MAX} days.` };
+  if (!Number.isInteger(days) || (days !== HISTORY_KEEP_FOREVER && (days < HISTORY_DAYS_MIN || days > HISTORY_DAYS_MAX))) {
+    return { ok: false, message: `Keep history for ${HISTORY_DAYS_MIN}–${HISTORY_DAYS_MAX} days, or 0 to keep it forever.` };
   }
   const lines = String(formData.get("pagespeedPaths") ?? "")
     .split(/\r?\n/)

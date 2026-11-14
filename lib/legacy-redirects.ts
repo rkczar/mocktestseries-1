@@ -16,6 +16,8 @@ export interface LegacyRedirect {
   source: string;
   destination: string;
   label: string;
+  /** Default 308 (permanent). 301 where an exact permanent status was requested. */
+  statusCode?: 301;
 }
 
 export const LEGACY_REDIRECTS: LegacyRedirect[] = [
@@ -24,4 +26,6 @@ export const LEGACY_REDIRECTS: LegacyRedirect[] = [
   { source: "/index.html", destination: "/", label: "Legacy static home" },
   { source: "/contact.html", destination: "/contact", label: "Legacy static contact page" },
   { source: "/privacy.php", destination: "/privacy", label: "Legacy PHP privacy policy" },
+  // Short FSO URL cited by AI assistants and tried in Search Console (never a real page): exact path only.
+  { source: "/exams/rpsc-fso", destination: "/exams/rajasthan-food-safety-officer", label: "Short RPSC FSO URL → FSO exam page", statusCode: 301 },
 ];

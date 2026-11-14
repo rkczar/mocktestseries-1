@@ -30,8 +30,8 @@ export function IntelSettingsForm({
       </label>
       <label className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-foreground)]">
         Keep daily history for
-        <Input name="historyDays" type="number" min={min} max={max} step={1} defaultValue={historyDays} required className="h-8 w-24" aria-label="History retention in days" />
-        days
+        <Input name="historyDays" type="number" min={0} max={max} step={1} defaultValue={historyDays} required className="h-8 w-24" aria-label="History retention in days" />
+        days (0 = keep forever; otherwise {min}–{max})
       </label>
       <label className="flex flex-col gap-1 text-sm text-[var(--color-foreground)]">
         PageSpeed pages (1–{maxPaths}, one path per line)

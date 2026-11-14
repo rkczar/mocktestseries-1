@@ -19,12 +19,14 @@ export const INTEL_SETTINGS_KEY = "seo.intel.settings";
 export const HISTORY_PREFIX = "seo.intel.history.";
 export const HISTORY_DAYS_MIN = 30;
 export const HISTORY_DAYS_MAX = 1095;
+/** historyDays = 0: keep every daily summary forever (never pruned). */
+export const HISTORY_KEEP_FOREVER = 0;
 const TOP_KEEP = 10;
 
 export interface IntelSettings {
   /** Daily scheduled sync (cron: ops/seo/mocktestseries-seo-intel.cron). OFF until a Master Admin turns it on. */
   autoSyncEnabled: boolean;
-  /** Daily history summaries older than this are deleted after each sync / settings save. */
+  /** Daily history summaries older than this are deleted after each sync / settings save; 0 = keep forever. */
   historyDays: number;
   /** Same-site pages the PageSpeed check tests (mobile + desktop), max PAGESPEED_PATHS_MAX. */
   pagespeedPaths: string[];
@@ -32,7 +34,7 @@ export interface IntelSettings {
 
 export const PAGESPEED_PATHS_MAX = 3;
 const DEFAULT_PAGESPEED_PATHS = ["/", "/exams", "/plans-and-pricing"];
-const DEFAULTS: IntelSettings = { autoSyncEnabled: false, historyDays: 400, pagespeedPaths: DEFAULT_PAGESPEED_PATHS };
+const DEFAULTS: IntelSettings = { autoSyncEnabled: false, historyDays: HISTORY_KEEP_FOREVER, pagespeedPaths: DEFAULT_PAGESPEED_PATHS };
 
 /** A same-site path PageSpeed may test, normalised; null if not acceptable (private areas are never sent to Google). */
 export function normalisePagespeedPath(input: string): string | null {
@@ -60,6 +62,7 @@ export async function getIntelSettings(): Promise<IntelSettings> {
 
 function clampDays(n: unknown): number {
   const v = Math.round(Number(n));
+  if (v === HISTORY_KEEP_FOREVER) return HISTORY_KEEP_FOREVER;
   return Number.isFinite(v) ? Math.min(HISTORY_DAYS_MAX, Math.max(HISTORY_DAYS_MIN, v)) : DEFAULTS.historyDays;
 }
 
@@ -137,6 +140,7 @@ export async function listHistory(limit = 90): Promise<HistoryEntry[]> {
 
 /** Deletes daily summaries older than `historyDays` (by IST date). Returns how many were removed. */
 export async function pruneHistory(historyDays: number, now = new Date()): Promise<number> {
+  if (clampDays(historyDays) === HISTORY_KEEP_FOREVER) return 0;
   const cutoff = new Date(`${toIstDateString(now)}T00:00:00Z`);
   cutoff.setUTCDate(cutoff.getUTCDate() - clampDays(historyDays));
   const res = await prisma.setting.deleteMany({

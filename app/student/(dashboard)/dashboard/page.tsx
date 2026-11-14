@@ -32,7 +32,7 @@ import { getDashboardLiveCbtPromotion } from "@/lib/live-cbt";
 import { getSiteUrl } from "@/lib/site-url";
 import { TrialPopup } from "./trial-popup";
 import { TrackOnce } from "@/components/analytics/track-once";
-import { recentSignup } from "@/lib/signup-tracking";
+import { claimSignupEvent } from "@/lib/signup-tracking";
 import { shouldShowUpgradeBanner, UpgradeBanner } from "@/components/student/upgrade-banner";
 import { getTrialStatus } from "@/lib/premium-trial";
 import { getPremiumPolicy } from "@/lib/premium-policy";
@@ -70,7 +70,7 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
   const activeExamId =
     requestedExamId && enrolledExams.some((e) => e.id === requestedExamId) ? requestedExamId : (enrolledExams[0]?.id ?? null);
 
-  const signup = await recentSignup(student.id);
+  const signup = await claimSignupEvent(student.id);
   const siteUrl = await getSiteUrl();
   const [[rawExamMetrics, subjects, nextTest, papers, overall], omrSheet, layout, accessSummaries, reviewState, publicReviews, liveCbt, telegramHref, trialStatus, premiumPolicy] = await Promise.all([
     activeExamId
@@ -181,7 +181,7 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
         telegramHref={telegramHref}
       />
       <FloatingWhatsAppSupport surface="dashboard" />
-      {/* GA4 sign_up once per new account (created in the last 30 min), tagged with the exam it landed in. */}
+      {/* GA4 sign_up once per new account (server-claimed, lib/signup-tracking.ts), tagged with the exam it landed in. */}
       {signup ? <TrackOnce event="sign_up" onceKey={`sign_up:${student.id}`} params={{ exam_code: enrolledExams.find((e) => e.id === activeExamId)?.code ?? null }} /> : null}
       {/* Keyed: arriving at ?premium=locked from the dashboard itself must remount it, or the once-per-mount claim never runs. */}
       {/* The trial belongs to the Premium policy exam: never prompt on another exam's dashboard. */}

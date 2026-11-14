@@ -114,7 +114,7 @@ function pickGscProperty(json: Record<string, unknown> | null): string | null {
 
 async function syncSearchConsole(accessToken: string, secrets: string[]): Promise<NonNullable<SeoSnapshot["gsc"]>> {
   const base = googleEndpoints().searchConsole;
-  const sites = await googleFetch(`${base}/sites`, { method: "GET", accessToken });
+  const sites = await googleFetch(`${base}/sites`, { method: "GET", accessToken, retry: true });
   if (sites.status !== 200) throw new SeoIntelError(`Search Console sites: ${googleErrorText(sites, secrets)}`);
   const property = pickGscProperty(sites.json);
   if (!property) throw new SeoIntelError(`The connected Google account has no verified Search Console property for ${new URL(SEO_SITE_URL).host}.`);
@@ -126,6 +126,7 @@ async function syncSearchConsole(accessToken: string, secrets: string[]): Promis
     const r = await googleFetch(`${base}/sites/${encodeURIComponent(property)}/searchAnalytics/query`, {
       method: "POST",
       accessToken,
+      retry: true,
       json: { startDate: start, endDate: end, dimensions, rowLimit, startRow, type: "web" },
     });
     if (r.status !== 200) throw new SeoIntelError(`Search Console query: ${googleErrorText(r, secrets)}`);
@@ -187,6 +188,7 @@ async function syncGa4(accessToken: string, secrets: string[]): Promise<NonNulla
   const r = await googleFetch(`${googleEndpoints().analyticsData}/properties/${GA4_PROPERTY_ID}:batchRunReports`, {
     method: "POST",
     accessToken,
+    retry: true,
     json: {
       requests: [
         { dateRanges, metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "screenPageViews" }, { name: "engagementRate" }] },

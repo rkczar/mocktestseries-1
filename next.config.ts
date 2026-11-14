@@ -38,7 +38,7 @@ const nextConfig: NextConfig = {
       { source: "/exams/:slug/mock-tests", destination: "/exams/:slug/mock-test-series", permanent: true },
       // Known URLs from the old PHP/static site (lib/legacy-redirects.ts) —
       // explicit entries only; unknown legacy URLs still 404.
-      ...LEGACY_REDIRECTS.map(({ source, destination }) => ({ source, destination, permanent: true })),
+      ...LEGACY_REDIRECTS.map(({ source, destination, statusCode }) => (statusCode ? { source, destination, statusCode } : { source, destination, permanent: true })),
     ];
   },
 };

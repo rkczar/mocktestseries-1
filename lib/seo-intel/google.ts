@@ -46,6 +46,9 @@ const GOOGLE = {
 const ID_TOKEN_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 const TIMEOUT_MS = 15_000;
 const MAX_BODY = 1024 * 1024;
+/** Waits before the 2nd and 3rd try of a retriable read (network error, 429, 5xx). */
+const RETRY_DELAYS_MS = [2_000, 8_000];
+const RETRY_AFTER_MAX_MS = 30_000;
 
 export class SeoIntelError extends Error {
   constructor(message: string) {
@@ -207,6 +210,8 @@ export async function clearAll() {
 export interface GoogleResponse {
   status: number;
   json: Record<string, unknown> | null;
+  /** Retry-After header (seconds), when Google sent one. */
+  retryAfter?: string | null;
 }
 
 function allowedUrl(url: string): boolean {
@@ -220,10 +225,49 @@ function allowedUrl(url: string): boolean {
   );
 }
 
-export async function googleFetch(
-  url: string,
-  init: { method: "GET" | "POST"; accessToken?: string; apiKey?: string; form?: Record<string, string>; json?: unknown; timeoutMs?: number }
-): Promise<GoogleResponse> {
+type GoogleFetchInit = { method: "GET" | "POST"; accessToken?: string; apiKey?: string; form?: Record<string, string>; json?: unknown; timeoutMs?: number; retry?: boolean };
+
+/** Network errors, 429 and 5xx are worth another try; 4xx (invalid_grant, 401/403, bad request) never are. */
+export function isRetriableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+function retryDelays(): number[] {
+  // Test-only override (honoured only against the loopback mock), so suites don't sleep for seconds.
+  const t = Number(process.env.SEO_RETRY_DELAY_MS);
+  return process.env.SEO_GOOGLE_TEST_BASE_URL && Number.isFinite(t) && t >= 0 ? RETRY_DELAYS_MS.map(() => t) : RETRY_DELAYS_MS;
+}
+
+function retryAfterMs(r: GoogleResponse, fallback: number): number {
+  const s = Number(r.retryAfter);
+  return Number.isFinite(s) && s > 0 ? Math.min(s * 1000, RETRY_AFTER_MAX_MS) : fallback;
+}
+
+/**
+ * googleFetch, plus — only with `retry: true` (idempotent reads and the token refresh) — up to two
+ * more tries after a network error, 429 or 5xx. Never retried: 4xx such as invalid_grant, and
+ * one-shot calls (authorization-code exchange, revoke), which don't pass `retry`.
+ */
+export async function googleFetch(url: string, init: GoogleFetchInit): Promise<GoogleResponse> {
+  if (!init.retry) return googleFetchOnce(url, init);
+  const delays = retryDelays();
+  for (let attempt = 0; ; attempt++) {
+    const last = attempt >= delays.length;
+    try {
+      const r = await googleFetchOnce(url, init);
+      if (last || !isRetriableStatus(r.status)) return r;
+      await sleep(retryAfterMs(r, delays[attempt]));
+    } catch (err) {
+      // Network failure / timeout ("Could not reach Google.", "did not answer in time"); policy errors are thrown before any request.
+      if (last || !(err instanceof SeoIntelError) || !/reach Google|in time/.test(err.message)) throw err;
+      await sleep(delays[attempt]);
+    }
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function googleFetchOnce(url: string, init: GoogleFetchInit): Promise<GoogleResponse> {
   if (!allowedUrl(url)) throw new SeoIntelError("Blocked request to a non-allow-listed Google endpoint.");
   if (/[?&]key=/i.test(url)) throw new SeoIntelError("An API key must never be sent in a URL.");
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -253,7 +297,7 @@ export async function googleFetch(
   } catch {
     json = null;
   }
-  return { status: res.status, json };
+  return { status: res.status, json, retryAfter: res.headers.get("retry-after") };
 }
 
 async function readCapped(res: Response): Promise<string> {
@@ -541,6 +585,7 @@ export async function getAccessToken(): Promise<{ accessToken: string; secrets: 
   const secrets = [creds.clientSecret, refresh];
   const r = await googleFetch(googleEndpoints().token, {
     method: "POST",
+    retry: true,
     form: { grant_type: "refresh_token", refresh_token: refresh, client_id: creds.clientId, client_secret: creds.clientSecret },
   });
   const accessToken = typeof r.json?.access_token === "string" ? r.json.access_token : null;

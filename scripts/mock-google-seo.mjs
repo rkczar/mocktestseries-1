@@ -16,6 +16,8 @@
  * gscRows (POST /__mock/control {"gscRows": n}): how many rows each Search Console
  * table has (default 5); every searchAnalytics and GA4 request body is kept for
  * GET /__mock/requests.
+ * failNext (POST /__mock/control {"failNext": {"count": n, "status": 503|429|403|"drop", "match": "<path part>"}})
+ * makes the next n matching requests fail (retry tests); seedRefresh {"token","email"} issues a live refresh token.
  *
  * Revocation is GRANT-WIDE, like Google: revoking any token of an account ends
  * that account's whole grant (every refresh + access token issued to it so far);
@@ -59,6 +61,7 @@ const state = {
   revoked: [],
   stats: {},
   urlLeaks: [],
+  failNext: { count: 0, status: 503, match: "" }, // inject failures: status number, or "drop" (connection reset)
 };
 
 const rand = (n = 24) => crypto.randomBytes(n).toString("base64url");
@@ -150,7 +153,17 @@ const server = http.createServer(async (req, res) => {
       if (body.email) state.email = body.email;
       if (body.psiScenario) state.psiScenario = body.psiScenario;
       if (body.resetPsiCalls) state.psiCalls = [];
+      if (body.failNext) state.failNext = { count: Number(body.failNext.count) || 0, status: body.failNext.status ?? 503, match: body.failNext.match ?? "" };
+      // Seed a live refresh token without the browser consent flow (tests that start from "already connected").
+      if (body.seedRefresh?.token) issue(state.refresh, body.seedRefresh.token, body.seedRefresh.email ?? state.email);
       return send(res, 200, { scenario: state.scenario, psiScenario: state.psiScenario });
+    }
+    // Injected failures (retry tests): the next N matching non-control requests fail.
+    if (state.failNext.count > 0 && !p.startsWith("/__mock/") && (!state.failNext.match || p.includes(state.failNext.match))) {
+      state.failNext.count--;
+      bump(`injected ${state.failNext.status}`);
+      if (state.failNext.status === "drop") return req.socket.destroy();
+      return send(res, state.failNext.status, { error: { code: state.failNext.status, status: "INJECTED", message: "injected failure" } });
     }
     if (p === "/__mock/stats") return send(res, 200, { scenario: state.scenario, stats: state.stats, revoked: state.revoked, urlLeaks: state.urlLeaks, psiCalls: state.psiCalls });
     if (p === "/__mock/secrets") return send(res, 200, { secrets: [...state.secrets] });

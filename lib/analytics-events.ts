@@ -14,3 +14,20 @@ export function trackEvent(name: string, params: Record<string, string | number 
     // Analytics must never break the page.
   }
 }
+
+/**
+ * trackEvent at most once per browser for `onceKey` (e.g. `begin_checkout:<orderId>`), so a retried
+ * payment window or a re-render can't count the same order twice. Same storage key scheme as
+ * components/analytics/track-once.tsx. Storage blocked: still sends (at worst a rare duplicate).
+ */
+export function trackEventOnce(onceKey: string, name: string, params: Record<string, string | number | boolean | null | undefined> = {}) {
+  if (typeof window === "undefined") return;
+  const key = `mts-ga-once:${onceKey}`;
+  try {
+    if (window.localStorage.getItem(key)) return;
+    window.localStorage.setItem(key, "1");
+  } catch {
+    // Storage blocked.
+  }
+  trackEvent(name, params);
+}

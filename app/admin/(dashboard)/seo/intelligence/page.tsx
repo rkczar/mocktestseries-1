@@ -419,7 +419,7 @@ export default async function SeoIntelligencePage({ searchParams }: { searchPara
             {intel.autoSyncEnabled && !cronInstalled ? <Badge variant="warning">Scheduler not installed</Badge> : null}
           </CardTitle>
           <CardDescription>
-            Daily automatic sync at 03:10 IST stores one summary per day; history older than {intel.historyDays} days is deleted automatically.
+            Daily automatic sync at 03:10 IST stores one summary per day; {intel.historyDays === 0 ? "history is kept forever." : `history older than ${intel.historyDays} days is deleted automatically.`}
             Scheduler {cronInstalled ? "installed" : "not installed on the server (see ops/SEO-INTELLIGENCE.md)"}.
           </CardDescription>
         </CardHeader>
