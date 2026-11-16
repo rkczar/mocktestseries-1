@@ -15,7 +15,7 @@ import { formulaDiff, sourceDiffSummary, sourceTextDiff } from "@/lib/ai-import/
 import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
 import { EXTRACT_SYSTEM, RESCAN_RULES, extractUserText, pageSchema, toExtracted, type PageOutput } from "@/lib/ai-import/prompts";
-import { gapPages, incompleteReading, optionOnlyReasons, repairDegenerateOptions } from "@/lib/ai-import/reading-checks";
+import { gapPages, incompleteReading, optionOnlyReasons, repairDegenerateOptions, repairLayout, NO_OCR } from "@/lib/ai-import/reading-checks";
 import { readVault, renderKey, putIntermediate, vaultPath, workDir, exists as vaultExists } from "@/lib/ai-import/vault";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { sourceKeyOf, type ExtractedQuestion, type NBox, type PageExtraction } from "@/lib/ai-import/types";
@@ -752,7 +752,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   // The page's own local OCR reading of each question number (free): a fallback for options a reader dropped.
   const ocrTwins = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id, pages: { has: page.pageNumber } }, select: { sourceNumber: true, data: true } });
   const ocrTextOf = (n: number | null) => (n === null ? null : (ocrTwins.find((t) => t.sourceNumber === n)?.data as { ocr?: { text?: string } } | null)?.ocr?.text ?? null);
-  const readOf = (p: { out: PageOutput; model: string }) => repairDegenerateOptions(toExtracted(p.out, page.pageNumber, p.model), ocrTextOf);
+  const readOf = (p: { out: PageOutput; model: string }) => repairLayout(repairDegenerateOptions(toExtracted(p.out, page.pageNumber, p.model), ocrTextOf), ocrTextOf);
   let incomplete = incompleteReading(readOf(primary));
   const retryModels = [ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks].filter((m, i, a) => !!m && a.indexOf(m) === i);
   let reread = false;
@@ -809,7 +809,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     try {
       const v = await call([verifyModel], "verify");
       secondModel = v.model;
-      second = toExtracted(v.out, page.pageNumber, v.model).filter((q) => !candidateInstruction(q));
+      second = repairLayout(toExtracted(v.out, page.pageNumber, v.model), NO_OCR).filter((q) => !candidateInstruction(q));
       if (sent) toPageBoxes(second, sent.parts);
       assignSections(second, state.startState);
     } catch (e) {
@@ -964,7 +964,7 @@ async function verifyLocalPage(ctx: StepContext, file: AiImportFile, pageId: str
     },
     (text) => parsePage(text, "the verification model's answer")
   );
-  const second = toExtracted(out, page.pageNumber, r.model).filter((q) => !candidateInstruction(q));
+  const second = repairLayout(toExtracted(out, page.pageNumber, r.model), NO_OCR).filter((q) => !candidateInstruction(q));
   assignSections(second, state.startState);
   const stored = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id, pages: { has: page.pageNumber } }, select: { id: true, data: true, pages: true } });
   const mine = stored.filter((q) => q.pages[0] === page.pageNumber);

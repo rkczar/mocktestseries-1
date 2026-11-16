@@ -15,7 +15,8 @@
  * more different papers show the same fact.
  */
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
-import { ANNOTATION_TAIL, candidateInstruction, mergedAnswerIn, mergedStatements, questionFormats, type QuestionFormat } from "@/lib/ai-import/local-parse";
+import { matchLayoutProblems, statementsAsOptions } from "@/lib/ai-import/reading-checks";
+import { ANNOTATION_TAIL, candidateInstruction, joinWrappedLines, mergedAnswerIn, mergedStatements, questionFormats, type QuestionFormat } from "@/lib/ai-import/local-parse";
 
 export const PAPER_RULE_KINDS = {
   NUMBERING: "Question numbering",
@@ -271,11 +272,14 @@ export const EXTRACTION_PATTERNS = {
   NUMBER_MISSING: "the printed question number was not read",
   INSTRUCTION_AS_QUESTION: "an instruction to candidates read as a question",
   STATEMENTS_MERGED: "numbered statements run together in the question text",
+  WRAPPED_LINES: "printed line wraps kept as separate lines in the question text (join ordinary wraps; keep statements, lists and paragraphs on their own lines)",
+  STATEMENTS_AS_OPTIONS: "numbered statements read as options (statements belong in the question text; options are only the printed combinations such as “1 and 2”)",
+  MATCH_LAYOUT: "Match-the-Following columns flattened or mixed (List I and List II rows keep their printed labels A, B… / 1, 2…; only the code rows (a)–(d) are options)",
 } as const;
 export type ExtractionPattern = keyof typeof EXTRACTION_PATTERNS;
 
 type FieldName = import("@/lib/ai-import/types").VerifyFieldName;
-type Q = Pick<ExtractedQuestion, "stem" | "options" | "number" | "section" | "printedAnswer">;
+type Q = Pick<ExtractedQuestion, "stem" | "options" | "number" | "section" | "printedAnswer"> & Partial<Pick<ExtractedQuestion, "type" | "listI" | "listII">>;
 
 /** Where the pattern shows in this question (the field), or null when it does not. */
 export function detectPattern(p: ExtractionPattern, e: Q): { field: FieldName; where: string } | null {
@@ -298,6 +302,12 @@ export function detectPattern(p: ExtractionPattern, e: Q): { field: FieldName; w
       return candidateInstruction(e) ? { field: "text", where: "question text" } : null;
     case "STATEMENTS_MERGED":
       return mergedStatements(e.stem) ? { field: "text", where: "question text" } : null;
+    case "WRAPPED_LINES":
+      return e.type !== "MATCH_THE_FOLLOWING" && !e.listI?.length && joinWrappedLines(e.stem) !== e.stem.trim() ? { field: "text", where: "question text" } : null;
+    case "STATEMENTS_AS_OPTIONS":
+      return statementsAsOptions(e) ? { field: "options", where: "options" } : null;
+    case "MATCH_LAYOUT":
+      return matchLayoutProblems({ ...e, type: e.type ?? "SINGLE_CORRECT", listI: e.listI ?? null, listII: e.listII ?? null }).length ? { field: "options", where: "List I / List II / code options" } : null;
   }
 }
 

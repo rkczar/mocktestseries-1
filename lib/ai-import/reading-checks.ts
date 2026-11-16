@@ -107,3 +107,91 @@ export function repairDegenerateOptions<T extends Pick<ExtractedQuestion, "numbe
 export function optionOnlyReasons(reasons: string[]): boolean {
   return reasons.every((r) => /one option only|every option is empty/.test(r));
 }
+
+// ---- Layout of statement / match questions (CMS 2026 Q4 / Q5, 2026-11-16) --------------------------------------------
+
+const LIST_KEY = /^(?:[A-H]|[1-9]|10|I{1,3}|IV|VI{0,3}|IX|X)$/;
+const STATEMENT_OPTION = /^\s*\(?([1-9])[.)]\s+\S/;
+/** A Match-the-Following code row: "1 2 3", "A-1, B-3, C-2", "4 3 2 1" — label tokens and separators only. */
+const CODE_ROW = /^[\s,;:\-–→]*(?:\(?(?:[A-H]|[1-9]|I{1,3}|IV|V)\)?[\s,;:\-–→]*){2,}$/;
+const COMBINATION = /\b(?:and|only)\b/i;
+const squash = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase();
+
+/** Second / Verify 2 reads: structural repair only — never the page OCR the first read used (that would hide real differences). */
+export const NO_OCR = (): string | null => null;
+
+type LayoutQ = Pick<ExtractedQuestion, "number" | "stem" | "options" | "type" | "listI" | "listII">;
+
+/** Every option is a numbered statement 1, 2, 3 … in order — the statements were read as options (CMS 2026 Q4). */
+export function statementsAsOptions(q: Pick<ExtractedQuestion, "options">): boolean {
+  return q.options.length >= 2 && q.options.every((o, i) => Number(STATEMENT_OPTION.exec(o.text ?? "")?.[1]) === i + 1);
+}
+
+/** Why the List I / List II / code structure of a match question is not trustworthy ([] = fine). CMS 2026 Q5. */
+export function matchLayoutProblems(q: LayoutQ): string[] {
+  const isMatch = q.type === "MATCH_THE_FOLLOWING" || !!q.listI?.length || !!q.listII?.length;
+  if (!isMatch) return [];
+  const out: string[] = [];
+  const l1 = q.listI ?? [];
+  const l2 = q.listII ?? [];
+  if (l1.length < 2 || l2.length < 2) out.push(`List I has ${l1.length} row(s) and List II ${l2.length} — the two columns were not separated`);
+  const badKey = [...l1, ...l2].find((e) => !LIST_KEY.test((e.key ?? "").trim()));
+  if (badKey) out.push(`a list row has no printed label (key “${(badKey.key ?? "").slice(0, 30)}”)`);
+  if (q.options.length > 5) out.push(`${q.options.length} options were read — the code table was read as options`);
+  else if (q.options.some((o) => /^\s*\(?[A-Ea-e1-9]\)?\s*$/.test(o.text ?? "") || /^\s*\([a-e]\)/.test(o.text ?? ""))) out.push("an option holds a lone label or a code-table fragment");
+  else if (q.options.filter((o) => COMBINATION.test(o.text ?? "")).length >= 3) out.push("the options are statement combinations (“1 and 2”), not code rows — they may belong to the question in the other column");
+  return out;
+}
+
+/**
+ * Repairs the layout of statement / match questions of one AI page reading, never inventing text:
+ *  - statements read as options → moved back into the question text (wording unchanged); the combination options are
+ *    taken from the page's local OCR reading of the same number only when they are unambiguous combination codes,
+ *    otherwise the question keeps NO options (blocked: Options missing → Needs Correction);
+ *  - a list key that only repeats its row's text (“BETA-MYOSIN…” for “Beta-myosin…”) is a missing label → the positional
+ *    label, as the reader adapter does for a missing key;
+ *  - a code table read as options → the OCR reading's (a)–(d) code rows when unambiguous;
+ *  - anything still wrong lowers confidence below the Ready threshold with the reason (→ Needs Correction).
+ */
+export function repairLayout<T extends LayoutQ & { notes?: string[]; confidence?: number }>(questions: T[], ocrText: (n: number | null) => string | null): T[] {
+  const ocrOptions = (n: number | null) => {
+    const t = ocrText(n);
+    return t ? optionsFromText(t.replace(/^\s*\d{1,3}\s*[.)]\s*/, ""))?.options ?? null : null;
+  };
+  return questions.map((q0) => {
+    let q = q0;
+    const notes = [...(q.notes ?? [])];
+    let confidence = q.confidence ?? 0.5;
+    if (statementsAsOptions(q)) {
+      const stem = `${q.stem.trim()}\n${q.options.map((o) => o.text.trim()).join("\n")}`;
+      const got = ocrOptions(q.number);
+      const ok = got && got.length >= 4 && got.every((o) => o.text.length <= 40 && COMBINATION.test(o.text) && !STATEMENT_OPTION.test(o.text));
+      q = { ...q, stem, options: ok ? got : [] };
+      confidence = Math.min(confidence, 0.5);
+      notes.push(ok ? "The numbered statements had been read as options: they are back in the question text and the options (a)–(d) were taken from the page's local OCR reading — check them." : "The numbered statements had been read as options: they are back in the question text. The printed options (a)–(d) could not be read unambiguously — enter them from the source.");
+    }
+    if (q.type === "MATCH_THE_FOLLOWING" || q.listI?.length || q.listII?.length) {
+      const relabel = (l: T["listI"], first: (k: number) => string) => l?.map((e, k) => (!LIST_KEY.test(e.key) && squash(e.key).length > 3 && squash(e.text).startsWith(squash(e.key).slice(0, Math.min(12, squash(e.key).length))) ? { ...e, key: first(k) } : e)) ?? l;
+      const listI = relabel(q.listI, (k) => String.fromCharCode(65 + k));
+      const listII = relabel(q.listII, (k) => String(k + 1));
+      if (JSON.stringify(listI) !== JSON.stringify(q.listI) || JSON.stringify(listII) !== JSON.stringify(q.listII)) {
+        q = { ...q, listI, listII };
+        confidence = Math.min(confidence, 0.6);
+        notes.push("Some List I / List II rows were read without their printed label; positional labels (A, B, C… / 1, 2, 3…) were used — check them against the source.");
+      }
+      if (matchLayoutProblems(q).some((p) => /options|code-table|combinations/.test(p))) {
+        const got = ocrOptions(q.number);
+        if (got && got.length >= 4 && got.length <= 5 && got.every((o) => CODE_ROW.test(o.text))) {
+          q = { ...q, options: got };
+          notes.push("The code-table options (a)–(d) were taken from the page's local OCR reading — check them.");
+        }
+      }
+      const left = matchLayoutProblems(q);
+      if (left.length) {
+        confidence = Math.min(confidence, 0.4);
+        notes.push(`Match-the-Following structure needs correction: ${left.join("; ")}. Correct List I, List II and the code options from the source.`);
+      }
+    }
+    return q === q0 && confidence === (q0.confidence ?? 0.5) ? q0 : { ...q, confidence, notes };
+  });
+}

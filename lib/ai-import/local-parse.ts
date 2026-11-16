@@ -719,9 +719,71 @@ export function notationRisk(text: string): string[] {
   return reasons;
 }
 
+/** A line that starts its own item: a statement / option / list marker, a list heading, Assertion/Reason, a code table. */
+const ITEM_START = /^\s*(?:\(?(?:[0-9]{1,2}|[A-Ha-h]|(?:i{1,3}|iv|vi{0,3}|ix|x|I{1,3}|IV|VI{0,3}|IX|X))[.)]\s|(?:List|Column)[\s-]*(?:I{1,2}|[12])\b|(?:Assertion|Reason)\b|Codes?\s*:|[•▪●*–-]\s)/;
+const TABLE_ROW = /\||\t|\S {2,}\S/; // DOCX joins table cells with two spaces
+
+/**
+ * Joins the ordinary line wraps of a printed column into running text (CMS 2026 Q26, local OCR: one line per printed
+ * line). Whitespace only — the words are never changed. Kept: blank lines (paragraphs), a line that starts an item
+ * (statement, option, list, Assertion/Reason, code table), table rows, and a capitalised line after a numbered item or
+ * after a sentence end ("3. Dermatitis herpetiformis" / "Select the correct answer …"). A wrap that ends in a hyphen
+ * before a lower-case word is joined without a space ("gastro-" + "oesophageal").
+ */
+export function joinWrappedLines(text: string): string {
+  const out: string[] = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    const prev = out.length ? out[out.length - 1] : "";
+    const join =
+      prev !== "" && line !== "" && !/[\u0900-\u097F]/.test(prev + line) && !ITEM_START.test(line) && !TABLE_ROW.test(line) && !TABLE_ROW.test(prev) &&
+      (/^[a-z(‘'"“]/.test(line) || (!/[.?!:;]$/.test(prev) && !ITEM_START.test(prev)));
+    if (join) out[out.length - 1] = /[a-z]-$/.test(prev) && /^[a-z]/.test(line) ? prev + line : `${prev} ${line}`;
+    else out.push(line);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * List I and List II printed side by side, read line by line (CMS 2026 Q5): "List I List II", an optional sub-heading line
+ * "(Mutation) (Phenotype)", then rows "A. text 1. text" (List II may run longer: "4. text"). Accepted only when EVERY line
+ * up to the code table is such a row — a wrapped cell ("chain mutations ventricular") cannot be assigned to a column,
+ * so any other line returns null (nothing guessed). Sub-headings are kept in the question text.
+ */
+export function sideBySideLists(stem: string): { listI: MatchEntry[]; listII: MatchEntry[]; rest: string } | null {
+  const lines = stem.split("\n");
+  const h = lines.findIndex((l) => /^\s*(?:List|Column)[\s-]*(?:I|1)\b\s*:?\s*(?:List|Column)[\s-]*(?:II|2)\b\s*:?\s*$/i.test(l));
+  if (h < 0) return null;
+  const listI: MatchEntry[] = [];
+  const listII: MatchEntry[] = [];
+  let sub: string | null = null;
+  for (const raw of lines.slice(h + 1)) {
+    const l = raw.trim();
+    if (!l) continue;
+    if (/^Codes?\s*:?$/i.test(l) || /^\(?[a-d]\)\s/.test(l)) break;
+    const subM = /^(\([^()]+\))\s+(\([^()]+\))$/.exec(l);
+    if (subM && !listI.length && sub === null) {
+      sub = `List I ${subM[1]} — List II ${subM[2]}`;
+      continue;
+    }
+    const row = /^\(?([A-H])[.)]\s+(.+?)\s+\(?([1-9]|I{1,3}|IV|V)[.)]\s+(.+)$/.exec(l);
+    const only2 = /^\(?([1-9])[.)]\s+(.+)$/.exec(l);
+    if (row && listII.length === listI.length) {
+      listI.push({ key: row[1], text: row[2].trim() });
+      listII.push({ key: row[3], text: row[4].trim() });
+    } else if (only2 && listI.length >= 2) listII.push({ key: only2[1], text: only2[2].trim() });
+    else return null;
+  }
+  if (listI.length < 2) return null;
+  const rest = lines.slice(0, h).join("\n").trim();
+  return { listI, listII, rest: sub ? `${rest}\n${sub}` : rest };
+}
+
 /** Parses "A. text" / "(a) text" lines of a Match-the-Following list block, when unambiguous. */
 export function parseMatchLists(stem: string): { listI: MatchEntry[]; listII: MatchEntry[]; rest: string } | null {
   // Headings on their own lines ("List-I" … "List-II"); a heading inside a sentence ("Match List-I with List-II") is not a list start.
+  const side = sideBySideLists(stem);
+  if (side) return side;
   const m = /([\s\S]*?)(?:^|\n)\s*(?:List|Column)[\s-]*(?:I|1)\s*:?\s*\n([\s\S]*?)(?:^|\n)\s*(?:List|Column)[\s-]*(?:II|2)\s*:?\s*\n([\s\S]*)$/i.exec(stem);
   if (!m) return null;
   const entries = (s: string, keys: RegExp) => [...s.matchAll(keys)].map((x) => ({ key: x[1].toUpperCase(), text: x[2].trim() }));
@@ -786,6 +848,7 @@ export function blockToQuestion(b: Block, page: number, method: string): { q: Ex
       notes.push("Match-the-Following lists could not be separated; they stay in the question text.");
     }
   }
+  if (type !== "MATCH_THE_FOLLOWING") stem = joinWrappedLines(stem);
   const q: ExtractedQuestion = {
     section: b.section,
     number: b.number,

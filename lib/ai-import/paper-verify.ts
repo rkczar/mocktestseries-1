@@ -39,6 +39,7 @@ import { approveQuestions, requestImport } from "@/lib/ai-import/review";
 import { MAX_VERIFY_PASSES, V2_RESULT_STATUSES, checksAllowReady, v2Independence, contentCurrent, contentFingerprint, fingerprintParts, fingerprintsOf, needsVerify2, passCount, stampOf, verifyState, withPass, type Fp } from "@/lib/ai-import/verify-core";
 import type { CandidateRow, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
 import type { ExtractedQuestion, PaperVerification, VerifyFix, VerifyProblem } from "@/lib/ai-import/types";
+import { NO_OCR, repairLayout } from "@/lib/ai-import/reading-checks";
 
 /**
  * Full-paper verification of an import (Admin → AI Question Importer → Review Exceptions):
@@ -1081,13 +1082,13 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
         const render = await ensureRender(ctx.job, u.file, u.pageNumber!, ctx.settings.limits.renderDpi);
         const image = await visionImage(render);
         const { value, model } = await verifyCall(ctx, state!, { task: "verify", stage: "verify2-read", system: EXTRACT_SYSTEM, content: [{ type: "text", text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page: u.pageNumber!, pages: u.file.pageCount ?? 1, textLayer: u.textLayer ?? null, memory }) }, { type: "image_url", image_url: { url: image, detail: "high" } }], maxOutputTokens: 8000, pageId: u.pageId, needsVision: true, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
-        const qs = toExtracted(value, u.pageNumber!, model);
+        const qs = repairLayout(toExtracted(value, u.pageNumber!, model), NO_OCR);
         assignSections(qs, u.startState as never);
         return { qs, model, text: u.textLayer ?? null };
       }
       const text = u.parts?.[0] ?? "";
       const r = await verifyCall(ctx, state!, { task: "verify", stage: "verify2-read", system: EXTRACT_SYSTEM, content: [{ type: "text", text: documentTextUserText({ exam: exam?.name ?? "Exam", subject: null, part: (u.partIndex ?? 0) + 1, parts: u.partCount ?? 1, text, memory }) }], maxOutputTokens: 8000, needsVision: false, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
-      const qs = toExtracted(r.value, 1, r.model);
+      const qs = repairLayout(toExtracted(r.value, 1, r.model), NO_OCR);
       // Sections (numbering restarts) as the local reader numbered this part's questions.
       if (u.qkeys?.length) sectionsFromKeys(qs, u.qkeys);
       else assignSections(qs, undefined);
