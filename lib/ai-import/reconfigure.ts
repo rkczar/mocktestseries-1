@@ -65,12 +65,13 @@ async function build(jobId: string): Promise<{ preview: ReconfigurePreview; plan
   const remaining = plan ? await priceRemainingWork(job, plan, settings) : null;
   const pages = remaining?.pages ?? (await prisma.aiImportPage.findMany({ where: { jobId }, select: { status: true } }));
   const unreadPages = remaining?.unreadPages ?? 0;
-  const failedKeys = job.files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY && f.status === AiImportFileStatus.ANALYZED && f.errorMessage);
+  const failedKeys = job.files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY && (f.status === AiImportFileStatus.ANALYZED || f.status === AiImportFileStatus.PROCESSED) && f.errorMessage);
   const est = remaining?.estimate ?? null;
   if (!unreadPages && !failedKeys.length) blocking.push("Nothing is left to read in this import (no failed or pending page), so there is nothing to reconfigure.");
   const GUIDE = "Add an image-capable model with a verified route and a known price to the importer's list (Import Settings → AI Auto-Configure shows what qualifies), then reconfigure again.";
   if (plan && !plan.tasks.extract.model && unreadPages) blocking.push(`No page-reading model is suitable now: ${plan.tasks.extract.reason} Nothing was changed. ${GUIDE}`);
-  if (plan && failedKeys.length && !plan.tasks.key.model) blocking.push(`No answer-key model is suitable now: ${plan.tasks.key.reason} Nothing was changed.`);
+  // A key that read empty is retried by free local OCR first, so only a failed AI reading needs a key model (as before).
+  if (plan && failedKeys.some((f) => f.status === AiImportFileStatus.ANALYZED) && !plan.tasks.key.model) blocking.push(`No answer-key model is suitable now: ${plan.tasks.key.reason} Nothing was changed.`);
   if (est && !blocking.length) {
     if (remaining!.maxInr === null) blocking.push(`The cost of the remaining work cannot be established (${est.notes[0] ?? "missing price"}). Nothing was changed.`);
   }
@@ -130,6 +131,7 @@ export async function reconfigureJob(input: { jobId: string; proposalKey: string
     });
     // Finished pages are never touched; failed pages get their next attempt with the new models.
     if (queue) await tx.aiImportPage.updateMany({ where: { jobId: input.jobId, status: AiImportPageStatus.FAILED }, data: { status: AiImportPageStatus.PENDING } });
+    if (queue) await tx.aiImportFile.updateMany({ where: { jobId: input.jobId, role: AiImportFileRole.ANSWER_KEY, status: AiImportFileStatus.PROCESSED, errorMessage: { not: null } }, data: { status: AiImportFileStatus.ANALYZED } });
     const summary = preview.tasks.filter((t) => t.current !== t.proposed).map((t) => `${t.label}: ${t.current ?? "none"} → ${t.proposed ?? "none"}${t.substituted ? ` (substitute: ${t.substituted.from} cannot be used — ${t.substituted.why.slice(0, 120)})` : ""}`).join("; ") || "same models, current routes and prices";
     await tx.aiImportEvent.create({ data: { jobId: input.jobId, type: "MODEL_RECONFIGURED", message: `Models reconfigured by an administrator (${summary}). ${preview.retryPages} page(s) to read, conservative maximum ${formatInr(preview.maxInr)}; ${preview.donePages} finished page(s) kept.${queue ? " Queued again." : " Paid AI is OFF: the import stays paused."}`.slice(0, 1000), data: { from, to, maxInr: preview.maxInr, retryPages: preview.retryPages, queued: queue, confirmedMaxInr: confirmedMax }, actorId: input.actorId } });
     await tx.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORTER_JOB_RECONFIGURED", entityType: "AiImportJob", entityId: input.jobId, metadata: { from, to, maxInr: preview.maxInr, retryPages: preview.retryPages, donePages: preview.donePages, spentInr: preview.spentInr, queued: queue, aiRequestsSent: 0 } } });
@@ -160,7 +162,7 @@ export async function priceRemainingWork(job: { id: string; analysis: Prisma.Jso
   const jobId = job.id;
   const pages = await prisma.aiImportPage.findMany({ where: { jobId }, select: { fileId: true, pageNumber: true, status: true, kind: true, textChars: true, imageCount: true } });
   const todo = pages.filter((p) => p.status === AiImportPageStatus.FAILED || p.status === AiImportPageStatus.PENDING);
-  const failedKeys = job.files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY && f.status === AiImportFileStatus.ANALYZED && f.errorMessage);
+  const failedKeys = job.files.filter((f) => f.role === AiImportFileRole.ANSWER_KEY && (f.status === AiImportFileStatus.ANALYZED || f.status === AiImportFileStatus.PROCESSED) && f.errorMessage);
   // Only the remaining work is priced: one file entry per paper with its failed / pending pages.
   const byFile = new Map<string, typeof todo>();
   for (const p of todo) byFile.set(p.fileId, [...(byFile.get(p.fileId) ?? []), p]);

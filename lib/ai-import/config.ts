@@ -370,6 +370,11 @@ export const ANSWER_STATUS_LABELS: Record<string, string> = {
 /** Issue codes stored on AiImportQuestion.issueCodes. `blocking` = cannot be imported until fixed. */
 /** Share of the paper's questions an answer key read by AI vision must cover to be used (a partial grid reading is not). */
 export const KEY_MIN_COVERAGE = 0.9;
+/** Independent answer opinions stop for the run after this many consecutive unusable (cut-off / malformed) answers. */
+export const OPINION_FAIL_STOP = Math.max(1, Number(process.env.AI_IMPORT_OPINION_FAIL_STOP) || 3);
+/** Output limit of an answer opinion: room for the answer, plus a bounded thinking allowance for a reasoning model. */
+export const OPINION_TOKENS = 600;
+export const OPINION_TOKENS_REASONING = 2400;
 
 export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publishBlocking: boolean }> = {
   EXTRACTION_UNCERTAIN: { label: "Extraction needs correction", blocking: false, publishBlocking: true },

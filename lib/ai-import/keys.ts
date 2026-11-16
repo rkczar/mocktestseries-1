@@ -14,6 +14,8 @@ import { visionImage } from "@/lib/ai-import/figures";
 import { ensureRender, saveKeyEntries, type StepContext } from "@/lib/ai-import/process";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { KEY_MIN_COVERAGE } from "@/lib/ai-import/config";
+import { ocrAvailable, ocrImageFile, ocrPdfPage } from "@/lib/ai-import/ocr";
+import type { OcrPage } from "@/lib/ai-import/ocr-layout";
 
 /**
  * Answer-key files: the key is read as printed (number + value), never
@@ -116,7 +118,7 @@ export function keyExpected(expectedQuestions: number | null | undefined): numbe
 /** An AI reading of a key that covers fewer than KEY_MIN_COVERAGE of the expected questions: not used (null = complete or unknown). */
 export function keyReadingIncomplete(method: string, pairs: KeyPair[], expected: number | null): { read: number; expected: number } | null {
   const read = new Set(pairs.map((x) => x.number)).size;
-  return method === "ai" && pairs.length && expected && read < Math.ceil(expected * KEY_MIN_COVERAGE) ? { read, expected } : null;
+  return method !== "local" && pairs.length && expected && read < Math.ceil(expected * KEY_MIN_COVERAGE) ? { read, expected } : null;
 }
 
 /**
@@ -176,6 +178,62 @@ async function aiKeyPage(ctx: StepContext, file: AiImportFile, page: number): Pr
   return { pairs: value.entries.map((e) => ({ number: Number.parseInt(String(e.number), 10), section: (e.section ?? "").trim(), raw: e.answer.trim().replace(/\s+/g, " "), page })), header: headerOf(value.header) };
 }
 
+/** OCR lines below this confidence are never used as a key number or value. */
+const KEY_OCR_MIN_SCORE = 0.9;
+const OCR_KEY_LETTER = /^\(?([A-Da-d])\)?$/;
+
+/**
+ * A scanned key page read by local OCR (no AI): each printed question number is paired with the nearest option letter to
+ * its right on the same row, with no other number between them (one-, two- or many-column grids). Conservative: a
+ * low-confidence token, a value that is not a single option letter, a number its column neighbours contradict, or a number paired twice (an OCR misread) gives no
+ * entry — that question keeps Answer unverified. Nothing is inferred from the grid position.
+ */
+export function ocrKeyPairs(page: Pick<OcrPage, "lines">, maxNumber = 300): { pairs: KeyPair[]; text: string } {
+  const toks = page.lines
+    .filter((l) => l.score >= KEY_OCR_MIN_SCORE)
+    .map((l) => ({ t: l.text.trim(), x0: l.box[0], x1: l.box[2], cy: (l.box[1] + l.box[3]) / 2, h: Math.max(1, l.box[3] - l.box[1]) }));
+  const nums = toks.filter((k) => /^\d{1,3}$/.test(k.t) && +k.t >= 1 && +k.t <= maxNumber);
+  const vals = toks.filter((k) => OCR_KEY_LETTER.test(k.t));
+  const sameRow = (a: { cy: number; h: number }, b: { cy: number }) => Math.abs(a.cy - b.cy) <= a.h * 0.6;
+  // A grid prints consecutive numbers down each column: a number whose every vertical neighbour contradicts it is an OCR
+  // misread (2026-11-15: Q99 read as "66", between 98 and 100 — paired, it would give Q66 the answer of Q99).
+  const centre = (k: { x0: number; x1: number }) => (k.x0 + k.x1) / 2;
+  const vertical = (n: (typeof nums)[number]) => {
+    const col = nums.filter((m) => m !== n && Math.abs(centre(m) - centre(n)) < n.h * 3);
+    // Two rows each way, so one misread neighbour never condemns a correct number (Q100 under the misread "66").
+    const above = col.filter((m) => m.cy < n.cy).sort((a, b) => b.cy - a.cy).slice(0, 2);
+    const below = col.filter((m) => m.cy > n.cy).sort((a, b) => a.cy - b.cy).slice(0, 2);
+    if (!above.length && !below.length) return true;
+    return above.some((m, i) => +m.t === +n.t - 1 - i) || below.some((m, i) => +m.t === +n.t + 1 + i);
+  };
+  const found: KeyPair[] = [];
+  for (const n of nums) {
+    if (!vertical(n)) continue;
+    const right = vals.filter((v) => sameRow(n, v) && v.x0 >= n.x1).sort((a, b) => a.x0 - b.x0)[0];
+    if (!right) continue;
+    if (nums.some((m) => m !== n && sameRow(n, m) && m.x0 >= n.x1 && m.x0 < right.x0)) continue;
+    found.push({ number: +n.t, section: "", raw: OCR_KEY_LETTER.exec(right.t)![1].toUpperCase() });
+  }
+  const count = new Map<number, number>();
+  for (const f of found) count.set(f.number, (count.get(f.number) ?? 0) + 1);
+  // A number paired twice is an OCR misread of another cell: neither pairing is used.
+  const pairs = found.filter((f) => count.get(f.number) === 1).sort((a, b) => a.number - b.number);
+  const text = [...page.lines].sort((a, b) => a.box[1] - b.box[1] || a.box[0] - b.box[0]).map((l) => l.text).join("\n");
+  return { pairs, text };
+}
+
+/** Local OCR of one scanned key page (free); null when OCR is unavailable or failed — the caller falls back as before. */
+async function ocrKeyPage(full: string, kind: string | undefined, page: number, maxNumber: number): Promise<{ pairs: KeyPair[]; header: KeyHeader | null } | null> {
+  if (!ocrAvailable()) return null;
+  try {
+    const r = ocrKeyPairs(kind === "pdf" ? await ocrPdfPage(full, page) : await ocrImageFile(full), maxNumber);
+    return keyLooksValid(r.pairs) ? { pairs: r.pairs.map((x) => ({ ...x, page })), header: parseKeyHeader(r.text) } : null;
+  } catch (e) {
+    console.warn(`[ai-import] key OCR of page ${page} failed: ${e instanceof Error ? e.message.slice(0, 160) : "error"}`);
+    return null;
+  }
+}
+
 /** Reads every unprocessed answer-key file of the job into AiImportKeyEntry rows. */
 export async function runKeyFiles(ctx: StepContext): Promise<void> {
   const files = await prisma.aiImportFile.findMany({ where: { jobId: ctx.job.id, role: AiImportFileRole.ANSWER_KEY, status: { in: [AiImportFileStatus.UPLOADED, AiImportFileStatus.ANALYZED] } }, orderBy: { createdAt: "asc" } });
@@ -191,6 +249,8 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     /** Entries a text page gave that did not form a recognisable key (reported, never used). */
     let rejectedPairs = 0;
     const full = vaultPath(file.storageKey!);
+    const maxKeyNumber = Math.max(300, ctx.job.expectedQuestions ?? 0);
+    let ocrRead: Awaited<ReturnType<typeof ocrKeyPage>> = null;
     try {
     if (kind === "pdf") {
       const text = (await runTool("pdftotext", ["-layout", "-enc", "UTF-8", full, "-"], { timeoutMs: 120_000, maxOutput: 16 * 1024 * 1024 })).toString("utf8");
@@ -204,7 +264,16 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
           pairs.push(...local.map((x) => ({ ...x, page: p + 1 })));
           continue;
         }
-        if (pages[p].replace(/\s+/g, "").length < 40 && ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
+        // A scanned page (no text layer): local OCR first (free), AI vision only when OCR gives no recognisable key.
+        const scanned = pages[p].replace(/\s+/g, "").length < 40;
+        const ocrRead = scanned ? await ocrKeyPage(full, kind, p + 1, maxKeyNumber) : null;
+        if (ocrRead) {
+          pairs.push(...ocrRead.pairs);
+          header ??= ocrRead.header;
+          method = "ocr";
+          continue;
+        }
+        if (scanned && ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
           const read = await aiKeyPage(ctx, file, p + 1);
           pairs.push(...read.pairs);
           header ??= read.header;
@@ -217,6 +286,10 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
       pairs = parseKeyText(text).map((x) => ({ ...x, page: 1 }));
     } else if (kind === "xlsx" || kind === "csv") {
       pairs = sheetPairs(await readFile(full), kind);
+    } else if ((kind === "png" || kind === "jpeg") && (ocrRead = await ocrKeyPage(full, kind, 1, maxKeyNumber))) {
+      pairs = ocrRead.pairs;
+      header = ocrRead.header;
+      method = "ocr";
     } else if (ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
       const read = await aiKeyPage(ctx, file, 1);
       pairs = read.pairs;
@@ -246,7 +319,7 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     }
     await prisma.aiImportKeyEntry.deleteMany({ where: { keyFileId: file.id } });
     if (!pairs.length) {
-      await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: rejectedPairs ? `The key's text was read (${rejectedPairs} number–answer pair(s)), but they do not form a recognisable key layout, so none was used — no answer was substituted. Check the file, or enter the answers by hand.` : kind === "pdf" || kind === "png" || kind === "jpeg" ? "No answer-key entries could be read (a scanned key needs AI vision, which is off, not configured or blocked by the budget). No answer was substituted." : "No answer-key entries were found. No answer was substituted." } });
+      await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: rejectedPairs ? `The key's text was read (${rejectedPairs} number–answer pair(s)), but they do not form a recognisable key layout, so none was used — no answer was substituted. Check the file, or enter the answers by hand.` : kind === "pdf" || kind === "png" || kind === "jpeg" ? "No answer-key entries could be read (local OCR found no recognisable key, and AI vision is off, not configured or blocked by the budget). No answer was substituted — use Retry to read it again." : "No answer-key entries were found. No answer was substituted." } });
       await logEvent(ctx.job.id, "KEY_EMPTY", `${file.originalName}: no answer-key entries could be read${rejectedPairs ? ` (${rejectedPairs} pair(s) read from the text layer did not form a recognisable layout)` : ""} — the questions keep Answer unverified; no AI answer is substituted`, { fileId: file.id, rejectedPairs });
       continue;
     }
@@ -255,6 +328,6 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     const detected = { ...((file.detected as Record<string, unknown> | null) ?? {}), keyHeader: header } as unknown as Prisma.InputJsonValue;
     await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: null, detected } });
     const printed = header ? [header.paper && `Paper ${header.paper}`, header.series && `Series ${header.series}`, header.set && `Set ${header.set}`, header.totalQuestions && `${header.totalQuestions} questions`].filter(Boolean).join(", ") : "";
-    await logEvent(ctx.job.id, "KEY_READ", `${file.originalName}: ${pairs.length} answer-key entries read (${method === "ai" ? "AI vision" : "text layer"})${printed ? ` — the key is printed for ${printed}` : ""}`, { fileId: file.id, entries: pairs.length, method, header });
+    await logEvent(ctx.job.id, "KEY_READ", `${file.originalName}: ${pairs.length} answer-key entries read (${method === "ai" ? "AI vision" : method === "ocr" ? "local OCR, no AI" : "text layer"})${printed ? ` — the key is printed for ${printed}` : ""}`, { fileId: file.id, entries: pairs.length, method, header });
   }
 }

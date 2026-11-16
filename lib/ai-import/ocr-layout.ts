@@ -180,6 +180,30 @@ export function attachNumberBoxes(lines: LayoutLine[], gutter: number): void {
   }
 }
 
+/**
+ * Two-column booklets (2026-11-15, CMS 2026 Paper II pages 6, 26, 27): (1) OCR returns ONE line across both columns
+ * ("The manoeuvre (marked with an asterisk)  21. A 42-year-old lady underwent a") — it is split at the right column's
+ * question number when that number sits at the gutter; (2) a right-column question number hangs left of the gutter
+ * ("115. Which one…" at x 0.50, gutter 0.56) and was read into the left column — its line moves to the right column.
+ * Text is never changed: a line is only cut in two at a printed question number, and only box positions move.
+ */
+export function separateColumns(lines: LayoutLine[], gutter: number): void {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (!(l.box.x < gutter - 0.05 && l.box.x + l.box.w > gutter + 0.05)) continue;
+    const cut = [...l.text.matchAll(/\s+(?=\d{1,3}\s*[.)]\s+\S)/g)].find((m) => {
+      const at = m.index! + m[0].length;
+      return at > 3 && Math.abs(l.box.x + l.box.w * (at / l.text.length) - gutter) < 0.08;
+    });
+    if (!cut) continue;
+    const at = cut.index! + cut[0].length;
+    const left: LayoutLine = { ...l, text: l.text.slice(0, cut.index!).trim(), box: { ...l.box, w: Math.max(0.01, gutter - 0.002 - l.box.x) } };
+    const right: LayoutLine = { ...l, text: l.text.slice(at).trim(), box: { ...l.box, x: gutter, w: Math.max(0.01, l.box.x + l.box.w - gutter) } };
+    lines.splice(i, 1, left, right);
+  }
+  for (const l of lines) if (l.box.x >= 0.3 && l.box.x < gutter && l.box.x >= gutter - 0.08 && l.box.w < 0.55 && /^\d{1,3}\s*[.)]\s*\S/.test(l.text)) l.box = { ...l.box, x: gutter };
+}
+
 export interface PageLayoutResult {
   lines: LayoutLine[];
   furniture: string[];
@@ -215,6 +239,7 @@ export function layoutOcrPage(page: OcrPage): PageLayoutResult {
   const gutter = findGutter(lines);
   if (gutter !== null) {
     attachNumberBoxes(lines, gutter);
+    separateColumns(lines, gutter);
     // On a two-column booklet page the top 5% holds the running header and show-through from the back of the sheet
     // (mirrored text), never question text. Single-column table papers DO continue questions there (RUHS), so the
     // rule applies only when columns were found.

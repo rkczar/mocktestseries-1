@@ -150,6 +150,18 @@ export function splitQuestions(lines: Line[], state: NumberingState = { last: 0,
       blocks.splice(i, 1);
     }
   }
+  // A restart at 1 whose first two blocks carry no option marker at all is a numbered statement list, not a new section
+  // (2026-11-15, CMS 2026 Paper II page 27: "1. It is to be done…" … "4. …" after Q115 became Q1–Q4 of "S2"). When the
+  // restarted run closes the page, it goes back into the question before it and the numbering continues from there.
+  const r = blocks.findIndex((b, i) => i > 0 && b.number === 1 && b.section !== blocks[i - 1].section && b.label !== UNNUMBERED);
+  const noMarks = (b: Block) => !markersOf(b.lines.map((l) => l.text).join("\n")).length;
+  if (r > 0 && blocks.length - r >= 2 && noMarks(blocks[r]) && noMarks(blocks[r + 1]) && blocks.slice(r).every((b, k) => b.section === blocks[r].section && b.number === k + 1)) {
+    const prev = blocks[r - 1];
+    for (const b of blocks.slice(r)) prev.lines.push({ ...b.lines[0], text: `${b.number}. ${b.lines[0].text}`.trim() }, ...b.lines.slice(1));
+    blocks.splice(r);
+    sectionIdx--;
+    last = prev.number || last;
+  }
   for (const b of blocks) b.text = b.lines.map((l) => l.text).join("\n").trim();
   state.last = last;
   state.sectionIdx = sectionIdx;
@@ -193,7 +205,8 @@ export interface Marker {
 }
 
 // "Option A" labels: table-style papers print "Option A | 700 Kcal" (seen 2026-11-04, RUHS MO 2016).
-const MARKER = /(^|[\s\n])(\(([A-Ea-e1-5])\)|([A-E])[.)](?=\s)|([a-e])\)(?=\s)|\[([A-Ea-e1-5])\]|(?:Option|OPTION)[ \t]+([A-E])(?=[ \t\n]|$))/g;
+// "(α)" is OCR's reading of "(a)" (2026-11-15, CMS 2026 scans); it only counts inside a complete (a)–(d) run (chooseRun).
+const MARKER = /(^|[\s\n])(\(([A-Ea-e1-5α])\)|([A-E])[.)](?=\s)|([a-e])\)(?=\s)|\[([A-Ea-e1-5])\]|(?:Option|OPTION)[ \t]+([A-E])(?=[ \t\n]|$))/g;
 
 export function markersOf(text: string): Marker[] {
   const out: Marker[] = [];
@@ -204,7 +217,7 @@ export function markersOf(text: string): Marker[] {
     let family: string;
     let ch: string;
     if (m[3]) {
-      ch = m[3];
+      ch = m[3] === "α" ? "a" : m[3];
       family = /\d/.test(ch) ? "(1)" : ch === ch.toUpperCase() ? "(A)" : "(a)";
     } else if (m[4]) {
       ch = m[4];

@@ -443,7 +443,7 @@ async function main() {
     const lower = await requestVerify2({ jobId: j1, actorId: actor, model: "mockvision/checker", confirmedMaxInr: Math.max(0, (pv.maxInr ?? 0) / 10) });
     await runWorker(30_000);
     check("Verify 2 without a confirmed maximum / below the maximum → not started, no AI request", !refused.started && !lower.started && (await mockStats()).chat === beforeRefuse.chat, [refused, lower]);
-    await mockConfig({ classifyKeep: 8 });
+    await mockConfig({ classifyKeep: 4 });
     const r2 = await requestVerify2({ jobId: j1, actorId: actor, model: "mockvision/checker", confirmedMaxInr: pv.maxInr });
     await runWorker(300_000);
     await mockConfig({ classifyKeep: null });
@@ -456,7 +456,7 @@ async function main() {
     check("…and the disagreement becomes TAXONOMY_DISAGREES + SUBJECT_MISMATCH on the question", byLabel(qs, "7").issueCodes.includes("TAXONOMY_DISAGREES") && byLabel(qs, "7").issueCodes.includes("SUBJECT_MISMATCH"), byLabel(qs, "7").issueCodes);
     check("Verify 2: no subject stored + model unsure → NEEDS_REVIEW (never AGREED)", ["5", "6"].every((l) => v2c(l)?.status === "NEEDS_REVIEW" || v2c(l)?.status === "VERIFICATION_FAILED"), ["5", "6"].map((l) => v2c(l)));
     const missing = qs.filter((q) => v2c(q.sourceLabel)?.status === "VERIFICATION_FAILED");
-    check("Verify 2: questions the model gave no answer for (it stopped after 8) → VERIFICATION_FAILED, never agreement", missing.length >= 2 && missing.every((q) => /returned no answer/.test(v2c(q.sourceLabel)?.findings[0] ?? "")), missing.map((q) => [q.sourceLabel, v2c(q.sourceLabel)]));
+    check("Verify 2: questions the model gave no answer for (it stopped after 4 of a 6-question request) → VERIFICATION_FAILED, never agreement", missing.length >= 2 && missing.every((q) => /returned no answer/.test(v2c(q.sourceLabel)?.findings[0] ?? "")), missing.map((q) => [q.sourceLabel, v2c(q.sourceLabel)]));
     check("Verify 2: too little text → NOT_VERIFIED (no request spent on it)", v2c("12")?.status === "NOT_VERIFIED", v2c("12"));
     const v2ev = (await events(j1, "VERIFY2_CLASSIFIED")).at(-1);
     check("Verify 2 reports the classification counts, failures named as never agreement", /verification failed \(never counted as agreement\)/.test(v2ev?.message ?? ""), v2ev?.message);

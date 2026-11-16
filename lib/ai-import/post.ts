@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { taxonomyNameKey } from "@/lib/exam-taxonomy";
 import { lintRichSource, looksRich } from "@/lib/rich-import/manifest";
-import { ISSUE_DEFS, KEY_MIN_COVERAGE } from "@/lib/ai-import/config";
+import { ISSUE_DEFS, KEY_MIN_COVERAGE, OPINION_FAIL_STOP, OPINION_TOKENS, OPINION_TOKENS_REASONING } from "@/lib/ai-import/config";
 import { importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
 import { failureCheckStatus, failureMessage } from "@/lib/ai-import/failure";
 import { CHECK_STATUS_LABELS, checksAllowReady, questionChecks, reviewClearsFlag, utc } from "@/lib/ai-import/checks";
@@ -335,13 +335,20 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   // A spending limit stops the optional AI steps of this run only: everything deterministic below still runs (owner
   // decision 1, 2026-11-05: local and deterministic processing keep working while paid AI is blocked).
   let aiStop: string | null = null;
+  // 2026-11-15 (CMS 2026 Paper II): a fixed 600-token limit left a reasoning model (qwen3.7-flash) no room to answer —
+  // 189 of 216 opinions were cut off and still charged. The limit follows the model's catalog entry (reasoning
+  // support, published completion limit), and the run stops after OPINION_FAIL_STOP unusable answers in a row.
+  const verifyRow = needsSolve.length ? await prisma.aiModel.findUnique({ where: { id: settings.models.verify! }, select: { maxCompletionTokens: true, supportedParameters: true } }) : null;
+  const opinionTokens = Math.min(verifyRow?.supportedParameters.includes("reasoning") ? OPINION_TOKENS_REASONING : OPINION_TOKENS, verifyRow?.maxCompletionTokens || Infinity);
+  let unusableInRow = 0;
   for (const q of needsSolve) {
     if (!(await ctx.stillRunning())) return;
     if (aiStop) break;
     const e = effective(q);
     try {
-      const r = await importerAiCall({ jobId: job.id, task: "verify", models: [settings.models.verify!], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: 600, settings, questionId: q.id, needsVision: false, stage: "post-answer-opinion", reasoningEffort: "low" });
+      const r = await importerAiCall({ jobId: job.id, task: "verify", models: [settings.models.verify!], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: opinionTokens, settings, questionId: q.id, needsVision: false, stage: "post-answer-opinion", reasoningEffort: "low" });
       const parsed = solveSchema.safeParse(parseModelJson(r.text));
+      unusableInRow = parsed.success ? 0 : unusableInRow + 1;
       if (parsed.success) {
         const labels = parsed.data.defective ? [] : parsed.data.answer.map((a) => labelFromPrinted(a, e.options.map((o) => o.label))).filter((x): x is string => !!x);
         await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { aiAnswer: [...new Set(labels)], aiAnswerModel: r.model, aiAnswerConfidence: parsed.data.confidence, costInr: { increment: r.costInr ?? 0 } } });
@@ -355,6 +362,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         continue;
       }
       if (err instanceof ImporterAiUnavailable) throw err;
+      // A cut-off / malformed answer: the question keeps no AI answer (manual verification); the reason is on its AI call.
+      if (err instanceof ImporterAiFailure && err.kind === "model_output") unusableInRow++;
+    }
+    if (unusableInRow >= OPINION_FAIL_STOP) {
+      const left = needsSolve.length - needsSolve.indexOf(q) - 1;
+      await logEvent(job.id, "AI_OPINION_STOPPED", `Independent AI answer opinions stopped: ${settings.models.verify} gave ${unusableInRow} unusable answers in a row (cut off at the ${opinionTokens}-token output limit, or not in the expected format). ${left} question(s) were not sent; they keep no AI answer and need manual verification.`, { model: settings.models.verify, limit: opinionTokens, notSent: left });
+      break;
     }
   }
   if (aiStop) await logEvent(job.id, "AI_SKIPPED_BUDGET", `Independent AI answer opinions were not requested: ${aiStop.slice(0, 300)} Deterministic checks continue.`, {});
@@ -430,14 +444,30 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           return parsed;
         });
         tally.models.add(r.model);
-        for (const res of value.results) {
-          const q = qCode.get(res.q.toUpperCase().replace(/[\s[\]]/g, ""));
-          if (!q) {
+        // 2026-11-15 (CMS 2026 Paper II): ling-3.0-tiny shifted its answers by one question (20 of 86, then 40 of 63 were
+        // caught by the key-word check). A code answered twice, or a batch with 2+ shifted answers, is not used at all:
+        // its other "matches" may be coincidental. Those questions keep no AI result (manual review).
+        const keyOf = (res: { q: string }) => res.q.toUpperCase().replace(/[\s[\]]/g, "");
+        const seen = new Map<string, number>();
+        for (const res of value.results) seen.set(keyOf(res), (seen.get(keyOf(res)) ?? 0) + 1);
+        const decided = value.results.map((res) => {
+          const q = seen.get(keyOf(res)) === 1 ? qCode.get(keyOf(res)) : undefined;
+          return { res, q, d: q ? decideClassification(res, effective(q), codes, subjectsAllowed, r.model) : null };
+        });
+        const shifted = decided.filter((x) => x.d?.rejected && !x.d.subject && /key words/.test(x.d.rejected)).length;
+        if (shifted >= 2) {
+          tally.misaligned += shifted;
+          for (const q of batch) aiOutcome.set(q.id, { status: "NO_RESULT", detail: `${r.model}'s answers in this request were shifted between questions (${shifted} answer(s) did not match their question's key words), so none of them was used`, model: r.model });
+          continue;
+        }
+        for (const { res, q, d: decision } of decided) {
+          if (!q || !decision) {
             tally.invalid++;
+            if (q === undefined && (seen.get(keyOf(res)) ?? 0) > 1) for (const b of batch) if (qCode.get(keyOf(res)) === b) aiOutcome.set(b.id, { status: "NO_RESULT", detail: `${r.model} answered this question twice in one request, so neither answer was used`, model: r.model });
             continue;
           }
           tally.results++;
-          const d = decideClassification(res, effective(q), codes, subjectsAllowed, r.model);
+          const d = decision;
           if (d.rejected && !d.subject) {
             if (/key words/.test(d.rejected)) tally.misaligned++;
             else if (/not in this exam/.test(d.rejected)) tally.invalid++;
@@ -449,7 +479,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         }
         // A question the model did not answer for (shortened / truncated list) has NO result — never "nothing fits".
         for (const q of batch) {
-          if (classifyResults.has(q.id)) continue;
+          if (classifyResults.has(q.id) || aiOutcome.has(q.id)) continue;
           tally.missing++;
           aiOutcome.set(q.id, { status: "NO_RESULT", detail: `${r.model} returned no answer for this question (${value.results.length} answer(s) for ${batch.length} question(s) in the request)`, model: r.model });
         }

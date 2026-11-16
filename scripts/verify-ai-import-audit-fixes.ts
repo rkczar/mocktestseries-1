@@ -161,7 +161,7 @@ async function main() {
 
     const items = classifyAnswerOf({ results: [{ bogus: true }, { q: "Q2", subject: "S1", topic: "T1", confidence: 0.9 }, { q: "Q3", subject: "S1", topic: null, confidence: "80" }] });
     check("classification: a malformed entry drops only its own question; the others are kept", !!items && items.results.length === 2 && items.dropped === 1 && items.results.map((r) => r.q).join() === "Q2,Q3", items);
-    check("classification: no usable list → unusable answer (retried once on another model)", classifyAnswerOf({ results: [{ bogus: 1 }] }) === null && classifyAnswerOf({}) === null && classifyAnswerOf({ results: "x" }) === null && CLASSIFY_BATCH === 10);
+    check("classification: no usable list → unusable answer (retried once on another model)", classifyAnswerOf({ results: [{ bogus: 1 }] }) === null && classifyAnswerOf({}) === null && classifyAnswerOf({ results: "x" }) === null && CLASSIFY_BATCH === 6);
 
     const prepared = { number: 7, label: "7", section: "", type: "SINGLE_CORRECT", stem: "Which of the following is the drug of choice for absence seizures in children?", instructions: "", passage: "", options: ["Ethosuximide", "Phenytoin", "Carbamazepine", "Phenobarbitone"].map((t, i) => ({ label: "ABCD"[i], printed: "abcd"[i], text: t })), printedAnswer: [], figures: [], pages: [1] } as unknown as ExtractedQuestion;
     const before = JSON.stringify(prepared);

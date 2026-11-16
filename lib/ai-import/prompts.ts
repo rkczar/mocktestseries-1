@@ -288,7 +288,8 @@ export const classifySchema = z.object({
 export type ClassifyAnswer = z.infer<typeof classifySchema>;
 
 /** Questions per classification request (2026-10-24: a 20-question request failed as one malformed answer for all 20). */
-export const CLASSIFY_BATCH = 10;
+// 2026-11-15: 10 → 6 — a small classifier shifted answers between questions in 10-question requests.
+export const CLASSIFY_BATCH = 6;
 
 /**
  * A classification answer, item by item: every well-formed result is kept and a malformed one only drops ITS

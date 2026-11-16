@@ -508,7 +508,8 @@ async function retryFailedParts(job: AiImportJob, actorId: string, confirmedMaxI
   if (job.leaseUntil && job.leaseUntil > new Date()) throw new ImportJobError("The worker is still finishing this import. Try again in a few seconds.", 409);
   const [failedPages, failedKeys] = await Promise.all([
     prisma.aiImportPage.count({ where: { jobId: job.id, status: AiImportPageStatus.FAILED } }),
-    prisma.aiImportFile.count({ where: { jobId: job.id, role: AiImportFileRole.ANSWER_KEY, status: AiImportFileStatus.ANALYZED, errorMessage: { not: null } } }),
+    // A key whose reading gave no entries is PROCESSED with an error (e.g. a scanned key while AI was blocked): retryable too.
+    prisma.aiImportFile.count({ where: { jobId: job.id, role: AiImportFileRole.ANSWER_KEY, status: { in: [AiImportFileStatus.ANALYZED, AiImportFileStatus.PROCESSED] }, errorMessage: { not: null } } }),
   ]);
   if (!failedPages && !failedKeys) throw new ImportJobError("Nothing failed in this import, so there is nothing to retry — review its questions instead.");
   if (!(await getImporterSettings()).aiEnabled) throw new ImportJobError("Paid AI is switched off in Import Settings, so the failed pages cannot be read. Nothing was changed. Switch Paid AI on (and save) first, then retry.");
@@ -522,6 +523,8 @@ async function retryFailedParts(job: AiImportJob, actorId: string, confirmedMaxI
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
   // The previous error stays on the page until it is read again (it is replaced on success or on a new failure).
   await prisma.aiImportPage.updateMany({ where: { jobId: job.id, status: AiImportPageStatus.FAILED }, data: { status: AiImportPageStatus.PENDING } });
+  // runKeyFiles reads ANALYZED keys again (its entries are replaced, never added twice); the error stays until then.
+  await prisma.aiImportFile.updateMany({ where: { jobId: job.id, role: AiImportFileRole.ANSWER_KEY, status: AiImportFileStatus.PROCESSED, errorMessage: { not: null } }, data: { status: AiImportFileStatus.ANALYZED } });
   await logEvent(job.id, "RETRY_FAILED", `Retry of the failed parts: ${failedPages} page(s)${failedKeys ? ` and ${failedKeys} answer-key file(s)` : ""} are read again (confirmed maximum ₹${fresh.budgetInr.toFixed(2)}). Finished pages are not read or charged again.`, { failedPages, failedKeys, confirmedMaxInr: fresh.budgetInr }, actorId);
   kickWorker();
   return { started: true, cost: null };

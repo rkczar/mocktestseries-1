@@ -12,7 +12,8 @@
  * picked up by the next one. While a Live CBT is running (or starts within
  * 15 minutes) it starts nothing. Logs job ids and counts only.
  *
- *   --seconds=N  run budget (default 540)
+ *   --seconds=N      run budget (default 540)
+ *   --lane=analysis  only free local analysis, under its own lock (lib/ai-import/kick.ts)
  */
 import "dotenv/config";
 
@@ -22,8 +23,9 @@ async function main() {
   const { prisma } = await import("../lib/prisma");
   const { runWorker } = await import("../lib/ai-import/worker");
   try {
-    const r = await runWorker(budgetMs);
-    if (r.handled || r.skippedForLiveCbt) console.log(`${new Date().toISOString()} ai-import-worker handled=${r.handled}${r.skippedForLiveCbt ? " (paused: Live CBT running)" : ""}`);
+    const lane = process.argv.includes("--lane=analysis") ? "analysis" : "all";
+    const r = await runWorker(budgetMs, lane);
+    if (r.handled || r.skippedForLiveCbt) console.log(`${new Date().toISOString()} ai-import-worker${lane === "analysis" ? " (analysis lane)" : ""} handled=${r.handled}${r.skippedForLiveCbt ? " (paused: Live CBT running)" : ""}`);
   } finally {
     await prisma.$disconnect();
   }

@@ -293,7 +293,12 @@ async function importJob(job: AiImportJob): Promise<void> {
 }
 
 /** One worker run: picks jobs that need work, oldest first, within a time budget. */
-export async function runWorker(budgetMs = 9 * 60_000): Promise<{ handled: number; skippedForLiveCbt: boolean }> {
+/**
+ * `lane: "analysis"` handles only free local analysis (ANALYZING) under its own lock, so a new paper is analysed while a
+ * long paid job holds the main lane (2026-11-15: CMS 2026 Paper I waited 1 h 50 min behind Paper II). Every job is still
+ * leased (lease() is an atomic compare-and-set), so the two lanes never run the same job; paid work stays in the main lane.
+ */
+export async function runWorker(budgetMs = 9 * 60_000, lane: "all" | "analysis" = "all"): Promise<{ handled: number; skippedForLiveCbt: boolean }> {
   const started = Date.now();
   let handled = 0;
   // Leases of a crashed worker expire; their jobs are picked up again.
@@ -302,7 +307,7 @@ export async function runWorker(budgetMs = 9 * 60_000): Promise<{ handled: numbe
     if (await liveCbtRunning()) return { handled, skippedForLiveCbt: true };
     const job = await prisma.aiImportJob.findFirst({
       where: {
-        status: { in: [AiImportJobStatus.ANALYZING, AiImportJobStatus.QUEUED, AiImportJobStatus.PROCESSING, AiImportJobStatus.IMPORTING] },
+        status: { in: lane === "analysis" ? [AiImportJobStatus.ANALYZING] : [AiImportJobStatus.ANALYZING, AiImportJobStatus.QUEUED, AiImportJobStatus.PROCESSING, AiImportJobStatus.IMPORTING] },
         OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }],
       },
       orderBy: { updatedAt: "asc" },
@@ -327,7 +332,7 @@ export async function runWorker(budgetMs = 9 * 60_000): Promise<{ handled: numbe
     }
   }
   // Retention housekeeping (only when enabled in Import Settings; reference-checked).
-  await autoCleanup().catch((e) => console.error(`[ai-import] auto cleanup skipped: ${e instanceof Error ? e.message : "error"}`));
+  if (lane === "all") await autoCleanup().catch((e) => console.error(`[ai-import] auto cleanup skipped: ${e instanceof Error ? e.message : "error"}`));
   return { handled, skippedForLiveCbt: false };
 }
 

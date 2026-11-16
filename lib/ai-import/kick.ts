@@ -5,8 +5,8 @@ import path from "node:path";
 
 /**
  * Starts the importer worker right away (instead of waiting for the next
- * cron minute). It runs under the same `flock` as the cron entry, so at most
- * one worker ever runs; when one is already running this is a no-op. The
+ * cron minute). The main lane runs under the same `flock` as the cron entry, so at most
+ * one main worker ever runs; the analysis lane has its own lock (see runWorker). The
  * worker is a separate, low-priority process — never inside a web request.
  */
 export function kickWorker(): void {
@@ -19,13 +19,17 @@ export function kickWorker(): void {
     const lock = process.env.AI_IMPORT_LOCK || "/run/mocktestseries-ai-import.lock";
     const logFile = process.env.AI_IMPORT_LOG || "/var/log/mocktestseries/ai-import-worker.log";
     const out = existsSync(path.dirname(/* turbopackIgnore: true */ logFile)) ? openSync(path.resolve(/* turbopackIgnore: true */ logFile), "a", 0o640) : "ignore";
-    const child = spawn("/usr/bin/flock", ["-n", lock, "/usr/bin/nice", "-n", "10", tsx, script], {
-      cwd,
-      detached: true,
-      stdio: ["ignore", out, out],
-      env: { ...process.env, NODE_OPTIONS: "--conditions=react-server" },
-    });
-    child.unref();
+    // The main lane (everything, one job at a time) and the analysis lane (free local analysis only, own lock): a new
+    // paper is analysed even while a long paid job holds the main lane. Each lane is a no-op when it already runs.
+    for (const [lockFile, args] of [[lock, [script]], [process.env.AI_IMPORT_ANALYSIS_LOCK || "/run/mocktestseries-ai-import-analysis.lock", [script, "--lane=analysis"]]] as const) {
+      const child = spawn("/usr/bin/flock", ["-n", lockFile, "/usr/bin/nice", "-n", "10", tsx, ...args], {
+        cwd,
+        detached: true,
+        stdio: ["ignore", out, out],
+        env: { ...process.env, NODE_OPTIONS: "--conditions=react-server" },
+      });
+      child.unref();
+    }
     if (typeof out === "number") closeSync(out);
   } catch {
     // The cron entry picks the job up within a minute.

@@ -62,3 +62,48 @@ export function gapPages(found: { number: number; pages: number[] }[], expected:
   }
   return out;
 }
+
+/**
+ * Options a reader put inside the question text (or one "option" holding the whole list) — 2026-11-15, CMS 2026 Paper II:
+ * gemma-3-4b returned "(a) 1, 2 and 3" as the only option of Q35/Q39/Q81 and the page failed three times. The labelled
+ * options are taken from the text only when the boundaries are unambiguous: markers (a)…(d) (or (a)…(e)), each once, in
+ * order, each at a line start or after a space. OCR's "(α)" for "(a)" is accepted as the first marker. Otherwise null:
+ * nothing is guessed.
+ */
+export function optionsFromText(text: string): { stem: string; options: { label: string; printed: string; text: string }[] } | null {
+  const re = /(^|\s)\(\s*([a-eα])\s*\)\s*/gm;
+  const marks = [...text.matchAll(re)].map((m) => ({ at: m.index! + m[1].length, end: m.index! + m[0].length, label: m[2] === "α" ? "a" : m[2] }));
+  const start = marks.findIndex((m, i) => m.label === "a" && marks.slice(i, i + 4).map((x) => x.label).join("") === "abcd");
+  if (start < 0) return null;
+  const run = marks.slice(start);
+  // Exactly one a–d (or a–e) run after the first (a): a repeated or out-of-order marker is ambiguous.
+  const labels = run.map((m) => m.label).join("");
+  if (labels !== "abcd" && labels !== "abcde") return null;
+  const options = run.map((m, i) => ({ label: m.label.toUpperCase(), printed: `(${m.label})`, text: text.slice(m.end, i + 1 < run.length ? run[i + 1].at : undefined).trim() }));
+  if (options.some((o) => !o.text || o.text.length > 400)) return null;
+  return { stem: text.slice(0, run[0].at).trim(), options };
+}
+
+/**
+ * Repairs the questions of one reading whose options are degenerate (one option only / all empty): from the question's
+ * own text first, else from the page's local OCR reading of the same question number (`ocrText`). A question that cannot
+ * be repaired is returned unchanged (still degenerate). Never adds an option that is not printed in the text.
+ */
+export function repairDegenerateOptions<T extends Pick<ExtractedQuestion, "number" | "stem" | "options" | "continuedFromPreviousPage" | "continuesOnNextPage"> & { notes?: string[]; confidence?: number }>(questions: T[], ocrText: (n: number | null) => string | null): T[] {
+  return questions.map((q) => {
+    if (!degenerateQuestion(q) || /own notes/.test(degenerateQuestion(q)!)) return q;
+    const inline = [q.stem, ...q.options.map((o) => `${o.printed ?? o.label ?? ""} ${o.text ?? ""}`)].join("\n");
+    const own = optionsFromText(q.stem ?? "") ?? optionsFromText(inline);
+    const ocr = own ? null : ocrText(q.number);
+    const fromOcr = ocr ? optionsFromText(ocr.replace(/^\s*\d{1,3}\s*[.)]\s*/, "")) : null;
+    const got = own ?? fromOcr;
+    if (!got) return q;
+    const how = own ? "the question text of the same reading" : "the page's local OCR reading";
+    return { ...q, stem: own ? got.stem : q.stem, options: got.options, confidence: Math.min(q.confidence ?? 0.5, 0.5), notes: [...(q.notes ?? []), `Options recovered from ${how} (the reader returned ${q.options.length} option(s)); check them.`] };
+  });
+}
+
+/** The reasons of an incomplete reading that concern options only (a page with other good questions is then kept). */
+export function optionOnlyReasons(reasons: string[]): boolean {
+  return reasons.every((r) => /one option only|every option is empty/.test(r));
+}

@@ -15,7 +15,7 @@ import { formulaDiff, sourceDiffSummary, sourceTextDiff } from "@/lib/ai-import/
 import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiSwitchedOff, ImporterAiUnavailable, ImporterJobStopped, ImporterRateLimited } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
 import { EXTRACT_SYSTEM, RESCAN_RULES, extractUserText, pageSchema, toExtracted, type PageOutput } from "@/lib/ai-import/prompts";
-import { gapPages, incompleteReading } from "@/lib/ai-import/reading-checks";
+import { gapPages, incompleteReading, optionOnlyReasons, repairDegenerateOptions } from "@/lib/ai-import/reading-checks";
 import { readVault, renderKey, putIntermediate, vaultPath, workDir, exists as vaultExists } from "@/lib/ai-import/vault";
 import { logEvent } from "@/lib/ai-import/jobs";
 import { sourceKeyOf, type ExtractedQuestion, type NBox, type PageExtraction } from "@/lib/ai-import/types";
@@ -749,7 +749,11 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   // is read again by the confirmed reader, then by each configured fallback (approved models only), at most
   // INCOMPLETE_READ_RETRIES more times; every attempt is a recorded, budgeted request. Still incomplete → the page
   // fails with the reasons (Review → failed pages); nothing from such a reading is saved.
-  let incomplete = incompleteReading(toExtracted(primary.out, page.pageNumber, primary.model));
+  // The page's own local OCR reading of each question number (free): a fallback for options a reader dropped.
+  const ocrTwins = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id, pages: { has: page.pageNumber } }, select: { sourceNumber: true, data: true } });
+  const ocrTextOf = (n: number | null) => (n === null ? null : (ocrTwins.find((t) => t.sourceNumber === n)?.data as { ocr?: { text?: string } } | null)?.ocr?.text ?? null);
+  const readOf = (p: { out: PageOutput; model: string }) => repairDegenerateOptions(toExtracted(p.out, page.pageNumber, p.model), ocrTextOf);
+  let incomplete = incompleteReading(readOf(primary));
   const retryModels = [ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks].filter((m, i, a) => !!m && a.indexOf(m) === i);
   let reread = false;
   for (let k = 0; incomplete.length && k < INCOMPLETE_READ_RETRIES; k++) {
@@ -757,14 +761,22 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     await logEvent(ctx.job.id, "PAGE_READING_INCOMPLETE", `${file.originalName} page ${page.pageNumber}: the reading by ${primary.model} is incomplete (${incomplete.slice(0, 3).join("; ")}) — reading the page again with ${model} (attempt ${k + 2} of ${INCOMPLETE_READ_RETRIES + 1}).`, { pageId: page.id, model: primary.model, reasons: incomplete.slice(0, 10), attempt: k + 1 });
     primary = await call([model], "extract", "extract-retry-incomplete");
     reread = true;
-    incomplete = incompleteReading(toExtracted(primary.out, page.pageNumber, primary.model));
+    incomplete = incompleteReading(readOf(primary));
+  }
+  // Only some questions have unusable options and the rest of the page is good: the page is kept (one malformed question
+  // never fails the whole page). Such a question is dropped from this reading when the page's local reading has it (that
+  // row is kept and flagged below), else saved as read — its missing options flag it for correction. Nothing is invented.
+  const isolated = incomplete.length && optionOnlyReasons(incomplete) && incomplete.length < readOf(primary).length ? new Set(readOf(primary).filter((q) => incompleteReading([q]).length && ocrTextOf(q.number)).map((q) => q.number)) : null;
+  if (isolated) {
+    await logEvent(ctx.job.id, "PAGE_QUESTIONS_ISOLATED", `${file.originalName} page ${page.pageNumber}: ${incomplete.length} question(s) with unusable options were isolated (${incomplete.slice(0, 3).join("; ")}); the rest of the page is kept. They need correction.`, { pageId: page.id, reasons: incomplete });
+    incomplete = [];
   }
   if (incomplete.length) {
     await logEvent(ctx.job.id, "PAGE_READING_INCOMPLETE", `${file.originalName} page ${page.pageNumber}: still incomplete after ${INCOMPLETE_READ_RETRIES + 1} readings — sent to review; nothing from these readings was saved.`, { pageId: page.id, reasons: incomplete.slice(0, 10), final: true });
     throw new Error(`Incomplete reading after ${INCOMPLETE_READ_RETRIES + 1} attempts (${incomplete.slice(0, 2).join("; ")}). Nothing from it was saved — check the page and use Retry, or enter its questions by hand.`);
   }
   if ((!cached || reread) && !state.rescan) await prisma.aiImportPage.update({ where: { id: page.id }, data: { rawOutput: { ...state, primaryCache: { model: primary.model, out: primary.out, at: new Date().toISOString() } } as unknown as Prisma.InputJsonValue } });
-  const read = toExtracted(primary.out, page.pageNumber, primary.model);
+  const read = readOf(primary).filter((q) => !isolated?.has(q.number));
   if (sent) toPageBoxes(read, sent.parts);
   // Numbered instructions to candidates are never questions: kept in the page's reading, not saved, so they cannot take
   // the numbers of the real questions on the next page.

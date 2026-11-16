@@ -21,6 +21,21 @@ import time
 PDFTOPPM = "/usr/bin/pdftoppm"
 LOW = 0.90  # lines below this confidence are read again from a sharper crop
 REREAD_DPI = 400
+MAX_PIXELS = 40_000_000  # a page stored at an oversized point size (e.g. a 600-dpi scan saved as 4960x7015 pt) is rendered at a lower dpi
+
+
+def fit_dpi(pdf, page, dpi):
+    """The dpi at which the page renders within MAX_PIXELS (never above `dpi`)."""
+    out = subprocess.run(["/usr/bin/pdfinfo", "-f", str(page), "-l", str(page), pdf], capture_output=True, text=True, timeout=60).stdout
+    for line in out.splitlines():
+        if line.startswith(f"Page {page:4d} size:") or (line.startswith("Page size:") and page == 1):
+            parts = line.split(":", 1)[1].split()
+            try:
+                w, h = float(parts[0]), float(parts[2])
+            except (IndexError, ValueError):
+                return dpi
+            return max(36, min(dpi, int((MAX_PIXELS / (w * h / 72 / 72)) ** 0.5)))
+    return dpi
 MAX_REREADS = 40
 
 
@@ -90,6 +105,7 @@ def main():
     ocr = RapidOCR()
     with tempfile.TemporaryDirectory(prefix="mts-ocr-") as tmp:
         if a.pdf:
+            a.dpi = fit_dpi(a.pdf, a.page, a.dpi)
             path = render(a.pdf, a.page, a.dpi, os.path.join(tmp, "page"))
         else:
             path = a.image
@@ -113,9 +129,10 @@ def main():
             x1, y1 = min(width, x1 + pad), min(height, y1 + pad)
             try:
                 if a.pdf:
-                    k = REREAD_DPI / a.dpi
-                    crop = render(a.pdf, a.page, REREAD_DPI, os.path.join(tmp, f"crop{i}"), (int(x0 * k), int(y0 * k), max(1, int((x1 - x0) * k)), max(1, int((y1 - y0) * k))))
-                    dpi = REREAD_DPI
+                    rdpi = min(REREAD_DPI, a.dpi * 2)
+                    k = rdpi / a.dpi
+                    crop = render(a.pdf, a.page, rdpi, os.path.join(tmp, f"crop{i}"), (int(x0 * k), int(y0 * k), max(1, int((x1 - x0) * k)), max(1, int((y1 - y0) * k))))
+                    dpi = rdpi
                 else:
                     c = img.crop((int(x0), int(y0), int(x1), int(y1)))
                     c = c.resize((c.size[0] * 2, c.size[1] * 2), Image.LANCZOS)
