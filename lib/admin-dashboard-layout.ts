@@ -12,6 +12,7 @@ export type DashboardCardSize = "stat" | "half" | "full";
 
 export const DASHBOARD_CARDS: { id: string; label: string; size: DashboardCardSize }[] = [
   { id: "action-required", label: "Action Required", size: "full" },
+  { id: "system-clock", label: "System Clock", size: "half" },
   { id: "total-students", label: "Total Students", size: "stat" },
   { id: "online-now", label: "Online Now", size: "stat" },
   { id: "active-students", label: "Active Students (7d)", size: "stat" },

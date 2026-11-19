@@ -5,6 +5,7 @@ import { HardDrive } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { StatCard } from "@/components/admin/stat-card";
 import { PlatformStatusStrip } from "@/components/admin/platform-status-strip";
+import { SystemClock } from "@/components/admin/system-clock";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { getStorageSnapshot, formatBytes } from "@/lib/storage-stats";
 import { formatInr } from "@/lib/payments/money";
@@ -333,6 +334,7 @@ export default async function AdminDashboardPage() {
 
   const actionPending = actions.reduce((s, a) => s + a.pending, 0);
   const cards: Record<string, React.ReactNode> = {
+    "system-clock": <SystemClock serverNowMs={new Date().getTime()} />,
     "action-required": (
       <Card data-testid="action-required">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
