@@ -80,17 +80,40 @@ const BOOKLET_CODE = /^[A-Z0-9]{2,6}(?:\s*-\s*[A-Z0-9]{1,6}){1,4}$/;
 const BOOKLET_TOKEN = /\b[A-Z]{3,6}-[A-Z0-9]{1,2}-[A-Z]{3,6}\b/;
 const QUESTION_LIKE = /^\s*(?:Q\.?\s*(?:No[.:]?)?\s*)?\d{1,3}\s*[.)]|^\s*\(?[a-dA-D]\)/;
 const URL_ONLY = /^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:in|com|org|net)$/i;
-const FURNITURE_WORDS = /^(?:p\.?\s*t\.?\s*o\.?|turn over|space for rough work|rough work|\(?\s*contd\.?\s*\)?)$/i;
+const FURNITURE_WORDS = /^[[(]?\s*(?:p\.?\s*t\.?\s*o\.?|turn over|space for rough work|rough work|\(?\s*contd\.?\s*\)?)\s*[\])]?$/i;
+const furnitureText = (t: string) => t.length <= 40 && (PAGE_NUMBER.test(t) || BOOKLET_CODE.test(t) || BOOKLET_TOKEN.test(t) || FURNITURE_WORDS.test(t));
 
 /** Running header/footer text (page numbers, booklet codes, watermark URLs) — never question text. */
 export function isFurniture(text: string, box: NBox): boolean {
   const t = text.trim();
   if (!t) return true;
   if (URL_ONLY.test(t)) return true;
+  // A whole line "[P.T.O." / "Turn over" is never question text, wherever the scan placed it (CMS 2024: ~0.877).
+  // ("Rough work" stays in the band rule: nonQuestionPage needs it to recognise a rough-work page.)
+  if (/^[[(]?\s*(?:p\.?\s*t\.?\s*o\.?|turn over)\s*[\])]?$/i.test(t)) return true;
   const inBand = box.y + box.h < 0.075 || box.y > 0.88;
   if (!inBand) return false;
-  if (t.length > 40) return false;
-  return PAGE_NUMBER.test(t) || BOOKLET_CODE.test(t) || BOOKLET_TOKEN.test(t) || FURNITURE_WORDS.test(t);
+  return furnitureText(t);
+}
+
+/** Footer text that never occurs in a question: "[P.T.O.", a booklet code, or a page number WITH its series ("(3-A)"). */
+// (Not BOOKLET_CODE: it also matches ordinary words such as "COVID-19".)
+export const STRONG_FOOTER = (t: string) => t.length <= 40 && (FURNITURE_WORDS.test(t) || BOOKLET_TOKEN.test(t) || /^[\s(\[]*\d{1,3}\s*[-–]\s*[A-Z][\s)\]]*$/.test(t));
+
+/**
+ * The page's LAST text row when it is a footer printed above the fixed bottom band (2026-11-19 replay: CMS 2024 scans
+ * print "(3-A)" + "[P.T.O." at ~80–88% of the page height, which ended up inside the last option). Removed only when
+ * EVERY line of that row is strong footer text — a bare number is never removed here (a statement value "4" can be the
+ * last line of a page; real page numbers are caught by the fixed band). Returns the removed texts.
+ */
+export function dropFooterRow(lines: LayoutLine[]): string[] {
+  if (lines.length < 2) return [];
+  const bottom = Math.max(...lines.map((l) => l.box.y + l.box.h));
+  const lineH = Math.max(...lines.filter((l) => l.box.y + l.box.h === bottom).map((l) => l.box.h));
+  const row = lines.filter((l) => l.box.y + l.box.h > bottom - lineH * 0.8);
+  if (row.length === lines.length || !row.every((l) => STRONG_FOOTER(l.text.trim()))) return [];
+  for (const l of row) lines.splice(lines.indexOf(l), 1);
+  return row.map((l) => l.text);
 }
 
 /**
@@ -180,7 +203,8 @@ export function attachNumberBoxes(lines: LayoutLine[], gutter: number): void {
   for (const n of lines) {
     if (!NUMBER_ONLY.test(n.text) || n.box.x >= gutter) continue;
     const right = lines
-      .filter((l) => l !== n && l.box.x > n.box.x + n.box.w - 0.002 && l.box.x - (n.box.x + n.box.w) < 0.06 && Math.abs(l.box.y - n.box.y) < Math.max(n.box.h, l.box.h) * 0.8)
+      // OCR boxes may overlap the number by a few pixels (CMS 2026 P-I p9: "41." ends at x 826, its stem starts at 812).
+      .filter((l) => l !== n && l.box.x > n.box.x + n.box.w / 2 && l.box.x - (n.box.x + n.box.w) < 0.06 && Math.abs(l.box.y - n.box.y) < Math.max(n.box.h, l.box.h) * 0.8)
       .sort((a, b) => a.box.x - b.box.x)[0];
     if (right && right.box.x >= gutter) n.box = { ...n.box, x: Math.max(gutter, right.box.x - n.box.w - 0.002) };
   }
@@ -241,6 +265,7 @@ export function layoutOcrPage(page: OcrPage): PageLayoutResult {
     }
     lines.push({ text: l.text, box, conf: l.score });
   }
+  furniture.push(...dropFooterRow(lines));
   anchorTableLabels(lines);
   const gutter = findGutter(lines);
   if (gutter !== null) {

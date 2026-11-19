@@ -19,6 +19,7 @@ import { classifierContext, headingResolver, jobPaperMemory } from "@/lib/ai-imp
 import { confirmedRulesFor, confirmedSubjectScope, memoryBrief, memoryFindings } from "@/lib/ai-import/paper-memory";
 import type { ClassificationRecord, ExtractedQuestion } from "@/lib/ai-import/types";
 import { controlCharFindings, unbalancedChemistry } from "@/lib/ai-import/formula-check";
+import { STRONG_FOOTER } from "@/lib/ai-import/ocr-layout";
 import { PRINTED_DROPPED, candidateInstruction, formatStem, mergedAnswerIn, mergedStatements, notationRisk, numberSequenceProblems, statementCodeQuestion, statementsOf } from "@/lib/ai-import/local-parse";
 
 const ROMAN_INDEX: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
@@ -587,6 +588,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (contaminated) add("ANSWER_IN_OPTION", `${contaminated.where[0].toUpperCase()}${contaminated.where.slice(1)} contains the printed answer “${contaminated.raw.slice(0, 80)}” — Verify 1 moves it out when the source confirms it; otherwise remove it and set the answer.`);
     const glued = mergedStatements(e.stem);
     if (glued) add("STATEMENTS_MERGED", formatStem(e.stem)?.rules.includes("STATEMENT_BREAKS") ? `The numbered statements ${glued.join(", ")} run together in the question text. Run Verify 1 (free): it puts each statement on its own line (whitespace only — the wording is not changed).` : `The numbered statements ${glued.join(", ")} run together in the question text and cannot be separated automatically (for example a table or a list without a lead-in). Put each statement or row on its own line by hand.`);
+    // Page footer / printed annotation left inside the text ("[P.T.O.", "(3-A)", "KCSP-A-GMPK" — 2026-11-19 replay: these
+    // passed every check on CMS 2024 scans). A whole line only; flagged, never removed here (the reader decides).
+    {
+      const where = [["question text", e.stem] as const, ...e.options.map((o) => [`option ${o.label}`, o.text] as const)]
+        .flatMap(([at, text]) => (text ?? "").split("\n").filter((l) => STRONG_FOOTER(l.trim())).map((l) => `${at}: "${l.trim()}"`));
+      if (where.length) addMore("EXTRACTION_UNCERTAIN", `Page header/footer text was read into the question (${where.slice(0, 3).join("; ")}) — remove it and compare with the original page.`);
+    }
     // Statement-code options that cite a statement the text does not have ("1, 2 and 4" with three statements): a statement
     // was lost or merged with another in the source text (2026-11-05: a Word transcription merged statements 1 and 2 of
     // CMS 2024 Q105 and changed the options of Q70). Flagged for comparison with the original paper — never changed.
@@ -596,7 +604,10 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       // Every statement 1..(highest cited) must be in the text — a lost first or middle statement counts too (2026-11-19
       // audit: CMS-GS Q8 lost statement 1 while 2–4 were present; the old "highest cited > highest present" missed it).
       if (statementCodeQuestion(e)) {
-        const roman = stmts.length ? stmts.every((x) => /^[IVX]+$/.test(x.key)) : !e.options.some((o) => /\b[1-9]\b/.test(o.text));
+        // Letter codes ("B, F, G", "A, D, I" — CMS 2024 P-I Q25 triplets) are not Roman statements: with no statement in
+        // the text, Roman citations count only when every capital code in the options is a Roman numeral.
+        const letterCodes = e.options.some((o) => (o.text.match(/\b[A-Z]{1,4}\b/g) ?? []).some((t) => !/^[IVX]+$/.test(t)));
+        const roman = stmts.length ? stmts.every((x) => /^[IVX]+$/.test(x.key)) : !letterCodes && !e.options.some((o) => /\b[1-9]\b/.test(o.text));
         const cited = Math.max(0, ...e.options.flatMap((o) => (roman ? [...o.text.matchAll(/\b([IVX]{1,4})\b/g)].map((m) => index(m[1])) : [...o.text.matchAll(/\b([1-9])\b/g)].map((m) => Number(m[1])))));
         const present = new Set(stmts.map((x) => index(x.key)));
         if (Array.from({ length: cited }, (_, i) => i + 1).some((n) => !present.has(n))) add("STATEMENT_COUNT_MISMATCH", `The options refer to statement ${roman ? Object.keys(ROMAN_INDEX).find((k) => ROMAN_INDEX[k] === cited) : cited}, but the question text has ${stmts.length} numbered statement(s) — one may be missing or merged with another. Compare the statements and options with the original paper.`);

@@ -268,7 +268,8 @@ function pureBudget() {
   const over = budgetShortfall(150, b);
   check("approval: ₹150 maximum → says it exceeds the ₹200 testing cap by up to ₹39.69", over.short.length === 1 && /₹200\.00 paid-testing cap by up to ₹39\.69/.test(over.short[0]), over.short);
   const both = budgetShortfall(150, { ...b, monthlyInr: 100, monthUsedInr: 90 });
-  check("approval: monthly shortfall named with the amount (₹140.00 more than ₹10.00 left)", both.short.length === 2 && /₹140\.00 more than the monthly budget left \(₹10\.00 of ₹100\.00\)/.test(both.short[0]), both.short);
+  // One warning per budget state (P1, owner-approved 2026-11-19): only the tighter limit (₹10 month < ₹110.31 total) is named.
+  check("approval: monthly shortfall named with the amount (₹140.00 more than ₹10.00 left), the looser total cap not repeated", both.short.length === 1 && /₹140\.00 more than the monthly budget left \(₹10\.00 of ₹100\.00\)/.test(both.short[0]) && !/paid-testing cap/.test(both.short[0]), both.short);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
