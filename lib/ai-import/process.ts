@@ -1165,11 +1165,11 @@ async function imagePass(ctx: StepContext, file: AiImportFile): Promise<void> {
 
 // ---- Answer-key entries (shared with lib/ai-import/keys.ts) ------------------------------------------
 
-export async function saveKeyEntries(ctx: { job: { id: string } }, keyFileId: string, paperFileId: string | null, page: number | null, entries: { number: number; section: string; raw: string; page?: number | null }[]): Promise<void> {
+export async function saveKeyEntries(ctx: { job: { id: string } }, keyFileId: string, paperFileId: string | null, page: number | null, entries: { number: number; section: string; raw: string; page?: number | null; box?: NBox | null }[]): Promise<void> {
   const valid = entries.filter((e) => Number.isFinite(e.number) && e.number > 0 && e.number < 1000);
   if (!valid.length) return;
   await prisma.aiImportKeyEntry.createMany({
-    data: valid.map((e) => ({ jobId: ctx.job.id, keyFileId, paperFileId, sourceNumber: e.number, section: e.section, rawValue: e.raw.slice(0, 40), labels: [], page: e.page ?? page })),
+    data: valid.map((e) => ({ jobId: ctx.job.id, keyFileId, paperFileId, sourceNumber: e.number, section: e.section, rawValue: e.raw.slice(0, 40), labels: [], page: e.page ?? page, box: e.box ? { ...e.box } : undefined })),
   });
 }
 

@@ -4044,6 +4044,8 @@ model AiImportKeyEntry {
   /// OK | WITHDRAWN | BONUS | AMBIGUOUS | DUPLICATE | UNMATCHED
   status            String      @default("OK")
   page              Int?
+  /// Normalized box of the key cell on its page {x, y, w, h} in 0..1 (local OCR keys); null for text-layer / sheet / AI keys.
+  box               Json?
   matchedQuestionId String?
   createdAt         DateTime    @default(now())
 

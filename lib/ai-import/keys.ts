@@ -16,6 +16,7 @@ import { logEvent } from "@/lib/ai-import/jobs";
 import { KEY_MIN_COVERAGE } from "@/lib/ai-import/config";
 import { ocrAvailable, ocrImageFile, ocrPdfPage } from "@/lib/ai-import/ocr";
 import type { OcrPage } from "@/lib/ai-import/ocr-layout";
+import type { NBox } from "@/lib/ai-import/types";
 
 /**
  * Answer-key files: the key is read as printed (number + value), never
@@ -29,6 +30,8 @@ export interface KeyPair {
   raw: string;
   /** Page of the key file the entry was read from (source reference). */
   page?: number | null;
+  /** Normalized box (0..1) of the number + value cells on that page (local OCR only), for the review card's key crop. */
+  box?: NBox | null;
 }
 
 /** The key's own identifiers as printed (paper, series / set, total questions) — compared with the question paper. */
@@ -192,10 +195,10 @@ const OCR_KEY_LETTER = /^\(?([A-Da-d])\)?$/;
  * low-confidence token, a value that is not a single option letter, a number its column neighbours contradict, or a number paired twice (an OCR misread) gives no
  * entry — that question keeps Answer unverified. Nothing is inferred from the grid position.
  */
-export function ocrKeyPairs(page: Pick<OcrPage, "lines">, maxNumber = 300): { pairs: KeyPair[]; text: string } {
+export function ocrKeyPairs(page: Pick<OcrPage, "lines"> & Partial<Pick<OcrPage, "width" | "height">>, maxNumber = 300): { pairs: KeyPair[]; text: string } {
   const toks = page.lines
     .filter((l) => l.score >= KEY_OCR_MIN_SCORE)
-    .map((l) => ({ t: l.text.trim(), x0: l.box[0], x1: l.box[2], cy: (l.box[1] + l.box[3]) / 2, h: Math.max(1, l.box[3] - l.box[1]) }));
+    .map((l) => ({ t: l.text.trim(), x0: l.box[0], x1: l.box[2], y0: l.box[1], y1: l.box[3], cy: (l.box[1] + l.box[3]) / 2, h: Math.max(1, l.box[3] - l.box[1]) }));
   const nums = toks.filter((k) => /^\d{1,3}$/.test(k.t) && +k.t >= 1 && +k.t <= maxNumber);
   const vals = toks.filter((k) => OCR_KEY_LETTER.test(k.t));
   const sameRow = (a: { cy: number; h: number }, b: { cy: number }) => Math.abs(a.cy - b.cy) <= a.h * 0.6;
@@ -216,7 +219,7 @@ export function ocrKeyPairs(page: Pick<OcrPage, "lines">, maxNumber = 300): { pa
     const right = vals.filter((v) => sameRow(n, v) && v.x0 >= n.x1).sort((a, b) => a.x0 - b.x0)[0];
     if (!right) continue;
     if (nums.some((m) => m !== n && sameRow(n, m) && m.x0 >= n.x1 && m.x0 < right.x0)) continue;
-    found.push({ number: +n.t, section: "", raw: OCR_KEY_LETTER.exec(right.t)![1].toUpperCase() });
+    found.push({ number: +n.t, section: "", raw: OCR_KEY_LETTER.exec(right.t)![1].toUpperCase(), box: keyCellBox(page, n, right) });
   }
   const count = new Map<number, number>();
   for (const f of found) count.set(f.number, (count.get(f.number) ?? 0) + 1);
@@ -224,6 +227,18 @@ export function ocrKeyPairs(page: Pick<OcrPage, "lines">, maxNumber = 300): { pa
   const pairs = found.filter((f) => count.get(f.number) === 1).sort((a, b) => a.number - b.number);
   const text = [...page.lines].sort((a, b) => a.box[1] - b.box[1] || a.box[0] - b.box[0]).map((l) => l.text).join("\n");
   return { pairs, text };
+}
+
+/** Union of the number and value cells, padded by about one row, normalized to the page (0..1); null without page size. */
+function keyCellBox(page: Partial<Pick<OcrPage, "width" | "height">>, a: { x0: number; x1: number; y0: number; y1: number; h: number }, b: { x0: number; x1: number; y0: number; y1: number }): NBox | null {
+  const W = page.width ?? 0;
+  const H = page.height ?? 0;
+  if (!(W > 0 && H > 0)) return null;
+  const x0 = Math.max(0, Math.min(a.x0, b.x0) - a.h) / W;
+  const y0 = Math.max(0, Math.min(a.y0, b.y0) - a.h) / H;
+  const x1 = Math.min(W, Math.max(a.x1, b.x1) + a.h) / W;
+  const y1 = Math.min(H, Math.max(a.y1, b.y1) + a.h) / H;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
 /** Local OCR of one scanned key page (free); null when OCR is unavailable or failed — the caller falls back as before. */

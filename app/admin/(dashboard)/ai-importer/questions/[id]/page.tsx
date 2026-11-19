@@ -26,8 +26,8 @@ import { planOf } from "@/lib/ai-import/select";
 import { formatIst } from "@/lib/ist-time";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { fingerprintOf } from "@/lib/ai-import/paper-verify";
-import { verifyState } from "@/lib/ai-import/verify-core";
-import { approvalOutdatedBy, utc } from "@/lib/ai-import/checks";
+import { V1_DISPLAY, v2Display, verifyState } from "@/lib/ai-import/verify-core";
+import { approvalOutdatedBy, issueKind, reviewStatus, utc } from "@/lib/ai-import/checks";
 import { holdNoteNames } from "@/lib/ai-import/review";
 import { listReferences } from "@/lib/ai-import/reference";
 import { fieldBoard, v2TaxonomyChecks } from "@/lib/ai-import/field-checks";
@@ -60,8 +60,8 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     hasPermission(PERMISSIONS.AI_IMPORTER_USE),
     getImporterSettings(),
     getExamTaxonomy(prisma, q.job.examId),
-    prisma.aiImportPage.findMany({ where: { fileId: q.fileId, pageNumber: { in: [...new Set([...q.pages, ...figurePages])] } }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true, kind: true, model: true, errorMessage: true, status: true, rawOutput: true } }),
-    prisma.aiImportKeyEntry.findMany({ where: { matchedQuestionId: q.id }, select: { rawValue: true, page: true, status: true } }),
+    prisma.aiImportPage.findMany({ where: { fileId: q.fileId, pageNumber: { in: [...new Set([...q.pages, ...figurePages])] } }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true, kind: true, model: true, errorMessage: true, status: true, rawOutput: true, renderWidth: true, renderHeight: true } }),
+    prisma.aiImportKeyEntry.findMany({ where: { matchedQuestionId: q.id }, select: { id: true, rawValue: true, page: true, status: true, box: true } }),
     jobMapping(q.jobId),
     prisma.aiImportQuestionVersion.findMany({ where: { questionId: q.id }, orderBy: { createdAt: "desc" }, take: 50 }),
   ]);
@@ -176,6 +176,18 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     ...(vsNow.pv?.v1 ? [{ key: "v1", kind: "v1" as const, at: vsNow.pv.v1.at, model: null, versionId: vsNow.pv.v1.versionId ?? null, outcome: vsNow.pv.v1.passed ? "PASSED" : "PROBLEMS", summary: vsNow.pv.v1.problems.map((p) => p.detail).join(" · ").slice(0, 300), label: vsNow.v1 === "stale" ? "historical (the question changed after it)" : "current" }] : []),
     ...(vsNow.pv?.v2 ? [{ key: "v2", kind: "v2" as const, at: vsNow.pv.v2.at, model: vsNow.pv.v2.model, versionId: vsNow.pv.v2.versionId ?? null, outcome: vsNow.pv.v2.status, summary: vsNow.pv.v2.detail.slice(0, 300), label: vsNow.v2 === "stale" ? (["VERIFIED", "DISAGREE", "NOT_FOUND"].includes(vsNow.pv.v2.status) ? "re-verification needed (the question changed after it)" : "historical (the question changed after it)") : "current" }] : []),
   ].sort((a, b) => b.at.localeCompare(a.at));
+  const strip = reviewStatus(q, vsNow, ISSUE_DEFS);
+  const ANSWER_SOURCE: Record<string, { label: string; color: string }> = {
+    verified: { label: "Verified", color: "text-[var(--color-success)]" },
+    provisional: { label: "Provisional", color: "text-[var(--color-warning)]" },
+    conflict: { label: "Conflict", color: "text-[var(--color-error)]" },
+    missing: { label: "Missing", color: "text-[var(--color-error)]" },
+  };
+  // Question crop: the stored question box on its first page, clipped from the page image with CSS (no new render).
+  const region = (q.data as unknown as ExtractedQuestion).region ?? null;
+  const regionPage = hasPageImages && region && region.w > 0 && region.h > 0 ? pages.find((p) => p.pageNumber === q.pages[0] && p.renderWidth && p.renderHeight) : undefined;
+  const dataIssues = q.issueCodes.filter((c) => issueKind(c, ISSUE_DEFS) === "data");
+  const cosmeticIssues = q.issueCodes.filter((c) => issueKind(c, ISSUE_DEFS) === "cosmetic");
   const blockerPublish = q.questionId ? publishBlocker(q, settings) : blockerImport ?? publishBlocker(q, settings);
   // Complete figure at its stored aspect ratio (never cropped to a box), tap to zoom.
   const figureImg = (f: (typeof q.figures)[number]) =>
@@ -230,6 +242,22 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             ))}
         </div>
       </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 rounded border border-[var(--color-border)] p-2 text-xs" data-testid="q-status-strip" data-answer-source={strip.answerSource}>
+        <span>
+          Answer: <span className={`font-medium ${ANSWER_SOURCE[strip.answerSource].color}`}>{ANSWER_SOURCE[strip.answerSource].label}</span> ({strip.answerFrom}
+          {strip.keyPage ? `, key page ${strip.keyPage}` : ""})
+        </span>
+        <span>Verify 1: {V1_DISPLAY[strip.v1]}</span>
+        <span>
+          Verify 2: {v2Display(strip.v2, null)}
+          {strip.independence ? ` · ${strip.independence === "SOURCE" ? "independent (page images)" : "same text (not independent)"}` : ""}
+        </span>
+        <span>Confidence: {strip.confidence === null ? "—" : `${strip.confidence}%`}</span>
+        <span>Page {strip.pages.join(", ") || "—"}</span>
+        <span className={strip.flag ? "text-[var(--color-error)]" : "text-[var(--color-success)]"} data-testid="q-status-flag">
+          {strip.flag ? `Flag: ${strip.flag.label}${strip.flag.reason ? ` — ${strip.flag.reason}` : ""}` : "No data-error flag"}
+        </span>
+      </div>
       <Card data-testid="field-verification-card">
         <CardHeader>
           <CardTitle>Field verification</CardTitle>
@@ -246,6 +274,15 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             <CardDescription>{hasPageImages ? "The original page(s) this question was read from." : file?.status === "PURGED" ? "The original file was removed after its retention period." : "Word and spreadsheet files have no page images; the text was read exactly."}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
+            {regionPage && region && (
+              <figure className="flex flex-col gap-1" data-testid="question-crop">
+                <div className="relative w-full overflow-hidden rounded border border-[var(--color-border)] bg-white" style={{ aspectRatio: `${region.w * regionPage.renderWidth!} / ${region.h * regionPage.renderHeight!}` }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={`/api/admin/ai-importer/pages/${regionPage.id}/image`} alt={`Question ${q.sourceLabel} on page ${regionPage.pageNumber}`} className="absolute max-w-none" style={{ width: `${100 / region.w}%`, left: `${(-region.x / region.w) * 100}%`, top: `${(-region.y / region.h) * 100}%` }} loading="lazy" />
+                </div>
+                <figcaption className="text-xs text-[var(--color-muted-foreground)]">Question {q.sourceLabel} as located on page {regionPage.pageNumber} (full page below)</figcaption>
+              </figure>
+            )}
             {hasPageImages &&
               pages.filter((p) => q.pages.includes(p.pageNumber)).map((p) => (
                 <figure key={p.id} className="flex flex-col gap-1">
@@ -326,6 +363,13 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
               {q.answerConfirmedById ? " · answer chosen by an administrator" : ""}
               {keyEntries.length > 1 ? ` · key lists it ${keyEntries.length}×` : ""}
             </div>
+            {keyEntries.filter((k) => k.box).map((k) => (
+              <figure key={k.id} className="flex flex-col gap-1" data-testid="key-crop">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={`/api/admin/ai-importer/key-entries/${k.id}/image`} alt={`Answer key entry ${k.rawValue}`} className="max-h-24 w-auto self-start rounded border border-[var(--color-border)] bg-white" loading="lazy" />
+                <figcaption className="text-xs text-[var(--color-muted-foreground)]">Answer key as printed: {k.rawValue}{k.page ? ` (key page ${k.page})` : ""}</figcaption>
+              </figure>
+            ))}
             <div className="text-xs">
               <span className={blockerImport ? "text-[var(--color-error)]" : "text-[var(--color-success)]"}>Import: {blockerImport ? `blocked — ${blockerImport}` : q.questionId ? "imported" : "ready"}</span>
               {" · "}
@@ -426,13 +470,23 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             </div>
           )}
           {q.issueCodes.length > 0 && (
-            <ul className="mt-3 flex flex-col gap-0.5 text-xs" data-testid="q-issues">
-              {q.issueCodes.map((c) => (
-                <li key={c} className={ISSUE_DEFS[c]?.blocking ? "text-[var(--color-error)]" : "text-[var(--color-warning)]"}>
-                  {ISSUE_DEFS[c]?.label ?? c}: {(q.issues as Record<string, string> | null)?.[c] ?? ""}
-                </li>
+            <div className="mt-3 flex flex-col gap-2 text-xs" data-testid="q-issues">
+              {[
+                { title: "Data errors", codes: dataIssues, testid: "q-issues-data" },
+                { title: "Cosmetic (never blocks)", codes: cosmeticIssues, testid: "q-issues-cosmetic" },
+              ].filter((g) => g.codes.length).map((g) => (
+                <div key={g.testid} data-testid={g.testid}>
+                  <p className="font-medium">{g.title}</p>
+                  <ul className="flex flex-col gap-0.5">
+                    {g.codes.map((c) => (
+                      <li key={c} className={ISSUE_DEFS[c]?.blocking ? "text-[var(--color-error)]" : g.codes === cosmeticIssues ? "text-[var(--color-muted-foreground)]" : "text-[var(--color-warning)]"}>
+                        {ISSUE_DEFS[c]?.label ?? c}: {(q.issues as Record<string, string> | null)?.[c] ?? ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </CardContent>
       </Card>

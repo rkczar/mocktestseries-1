@@ -65,6 +65,13 @@ export async function cropFromRender(render: Buffer, box: NBox, margin = 0.012):
   return { bytes, clipped, width: Math.min(width, W - left), height: Math.min(height, H - top) };
 }
 
+/** Review-card crop of an answer-key cell (AiImportKeyEntry.box, already padded); null when the stored box is missing or invalid. */
+export async function keyEntryCrop(render: Buffer, box: unknown): Promise<Buffer | null> {
+  const b = box as Partial<NBox> | null;
+  if (!b || ![b.x, b.y, b.w, b.h].every((n) => typeof n === "number" && Number.isFinite(n)) || !(b.w! > 0 && b.h! > 0)) return null;
+  return (await cropFromRender(render, b as NBox, 0))?.bytes ?? null;
+}
+
 /**
  * Crops a page box out of the page's ORIGINAL embedded scan (a scanned PDF page is one full-page image)
  * at the scan's own resolution. Returns null when the scan does not cover the box, when its pixel aspect

@@ -218,3 +218,49 @@ export function mergePaperVerify(prev: PaperVerification | null | undefined, pat
   out.history = history.slice(-VERIFY_HISTORY_MAX);
   return out;
 }
+
+// ---- Review card (P2): status strip and issue split, from stored data only ----------------------------------------
+
+/** "Cosmetic" = a warning that never holds import or publish (ISSUE_DEFS) or a content warning; everything else is a data error. */
+export function issueKind(code: string, defs: Record<string, { blocking: boolean; publishBlocking: boolean }>): "data" | "cosmetic" {
+  const d = defs[code];
+  return CONTENT_WARN.includes(code) || (d && !d.blocking && !d.publishBlocking) ? "cosmetic" : "data";
+}
+
+export type AnswerSource = "verified" | "conflict" | "provisional" | "missing";
+
+/**
+ * The review card's status strip: where the answer comes from (same rules as the answer check above), Verify 1 / 2 state,
+ * Verify 2 independence, the exact reason of the first data-error flag, confidence and page references.
+ */
+export function reviewStatus(
+  q: { answerStatus: AiImportAnswerStatus; answerConfirmedById: string | null; finalAnswer: string[]; officialAnswerRaw: string | null; officialKeyPage: number | null; sourceAnswer: string[]; aiAnswer: string[]; issueCodes: string[]; issues: unknown; confidence: number | null; pages: number[] },
+  vs: { v1: V1State; v2: V2State; pv: PaperVerification | null },
+  defs: Record<string, { label: string; blocking: boolean; publishBlocking: boolean }>,
+) {
+  const codes = q.issueCodes;
+  const reasons = (q.issues ?? {}) as Record<string, string>;
+  const conflict = codes.some((c) => ANSWER_FAIL.includes(c)) || q.answerStatus === "KEY_MISMATCH" || q.answerStatus === "AMBIGUOUS_MAPPING";
+  const official = q.answerStatus === "OFFICIAL_MATCHED" && !codes.some((c) => ["ANSWER_UNVERIFIED", "ANSWER_MISSING", "POSSIBLE_WITHDRAWN"].includes(c));
+  const answerSource: AnswerSource = q.answerConfirmedById ? "verified" : conflict ? "conflict" : official ? "verified" : q.finalAnswer.length ? "provisional" : "missing";
+  const answerFrom = q.answerConfirmedById
+    ? "confirmed by an administrator"
+    : official
+      ? `official key ${q.officialAnswerRaw ?? ""}`.trim()
+      : q.finalAnswer.length
+        ? q.sourceAnswer.length ? "printed in the paper" : q.aiAnswer.length ? "AI opinion only" : "not from an official key"
+        : "none";
+  // Blocking first, then publish-blocking: the flag that holds this question back.
+  const flagCode = codes.find((c) => defs[c]?.blocking) ?? codes.find((c) => issueKind(c, defs) === "data") ?? null;
+  return {
+    answerSource,
+    answerFrom,
+    v1: vs.v1,
+    v2: vs.v2,
+    independence: vs.pv?.v2 && vs.v2 !== "none" ? v2Independence(vs.pv.v2) : null,
+    flag: flagCode ? { code: flagCode, label: defs[flagCode]?.label ?? flagCode, reason: reasons[flagCode] ?? "" } : null,
+    confidence: typeof q.confidence === "number" ? Math.round(q.confidence * 100) : null,
+    pages: q.pages,
+    keyPage: q.officialKeyPage,
+  };
+}
