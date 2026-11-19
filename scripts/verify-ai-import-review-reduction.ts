@@ -12,7 +12,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import type { AiImportQuestion } from "@prisma/client";
-import { ISSUE_DEFS } from "@/lib/ai-import/config";
+import { DEFAULT_TIEBREAK_MODEL, ISSUE_DEFS, normalizeImporterSettings, tiebreakModel } from "@/lib/ai-import/config";
 import { acceptKeyCell, keyCellAnswerOf, keyCellCandidates, ocrKeyPairs } from "@/lib/ai-import/keys";
 import { readsAgree } from "@/lib/ai-import/process";
 import { STRONG_FOOTER } from "@/lib/ai-import/ocr-layout";
@@ -151,6 +151,12 @@ if (E && existsSync(`${E}/key-ocr.json`)) {
   check("G6. no source / all disagree → nothing set", resolveTaxonomy([]).subjectId === null && resolveTaxonomy([src("a", "x", null), src("b", "y", null)]).subjectId === null);
   const pv = readFileSync(new URL("../lib/ai-import/paper-verify.ts", import.meta.url), "utf8");
   check("G7. consensus never touches admin choices or approved questions, and is logged", /approvedById: null/.test(pv) && /taxonomySource\?\.startsWith\("admin"\)\) continue/.test(pv) && /TAXONOMY_CONSENSUS/.test(pv));
+}
+
+// ---------------------------------------------------------------- H. third classifier setting
+{
+  check("H1. settings without the field use the default third classifier (particle-1); null switches it off", tiebreakModel({}) === DEFAULT_TIEBREAK_MODEL && DEFAULT_TIEBREAK_MODEL === "particle-ai/particle-1" && tiebreakModel({ tiebreak: null }) === null);
+  check("H2. saved settings keep an explicit off (null) and a chosen model", normalizeImporterSettings({ models: { tiebreak: null } }).models.tiebreak === null && normalizeImporterSettings({ models: { tiebreak: "a/b" } }).models.tiebreak === "a/b" && normalizeImporterSettings({}).models.tiebreak === DEFAULT_TIEBREAK_MODEL);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

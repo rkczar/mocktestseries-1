@@ -64,7 +64,10 @@ export function QuickReviewTable({ rows, canUse }: { rows: QuickRow[]; canUse: b
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [list, cur, router]);
-  useEffect(() => document.getElementById(`qr-${list[cur]?.id}`)?.scrollIntoView({ block: "nearest" }), [cur, list]);
+  // Block body: scrollIntoView returns a Promise in current Chromium, and an effect must return nothing or a cleanup function.
+  useEffect(() => {
+    document.getElementById(`qr-${list[cur]?.id}`)?.scrollIntoView({ block: "nearest" });
+  }, [cur, list]);
 
   // The batch is allowed only when every selected row carries the SAME suggested subject / topic.
   const chosen = list.filter((r) => sel.has(r.id));
@@ -96,6 +99,8 @@ export function QuickReviewTable({ rows, canUse }: { rows: QuickRow[]; canUse: b
         {chosen.length && !same ? <span className="text-xs text-[var(--color-muted-foreground)]">Select rows with the same suggestion.</span> : null}
         {msg ? <span role="status" className="text-xs">{msg}</span> : null}
       </div>
+      {/* The wide table scrolls inside its own box on phones instead of widening the page. */}
+      <div className="max-w-full overflow-x-auto">
       <table className="w-full border-collapse text-xs">
         <thead>
           <tr className="text-left">
@@ -140,6 +145,7 @@ export function QuickReviewTable({ rows, canUse }: { rows: QuickRow[]; canUse: b
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

@@ -21,6 +21,11 @@ export const TASK_LABELS: Record<ImporterTask, string> = {
   key: "Answer-key reading",
 };
 
+/** 2026-11-19 benchmark (CMS 2023 P-I): resolved 21 of 49 rows the first two sources left open; 19/19 key cells read right. */
+export const DEFAULT_TIEBREAK_MODEL = "particle-ai/particle-1";
+/** The tie-break model of these settings (an older settings object without the field gets the default). */
+export const tiebreakModel = (m: Pick<ImporterModels, "tiebreak">): string | null => (m.tiebreak === undefined ? DEFAULT_TIEBREAK_MODEL : m.tiebreak);
+
 export interface ImporterModels {
   /** Vision model for page extraction (scanned / complex pages). null = AI extraction disabled. */
   extract: string | null;
@@ -32,6 +37,11 @@ export interface ImporterModels {
   classify: string | null;
   /** Vision model for scanned answer keys (defaults to the extractor). */
   key: string | null;
+  /**
+   * Third, independent subject / topic classifier, asked ONLY for questions the local classifier, the primary AI and
+   * Verify 2 left unresolved (paper-verify.ts applyTaxonomyConsensus). Absent = DEFAULT_TIEBREAK_MODEL; null = off.
+   */
+  tiebreak?: string | null;
 }
 
 export type ModelSelectionMode = "auto" | "manual";
@@ -198,6 +208,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
       verify: model(m.verify),
       classify: model(m.classify),
       key: model(m.key),
+      tiebreak: m.tiebreak === null ? null : (model(m.tiebreak) ?? DEFAULT_TIEBREAK_MODEL),
     },
     privacy: {
       dataCollection: r.privacy?.dataCollection === "allow" ? "allow" : "deny",

@@ -7,7 +7,7 @@ import { getUsdInr } from "@/lib/ai-engine/fx";
 import { parseImportFile } from "@/lib/bulk-import";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { resolveTaxonomy, type TaxonomySource } from "@/lib/ai-import/taxonomy-resolve";
-import { ISSUE_DEFS, type ImporterSettings } from "@/lib/ai-import/config";
+import { ISSUE_DEFS, tiebreakModel, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { ImportJobError, logEvent } from "@/lib/ai-import/jobs";
 import { kickWorker } from "@/lib/ai-import/kick";
@@ -25,7 +25,7 @@ import { runKeyFiles } from "@/lib/ai-import/keys";
 import { numbersMissingFromSource } from "@/lib/ai-import/fidelity";
 import { MIN_CROP_SIDE, visionImage } from "@/lib/ai-import/figures";
 import { assignSections, ensureRender, mergeContinuation, parsePage, readsAgree, type StepContext } from "@/lib/ai-import/process";
-import { exhaustedModels, importerAiCall, importerBudgetBlock, modelFamily, parseModelJson, preferReliable, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
+import { exhaustedModels, importerAiCall, importerAiCallChecked, importerBudgetBlock, modelFamily, parseModelJson, preferReliable, estimateInputTokens, ImporterAiFailure, ImporterAiUnavailable, PRICE_MARGIN, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import { failureCheckStatus, failureMessage } from "@/lib/ai-import/failure";
 import { mergePaperVerify } from "@/lib/ai-import/checks";
 import { FORMULA_CODES } from "@/lib/ai-import/review-filters";
@@ -923,7 +923,14 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
           }
       }
       typUsd += classifyBatches * requestUsd({ ...choice.price, image: 0 }, Math.round(classifyTokens / 3), 600, 0);
-      const maxUsd = REQUEST_ATTEMPTS * (worst(choice.price) + (fallbackPrice ? worst(fallbackPrice) : 0));
+      // Third classifier (applyTaxonomyConsensus): worst case = every classify batch plus one retry pass at its own price;
+      // typical = the unresolved share seen on CMS 2023 P-I (49 of 120 ≈ 40%) with a short answer.
+      const tb = tiebreakModel(settings.models);
+      const tbChoice = tb ? await choiceFor(settings, tb, used[0] ?? null, jobId, refresh) : null;
+      const tbPrice = tbChoice?.model === tb && tbChoice?.price ? { ...tbChoice.price, image: 0 } : null;
+      const tbWorstUsd = tbPrice ? 2 * classifyBatches * requestUsd(tbPrice, classifyTokens, 6000, 0) * PRICE_MARGIN : 0;
+      if (tbPrice) typUsd += Math.ceil(classifyBatches * 0.4) * requestUsd(tbPrice, classifyTokens, 1500, 0);
+      const maxUsd = REQUEST_ATTEMPTS * (worst(choice.price) + (fallbackPrice ? worst(fallbackPrice) : 0)) + tbWorstUsd;
       maxInr = Math.ceil((usdToInr(maxUsd, fx.rate) ?? 0) * 100) / 100;
       estimateInr = Math.ceil((usdToInr(typUsd, fx.rate) ?? 0) * 100) / 100;
     } else problems.push(`${model} cannot be used for Verify 2: ${choice.reason}`);
@@ -1434,7 +1441,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   // Two-source consensus (lib/ai-import/taxonomy-resolve.ts): where the local classifier, a stored AI choice and this
   // independent check leave two DIFFERENT sources agreeing on subject AND topic, that choice is stored (source "consensus"),
   // never over an administrator's choice or an approved question. Everything else stays as it is, blocked and grouped.
-  const settled = await applyTaxonomyConsensus(ctx.job.id, taxonomy);
+  const settled = await applyTaxonomyConsensus(ctx, taxonomy, paper, paperRules);
   tc.AGREED += settled;
   counts.taxAgreed = tc.AGREED;
   counts.taxDisagree = tc.DISAGREEMENT;
@@ -1442,27 +1449,97 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   return counts;
 }
 
-export async function applyTaxonomyConsensus(jobId: string, taxonomy: Awaited<ReturnType<typeof getExamTaxonomy>>): Promise<number> {
+type ConsensusRow = { q: QRow; e: ExtractedQuestion; vc: NonNullable<NonNullable<NonNullable<ExtractedQuestion["paperVerify"]>["v2"]>["classification"]>; sources: TaxonomySource[] };
+
+export async function applyTaxonomyConsensus(ctx: StepContext, taxonomy: Awaited<ReturnType<typeof getExamTaxonomy>>, paper: string | null = null, rules: PaperRule[] = []): Promise<number> {
+  const jobId = ctx.job.id;
   const topicOf = new Map(taxonomy.flatMap((s) => s.topics.map((t) => [t.id, s.id] as const)));
   const rows = await prisma.aiImportQuestion.findMany({ where: { jobId, status: { notIn: LOCKED }, approvedById: null }, include: { figures: true } });
-  const done: string[] = [];
+  const open: ConsensusRow[] = [];
   for (const q of rows) {
+    // Never over an administrator's choice or an approved / imported question.
     if (q.taxonomySource?.startsWith("admin")) continue;
     const e = q.data as unknown as ExtractedQuestion;
     const vc = e.paperVerify?.v2?.classification;
-    if (!vc || (vc.status !== "DISAGREEMENT" && vc.status !== "NEEDS_REVIEW") || !vc.found?.subjectId) continue;
+    if (!vc || (vc.status !== "DISAGREEMENT" && vc.status !== "NEEDS_REVIEW" && vc.status !== "VERIFICATION_FAILED")) continue;
     const local = (e as { classification?: { local?: { status?: string; subjectId?: string | null; topicId?: string | null; subjectConfidence?: number } } }).classification?.local;
-    const sources: TaxonomySource[] = [{ by: `Verify 2 (${vc.method})`, subjectId: vc.found.subjectId, topicId: vc.found.topicId, confidence: vc.confidence ?? 0 }];
+    const sources: TaxonomySource[] = [];
+    if (vc.found?.subjectId) sources.push({ by: `Verify 2 (${vc.method})`, subjectId: vc.found.subjectId, topicId: vc.found.topicId, confidence: vc.confidence ?? 0 });
     if (local?.subjectId && (local.status === "CLASSIFIED" || local.status === "SUBJECT_ONLY")) sources.push({ by: "local classifier", subjectId: local.subjectId, topicId: local.status === "CLASSIFIED" ? (local.topicId ?? null) : null, confidence: local.subjectConfidence ?? 0 });
     if (q.subjectId && q.taxonomySource?.startsWith("AI")) sources.push({ by: q.taxonomySource, subjectId: q.subjectId, topicId: q.topicId, confidence: q.taxonomyConfidence ?? 0 });
-    const c = resolveTaxonomy(sources);
-    if (!c.subjectId || !c.topicId || topicOf.get(c.topicId) !== c.subjectId) continue;
-    const ids = { subjectId: c.subjectId, topicId: c.topicId, subTopicId: null };
-    await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { ...ids, taxonomySource: "consensus (2 independent sources)", taxonomyConfidence: Math.min(...sources.filter((x) => x.subjectId === c.subjectId).map((x) => x.confidence)) } });
-    await savePaperVerify(q, { v2: { ...e.paperVerify!.v2!, classification: { ...vc, status: "AGREED", stored: ids, findings: [...vc.findings, `settled by consensus — ${c.detail}`] } } });
-    done.push(`Q${q.sourceLabel}`);
+    open.push({ q, e, vc, sources });
   }
-  if (done.length) await logEvent(jobId, "TAXONOMY_CONSENSUS", `Subject / topic set by two agreeing independent sources for ${done.length} question(s): ${done.slice(0, 40).join(", ")}. Not approved — each still needs approval before import.`, { questions: done });
+  const done: string[] = [];
+  const settle = async (r: ConsensusRow) => {
+    const c = resolveTaxonomy(r.sources);
+    if (!c.subjectId || !c.topicId || topicOf.get(c.topicId) !== c.subjectId) return false;
+    const ids = { subjectId: c.subjectId, topicId: c.topicId, subTopicId: null };
+    const agreeing = r.sources.filter((x) => x.subjectId === c.subjectId);
+    await prisma.aiImportQuestion.update({ where: { id: r.q.id }, data: { ...ids, taxonomySource: `consensus (${agreeing.map((x) => x.by).join(" + ")})`.slice(0, 190), taxonomyConfidence: Math.min(...agreeing.map((x) => x.confidence)) } });
+    await savePaperVerify(r.q, { v2: { ...r.e.paperVerify!.v2!, classification: { ...r.vc, status: "AGREED", stored: ids, findings: [...r.vc.findings, `settled by consensus — ${c.detail}`] } } });
+    done.push(`Q${r.q.sourceLabel}`);
+    return true;
+  };
+  const unresolved: ConsensusRow[] = [];
+  for (const r of open) if (!(await settle(r))) unresolved.push(r);
+  // Third independent classifier, ONLY for what the first sources left open, and only when it is a different model from
+  // every source it would be compared with (its answer must be independent). Budget-checked like every importer request
+  // (job maximum + monthly / total budgets); a malformed answer is retried once; raw output kept in the event log.
+  const tb = tiebreakModel(ctx.settings.models);
+  const asked = unresolved.filter((r) => tb && r.sources.every((x) => !x.by.includes(tb)) && textSufficient(effective(r.q)).ok);
+  let tbSettled = 0;
+  if (tb && asked.length && taxonomy.length) {
+    const codes = taxonomyCodes(taxonomy);
+    const choice = await choiceFor(ctx.settings, tb, null, jobId, false);
+    if (choice.model !== tb || !choice.price) {
+      await logEvent(jobId, "TIEBREAK_SKIPPED", `Third classifier ${tb} not used: ${choice.reason}. ${asked.length} question(s) stay in Subject / topic only.`, { model: tb, questions: asked.length });
+    } else {
+      const answers = new Map<string, TaxonomySource>();
+      const queue: { batch: ConsensusRow[]; retry: boolean }[] = [];
+      for (let i = 0; i < asked.length; i += CLASSIFY_BATCH) queue.push({ batch: asked.slice(i, i + CLASSIFY_BATCH), retry: false });
+      const retryLater: ConsensusRow[] = [];
+      try {
+        while (queue.length || retryLater.length) {
+          if (!queue.length) for (let i = 0; i < retryLater.length; i += CLASSIFY_BATCH) queue.push({ batch: retryLater.splice(0, CLASSIFY_BATCH), retry: true });
+          if (!(await ctx.stillRunning())) break;
+          const { batch, retry } = queue.shift()!;
+          let raw = "";
+          const failed: string[] = [];
+          let value: ReturnType<typeof classifyAnswerOf> = null;
+          try {
+            ({ value } = await importerAiCallChecked({ jobId, task: "classify", stage: retry ? "verify2-tiebreak-retry" : "verify2-tiebreak", models: [tb], override: choice, noReplace: true, system: CLASSIFY_SYSTEM, content: [{ type: "text", text: classifyUserText(codes.list, batch.map((r) => effective(r.q)), memoryBrief(rules, paper, "classify")) }], maxOutputTokens: 6000, settings: ctx.settings, needsVision: false, jsonSchema: "classify" }, (out) => {
+              raw = out;
+              const parsed = classifyAnswerOf(parseModelJson(out));
+              if (!parsed) throw new ImporterAiFailure(failureMessage("model_output", "the tie-break classification did not match the expected format"), "model_output");
+              return parsed;
+            }));
+          } catch (err) {
+            if (err instanceof ImporterAiUnavailable || (err instanceof Error && err.name === "ImporterBudgetError")) throw err;
+            if (!(err instanceof ImporterAiFailure)) throw err;
+          }
+          batch.forEach((r, k) => {
+            const res = value?.results.find((x) => x.q.toUpperCase().replace(/[\s[\]]/g, "") === `Q${k + 1}`);
+            const d = res ? decideClassification(res, effective(r.q), codes, taxonomy, tb) : null;
+            if (d?.subject) answers.set(r.q.id, { by: tb, subjectId: d.subject, topicId: d.topic, confidence: d.confidence });
+            else if (!d || d.failure === "FORMAT" || d.failure === "SHIFTED") {
+              failed.push(r.q.id);
+              if (!retry) retryLater.push(r);
+            }
+          });
+          if (failed.length || !value) await logEvent(jobId, "TIEBREAK_MODEL_OUTPUT", `Third classifier ${tb}: ${failed.length || batch.length} of ${batch.length} answer(s) unusable (model output, not a classification)${retry ? " — also after one retry; those stay in Subject / topic only" : " — asked again once"}.`, { model: tb, retry, questions: batch.map((r) => r.q.id), failed, raw: raw.slice(0, 6000) });
+        }
+      } catch (err) {
+        if (err instanceof ImporterAiUnavailable || (err instanceof Error && err.name === "ImporterBudgetError")) await logEvent(jobId, "TIEBREAK_STOPPED", `Third classifier stopped: ${(err as Error).message.slice(0, 300)} Unanswered questions stay in Subject / topic only.`, {});
+        else throw err;
+      }
+      for (const r of asked) {
+        const a = answers.get(r.q.id);
+        if (a && (await settle({ ...r, sources: [...r.sources, a] }))) tbSettled++;
+      }
+      await logEvent(jobId, "TIEBREAK_RESULT", `Third classifier ${tb} asked about ${asked.length} unresolved question(s): ${answers.size} answered, ${tbSettled} settled by two agreeing sources, ${asked.length - tbSettled} stay in Subject / topic only.`, { model: tb, asked: asked.map((r) => r.q.id), answered: answers.size, settled: tbSettled });
+    }
+  }
+  if (done.length) await logEvent(jobId, "TAXONOMY_CONSENSUS", `Subject / topic set by two agreeing independent sources for ${done.length} question(s) (${tbSettled} with the third classifier): ${done.slice(0, 40).join(", ")}. Not approved — each still needs approval before import.`, { questions: done, tiebreak: tbSettled });
   return done.length;
 }
 

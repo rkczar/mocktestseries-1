@@ -465,6 +465,52 @@ async function main() {
     const v2ev = (await events(j1, "VERIFY2_CLASSIFIED")).at(-1);
     check("Verify 2 reports the classification counts, failures named as never agreement", /verification failed \(never counted as agreement\)/.test(v2ev?.message ?? ""), v2ev?.message);
 
+    // ------------------------------------------------------------------ B5b
+    section("B5b. Third classifier (tie-break): only for rows the first sources left unresolved");
+    {
+      // Its own import of the same paper (the B-job has used its Verify 2 passes). A job runs with the settings it was
+      // created with, so the third model is configured first.
+      const base = normalizeImporterSettings(await getImporterSettings());
+      await saveImporterSettings({ ...base, models: { ...base.models, tiebreak: "mockvision/mid" } }, actor);
+      const jT = await createJob({ actorId: actor, title: `Taxonomy tiebreak ${TAG}`, examId: A.exam.id, paperType: AiImportPaperType.FULL_PAPER, subjectId: null, year: 2025, paperCode: null, previousYearPaperId: null, expectedQuestions: SRC.length });
+      jobs.push(jT);
+      await upload(actor, jT, "tx-paper.docx");
+      await runJob(actor, jT);
+      let tq = await questionsOf(jT);
+      // An administrator settles Q7 first: it must never be sent to the third classifier or changed by the consensus.
+      const adminRow = byLabel(tq, "7");
+      await setTaxonomy(adminRow.id, actor, idOf("s-gm"), idOf("t-renal"), null);
+      // Same paper and models without a usable third model: the B-job's first preview (its tie-break model was not eligible).
+      const pvOff = pv;
+      const pvTb = await verify2Preview(jT, "mockvision/checker");
+      check("cost: the Verify 2 maximum includes the third classifier's worst case (estimate shown before confirmation)", (pvTb.maxInr ?? 0) > (pvOff.maxInr ?? 0) && (pvTb.estimateInr ?? 0) >= (pvOff.estimateInr ?? 0), [pvOff.maxInr, pvTb.maxInr, pvOff.estimateInr, pvTb.estimateInr]);
+      const midBefore = (await mockStats()).byModel["mockvision/mid"] ?? 0;
+      // Its first answer is malformed (cut-off JSON): asked again once, the original answer kept.
+      await mockConfig({ script: { "mockvision/mid": ["malformed"] } });
+      const r3 = await requestVerify2({ jobId: jT, actorId: actor, model: "mockvision/checker", confirmedMaxInr: pvTb.maxInr });
+      await runWorker(300_000);
+      tq = await questionsOf(jT);
+      const cls = (q: (typeof tq)[number]) => vsOf(q).pv?.v2?.classification;
+      const tr = (await events(jT, "TIEBREAK_RESULT")).at(-1);
+      const asked = new Set(((tr?.data ?? {}) as { asked?: string[] }).asked ?? []);
+      const calls = await prisma.aiImportAiCall.findMany({ where: { jobId: jT, model: "mockvision/mid" } });
+      const agreedByV2 = tq.filter((q) => cls(q)?.status === "AGREED" && !(cls(q)?.findings ?? []).some((f) => /settled by consensus/.test(f)));
+      check("third classifier ran after Verify 2 and was asked about some rows", r3.started && asked.size > 0 && ((await mockStats()).byModel["mockvision/mid"] ?? 0) > midBefore, [r3, tr?.message, tq.map((q) => [q.sourceLabel, cls(q)?.status])]);
+      check("…never about a row Verify 2 already agreed with", agreedByV2.length > 0 && agreedByV2.every((q) => !asked.has(q.id)), agreedByV2.map((q) => q.sourceLabel));
+      check("…never about the admin-set row, which keeps its admin subject / topic", !asked.has(adminRow.id) && byLabel(tq, "7").taxonomySource === "admin" && byLabel(tq, "7").topicId === idOf("t-renal"), [byLabel(tq, "7").taxonomySource]);
+      check("…every row it was asked about was unresolved (no agreement) or was settled only with it", [...asked].every((id) => { const q = tq.find((x) => x.id === id)!; return cls(q)?.status !== "AGREED" || (q.taxonomySource ?? "").includes("mockvision/mid"); }));
+      check("…every call to it is a logged tie-break request (own stage, model in the AI ledger)", calls.length > 0 && calls.every((c) => c.stage === "verify2-tiebreak" || c.stage === "verify2-tiebreak-retry"), calls.map((c) => c.stage));
+      const outEv = (await events(jT, "TIEBREAK_MODEL_OUTPUT"))[0];
+      const retries = calls.filter((c) => c.stage === "verify2-tiebreak-retry").length;
+      check("malformed tie-break JSON: raw output kept, its questions asked again exactly once (bounded)", !!outEv && ((outEv.data as { retry?: boolean }).retry === false) && typeof (outEv.data as { raw?: string }).raw === "string" && retries >= 1 && retries <= Math.ceil(asked.size / 6), [outEv?.message, calls.map((c) => c.stage)]);
+      await mockConfig({ script: {} });
+      const settledQs = tq.filter((q) => (q.taxonomySource ?? "").startsWith("consensus") && (q.taxonomySource ?? "").includes("mockvision/mid"));
+      check("settled rows name the agreeing sources incl. the third model, match the event count, and are NOT approved", settledQs.length === Number(((tr?.data ?? {}) as { settled?: number }).settled ?? -1) && settledQs.every((q) => !q.approvedById), [settledQs.map((q) => [q.sourceLabel, q.taxonomySource]), tr?.message]);
+      const unresolvedAfter = tq.filter((q) => asked.has(q.id) && !settledQs.includes(q));
+      check("rows it could not settle stay unresolved (Subject / topic only), no subject guessed", unresolvedAfter.every((q) => cls(q)?.status !== "AGREED"), unresolvedAfter.map((q) => [q.sourceLabel, cls(q)?.status]));
+      await saveImporterSettings({ ...base, models: { ...base.models, tiebreak: null } }, actor);
+    }
+
     // ------------------------------------------------------------------ B6
     section("B6. Admin corrections, audit, confirmed examples (exam-scoped)");
     const target = byLabel(qs, "7");
