@@ -86,6 +86,9 @@ export interface ClassifyDecision {
   rejected: string | null;
   /** Plain explanation of the choice (model, confidence, matched key words, the model's reason). */
   explanation: string;
+  /** Why the result is unusable as a MODEL failure (never an academic judgement): FORMAT = no key words returned (the
+   *  answer cannot be tied to a question), SHIFTED = key words of another question, INVALID_CODE = code not in this exam. */
+  failure?: "FORMAT" | "SHIFTED" | "INVALID_CODE";
 }
 
 /**
@@ -95,10 +98,10 @@ export interface ClassifyDecision {
 export function decideClassification(res: { subject: string | null; topic: string | null; subtopic: string | null; confidence: number; about?: string | string[] | null; reason?: string | null }, e: Pick<ExtractedQuestion, "stem" | "options"> & Partial<Pick<ExtractedQuestion, "listI" | "listII" | "passage">>, codes: TaxonomyCodes, taxonomy: ExamTaxonomySubject[], model: string): ClassifyDecision {
   const about = Array.isArray(res.about) ? res.about.join(", ") : (res.about ?? "");
   const base = `${model}, ${Math.round(res.confidence * 100)}%${about ? `, key words “${about.slice(0, 80)}”` : ""}${res.reason ? `, reason: ${res.reason.slice(0, 160)}` : ""}`;
-  const none = (rejected: string): ClassifyDecision => ({ subject: null, topic: null, subTopic: null, confidence: res.confidence, rejected, explanation: `${base} — not used: ${rejected}` });
-  if (!echoMatches(res.about, e)) return none(about ? "the key words it returned are not in this question (the answer belongs to another question)" : "it did not return the question's key words, so its answer cannot be tied to this question");
+  const none = (rejected: string, failure?: ClassifyDecision["failure"]): ClassifyDecision => ({ subject: null, topic: null, subTopic: null, confidence: res.confidence, rejected, explanation: `${base} — not used: ${rejected}`, failure });
+  if (!echoMatches(res.about, e)) return about.trim() ? none("the key words it returned are not in this question (the answer belongs to another question)", "SHIFTED") : none("it did not return the question's key words, so its answer cannot be tied to this question", "FORMAT");
   const subject = codes.subject(res.subject);
-  if (res.subject && !subject) return none(`subject code “${res.subject}” is not in this exam's list`);
+  if (res.subject && !subject) return none(`subject code “${res.subject}” is not in this exam's list`, "INVALID_CODE");
   if (!subject) return none("no subject of this exam fits");
   if (res.confidence < SUBJECT_MIN_CONFIDENCE) return none(`confidence ${Math.round(res.confidence * 100)}% is below ${Math.round(SUBJECT_MIN_CONFIDENCE * 100)}%`);
   const s = taxonomy.find((x) => x.id === subject)!;

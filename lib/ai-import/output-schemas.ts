@@ -61,7 +61,9 @@ const classify = {
       items: {
         type: "object",
         properties: { q: { type: "string" }, subject: str, topic: str, subtopic: str, confidence: { type: "number" }, about: { type: "array", items: { type: "string" } }, reason: str },
-        required: ["q", "subject", "topic", "confidence"],
+        // "about" (key words of THAT question) ties a result to its question; optional, providers that enforce the schema let
+        // models drop it — 2026-11-19 CMS 2023: 72 of 120 Verify 2 classification answers came back without it.
+        required: ["q", "subject", "topic", "confidence", "about", "reason"],
       },
     },
   },

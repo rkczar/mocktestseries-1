@@ -131,7 +131,7 @@ const routesOf = (id) => {
   }));
 };
 const zdrRoute = (id) => !config.zdrRemoved.includes(id) && routesOf(id).some((r) => r.tag !== "mockprov/std");
-const DEFAULT_CONFIG = { classifyKeep: null, classifyShift: false, classifyNoAbout: false, keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, reasonModels: false, batchModels: false, script: {}, keyHeader: null, rateLimit: {}, badRequest: {}, failTask: {} };
+const DEFAULT_CONFIG = { classifyKeep: null, classifyShift: false, classifyNoAbout: false, classifyNoAboutCalls: 0, keyLimitRemaining: 9, costMultiplier: 1, modelsStatus: null, chatDelayMs: 0, endpointsStatus: null, zdrStatus: null, routeStatus: {}, noEndpoint: [], zdrRemoved: [], extraModels: false, paramModels: false, reasonModels: false, batchModels: false, script: {}, keyHeader: null, rateLimit: {}, badRequest: {}, failTask: {} };
 const config = structuredClone(DEFAULT_CONFIG);
 // 7 and 8 (2026-11-11, scripts/importer-recovery-fixtures.ts): far from every older colour, so older fixtures decode as before.
 const PALETTE = [[0, 0, 0], [230, 0, 0], [0, 150, 0], [0, 0, 230], [240, 140, 0], [150, 0, 150], [0, 160, 170], [255, 230, 0], [120, 60, 20]];
@@ -185,13 +185,16 @@ function classify(text) {
   // Key words echoed from the question (as the prompt asks); config.classifyShift echoes the NEXT question's words
   // and topic (a model that shifted its answers), config.classifyNoAbout leaves them out.
   const about = (t) => t.split(/[^A-Za-z]+/).filter((w) => w.length >= 5).slice(0, 3);
+  // config.classifyNoAboutCalls: the next n classification requests leave the key words out (then normal again).
+  const noAbout = config.classifyNoAbout || config.classifyNoAboutCalls > 0;
+  if (config.classifyNoAboutCalls > 0) config.classifyNoAboutCalls--;
   qs.forEach((m, i) => {
     const src = config.classifyShift ? (qs[i + 1] ?? qs[0]) : m;
     const q = src[2].toLowerCase();
     let hit = null;
     for (const s of subjects) for (const t of s.topics) if (!hit && q.includes(t.name.toLowerCase())) hit = { s, t };
     const r = hit ? { q: m[1], subject: hit.s.id, topic: hit.t.id, confidence: 0.9 } : { q: m[1], subject: subjects[0]?.id ?? null, topic: null, confidence: 0.3 };
-    results.push(config.classifyNoAbout ? r : { ...r, about: about(src[2]), reason: "mock" });
+    results.push(noAbout ? r : { ...r, about: about(src[2]), reason: "mock" });
   });
   // config.classifyKeep: only the first n answers (a model that stops early / drops questions — 2026-10-23 production).
   return { results: typeof config.classifyKeep === "number" ? results.slice(0, config.classifyKeep) : results };

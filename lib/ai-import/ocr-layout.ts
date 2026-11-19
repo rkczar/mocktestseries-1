@@ -80,7 +80,8 @@ const BOOKLET_CODE = /^[A-Z0-9]{2,6}(?:\s*-\s*[A-Z0-9]{1,6}){1,4}$/;
 const BOOKLET_TOKEN = /\b[A-Z]{3,6}-[A-Z0-9]{1,2}-[A-Z]{3,6}\b/;
 const QUESTION_LIKE = /^\s*(?:Q\.?\s*(?:No[.:]?)?\s*)?\d{1,3}\s*[.)]|^\s*\(?[a-dA-D]\)/;
 const URL_ONLY = /^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:in|com|org|net)$/i;
-const FURNITURE_WORDS = /^[[(]?\s*(?:p\.?\s*t\.?\s*o\.?|turn over|space for rough work|rough work|\(?\s*contd\.?\s*\)?)\s*[\])]?$/i;
+// "|" = the scan's reading of the bracket in "[P.T.O." (2026-11-19 CMS 2023: Q37 / Q50 options ended with "|P.T.O.").
+const FURNITURE_WORDS = /^[[(|]?\s*(?:p\.?\s*t\.?\s*o\.?|turn over|space for rough work|rough work|\(?\s*contd\.?\s*\)?)\s*[\])]?$/i;
 const furnitureText = (t: string) => t.length <= 40 && (PAGE_NUMBER.test(t) || BOOKLET_CODE.test(t) || BOOKLET_TOKEN.test(t) || FURNITURE_WORDS.test(t));
 
 /** Running header/footer text (page numbers, booklet codes, watermark URLs) — never question text. */
@@ -90,7 +91,7 @@ export function isFurniture(text: string, box: NBox): boolean {
   if (URL_ONLY.test(t)) return true;
   // A whole line "[P.T.O." / "Turn over" is never question text, wherever the scan placed it (CMS 2024: ~0.877).
   // ("Rough work" stays in the band rule: nonQuestionPage needs it to recognise a rough-work page.)
-  if (/^[[(]?\s*(?:p\.?\s*t\.?\s*o\.?|turn over)\s*[\])]?$/i.test(t)) return true;
+  if (/^[[(|]?\s*(?:p\.?\s*t\.?\s*o\.?|turn over)\s*[\])]?$/i.test(t)) return true;
   const inBand = box.y + box.h < 0.075 || box.y > 0.88;
   if (!inBand) return false;
   return furnitureText(t);

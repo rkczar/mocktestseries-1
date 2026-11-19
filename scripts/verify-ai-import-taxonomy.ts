@@ -392,7 +392,8 @@ async function main() {
     check("model answered for NO question → CLASSIFICATION_FAILED (engine failure), not SUBJECT_UNKNOWN", ["5", "6"].every((l) => byLabel(qs, l).issueCodes.includes("CLASSIFICATION_FAILED") && !byLabel(qs, l).issueCodes.includes("SUBJECT_UNKNOWN") && rec(byLabel(qs, l))?.kind === "engine_failure" && rec(byLabel(qs, l))?.ai?.status === "NO_RESULT"), ["5", "6"].map((l) => [byLabel(qs, l).issueCodes, rec(byLabel(qs, l))?.ai]));
     check("…the flag says why (no answer from the model) and that it is a failure, not a judgement", /returned no answer/.test(issue(byLabel(qs, "5"), "CLASSIFICATION_FAILED")) && /not a judgement/.test(issue(byLabel(qs, "5"), "CLASSIFICATION_FAILED")), issue(byLabel(qs, "5"), "CLASSIFICATION_FAILED"));
     const cr = (await events(j1, "CLASSIFY_RESULT")).at(-1);
-    check("…and the CLASSIFY_RESULT event counts the missing answers", /got no answer from the model/.test(cr?.message ?? "") && ((cr?.data as { missing?: number })?.missing ?? 0) === 2, cr?.message);
+    // 2026-11-19: questions without an answer are asked again ONCE (2 + 2 missing answers, 2 retried), never a third time.
+    check("…and the CLASSIFY_RESULT event counts the missing answers, retried once only", /got no answer from the model/.test(cr?.message ?? "") && ((cr?.data as { missing?: number })?.missing ?? 0) === 4 && ((cr?.data as { retried?: number })?.retried ?? 0) === 2 && /also after one retry/.test(issue(byLabel(qs, "5"), "CLASSIFICATION_FAILED")), [cr?.message, cr?.data]);
     // Every classification request fails (the allowed fallback model too): the request failed — a failure, not a result.
     await mockConfig({ classifyKeep: null, failTask: { classify: [502, "mock: upstream error"] } });
     await reclassifyQuestions([q5.id], actor);
@@ -455,8 +456,11 @@ async function main() {
     check("…its text read is still VERIFIED: a taxonomy disagreement never fails a correct reading", vsOf(byLabel(qs, "7")).pv?.v2?.status === "VERIFIED", vsOf(byLabel(qs, "7")).pv?.v2?.status);
     check("…and the disagreement becomes TAXONOMY_DISAGREES + SUBJECT_MISMATCH on the question", byLabel(qs, "7").issueCodes.includes("TAXONOMY_DISAGREES") && byLabel(qs, "7").issueCodes.includes("SUBJECT_MISMATCH"), byLabel(qs, "7").issueCodes);
     check("Verify 2: no subject stored + model unsure → NEEDS_REVIEW (never AGREED)", ["5", "6"].every((l) => v2c(l)?.status === "NEEDS_REVIEW" || v2c(l)?.status === "VERIFICATION_FAILED"), ["5", "6"].map((l) => v2c(l)));
-    const missing = qs.filter((q) => v2c(q.sourceLabel)?.status === "VERIFICATION_FAILED");
-    check("Verify 2: questions the model gave no answer for (it stopped after 4 of a 6-question request) → VERIFICATION_FAILED, never agreement", missing.length >= 2 && missing.every((q) => /returned no answer/.test(v2c(q.sourceLabel)?.findings[0] ?? "")), missing.map((q) => [q.sourceLabel, v2c(q.sourceLabel)]));
+    // 2026-11-19: questions the model gave no answer for (it stopped after 4 of a 6-question request) are asked again once,
+    // only those, with the original answer kept; the retry answers them, so none is left without a result.
+    const retryEv = (await events(j1, "VERIFY2_MODEL_OUTPUT")).find((e) => (e.data as { retry?: boolean }).retry === false);
+    const missing = qs.filter((q) => v2c(q.sourceLabel)?.status === "VERIFICATION_FAILED" && /returned no answer/.test(v2c(q.sourceLabel)?.findings[0] ?? ""));
+    check("Verify 2: questions the model gave no answer for are asked again once (raw answer kept), then have a result", !!retryEv && ((retryEv.data as { failed?: string[] }).failed?.length ?? 0) >= 2 && typeof (retryEv.data as { raw?: string }).raw === "string" && missing.length === 0, [retryEv?.message, missing.map((q) => [q.sourceLabel, v2c(q.sourceLabel)])]);
     check("Verify 2: too little text → NOT_VERIFIED (no request spent on it)", v2c("12")?.status === "NOT_VERIFIED", v2c("12"));
     const v2ev = (await events(j1, "VERIFY2_CLASSIFIED")).at(-1);
     check("Verify 2 reports the classification counts, failures named as never agreement", /verification failed \(never counted as agreement\)/.test(v2ev?.message ?? ""), v2ev?.message);

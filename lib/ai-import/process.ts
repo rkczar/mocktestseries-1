@@ -603,7 +603,10 @@ export async function joinPendingContinuations(ctx: StepContext): Promise<number
 }
 
 /** Compares two independent reads of the same question (deterministic), field by field. */
-const normRead = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[{}\s.,;:()[\]'"`]/g, "");
+// Similarity only: the printed instruction line "Select the correct answer using the code given below" and hyphen / dash
+// variants ("cardio-myopathy", "2–3") are not content (2026-11-19 CMS 2023: 7 of 20 Verify 2 disagreements). Signs and
+// digits are still compared exactly by formulaDiff in readsAgree.
+const normRead = (s: string) => s.toLowerCase().replace(/select the correct answer using the codes? given below/g, "").replace(/\$|\\[a-z]+|[{}\s.,;:()[\]'"`\-‐-―−]/g, "");
 const trigrams = (s: string) => new Set(Array.from({ length: Math.max(0, s.length - 2) }, (_, i) => s.slice(i, i + 3)));
 /** Share of `part`'s text found in `whole` (character trigrams, same normalisation as readsAgree). */
 export function containedIn(part: string, whole: string): number {

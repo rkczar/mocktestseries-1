@@ -187,7 +187,13 @@ async function aiKeyPage(ctx: StepContext, file: AiImportFile, page: number): Pr
 
 /** OCR lines below this confidence are never used as a key number or value. */
 const KEY_OCR_MIN_SCORE = 0.9;
-const OCR_KEY_LETTER = /^\(?([A-Da-d])\)?$/;
+const OCR_KEY_LETTER = /^\(?([A-Da-dX×])\)?$/;
+/**
+ * Scan specks and print dots around one cell ("C.", "-A.", "64.", "À") — seen 2026-11-19, CMS 2023 key screenshot: 43 of
+ * 120 cells were read at ≥0.9 confidence and dropped only for a trailing dot. Only the token's EDGES are cleaned (and accents
+ * removed); "1.17" or "AB" still never match. X / × = the key's dropped-question mark (post.ts WITHDRAWN).
+ */
+const cleanKeyToken = (t: string) => t.normalize("NFKD").replace(/\p{M}/gu, "").trim().replace(/^[.,·'`^_\-:;~*]+|[.,·'`^_\-:;~*]+$/g, "");
 
 /**
  * A scanned key page read by local OCR (no AI): each printed question number is paired with the nearest option letter to
@@ -198,7 +204,7 @@ const OCR_KEY_LETTER = /^\(?([A-Da-d])\)?$/;
 export function ocrKeyPairs(page: Pick<OcrPage, "lines"> & Partial<Pick<OcrPage, "width" | "height">>, maxNumber = 300): { pairs: KeyPair[]; text: string } {
   const toks = page.lines
     .filter((l) => l.score >= KEY_OCR_MIN_SCORE)
-    .map((l) => ({ t: l.text.trim(), x0: l.box[0], x1: l.box[2], y0: l.box[1], y1: l.box[3], cy: (l.box[1] + l.box[3]) / 2, h: Math.max(1, l.box[3] - l.box[1]) }));
+    .map((l) => ({ t: cleanKeyToken(l.text), x0: l.box[0], x1: l.box[2], y0: l.box[1], y1: l.box[3], cy: (l.box[1] + l.box[3]) / 2, h: Math.max(1, l.box[3] - l.box[1]) }));
   const nums = toks.filter((k) => /^\d{1,3}$/.test(k.t) && +k.t >= 1 && +k.t <= maxNumber);
   const vals = toks.filter((k) => OCR_KEY_LETTER.test(k.t));
   const sameRow = (a: { cy: number; h: number }, b: { cy: number }) => Math.abs(a.cy - b.cy) <= a.h * 0.6;

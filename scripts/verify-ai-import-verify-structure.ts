@@ -352,6 +352,27 @@ async function main() {
     check("shifted classifier answers are NOT used: no subject / topic comes from the AI, the heart-sounds question is never filed under another subject", qs.every((q) => !q.taxonomySource?.startsWith("AI")) && byLabel(qs, "1").subjectId !== subjectOf("Biochemistry").id, [qs.map((q) => [q.sourceLabel, q.subjectId, q.taxonomySource]), shiftEv?.message]);
     check("each question without a subject says why (its own reason, never the bare generic message)", qs.filter((q) => !q.subjectId).every((q) => { const t = ((q.issues as Record<string, string>) ?? {}); const why = t.SUBJECT_UNKNOWN ?? t.CLASSIFICATION_FAILED ?? ""; return why.length > 60 && !/^No subject of this exam could be determined\. Set it/.test(why); }), qs.filter((q) => !q.subjectId).map((q) => q.issues));
     await mockConfig({ classifyShift: false });
+    // 2026-11-19 (CMS 2023 P-I): answers WITHOUT key words are a format failure, not a shift — only those questions are
+    // asked again, once, and the original model output is kept. The first request omits "about"; the retry answers normally.
+    {
+      await mockConfig({ classifyNoAboutCalls: 1 });
+      const ids = qs.map((q) => q.id);
+      await reclassifyQuestions(ids, actor);
+      await runWorker(300_000);
+      const raw = (await events(jB, "CLASSIFY_MODEL_OUTPUT")).at(-1);
+      const res = (await events(jB, "CLASSIFY_RESULT")).at(-1);
+      const calls = await prisma.aiImportAiCall.findMany({ where: { jobId: jB, stage: { in: ["post-classify", "post-classify-retry"] } }, orderBy: { createdAt: "desc" }, take: 20 });
+      const retried = calls.filter((c) => c.stage === "post-classify-retry").length;
+      const data = (raw?.data ?? {}) as { failed?: string[]; raw?: string; retry?: boolean };
+      check("R1. no key words: kept as model output (raw answer stored), only the failed questions re-asked once, then used", !!raw && data.retry === false && (data.failed?.length ?? 0) > 0 && typeof data.raw === "string" && data.raw.length > 10 && retried >= 1 && /sent again once/.test(res?.message ?? "") && !/shifted/.test(res?.message ?? ""), [raw?.message, res?.message, retried]);
+      await mockConfig({ classifyNoAboutCalls: 0, classifyNoAbout: true });
+      await reclassifyQuestions(ids, actor);
+      await runWorker(300_000);
+      const res2 = (await events(jB, "CLASSIFY_RESULT")).at(-1);
+      const after = await questionsOf(jB);
+      check("R2. still no key words after the one retry: bounded (no third request), nothing from the AI is used", /sent again once/.test(res2?.message ?? "") && after.every((q) => !q.taxonomySource?.startsWith("AI")) && after.some((q) => /also after one retry/.test(JSON.stringify(q.issues ?? {}) + JSON.stringify((q.data as { classification?: unknown }).classification ?? {}))), [res2?.message]);
+      await mockConfig({ classifyNoAbout: false });
+    }
     // Bulk re-classification with the same restrictions.
     const n = await reclassifyQuestions(qs.map((q) => q.id), actor);
     await runWorker(300_000);

@@ -21,7 +21,8 @@ type Def = { label: string; hint: string };
 /** Status values. `exceptions` = no `status` param (the default list); `all` = no status filter. */
 export const STATUS_MAIN: Record<string, Def> = {
   all: { label: "All", hint: "Every question of the paper, including rejected ones." },
-  exceptions: { label: "Needs review", hint: "Needs correction, not importable, duplicate, import failed or still being read." },
+  exceptions: { label: "Needs review", hint: "Needs correction, not importable, duplicate, import failed or still being read — except Subject / topic only." },
+  "taxonomy-only": { label: "Subject / topic only", hint: "Wording, options and answer verified (Verify 1 passed, Verify 2 agrees, official key matched); only the subject / topic is open. Never imported or published until it is set." },
   approval: { label: "Awaiting approval", hint: "Ready, not approved yet, not in the Question Bank." },
   READY: { label: "Ready", hint: "Passed every mandatory check (approved or not)." },
   imported: { label: "Imported", hint: "Saved in the Question Bank (draft or published)." },
@@ -73,6 +74,8 @@ export const PROBLEM_CODES: Record<string, string[]> = {
   bilingual: BILINGUAL,
 };
 export const PROBLEM_MAIN: Record<string, Def> = {
+  rescan: { label: "Verify 2 disagreements", hint: "Verify 2 or the reference disagrees with the stored wording, or a re-scan is pending." },
+  "model-failure": { label: "Model failures", hint: "A model answer was unusable (error, timeout, cut off, no key words): not an academic finding — run the check again." },
   text: { label: "Text / OCR", hint: "Text unreadable, OCR unsure, differs from the page, merged statements, Hindi/English pair." },
   formula: { label: "Formula", hint: "Formula corrupt, needs manual check, or differs from the image." },
   options: { label: "Options", hint: "Options incomplete, repeated in the question, or containing the answer." },
@@ -82,11 +85,9 @@ export const PROBLEM_MAIN: Record<string, Def> = {
   duplicates: { label: "Duplicates", hint: "Duplicate status, or a possible duplicate in this paper or the Question Bank." },
 };
 export const PROBLEM_ADVANCED: Record<string, Def> = {
-  "model-failure": { label: "Model failures (error, timeout, cut off)", hint: "" },
   "classifier-failed": { label: "Classifier failed (no answer)", hint: "" },
   "subject-mismatch": { label: "Subject mismatch", hint: "" },
   "taxonomy-disagree": { label: "Subject / topic check disagrees (Verify 1 / 2)", hint: "" },
-  rescan: { label: "Re-scan candidates", hint: "A re-scan is pending, or Verify / Verify 2 disagreed with the read." },
   structure: { label: "Structure errors (stem / option / answer boundaries)", hint: "" },
   answer: { label: "Answer-key / type", hint: "" },
   "answer-unverified": { label: "Answer unverified / AI disagrees", hint: "" },
@@ -135,12 +136,20 @@ export interface FilterRow {
 export const isStored = (q: { questionId: string | null; status: string }) => !!q.questionId && (q.status === "IMPORTED" || q.status === "PUBLISHED");
 /** The one "awaiting approval" rule (Review Exceptions filter and Quality summary). */
 export const awaitingApproval = (q: Pick<FilterRow, "status" | "approved" | "stored">) => q.status === "READY" && !q.approved && !q.stored;
+const VERIFIED_ANSWER = ["OFFICIAL_MATCHED", "INDEPENDENTLY_VERIFIED"];
+/**
+ * Only the subject / topic is open: wording and answer are verified and every publish-blocking code is a taxonomy code.
+ * The question keeps its status and codes (publish stays blocked); it is only listed apart from content / answer review.
+ */
+export const classificationOnly = (q: Pick<FilterRow, "status" | "answerStatus" | "issueCodes" | "v1" | "v2">) =>
+  q.status === "NEEDS_CORRECTION" && q.v1 === "passed" && q.v2 === "verified" && VERIFIED_ANSWER.includes(q.answerStatus) && q.issueCodes.some((c) => TAXONOMY_CODES.includes(c)) && q.issueCodes.every((c) => TAXONOMY_CODES.includes(c) || !ISSUE_DEFS[c]?.publishBlocking);
 /** Still needs a decision: live, not in the Question Bank, and not (approved, READY and importable). */
 export const unresolved = (q: Pick<FilterRow, "status" | "approved" | "stored" | "importBlocker">) => q.status !== "REJECTED" && !q.stored && !(q.approved && q.status === "READY" && !q.importBlocker);
 
 export function matchStatus(r: FilterRow, status: string | null): boolean {
   if (status === null) return true;
-  if (status === "exceptions") return (EXCEPTION_STATUSES as readonly string[]).includes(r.status);
+  if (status === "exceptions") return (EXCEPTION_STATUSES as readonly string[]).includes(r.status) && !classificationOnly(r);
+  if (status === "taxonomy-only") return classificationOnly(r);
   if (status === "approval") return awaitingApproval(r);
   if (status === "imported") return r.status === "IMPORTED" || r.status === "PUBLISHED";
   if (status === "withdrawn") return r.answerStatus === "WITHDRAWN" || r.issueCodes.includes("POSSIBLE_WITHDRAWN");
@@ -199,6 +208,7 @@ export function dbWhere(f: Filters): Record<string, unknown> {
   const and: Record<string, unknown>[] = [];
   const s = f.status;
   if (s === "exceptions") and.push({ status: { in: [...EXCEPTION_STATUSES] } });
+  else if (s === "taxonomy-only") and.push({ status: "NEEDS_CORRECTION" });
   else if (s === "approval") and.push({ status: "READY", approvedById: null, questionId: null });
   else if (s === "imported") and.push({ status: { in: ["IMPORTED", "PUBLISHED"] } });
   else if (s === "withdrawn") and.push({ OR: [{ answerStatus: "WITHDRAWN" }, { issueCodes: { has: "POSSIBLE_WITHDRAWN" } }] });

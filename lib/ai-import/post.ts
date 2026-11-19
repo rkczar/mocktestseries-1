@@ -461,7 +461,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const aiOutcome = new Map<string, { status: "FAILED" | "NO_RESULT"; detail: string; model: string | null }>();
   const classifyResults = new Map<string, ClassifyDecision & { model: string }>();
   if (settings.aiEnabled && settings.models.classify && toAi.length && taxonomy.length && !aiStop) {
-    const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, misaligned: 0, unsure: 0, missing: 0, errors: [] as string[], models: new Set<string>() };
+    const tally = { batches: 0, failedBatches: 0, results: 0, subjects: 0, topics: 0, invalid: 0, misaligned: 0, format: 0, retried: 0, unsure: 0, missing: 0, errors: [] as string[], models: new Set<string>() };
     // Questions whose subject the paper prints (section heading) are classified only within that subject: the AI picks
     // the topic, never another subject (2026-10-26: "cauda equina" in the Surgery section was filed under Neurology).
     const groups = new Map<string, typeof toAi>();
@@ -475,20 +475,33 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     // often not. The codes are mapped back (lib/ai-import/taxonomy-check.ts); a code that is not on the list is
     // counted as invalid, never guessed, and a result whose key words are not in its question is not used.
     const codes = taxonomyCodes(subjectsAllowed);
-    for (let i = 0; i < members.length; i += CLASSIFY_BATCH) {
+    // Questions whose answer was unusable for a MODEL reason (no key words, shifted batch, no answer) are sent again ONCE,
+    // only those questions, in their own request; a second failure stays a model failure (never a guess, never a judgement).
+    const queue: { batch: typeof members; retry: boolean }[] = [];
+    for (let i = 0; i < members.length; i += CLASSIFY_BATCH) queue.push({ batch: members.slice(i, i + CLASSIFY_BATCH), retry: false });
+    const retryLater: typeof members = [];
+    while (queue.length || retryLater.length) {
+      if (!queue.length) for (let i = 0; i < retryLater.length; i += CLASSIFY_BATCH) queue.push({ batch: retryLater.splice(0, CLASSIFY_BATCH), retry: true });
       if (!(await ctx.stillRunning())) return;
-      const batch = members.slice(i, i + CLASSIFY_BATCH);
+      const { batch, retry } = queue.shift()!;
       const qCode = new Map(batch.map((q, k) => [`Q${k + 1}`, q]));
       const text = classifyUserText(codes.list, batch.map((q) => effective(q)), memoryBrief(mem.rules, mem.paper, "classify"));
       tally.batches++;
+      if (retry) {
+        tally.retried += batch.length;
+        for (const q of batch) aiOutcome.delete(q.id);
+      }
+      let raw = "";
       try {
-        const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", stage: "post-classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false, jsonSchema: "classify" }, (out) => {
+        const { value, result: r } = await importerAiCallChecked({ jobId: job.id, task: "classify", stage: retry ? "post-classify-retry" : "post-classify", models: [settings.models.classify], system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, settings, needsVision: false, jsonSchema: "classify" }, (out) => {
           // Item by item: a malformed entry only leaves its own question without a result.
+          raw = out;
           const parsed = classifyAnswerOf(parseModelJson(out));
           if (!parsed) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format (no usable result list)"), "model_output");
           return parsed;
         });
         tally.models.add(r.model);
+        const failedHere = new Set<string>();
         // 2026-11-15 (CMS 2026 Paper II): ling-3.0-tiny shifted its answers by one question (20 of 86, then 40 of 63 were
         // caught by the key-word check). A code answered twice, or a batch with 2+ shifted answers, is not used at all:
         // its other "matches" may be coincidental. Those questions keep no AI result (manual review).
@@ -499,10 +512,18 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
           const q = seen.get(keyOf(res)) === 1 ? qCode.get(keyOf(res)) : undefined;
           return { res, q, d: q ? decideClassification(res, effective(q), codes, subjectsAllowed, r.model) : null };
         });
-        const shifted = decided.filter((x) => x.d?.rejected && !x.d.subject && /key words/.test(x.d.rejected)).length;
+        // Only key words of ANOTHER question are a shift; no key words at all is a format failure of that answer alone.
+        const shifted = decided.filter((x) => x.d?.failure === "SHIFTED").length;
+        const unusable = (q: (typeof batch)[number], detail: string) => {
+          if (!retry) retryLater.push(q);
+          failedHere.add(q.id);
+          aiOutcome.set(q.id, { status: "NO_RESULT", detail: `${detail}${retry ? " (also after one retry)" : ""}`, model: r.model });
+        };
+        const logRaw = () => logEvent(job.id, "CLASSIFY_MODEL_OUTPUT", `${r.model}: ${failedHere.size} of ${batch.length} answer(s) in this request were unusable (model output, not a classification) — the original answer is kept here${retry ? "" : "; those questions are sent again once"}.`, { model: r.model, retry, questions: batch.map((q) => q.id), failed: [...failedHere], raw: raw.slice(0, 6000) });
         if (shifted >= 2) {
           tally.misaligned += shifted;
-          for (const q of batch) aiOutcome.set(q.id, { status: "NO_RESULT", detail: `${r.model}'s answers in this request were shifted between questions (${shifted} answer(s) did not match their question's key words), so none of them was used`, model: r.model });
+          for (const q of batch) unusable(q, `${r.model}'s answers in this request were shifted between questions (${shifted} answer(s) named key words of another question), so none of them was used`);
+          await logRaw();
           continue;
         }
         for (const { res, q, d: decision } of decided) {
@@ -511,8 +532,14 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
             if (q === undefined && (seen.get(keyOf(res)) ?? 0) > 1) for (const b of batch) if (qCode.get(keyOf(res)) === b) aiOutcome.set(b.id, { status: "NO_RESULT", detail: `${r.model} answered this question twice in one request, so neither answer was used`, model: r.model });
             continue;
           }
-          tally.results++;
           const d = decision;
+          if (d.failure === "FORMAT" || d.failure === "SHIFTED") {
+            if (d.failure === "FORMAT") tally.format++;
+            else tally.misaligned++;
+            unusable(q, `${r.model}: ${d.rejected}`);
+            continue;
+          }
+          tally.results++;
           if (d.rejected && !d.subject) {
             if (/key words/.test(d.rejected)) tally.misaligned++;
             else if (/not in this exam/.test(d.rejected)) tally.invalid++;
@@ -526,13 +553,14 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         for (const q of batch) {
           if (classifyResults.has(q.id) || aiOutcome.has(q.id)) continue;
           tally.missing++;
-          aiOutcome.set(q.id, { status: "NO_RESULT", detail: `${r.model} returned no answer for this question (${value.results.length} answer(s) for ${batch.length} question(s) in the request)`, model: r.model });
+          unusable(q, `${r.model} returned no answer for this question (${value.results.length} answer(s) for ${batch.length} question(s) in the request)`);
         }
+        if (failedHere.size) await logRaw();
       } catch (err) {
         if (err instanceof Error && err.name === "ImporterBudgetError") {
           // Not sent: the questions of this and every later batch have no AI result (never "nothing fits").
           aiStop = err.message;
-          for (const q of members.slice(i)) aiOutcome.set(q.id, { status: "NO_RESULT", detail: `not sent — ${err.message.slice(0, 200)}`, model: settings.models.classify });
+          for (const q of [...batch, ...queue.flatMap((b) => b.batch), ...retryLater]) aiOutcome.set(q.id, { status: "NO_RESULT", detail: `not sent — ${err.message.slice(0, 200)}`, model: settings.models.classify });
           for (const [g, rest] of groups) if (g !== groupSubject && rest.every((q) => !aiOutcome.has(q.id) && !classifyResults.has(q.id))) for (const q of rest) aiOutcome.set(q.id, { status: "NO_RESULT", detail: `not sent — ${err.message.slice(0, 200)}`, model: settings.models.classify });
           await logEvent(job.id, "AI_SKIPPED_BUDGET", `Subject / topic AI classification stopped: ${err.message.slice(0, 300)} The free local classification is kept; deterministic checks continue.`, {});
           break groupLoop;
@@ -546,7 +574,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     }
     }
     // Never silent: what the classifier returned, and what could be used.
-    await logEvent(job.id, "CLASSIFY_RESULT", `Subject / topic classification of ${toAi.length} question(s) in ${tally.batches} request(s)${tally.models.size ? ` (${[...tally.models].join(", ")})` : ""}: ${tally.subjects} subject(s) and ${tally.topics} topic(s) assigned${tally.missing ? `, ${tally.missing} question(s) got no answer from the model (engine failure, flagged as such)` : ""}${tally.misaligned ? `, ${tally.misaligned} answer(s) not used because their key words were not in the question (answers shifted to another question)` : ""}${tally.unsure ? `, ${tally.unsure} left unresolved (no subject fits, or confidence below ${Math.round(SUBJECT_MIN_CONFIDENCE * 100)}%)` : ""}${tally.invalid ? `, ${tally.invalid} answer(s) named a question, subject, topic or subtopic code that is not on the list (ignored — only this exam's own records are valid)` : ""}${tally.failedBatches ? `, ${tally.failedBatches} request(s) failed (${tally.errors[0]})` : ""}. Questions without a subject stay in Needs correction.`, { questions: toAi.length, ...tally, models: [...tally.models], errors: tally.errors.slice(0, 5) });
+    await logEvent(job.id, "CLASSIFY_RESULT", `Subject / topic classification of ${toAi.length} question(s) in ${tally.batches} request(s)${tally.models.size ? ` (${[...tally.models].join(", ")})` : ""}: ${tally.subjects} subject(s) and ${tally.topics} topic(s) assigned${tally.missing ? `, ${tally.missing} question(s) got no answer from the model (engine failure, flagged as such)` : ""}${tally.format ? `, ${tally.format} answer(s) unusable because the model returned no key words (model output format)` : ""}${tally.misaligned ? `, ${tally.misaligned} answer(s) not used because their key words belong to another question (answers shifted)` : ""}${tally.retried ? `, ${tally.retried} question(s) sent again once after an unusable answer` : ""}${tally.unsure ? `, ${tally.unsure} left unresolved (no subject fits, or confidence below ${Math.round(SUBJECT_MIN_CONFIDENCE * 100)}%)` : ""}${tally.invalid ? `, ${tally.invalid} answer(s) named a question, subject, topic or subtopic code that is not on the list (ignored — only this exam's own records are valid)` : ""}${tally.failedBatches ? `, ${tally.failedBatches} request(s) failed (${tally.errors[0]})` : ""}. Questions without a subject stay in Needs correction.`, { questions: toAi.length, ...tally, models: [...tally.models], errors: tally.errors.slice(0, 5) });
   }
 
   // Text layers of digital pages the vision model read (layout unclear): its digits are exact, so a number in

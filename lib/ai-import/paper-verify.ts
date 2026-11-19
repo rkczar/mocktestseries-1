@@ -1123,6 +1123,14 @@ export function compareSecondRead(q: QRow, twin: SecondRead | undefined, v1: Non
     if (textFields.length === fields.length && storedIn && !secondIn && !missingStored.length) resolved = `the source text contains the stored wording exactly; the second read differs (${diffs.join("; ").slice(0, 200)})`;
   }
   if (resolved) return { ...fp, at: now, model: twin.model, status: "VERIFIED", fields, detail: "the two reads differ, but the source text confirms the stored question", resolvedBySource: resolved, second };
+  // An incomplete second read (empty stem, or only part of the stored stem — the lead-in / closing question left out) neither
+  // confirms nor contradicts the missing words: a model-output failure (Verify 2 failed, still blocking, retried by the next
+  // Verify 2 run), not an academic disagreement (2026-11-19 CMS 2023: 9 of 20 DISAGREEs; e.g. Q24 stem "", Q3 lead-in dropped).
+  const k = (s: string) => s.toLowerCase().replace(/select the correct answer using the codes? given below/g, "").replace(/[^\p{L}\p{N}]+/gu, "");
+  if (fields.every((f) => f === "question text") && k(e.stem).includes(k(twin.q.stem))) {
+    const message = `incomplete second read: ${twin.q.stem.trim() ? "it returned only part of the question text" : "it returned no question text"} (options agree) — the missing words are not confirmed; run Verify 2 again for this question`;
+    return { ...fp, at: now, model: twin.model, status: "FAILED", fields, detail: message, error: { kind: "error", message, model: twin.model }, second };
+  }
   const alsoV1 = v1 && !v1.passed ? ` Verify 1 also has findings (${v1.problems.map((p) => p.code).join(", ") || "flags"}).` : "";
   return { ...fp, at: now, model: twin.model, status: "DISAGREE", fields, detail: `${diffs.join("; ")} — the source cannot settle it; correct the question by hand or approve it after checking.${circular}${alsoV1}${typeInfo}`.slice(0, 900), second };
 }
@@ -1331,17 +1339,24 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
     const codes = taxonomyCodes(taxonomy);
     // A batch whose answer was cut off at the output limit is split in half ONCE (two smaller requests, each budget-
     // checked); a half that is cut off again is a failed check (OUTPUT_TRUNCATED), never resent at the same size.
-    const queue: { batch: typeof checkable; split: boolean }[] = [];
+    // An answer unusable for a MODEL reason (no key words, another question's key words, no answer) is asked again ONCE,
+    // only for those questions; a second failure is VERIFICATION_FAILED (model failure), never agreement or disagreement.
+    const queue: { batch: typeof checkable; split: boolean; retry?: boolean }[] = [];
     for (let i = 0; i < checkable.length; i += CLASSIFY_BATCH) queue.push({ batch: checkable.slice(i, i + CLASSIFY_BATCH), split: false });
-    while (queue.length) {
+    const retryLater: typeof checkable = [];
+    while (queue.length || retryLater.length) {
+      if (!queue.length) for (let i = 0; i < retryLater.length; i += CLASSIFY_BATCH) queue.push({ batch: retryLater.splice(0, CLASSIFY_BATCH), split: true, retry: true });
       if (!(await ctx.stillRunning())) return counts;
-      const { batch, split } = queue.shift()!;
+      const { batch, split, retry } = queue.shift()!;
+      let raw = "";
+      const failedHere: string[] = [];
       const text = classifyUserText(codes.list, batch.map((q) => effective(q)), memoryBrief(paperRules, paper, "classify"));
       let value: { results: { q: string; subject: string | null; topic: string | null; subtopic: string | null; confidence: number; about: string | string[] | null; reason: string | null }[] } | null = null;
       let model = state.model;
       let failure: string | null = null;
       try {
-        const r = await verifyCall(ctx, state, { task: "classify", stage: "verify2-classify", system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, needsVision: false, jsonSchema: "classify" }, (out) => {
+        const r = await verifyCall(ctx, state, { task: "classify", stage: retry ? "verify2-classify-retry" : "verify2-classify", system: CLASSIFY_SYSTEM, content: [{ type: "text", text }], maxOutputTokens: 2500, needsVision: false, jsonSchema: "classify" }, (out) => {
+          raw = out;
           const parsed = classifyAnswerOf(parseModelJson(out));
           if (!parsed) throw new ImporterAiFailure(failureMessage("model_output", "the classification answer did not match the expected format"), "model_output");
           return parsed;
@@ -1350,7 +1365,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
         model = r.model;
       } catch (e) {
         if (e instanceof ImporterAiUnavailable || (e instanceof Error && e.name === "ImporterBudgetError")) {
-          for (const q of [...batch, ...queue.flatMap((b) => b.batch)]) await saveTax(q, { status: "NOT_VERIFIED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: [`not checked — Verify 2 stopped before this request was sent: ${(e as Error).message.slice(0, 200)}`], comparedWithV1: "NO_V1" });
+          for (const q of [...batch, ...queue.flatMap((b) => b.batch), ...retryLater]) await saveTax(q, { status: "NOT_VERIFIED", stored: storedOf(q), found: null, confidence: null, method: state.model, findings: [`not checked — Verify 2 stopped before this request was sent: ${(e as Error).message.slice(0, 200)}`], comparedWithV1: "NO_V1" });
           throw e;
         }
         failure = e instanceof Error ? e.message.slice(0, 300) : "request failed";
@@ -1369,17 +1384,25 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
           continue;
         }
         const res = value.results.find((x) => Number.parseInt(x.q.replace(/\D+/g, ""), 10) - 1 === k);
+        const decision = res ? decideClassification(res, effective(q), codes, taxonomy, model) : null;
+        if (!res || decision?.failure === "FORMAT" || decision?.failure === "SHIFTED") {
+          failedHere.push(q.id);
+          if (!retry) {
+            retryLater.push(q);
+            continue;
+          }
+        }
         if (!res) {
           await saveTax(q, { status: "VERIFICATION_FAILED", stored, found: null, confidence: null, method: model, findings: [`${model} returned no answer for this question (${value.results.length} answer(s) for ${batch.length} question(s))`], comparedWithV1: "NO_V1" });
           continue;
         }
-        const d = decideClassification(res, effective(q), codes, taxonomy, model);
+        const d = decision!;
         const found = { subjectId: d.subject, topicId: d.topic, subTopicId: d.subTopic };
         const name = (id: string | null) => codes.name(id);
         if (!d.subject) {
           // An answer that cannot be tied to this question, or names codes outside the exam, is a failed check.
-          const failed = !!d.rejected && (/key words/.test(d.rejected) || /not in this exam/.test(d.rejected));
-          await saveTax(q, { status: failed ? "VERIFICATION_FAILED" : "NEEDS_REVIEW", stored, found: null, confidence: res.confidence, method: model, findings: [failed ? `unusable answer: ${d.rejected}` : `${model} could not place it reliably (${d.rejected ?? "no subject fits"})${stored.subjectId ? ` — the stored ${name(stored.subjectId)} is not confirmed` : ""}`], comparedWithV1: "NO_V1" });
+          const failed = !!d.failure;
+          await saveTax(q, { status: failed ? "VERIFICATION_FAILED" : "NEEDS_REVIEW", stored, found: null, confidence: res.confidence, method: model, findings: [failed ? `unusable answer (model output, ${retry ? "also after one retry" : "not retried"}): ${d.rejected}` : `${model} could not place it reliably (${d.rejected ?? "no subject fits"})${stored.subjectId ? ` — the stored ${name(stored.subjectId)} is not confirmed` : ""}`], comparedWithV1: "NO_V1" });
           continue;
         }
         const findings: string[] = [];
@@ -1403,6 +1426,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
         if (d.rejected) findings.push(`ignored: ${d.rejected}`);
         await saveTax(q, { status, stored, found, confidence: d.confidence, method: model, findings, comparedWithV1: vsV1(q, found) });
       }
+      if (failedHere.length) await logEvent(ctx.job.id, "VERIFY2_MODEL_OUTPUT", `Verify 2 classification (${model}): ${failedHere.length} of ${batch.length} answer(s) unusable (model output, not a classification) — the original answer is kept here${retry ? "" : "; those questions are asked again once"}.`, { model, retry: !!retry, questions: batch.map((q) => q.id), failed: failedHere, raw: raw.slice(0, 6000) });
     }
   }
   await logEvent(ctx.job.id, "VERIFY2_CLASSIFIED", `Verify 2 subject / topic check of ${all.length} question(s): ${tc.AGREED} agreed, ${tc.DISAGREEMENT} disagreement(s), ${tc.NEEDS_REVIEW} need review, ${tc.VERIFICATION_FAILED} verification failed (never counted as agreement), ${tc.NOT_VERIFIED} not verified.`, { ...tc });
