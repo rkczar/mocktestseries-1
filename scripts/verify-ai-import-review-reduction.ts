@@ -156,6 +156,9 @@ if (E && existsSync(`${E}/key-ocr.json`)) {
 // ---------------------------------------------------------------- H. third classifier setting
 {
   check("H1. settings without the field use the default third classifier (particle-1); null switches it off", tiebreakModel({}) === DEFAULT_TIEBREAK_MODEL && DEFAULT_TIEBREAK_MODEL === "particle-ai/particle-1" && tiebreakModel({ tiebreak: null }) === null);
+  const ac = readFileSync(new URL("../lib/ai-import/autoconfig.ts", import.meta.url), "utf8");
+  const form = readFileSync(new URL("../app/admin/(dashboard)/ai-importer/settings/settings-form.tsx", import.meta.url), "utf8");
+  check("H3. auto-configure keeps the administrator's third-classifier switch; the settings page has the ON/OFF switch", /tiebreak: saved\.models\.tiebreak/.test(ac) && /data-testid="tiebreak-enabled"/.test(form));
   check("H2. saved settings keep an explicit off (null) and a chosen model", normalizeImporterSettings({ models: { tiebreak: null } }).models.tiebreak === null && normalizeImporterSettings({ models: { tiebreak: "a/b" } }).models.tiebreak === "a/b" && normalizeImporterSettings({}).models.tiebreak === DEFAULT_TIEBREAK_MODEL);
 }
 

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PILOT_LIMITS, SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
+import { DEFAULT_TIEBREAK_MODEL, PILOT_LIMITS, SELECTION_TASKS, SELECTION_TASK_LABELS, tiebreakModel, type ImporterSettings } from "@/lib/ai-import/config";
 import { GEMINI_DIRECT_REASONS, suggestModels, type ImporterCatalog, type ImporterModelOption, type RequestCost } from "@/lib/ai-import/model-options";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import { importerModelsAction, refreshRoutesAction, saveSettingsAction } from "../actions";
@@ -732,6 +732,13 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={s.aiEnabled} onChange={(e) => setS({ ...s, aiEnabled: e.target.checked })} disabled={d} data-testid="ai-enabled" />
             Allow paid AI calls for the importer
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={tiebreakModel(s.models) !== null} onChange={(e) => setS({ ...s, models: { ...s.models, tiebreak: e.target.checked ? (s.models.tiebreak ?? DEFAULT_TIEBREAK_MODEL) : null } })} disabled={d} data-testid="tiebreak-enabled" />
+            <span>
+              Third subject / topic classifier ({tiebreakModel(s.models) ?? DEFAULT_TIEBREAK_MODEL})
+              <span className="block text-xs text-[var(--color-muted-foreground)]">After Verify 2, asked only about questions the first classifiers left unresolved; a subject / topic is stored only when two independent sources agree. Never changes answers, text, approvals or admin choices. About ₹1 per 120-question paper, included in the Verify 2 maximum.</span>
+            </span>
           </label>
         </CardContent>
       </Card>

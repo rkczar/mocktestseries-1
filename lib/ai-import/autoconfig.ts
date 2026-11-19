@@ -186,7 +186,8 @@ async function build(saved: ImporterSettings): Promise<Built> {
     ...saved,
     importerModels: list.slice(0, MAX_IMPORTER_MODELS),
     selection: { mode: "manual" },
-    models: { extract: pick.extract, extractFallbacks: [], verify: pick.verify, classify: pick.classify, key: pick.key },
+    // The third-classifier switch is the administrator's choice: auto-configure keeps it (null = off stays off).
+    models: { extract: pick.extract, extractFallbacks: [], verify: pick.verify, classify: pick.classify, key: pick.key, tiebreak: saved.models.tiebreak },
     budget: { ...saved.budget, allowPricierFallback: false },
     limits: { ...saved.limits, concurrency: recentLimited ? 1 : saved.limits.concurrency, renderDpi: Math.max(saved.limits.renderDpi, OCR_MIN_DPI) },
     verification: { ...saved.verification, independentAnswer: saved.verification.independentAnswer && !!pick.verify },
