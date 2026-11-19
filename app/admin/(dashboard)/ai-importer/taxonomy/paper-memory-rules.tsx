@@ -6,8 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
-import type { PaperRule } from "@/lib/ai-import/paper-memory";
-import { decidePaperRuleAction, removeTaxonomyMemoryAction } from "../actions";
+import { bulkConfirmEligible, type PaperRule } from "@/lib/ai-import/paper-memory";
+import { confirmEligiblePaperRulesAction, decidePaperRuleAction, removeTaxonomyMemoryAction } from "../actions";
 
 /**
  * Paper-format memory of one exam: facts measured on its imported papers, each with its evidence and confidence.
@@ -23,6 +23,7 @@ export function PaperMemoryRules({ examId, canEdit, rules, kinds }: { examId: st
       setMsg(r.ok ? { ok: true, text: ok } : { ok: false, text: r.error ?? "Failed" });
       if (r.ok) router.refresh();
     });
+  const eligible = rules.filter(bulkConfirmEligible);
   const scopes = [...new Set(rules.map((r) => (r.scope === "EXAM" ? "Whole exam" : (r.paper ?? "Paper not identified"))))].sort((a, b) => (a === "Whole exam" ? -1 : b === "Whole exam" ? 1 : a.localeCompare(b)));
   return (
     <Card data-testid="paper-memory">
@@ -37,6 +38,22 @@ export function PaperMemoryRules({ examId, canEdit, rules, kinds }: { examId: st
           <p className={`text-xs ${msg.ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`} role="status">
             {msg.text}
           </p>
+        )}
+        {canEdit && eligible.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2" data-testid="paper-rules-eligible">
+            <Button
+              size="sm"
+              disabled={pending}
+              onClick={() => {
+                if (!window.confirm(`Confirm ${eligible.length} eligible rule(s)? Each one is then used as a check (it flags, never changes a question).`)) return;
+                act(() => confirmEligiblePaperRulesAction(examId, eligible.map((r) => r.id)), `${eligible.length} rule(s) confirmed.`);
+              }}
+              data-testid="paper-rules-confirm-eligible"
+            >
+              Confirm all eligible ({eligible.length})
+            </Button>
+            <span className="text-xs text-[var(--color-muted-foreground)]">Eligible: proposed, not contradicted, confidence at least 95%, seen in two source files or one source document with 50+ questions. OCR and notation rules are confirmed one by one.</span>
+          </div>
         )}
         {!rules.length && <p className="text-xs text-[var(--color-muted-foreground)]">Nothing learned yet.</p>}
         {scopes.map((scope) => (

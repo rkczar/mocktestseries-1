@@ -16,7 +16,7 @@
  */
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { matchLayoutProblems, statementsAsOptions } from "@/lib/ai-import/reading-checks";
-import { ANNOTATION_TAIL, candidateInstruction, joinWrappedLines, mergedAnswerIn, mergedStatements, questionFormats, type QuestionFormat } from "@/lib/ai-import/local-parse";
+import { ANNOTATION_TAIL, candidateInstruction, joinWrappedLines, mergedAnswerIn, mergedStatements, questionFormats, statementsOf, type QuestionFormat } from "@/lib/ai-import/local-parse";
 
 export const PAPER_RULE_KINDS = {
   NUMBERING: "Question numbering",
@@ -30,11 +30,16 @@ export const PAPER_RULE_KINDS = {
   SUBJECT_SCOPE: "Subjects the paper covers",
   OCR_CONFUSION: "OCR confusion (admin-corrected)",
   EXTRACTION_ERROR: "Extraction error (admin-corrected)",
+  NOTATION: "Formula / notation (admin-corrected, flag only)",
 } as const;
 export type PaperRuleKind = keyof typeof PAPER_RULE_KINDS;
 
 /** Kinds that become an exam-level proposal when two or more papers show the same value. */
-const GENERALIZABLE = new Set<PaperRuleKind>(["NUMBERING", "OPTION_LABELS", "DROPPED_MARKER", "ANSWER_KEY_LAYOUT", "OCR_CONFUSION", "EXTRACTION_ERROR"]);
+const GENERALIZABLE = new Set<PaperRuleKind>(["NUMBERING", "OPTION_LABELS", "DROPPED_MARKER", "ANSWER_KEY_LAYOUT", "OCR_CONFUSION", "EXTRACTION_ERROR", "NOTATION"]);
+/** Kinds that describe one import, a word or a pattern each: several values coexist and never contradict each other. */
+const MULTI_VALUED = new Set<PaperRuleKind>(["QUESTION_TYPES", "ANNOTATION_RELIABILITY", "OCR_CONFUSION", "EXTRACTION_ERROR", "NOTATION"]);
+/** Paper key of an exam whose imports name no paper (single-paper exams such as FSO): one key for all of them. */
+export const SINGLE_PAPER_KEY = "UNKNOWN PAPER";
 
 export type PaperRuleSource = "SOURCE_DOCUMENT" | "OFFICIAL_KEY" | "ADMIN_CONFIRMED";
 
@@ -48,6 +53,8 @@ export interface PaperRuleEvidence {
   supporting: number;
   observed: number;
   at: string;
+  /** Edition (year) of the paper the evidence came from; absent on evidence stored before editions existed. */
+  edition?: string;
 }
 
 export interface PaperRule {
@@ -78,16 +85,30 @@ export type PaperRuleProposal = Pick<PaperRule, "scope" | "paper" | "kind" | "ke
 
 /** "UPSC CMS PAPER 2" / "Paper-II" / "paper 1" → "PAPER II" / "PAPER I"; null when the title names no paper. */
 export function paperOf(title: string | null | undefined): string | null {
-  const m = /\bpaper[\s\-–_]*(?:no\.?\s*)?(I{1,3}|IV|V|[1-5])\b/i.exec(title ?? "");
+  // "MdcnPaper-II" → "Mdcn Paper-II"; "_" counts as a separator ("Paper_I_", "paper1_"), unlike \b.
+  const t = (title ?? "").replace(/([a-z])(?=Paper)/g, "$1 ");
+  const m = /(?<![A-Za-z])paper[\s\-–_.]*(?:no\.?\s*)?(I{1,3}|IV|V|[1-5])(?![A-Za-z0-9])/i.exec(t);
   if (!m) return null;
   const roman = ["", "I", "II", "III", "IV", "V"];
   return `PAPER ${/\d/.test(m[1]) ? roman[Number(m[1])] : m[1].toUpperCase()}`;
+}
+
+/** Edition of a paper: the job's year, else the first 19xx / 20xx year in its titles; null when none is known. */
+export function editionOf(year: number | null | undefined, ...titles: (string | null | undefined)[]): string | null {
+  if (year && year > 1900 && year < 2100) return String(year);
+  for (const t of titles) {
+    const m = /(?<!\d)(19[5-9]\d|20\d\d)(?!\d)/.exec(t ?? "");
+    if (m) return m[1];
+  }
+  return null;
 }
 
 export interface LearnInput {
   jobId: string;
   jobTitle: string;
   paper: string | null;
+  /** Edition (year) of this paper; optional so older callers keep working. */
+  edition?: string | null;
   fileName: string;
   fileSha256: string | null;
   at: string;
@@ -107,7 +128,7 @@ export interface LearnInput {
 }
 
 const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
-const ev = (i: LearnInput, source: PaperRuleSource, detail: string, supporting: number, observed: number, file?: { name: string; sha: string | null }): PaperRuleEvidence => ({ jobId: i.jobId, jobTitle: i.jobTitle, fileName: file?.name ?? i.fileName, fileSha256: file ? file.sha : i.fileSha256, source, detail, supporting, observed, at: i.at });
+const ev = (i: LearnInput, source: PaperRuleSource, detail: string, supporting: number, observed: number, file?: { name: string; sha: string | null }): PaperRuleEvidence => ({ jobId: i.jobId, jobTitle: i.jobTitle, fileName: file?.name ?? i.fileName, fileSha256: file ? file.sha : i.fileSha256, source, detail, supporting, observed, at: i.at, ...(i.edition ? { edition: i.edition } : {}) });
 const dominant = <T extends string>(xs: T[]): [T, number] | null => {
   const c = new Map<T, number>();
   for (const x of xs) c.set(x, (c.get(x) ?? 0) + 1);
@@ -126,7 +147,7 @@ function answerMarkStyle(q: ExtractedQuestion): string | null {
 /** Facts measured on one paper → rule proposals (PAPER scope; exam rules come from generalize()). */
 export function learnPaperRules(i: LearnInput): PaperRuleProposal[] {
   const out: PaperRuleProposal[] = [];
-  const paperKey = i.paper ?? "UNKNOWN PAPER";
+  const paperKey = i.paper ?? SINGLE_PAPER_KEY;
   const add = (kind: PaperRuleKind, valueKey: string, statement: string, value: Record<string, unknown>, evidence: PaperRuleEvidence) => out.push({ scope: "PAPER", paper: paperKey, kind, key: `${kind}:${valueKey}`, statement, value, evidence });
   const src = i.source;
   if (src && src.questions.length) {
@@ -145,7 +166,9 @@ export function learnPaperRules(i: LearnInput): PaperRuleProposal[] {
     const formats = new Map<QuestionFormat, number>();
     for (const q of src.questions) for (const f of questionFormats(q)) formats.set(f, (formats.get(f) ?? 0) + 1);
     const shown = [...formats.entries()].filter(([f]) => f !== "MARKED_OPTION").sort((a, b) => b[1] - a[1]);
-    add("QUESTION_TYPES", `${i.jobId}`, `Question formats in this paper: ${shown.map(([f, c]) => `${f.toLowerCase().replace(/_/g, " ")} ${pct(c, n)}%`).join(", ") || "plain single-answer questions only"}.`, { formats: Object.fromEntries(formats), questions: n }, ev(i, "SOURCE_DOCUMENT", `${n} questions classified by their own text`, n, n));
+    const shapes = formatShapes(src.questions);
+    const shapeText = [shapes.statementNumbering ? `statements numbered ${shapes.statementNumbering}` : "", shapes.matchShape ? `match lists ${shapes.matchShape}` : ""].filter(Boolean).join("; ");
+    add("QUESTION_TYPES", `${i.jobId}`, `Question formats in this paper: ${shown.map(([f, c]) => `${f.toLowerCase().replace(/_/g, " ")} ${pct(c, n)}%`).join(", ") || "plain single-answer questions only"}${shapeText ? ` (${shapeText})` : ""}.`, { formats: Object.fromEntries(formats), questions: n, shapes }, ev(i, "SOURCE_DOCUMENT", `${n} questions classified by their own text`, n, n));
     // Printed marks against an official key that an administrator approved: how far the source's own marks can be trusted.
     if (i.approvedKey) {
       let agree = 0;
@@ -179,6 +202,19 @@ export function learnPaperRules(i: LearnInput): PaperRuleProposal[] {
   return out;
 }
 
+/** Checkable layout of the paper's formats: the dominant statement numbering and match-list shape ("4x4"), when seen. */
+export function formatShapes(questions: Pick<ExtractedQuestion, "stem" | "listI" | "listII">[]): { statementNumbering: StatementFamily | null; matchShape: string | null } {
+  const fams = questions.map((q) => statementFamily(q.stem)).filter((f): f is StatementFamily => !!f);
+  const shapes = questions.map(matchShapeOf).filter((s): s is string => !!s);
+  return { statementNumbering: dominant(fams)?.[0] ?? null, matchShape: dominant(shapes)?.[0] ?? null };
+}
+type StatementFamily = "roman" | "arabic" | "letter";
+const statementFamily = (stem: string): StatementFamily | null => {
+  const k = statementsOf(stem)[0]?.key;
+  return !k ? null : /^\d+$/.test(k) ? "arabic" : /^[IVX]+$/.test(k) ? "roman" : "letter";
+};
+const matchShapeOf = (q: Pick<ExtractedQuestion, "listI" | "listII">) => (q.listI?.length && q.listII?.length ? `${q.listI.length}x${q.listII.length}` : null);
+
 const confidenceOf = (evidence: PaperRuleEvidence[]) => {
   const s = evidence.reduce((a, e) => a + e.supporting, 0);
   const o = evidence.reduce((a, e) => a + e.observed, 0);
@@ -197,6 +233,8 @@ export function mergePaperRules(rules: PaperRule[], proposals: PaperRuleProposal
   let contradicted = 0;
   for (const p of proposals) {
     const same = next.find((r) => r.scope === p.scope && r.paper === p.paper && r.key === p.key);
+    // The same fact from the same import with the same measurement is nothing new: the stored rule stays byte-identical.
+    if (same && same.statement === p.statement && canon(same.value) === canon(p.value) && same.evidence.some((e) => e.jobId === p.evidence.jobId && e.source === p.evidence.source && sameEvidence(e, p.evidence))) continue;
     if (same) {
       same.evidence = [...same.evidence.filter((e) => e.jobId !== p.evidence.jobId || e.source !== p.evidence.source), p.evidence];
       Object.assign(same, confidenceOf(same.evidence), { statement: p.statement, value: p.value, updatedAt: now });
@@ -206,9 +244,11 @@ export function mergePaperRules(rules: PaperRule[], proposals: PaperRuleProposal
       added++;
     }
     // Per-import facts (formats, mark reliability) describe one paper each and never contradict another.
-    if (p.kind === "QUESTION_TYPES" || p.kind === "ANNOTATION_RELIABILITY" || p.kind === "OCR_CONFUSION" || p.kind === "EXTRACTION_ERROR") continue;
+    if (MULTI_VALUED.has(p.kind)) continue;
     for (const other of next) {
       if (other.scope !== p.scope || other.paper !== p.paper || other.kind !== p.kind || other.key === p.key || other.status === "REJECTED") continue;
+      // A different value seen only in another edition (year) is a format change between years, not a contradiction.
+      if (p.evidence.edition && other.evidence.every((e) => e.edition && e.edition !== p.evidence.edition)) continue;
       if (other.contradictedBy !== p.key) contradicted++;
       other.contradictedBy = p.key;
       if (other.status === "CONFIRMED") other.status = "PROPOSED";
@@ -216,6 +256,9 @@ export function mergePaperRules(rules: PaperRule[], proposals: PaperRuleProposal
   }
   return { rules: generalize(next, now, newId), added, updated, contradicted };
 }
+/** JSON with object keys sorted: a row read back from jsonb has its keys in another order than the learner writes them. */
+const canon = (v: unknown) => JSON.stringify(v, (_k, x: unknown) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+const sameEvidence = (a: PaperRuleEvidence, b: PaperRuleEvidence) => canon({ ...a, at: "" }) === canon({ ...b, at: "" });
 
 /** Exam-level proposals for facts that two or more different papers show (their evidence combined). */
 export function generalize(rules: PaperRule[], now: string, newId: () => string): PaperRule[] {
@@ -228,6 +271,7 @@ export function generalize(rules: PaperRule[], now: string, newId: () => string)
     const evidence = list.flatMap((r) => r.evidence);
     const exam = out.find((r) => r.scope === "EXAM" && r.key === key);
     const statement = `${list[0].statement.replace(/\s*\(\d+ questions in this paper\)/, "")} Seen in ${[...papers].sort().join(", ")}.`;
+    if (exam && exam.statement === statement && canon(exam.evidence) === canon(evidence)) continue;
     if (exam) Object.assign(exam, { evidence, ...confidenceOf(evidence), statement, updatedAt: now });
     else out.push({ ...list[0], id: newId(), scope: "EXAM", paper: null, statement, evidence, ...confidenceOf(evidence), status: "PROPOSED", contradictedBy: null, learnedAt: now, updatedAt: now, decidedById: null, decidedAt: null, note: null });
   }
@@ -236,7 +280,23 @@ export function generalize(rules: PaperRule[], now: string, newId: () => string)
 
 /** The confirmed rules that apply to one paper of the exam (exam rules + that paper's own). */
 export function confirmedRulesFor(rules: PaperRule[], paper: string | null): PaperRule[] {
-  return rules.filter((r) => r.status === "CONFIRMED" && !r.contradictedBy && (r.scope === "EXAM" || (paper !== null && r.paper === paper)));
+  // An import that names no paper uses the single-paper key its learning stored the rules under.
+  const key = paper ?? SINGLE_PAPER_KEY;
+  const usable = rules.filter((r) => r.status === "CONFIRMED" && !r.contradictedBy && (r.scope === "EXAM" || r.paper === key));
+  // Single-valued facts that differ by edition (year) are both confirmed and uncontradicted: the newest edition's applies.
+  const newest = (r: PaperRule) => r.evidence.reduce((m, e) => (e.edition && e.edition > m ? e.edition : m), "");
+  return usable.filter((r) => MULTI_VALUED.has(r.kind) || !usable.some((o) => o !== r && o.scope === r.scope && o.paper === r.paper && o.kind === r.kind && (newest(o) > newest(r) || (newest(o) === newest(r) && o.updatedAt > r.updatedAt))));
+}
+
+/**
+ * Rules the admin may confirm in one click ("Confirm all eligible"): PROPOSED, uncontradicted, confidence ≥ 95 %, backed
+ * by two different source files or one source document with ≥ 50 supporting questions, and not a word-level rule (OCR /
+ * notation pairs stay one-by-one). Nothing is confirmed by this function — the administrator's action does that.
+ */
+export function bulkConfirmEligible(r: PaperRule): boolean {
+  if (r.status !== "PROPOSED" || r.contradictedBy || r.confidence < 0.95 || r.kind === "OCR_CONFUSION" || r.kind === "NOTATION") return false;
+  const files = new Set(r.evidence.map((e) => e.fileSha256).filter(Boolean));
+  return files.size >= 2 || r.evidence.some((e) => e.source === "SOURCE_DOCUMENT" && e.supporting >= 50);
 }
 
 /** Subjects a confirmed SUBJECT_SCOPE rule allows for this paper (null = no confirmed scope). */
@@ -245,8 +305,8 @@ export function confirmedSubjectScope(rules: PaperRule[], paper: string | null):
   return r ? new Set(Object.keys((r.value.subjects as Record<string, number>) ?? {})) : null;
 }
 
-/** Word-level wrong → right pairs from an administrator's edit of AI-read text (single-word substitutions only). */
-export function ocrPairs(before: string, after: string): { wrong: string; right: string }[] {
+/** Same-position word substitutions of an edit (none when the edit is a rewrite: different word count or too many). */
+function wordSubs(before: string, after: string): { wrong: string; right: string }[] {
   const a = before.split(/\s+/).filter(Boolean);
   const b = after.split(/\s+/).filter(Boolean);
   if (a.length !== b.length || a.length > 400) return [];
@@ -254,10 +314,44 @@ export function ocrPairs(before: string, after: string): { wrong: string; right:
   for (let k = 0; k < a.length; k++) {
     const w = a[k].replace(/[.,;:?!()]+$/g, "");
     const r = b[k].replace(/[.,;:?!()]+$/g, "");
-    if (w === r || w.length < 3 || Math.abs(w.length - r.length) > 2) continue;
+    if (w !== r) out.push({ wrong: w, right: r });
+  }
+  return out;
+}
+const SUB_SUP = "₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹";
+const NOTATION_MARK = /[₀-₉⁰¹²³⁴-⁹⁺⁻]|\\[A-Za-z]+|[_^]\{?/;
+/** A word without its notation: sub/superscripts as digits; TeX text commands, braces, $, ^, _ and backslashes removed. */
+const notationFold = (w: string) => w.replace(/[₀-₉⁰¹²³⁴-⁹]/g, (c) => String(SUB_SUP.indexOf(c) % 10)).replace(/\\(?:text|mathrm|rm)\b|[{}$^_\\]/g, "");
+const isNotation = (w: string, r: string) => w !== r && notationFold(w) === notationFold(r) && (NOTATION_MARK.test(r) || NOTATION_MARK.test(w));
+const SCRIPT = (w: string) => (/\p{Script=Devanagari}/u.test(w) ? "deva" : /\p{Script=Latin}/u.test(w) ? "latn" : "other");
+const quoteFold = (w: string) => w.replace(/[’‘`´]/g, "'").replace(/[“”]/g, '"');
+const wordIn = (word: string, text: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${quoteFold(word).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}])`, "u").test(quoteFold(text));
+
+/**
+ * Word-level wrong → right pairs from an administrator's edit of AI-read text (single-word substitutions only). Not OCR
+ * (so never learned): a swap between scripts (Hindi ↔ English field mix-up), a change of a number (a content edit), a quote
+ * normalisation, a notation change (notationPairs), and — when the page's source text is given — a "right" word the
+ * source text does not contain (an admin typo or rewrite). `sourceText` undefined = not checked; null / "" = no source,
+ * so nothing can be confirmed and nothing is learned.
+ */
+export function ocrPairs(before: string, after: string, sourceText?: string | null): { wrong: string; right: string }[] {
+  const out: { wrong: string; right: string }[] = [];
+  const subs = wordSubs(before, after).filter(({ wrong: w, right: r }) => w.length >= 3 && Math.abs(w.length - r.length) <= 2);
+  for (const { wrong: w, right: r } of subs) {
+    if (SCRIPT(w) !== SCRIPT(r)) continue;
+    if (/\d/.test(w + r) && w.replace(/\D/g, "") !== r.replace(/\D/g, "")) continue;
+    if (quoteFold(w) === quoteFold(r) || isNotation(w, r)) continue;
+    if (sourceText !== undefined && !(sourceText && wordIn(r, sourceText))) continue;
     out.push({ wrong: w, right: r });
   }
-  return out.length <= 5 ? out : [];
+  return subs.length <= 5 ? out : [];
+}
+
+/** Formula / notation pairs of an edit ("CO2" → "CO₂", a TeX artefact → its symbol): flag-only memory, never a rewrite. */
+export function notationPairs(before: string, after: string): { wrong: string; right: string }[] {
+  const subs = wordSubs(before, after);
+  if (subs.length > 5) return [];
+  return subs.filter(({ wrong: w, right: r }) => w.length >= 2 && isNotation(w, r));
 }
 
 // ---- Use of confirmed memory: prompts, deterministic checks, learning from approved corrections ----------------------
@@ -332,15 +426,17 @@ export interface CorrectionItem {
   aiRead: boolean;
   /** The correction took a Verify 1 / Verify 2 suggestion that the administrator applied and then approved. */
   acceptedSuggestion: boolean;
+  /** Deterministic text of the question's source pages (text layer / OCR); an OCR fix is learned only if it shows there. */
+  sourceText?: string | null;
 }
 
 /**
  * Rule proposals from the corrections an administrator CONFIRMED (approved questions with an admin edit, rejected
  * non-questions). Unapproved edits and AI suggestions nobody approved are never passed in. Every proposal is PROPOSED.
  */
-export function correctionProposals(i: { jobId: string; jobTitle: string; paper: string | null; at: string; files: Map<string, { name: string; sha: string | null }>; items: CorrectionItem[] }): PaperRuleProposal[] {
+export function correctionProposals(i: { jobId: string; jobTitle: string; paper: string | null; edition?: string | null; at: string; files: Map<string, { name: string; sha: string | null }>; items: CorrectionItem[] }): PaperRuleProposal[] {
   const out: PaperRuleProposal[] = [];
-  const paperKey = i.paper ?? "UNKNOWN PAPER";
+  const paperKey = i.paper ?? SINGLE_PAPER_KEY;
   const groups = new Map<ExtractionPattern, CorrectionItem[]>();
   for (const it of i.items) for (const p of correctionPatterns(it.before, it.after)) groups.set(p, [...(groups.get(p) ?? []), it]);
   const fileOf = (items: CorrectionItem[]) => {
@@ -358,7 +454,7 @@ export function correctionProposals(i: { jobId: string; jobTitle: string; paper:
   const ocr = new Map<string, { wrong: string; right: string; count: number; files: Set<string> }>();
   for (const it of i.items) {
     if (!it.aiRead || it.kind !== "EDIT" || !it.after) continue;
-    const pairs = [...ocrPairs(it.before.stem, it.after.stem), ...it.before.options.flatMap((o) => ocrPairs(o.text, it.after!.options.find((x) => x.label === o.label)?.text ?? o.text))];
+    const pairs = [...ocrPairs(it.before.stem, it.after.stem, it.sourceText), ...it.before.options.flatMap((o) => ocrPairs(o.text, it.after!.options.find((x) => x.label === o.label)?.text ?? o.text, it.sourceText))];
     for (const pr of pairs) {
       const k = `${pr.wrong}→${pr.right}`;
       const cur = ocr.get(k) ?? { ...pr, count: 0, files: new Set<string>() };
@@ -369,7 +465,21 @@ export function correctionProposals(i: { jobId: string; jobTitle: string; paper:
   }
   for (const c of ocr.values()) {
     const f = i.files.get([...c.files][0]);
-    out.push({ scope: "PAPER", paper: paperKey, kind: "OCR_CONFUSION", key: `OCR_CONFUSION:${c.wrong}→${c.right}`, statement: `OCR reads “${c.right}” as “${c.wrong}” — reported where it occurs, never replaced automatically.`, value: { wrong: c.wrong, right: c.right }, evidence: { jobId: i.jobId, jobTitle: i.jobTitle, fileName: f?.name ?? "", fileSha256: f?.sha ?? null, source: "ADMIN_CONFIRMED", detail: `${c.count} admin correction(s) of approved question(s)`, supporting: c.count, observed: c.count, at: i.at } });
+    out.push({ scope: "PAPER", paper: paperKey, kind: "OCR_CONFUSION", key: `OCR_CONFUSION:${c.wrong}→${c.right}`, statement: `OCR reads “${c.right}” as “${c.wrong}” — reported where it occurs, never replaced automatically.`, value: { wrong: c.wrong, right: c.right }, evidence: { jobId: i.jobId, jobTitle: i.jobTitle, fileName: f?.name ?? "", fileSha256: f?.sha ?? null, source: "ADMIN_CONFIRMED", detail: `${c.count} admin correction(s) of approved question(s)`, supporting: c.count, observed: c.count, at: i.at, ...(i.edition ? { edition: i.edition } : {}) } });
+  }
+  // Formula / notation corrections (any reading method): flag-only rules.
+  const nota = new Map<string, { wrong: string; right: string; count: number; fileId: string }>();
+  for (const it of i.items) {
+    if (it.kind !== "EDIT" || !it.after) continue;
+    const pairs = [...notationPairs(it.before.stem, it.after.stem), ...it.before.options.flatMap((o) => notationPairs(o.text, it.after!.options.find((x) => x.label === o.label)?.text ?? o.text))];
+    for (const pr of pairs) {
+      const k = `${pr.wrong}→${pr.right}`;
+      nota.set(k, { ...pr, count: (nota.get(k)?.count ?? 0) + 1, fileId: nota.get(k)?.fileId ?? it.fileId });
+    }
+  }
+  for (const c of nota.values()) {
+    const f = i.files.get(c.fileId);
+    out.push({ scope: "PAPER", paper: paperKey, kind: "NOTATION", key: `NOTATION:${c.wrong}→${c.right}`, statement: `Notation: “${c.wrong}” was corrected to “${c.right}” — reported where it occurs, never replaced automatically.`, value: { wrong: c.wrong, right: c.right }, evidence: { jobId: i.jobId, jobTitle: i.jobTitle, fileName: f?.name ?? "", fileSha256: f?.sha ?? null, source: "ADMIN_CONFIRMED", detail: `${c.count} admin correction(s) of approved question(s)`, supporting: c.count, observed: c.count, at: i.at, ...(i.edition ? { edition: i.edition } : {}) } });
   }
   return out;
 }
@@ -419,6 +529,9 @@ export function memoryFindings(rules: PaperRule[], paper: string | null, e: Extr
   const out: MemoryFinding[] = [];
   const confirmed = confirmedRulesFor(rules, paper);
   const tag = (r: PaperRule) => `Paper memory (${r.scope === "EXAM" ? "exam rule" : r.paper}, confirmed)`;
+  // One format summary is checked (the most recent), as in memoryBrief.
+  const types = confirmed.filter((r) => r.kind === "QUESTION_TYPES").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const wordRe = (w: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}])`, "u");
   for (const r of confirmed) {
     const v = r.value as Record<string, unknown>;
     switch (r.kind) {
@@ -450,7 +563,7 @@ export function memoryFindings(rules: PaperRule[], paper: string | null, e: Extr
         if (!ctx.aiRead) break;
         const wrong = String(v.wrong ?? "");
         if (!wrong) break;
-        const re = new RegExp(`(^|[^\\p{L}\\p{N}])${wrong.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}])`, "u");
+        const re = wordRe(wrong);
         const where = re.test(e.stem) ? "text" : e.options.find((o) => re.test(o.text));
         if (where) out.push({ field: where === "text" ? "text" : (`option ${(where as { label: string }).label}` as FieldName), ruleId: r.id, detail: `${tag(r)}: OCR has read “${String(v.right)}” as “${wrong}” before; this question contains “${wrong}” — check it against the source (suggestion: “${String(v.right)}”, only if the source shows it).` });
         break;
@@ -462,10 +575,27 @@ export function memoryFindings(rules: PaperRule[], paper: string | null, e: Extr
         if (hit) out.push({ field: hit.field, ruleId: r.id, detail: `${tag(r)}: known extraction error of this paper — ${EXTRACTION_PATTERNS[p]} — shows again in the ${hit.where}; check it against the source.` });
         break;
       }
+      case "NOTATION": {
+        const wrong = String(v.wrong ?? "");
+        if (!wrong) break;
+        const re = wordRe(wrong);
+        const where = re.test(e.stem) ? "text" : e.options.find((o) => re.test(o.text));
+        if (where) out.push({ field: where === "text" ? "text" : (`option ${(where as { label: string }).label}` as FieldName), ruleId: r.id, detail: `${tag(r)}: “${wrong}” was corrected to “${String(v.right)}” before; check the notation against the source (nothing is changed).` });
+        break;
+      }
+      case "QUESTION_TYPES": {
+        const shapes = v.shapes as { statementNumbering?: string | null; matchShape?: string | null } | undefined;
+        if (r !== types || !shapes) break;
+        const fam = statementFamily(e.stem);
+        if (shapes.statementNumbering && fam && fam !== shapes.statementNumbering) out.push({ field: "text", ruleId: r.id, detail: `${tag(r)}: statements in this paper are numbered ${shapes.statementNumbering}; this question's are ${fam} — check the statements against the source.` });
+        const shape = matchShapeOf({ listI: e.listI ?? null, listII: e.listII ?? null });
+        if (shapes.matchShape && shape && shape !== shapes.matchShape) out.push({ field: "options", ruleId: r.id, detail: `${tag(r)}: match lists in this paper are ${shapes.matchShape} (List I x List II); this question's are ${shape} — check for rows lost or merged.` });
+        break;
+      }
       case "SUBJECT_SCOPE": {
         if (r.scope !== "PAPER" || !ctx.subjectName) break;
         const scope = Object.keys((v.subjects as Record<string, number>) ?? {});
-        if (scope.length && !scope.includes(ctx.subjectName)) out.push({ field: "subject", ruleId: r.id, detail: `${tag(r)}: ${paper} covers ${scope.join(", ")}; this question's subject “${ctx.subjectName}” is outside them — check the subject.` });
+        if (scope.length && !scope.includes(ctx.subjectName)) out.push({ field: "subject", ruleId: r.id, detail: `${tag(r)}: ${r.paper} covers ${scope.join(", ")}; this question's subject “${ctx.subjectName}” is outside them — check the subject.` });
         break;
       }
       default:

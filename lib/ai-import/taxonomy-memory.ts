@@ -7,7 +7,7 @@ import { getExamTaxonomy, type ExamTaxonomySubject } from "@/lib/exam-taxonomy";
 import { buildTaxonomyIndex, classificationText, type ClassifierMemory, type TaxonomyIndex } from "@/lib/ai-import/taxonomy-classify";
 import { headingKey, resolveHeadingSubject } from "@/lib/ai-import/section-subject";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
-import { memoryBrief, mergePaperRules, paperOf, type MemoryPurpose, type PaperRule, type PaperRuleProposal } from "@/lib/ai-import/paper-memory";
+import { bulkConfirmEligible, editionOf, memoryBrief, mergePaperRules, paperOf, type MemoryPurpose, type PaperRule, type PaperRuleProposal } from "@/lib/ai-import/paper-memory";
 
 /**
  * Exam-specific taxonomy reference of the AI Question Importer ("taxonomy memory"), one Setting row per exam
@@ -478,6 +478,12 @@ export async function paperIdentity(job: { title: string; previousYearPaperId: s
   return paperOf(pyp?.title) ?? paperOf(job.title);
 }
 
+/** The edition (year) of this import's paper: the job's year, else a year in its Previous Year Paper / job title. */
+export async function paperEdition(job: { title: string; previousYearPaperId: string | null; year?: number | null }): Promise<string | null> {
+  const pyp = job.previousYearPaperId ? await prisma.previousYearPaper.findUnique({ where: { id: job.previousYearPaperId }, select: { title: true } }) : null;
+  return editionOf(job.year, pyp?.title, job.title);
+}
+
 /** One import's paper and its exam's paper rules (callers use only the confirmed ones that apply — paper-memory.ts). */
 export async function jobPaperMemory(job: { examId: string; title: string; previousYearPaperId: string | null }): Promise<{ paper: string | null; rules: PaperRule[] }> {
   return { paper: await paperIdentity(job), rules: await examPaperRules(job.examId) };
@@ -498,6 +504,8 @@ export async function examPaperRules(examId: string): Promise<PaperRule[]> {
 export async function savePaperRuleProposals(examId: string, actorId: string, jobId: string, proposals: PaperRuleProposal[]): Promise<{ added: number; updated: number; contradicted: number }> {
   const { mem } = await current(examId);
   const r = mergePaperRules(mem.paperRules ?? [], proposals, new Date().toISOString(), () => randomBytes(6).toString("hex"));
+  // Nothing new learned: the stored row is left exactly as it is (no version bump, no history entry).
+  if (JSON.stringify(r.rules) === JSON.stringify(mem.paperRules ?? [])) return { added: 0, updated: 0, contradicted: 0 };
   await saveExamMemory({ ...mem, paperRules: r.rules }, actorId, "AI_IMPORT_PAPER_MEMORY_LEARNED", { jobId, proposals: proposals.length, added: r.added, updated: r.updated, contradicted: r.contradicted });
   return { added: r.added, updated: r.updated, contradicted: r.contradicted };
 }
@@ -513,4 +521,19 @@ export async function decidePaperRule(examId: string, actorId: string, id: strin
   const rules = (mem.paperRules ?? []).map((x) => (x.id === id ? next : decision === "REJECTED" && x.contradictedBy === rule.key && x.paper === rule.paper && x.kind === rule.kind ? { ...x, contradictedBy: null } : x));
   await saveExamMemory({ ...mem, paperRules: rules }, actorId, decision === "CONFIRMED" ? "AI_IMPORT_PAPER_RULE_CONFIRMED" : "AI_IMPORT_PAPER_RULE_REJECTED", { id, kind: rule.kind, scope: rule.scope, paper: rule.paper, key: rule.key });
   return next;
+}
+
+/**
+ * "Confirm all eligible": the administrator confirms, in one click, the rules shown to them as eligible (bulkConfirmEligible)
+ * that are still eligible now. One memory version and one audit entry list every id. Never runs without that click.
+ */
+export async function confirmEligiblePaperRules(examId: string, actorId: string, shownIds: string[]): Promise<{ confirmed: string[] }> {
+  const { mem } = await current(examId);
+  const shown = new Set(shownIds);
+  const at = new Date().toISOString();
+  const ids = (mem.paperRules ?? []).filter((r) => shown.has(r.id) && bulkConfirmEligible(r)).map((r) => r.id);
+  if (!ids.length) throw new ImportJobError("No rule is eligible any more — reload the page.");
+  const rules = (mem.paperRules ?? []).map((x) => (ids.includes(x.id) ? { ...x, status: "CONFIRMED" as const, decidedById: actorId, decidedAt: at, note: "Confirmed with “Confirm all eligible”." } : x));
+  await saveExamMemory({ ...mem, paperRules: rules }, actorId, "AI_IMPORT_PAPER_RULES_BULK_CONFIRMED", { ids, count: ids.length });
+  return { confirmed: ids };
 }

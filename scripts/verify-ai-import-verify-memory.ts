@@ -316,7 +316,9 @@ async function main() {
   check("the same (now out-of-date) suggestion cannot be applied again", await refused(() => applyVerifySuggestion(t2.id, admin.id, "text", "V2"), /out of date/));
   check("the accepted suggestion teaches nothing until the question is approved", !(await examPaperRules(exam.id)).some((r) => r.kind === "OCR_CONFUSION"));
   await prisma.aiImportQuestion.update({ where: { id: t2.id }, data: { finalAnswer: ["A"], answerConfirmedById: admin.id } });
-  const ap2 = await approveQuestions([t2.id], admin.id);
+  // P3: an OCR fix is learned only when the page's own text shows the corrected word.
+  await prisma.aiImportPage.upsert({ where: { fileId_pageNumber: { fileId: t2.fileId, pageNumber: t2.pages[0] } }, create: { jobId: t2.jobId, fileId: t2.fileId, pageNumber: t2.pages[0], textLayer: te.stem }, update: { textLayer: te.stem } });
+  const ap2 =await approveQuestions([t2.id], admin.id);
   const ocrRule = (await examPaperRules(exam.id)).find((r) => r.kind === "OCR_CONFUSION");
   check("after approval: “Rheurnatic” → “Rheumatic” proposed as an OCR confusion of PAPER I (PROPOSED)", ap2.approved === 1 && ocrRule?.value.wrong === "Rheurnatic" && ocrRule.status === "PROPOSED" && ocrRule.paper === "PAPER I", { ap2, ocrRule });
 

@@ -61,7 +61,7 @@ import { unlinkReference } from "@/lib/ai-import/reference";
 import { referenceOcrPreview, requestLocalReferenceOcr, requestReferenceOcr, type ReferenceOcrPreview, type ReferenceOcrRequest } from "@/lib/ai-import/reference-ocr";
 import { applySourceReread, sourceRereadPreview, type RereadChoice, type RereadPreview } from "@/lib/ai-import/source-reread";
 import { learnPaperMemory } from "@/lib/ai-import/paper-learn";
-import { decidePaperRule } from "@/lib/ai-import/taxonomy-memory";
+import { confirmEligiblePaperRules, decidePaperRule } from "@/lib/ai-import/taxonomy-memory";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { forceImportQuestion, type ForceResult } from "@/lib/ai-import/force-publish";
 
@@ -916,6 +916,15 @@ export async function decidePaperRuleAction(examId: string, id: string, decision
     if (typeof examId !== "string" || !examId || typeof id !== "string" || !id || (decision !== "CONFIRMED" && decision !== "REJECTED")) throw new ImportJobError("Choose the rule and a decision.");
     await decidePaperRule(examId, actorId, id, decision, typeof note === "string" ? note : null);
     return null;
+  });
+}
+
+/** Paper memory: "Confirm all eligible" — confirms the eligible rules the administrator was shown (Manage permission, audited). */
+export async function confirmEligiblePaperRulesAction(examId: string, ids: string[]): Promise<ImporterResult<{ confirmed: string[] }>> {
+  return run(await requireManage(), async (actorId) => {
+    const list = Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string").slice(0, 500) : [];
+    if (typeof examId !== "string" || !examId || !list.length) throw new ImportJobError("No eligible rule was shown.");
+    return confirmEligiblePaperRules(examId, actorId, list);
   });
 }
 
