@@ -39,7 +39,9 @@ export function CostSummary({ estimateInr, maxInr, job, month, istMonth, priced 
   const [y, m] = istMonth.split("-");
   const j = actual(job);
   const mo = actual(month);
-  const { monthLeft, totalLeft, short } = budgetShortfall(priced ? maxInr : null, budget);
+  // After confirmation the shortfall was already shown in the approval (BudgetCheck) for this budget state: the job page
+  // keeps the budget-left figures but does not repeat the warning on every visit.
+  const { monthLeft, totalLeft, short } = budgetShortfall(priced && confirmedMaxInr === undefined ? maxInr : null, budget);
   const rows: { id: string; label: string; value: string; detail?: string | null }[] = [
     { id: "cost-estimate", label: "Estimated cost", value: priced ? inr(estimateInr) : "Unknown — not priced" },
     { id: "cost-max", label: "Estimated maximum", value: priced ? inr(maxInr) : "Unknown — not priced", detail: "an estimate: every request at its worst case" },

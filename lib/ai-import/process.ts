@@ -4,7 +4,7 @@ import sharp from "sharp";
 import { AiImportFileRole, AiImportFileStatus, AiImportPageStatus, AiImportQuestionStatus, type AiImportFile, type AiImportJob, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseImportFile } from "@/lib/bulk-import";
-import { ocrTextLayer, pageLayout, renderPage, type PageLayout } from "@/lib/ai-import/pdf";
+import { ocrTextLayer, pageLayout, renderPage, scanPpi, type PageLayout } from "@/lib/ai-import/pdf";
 import { readDocx, IMG_TOKEN, type DocxContent } from "@/lib/ai-import/docx";
 import { joinPreamble, orphanQuestion, parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
 import { blockToQuestion, candidateInstruction, cleanStem, formatStem, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
@@ -21,7 +21,7 @@ import { logEvent } from "@/lib/ai-import/jobs";
 import { sourceKeyOf, type ExtractedQuestion, type NBox, type PageExtraction } from "@/lib/ai-import/types";
 import { pixelRect, toPageBox, type ViewPart } from "@/lib/ai-import/rescan-target";
 import { ocrAvailable, ocrImageFile, ocrPdfPage } from "@/lib/ai-import/ocr";
-import { readOcrPage, type OcrPageResult } from "@/lib/ai-import/ocr-page";
+import { EXPLAINED_OUTCOMES, readOcrPage, type OcrPageResult, type PageOutcome } from "@/lib/ai-import/ocr-page";
 import { BLANK_INK_BELOW, type OcrPage } from "@/lib/ai-import/ocr-layout";
 import type { ImporterSettings, VerifyMode } from "@/lib/ai-import/config";
 import { figureRows, manuallyCorrected, recordVersion, snapshotFigures, type FigureSnapshot } from "@/lib/ai-import/versions";
@@ -277,6 +277,11 @@ async function nextOrderIndex(fileId: string): Promise<number> {
 
 // ---- PDF -------------------------------------------------------------------------------------------
 
+/** Share of an unnumbered local fragment's text inside an AI-read question at which it is that question's duplicate. */
+const DUPLICATE_FRAGMENT_AT = 0.8;
+/** Native scan resolution below which a page gets a low-resolution warning (OCR renders at 200 dpi). */
+const LOW_SCAN_PPI = 200;
+
 async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void> {
   const full = vaultPath(file.storageKey!);
   const pages = file.pageCount ?? 0;
@@ -319,6 +324,9 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
     }
     const textChars = layout.lines.reduce((a, l) => a + l.text.replace(/\s+/g, "").length, 0);
     const scanned = textChars < 80 || bilingual;
+    // A low native scan resolution (e.g. a 150-dpi recompressed re-upload) limits what OCR / the reader can see: warned, never blocked.
+    const ppi = scanned ? await scanPpi(full, p).catch(() => null) : null;
+    if (ppi !== null && ppi < LOW_SCAN_PPI) await logEvent(ctx.job.id, "PAGE_LOW_RESOLUTION", `${file.originalName} page ${p}: the scan is only ${ppi} dpi (below ${LOW_SCAN_PPI}); small print, subscripts and figures may be misread — a ${LOW_SCAN_PPI}–300 dpi scan of the paper reads more reliably.`, { page: p, ppi });
     let textLayer = layout.lines.map((l) => l.text).join("\n").slice(0, 20_000);
     let local: (PageExtraction & { preamble: string }) | null = scanned ? null : parsePdfPageLocal({ lines: layout.lines, images: layout.images }, p, state);
     // A searchable scan carries an invisible OCR text layer (Sprint A item 2, 2026-11-06). It is read (free) but never
@@ -395,9 +403,11 @@ async function localPdfPass(ctx: StepContext, file: AiImportFile): Promise<void>
     const read = local.questions.map((q) => q.number).filter((n): n is number => n !== null);
     const layerOnly = layer ? layer.numbers.filter((n) => !read.includes(n)) : [];
     // A question number the OCR layer shows but the reading missed leaves the page unexplained (quality blocker).
-    const outcome = layerOnly.length ? "NEEDS_REVIEW" : ocr ? ocr.result.outcome : noQuestions ? "NO_QUESTIONS" : "TEXT_LAYER";
+    // An uncertain OCR reading that no AI can re-read is not explained: it is reviewed, never silently accepted.
+    const ocrUnchecked = !!ocr && needsAi && !aiUsable(ctx.settings);
+    const outcome = layerOnly.length || ocrUnchecked ? "NEEDS_REVIEW" : ocr ? ocr.result.outcome : noQuestions ? "NO_QUESTIONS" : "TEXT_LAYER";
     const layerCheck = layer ? (layerOnly.length ? ` The PDF's own OCR text layer also shows question number(s) ${layerOnly.join(", ")} that this reading did not find — check the page.` : ` The PDF's own OCR text layer agrees on the question numbers (${layer.numbers.length}).`) : "";
-    const outcomeReason = (ocr ? ocr.result.reason : noQuestions ? "the text layer was read but no numbered question was found — check it" : `${local.questions.length} question(s) from the PDF's own text${local.reliable ? "" : ` (uncertain: ${local.reasons.slice(0, 3).join("; ")})`}`) + layerCheck;
+    const outcomeReason = (ocrUnchecked ? `local OCR reading is uncertain and AI is not available to re-read it (${local.reasons.slice(0, 3).join("; ") || "no questions found"}) — check the page` : ocr ? ocr.result.reason : noQuestions ? "the text layer was read but no numbered question was found — check it" : `${local.questions.length} question(s) from the PDF's own text${local.reliable ? "" : ` (uncertain: ${local.reasons.slice(0, 3).join("; ")})`}`) + layerCheck;
     const pageKind = ocr ? "SCANNED" : needsAi ? "TEXT_UNRELIABLE" : "TEXT";
     const rawOutput = { startState, endState: { ...state }, local: { reliable: local.reliable, reasons: local.reasons }, ...(layer ? { ocrLayer: { chars: layer.chars, numbers: layer.numbers, notRead: layerOnly } } : {}), ...(ocr ? { ocr: { skew: ocr.result.layout.skew, gutter: ocr.result.layout.gutter, furniture: ocr.result.layout.furniture.slice(0, 40), seconds: ocr.raw.seconds, rereads: ocr.raw.rereads } } : {}) } as Prisma.InputJsonValue;
     await record(p, { status, kind: pageKind, textChars, textLayer, imageCount: layout.images.length, ...ocrFields, outcome, outcomeReason, rawOutput, processedAt: status === AiImportPageStatus.DONE ? new Date() : null, model: status === AiImportPageStatus.DONE ? (ocr ? ocr.raw.engine : "local") : null });
@@ -491,7 +501,10 @@ export function mergeContinuation(pd: ExtractedQuestion, q: ExtractedQuestion, p
       notes.push(`Page ${pageNumber} repeats option label(s) already read on the previous page — check the options.`);
       confidence = Math.min(confidence, 0.5);
     }
-    options = [...pd.options, ...added].map((o, i) => ({ ...o, label: String.fromCharCode(65 + i) }));
+    const joined = [...pd.options, ...added];
+    // Printed letters are kept when they run in order ((a),(c),(d) stays A,C,D — a missing (b) is never shifted in).
+    const inOrder = joined.every((o, i) => /^[A-E]$/.test(o.label) && (i === 0 || o.label > joined[i - 1].label));
+    options = inOrder ? joined : joined.map((o, i) => ({ ...o, label: String.fromCharCode(65 + i) }));
     if (tail) {
       notes.push(`Text at the top of page ${pageNumber} could not be placed automatically: "${tail.slice(0, 300)}" — add it where it belongs.`);
       confidence = Math.min(confidence, 0.4);
@@ -590,15 +603,27 @@ export async function joinPendingContinuations(ctx: StepContext): Promise<number
 }
 
 /** Compares two independent reads of the same question (deterministic), field by field. */
+const normRead = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[{}\s.,;:()[\]'"`]/g, "");
+const trigrams = (s: string) => new Set(Array.from({ length: Math.max(0, s.length - 2) }, (_, i) => s.slice(i, i + 3)));
+/** Share of `part`'s text found in `whole` (character trigrams, same normalisation as readsAgree). */
+export function containedIn(part: string, whole: string): number {
+  const gp = trigrams(normRead(part));
+  if (!gp.size) return 0;
+  const gw = trigrams(normRead(whole));
+  let hit = 0;
+  for (const g of gp) if (gw.has(g)) hit++;
+  return hit / gp.size;
+}
+const readText = (q: Pick<ExtractedQuestion, "stem" | "options">) => [q.stem, ...q.options.map((o) => o.text)].join("\n");
+
 export function readsAgree(a: ExtractedQuestion, b: ExtractedQuestion): { agree: boolean; detail: string; fields: string[] } {
-  const norm = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[{}\s.,;:()[\]'"`]/g, "");
+  const norm = normRead;
   const sim = (x: string, y: string) => {
     const A = norm(x);
     const B = norm(y);
     if (!A && !B) return 1;
-    const grams = (s: string) => new Set(Array.from({ length: Math.max(0, s.length - 2) }, (_, i) => s.slice(i, i + 3)));
-    const ga = grams(A);
-    const gb = grams(B);
+    const ga = trigrams(A);
+    const gb = trigrams(B);
     let inter = 0;
     for (const g of ga) if (gb.has(g)) inter++;
     return ga.size + gb.size ? (2 * inter) / (ga.size + gb.size) : A === B ? 1 : 0;
@@ -753,7 +778,7 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   const ocrTwins = await prisma.aiImportQuestion.findMany({ where: { fileId: file.id, pages: { has: page.pageNumber } }, select: { sourceNumber: true, data: true } });
   const ocrTextOf = (n: number | null) => (n === null ? null : (ocrTwins.find((t) => t.sourceNumber === n)?.data as { ocr?: { text?: string } } | null)?.ocr?.text ?? null);
   const readOf = (p: { out: PageOutput; model: string }) => repairLayout(repairDegenerateOptions(toExtracted(p.out, page.pageNumber, p.model), ocrTextOf), ocrTextOf);
-  let incomplete = incompleteReading(readOf(primary));
+  let incomplete = incompleteReading(readOf(primary), ocrTextOf);
   const retryModels = [ctx.settings.models.extract!, ...ctx.settings.models.extractFallbacks].filter((m, i, a) => !!m && a.indexOf(m) === i);
   let reread = false;
   for (let k = 0; incomplete.length && k < INCOMPLETE_READ_RETRIES; k++) {
@@ -761,12 +786,12 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     await logEvent(ctx.job.id, "PAGE_READING_INCOMPLETE", `${file.originalName} page ${page.pageNumber}: the reading by ${primary.model} is incomplete (${incomplete.slice(0, 3).join("; ")}) — reading the page again with ${model} (attempt ${k + 2} of ${INCOMPLETE_READ_RETRIES + 1}).`, { pageId: page.id, model: primary.model, reasons: incomplete.slice(0, 10), attempt: k + 1 });
     primary = await call([model], "extract", "extract-retry-incomplete");
     reread = true;
-    incomplete = incompleteReading(readOf(primary));
+    incomplete = incompleteReading(readOf(primary), ocrTextOf);
   }
   // Only some questions have unusable options and the rest of the page is good: the page is kept (one malformed question
   // never fails the whole page). Such a question is dropped from this reading when the page's local reading has it (that
   // row is kept and flagged below), else saved as read — its missing options flag it for correction. Nothing is invented.
-  const isolated = incomplete.length && optionOnlyReasons(incomplete) && incomplete.length < readOf(primary).length ? new Set(readOf(primary).filter((q) => incompleteReading([q]).length && ocrTextOf(q.number)).map((q) => q.number)) : null;
+  const isolated = incomplete.length && optionOnlyReasons(incomplete) && incomplete.length < readOf(primary).length ? new Set(readOf(primary).filter((q) => incompleteReading([q], ocrTextOf).length && ocrTextOf(q.number)).map((q) => q.number)) : null;
   if (isolated) {
     await logEvent(ctx.job.id, "PAGE_QUESTIONS_ISOLATED", `${file.originalName} page ${page.pageNumber}: ${incomplete.length} question(s) with unusable options were isolated (${incomplete.slice(0, 3).join("; ")}); the rest of the page is kept. They need correction.`, { pageId: page.id, reasons: incomplete });
     incomplete = [];
@@ -893,6 +918,16 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
     if (rescan || l.editedData || l.status !== AiImportQuestionStatus.EXTRACTED) continue;
     const d = l.data as unknown as ExtractedQuestion;
     if (d.method !== "LOCAL_PDF" && d.method !== "LOCAL_OCR") continue;
+    // An unnumbered local fragment (its printed number was not read) whose text the AI read holds is that question
+    // again, not another one (2026-11-19 audit: 7 extra rows, e.g. CMS 2026 P-II p6 = the tail of Q21).
+    const host = d.number === null ? qs.find((q) => containedIn(readText(d), readText(q)) >= DUPLICATE_FRAGMENT_AT) : undefined;
+    if (host) {
+      d.notes = [...(d.notes ?? []), `Duplicate: this unnumbered fragment is part of Q${host.number ?? host.label} as read by AI on this page.`];
+      (d as ExtractedQuestion & { duplicateFragmentOf?: string }).duplicateFragmentOf = sourceKeyOf(host);
+      const row = await prisma.aiImportQuestion.findUnique({ where: { id: l.id }, select: { issueCodes: true } });
+      await prisma.aiImportQuestion.update({ where: { id: l.id }, data: { data: d as unknown as Prisma.InputJsonValue, status: AiImportQuestionStatus.DUPLICATE, issueCodes: [...new Set([...(row?.issueCodes ?? []), "DUPLICATE_IN_BATCH"])] } });
+      continue;
+    }
     d.notes = [...(d.notes ?? []), "The AI read of this page did not return this question; kept from the text layer."];
     d.confidence = Math.min(d.confidence, 0.5);
     await prisma.aiImportQuestion.update({ where: { id: l.id }, data: { data: d as unknown as Prisma.InputJsonValue, confidence: d.confidence } });
@@ -907,9 +942,12 @@ async function aiPage(ctx: StepContext, file: AiImportFile, pageId: string): Pro
   if (rescan) {
     // A re-scan never replaces the page's own reading or outcome: its reading is appended to the page's re-scan log.
     const log = Array.isArray((rest as { rescanReads?: unknown[] }).rescanReads) ? (rest as { rescanReads: unknown[] }).rescanReads : [];
+    // …except a page that never had a reading of its own (its first read failed, 2026-11-19 audit: FSO 2019 p9 stayed
+    // unaccounted for after 4 successful re-scans): a re-scan that read questions there is the page's reading.
+    const firstReading = !(rest as { ai?: unknown }).ai && !EXPLAINED_OUTCOMES.includes(page.outcome as PageOutcome) && qs.length > 0;
     await prisma.aiImportPage.update({
       where: { id: page.id },
-      data: { status: AiImportPageStatus.DONE, processedAt: new Date(), errorMessage: null, rawOutput: { ...rest, ...(pendingJoins.length ? { pendingJoins } : {}), rescanReads: [...log.slice(-9), { at: new Date().toISOString(), model: primary.model, view: rescan.view ?? { kind: "PAGE" }, keys: rescan.keys, out: primary.out }] } as unknown as Prisma.InputJsonValue },
+      data: { status: AiImportPageStatus.DONE, processedAt: new Date(), errorMessage: null, ...(firstReading ? { model: primary.model, outcome: "AI", outcomeReason: `${qs.length} question(s) read by a re-scan (${primary.model}); the page had no earlier reading` } : {}), rawOutput: { ...rest, ...(pendingJoins.length ? { pendingJoins } : {}), rescanReads: [...log.slice(-9), { at: new Date().toISOString(), model: primary.model, view: rescan.view ?? { kind: "PAGE" }, keys: rescan.keys, out: primary.out }] } as unknown as Prisma.InputJsonValue },
     });
   } else
   await prisma.aiImportPage.update({

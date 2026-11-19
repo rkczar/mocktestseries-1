@@ -5,7 +5,7 @@ import { IMAGE_TOKENS, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
 import type { ImporterSettings, ImporterTask, SelectionTask, VerifyMode } from "@/lib/ai-import/config";
 import type { FileFacts } from "@/lib/ai-import/analyze";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
-import { fallbackMaxInr } from "@/lib/ai-import/select";
+import type { TaskChoice } from "@/lib/ai-import/selection-types";
 import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
 
 /**
@@ -14,8 +14,8 @@ import { CLASSIFY_BATCH } from "@/lib/ai-import/prompts";
  * the plan's USD→INR rate. `totalInr` is the typical ESTIMATE; `maxInr` is the
  * conservative MAXIMUM — every possible request at the reserved worst case
  * (full output limit, second reads of every AI page, REQUEST_ATTEMPTS sends per
- * request, and REQUEST_ATTEMPTS sends to a fallback model priced at the dearest
- * eligible one — ai.ts importerAiCall / importerAiCallChecked).
+ * request, and REQUEST_ATTEMPTS sends to a fallback model priced at the plan's
+ * actual next model — ai.ts importerAiCall / importerAiCallChecked).
  * Actual cost is what the provider reports per call (Cost Center).
  */
 
@@ -60,6 +60,20 @@ export interface CostEstimate {
 }
 
 const SYSTEM_TOKENS = 1_100;
+
+/**
+ * The worst case of ONE fallback request for a task: the model the worker would actually turn to next — the task's
+ * first configured fallback, else the next eligible candidate of the plan (candidates are cheapest first; ai.ts
+ * replaceModel picks it the same way) — never below the task's own model. 2026-11: pricing every fallback at the
+ * dearest eligible model made the maximum ~1,000× the estimate (₹5,725 vs ₹4.81) and every approval warned. The
+ * gateway still reserves and checks each real request at its own price.
+ */
+export function nextFallbackMaxInr(c: Pick<TaskChoice, "model" | "maxInr" | "fallbacks" | "candidates"> | null | undefined): number | null {
+  if (!c || c.maxInr === null) return null;
+  const eligible = (c.candidates ?? []).filter((x) => x.eligible && x.maxInr !== null && x.id !== c.model);
+  const next = eligible.find((x) => x.id === c.fallbacks?.[0]) ?? eligible[0];
+  return Math.max(c.maxInr, next?.maxInr ?? 0);
+}
 
 export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts: FileFacts[]; settings: ImporterSettings; plan: ModelPlan | null; verifyMode?: VerifyMode }): Promise<CostEstimate> {
   const { settings, plan } = input;
@@ -109,8 +123,8 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
     const problem = !plan ? "no model plan" : !model ? c?.reason ?? "no model" : !pr ? "no price" : null;
     const usd = pr && model ? inTok * pr.prompt + outTok * pr.completion + calls * (pr.request + (vision ? IMAGE_TOKENS * pr.image : 0)) : null;
     // Every send one request can make: REQUEST_ATTEMPTS to the job's model, and — after an unusable answer or an
-    // unavailable model — REQUEST_ATTEMPTS to a fallback, priced at the dearest eligible model of the task.
-    const fallbackInr = fallbackMaxInr(c);
+    // unavailable model — REQUEST_ATTEMPTS to a fallback, priced at the plan's actual next model.
+    const fallbackInr = nextFallbackMaxInr(c);
     const maxInr = model && c?.maxInr !== null && c?.maxInr !== undefined && fallbackInr !== null ? maxCalls * attemptsPerRequest * (c.maxInr + fallbackInr) : null;
     return { task, label, model, calls, inputTokens: inTok, outputTokens: outTok, usd, inr: usdToInr(usd, fx.rate), pricePerM: pr ? { prompt: pr.prompt * 1e6, completion: pr.completion * 1e6 } : null, problem: calls ? problem : null, maxCalls, maxInr: calls ? maxInr : 0 };
   };

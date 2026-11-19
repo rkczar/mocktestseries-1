@@ -115,10 +115,14 @@ export function keyExpected(expectedQuestions: number | null | undefined): numbe
   return expectedQuestions ?? null;
 }
 
-/** An AI reading of a key that covers fewer than KEY_MIN_COVERAGE of the expected questions: not used (null = complete or unknown). */
+/**
+ * An AI-vision reading of a key that covers fewer than KEY_MIN_COVERAGE of the expected questions: not used (null = complete
+ * or unknown). Text-layer and local-OCR readings are kept per entry (ocrKeyPairs already drops doubtful cells); the numbers
+ * they miss simply have no entry (seen 2026-11-19: 89/89 and 85/85 OCR entries identical to the text key were discarded).
+ */
 export function keyReadingIncomplete(method: string, pairs: KeyPair[], expected: number | null): { read: number; expected: number } | null {
   const read = new Set(pairs.map((x) => x.number)).size;
-  return method !== "local" && pairs.length && expected && read < Math.ceil(expected * KEY_MIN_COVERAGE) ? { read, expected } : null;
+  return method === "ai" && pairs.length && expected && read < Math.ceil(expected * KEY_MIN_COVERAGE) ? { read, expected } : null;
 }
 
 /**
@@ -325,7 +329,7 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     }
     await saveKeyEntries(ctx, file.id, paperFileId, null, pairs);
     // The key's printed identifiers are kept with the file (post.ts compares them with the question paper).
-    const detected = { ...((file.detected as Record<string, unknown> | null) ?? {}), keyHeader: header } as unknown as Prisma.InputJsonValue;
+    const detected = { ...((file.detected as Record<string, unknown> | null) ?? {}), keyHeader: header, keyMethod: method } as unknown as Prisma.InputJsonValue;
     await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED, errorMessage: null, detected } });
     const printed = header ? [header.paper && `Paper ${header.paper}`, header.series && `Series ${header.series}`, header.set && `Set ${header.set}`, header.totalQuestions && `${header.totalQuestions} questions`].filter(Boolean).join(", ") : "";
     await logEvent(ctx.job.id, "KEY_READ", `${file.originalName}: ${pairs.length} answer-key entries read (${method === "ai" ? "AI vision" : method === "ocr" ? "local OCR, no AI" : "text layer"})${printed ? ` — the key is printed for ${printed}` : ""}`, { fileId: file.id, entries: pairs.length, method, header });

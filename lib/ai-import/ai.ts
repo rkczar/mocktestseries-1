@@ -10,12 +10,16 @@ import { OpenRouterError, TRANSIENT_OPENROUTER_ERRORS, chatCompletion, describeC
 import { IMPORTER_SETTING_KEY, PILOT_LIMITS, SELECTION_TASK_LABELS, importerFeature, normalizeImporterSettings, type ImporterSettings, type ImporterTask, type SelectionTask } from "@/lib/ai-import/config";
 import { budgetBlock, capsOf, type BudgetBlock, type ImporterCaps } from "@/lib/ai-import/budget-guard";
 import { FAILURE_ADVICE, failureMessage, kindOfCategory, type FailureKind } from "@/lib/ai-import/failure";
-import { computeModelPlan, evaluateModel, planOf, requestUsd } from "@/lib/ai-import/select";
+import { PROFILES, computeModelPlan, evaluateModel, planOf, requestUsd } from "@/lib/ai-import/select";
 import { OUTPUT_SCHEMAS, type OutputSchemaName } from "@/lib/ai-import/output-schemas";
 import { asReasoningMeta, reasoningParam, requestProblem } from "@/lib/ai-import/request-params";
 import { freshRouteSnapshot } from "@/lib/ai-import/routes";
 import { importerModelHealth } from "@/lib/ai-import/health";
-import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
+import type { ModelPlan, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
+import { EXTRACT_SYSTEM } from "@/lib/ai-import/prompts";
+import { BILINGUAL_RULES } from "@/lib/ai-import/bilingual";
+import { contentPartOf } from "@/lib/ai-import/verify-core";
+import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
 /**
  * Every paid AI request of the AI Question Importer goes through here:
@@ -297,6 +301,56 @@ export async function importerBudgetBlock(jobId: string, settings: ImporterSetti
   return budgetBlock({ amountInr: Math.max(0, opts.amountInr ?? 0), caps: importerCaps(settings), job: { spentInr: job.spentInr, inFlightInr: await jobInFlight(prisma, jobId), confirmedMaxInr: opts.beforeConfirmation ? null : job.budgetInr }, spend: await importerSpendTx(prisma, istDayMonth().istMonth) });
 }
 
+/** Output limit of one page read (process.ts aiPage): both language versions of a bilingual paper need more room. */
+export const pageReadOutputTokens = (bilingual: boolean): number => (bilingual ? 10_000 : 8_000);
+
+/** The worst case (₹) the gateway reserves for one send of a request of this shape at these prices (importerAiCall). */
+export function requestWorstInr(price: PlanPrice, inputTokens: number, maxOutputTokens: number, images: number, fxRate: number): number {
+  return usdToInr(requestUsd(price, inputTokens, maxOutputTokens, images) * PRICE_MARGIN, fxRate)!;
+}
+
+/**
+ * The worst case of one page read by `choice` exactly as the gateway will reserve it (bilingual system prompt and output
+ * limit, largest page text, one image), never below the plan's own maximum or the largest reservation this job already
+ * made for the task (a route priced above the plan is reserved at its higher price). 2026-11-11: the re-scan preflight
+ * used the plan's 8,000-token maximum (₹6.10) while the gateway reserved ₹12.92, so 23 re-scans were queued and refused.
+ */
+export async function pageReadWorstInr(jobId: string, choice: TaskChoice | null | undefined, bilingual: boolean): Promise<number> {
+  if (!choice?.model) return 0;
+  const fx = (await getUsdInr()).rate;
+  const system = bilingual ? EXTRACT_SYSTEM + BILINGUAL_RULES : EXTRACT_SYSTEM;
+  const tokens = estimateInputTokens(system, [{ type: "text", text: "x".repeat(PROFILES.extract.textChars) }, { type: "image_url", image_url: { url: "" } }]);
+  const priced = choice.price && fx !== null ? requestWorstInr(choice.price, tokens, pageReadOutputTokens(bilingual), 1, fx) : 0;
+  const past = await prisma.aiBudgetReservation.aggregate({ where: { requestKey: { startsWith: `qi:${jobId}:` }, feature: importerFeature(choice.task === "verify" ? "verify" : "extract") }, _max: { reservedInr: true } });
+  return Math.max(priced, choice.maxInr ?? 0, past._max.reservedInr ?? 0);
+}
+
+/**
+ * Paid answers already stored for the same question content in this exam, by model: an answer opinion
+ * (aiAnswer / aiAnswerModel) and a used AI classification (data.classification.ai). Keyed `${contentPartOf}|${model}`,
+ * so a re-run, a re-import of the same paper or Retry never pays again for a question whose content did not change.
+ * No new storage: read from the AiImportQuestion rows that already hold these results.
+ */
+export async function storedAiResults(examId: string): Promise<{ opinions: Map<string, { answer: string[]; confidence: number | null }>; classifications: Map<string, { subjectId: string; topicId: string | null; subTopicId: string | null; confidence: number }> }> {
+  const rows = await prisma.aiImportQuestion.findMany({ where: { job: { examId } }, select: { data: true, editedData: true, aiAnswer: true, aiAnswerModel: true, aiAnswerConfidence: true }, orderBy: { createdAt: "desc" } });
+  return aiResultIndex(rows);
+}
+
+/** Pure part of storedAiResults (tested in scripts/verify-ai-import-redesign-cost.ts); the newest row wins. */
+export function aiResultIndex(rows: { data: unknown; editedData: unknown; aiAnswer: string[]; aiAnswerModel: string | null; aiAnswerConfidence: number | null }[]) {
+  const opinions = new Map<string, { answer: string[]; confidence: number | null }>();
+  const classifications = new Map<string, { subjectId: string; topicId: string | null; subTopicId: string | null; confidence: number }>();
+  for (const r of rows) {
+    const e = (r.editedData ?? r.data) as ExtractedQuestion | null;
+    if (!e?.stem || !Array.isArray(e.options)) continue;
+    const h = contentPartOf(e);
+    if (r.aiAnswer.length && r.aiAnswerModel && !opinions.has(`${h}|${r.aiAnswerModel}`)) opinions.set(`${h}|${r.aiAnswerModel}`, { answer: r.aiAnswer, confidence: r.aiAnswerConfidence });
+    const ai = (e.classification ?? (r.data as ExtractedQuestion | null)?.classification)?.ai;
+    if (ai?.status === "USED" && ai.model && ai.subjectId && !classifications.has(`${h}|${ai.model}`)) classifications.set(`${h}|${ai.model}`, { subjectId: ai.subjectId, topicId: ai.topicId ?? null, subTopicId: ai.subTopicId ?? null, confidence: ai.confidence ?? 0 });
+  }
+  return { opinions, classifications };
+}
+
 /** Test hook only (scripts/verify-ai-import-reliability3.ts): the gateway's budget reservation, exactly as every request makes it. */
 export const reserveForTest = (input: { jobId: string; requestKey: string; feature: string; amountInr: number }) => reserve(input);
 
@@ -459,7 +513,7 @@ async function replaceModel(input: AiCallInput, plan: ModelPlan, choice: TaskCho
     throw new ImporterAiUnavailable(`The selected ${label} model ${failed} is unavailable (${why}) and no other approved model is suitable: ${alt.reason} ${sent}${advice}`);
   }
   // A configured fallback is used whatever its price (no application spending cap); the confirmed maximum already
-  // prices a fallback request (select.ts fallbackMaxInr) and the replacement is recorded with its price.
+  // prices a fallback request (estimate.ts nextFallbackMaxInr) and the replacement is recorded with its price.
   const pricier = (alt.maxInr ?? Infinity) > (choice.maxInr ?? 0) + 1e-9;
   return persistReplacement(input.jobId, sel, failed, choice, alt, why, pricier);
 }
@@ -560,7 +614,7 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   const priced = (c: TaskChoice) => {
     if (!c.price) throw new ImporterAiUnavailable(`The price of ${c.model} could not be established. Nothing was sent.`);
     const worstUsd = requestUsd(c.price, inputTokens, input.maxOutputTokens, images) * PRICE_MARGIN;
-    return { price: c.price, worstUsd, worstInr: usdToInr(worstUsd, fx.rate)!, typicalUsd: requestUsd(c.price, inputTokens, Math.round(input.maxOutputTokens * 0.4), images) };
+    return { price: c.price, worstUsd, worstInr: requestWorstInr(c.price, inputTokens, input.maxOutputTokens, images, fx.rate!), typicalUsd: requestUsd(c.price, inputTokens, Math.round(input.maxOutputTokens * 0.4), images) };
   };
   let cost = priced(choice);
   const requestId = crypto.randomUUID();
@@ -623,6 +677,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
           require_parameters: true,
         },
         timeoutMs: 150_000,
+        // The 150 s also bounds the body read (2026-11: 38 requests streamed for up to 868 s after their headers).
+        totalDeadline: true,
       });
       const actualInr = r.costUsd !== null ? usdToInr(r.costUsd, fx.rate) : null;
       const { charged, overrunInr } = await settle(input.jobId, requestKey, actualInr, r.costUsd);

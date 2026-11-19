@@ -60,9 +60,16 @@ export function budgetShortfall(maxInr: number | null, budget: { monthlyInr: num
   const monthLeft = budget ? Math.max(0, budget.monthlyInr - budget.monthUsedInr) : null;
   const totalLeft = budget ? Math.max(0, budget.totalInr - budget.allUsedInr) : null;
   const short: string[] = [];
+  // One warning per budget state: only the tighter limit is named (2026-11: with ₹1,500 monthly and ₹1,500 total, every
+  // approval showed two near-identical warnings).
   if (budget && maxInr !== null && maxInr > 0) {
-    if (maxInr > monthLeft! + 0.005) short.push(`The estimated maximum (${inr(maxInr)}) is ${inr(maxInr - monthLeft!)} more than the monthly budget left (${inr(monthLeft)} of ${inr(budget.monthlyInr)}).`);
-    if (maxInr > totalLeft! + 0.005) short.push(`It would exceed the initial ${inr(budget.totalInr)} paid-testing cap by up to ${inr(maxInr - totalLeft!)} (${inr(totalLeft)} left).`);
+    if (monthLeft! <= totalLeft! && maxInr > monthLeft! + 0.005) short.push(`The estimated maximum (${inr(maxInr)}) is ${inr(maxInr - monthLeft!)} more than the monthly budget left (${inr(monthLeft)} of ${inr(budget.monthlyInr)}).`);
+    else if (totalLeft! < monthLeft! && maxInr > totalLeft! + 0.005) short.push(`The estimated maximum (${inr(maxInr)}) would exceed the initial ${inr(budget.totalInr)} paid-testing cap by up to ${inr(maxInr - totalLeft!)} (${inr(totalLeft)} left).`);
   }
   return { monthLeft, totalLeft, short };
+}
+
+/** The budget state a decision was made in: the enforced caps and the spend so far (changes when either changes). */
+export function budgetStateKey(caps: ImporterCaps, spend: { monthInr: number; allInr: number }): string {
+  return [caps.monthlyInr, caps.totalInr, spend.monthInr, spend.allInr].map((v) => v.toFixed(2)).join("|");
 }

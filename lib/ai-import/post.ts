@@ -7,7 +7,7 @@ import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { taxonomyNameKey } from "@/lib/exam-taxonomy";
 import { lintRichSource, looksRich } from "@/lib/rich-import/manifest";
 import { ISSUE_DEFS, KEY_MIN_COVERAGE, OPINION_FAIL_STOP, OPINION_TOKENS, OPINION_TOKENS_REASONING } from "@/lib/ai-import/config";
-import { importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
+import { importerAiCall, importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable, storedAiResults } from "@/lib/ai-import/ai";
 import { failureCheckStatus, failureMessage } from "@/lib/ai-import/failure";
 import { CHECK_STATUS_LABELS, checksAllowReady, questionChecks, reviewClearsFlag, utc } from "@/lib/ai-import/checks";
 import { keyPaperChecks } from "@/lib/ai-import/key-check";
@@ -194,6 +194,19 @@ function sectionKeys(rows: KeyRow[]): KeyRow[] {
   return out;
 }
 
+/** "Correct Answer: (B) 1, 2 and 4" — a bracketed label followed by option text (not by another label). */
+const PRINTED_CODE_ANSWER = /\(\s*([A-Da-d1-4])\s*\)[ \t]+(?!(?:and|or|&|,|\/)?\s*(?:\(|[A-Da-d]\b))\S/i;
+
+/**
+ * The printed answer compared with the official key: for "(B) 1, 2 and 4" only the first bracketed label — the statement
+ * digits after it are option text, not labels (2026-11-19: stored as {B, A, D}, 43 of 46 KEY_MISMATCH were false).
+ */
+export function printedAnswerForKey(e: Pick<ExtractedQuestion, "printedAnswer" | "printedAnswerRaw">, printedLabels: string[]): string[] {
+  const m = PRINTED_CODE_ANSWER.exec(e.printedAnswerRaw ?? "");
+  const label = m ? labelFromPrinted(m[1], printedLabels) : null;
+  return label ? [label] : e.printedAnswer;
+}
+
 function sameSet(a: string[], b: string[]): boolean {
   return a.length === b.length && [...a].sort().join() === [...b].sort().join();
 }
@@ -217,12 +230,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
 
   // ---- Answer keys ----
   const keyRowsRaw = await prisma.aiImportKeyEntry.findMany({ where: { jobId: job.id }, orderBy: [{ keyFileId: "asc" }, { createdAt: "asc" }, { id: "asc" }] });
-  // A key file that only AI vision can read (image / scanned) and whose reading covers far fewer questions than the paper
-  // has is a partial reading (seen 2026-10-31: 15 cells of a 120-cell grid, 9 of them wrong): its values are not used.
+  // An AI-vision reading of a key file (image / scanned) that covers far fewer questions than the paper has is a partial
+  // reading (seen 2026-10-31: 15 cells of a 120-cell grid, 9 of them wrong): its values are not used. A local OCR or
+  // text-layer reading is used per entry (keys.ts keyMethod; files read before it was recorded keep the old rule).
   const incompleteKeys = new Map<string, string>();
   for (const f of await prisma.aiImportFile.findMany({ where: { jobId: job.id, role: AiImportFileRole.ANSWER_KEY }, select: { id: true, originalName: true, detected: true } })) {
-    const d = f.detected as { kind?: string; facts?: { textPages?: number } } | null;
-    const visionOnly = ["jpeg", "jpg", "png", "webp"].includes(d?.kind ?? "") || d?.facts?.textPages === 0;
+    const d = f.detected as { kind?: string; keyMethod?: string; facts?: { textPages?: number } } | null;
+    const visionOnly = d?.keyMethod ? d.keyMethod === "ai" : ["jpeg", "jpg", "png", "webp"].includes(d?.kind ?? "") || d?.facts?.textPages === 0;
     const read = new Set(keyRowsRaw.filter((r) => r.keyFileId === f.id).map((r) => r.sourceNumber)).size;
     if (visionOnly && read && job.expectedQuestions && read < Math.ceil(job.expectedQuestions * KEY_MIN_COVERAGE)) incompleteKeys.set(f.id, `The answer key “${f.originalName}” was read only partly (${read} of ${job.expectedQuestions} entries), so it is not used — read it again (Retry) or enter the answers by hand.`);
   }
@@ -237,10 +251,10 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     byPaper.set(paper, list);
   }
   const keyFor = new Map<string, { rows: KeyRow[]; method: string }>();
-  /** Papers whose key could not be matched by number safely (the reason is shown on each question). */
-  const unsafeKeyPapers = new Map<string, string>();
   /** Single questions whose printed number cannot be trusted for key matching (AI-read page out of sequence, an instruction). */
   const unsafeKeyQuestions = new Map<string, string>();
+  /** Key entries found for an unsafe question: shown to the reviewer with the reason, never applied. */
+  const keyNotApplied = new Map<string, KeyRow[]>();
   for (const paper of papers) {
     const rows = byPaper.get(paper);
     if (!rows?.length) continue;
@@ -258,7 +272,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     if (paperSections.size > 1 && !keyHasSections) {
       // Paper restarts numbering per section, key numbers continuously (1…N): each section's numbers are
       // offset by the sizes of the sections before it — matched by number, never by position. Used only
-      // when the section sizes add up to the key exactly; otherwise nothing is matched and it is reported.
+      // when the section sizes add up to the key exactly; otherwise only unambiguous numbers are matched (below).
       const order: { section: string; max: number }[] = [];
       for (const q of qs) {
         const e = effective(q);
@@ -269,10 +283,25 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       }
       const keyMax = Math.max(...rows.map((r) => r.sourceNumber));
       const total = order.reduce((a, g) => a + g.max, 0);
-      if (total !== keyMax) unsafeKeyPapers.set(paper, `The answer key numbers its entries 1–${keyMax} continuously, but the paper restarts its numbering per section (${order.map((g) => `${g.section || "first"}: 1–${g.max}`).join(", ")} = ${total}). The key cannot be matched to these questions safely — check for missing questions or enter the answers by hand.`);
-      else {
-        const byNumber = new Map<number, KeyRow[]>();
-        for (const r of rows) byNumber.set(r.sourceNumber, [...(byNumber.get(r.sourceNumber) ?? []), r]);
+      const byNumber = new Map<number, KeyRow[]>();
+      for (const r of rows) byNumber.set(r.sourceNumber, [...(byNumber.get(r.sourceNumber) ?? []), r]);
+      if (total !== keyMax) {
+        // The sections do not add up (often one spurious section: 2026-11-19, CMS 2026 P-II — statements read as S2#1–4
+        // pulled Q117–120 into S2 and the whole paper went unmatched). A number used by only one section is matched to
+        // the key entry with that number only when it also continues past every earlier section (so it cannot be a
+        // restarted number of a real section); any other number stays unmatched and is reported on its question.
+        const why = `The answer key numbers its entries 1–${keyMax} continuously, but the paper restarts its numbering per section (${order.map((g) => `${g.section || "first"}: 1–${g.max}`).join(", ")} = ${total}). This question's number is repeated in another section or restarts after an earlier one, so the key cannot be matched to it safely — check for missing or spurious questions, or enter the answer by hand.`;
+        const count = new Map<number, number>();
+        for (const q of qs) if (effective(q).number !== null) count.set(effective(q).number!, (count.get(effective(q).number!) ?? 0) + 1);
+        const earlierMax = new Map(order.map((g, i) => [g.section, Math.max(0, ...order.slice(0, i).map((x) => x.max))]));
+        for (const q of qs) {
+          const n = effective(q).number;
+          if (n !== null && !matchable(q) && byNumber.get(n)) keyNotApplied.set(q.id, byNumber.get(n)!);
+          if (n === null || !matchable(q)) continue;
+          if (count.get(n)! > 1 || n <= (earlierMax.get(effective(q).section) ?? 0)) unsafeKeyQuestions.set(q.id, why);
+          else if (byNumber.get(n)) keyFor.set(q.id, { rows: byNumber.get(n)!, method: `by question number (number used once in the paper; the sections do not add up to the key)` });
+        }
+      } else {
         let offset = 0;
         const offsetOf = new Map<string, number>();
         for (const g of order) {
@@ -281,9 +310,10 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         }
         for (const q of qs) {
           const e = effective(q);
-          if (e.number === null || !offsetOf.has(e.section) || !matchable(q)) continue;
+          if (e.number === null || !offsetOf.has(e.section)) continue;
           const hit = byNumber.get(offsetOf.get(e.section)! + e.number);
-          if (hit) keyFor.set(q.id, { rows: hit, method: `by number (key entry ${offsetOf.get(e.section)! + e.number} = ${e.section || "first section"} Q${e.number})` });
+          if (hit && !matchable(q)) keyNotApplied.set(q.id, hit);
+          else if (hit) keyFor.set(q.id, { rows: hit, method: `by number (key entry ${offsetOf.get(e.section)! + e.number} = ${e.section || "first section"} Q${e.number})` });
         }
       }
     } else {
@@ -291,6 +321,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         const e = effective(q);
         const hit = direct.get(`${e.section}#${e.number}`);
         if (hit && matchable(q)) keyFor.set(q.id, { rows: hit, method: "by question number" });
+        else if (hit) keyNotApplied.set(q.id, hit);
       }
     }
     // Record matches + unmatched / duplicate key rows.
@@ -300,9 +331,11 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const anyKey = keyRowsRaw.length > 0;
   // Answer-key files of this job that gave no entries (unreadable, failed, or read nothing): named on every question that
   // therefore has no official answer — never a silent AI substitute (owner decision 2, 2026-11-05).
-  const unreadKeyFiles = (await prisma.aiImportFile.findMany({ where: { jobId: job.id, role: "ANSWER_KEY", status: { not: "REJECTED" } }, select: { id: true, originalName: true } }))
-    .filter((f) => !keyRowsRaw.some((r) => r.keyFileId === f.id))
-    .map((f) => f.originalName);
+  const unreadKeys = (await prisma.aiImportFile.findMany({ where: { jobId: job.id, role: "ANSWER_KEY", status: { not: "REJECTED" } }, select: { id: true, originalName: true, errorMessage: true } }))
+    .filter((f) => !keyRowsRaw.some((r) => r.keyFileId === f.id));
+  const unreadKeyFiles = unreadKeys.map((f) => f.originalName);
+  // An uploaded key that gave no usable entries is reported with its real state, never as "no key uploaded".
+  const unreadKeyDetail = unreadKeys.length ? unreadKeys.map((f) => `The answer key “${f.originalName}” was uploaded but gave no usable entries${f.errorMessage ? `: ${f.errorMessage}` : " (not read yet)."}`).join(" ") : null;
   // A key printed for another paper / series never supplies official answers to this one.
   const wrongKeyFiles = new Map((await keyPaperChecks(job.id)).filter((c) => c.state === "MISMATCH").map((c) => [c.keyFileId, c.detail]));
   const keyFileOfRow = new Map(keyRowsRaw.map((r) => [r.id, r.keyFileId]));
@@ -341,12 +374,23 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   const verifyRow = needsSolve.length ? await prisma.aiModel.findUnique({ where: { id: settings.models.verify! }, select: { maxCompletionTokens: true, supportedParameters: true } }) : null;
   const opinionTokens = Math.min(verifyRow?.supportedParameters.includes("reasoning") ? OPINION_TOKENS_REASONING : OPINION_TOKENS, verifyRow?.maxCompletionTokens || Infinity);
   let unusableInRow = 0;
+  // Same content + same model already answered in this exam (re-run, re-upload, Retry): reuse it, never pay again.
+  const cachedOpinions = needsSolve.length ? (await storedAiResults(job.examId)).opinions : null;
   for (const q of needsSolve) {
     if (!(await ctx.stillRunning())) return;
     if (aiStop) break;
     const e = effective(q);
+    const hit = cachedOpinions?.get(`${contentPartOf(e)}|${settings.models.verify}`);
+    if (hit) {
+      const labels = hit.answer.filter((a) => e.options.some((o) => o.label === a));
+      await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { aiAnswer: labels, aiAnswerModel: settings.models.verify, aiAnswerConfidence: hit.confidence } });
+      q.aiAnswer = labels;
+      q.aiAnswerModel = settings.models.verify ?? null;
+      q.aiAnswerConfidence = hit.confidence;
+      continue;
+    }
     try {
-      const r = await importerAiCall({ jobId: job.id, task: "verify", models: [settings.models.verify!], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: opinionTokens, settings, questionId: q.id, needsVision: false, stage: "post-answer-opinion", reasoningEffort: "low" });
+      const r = await importerAiCall({ jobId: job.id, task: "verify", models: [settings.models.verify!], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: opinionTokens, settings, questionId: q.id, needsVision: false, stage: "post-answer-opinion" });
       const parsed = solveSchema.safeParse(parseModelJson(r.text));
       unusableInRow = parsed.success ? 0 : unusableInRow + 1;
       if (parsed.success) {
@@ -549,11 +593,13 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     {
       const stmts = statementsOf(e.stem);
       const index = (k: string) => (/^\d$/.test(k) ? Number(k) : ROMAN_INDEX[k] ?? 0);
-      if (stmts.length >= 2 && statementCodeQuestion(e)) {
-        const roman = stmts.every((x) => /^[IVX]+$/.test(x.key));
+      // Every statement 1..(highest cited) must be in the text — a lost first or middle statement counts too (2026-11-19
+      // audit: CMS-GS Q8 lost statement 1 while 2–4 were present; the old "highest cited > highest present" missed it).
+      if (statementCodeQuestion(e)) {
+        const roman = stmts.length ? stmts.every((x) => /^[IVX]+$/.test(x.key)) : !e.options.some((o) => /\b[1-9]\b/.test(o.text));
         const cited = Math.max(0, ...e.options.flatMap((o) => (roman ? [...o.text.matchAll(/\b([IVX]{1,4})\b/g)].map((m) => index(m[1])) : [...o.text.matchAll(/\b([1-9])\b/g)].map((m) => Number(m[1])))));
-        const top = Math.max(...stmts.map((x) => index(x.key)));
-        if (cited > top) add("STATEMENT_COUNT_MISMATCH", `The options refer to statement ${roman ? Object.keys(ROMAN_INDEX).find((k) => ROMAN_INDEX[k] === cited) : cited}, but the question text has ${stmts.length} numbered statement(s) — one may be missing or merged with another. Compare the statements and options with the original paper.`);
+        const present = new Set(stmts.map((x) => index(x.key)));
+        if (Array.from({ length: cited }, (_, i) => i + 1).some((n) => !present.has(n))) add("STATEMENT_COUNT_MISMATCH", `The options refer to statement ${roman ? Object.keys(ROMAN_INDEX).find((k) => ROMAN_INDEX[k] === cited) : cited}, but the question text has ${stmts.length} numbered statement(s) — one may be missing or merged with another. Compare the statements and options with the original paper.`);
       }
     }
     if (lowConf) add("EXTRACTION_UNCERTAIN", e.notes?.join(" ").slice(0, 300) || `Extraction confidence ${Math.round(conf * 100)}%.`);
@@ -648,7 +694,9 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
         const missingNums = e.pages.flatMap((pg) => numbersMissingFromSource(richText, textLayers.get(`${q.fileId}:${pg}`) ?? null));
         if (missingNums.length && e.pages.every((pg) => textLayers.has(`${q.fileId}:${pg}`))) addMore("FORMULA_ISSUE", `Number(s) ${[...new Set(missingNums)].slice(0, 6).join(", ")} in the extracted text do not appear on the source page — check digits, signs and exponents against the page.`);
       }
-      if (ver?.fields.some((f) => f.endsWith(" numbers"))) addMore("FORMULA_ISSUE", `The independent read has different numbers / symbols (${ver.detail.slice(0, 200)}).`);
+      // Only a formula question (rich content with TeX in the text) gets FORMULA_ISSUE for a number / symbol difference; on
+      // plain text (e.g. statement numbers "1 2 3" kept by one read only, 86/86 on the CMS scans) it stays VERIFY_DISAGREES.
+      if (ver?.fields.some((f) => f.endsWith(" numbers")) && e.contentFormat === "RICH_V1" && richText.some((t) => /[$\\]/.test(t))) addMore("FORMULA_ISSUE", `The independent read has different numbers / symbols (${ver.detail.slice(0, 200)}).`);
     }
     checks.push({ stage: 2, name: "Structure", passed: IMPORTABLE.has(type) && e.options.length === 4 && !formulaWarnings.length, severity: IMPORTABLE.has(type) && e.options.length === 4 ? (formulaWarnings.length ? "WARNING" : "INFO") : "ERROR", method: "DETERMINISTIC", detail: `${type.replace(/_/g, " ").toLowerCase()}, ${e.options.length} options, ${e.contentFormat === "RICH_V1" ? "with formulas" : "plain text"}${formulaWarnings.length ? ` — ${formulaWarnings[0].slice(0, 160)}` : ""}` });
 
@@ -850,21 +898,24 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
             // Never silently stored as a multiple-correct answer, never changed: the type or the key needs a decision.
             answerStatus = AiImportAnswerStatus.AMBIGUOUS_MAPPING;
             add("ANSWER_TYPE_CONFLICT", `The official key gives one answer (${official[0]}) but the question is marked multiple-correct — check the question type, or confirm the answer by hand. The official key is kept as printed.`);
-          } else if (e.printedAnswer.length && !sameSet(e.printedAnswer, official)) {
+          } else if (e.printedAnswer.length && !sameSet(printedAnswerForKey(e, printedLabels), official)) {
             answerStatus = AiImportAnswerStatus.KEY_MISMATCH;
-            add("ANSWER_MISMATCH", `The paper prints ${e.printedAnswer.join(", ")} but the official key says ${official.join(", ")}.`);
+            add("ANSWER_MISMATCH", `The paper prints ${printedAnswerForKey(e, printedLabels).join(", ")} but the official key says ${official.join(", ")}.`);
           }
         }
       }
       checks.push({ stage: 3, name: "Official answer key", passed: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED, severity: answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED ? "INFO" : "ERROR", method: "DETERMINISTIC", detail: `Key "${officialRaw}"${officialPage ? ` (key page ${officialPage})` : ""}, matched ${key.method}.` });
       if (!q.answerConfirmedById && answerStatus === AiImportAnswerStatus.OFFICIAL_MATCHED) finalAnswer = official;
     } else if (!wrongKey) {
-      const unsafe = unsafeKeyPapers.get(q.fileId) ?? (anyKey ? unsafeKeyQuestions.get(q.id) : undefined);
+      const notApplied = keyNotApplied.get(q.id);
+      const unsafeWhy = anyKey ? unsafeKeyQuestions.get(q.id) : undefined;
+      // The key value stays visible to the reviewer (never applied): "Key entry 19 = C found but not applied: <reason>".
+      const unsafe = unsafeWhy && notApplied ? `Key entry ${notApplied[0].section ? `${notApplied[0].section}#` : ""}${notApplied[0].sourceNumber} = ${notApplied.map((r) => r.rawValue).join(" / ")} found but not applied: ${unsafeWhy}` : unsafeWhy;
       if (unsafe) {
         answerStatus = AiImportAnswerStatus.AMBIGUOUS_MAPPING;
         add("ANSWER_AMBIGUOUS", unsafe);
       }
-      checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: unsafe ?? ([...incompleteKeys.values()][0] ?? (anyKey ? "The answer key has no entry for this question." : "No answer key uploaded for this paper.")) });
+      checks.push({ stage: 3, name: "Official answer key", passed: false, severity: "WARNING", method: "DETERMINISTIC", detail: unsafe ?? ([...incompleteKeys.values()][0] ?? unreadKeyDetail ?? (anyKey ? "The answer key has no entry for this question." : "No answer key uploaded for this paper.")) });
       // Owner decision 2, 2026-11-05: only the official key (or an administrator's confirmation) verifies an answer.
       // A printed answer in the paper is kept as a proposal; an AI opinion — or two AI opinions agreeing — never becomes
       // the answer, and an answer key that is missing or could not be read never triggers an AI substitute.
@@ -940,6 +991,7 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
     }
     const batchTwin = seenInBatch.get(norm);
     if (batchTwin && batchTwin !== q.id && norm.length > 10) add("DUPLICATE_IN_BATCH", "The same question appears earlier in this import.");
+    if ((e as { duplicateFragmentOf?: string }).duplicateFragmentOf) add("DUPLICATE_IN_BATCH", "This unnumbered fragment is part of an AI-read question on the same page.");
     else seenInBatch.set(norm, q.id);
     // Full-paper verification (Verify 1 / Verify 2), counted only while it still describes this exact content.
     const fingerprint = fingerprintsOf({ e, finalAnswer, subjectId, topicId, subTopicId, figures: figs });

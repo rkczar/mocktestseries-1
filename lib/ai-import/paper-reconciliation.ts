@@ -103,3 +103,103 @@ export function reconcilePaper(expected: number, rows: ReconInput[]): PaperRecon
   for (const r of out) counts[r.bucket]++;
   return { expected, rows: out, counts, missing: out.filter((r) => r.bucket === "MISSING" && r.number <= expected).map((r) => r.number), unnumbered, extracted: out.filter((r) => r.bucket !== "MISSING").length };
 }
+
+// ---- First read vs independent second read (Verify 2), by identity (2026-11-19 audit) ----------------------------
+
+/** One question of one read: identity = section + printed number; position = page and order on the page. */
+export interface ReadRow<T> {
+  section: string | null;
+  number: number | null;
+  page: number;
+  /** Order within the read (reading order); rows are compared in this order for the reorder check. */
+  order: number;
+  item: T;
+}
+
+export interface ReadComparison {
+  /** Identities ("Q12 p3", "S2 Q1 p27") the first read has and the second does not — and the reverse. */
+  missingInSecond: string[];
+  missingInFirst: string[];
+  /** Identities one read holds more than once. */
+  duplicatedInFirst: string[];
+  duplicatedInSecond: string[];
+  /** Numbers that come after a higher number of the same section in reading (page) order: "Q14 after Q15 (p5)". */
+  reorderedInFirst: string[];
+  reorderedInSecond: string[];
+  /** Identities both reads hold whose wording / options differ (per `agree`). */
+  conflicting: string[];
+}
+
+const idOf = (r: { section: string | null; number: number | null }) => `${r.section ? `${r.section} ` : ""}Q${r.number ?? "?"}`;
+
+function dupes<T>(rows: ReadRow<T>[]): string[] {
+  const seen = new Map<string, number[]>();
+  for (const r of rows) if (r.number !== null) seen.set(idOf(r), [...(seen.get(idOf(r)) ?? []), r.page]);
+  return [...seen].filter(([, p]) => p.length > 1).map(([k, p]) => `${k} (p${[...new Set(p)].join(", p")})`);
+}
+
+function reordered<T>(rows: ReadRow<T>[]): string[] {
+  const out: string[] = [];
+  const top = new Map<string, ReadRow<T>>();
+  for (const r of [...rows].sort((a, b) => a.page - b.page || a.order - b.order)) {
+    if (r.number === null) continue;
+    const s = r.section ?? "";
+    const hi = top.get(s);
+    if (hi && hi.number! > r.number) out.push(`${idOf(r)} (p${r.page}) after ${idOf(hi)} (p${hi.page})`);
+    else top.set(s, r);
+  }
+  return out;
+}
+
+/**
+ * Reconciles the first read (stored questions) with the independent second read of the SAME pages, by identity — never
+ * by position, so reading order cannot hide or invent a difference (pure). Only numbered rows have an identity.
+ */
+export function compareReads<T>(first: ReadRow<T>[], second: ReadRow<T>[], agree: (a: T, b: T) => boolean): ReadComparison {
+  const index = (rows: ReadRow<T>[]) => {
+    const m = new Map<string, ReadRow<T>>();
+    for (const r of rows) if (r.number !== null && !m.has(idOf(r))) m.set(idOf(r), r);
+    return m;
+  };
+  const a = index(first);
+  const b = index(second);
+  const at = (r: ReadRow<T>) => `${idOf(r)} p${r.page}`;
+  return {
+    missingInSecond: [...a.values()].filter((r) => !b.has(idOf(r))).map(at),
+    missingInFirst: [...b.values()].filter((r) => !a.has(idOf(r))).map(at),
+    duplicatedInFirst: dupes(first),
+    duplicatedInSecond: dupes(second),
+    reorderedInFirst: reordered(first),
+    reorderedInSecond: reordered(second),
+    conflicting: [...a].filter(([k, r]) => b.has(k) && !agree(r.item, b.get(k)!.item)).map(([, r]) => at(r)),
+  };
+}
+
+/** Whether a comparison found anything (an empty one is "the two reads agree on every identity"). */
+export const readsDiffer = (c: ReadComparison) => Object.values(c).some((x) => x.length > 0);
+
+// ---- Duplicate upload (2026-11-19 audit: 2024 P-I / P-II were each uploaded twice, as DOCX and as a scan) ------------
+
+export interface UploadIdentity {
+  jobId: string;
+  title: string;
+  year: number | null;
+  paperCode: string | null;
+  /** Question 1 and question 11 as stored (null = not read). */
+  q1: string | null;
+  q11: string | null;
+}
+
+/** Normalized stem: lower-case letters and digits only (OCR spacing / punctuation / case never decide). */
+export const stemKey = (s: string | null) => (s ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
+/**
+ * Why `other` looks like the same paper as `job` (pure; null = it does not): the same Q1 + Q11 wording (exact once
+ * normalized, or ≥ `minSimilar` by `similar` for OCR noise), or the same year + paper code. Informational only.
+ */
+export function sameUpload(job: UploadIdentity, other: UploadIdentity, similar: (a: string, b: string) => number, minSimilar = 0.9): string | null {
+  const close = (x: string | null, y: string | null) => !!stemKey(x) && !!stemKey(y) && (stemKey(x) === stemKey(y) || similar(x!, y!) >= minSimilar);
+  if (close(job.q1, other.q1) && close(job.q11, other.q11)) return "the same question 1 and question 11";
+  if (job.year !== null && job.year === other.year && !!job.paperCode?.trim() && job.paperCode.trim().toLowerCase() === other.paperCode?.trim().toLowerCase()) return `the same year (${job.year}) and paper (${job.paperCode})`;
+  return null;
+}

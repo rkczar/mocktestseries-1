@@ -95,29 +95,35 @@ export function isFurniture(text: string, box: NBox): boolean {
 
 /**
  * x (0..1) where the second text column begins, or null for a single-column page. Columns are told apart by where
- * lines START (the question parser assigns columns by start too): the largest gap between line-start positions near
- * the middle of the page, placed just left of the second column's first start. Empty-band detection fails on shifted
- * or skewed scans whose left column runs into the right one (seen 2026-11-04, CMS 2025 Paper II page 5: left lines end
- * at 0.471 while right-column questions start at 0.468), and on columns whose question numbers stand in the gap.
+ * lines START (the question parser assigns columns by start too): the x in [0.35, 0.65] crossed by the fewest lines
+ * (tie → closest to the middle), placed just left of the second column's first start. Empty-band detection fails on
+ * shifted or skewed scans whose left column runs into the right one (seen 2026-11-04, CMS 2025 Paper II page 5: left
+ * lines end at 0.471 while right-column questions start at 0.468) — hence the small crossing tolerance.
  */
 export function findGutter(lines: LayoutLine[]): number | null {
   const narrow = lines.filter((l) => l.box.w < 0.55);
   if (narrow.length < 8) return null;
-  const starts = [...new Set(narrow.map((l) => Math.round(l.box.x * 1000) / 1000))].sort((a, b) => a - b);
-  // A column edge is where MANY lines start in alignment; a table's second cell column inside one text column
-  // starts only a few (seen 2026-11-04, CMS 2025 Paper I page 3: "Arrhythmia | Response" cells at x 0.355).
-  let best: { split: number; aligned: number } | null = null;
-  for (let i = 1; i < starts.length; i++) {
-    const gap = starts[i] - starts[i - 1];
-    if (starts[i] < 0.3 || starts[i] > 0.75 || gap < 0.05) continue;
-    const split = starts[i] - 0.002;
-    const left = narrow.filter((l) => l.box.x < split).length;
-    const right = narrow.length - left;
-    if (left < narrow.length * 0.2 || right < narrow.length * 0.2) continue;
-    const aligned = narrow.filter((l) => l.box.x >= split && l.box.x < split + 0.04).length;
-    if (!best || aligned > best.aligned) best = { split, aligned };
+  // The gutter is the x crossed by the FEWEST lines: a dense run of hanging numbers / indents in the right column, or a
+  // table inside one column, never hides it (2026-11-19 audit: start-gap scoring split CMS 2024 P-II p18 at 0.721 and
+  // CMS 2026 P-I p17 at 0.324). A 0.003 tolerance absorbs columns that touch on shifted scans (CMS 2025 P-II p5).
+  const T = 0.003;
+  const crossing = (x: number) => narrow.filter((l) => l.box.x < x - T && l.box.x + l.box.w > x + T).length;
+  let best: { x: number; n: number } | null = null;
+  for (let i = 0; i <= 60; i++) {
+    const x = 0.35 + i * 0.005;
+    const n = crossing(x);
+    if (!best || n < best.n || (n === best.n && Math.abs(x - 0.5) < Math.abs(best.x - 0.5))) best = { x, n };
   }
-  return best ? Math.round(best.split * 1000) / 1000 : null;
+  if (!best || best.n > narrow.length * 0.15) return null;
+  // Placed just left of the second column's first start (columns are assigned by where lines start).
+  const rightStarts = narrow.filter((l) => l.box.x >= best!.x - T).map((l) => l.box.x);
+  if (!rightStarts.length) return null;
+  const split = Math.min(...rightStarts) - 0.002;
+  const left = narrow.filter((l) => l.box.x < split).length;
+  const right = narrow.length - left;
+  // Single column: one side holds almost nothing.
+  if (left < narrow.length * 0.2 || right < narrow.length * 0.2) return null;
+  return Math.round(split * 1000) / 1000;
 }
 
 const COVER_MARKS = [/do not open this (?:test )?booklet/i, /\btest booklet\b/i, /\binstructions?\b/i, /time allowed/i, /maximum marks/i, /roll number/i, /answer sheet|\bOMR\b/i, /invigilator/i, /penalty for wrong answers?/i];

@@ -6,7 +6,7 @@
  */
 import type { OpenRouterErrorCategory } from "@/lib/ai-engine/openrouter";
 
-export const FAILURE_KINDS = ["rate_limited", "route_unavailable", "bad_request", "image_unsupported", "budget", "model_output", "provider", "paid_ai_off"] as const;
+export const FAILURE_KINDS = ["rate_limited", "route_unavailable", "bad_request", "image_unsupported", "budget", "provider_credit", "timeout", "model_output", "provider", "paid_ai_off"] as const;
 export type FailureKind = (typeof FAILURE_KINDS)[number];
 
 /** Stable message prefix per kind (also how a stored message is classified again). */
@@ -15,7 +15,9 @@ export const FAILURE_LABELS: Record<FailureKind, string> = {
   route_unavailable: "Provider route unavailable",
   bad_request: "Invalid request",
   image_unsupported: "Image input not supported",
-  budget: "Cost or credit limit",
+  budget: "Importer budget limit",
+  provider_credit: "Provider credit or key limit",
+  timeout: "Provider timed out",
   model_output: "Model output failure",
   provider: "Provider error",
   paid_ai_off: "Paid AI is off",
@@ -26,7 +28,9 @@ export const FAILURE_ADVICE: Record<FailureKind, string> = {
   route_unavailable: "No provider route can serve this model under the privacy and price settings right now. Refresh provider routes in Import Settings or choose another importer model, then use Retry.",
   bad_request: "The provider rejected the request parameters. Check the model in Import Settings (Test Models), then use Retry.",
   image_unsupported: "The model or its route does not accept page images. Choose a model that reads images (Import Settings → Model Assistant), then use Retry.",
-  budget: "A spending limit stopped the request: the importer's own monthly / per-job / total budget (Import Settings), or the OpenRouter credit or key limit. Nothing more is sent until the limit allows it; local and deterministic steps still run.",
+  budget: "The importer's own monthly / total budget or this job's confirmed maximum (Import Settings) stopped the request. Nothing more is sent until the limit allows it; local and deterministic steps still run.",
+  provider_credit: "OpenRouter refused the request for lack of account credit or the API key's own limit — not the importer budget. Add credit or raise the key limit at OpenRouter, then use Retry.",
+  timeout: "The provider did not finish within the time limit. Use Retry once; if it repeats, choose a faster model for this task.",
   model_output: "The model answered, but not in the expected format (empty, cut off or malformed). Use Retry once; if it repeats, choose another model for this task.",
   provider: "The provider failed or timed out. Use Retry once; if it repeats, check the provider status.",
   paid_ai_off: "Paid AI was switched off in Import Settings, so no further AI request was sent. Switch it on and use Retry to continue.",
@@ -47,7 +51,9 @@ export function kindOfCategory(c: OpenRouterErrorCategory, message = ""): Failur
     case "truncated":
       return "model_output";
     case "insufficient_credits":
-      return "budget";
+      return "provider_credit";
+    case "timeout":
+      return "timeout";
     default:
       return "provider";
   }
@@ -64,6 +70,7 @@ export function failureKindOf(message: string | null | undefined): FailureKind |
   for (const k of FAILURE_KINDS) if (message.startsWith(`${FAILURE_LABELS[k]}:`)) return k;
   // Messages written before these labels existed.
   if (/rate-limited the request/i.test(message)) return "rate_limited";
+  if (message.startsWith("Cost or credit limit:")) return "budget";
   return null;
 }
 

@@ -298,6 +298,12 @@ function tidy(s: string): string {
 // 2024 Paper II). Such a line falls through to ANS_INLINE, which accepts the trailing text only when it is the option's.
 const ANSWER_LINE = /(?:^|\n)[ \t]*(?:[►▶➤→•✓✔☑√■][ \t]*)?(?:(?:Official|Final)[ \t]+)?(?:(?:The[ \t]+)?(?:Correct|Right)[ \t]+(?:answer|option|choice)(?:[ \t]+is)?|Ans(?:wer)?(?:[ \t]+is)?|Key)[ \t]*[:.\-–=]?[ \t]*(?:option[ \t]*)?((?:\(?[A-Da-d]\)?[ \t]*(?:,|&|and|\/)?[ \t]*){1,4}|(?:\(?[1-4]\)?[ \t]*(?:,|&|and|\/)?[ \t]*){1,4})[ \t]*\.?[ \t]*(?=\n|$)/i;
 
+/**
+ * "Correct Answer: (B) 1, 2 and 4" — a BRACKETED label followed by the option's text on the answer line (2026-11-19 audit).
+ * Only the bracketed label(s) are the answer; the trailing text is checked against that option, never read as labels.
+ */
+const ANSWER_LINE_TEXT = /(?:^|\n)[ \t]*(?:[►▶➤→•✓✔☑√■][ \t]*)?(?:(?:Official|Final)[ \t]+)?(?:(?:The[ \t]+)?(?:Correct|Right)[ \t]+(?:answer|option|choice)(?:[ \t]+is)?|Ans(?:wer)?(?:[ \t]+is)?)[ \t]*[:.\-–=]?[ \t]*(?:option[ \t]*)?((?:\([ \t]*[A-Da-d][ \t]*\)[ \t]*(?:,|&|and|\/)?[ \t]*){1,4})[ \t]*[-–—:=]?[ \t]*([^\n]*?)[ \t]*(?=\n|$)/i;
+
 /** A printed answer that drops / withdraws the question instead of naming an option (seen 2026-10-31, CMS 2025 Paper I Q101). */
 export const PRINTED_DROPPED = /\b(?:question[ \t]+)?(?:dropped|withdrawn|deleted|bonus)\b/i;
 const DROPPED_LINE = /(?:^|\n)[ \t]*(?:[►▶➤→•✓✔☑√■][ \t]*)?(?:(?:Official|Final)[ \t]+)?(?:(?:Correct|Right)[ \t]+)?(?:answer|ans|key)[ \t]*[:.\-–=]?[ \t]*(?:question[ \t]+)?(?:dropped|withdrawn|deleted|bonus)\b[^\n]*(?=\n|$)/i;
@@ -370,7 +376,11 @@ export interface PrintedAnswerTake {
 }
 
 // The joining word "and" is not a label: "(a) and (c)" is A, C — never A, D, C (the a / d of "and", seen 2026-11-06).
-const labelsOf = (v: string) => [...new Set([...v.replace(/\band\b/gi, " ").matchAll(/[A-Da-d1-4]/g)].map((x) => (/\d/.test(x[0]) ? String.fromCharCode(64 + Number(x[0])) : x[0].toUpperCase())))];
+// Bracketed labels, when present, are the only labels: "(B) 1, 2 and 4" is B — the digits are the option's statement code.
+const labelsOf = (v: string) => {
+  const bracketed = [...v.matchAll(/\(\s*([A-Da-d1-4])\s*\)/g)].map((x) => x[1]).join(" ");
+  return [...new Set([...(bracketed || v).replace(/\band\b/gi, " ").matchAll(/[A-Da-d1-4]/g)].map((x) => (/\d/.test(x[0]) ? String.fromCharCode(64 + Number(x[0])) : x[0].toUpperCase())))];
+};
 const normOption = (s: string) => s.toLowerCase().replace(/\$|\\[a-z]+|[\s.,;:()[\]'"`]/g, "");
 
 /**
@@ -562,11 +572,14 @@ const NONE_ALL = /^\s*(?:none|all|both|neither)\b.{0,40}$/i;
  * 11 false Verify 2 disagreements on one paper).
  */
 export function statementCodeQuestion(q: Pick<ExtractedQuestion, "stem" | "options">): boolean {
-  const statements = statementsOf(q.stem).length >= 2 || !!mergedStatements(q.stem);
-  if (!statements || q.options.length < 3) return false;
+  if (q.options.length < 3) return false;
   const coded = q.options.filter((o) => CODE_OPTION.test(stripAnnotationTail(o.text))).length;
   const rest = q.options.filter((o) => !CODE_OPTION.test(stripAnnotationTail(o.text)) && NONE_ALL.test(stripAnnotationTail(o.text))).length;
-  return coded >= 3 && coded + rest === q.options.length;
+  if (coded < 3 || coded + rest !== q.options.length) return false;
+  if (statementsOf(q.stem).length >= 2 || !!mergedStatements(q.stem)) return true;
+  // A stem that lost ALL its statements (2026-11-19, CMS-GS Q27) still qualifies when ≥3 options are real combinations
+  // ("1 and 2 only", "1, 2 and 3") — so the missing statements are flagged. Bare "1"…"4" (a count) never qualifies.
+  return q.options.filter((o) => /,|\band\b|&|\/|\bonly\b/i.test(o.text) && CODE_OPTION.test(stripAnnotationTail(o.text))).length >= 3;
 }
 
 export function takePrintedAnswer(text: string): PrintedAnswerTake {
@@ -591,6 +604,14 @@ export function takePrintedAnswer(text: string): PrintedAnswerTake {
   };
   const own = ANSWER_LINE.exec(text);
   if (own) return take(own.index, own.index + own[0].length, labelsOf(own[1]), own[0]);
+  const withText = ANSWER_LINE_TEXT.exec(text);
+  if (withText && answerAfterOptions(text, withText.index + 1)) {
+    const labels = labelsOf(withText[1]);
+    const trailing = withText[2].trim();
+    const opt = labels.length === 1 ? splitOptions(text.slice(0, withText.index)).options.find((o) => o.label === labels[0]) : undefined;
+    const agrees = !trailing || (opt && normOption(opt.text).indexOf(normOption(trailing)) === 0);
+    return take(withText.index, withText.index + withText[0].length, labels, withText[0], agrees ? null : `The answer line names option ${labels.join(", ")} but its text (“${trailing.slice(0, 80)}”) is not that option's text — check the answer.`);
+  }
   // "► Official Answer: Question Dropped (X)": an answer line without a label — never option text, no answer.
   const dropped = DROPPED_LINE.exec(text);
   if (dropped && answerAfterOptions(text, dropped.index + 1)) {
@@ -829,7 +850,8 @@ export function blockToQuestion(b: Block, page: number, method: string): { q: Ex
     confidence = Math.min(confidence, 0.6);
     notes.push("An option has no text (it may be an image).");
   }
-  const risk = notationRisk(answered.text);
+  // OCR reads the printed glyphs themselves: °, ×, ± there are correct, not lost. Only broken glyphs still count.
+  const risk = notationRisk(answered.text).filter((r) => method !== "LOCAL_OCR" || /private-use|unreadable/.test(r));
   if (risk.length) {
     confidence = Math.min(confidence, 0.7);
     notes.push(`Text layer may have lost notation: ${risk.join(", ")}.`);

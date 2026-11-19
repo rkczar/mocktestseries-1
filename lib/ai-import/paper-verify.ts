@@ -40,6 +40,7 @@ import { MAX_VERIFY_PASSES, V2_RESULT_STATUSES, checksAllowReady, v2Independence
 import type { CandidateRow, PlanPrice, TaskChoice } from "@/lib/ai-import/selection-types";
 import type { ExtractedQuestion, PaperVerification, VerifyFix, VerifyProblem } from "@/lib/ai-import/types";
 import { NO_OCR, repairLayout } from "@/lib/ai-import/reading-checks";
+import { compareReads, readsDiffer, sameUpload, type ReadRow, type UploadIdentity } from "@/lib/ai-import/paper-reconciliation";
 
 /**
  * Full-paper verification of an import (Admin → AI Question Importer → Review Exceptions):
@@ -131,11 +132,62 @@ export interface Verify1Result {
   headingsRestored?: number;
   /** Earlier Verify 2 results kept (provably unchanged content), settled by a rule, or left out of date. */
   verify2Upgrade?: { rebuilt: number; viaEdit: number; reassessed: number; stale: number };
+  /** Questions that passed Verify 1 but are still held by another open blocking flag (code → count), listed apart from Verify 1. */
+  blockedElsewhere?: number;
+  blockedBy?: Record<string, number>;
+  /** Other imports of the same exam that look like the same paper (informational; neither job is changed). */
+  duplicateUploads?: DuplicateUpload[];
+}
+
+export interface DuplicateUpload {
+  jobId: string;
+  title: string;
+  why: string;
+}
+
+/** Question 1 and 11 of a job as stored (first section, by reading order), for the duplicate-upload check. */
+async function uploadIdentities(jobIds: string[]): Promise<Map<string, { q1: string | null; q11: string | null }>> {
+  const rows = await prisma.aiImportQuestion.findMany({ where: { jobId: { in: jobIds }, sourceNumber: { in: [1, 11] }, status: { not: AiImportQuestionStatus.REJECTED } }, select: { jobId: true, sourceNumber: true, data: true, editedData: true }, orderBy: [{ jobId: "asc" }, { orderIndex: "asc" }] });
+  const out = new Map<string, { q1: string | null; q11: string | null }>();
+  for (const r of rows) {
+    const m = out.get(r.jobId) ?? { q1: null, q11: null };
+    const stem = effective(r).stem ?? null;
+    if (r.sourceNumber === 1 && m.q1 === null) m.q1 = stem;
+    if (r.sourceNumber === 11 && m.q11 === null) m.q11 = stem;
+    out.set(r.jobId, m);
+  }
+  return out;
+}
+
+/**
+ * Other imports of the same exam that look like the same paper (same Q1 + Q11 wording, or same year + paper code):
+ * informational only — neither import is blocked or changed (2026-11-19 audit: 2024 P-I and P-II were each imported
+ * twice, as a Word file and as a scan, and nothing said so).
+ */
+export async function duplicateUploadsOf(job: { id: string; examId: string; title: string; year: number | null; paperCode: string | null }): Promise<DuplicateUpload[]> {
+  const others = await prisma.aiImportJob.findMany({ where: { examId: job.examId, id: { not: job.id } }, select: { id: true, title: true, year: true, paperCode: true } });
+  if (!others.length) return [];
+  const ids = await uploadIdentities([job.id, ...others.map((o) => o.id)]);
+  const me: UploadIdentity = { jobId: job.id, title: job.title, year: job.year, paperCode: job.paperCode, q1: ids.get(job.id)?.q1 ?? null, q11: ids.get(job.id)?.q11 ?? null };
+  return others.flatMap((o) => {
+    const why = sameUpload(me, { jobId: o.id, title: o.title, year: o.year, paperCode: o.paperCode, q1: ids.get(o.id)?.q1 ?? null, q11: ids.get(o.id)?.q11 ?? null }, textSimilarity);
+    return why ? [{ jobId: o.id, title: o.title, why }] : [];
+  });
+}
+
+/** Verify 1 passed = none of its own findings blocks (a warning-only code such as FORMAT_DEVIATION is reported, not failed). */
+export function v1Passed(problems: VerifyProblem[]): boolean {
+  return !problems.some((p) => ISSUE_DEFS[p.code]?.blocking || ISSUE_DEFS[p.code]?.publishBlocking || !ISSUE_DEFS[p.code]);
 }
 
 /** The type disagreement of a statement-code question is no disagreement when its key gives one code option. */
 function codeSingle(q: QRow, e: ExtractedQuestion, rules: Set<FormatRuleCode>): boolean {
   return e.type === "SINGLE_CORRECT" && statementCodeQuestion(e) && q.finalAnswer.length === 1 && (q.answerStatus === "OFFICIAL_MATCHED" || !!q.answerConfirmedById || rules.has("STATEMENT_CODE_SINGLE"));
+}
+/** The two reads differ only in single vs multiple correct (a statement-code question with a one-label key is no difference). */
+export function typeOnlyDiffers(e: Pick<ExtractedQuestion, "type">, twin: Pick<ExtractedQuestion, "type">, codeSingleKey: boolean): boolean {
+  const both = ["MULTIPLE_CORRECT", "SINGLE_CORRECT"];
+  return twin.type !== e.type && both.includes(twin.type) && both.includes(e.type) && !codeSingleKey;
 }
 /** The question as content checks compare it: a lone printed tick left at the end of the text / an option is no content. */
 function withoutAnnotations(e: ExtractedQuestion): ExtractedQuestion {
@@ -153,7 +205,7 @@ function withoutAnnotations(e: ExtractedQuestion): ExtractedQuestion {
  *    (statement-code type with a one-label key; an option differing only by a printed tick) becomes VERIFIED, with the
  *    rule and the previous verdict recorded.
  */
-export async function upgradeVerify2Results(jobId: string, rules: Set<FormatRuleCode>): Promise<{ rebuilt: number; viaEdit: number; reassessed: number; stale: number }> {
+export async function upgradeVerify2Results(jobId: string): Promise<{ rebuilt: number; viaEdit: number; reassessed: number; stale: number }> {
   const out = { rebuilt: 0, viaEdit: 0, reassessed: 0, stale: 0 };
   const now = new Date().toISOString();
   for (const q of await prisma.aiImportQuestion.findMany({ where: { jobId, status: { notIn: LOCKED } }, include: { figures: true } })) {
@@ -189,7 +241,8 @@ export async function upgradeVerify2Results(jobId: string, rules: Set<FormatRule
     if (v2.status === "DISAGREE" && contentCurrent(v2, cur)) {
       const e = effective(q);
       const settled = v2.fields.every((f) => {
-        if (f === "type") return codeSingle(q, e, rules);
+        // Single vs multiple is information, never a content disagreement (2026-11-19).
+        if (f === "type") return true;
         const m = /^option ([A-E])$/.exec(f);
         if (!m) return false;
         const i = e.options.findIndex((o) => o.label === m[1]);
@@ -198,7 +251,7 @@ export async function upgradeVerify2Results(jobId: string, rules: Set<FormatRule
         return mine !== null && typeof second === "string" && textSimilarity(mine.slice(0, 200), second) >= 0.85;
       });
       if (settled && v2.fields.length) {
-        const rule = v2.fields.map((f) => (f === "type" ? "statement-code question with a one-label key is single-correct" : `${f} differs only by a printed tick`)).join("; ");
+        const rule = v2.fields.map((f) => (f === "type" ? "single vs multiple correct differs only (information — the answer key decides the type)" : `${f} differs only by a printed tick`)).join("; ");
         v2 = { ...v2, status: "VERIFIED", reassessed: { at: now, rule, before: v2.detail.slice(0, 300) }, resolvedBySource: rule, detail: `re-assessed without AI: ${rule}` };
         out.reassessed++;
         changed = true;
@@ -218,11 +271,10 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
   const files = await prisma.aiImportFile.findMany({ where: { jobId }, select: { id: true, pageCount: true, detected: true } });
   const fixesBy = new Map<string, VerifyFix[]>();
   const fixProblems = new Map<string, VerifyProblem[]>();
-  const rules = await examFormatRules(job.examId);
   // 0. Verify 2 results of an earlier release (one combined fingerprint) are given their parts where the stored content
   // provably did not change since (rebuildLegacy); a recorded disagreement a deterministic rule settles is re-assessed.
   // Both use only what is stored — no AI request. Runs before any correction below changes the content.
-  const legacy = await upgradeVerify2Results(jobId, rules);
+  const legacy = await upgradeVerify2Results(jobId);
   if (legacy.rebuilt || legacy.reassessed || legacy.stale) await logEvent(jobId, "VERIFY2_RESULTS_UPGRADED", `Earlier Verify 2 results checked without AI: ${legacy.rebuilt} kept (content provably unchanged since the read — only the subject / topic changed${legacy.viaEdit ? `, or only a printed tick was removed by hand in ${legacy.viaEdit}` : ""}), ${legacy.reassessed} disagreement(s) settled by a deterministic rule (statement-code type, printed tick), ${legacy.stale} left out of date (content, answer or figures changed — Verify 2 must read them again).`, { ...legacy }, actorId);
   // A previous Verify 1 result is replaced, so its findings must not decide this run.
   for (const q of await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { id: true, data: true } })) {
@@ -404,14 +456,16 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
     formatted++;
   }
 
-  // 1c. A reusable paper-format profile for this exam / format, checked against THIS paper (never trusted blindly).
-  const profileRun = await applyFormatProfile(jobId);
-  const profileFindings = profileRun?.findings ?? new Map<string, { id: string; version: number; findings: string[] }>();
-  const profileNote = profileRun?.summary ?? null;
-
   // 2. Every deterministic check of the importer, on the corrected content (no AI). Questions still without a
   // subject / topic get the free local classification there (never a paid call).
   await runPostProcessing(ctx);
+
+  // 2a. A reusable paper-format profile for this exam / format, checked against THIS paper (never trusted blindly) —
+  // AFTER the post-processing above mapped the answer key just re-read in 0b (2026-11-19: run before it, every question
+  // of a DOCX with a separate key was reported "answer beneath every question, none found").
+  const profileRun = await applyFormatProfile(jobId);
+  const profileFindings = profileRun?.findings ?? new Map<string, { id: string; version: number; findings: string[] }>();
+  const profileNote = profileRun?.summary ?? null;
   // The answer-key reconciliation of 0b, question by question: the answer stored before vs the official key now.
   if (answersBefore.size) {
     const rows = await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { id: true, sourceNumber: true, finalAnswer: true, answerStatus: true, officialAnswerRaw: true, status: true }, orderBy: { orderIndex: "asc" } });
@@ -452,6 +506,8 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
   let passed = 0;
   let withProblems = 0;
   let refConflicts = 0;
+  let blockedElsewhere = 0;
+  const blockedBy: Record<string, number> = {};
   for (const q of questions) {
     if (LOCKED.includes(q.status)) continue;
     const e = effective(q);
@@ -513,14 +569,25 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
       }
       if (c.suggestedAnswer.length && !q.finalAnswer.length) problems.push({ code: "REFERENCE_CONFLICT", detail: `${ref.name} gives answer ${c.suggestedAnswer.join(", ")}; this question has no answer. Accept it with “Use reference answers” (an administrator's decision) or set the answer.` });
     }
-    const blockingNow = q.issueCodes.filter((c) => ISSUE_DEFS[c]?.blocking || ISSUE_DEFS[c]?.publishBlocking);
-    const ok = !problems.length && !blockingNow.length && q.status !== AiImportQuestionStatus.NOT_IMPORTABLE && q.status !== AiImportQuestionStatus.DUPLICATE;
+    // Verify 1 is judged on its OWN findings (2026-11-19 audit): a flag raised elsewhere (no key, taxonomy, Verify 2)
+    // still blocks the question through its own code and is listed separately — it no longer makes Verify 1 "fail".
+    // A warning-only finding (non-blocking code, e.g. a format-profile deviation) is reported but does not fail it.
+    const ok = v1Passed(problems);
+    const blockingNow = q.issueCodes.filter((c) => (ISSUE_DEFS[c]?.blocking || ISSUE_DEFS[c]?.publishBlocking) && !problems.some((p) => p.code === c));
     if (ok) passed++;
     else withProblems++;
+    if (ok && (blockingNow.length || q.status === AiImportQuestionStatus.NOT_IMPORTABLE || q.status === AiImportQuestionStatus.DUPLICATE)) {
+      blockedElsewhere++;
+      for (const c of blockingNow.length ? blockingNow : [q.status]) blockedBy[c] = (blockedBy[c] ?? 0) + 1;
+    }
     const kind = (files.find((f) => f.id === q.fileId)?.detected as { kind?: string } | null)?.kind;
     const fieldChecks = v1FieldChecks({ e, problems, fixes: fixesBy.get(q.id) ?? [], issueCodes: q.issueCodes, issueLabel: (c) => ISSUE_DEFS[c]?.label ?? c, memory, answer: answerFacts(q), classification: tax.verification, name: (id) => (id ? (taxName.get(id) ?? null) : null), documentText: kind === "docx" || kind === "xlsx" || kind === "csv" || e.method === "LOCAL_PDF" || e.method === "DOCX" });
     await savePaperVerify(q, { v1: { ...stamp(q), at: new Date().toISOString(), passed: ok, problems, fixes: fixesBy.get(q.id) ?? [], reference, references, profile: profileFindings.get(q.id) ?? null, classification: tax.verification, fieldChecks, memoryRules: [...new Set(memory.map((m) => m.ruleId))] }, passes: withPass((q.data as unknown as ExtractedQuestion).paperVerify, "v1") });
   }
+
+  // 3b. Job level, informational: another import of this exam that looks like the same paper (never blocks or changes either).
+  const duplicateUploads = await duplicateUploadsOf(job);
+  if (duplicateUploads.length) await logEvent(jobId, "DUPLICATE_UPLOAD", `Possible duplicate upload (information only — nothing is blocked or changed): ${duplicateUploads.map((d) => `“${d.title}” (${d.jobId}) has ${d.why}`).join("; ")}. Check that the same paper is not imported twice.`, { duplicates: duplicateUploads }, actorId);
 
   // 4. The findings become the questions' flags (still no AI), then the job's status follows its quality.
   await runPostProcessing(ctx);
@@ -529,8 +596,8 @@ export async function runVerify1(jobId: string, actorId: string): Promise<Verify
   const refOnly = refs.filter(referenceComparable).flatMap((r) => referenceOnly(r, questions.map((x) => effective(x))).map((l) => `${l} (${r.name})`));
   const compared = refs.filter(referenceComparable);
   const notCompared = refs.filter((r) => !referenceComparable(r));
-  const result: Verify1Result = { questions: passed + withProblems, passed, withProblems, corrected: fixesBy.size, missing: quality?.missing ?? [], duplicateNumbers: quality?.duplicateNumbers ?? [], referenceOnly: refOnly.slice(0, 200), referenceConflicts: refConflicts, referencesCompared: compared.length, referencesNotCompared: notCompared.map((r) => r.name), whitespaceRestored: restored, formatted, classification: taxTally, annotationsRemoved: ticksRemoved, headingsRestored, verify2Upgrade: legacy };
-  await logEvent(jobId, "VERIFY1_DONE", `Verify 1 (full paper, no AI): ${result.questions} question(s) checked — ${passed} passed, ${withProblems} with findings, ${result.corrected} corrected from the source${result.missing.length ? `; missing ${result.missing.slice(0, 10).join(", ")}${result.missing.length > 10 ? " …" : ""}` : ""}${result.duplicateNumbers.length ? `; numbers read twice ${result.duplicateNumbers.slice(0, 10).join(", ")}` : ""}${compared.length ? `; reference papers compared: ${compared.map((r) => `“${r.name}”`).join(", ")} — ${refConflicts} conflict(s)${refOnly.length ? `, ${refOnly.length} reference question(s) not in the source (${refOnly.slice(0, 6).join(", ")})` : ""}` : ""}${notCompared.length ? `; NOT compared (scanned, stored only — needs OCR / vision): ${notCompared.map((r) => `“${r.name}” (${scannedPagesOf(r)} page(s))`).join(", ")}` : ""}${result.whitespaceRestored ? `; line breaks restored from the Word source in ${result.whitespaceRestored} question(s)` : ""}${formatted ? `; formatting rules (label / statement line breaks, wording unchanged) applied to ${formatted} question(s)` : ""}${ticksRemoved ? `; printed answer-line tick removed from ${ticksRemoved} question(s) (source evidence)` : ""}${headingsRestored ? `; section heading restored in ${headingsRestored} question(s)` : ""}${profileNote ? `; ${profileNote}` : ""}; subject / topic check (free): ${taxTally.AGREED} agreed, ${taxTally.DISAGREEMENT} disagreement(s), ${taxTally.NEEDS_REVIEW} need review, ${taxTally.NOT_VERIFIED} not verified.`, result as unknown as Record<string, unknown>, actorId);
+  const result: Verify1Result = { questions: passed + withProblems, passed, withProblems, corrected: fixesBy.size, missing: quality?.missing ?? [], duplicateNumbers: quality?.duplicateNumbers ?? [], referenceOnly: refOnly.slice(0, 200), referenceConflicts: refConflicts, referencesCompared: compared.length, referencesNotCompared: notCompared.map((r) => r.name), whitespaceRestored: restored, formatted, classification: taxTally, annotationsRemoved: ticksRemoved, headingsRestored, verify2Upgrade: legacy, blockedElsewhere, blockedBy, duplicateUploads };
+  await logEvent(jobId, "VERIFY1_DONE", `Verify 1 (full paper, no AI): ${result.questions} question(s) checked — ${passed} passed${blockedElsewhere ? ` (${blockedElsewhere} of them still blocked by other open flags, not by Verify 1: ${Object.entries(blockedBy).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${ISSUE_DEFS[c]?.label ?? c.toLowerCase().replace(/_/g, " ")} ${n}`).join(", ")})` : ""}, ${withProblems} with findings of its own, ${result.corrected} corrected from the source${result.missing.length ? `; missing ${result.missing.slice(0, 10).join(", ")}${result.missing.length > 10 ? " …" : ""}` : ""}${result.duplicateNumbers.length ? `; numbers read twice ${result.duplicateNumbers.slice(0, 10).join(", ")}` : ""}${compared.length ? `; reference papers compared: ${compared.map((r) => `“${r.name}”`).join(", ")} — ${refConflicts} conflict(s)${refOnly.length ? `, ${refOnly.length} reference question(s) not in the source (${refOnly.slice(0, 6).join(", ")})` : ""}` : ""}${notCompared.length ? `; NOT compared (scanned, stored only — needs OCR / vision): ${notCompared.map((r) => `“${r.name}” (${scannedPagesOf(r)} page(s))`).join(", ")}` : ""}${result.whitespaceRestored ? `; line breaks restored from the Word source in ${result.whitespaceRestored} question(s)` : ""}${formatted ? `; formatting rules (label / statement line breaks, wording unchanged) applied to ${formatted} question(s)` : ""}${ticksRemoved ? `; printed answer-line tick removed from ${ticksRemoved} question(s) (source evidence)` : ""}${headingsRestored ? `; section heading restored in ${headingsRestored} question(s)` : ""}${profileNote ? `; ${profileNote}` : ""}; subject / topic check (free): ${taxTally.AGREED} agreed, ${taxTally.DISAGREEMENT} disagreement(s), ${taxTally.NEEDS_REVIEW} need review, ${taxTally.NOT_VERIFIED} not verified.`, result as unknown as Record<string, unknown>, actorId);
   await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_VERIFY1", entityType: "AiImportJob", entityId: jobId, metadata: { questions: result.questions, passed, corrected: result.corrected } } });
   return result;
 }
@@ -576,6 +643,8 @@ interface Unit {
   pageId?: string;
   pageNumber?: number;
   textLayer?: string | null;
+  /** The page's text is the local OCR reading (not the PDF's own text layer): Verify 2 reads the image only. */
+  ocr?: boolean;
   startState?: unknown;
   parts?: string[];
   /** Text part: its position, and the questions (section|number) the local reading found in it. */
@@ -668,8 +737,8 @@ async function verify2Units(jobId: string): Promise<Unit[]> {
     const kind = (file.detected as { kind?: string } | null)?.kind;
     if (!file.storageKey) continue;
     if (kind === "pdf" || kind === "png" || kind === "jpeg") {
-      const pages = await prisma.aiImportPage.findMany({ where: { fileId: file.id, status: "DONE", NOT: { kind: "BLANK" } }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true, textLayer: true, rawOutput: true } });
-      for (const p of pages) units.push({ key: `${file.id}:p${p.pageNumber}`, kind: "page", file, pageId: p.id, pageNumber: p.pageNumber, textLayer: p.textLayer, startState: (p.rawOutput as { startState?: unknown } | null)?.startState });
+      const pages = await prisma.aiImportPage.findMany({ where: { fileId: file.id, status: "DONE", NOT: { kind: "BLANK" } }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true, textLayer: true, ocrEngine: true, rawOutput: true } });
+      for (const p of pages) units.push({ key: `${file.id}:p${p.pageNumber}`, kind: "page", file, pageId: p.id, pageNumber: p.pageNumber, textLayer: p.textLayer, ocr: !!p.ocrEngine, startState: (p.rawOutput as { startState?: unknown } | null)?.startState });
     } else if (kind === "docx" || kind === "xlsx" || kind === "csv") {
       const lines = kind === "docx" ? (await readDocx(vaultPath(file.storageKey))).lines.map((l) => l.text.replace(/⟦IMG:(?:\d+|missing)⟧/g, "[image]")) : await sheetLines(file);
       const parts = verify2TextParts(lines);
@@ -730,6 +799,11 @@ const inUnit = (u: Unit, q: UnitRow) => {
   const k = qkey(effective(q).section, effective(q).number);
   return u.qkeys.includes(k) || (u.partIndex === (u.partCount ?? 1) - 1 && !u.fileKeys?.has(k));
 };
+/**
+ * The text sent with a Verify 2 page image: the PDF's own text layer, never the local OCR reading (2026-11-19 audit: the
+ * second read was given the very OCR text the first read's questions were built from, so it was not independent).
+ */
+export const verify2Hint = (u: Pick<Unit, "textLayer" | "ocr">): string | null => (u.ocr ? null : (u.textLayer ?? null));
 const unitLabel = (u: Unit) => `${u.file.originalName}${u.kind === "page" ? ` page ${u.pageNumber}` : (u.partCount ?? 1) > 1 ? ` part ${(u.partIndex ?? 0) + 1} of ${u.partCount}` : ""}`;
 
 /** A unit needs no new read when this model already read it and every one of its questions still has an up-to-date result. */
@@ -784,7 +858,8 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
   // Every importer model, evaluated for page reading (the same request Verify 2 sends), minus the job's own readers.
   const auto = await computeModelPlan({ ...settings, selection: { ...settings.selection, mode: "auto" } }, { refresh: false, jobId }, { extract: used });
   // Price order, but a reliable non-thinking model (no repeated "output limit used up") first.
-  const candidates = await preferReliable(auto.tasks.extract.candidates.map((c) => (usedBy(used, c.id) ? { ...c, eligible: false, reason: "extracted this import (Verify 2 needs a different model)" } : c)));
+  const jsonFails = await jsonFailures(jobId);
+  const candidates = await preferReliable(auto.tasks.extract.candidates.map((c) => (usedBy(used, c.id) ? { ...c, eligible: false, reason: "extracted this import (Verify 2 needs a different model)" } : c.eligible && failuresOf(jsonFails, c.id) >= JSON_FAIL_SKIP ? { ...c, eligible: false, reason: `${failuresOf(jsonFails, c.id)} of its answers in this import were not usable JSON — skipped, another model is used` } : c)));
   const model = modelArg ?? candidates.find((c) => c.eligible)?.id ?? null;
   const problems: string[] = [...auto.problems];
   if (!settings.aiEnabled) problems.push("Paid AI is switched off in Import Settings — Verify 2 cannot run.");
@@ -943,22 +1018,49 @@ async function saveState(jobId: string, patch: Partial<Verify2State>): Promise<V
   return next;
 }
 
+/** A job's answers that were not usable JSON stop going to that model after this many (2026-11-19: gemma-3-27b, 110 of 129). */
+export const JSON_FAIL_SKIP = 3;
+/** Unusable (non-JSON / wrong-shape) answers per reported model in this job, as recorded by markUnusable. */
+export async function jsonFailures(jobId: string): Promise<Map<string, number>> {
+  const rows = await prisma.aiImportAiCall.groupBy({ by: ["model"], where: { jobId, ok: false, OR: [{ errorCategory: "unusable" }, { errorSummary: { contains: "JSON" } }] }, _count: { _all: true } });
+  return new Map(rows.map((r) => [r.model, r._count._all]));
+}
+/** Failures of a catalog id (the provider may report a dated variant, "<id>-2025-04-01"). */
+export const failuresOf = (fails: Map<string, number>, id: string) => [...fails].reduce((n, [m, c]) => n + (m === id || m.startsWith(`${id}-`) ? c : 0), 0);
+
+/**
+ * A request the gateway logged as answered (ok) whose answer then could not be parsed is recorded as a FAILED call
+ * (errorCategory "unusable"): health, model skipping and the job's call list see it (2026-11-19 audit: every
+ * content-safety "safe" answer was logged ok). Its cost stays as charged. The newest matching ok row is updated.
+ * shortcut: two parallel text parts of the same model have no pageId to tell their rows apart — either row is marked,
+ * the count per model stays right; record the call id in AiCallResult (ai.ts) to make it exact.
+ */
+export async function markUnusable(jobId: string, input: { stage?: string; pageId?: string | null }, model: string, e: unknown): Promise<void> {
+  const row = await prisma.aiImportAiCall.findFirst({ where: { jobId, model, ok: true, stage: input.stage ?? undefined, pageId: input.pageId ?? undefined }, orderBy: { createdAt: "desc" }, select: { id: true } });
+  if (row) await prisma.aiImportAiCall.update({ where: { id: row.id }, data: { ok: false, errorCategory: "unusable", errorSummary: `answer not usable: ${(e instanceof Error ? e.message : String(e)).slice(0, 400)}` } });
+}
+
 /** One Verify 2 request with the confirmed model, and at most ONE recorded fallback to a cheaper-or-equal suitable model. */
 async function verifyCall<T>(ctx: StepContext, state: Verify2State, input: Omit<Parameters<typeof importerAiCall>[0], "override" | "noReplace" | "models" | "jobId" | "settings">, parse: (text: string) => T): Promise<{ value: T; model: string }> {
   const base = { ...input, jobId: ctx.job.id, settings: ctx.settings, models: [state.model], noReplace: true };
-  // The confirmed model used up its output limit repeatedly in this job: its remaining requests go to the (priced,
-  // confirmed) fallback of another family instead of being paid for twice.
-  const alt0 = state.alternates.find((m) => m !== state.model);
-  if (alt0 && (await exhaustedModels(ctx.job.id)).has(state.model)) {
-    const choice = await choiceFor(ctx.settings, alt0, state.usedModels[0] ?? null, ctx.job.id, false);
-    if (choice.model === alt0 && choice.price) {
-      const r = await importerAiCall({ ...base, models: [alt0], override: choice });
+  const send = async (args: Parameters<typeof importerAiCall>[0]) => {
+    const r = await importerAiCall(args);
+    try {
       return { value: parse(r.text), model: r.model };
+    } catch (e) {
+      await markUnusable(ctx.job.id, input, r.model, e).catch(() => undefined);
+      throw e;
     }
+  };
+  // The confirmed model used up its output limit repeatedly in this job, or gave JSON_FAIL_SKIP unusable answers: its
+  // remaining requests go to the (priced, confirmed) fallback of another family instead of being paid for twice.
+  const alt0 = state.alternates.find((m) => m !== state.model);
+  if (alt0 && ((await exhaustedModels(ctx.job.id)).has(state.model) || failuresOf(await jsonFailures(ctx.job.id), state.model) >= JSON_FAIL_SKIP)) {
+    const choice = await choiceFor(ctx.settings, alt0, state.usedModels[0] ?? null, ctx.job.id, false);
+    if (choice.model === alt0 && choice.price) return send({ ...base, models: [alt0], override: choice });
   }
   try {
-    const r = await importerAiCall({ ...base, override: state.choice });
-    return { value: parse(r.text), model: r.model };
+    return await send({ ...base, override: state.choice });
   } catch (e) {
     if (!(e instanceof ImporterAiFailure) || !["model_output", "image_unsupported", "route_unavailable"].includes(e.kind)) throw e;
     const alt = state.alternates.find((m) => m !== state.model);
@@ -966,8 +1068,7 @@ async function verifyCall<T>(ctx: StepContext, state: Verify2State, input: Omit<
     const choice = await choiceFor(ctx.settings, alt, state.usedModels[0] ?? null, ctx.job.id, false);
     if (choice.model !== alt || !choice.price) throw new ImporterAiFailure(`${e.message} The fallback ${alt} cannot be used: ${choice.reason}`.slice(0, 600), e.kind, state.model, e.chargedInr);
     await logEvent(ctx.job.id, "MODEL_SWITCHED", `Verify 2: ${state.model} failed (${e.message.slice(0, 200)}); the same request is sent once to ${alt} (up to ${formatInr(choice.maxInr)} per request). The failed attempt cost ${e.chargedInr === null ? "an unknown amount (worst case kept)" : formatInr(e.chargedInr)}.`, { task: "verify2", from: state.model, to: alt, reason: e.message.slice(0, 300), failedChargedInr: e.chargedInr });
-    const r = await importerAiCall({ ...base, models: [alt], override: choice });
-    return { value: parse(r.text), model: r.model };
+    return send({ ...base, models: [alt], override: choice });
   }
 }
 
@@ -980,13 +1081,15 @@ interface SecondRead {
 function compareSecond(q: QRow, twin: SecondRead | undefined, v1: NonNullable<PaperVerification["v1"]> | undefined, rules: Set<FormatRuleCode> = new Set(), memo: { used: boolean; unreliableMarks: boolean; model?: string; part?: string | null } = { used: false, unreliableMarks: false }): NonNullable<PaperVerification["v2"]> {
   const r = compareSecondRead(q, twin, v1, rules);
   const e = effective(q);
-  const typeDiffers = r.fields.includes("type");
+  const typeDiffers = !!twin && typeOnlyDiffers(e, twin.q, codeSingle(q, e, rules));
   const missingNumbers = twin?.sourceText ? numbersMissingFromSource([e.stem, ...e.options.map((o) => o.text)], twin.sourceText) : [];
   const fieldChecks = v2FieldChecks({ e, twin: twin?.q ?? null, model: twin?.model || memo.model || r.model || "the Verify 2 model", part: memo.part ?? null, sourceText: twin?.sourceText ?? null, fields: r.fields, resolvedBySource: !!r.resolvedBySource, answer: answerFacts(q), typeDiffers, missingNumbers, memoryUsed: memo.used, unreliableMarks: memo.unreliableMarks });
-  return { ...r, fieldChecks, memoryUsed: memo.used };
+  // The type differs only as information (never a field problem): see compareSecondRead.
+  const checks = fieldChecks.map((f) => (f.field === "type" && f.status === "PROBLEM" ? { ...f, status: "OK" as const, problem: null, evidence: `info only — ${f.problem}; the answer key decides single / multiple` } : f));
+  return { ...r, fieldChecks: checks, memoryUsed: memo.used };
 }
 
-function compareSecondRead(q: QRow, twin: SecondRead | undefined, v1: NonNullable<PaperVerification["v1"]> | undefined, rules: Set<FormatRuleCode> = new Set()): NonNullable<PaperVerification["v2"]> {
+export function compareSecondRead(q: QRow, twin: SecondRead | undefined, v1: NonNullable<PaperVerification["v1"]> | undefined, rules: Set<FormatRuleCode> = new Set()): NonNullable<PaperVerification["v2"]> {
   const fp = stamp(q);
   const now = new Date().toISOString();
   const e = effective(q);
@@ -1000,16 +1103,18 @@ function compareSecondRead(q: QRow, twin: SecondRead | undefined, v1: NonNullabl
     fields.push("answer");
     diffs.push(`answer ${q.finalAnswer.join(",")} vs printed ${twin.q.printedAnswer.join(",")} in the second read`);
   }
-  // A statement-code question whose key gives one code option is single-correct whatever the second read calls it.
-  if (twin.q.type !== e.type && !(twin.q.type === "SINGLE_CORRECT" && e.type === "OTHER") && ["MULTIPLE_CORRECT", "SINGLE_CORRECT"].includes(twin.q.type) && ["MULTIPLE_CORRECT", "SINGLE_CORRECT"].includes(e.type) && !codeSingle(q, e, rules)) {
-    fields.push("type");
-    diffs.push(`type ${e.type.toLowerCase()} vs ${twin.q.type.toLowerCase()}`);
-  }
+  // Single vs multiple correct is NOT a content disagreement (2026-11-19 audit: 31 of 96 DISAGREEs were type-only): the
+  // answer key / answer-type check decides it. It is kept as information in the detail only.
+  const typeInfo = typeOnlyDiffers(e, twin.q, codeSingle(q, e, rules)) ? `; info: the second read calls it ${twin.q.type.toLowerCase().replace(/_/g, " ")} (stored ${e.type.toLowerCase().replace(/_/g, " ")}) — not counted as a disagreement` : "";
   const second = { stem: twin.q.stem.slice(0, 600), options: twin.q.options.map((o) => o.text.slice(0, 200)), printedAnswer: twin.q.printedAnswer };
-  if (!fields.length) return { ...fp, at: now, model: twin.model, status: "VERIFIED", fields: [], detail: `wording, ${e.options.length} options, answer, numbers / symbols and figures agree${v1 ? (v1.passed ? "; Verify 1 passed" : "; Verify 1 has findings") : ""}` };
-  // The source text settles text / number differences when the stored question is in it and the second read is not.
+  if (!fields.length) return { ...fp, at: now, model: twin.model, status: "VERIFIED", fields: [], detail: `wording, ${e.options.length} options, answer, numbers / symbols and figures agree${v1 ? (v1.passed ? "; Verify 1 passed" : "; Verify 1 has findings") : ""}${typeInfo}` };
+  // The source text settles text / number differences when the stored question is in it and the second read is not —
+  // never for a question built FROM that text (local OCR): its stored wording is always "in" its own source, so the
+  // tie-break would be circular; the disagreement stays for a person to decide.
   let resolved: string | null = null;
-  if (twin.sourceText) {
+  let circular = "";
+  if (twin.sourceText && e.method === "LOCAL_OCR") circular = " The stored question was read by local OCR from this same text, so the text cannot settle it.";
+  else if (twin.sourceText) {
     const src = nrm(twin.sourceText);
     const textFields = fields.filter((f) => f === "question text" || f.startsWith("option") || f.endsWith(" numbers"));
     const storedIn = [e.stem, ...e.options.map((o) => o.text)].every((t) => !t.trim() || src.includes(nrm(t)));
@@ -1019,7 +1124,7 @@ function compareSecondRead(q: QRow, twin: SecondRead | undefined, v1: NonNullabl
   }
   if (resolved) return { ...fp, at: now, model: twin.model, status: "VERIFIED", fields, detail: "the two reads differ, but the source text confirms the stored question", resolvedBySource: resolved, second };
   const alsoV1 = v1 && !v1.passed ? ` Verify 1 also has findings (${v1.problems.map((p) => p.code).join(", ") || "flags"}).` : "";
-  return { ...fp, at: now, model: twin.model, status: "DISAGREE", fields, detail: `${diffs.join("; ")} — the source cannot settle it; correct the question by hand or approve it after checking.${alsoV1}`.slice(0, 900), second };
+  return { ...fp, at: now, model: twin.model, status: "DISAGREE", fields, detail: `${diffs.join("; ")} — the source cannot settle it; correct the question by hand or approve it after checking.${circular}${alsoV1}${typeInfo}`.slice(0, 900), second };
 }
 
 type V2Result = NonNullable<PaperVerification["v2"]>;
@@ -1081,7 +1186,7 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
       if (u.kind === "page") {
         const render = await ensureRender(ctx.job, u.file, u.pageNumber!, ctx.settings.limits.renderDpi);
         const image = await visionImage(render);
-        const { value, model } = await verifyCall(ctx, state!, { task: "verify", stage: "verify2-read", system: EXTRACT_SYSTEM, content: [{ type: "text", text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page: u.pageNumber!, pages: u.file.pageCount ?? 1, textLayer: u.textLayer ?? null, memory }) }, { type: "image_url", image_url: { url: image, detail: "high" } }], maxOutputTokens: 8000, pageId: u.pageId, needsVision: true, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
+        const { value, model } = await verifyCall(ctx, state!, { task: "verify", stage: "verify2-read", system: EXTRACT_SYSTEM, content: [{ type: "text", text: extractUserText({ exam: exam?.name ?? "Exam", subject: null, page: u.pageNumber!, pages: u.file.pageCount ?? 1, textLayer: verify2Hint(u), memory }) }, { type: "image_url", image_url: { url: image, detail: "high" } }], maxOutputTokens: 8000, pageId: u.pageId, needsVision: true, jsonSchema: "extract" }, (t) => parsePage(t, "the Verify 2 model's answer"));
         const qs = repairLayout(toExtracted(value, u.pageNumber!, model), NO_OCR);
         assignSections(qs, u.startState as never);
         return { qs, model, text: u.textLayer ?? null };
@@ -1101,6 +1206,9 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
 
   let stopped: unknown = null;
   let notRead = units.length;
+  type Row = ReadRow<ExtractedQuestion> & { file: string };
+  const firstRows: Row[] = [];
+  const secondRows: Row[] = [];
   for (let w = 0; w < units.length && !stopped; w += V2_PARALLEL) {
     if (!(await ctx.stillRunning())) return counts;
     const window = units.slice(w, w + V2_PARALLEL);
@@ -1151,6 +1259,12 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
       // A read with a result is one verification pass (a failed / unavailable one can be retried).
       await savePaperVerify(q, V2_RESULT_STATUSES.includes(result.status) ? { v2: result, passes: withPass(pvOf(q), "v2", result.model) } : { v2: result });
     }
+    // First read vs this independent read of the same unit, by identity (section + printed number), for the paper report.
+    if (!failed) {
+      const pg = u.kind === "page" ? u.pageNumber! : 1;
+      firstRows.push(...stored.filter((q) => inUnit(u, q)).map((q) => ({ section: effective(q).section ?? null, number: effective(q).number, page: pg, order: q.orderIndex, item: effective(q), file: u.file.id })));
+      secondRows.push(...second.map((x, i) => ({ section: x.q.section ?? null, number: x.q.number, page: pg, order: i, item: x.q, file: u.file.id })));
+    }
     const all = u.kind === "text" ? await prisma.aiImportQuestion.findMany({ where: { fileId: u.file.id, status: { notIn: LOCKED } }, select: { data: true, editedData: true } }) : stored;
     const extra = second.filter((x) => !x.q.continuesOnNextPage && !all.some((q) => effective(q).number === x.q.number && effective(q).section === x.q.section)).map((x) => `${x.q.section ? `${x.q.section} ` : ""}Q${x.q.number ?? x.q.label}`);
     if (extra.length && !failed) {
@@ -1164,6 +1278,15 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
     } else done.push(u.key);
     state = await saveState(ctx.job.id, { doneUnits: done, counts });
     }
+  }
+  // Per-paper reconciliation of the two reads (missing / duplicated / reordered / conflicting), one report per file.
+  for (const fileId of new Set(firstRows.map((r) => r.file))) {
+    const c = compareReads(firstRows.filter((r) => r.file === fileId), secondRows.filter((r) => r.file === fileId), (a, b) => readsAgree(withoutAnnotations(a), b).agree);
+    const name = units.find((u) => u.file.id === fileId)?.file.originalName ?? fileId;
+    const list = (label: string, xs: string[]) => (xs.length ? `${label} ${xs.length}: ${xs.slice(0, 15).join(", ")}${xs.length > 15 ? " …" : ""}` : null);
+    const parts = [list("in the import, not in the second read", c.missingInSecond), list("in the second read, not in the import", c.missingInFirst), list("duplicated in the import", c.duplicatedInFirst), list("duplicated in the second read", c.duplicatedInSecond), list("out of number order in the import", c.reorderedInFirst), list("out of number order in the second read", c.reorderedInSecond), list("wording / options differ", c.conflicting)].filter(Boolean);
+    await logEvent(ctx.job.id, "VERIFY2_RECONCILED", `${name}: first read vs independent second read of the same ${firstRows.filter((r) => r.file === fileId).length} question(s), matched by section + printed number — ${readsDiffer(c) ? parts.join("; ") : "every question agrees in identity, order and content"}. Nothing was changed.`, { fileId, ...c });
+    counts.reconFindings = (counts.reconFindings ?? 0) + Object.values(c).reduce((n, x) => n + x.length, 0);
   }
   if (stopped) {
     await markUnavailable(notRead, stopped);

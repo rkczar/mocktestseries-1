@@ -124,7 +124,7 @@ export function placeholderStem(stem: string, instructions: string | null | unde
   if (/^(question|q\.?)\s*\d*\s*[:.]?$/i.test(s)) return `The question text is only a label ("${s.slice(0, 40)}").`;
   if (/\b(text|question)\s+(is\s+)?(not|un)\s*(visible|readable|clear|available)\b/i.test(s)) return "The question text says it could not be read.";
   if (/^(see|refer to|look at)\s+(the\s+)?(figure|image|diagram|picture)\.?$/i.test(s) && !hasFigure) return "The question text only refers to a figure, and no figure was extracted.";
-  if (instructions && s.toLowerCase() === instructions.trim().toLowerCase()) return "The question text repeats the general instructions instead of the question.";
+  if (instructions && s.toLowerCase() === instructions.trim().toLowerCase()) return "The question text was also copied into the instructions field — the question would print twice (instructions are printed before it). Clear the instructions field.";
   if (/^(choose|select|mark)\s+the\s+(correct|right|best)\s+(answer|option)\.?$/i.test(s)) return "The question text is a generic instruction, not the question.";
   return null;
 }

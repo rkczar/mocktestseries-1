@@ -13,7 +13,8 @@ import { kickWorker } from "@/lib/ai-import/kick";
 import { estimateJobCost } from "@/lib/ai-import/estimate";
 import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
 import { priceRemainingWork } from "@/lib/ai-import/reconfigure";
-import { BUDGET_LOCK_KEY } from "@/lib/ai-import/ai";
+import { BUDGET_LOCK_KEY, importerBudgetBlock } from "@/lib/ai-import/ai";
+import type { ModelPlan } from "@/lib/ai-import/selection-types";
 import { referenceKeysInUse } from "@/lib/ai-import/reference-keys";
 import type { JobAnalysis } from "@/lib/ai-import/analyze";
 import type { VerifyMode } from "@/lib/ai-import/config";
@@ -410,6 +411,10 @@ async function authorizeRemaining(job: AiImportJob, actorId: string, confirmedMa
   const current = await getImporterSettings();
   const plan = planOf(job.config);
   if (!current.aiEnabled || !plan) return null;
+  // The importer budget must leave room for at least the next (smallest) request: otherwise the job would be queued and
+  // paused again by the gateway seconds later (2026-11-15: RESUMED → PAUSED_BUDGET 6 s later, twice).
+  const blocked = await importerBudgetBlock(job.id, current, { beforeConfirmation: true, amountInr: nextRequestMaxInr(plan) });
+  if (blocked) throw new ImportJobError(`Not started: ${blocked.message.replace(/ Nothing was sent\..*$/, "")} Nothing was queued — the budget in Import Settings must allow at least one more request first.`);
   const settings = { ...jobRunSettings(job.config, current), models: modelsFromPlan(plan) };
   const files = await prisma.aiImportFile.findMany({ where: { jobId: job.id }, select: { id: true, role: true, status: true, errorMessage: true, pageCount: true } });
   const r = await priceRemainingWork({ id: job.id, analysis: job.analysis, files }, plan, settings);
@@ -424,6 +429,12 @@ async function authorizeRemaining(job: AiImportJob, actorId: string, confirmedMa
   await prisma.aiImportJob.update({ where: { id: job.id }, data: { budgetInr: needed } });
   await logEvent(job.id, "COST_RECONFIRMED", `New maximum confirmed: ₹${needed.toFixed(2)} (₹${job.spentInr.toFixed(2)} spent + up to ₹${r.maxInr.toFixed(2)} for ${r.unreadPages} page(s)${r.failedKeyFiles ? `, ${r.failedKeyFiles} answer-key file(s)` : ""}${r.toClassify ? ` and classifying ${r.toClassify} question(s)` : ""}); was ₹${job.budgetInr.toFixed(2)}.`, { ...cost }, actorId);
   return null;
+}
+
+/** The worst case of the cheapest request the job's plan can send next (₹0 when nothing is priced). */
+export function nextRequestMaxInr(plan: ModelPlan): number {
+  const each = Object.values(plan.tasks).filter((t) => t.model && t.maxInr !== null).map((t) => t.maxInr!);
+  return each.length ? Math.min(...each) : 0;
 }
 
 /** Resume after a manual pause, a provider/key pause or a failure (finished pages are never read or paid for again). */

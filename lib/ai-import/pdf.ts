@@ -139,6 +139,23 @@ export async function imagesPerPage(file: string, maxPages: number): Promise<Map
   return counts;
 }
 
+/** Native resolution of a scanned page: ppi of its largest raster image in `pdfimages -list` output (null when none). */
+export function scanPpiFromList(list: string, page: number): number | null {
+  let best: { area: number; ppi: number } | null = null;
+  for (const line of list.split("\n")) {
+    const m = /^\s*(\d+)\s+\d+\s+image\s+(\d+)\s+(\d+)\s+\S+\s+\d+\s+\d+\s+\S+\s+\S+\s+\d+\s+\d+\s+(\d+)\s+(\d+)\s/.exec(line);
+    if (!m || Number(m[1]) !== page) continue;
+    const area = Number(m[2]) * Number(m[3]);
+    if (!best || area > best.area) best = { area, ppi: Math.min(Number(m[4]), Number(m[5])) };
+  }
+  return best?.ppi ?? null;
+}
+
+export async function scanPpi(file: string, page: number): Promise<number | null> {
+  const out = (await runTool("pdfimages", ["-list", "-f", String(page), "-l", String(page), file], { timeoutMs: 60_000, maxOutput: 1024 * 1024 })).toString("utf8");
+  return scanPpiFromList(out, page);
+}
+
 /**
  * Renders one page to PNG. The long side is fixed from `dpi` for an A4/Letter
  * page (150 dpi ≈ 1750 px) so an oversized page can never exhaust memory.

@@ -151,16 +151,35 @@ export type PageOutput = z.infer<typeof pageSchema>;
 
 const TYPES: ExtractedType[] = ["SINGLE_CORRECT", "MULTIPLE_CORRECT", "MATCH_THE_FOLLOWING", "ASSERTION_REASON", "NUMERICAL", "SUBJECTIVE", "OTHER"];
 
-/** Printed option label → canonical A–E by position in the printed sequence. */
+/** The letter a printed option label names ("(c)" / "C." / "3" / "Option C" → "C"), or null. */
+const printedLetter = (p: string): string | null => {
+  const v = p.replace(/[()[\].:\s]/g, "").toUpperCase().replace(/^OPTION/, "");
+  return /^[A-E]$/.test(v) ? v : /^[1-5]$/.test(v) ? String.fromCharCode(64 + Number(v)) : null;
+};
+
+/**
+ * Printed option label → canonical A–E. The printed letter is kept when every label names one, in order: a dropped (b)
+ * leaves (a),(c),(d) as A,C,D — never shifted to A,B,C, so the official key "C" still points at printed (c)
+ * (2026-11-19 audit, CMS 2026 P-I Q92). Otherwise (unlabelled / roman / out of order) by position.
+ */
 function canonicalLabels(printed: string[]): string[] {
+  const letters = printed.map(printedLetter);
+  if (letters.every((l, i) => l && (i === 0 || l > letters[i - 1]!))) return letters as string[];
   return printed.map((_, i) => String.fromCharCode(65 + i));
+}
+
+/** Printed letters skipped inside the sequence ("(a),(c),(d)" → ["B"]). */
+function skippedLetters(labels: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 1; i < labels.length; i++) for (let c = labels[i - 1].charCodeAt(0) + 1; c < labels[i].charCodeAt(0); c++) out.push(String.fromCharCode(c));
+  return out;
 }
 
 export function labelFromPrinted(value: string, printedOptions: string[]): string | null {
   const v = value.replace(/[()[\].\s]/g, "").toUpperCase();
   if (!v) return null;
   const idx = printedOptions.findIndex((p) => p.replace(/[()[\].\s]/g, "").toUpperCase() === v);
-  if (idx >= 0) return String.fromCharCode(65 + idx);
+  if (idx >= 0) return canonicalLabels(printedOptions)[idx];
   if (/^[A-E]$/.test(v)) return v;
   if (/^[1-5]$/.test(v)) return String.fromCharCode(64 + Number(v));
   return null;
@@ -217,7 +236,10 @@ export function toExtracted(out: PageOutput, page: number, model: string): Extra
       continuesOnNextPage: q.continues_on_next_page === true,
       continuedFromPreviousPage: q.continued_from_previous_page === true,
       region: q.region ? normalizeBox(q.region, scale).box : null,
-      notes: labelsMissing ? ["The model did not return the printed option labels; the options are labelled by their position — check them against the page."] : [],
+      notes: [
+        ...(labelsMissing ? ["The model did not return the printed option labels; the options are labelled by their position — check them against the page."] : []),
+        ...(skippedLetters(labels).length ? [`Option ${skippedLetters(labels).map((l) => `(${l.toLowerCase()})`).join(", ")} is missing from the reading; the other options keep their printed letters — enter the missing option from the page.`] : []),
+      ],
       ...(q.explanation?.trim() ? { hints: { explanation: q.explanation.trim() } } : {}),
       ...(q.hi !== undefined ? { hi: toHindi(q.hi, labels) } : {}),
     } satisfies ExtractedQuestion;

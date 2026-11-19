@@ -431,7 +431,8 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   /** The options cite a statement number the question text does not have (a statement lost or merged in the source). */
   STATEMENT_COUNT_MISMATCH: { label: "Options refer to a statement the text does not have", blocking: false, publishBlocking: true },
   SUBJECT_MISMATCH: { label: "Subject does not fit the question", blocking: true, publishBlocking: true },
-  FORMAT_DEVIATION: { label: "Differs from this paper format's profile", blocking: false, publishBlocking: true },
+  /** A warning (2026-11-19 audit): a format-profile / paper-memory difference is shown for review but never blocks. */
+  FORMAT_DEVIATION: { label: "Differs from this paper format's profile (warning)", blocking: false, publishBlocking: false },
   REFERENCE_CONFLICT: { label: "Differs from the reference paper", blocking: false, publishBlocking: true },
   VERIFY2_DISAGREES: { label: "Verify 2 (independent model) disagrees", blocking: true, publishBlocking: true },
   /** Verify 2 was sent but gave no usable answer (model error, timeout, cut-off output) — never agreement, never a disagreement. */

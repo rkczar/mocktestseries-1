@@ -6,9 +6,9 @@ import { formatInr } from "@/lib/ai-engine/config";
 import { SELECTION_TASKS, SELECTION_TASK_LABELS, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { readRoutes } from "@/lib/ai-import/routes";
-import { computeModelPlan, fallbackMaxInr, modelsFromPlan, planOf } from "@/lib/ai-import/select";
+import { computeModelPlan, modelsFromPlan, planOf } from "@/lib/ai-import/select";
 import { REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
-import { estimateJobCost } from "@/lib/ai-import/estimate";
+import { estimateJobCost, nextFallbackMaxInr } from "@/lib/ai-import/estimate";
 import { kickWorker } from "@/lib/ai-import/kick";
 import type { FileFacts, JobAnalysis } from "@/lib/ai-import/analyze";
 import type { ModelPlan, TaskChoice } from "@/lib/ai-import/selection-types";
@@ -197,7 +197,7 @@ export async function priceRemainingWork(job: { id: string; analysis: Prisma.Jso
   const toClassify = open.filter((q) => !q.topicId && !q.taxonomySource?.startsWith("admin")).length;
   const toSolve = settings.verification.independentAnswer ? open.filter((q) => !q.aiAnswer.length).length : 0;
   const perRequest = (c: TaskChoice | undefined) => {
-    const fb = fallbackMaxInr(c);
+    const fb = nextFallbackMaxInr(c);
     return c?.maxInr == null || fb === null ? null : REQUEST_ATTEMPTS * (c.maxInr + fb);
   };
   const classifyEach = plan.tasks.classify.model ? perRequest(plan.tasks.classify) : 0;

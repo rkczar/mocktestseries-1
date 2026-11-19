@@ -7,10 +7,12 @@ import { logEvent, ImportJobError } from "@/lib/ai-import/jobs";
 import { blockerOnceApproved, importBlocker, type ImportMode, type ImportPlan } from "@/lib/ai-import/adapter";
 import { REVIEWABLE } from "@/lib/ai-import/post";
 import { compareVersions, figureRows, mergeChoice, recordVersion, snapshotFigures, RESCAN_FIELDS, type FigureSnapshot, type RescanField } from "@/lib/ai-import/versions";
-import { cropFromRender, storeOriginalFigure, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
+import sharp from "sharp";
+import { cropFromRender, cropFromScan, storeOriginalFigure, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
+import { pageLayout } from "@/lib/ai-import/pdf";
 import { normalizeBox } from "@/lib/ai-import/figure-map";
-import { ensureRender } from "@/lib/ai-import/process";
-import { exists as vaultExists } from "@/lib/ai-import/vault";
+import { ensureRender, jobIsBilingual } from "@/lib/ai-import/process";
+import { exists as vaultExists, vaultPath, workDir } from "@/lib/ai-import/vault";
 import { isPlaceholder, placeholderRow, type RescanRequest, type RescanView } from "@/lib/ai-import/process";
 import { gapPages } from "@/lib/ai-import/reading-checks";
 import type { SequenceAck } from "@/lib/ai-import/quality";
@@ -23,7 +25,8 @@ import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { headingResolver, promoteExamples, quarantineProposals, rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { MAX_VERIFY_PASSES, contentCurrent, contentPartOf, fingerprintsOf, passCount } from "@/lib/ai-import/verify-core";
-import { importerBudgetBlock } from "@/lib/ai-import/ai";
+import { importerBudgetBlock, importerCaps, importerSpend, pageReadWorstInr } from "@/lib/ai-import/ai";
+import { budgetStateKey } from "@/lib/ai-import/budget-guard";
 import { learnFromCorrections } from "@/lib/ai-import/paper-learn";
 
 /**
@@ -615,7 +618,12 @@ export async function cropFigureFromPage(input: { questionId: string; actorId: s
   if (!page) throw new ImportJobError("That page is not part of this paper.", 404);
   const settings = await getImporterSettings();
   const render = await ensureRender({ id: q.jobId }, file, input.pageNumber, settings.limits.renderDpi);
-  const crop = await cropFromRender(render, norm.box, 0);
+  // A scanned PDF page: cut from the original full-page scan (its own resolution, e.g. 300 dpi), as the worker does
+  // (process.ts pageFigureBytes); the render (150 dpi) only when no usable scan is embedded.
+  const layout = kind === "pdf" ? await pageLayout(vaultPath(file.storageKey!), input.pageNumber, workDir(q.jobId)).catch(() => null) : null;
+  const scan = layout?.images.find((img) => img.box.w * img.box.h >= 0.85) ?? null;
+  const fromScan = scan && layout ? await cropFromScan(scan, layout, norm.box, (await sharp(render).metadata()).width ?? 0, 0) : null;
+  const crop = fromScan ?? (await cropFromRender(render, norm.box, 0));
   if (!crop) throw new ImportJobError("The crop is too small. Draw a larger box around the figure.");
   if (Math.min(crop.width, crop.height) < MIN_CROP_SIDE) throw new ImportJobError(`The crop is only ${crop.width}×${crop.height} px. Draw a larger box around the whole figure.`);
   let stored;
@@ -640,7 +648,7 @@ export async function cropFigureFromPage(input: { questionId: string; actorId: s
         owner: input.owner,
         optionLabel: input.owner === "OPTION" ? input.optionLabel : null,
         sharedGroup: old?.sharedGroup ?? null,
-        box: { ...norm.box, crop: { from: "render", width: crop.width, height: crop.height }, reason: `Cropped from page ${input.pageNumber} by an administrator.` },
+        box: { ...norm.box, crop: { from: fromScan ? "scan" : "render", width: crop.width, height: crop.height }, reason: `Cropped from page ${input.pageNumber} by an administrator.` },
         source: "CROP",
         originalKey: stored.key,
         originalSha256: stored.sha256,
@@ -692,10 +700,20 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
   const plan = planOf(job.config);
   if (!plan?.tasks.extract.model) throw new ImportJobError("This import's confirmed model plan has no page-reading model, so its pages cannot be read again. Nothing was changed — use Reconfigure Models, or correct the question by hand.");
   // Budget preflight: a request the importer budget cannot pay for is refused here, before anything is queued (no
-  // stored request, no pass used). One page = the plan's worst case for a page read plus its independent read.
-  const perPage = (plan.tasks.extract.maxInr ?? 0) + (plan.tasks.verify?.model ? (plan.tasks.verify.maxInr ?? 0) : 0);
+  // stored request, no pass used). One page = a page read plus its independent read, each priced exactly as the gateway
+  // will reserve it (ai.ts pageReadWorstInr: bilingual output limit, route price above the plan's).
+  const bilingual = await jobIsBilingual(job);
+  const perPage = (await pageReadWorstInr(jobId, plan.tasks.extract, bilingual)) + (plan.tasks.verify?.model ? await pageReadWorstInr(jobId, plan.tasks.verify, bilingual) : 0);
   const blocked = await importerBudgetBlock(jobId, settings, { beforeConfirmation: true, amountInr: perPage });
   if (blocked) throw new ImportJobError(`Re-scan not started: ${blocked.message} Nothing was queued and no verification pass was used.`);
+  // A re-scan the budget already stopped is not queued again while nothing about the budget changed (2026-11-11: 23
+  // queued-then-paused cycles on one job).
+  const spend = await importerSpend();
+  const budgetState = budgetStateKey(importerCaps(settings), { monthInr: spend.monthUsed, allInr: spend.allUsed });
+  if (job.status === AiImportJobStatus.PAUSED_BUDGET) {
+    const last = await prisma.aiImportEvent.findFirst({ where: { jobId, type: "RESCAN_REQUESTED" }, orderBy: { createdAt: "desc" }, select: { data: true } });
+    if ((last?.data as { budgetState?: string } | null)?.budgetState === budgetState) throw new ImportJobError(`Re-scan not started: the last re-scan of this import was stopped by the importer budget (${job.pauseReason ?? "budget limit"}) and neither the budget nor the spend has changed since. Nothing was queued — raise the budget in Import Settings or wait for the monthly budget to renew.`);
+  }
   const open = qs.filter((q) => !LOCKED.includes(q.status));
   if (!open.length) throw new ImportJobError("These questions are already in the Question Bank — edit them there.");
   // A re-scan is a paid verification pass: a question that already had MAX_VERIFY_PASSES is decided by hand.
@@ -762,7 +780,7 @@ export async function rescanQuestions(ids: string[], scope: RescanScope, actorId
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
   // No pass is used by the request: the worker counts one when a reading of the question is saved as a candidate
   // (lib/ai-import/process.ts saveQuestion), once per request, with the model that actually read it.
-  await logEvent(jobId, "RESCAN_REQUESTED", `Re-scan requested: ${scope === "page" ? `${pages} whole page(s)` : `${open.length} question(s) on ${pages} page(s)`} are read again from the original file. Manual corrections are kept; new results you have to choose from appear on each question.`, { scope, questionIds: open.map((q) => q.id), pages }, actorId);
+  await logEvent(jobId, "RESCAN_REQUESTED", `Re-scan requested: ${scope === "page" ? `${pages} whole page(s)` : `${open.length} question(s) on ${pages} page(s)`} are read again from the original file. Manual corrections are kept; new results you have to choose from appear on each question.`, { scope, questionIds: open.map((q) => q.id), pages, budgetState }, actorId);
   await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_RESCAN_REQUESTED", entityType: "AiImportJob", entityId: jobId, metadata: { scope, questionIds: open.map((q) => q.id) } } });
   kickWorker();
   return { pages, questions: open.length, reads };

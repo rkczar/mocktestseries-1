@@ -38,14 +38,16 @@ export const CHECK_NAMES: Record<keyof Omit<QuestionChecks, "at">, string> = {
 
 /** Issue codes of each check (a code that fails the check outright, and one that needs a person's decision). */
 const CONTENT_FAIL = ["STATEMENTS_MERGED", "ANSWER_IN_OPTION", "OPTIONS_INCOMPLETE", "STEM_HAS_OPTIONS", "QUESTION_TEXT_SUSPECT", "NUMBER_CONFLICT", "SOURCE_TEXT_MISMATCH", "FORMULA_TEXT_CORRUPT", "IMAGE_MISSING", "UNSUPPORTED_TYPE", "BILINGUAL_HINDI_MISSING", "BILINGUAL_MISMATCH"];
-const CONTENT_REVIEW = ["STATEMENT_COUNT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "OCR_UNCERTAIN", "FORMULA_ISSUE", "FORMULA_NEEDS_MANUAL_VERIFICATION", "IMAGE_MAPPING_UNCERTAIN", "IMAGE_REFERENCE_UNCERTAIN", "VERIFY_DISAGREES", "RESCAN_PENDING", "FORMAT_DEVIATION", "REFERENCE_CONFLICT", "BILINGUAL_HINDI_UNCERTAIN", "OPTION_FORMULA_IMAGE_DIFFERS"];
+const CONTENT_REVIEW = ["STATEMENT_COUNT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "OCR_UNCERTAIN", "FORMULA_ISSUE", "FORMULA_NEEDS_MANUAL_VERIFICATION", "IMAGE_MAPPING_UNCERTAIN", "IMAGE_REFERENCE_UNCERTAIN", "VERIFY_DISAGREES", "RESCAN_PENDING", "REFERENCE_CONFLICT", "BILINGUAL_HINDI_UNCERTAIN", "OPTION_FORMULA_IMAGE_DIFFERS"];
+/** Content warnings: shown under the content check, never failing it (FORMAT_DEVIATION is not blocking since 2026-11-19). */
+const CONTENT_WARN = ["FORMAT_DEVIATION"];
 const ANSWER_FAIL = ["ANSWER_MISMATCH", "ANSWER_AMBIGUOUS", "ANSWER_KEY_PAPER_MISMATCH", "ANSWER_TYPE_CONFLICT"];
 const TAXONOMY_REVIEW = ["SUBJECT_UNKNOWN", "CLASSIFICATION_FAILED", "TOPIC_UNCERTAIN"];
 const TAXONOMY_DISAGREE = ["TAXONOMY_DISAGREES", "SUBJECT_MISMATCH"];
 
 /** Which check an issue code belongs to (filters on the review screens); null = none of the four. */
 export function checkOfIssue(code: string): keyof Omit<QuestionChecks, "at"> | null {
-  if (CONTENT_FAIL.includes(code) || CONTENT_REVIEW.includes(code)) return "content";
+  if (CONTENT_FAIL.includes(code) || CONTENT_REVIEW.includes(code) || CONTENT_WARN.includes(code)) return "content";
   if (ANSWER_FAIL.includes(code) || ["ANSWER_UNVERIFIED", "ANSWER_MISSING", "POSSIBLE_WITHDRAWN", "AI_OPINION_DIFFERS"].includes(code)) return "answer";
   if (TAXONOMY_REVIEW.includes(code) || TAXONOMY_DISAGREE.includes(code) || code === "TAXONOMY_CHECK_FAILED") return "taxonomy";
   if (code === "VERIFY2_DISAGREES" || code === "VERIFY2_FAILED") return "independent";
@@ -98,7 +100,7 @@ export function questionChecks(input: {
     ? { status: "FAILED", required: true, detail: listOf(cFail, issues) }
     : cReview.length
       ? { status: "NEEDS_REVIEW", required: true, detail: listOf(cReview, issues) }
-      : { status: "PASSED", required: true, detail: input.v1Ran ? "Wording, statements, options and figures checked (Verify 1 ran)." : "Wording, statements, options and figures checked by the importer (full-paper Verify 1 not run yet)." };
+      : { status: "PASSED", required: true, detail: `${input.v1Ran ? "Wording, statements, options and figures checked (Verify 1 ran)." : "Wording, statements, options and figures checked by the importer (full-paper Verify 1 not run yet)."}${has(CONTENT_WARN).length ? ` Warning: ${listOf(has(CONTENT_WARN), issues)}` : ""}` };
 
   // Answer.
   const aFail = has(ANSWER_FAIL);

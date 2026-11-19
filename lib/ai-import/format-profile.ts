@@ -128,10 +128,13 @@ export function deriveRules(qs: ExtractedQuestion[]): FormatRules {
 }
 
 /** Deviations of one question from a profile (pure). Reported as Verify 1 findings, never applied as changes. */
-export function profileDeviations(rules: FormatRules, q: ExtractedQuestion, hasOfficialKey: boolean): string[] {
+export function profileDeviations(rules: FormatRules, q: ExtractedQuestion, hasOfficialKey: boolean, paperLabels: string | null = null): string[] {
   const out: string[] = [];
   const texts = [q.stem, ...q.options.map((o) => o.text)];
-  if (rules.optionLabels && q.options.length && q.options[0].printed && labelShape(q.options[0].printed) !== rules.optionLabels) out.push(`options are printed as “${q.options[0].printed}” here; this format prints “${rules.optionLabels}” — check the option boundaries`);
+  // `paperLabels`: the label style THIS paper prints throughout (paperLabelShape) — a paper printed in another style than
+  // the profile's is a format difference of the paper (reported once), not a boundary problem of each question.
+  const shape = q.options[0]?.printed ? labelShape(q.options[0].printed) : null;
+  if (rules.optionLabels && shape && shape !== rules.optionLabels && shape !== paperLabels) out.push(`options are printed as “${q.options[0].printed}” here; this format prints “${rules.optionLabels}” — check the option boundaries`);
   if (rules.answerPlacement === "below-question" && !q.printedAnswerRaw && !hasOfficialKey) out.push("this format prints the answer beneath every question, but none was found here — check that the answer line was not merged into an option or the next question");
   if (rules.answerLinePrefix) {
     const p = rules.answerLinePrefix.toLowerCase();
@@ -144,6 +147,18 @@ export function profileDeviations(rules: FormatRules, q: ExtractedQuestion, hasO
   return out;
 }
 
+/** The option-label style one paper prints on at least 80 % of its questions (pure), else null. */
+export function paperLabelShape(qs: ExtractedQuestion[]): string | null {
+  const m = mode(qs.filter((q) => q.options[0]?.printed).map((q) => labelShape(q.options[0].printed)));
+  return m.share >= 0.8 ? m.value : null;
+}
+
+/** The source format of each question-paper file of a job (file id → docx / pdf / png …). */
+async function paperKinds(jobId: string): Promise<Map<string, string | null>> {
+  const files = await prisma.aiImportFile.findMany({ where: { jobId, role: "PAPER" }, select: { id: true, detected: true } });
+  return new Map(files.map((f) => [f.id, (f.detected as { kind?: string } | null)?.kind ?? null]));
+}
+
 async function jobFormat(jobId: string): Promise<{ examId: string; title: string; kind: string | null } | null> {
   const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { examId: true, title: true } });
   if (!job) return null;
@@ -151,21 +166,34 @@ async function jobFormat(jobId: string): Promise<{ examId: string; title: string
   return { examId: job.examId, title: job.title, kind: (file?.detected as { kind?: string } | null)?.kind ?? null };
 }
 
-/** Verify 1: the enabled profile for this job's exam + format, checked against every open question. */
-export async function applyFormatProfile(jobId: string): Promise<{ profile: FormatProfile; findings: Map<string, { id: string; version: number; findings: string[] }>; summary: string } | null> {
-  const fmt = await jobFormat(jobId);
-  if (!fmt?.kind) return null;
-  const profile = (await listFormatProfiles()).find((p) => p.enabled && p.examId === fmt.examId && p.sourceKind === fmt.kind);
-  if (!profile) return null;
-  const qs = await prisma.aiImportQuestion.findMany({ where: { jobId, status: { notIn: [AiImportQuestionStatus.IMPORTED, AiImportQuestionStatus.PUBLISHED, AiImportQuestionStatus.REJECTED] } } });
+/**
+ * Verify 1: every open question checked against the enabled profile of its exam AND its own file's format (2026-11-19:
+ * the first paper file's format was applied to every question of the job, so a profile of one format could judge a file
+ * of another). Findings are warnings (FORMAT_DEVIATION is not blocking); nothing is changed.
+ */
+export async function applyFormatProfile(jobId: string): Promise<{ findings: Map<string, { id: string; version: number; findings: string[] }>; summary: string } | null> {
+  const job = await prisma.aiImportJob.findUnique({ where: { id: jobId }, select: { examId: true } });
+  if (!job) return null;
+  const kinds = await paperKinds(jobId);
+  const profiles = (await listFormatProfiles()).filter((p) => p.enabled && p.examId === job.examId);
+  const profileOf = (fileId: string) => profiles.find((p) => p.sourceKind === kinds.get(fileId)) ?? null;
+  const qs = (await prisma.aiImportQuestion.findMany({ where: { jobId, status: { notIn: [AiImportQuestionStatus.IMPORTED, AiImportQuestionStatus.PUBLISHED, AiImportQuestionStatus.REJECTED] } } })).filter((q) => profileOf(q.fileId));
+  if (!qs.length) return null;
   const findings = new Map<string, { id: string; version: number; findings: string[] }>();
-  for (const q of qs) {
-    const f = profileDeviations(profile.rules, effective(q), q.answerStatus === "OFFICIAL_MATCHED" || q.answerStatus === "KEY_MISMATCH");
-    if (f.length) findings.set(q.id, { id: profile.id, version: profile.version, findings: f });
+  const notes: string[] = [];
+  for (const profile of new Set(qs.map((q) => profileOf(q.fileId)!))) {
+    const mine = qs.filter((q) => profileOf(q.fileId) === profile);
+    const labels = paperLabelShape(mine.map((q) => effective(q)));
+    const paperDiffers = !!labels && !!profile.rules.optionLabels && labels !== profile.rules.optionLabels;
+    for (const q of mine) {
+      const f = profileDeviations(profile.rules, effective(q), q.answerStatus === "OFFICIAL_MATCHED" || q.answerStatus === "KEY_MISMATCH", labels);
+      if (f.length) findings.set(q.id, { id: profile.id, version: profile.version, findings: f });
+    }
+    const dev = mine.filter((q) => findings.has(q.id)).length;
+    notes.push(`format profile “${profile.name}” v${profile.version} (${profile.sourceKind}) checked: ${dev} of ${mine.length} question(s) deviate from it${paperDiffers ? `; this paper prints its options as “${labels}”, the profile “${profile.rules.optionLabels}” (a format difference of the paper, not flagged per question)` : ""}`);
+    await logEvent(jobId, "FORMAT_PROFILE_APPLIED", `Format profile “${profile.name}” (version ${profile.version}, ${profile.sourceKind}) checked against this paper: ${dev} of ${mine.length} question(s) deviate from it (reported as Verify 1 warnings; nothing was changed).${paperDiffers ? ` This paper prints its options as “${labels}” throughout, the profile “${profile.rules.optionLabels}”: a format difference of the paper, not a deviation of each question.` : ""}`, { profileId: profile.id, version: profile.version, sourceKind: profile.sourceKind, deviations: dev, paperLabels: labels });
   }
-  const summary = `format profile “${profile.name}” v${profile.version} checked: ${findings.size} question(s) deviate from it`;
-  await logEvent(jobId, "FORMAT_PROFILE_APPLIED", `Format profile “${profile.name}” (version ${profile.version}) checked against this paper: ${findings.size} of ${qs.length} question(s) deviate from it (reported as Verify 1 findings; nothing was changed).`, { profileId: profile.id, version: profile.version, deviations: findings.size });
-  return { profile, findings, summary };
+  return { findings, summary: notes.join("; ") };
 }
 
 /** Master Admin: a new profile (or a new version of this exam + format's profile) from an import's verified questions. */
@@ -174,7 +202,9 @@ export async function saveProfileFromJob(input: { jobId: string; actorId: string
   if (!fmt) throw new ImportJobError("Import job not found.", 404);
   if (!fmt.kind) throw new ImportJobError("This import has no question paper.");
   const rows = await prisma.aiImportQuestion.findMany({ where: { jobId: input.jobId }, include: { figures: true } });
-  const verified = rows.filter(isVerifiedForProfile);
+  // Only questions of the files in the profile's own format (a job may hold a Word and a scanned version).
+  const kinds = await paperKinds(input.jobId);
+  const verified = rows.filter((q) => kinds.get(q.fileId) === fmt.kind && isVerifiedForProfile(q));
   if (verified.length < 5) throw new ImportJobError(`A format profile is learned only from verified questions (Verify 1 passed and Verify 2 agreed, or approved by an administrator). This import has ${verified.length}; at least 5 are needed. Nothing was saved.`);
   const rules = deriveRules(verified.map((q) => effective(q)));
   const profiles = await listFormatProfiles();

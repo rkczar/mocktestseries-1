@@ -17,7 +17,7 @@ const PLACEHOLDER = /^[\s.…?_\-–]*$/;
 const THINKING = /\b(wait|let me|let's|actually|hmm|no,|i think|format options|in image|->)\b|->/i;
 
 /** Why one question of a reading is degenerate, or null. Continuations across pages may legitimately be partial. */
-export function degenerateQuestion(q: Pick<ExtractedQuestion, "number" | "stem" | "options" | "continuedFromPreviousPage" | "continuesOnNextPage">): string | null {
+export function degenerateQuestion(q: Pick<ExtractedQuestion, "number" | "stem" | "options" | "continuedFromPreviousPage" | "continuesOnNextPage">, ocrText: string | null = null): string | null {
   if (q.continuedFromPreviousPage || q.continuesOnNextPage) return null;
   const opts = q.options ?? [];
   const bad = opts.filter((o) => {
@@ -25,14 +25,19 @@ export function degenerateQuestion(q: Pick<ExtractedQuestion, "number" | "stem" 
     return (label && (!LABEL.test(label) || THINKING.test(label))) || PLACEHOLDER.test(o.text ?? "") || THINKING.test(o.text ?? "");
   });
   if (opts.length === 1 && bad.length) return `Q${q.number ?? "?"}: one option only, and it is not a printed option ("${(opts[0].printed ?? opts[0].label ?? "").slice(0, 40)}" = "${(opts[0].text ?? "").slice(0, 30)}")`;
+  // 2026-11-19 audit: a single well-formed "(a) 2 only" passed as complete and the repair never ran (18 one-option rows).
+  if (opts.length === 1) return `Q${q.number ?? "?"}: one option only ("${(opts[0].text ?? "").slice(0, 30)}")`;
+  // Fewer than 4 options while the printed text (question text or the page's OCR of it) has a clean (a)–(d) run.
+  // Zero options with no such run is left alone: statements moved back to the stem / numerical answers are legitimate.
+  if (opts.length < 4 && (optionsFromText(q.stem ?? "") || (ocrText && optionsFromText(ocrText.replace(/^\s*\d{1,3}\s*[.)]\s*/, ""))))) return `Q${q.number ?? "?"}: ${opts.length} option(s) read, but the printed text has (a)–(d)`;
   if (opts.length >= 1 && bad.length === opts.length && opts.every((o) => PLACEHOLDER.test(o.text ?? ""))) return `Q${q.number ?? "?"}: every option is empty`;
   if (THINKING.test(q.stem ?? "") && /\bwait\b/i.test(q.stem ?? "")) return `Q${q.number ?? "?"}: the question text contains the model's own notes`;
   return null;
 }
 
 /** The reading of one page is incomplete (not to be accepted as processed) — the reasons, or [] when it is fine. */
-export function incompleteReading(questions: Parameters<typeof degenerateQuestion>[0][]): string[] {
-  return questions.map(degenerateQuestion).filter((x): x is string => !!x);
+export function incompleteReading(questions: Parameters<typeof degenerateQuestion>[0][], ocrText: (n: number | null) => string | null = NO_OCR): string[] {
+  return questions.map((q) => degenerateQuestion(q, ocrText(q.number))).filter((x): x is string => !!x);
 }
 
 /**
@@ -91,7 +96,8 @@ export function optionsFromText(text: string): { stem: string; options: { label:
  */
 export function repairDegenerateOptions<T extends Pick<ExtractedQuestion, "number" | "stem" | "options" | "continuedFromPreviousPage" | "continuesOnNextPage"> & { notes?: string[]; confidence?: number }>(questions: T[], ocrText: (n: number | null) => string | null): T[] {
   return questions.map((q) => {
-    if (!degenerateQuestion(q) || /own notes/.test(degenerateQuestion(q)!)) return q;
+    const why = degenerateQuestion(q, ocrText(q.number));
+    if (!why || /own notes/.test(why)) return q;
     const inline = [q.stem, ...q.options.map((o) => `${o.printed ?? o.label ?? ""} ${o.text ?? ""}`)].join("\n");
     const own = optionsFromText(q.stem ?? "") ?? optionsFromText(inline);
     const ocr = own ? null : ocrText(q.number);
@@ -105,7 +111,7 @@ export function repairDegenerateOptions<T extends Pick<ExtractedQuestion, "numbe
 
 /** The reasons of an incomplete reading that concern options only (a page with other good questions is then kept). */
 export function optionOnlyReasons(reasons: string[]): boolean {
-  return reasons.every((r) => /one option only|every option is empty/.test(r));
+  return reasons.every((r) => /one option only|every option is empty|option\(s\) read, but the printed text has/.test(r));
 }
 
 // ---- Layout of statement / match questions (CMS 2026 Q4 / Q5, 2026-11-16) --------------------------------------------

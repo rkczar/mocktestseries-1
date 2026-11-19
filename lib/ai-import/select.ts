@@ -178,9 +178,16 @@ export function evaluateModel(m: AiModel | undefined, id: string, task: Selectio
 
 const order = (a: CandidateRow, b: CandidateRow) => Number(b.eligible) - Number(a.eligible) || (a.maxInr ?? Infinity) - (b.maxInr ?? Infinity) || (a.typicalInr ?? Infinity) - (b.typicalInr ?? Infinity) || a.id.localeCompare(b.id);
 
+/**
+ * A safety / moderation classifier (2026-11-19 audit: nvidia/nemotron-3.5-content-safety was auto-picked for Verify 2 and
+ * answered "safe" — 5 tokens — to every page). It never reads, verifies or classifies a paper.
+ */
+export const SAFETY_MODEL = /safety|guard|moderation/i;
+
 /** Why automatic selection does not pick an otherwise eligible model (null = it may). */
 export function autoSkip(row: CandidateRow, health: Record<string, ModelHealth> | undefined, now?: number): string | null {
   if (!row.eligible) return null;
+  if (SAFETY_MODEL.test(row.id)) return "a safety / moderation classifier — it labels content, it cannot read or verify a paper, so automatic selection never picks it";
   // Measured history first (the more specific reason), then the zero-price rule.
   return rateLimitAvoidance(health?.[row.id], now) ?? (row.zeroPrice ? "its published price is ₹0 — a zero price is never a reason to choose a model automatically (choose it under Manual override)" : null);
 }
