@@ -808,6 +808,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
               <Link className="text-sm underline" href={`/admin/ai-importer/exceptions?job=${job.id}&status=all`}>
                 All questions
               </Link>
+              <Link className="text-sm underline" href={`/admin/ai-importer/jobs/${job.id}/quick-review`} data-testid="quick-review-link">Quick review (one screen)</Link>
               <Link className="text-sm underline" href={`/admin/ai-importer/answers?job=${job.id}`}>
                 Answer keys & verification
               </Link>

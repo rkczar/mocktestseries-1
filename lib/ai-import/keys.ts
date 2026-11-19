@@ -13,6 +13,7 @@ import { jobMemoryBrief } from "@/lib/ai-import/taxonomy-memory";
 import { visionImage } from "@/lib/ai-import/figures";
 import { ensureRender, saveKeyEntries, type StepContext } from "@/lib/ai-import/process";
 import { logEvent } from "@/lib/ai-import/jobs";
+import sharp from "sharp";
 import { KEY_MIN_COVERAGE } from "@/lib/ai-import/config";
 import { ocrAvailable, ocrImageFile, ocrPdfPage } from "@/lib/ai-import/ocr";
 import type { OcrPage } from "@/lib/ai-import/ocr-layout";
@@ -247,12 +248,125 @@ function keyCellBox(page: Partial<Pick<OcrPage, "width" | "height">>, a: { x0: n
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
+// ---- Missing key cells (2026-11-19 CMS 2023: 20 of 120 cells not read by OCR — "8" for B, a smudge, confidence < 0.9) ----
+// Each missing number's printed cell is cropped from the key image and read by vision, which must return the printed NUMBER
+// too. A letter is used only when (a) the low-confidence local OCR reading of that same cell agrees, or (b) two different
+// vision models agree. Anything else keeps Answer unverified. Never inferred from the grid or from the question.
+export interface KeyCell { number: number; box: { x0: number; y0: number; x1: number; y1: number }; ocr: string | null }
+export interface KeyCellRead { model: string; number: string; answer: string }
+/** OCR digit read for a key letter in a printed grid: only as one of the two required agreeing readings, never alone. */
+const OCR_DIGIT_AS_LETTER: Record<string, string> = { "8": "B", "0": "D" };
+const median = (a: number[]) => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : 0);
+
+export function keyCellCandidates(page: Pick<OcrPage, "lines">, pairs: KeyPair[], expected: number): KeyCell[] {
+  const toks = page.lines.map((l) => ({ t: cleanKeyToken(l.text), score: l.score, x0: l.box[0], x1: l.box[2], cy: (l.box[1] + l.box[3]) / 2, h: Math.max(1, l.box[3] - l.box[1]) }));
+  const nums = toks.filter((k) => /^\d{1,3}$/.test(k.t) && k.score >= KEY_OCR_MIN_SCORE);
+  const count = new Map<number, number>();
+  for (const n of nums) count.set(+n.t, (count.get(+n.t) ?? 0) + 1);
+  const byN = new Map(nums.filter((n) => count.get(+n.t) === 1).map((n) => [+n.t, n]));
+  const h = median(nums.map((n) => n.h));
+  const sameRow = (a: { cy: number }, b: { cy: number }) => Math.abs(a.cy - b.cy) <= h * 0.6;
+  const pitch = median(nums.map((n) => Math.min(...nums.filter((m) => m !== n && sameRow(n, m) && m.x0 > n.x1).map((m) => m.x0 - n.x0))).filter(Number.isFinite));
+  if (!h || !pitch) return [];
+  const have = new Set(pairs.map((p) => p.number));
+  const out: KeyCell[] = [];
+  for (let n = 1; n <= expected; n++) {
+    if (have.has(n)) continue;
+    const a = byN.get(n);
+    const up = byN.get(n - 1);
+    const down = byN.get(n + 1);
+    // Located by its own printed number, else between its column neighbours (the crop is then checked by the number the reader returns).
+    const at = a ? { x0: a.x0, cy: a.cy } : up && down && Math.abs(up.x0 - down.x0) <= h ? { x0: (up.x0 + down.x0) / 2, cy: (up.cy + down.cy) / 2 } : null;
+    if (!at) continue;
+    const box = { x0: Math.max(0, at.x0 - 0.3 * h), y0: Math.max(0, at.cy - 0.9 * h), x1: at.x0 + pitch - 0.3 * h, y1: at.cy + 0.9 * h };
+    const right = a ? a.x1 : at.x0 + h;
+    const vals = toks.filter((k) => k.cy > box.y0 && k.cy < box.y1 && k.x0 >= right && k.x1 <= box.x1 + 0.3 * h);
+    const v = vals.length === 1 ? vals[0].t : null;
+    const ocr = v ? (OCR_KEY_LETTER.test(v) ? OCR_KEY_LETTER.exec(v)![1].toUpperCase().replace("×", "X") : (OCR_DIGIT_AS_LETTER[v] ?? null)) : null;
+    out.push({ number: n, box, ocr });
+  }
+  return out;
+}
+
+export const KEY_CELL_SYSTEM = "You read printed ANSWER KEY cells. Each image is one cell of a printed answer-key grid: a question number and, to its right, its key letter. Copy exactly what is printed: number = the printed question number; answer = the printed key letter (A, B, C or D), X when the key prints X / × (question dropped), ? when it is unclear, smudged or not visible. Never guess, never answer the question, never use medical knowledge. Answer JSON only: {\"cells\":[{\"ref\":\"C1\",\"number\":\"12\",\"answer\":\"B\"}]} — one entry per image, in the given refs.";
+
+export function keyCellAnswerOf(json: unknown, model: string): Map<string, KeyCellRead> {
+  const out = new Map<string, KeyCellRead>();
+  const cells = (json as { cells?: unknown } | null)?.cells;
+  if (!Array.isArray(cells)) return out;
+  for (const c of cells as { ref?: unknown; number?: unknown; answer?: unknown }[]) {
+    const ref = String(c?.ref ?? "").trim().toUpperCase();
+    if (!/^C\d+$/.test(ref) || out.has(ref)) continue;
+    out.set(ref, { model, number: String(c?.number ?? "").replace(/\D+/g, ""), answer: String(c?.answer ?? "").trim().toUpperCase().replace("×", "X") });
+  }
+  return out;
+}
+
+/** The answer of one missing cell, or why none is used. reads[0] = the key model, reads[1] = a different vision model. */
+export function acceptKeyCell(cell: Pick<KeyCell, "number" | "ocr">, reads: KeyCellRead[]): { answer: string; how: string } | { answer: null; why: string } {
+  const valid = reads.filter((r) => r.number === String(cell.number) && /^[A-DX]$/.test(r.answer));
+  const bad = reads.find((r) => r.number && r.number !== String(cell.number));
+  if (bad) return { answer: null, why: `${bad.model} read the number ${bad.number} in this crop (expected ${cell.number})` };
+  if (!valid.length) return { answer: null, why: `no clear letter (${reads.map((r) => `${r.model}: ${r.answer || "—"}`).join("; ") || "no reading"})` };
+  const letters = new Set(valid.map((r) => r.answer));
+  if (letters.size > 1) return { answer: null, why: `readings disagree (${valid.map((r) => `${r.model}: ${r.answer}`).join("; ")})` };
+  const a = valid[0].answer;
+  if (cell.ocr) return cell.ocr === a ? { answer: a, how: `local OCR (low confidence) and ${valid[0].model} agree` } : { answer: null, why: `local OCR read ${cell.ocr}, ${valid[0].model} read ${a}` };
+  return valid.length >= 2 && new Set(valid.map((r) => r.model)).size >= 2 ? { answer: a, how: `${valid.map((r) => r.model).join(" and ")} agree` } : { answer: null, why: `only one reading (${valid[0].model}: ${a}); a second, different model is needed` };
+}
+
+/** Crops of the cells (JPEG data URLs), scaled from OCR pixel space to the image actually cropped. */
+export async function keyCellCrops(image: Buffer, ocrWidth: number, cells: KeyCell[]): Promise<string[]> {
+  const meta = await sharp(image).metadata();
+  const k = (meta.width ?? ocrWidth) / ocrWidth;
+  return Promise.all(cells.map(async (c) => {
+    const left = Math.max(0, Math.floor(c.box.x0 * k));
+    const top = Math.max(0, Math.floor(c.box.y0 * k));
+    const width = Math.max(8, Math.min((meta.width ?? 0) - left, Math.ceil((c.box.x1 - c.box.x0) * k)));
+    const height = Math.max(8, Math.min((meta.height ?? 0) - top, Math.ceil((c.box.y1 - c.box.y0) * k)));
+    const buf = await sharp(image).extract({ left, top, width, height }).resize({ height: 96, withoutEnlargement: false }).jpeg({ quality: 85 }).toBuffer();
+    return `data:image/jpeg;base64,${buf.toString("base64")}`;
+  }));
+}
+
+export const keyCellContent = (crops: string[]) => [{ type: "text" as const, text: `${crops.length} answer-key cell image(s), refs C1..C${crops.length} in order.` }, ...crops.flatMap((url, i) => [{ type: "text" as const, text: `C${i + 1}:` }, { type: "image_url" as const, image_url: { url, detail: "high" as const } }])];
+
+/** Reads the missing cells of one OCR key page with vision (budget-checked calls); returns the accepted entries + an audit list. */
+async function recoverKeyCells(ctx: StepContext, image: Buffer, ocr: OcrPage, pairs: KeyPair[], page: number): Promise<{ pairs: KeyPair[]; audit: { number: number; ocr: string | null; reads: KeyCellRead[]; result: string }[] }> {
+  const expected = keyExpected(ctx.job.expectedQuestions);
+  const keyModel = ctx.settings.models.key ?? ctx.settings.models.extract;
+  if (!expected || !ctx.settings.aiEnabled || !keyModel) return { pairs: [], audit: [] };
+  const cells = keyCellCandidates(ocr, pairs, expected).slice(0, 60);
+  if (!cells.length) return { pairs: [], audit: [] };
+  const crops = await keyCellCrops(image, ocr.width ?? 0, cells);
+  // Output budget: reasoning models spend tokens before the JSON (2026-11-19 benchmark: 4 of 6 models cut off at 60 + 40 per cell).
+  const read = async (model: string, idx: number[]) => {
+    const { value } = await importerAiCallChecked({ jobId: ctx.job.id, task: "key", stage: "key-cells", models: [model], system: KEY_CELL_SYSTEM, content: keyCellContent(idx.map((i) => crops[i])), maxOutputTokens: 1500 + idx.length * 60, settings: ctx.settings, needsVision: true, jsonSchema: "keyCells" }, (t) => keyCellAnswerOf(parseModelJson(t), model));
+    return new Map(idx.map((i, k) => [i, value.get(`C${k + 1}`)]));
+  };
+  const all = cells.map((_, i) => i);
+  const first = await read(keyModel, all);
+  // A second, different vision model only for cells without a local OCR reading (the OCR reading is the other witness otherwise).
+  const second = ctx.settings.models.verify && ctx.settings.models.verify !== keyModel ? ctx.settings.models.verify : (ctx.settings.models.extractFallbacks ?? []).find((m) => m !== keyModel) ?? null;
+  const need = all.filter((i) => !cells[i].ocr && first.get(i));
+  const again = second && need.length ? await read(second, need) : new Map<number, KeyCellRead | undefined>();
+  const out: KeyPair[] = [];
+  const audit = cells.map((c, i) => {
+    const reads = [first.get(i), again.get(i)].filter((r): r is KeyCellRead => !!r);
+    const d = acceptKeyCell(c, reads);
+    if ("how" in d) out.push({ number: c.number, section: "", raw: d.answer, page, box: ocr.width && ocr.height ? { x: c.box.x0 / ocr.width, y: c.box.y0 / ocr.height, w: (c.box.x1 - c.box.x0) / ocr.width, h: (c.box.y1 - c.box.y0) / ocr.height } : null });
+    return { number: c.number, ocr: c.ocr, reads, result: "how" in d ? `${d.answer} — ${d.how}` : `not used — ${d.why}` };
+  });
+  return { pairs: out, audit };
+}
+
 /** Local OCR of one scanned key page (free); null when OCR is unavailable or failed — the caller falls back as before. */
-async function ocrKeyPage(full: string, kind: string | undefined, page: number, maxNumber: number): Promise<{ pairs: KeyPair[]; header: KeyHeader | null } | null> {
+async function ocrKeyPage(full: string, kind: string | undefined, page: number, maxNumber: number): Promise<{ pairs: KeyPair[]; header: KeyHeader | null; ocr: OcrPage } | null> {
   if (!ocrAvailable()) return null;
   try {
-    const r = ocrKeyPairs(kind === "pdf" ? await ocrPdfPage(full, page) : await ocrImageFile(full), maxNumber);
-    return keyLooksValid(r.pairs) ? { pairs: r.pairs.map((x) => ({ ...x, page })), header: parseKeyHeader(r.text) } : null;
+    const ocr = kind === "pdf" ? await ocrPdfPage(full, page) : await ocrImageFile(full);
+    const r = ocrKeyPairs(ocr, maxNumber);
+    return keyLooksValid(r.pairs) ? { pairs: r.pairs.map((x) => ({ ...x, page })), header: parseKeyHeader(r.text), ocr } : null;
   } catch (e) {
     console.warn(`[ai-import] key OCR of page ${page} failed: ${e instanceof Error ? e.message.slice(0, 160) : "error"}`);
     return null;
@@ -294,6 +408,9 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
         const ocrRead = scanned ? await ocrKeyPage(full, kind, p + 1, maxKeyNumber) : null;
         if (ocrRead) {
           pairs.push(...ocrRead.pairs);
+          const rec = await recoverKeyCells(ctx, await ensureRender(ctx.job, file, p + 1, Math.round((ocrRead.ocr.dpi ?? 0) || ctx.settings.limits.renderDpi)), ocrRead.ocr, ocrRead.pairs, p + 1);
+          pairs.push(...rec.pairs);
+          if (rec.audit.length) await logEvent(ctx.job.id, "KEY_CELLS_READ", `${file.originalName} page ${p + 1}: ${rec.audit.length} key cell(s) not read by local OCR were cropped and read by vision — ${rec.pairs.length} used (two agreeing readings + matching printed number), ${rec.audit.length - rec.pairs.length} left unverified.`, { fileId: file.id, page: p + 1, cells: rec.audit });
           header ??= ocrRead.header;
           method = "ocr";
           continue;
@@ -312,9 +429,11 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
     } else if (kind === "xlsx" || kind === "csv") {
       pairs = sheetPairs(await readFile(full), kind);
     } else if ((kind === "png" || kind === "jpeg") && (ocrRead = await ocrKeyPage(full, kind, 1, maxKeyNumber))) {
-      pairs = ocrRead.pairs;
+      const rec = await recoverKeyCells(ctx, await readFile(full), ocrRead.ocr, ocrRead.pairs, 1);
+      pairs = [...ocrRead.pairs, ...rec.pairs];
       header = ocrRead.header;
       method = "ocr";
+      if (rec.audit.length) await logEvent(ctx.job.id, "KEY_CELLS_READ", `${file.originalName}: ${rec.audit.length} key cell(s) not read by local OCR were cropped and read by vision — ${rec.pairs.length} used (two agreeing readings + matching printed number), ${rec.audit.length - rec.pairs.length} left unverified.`, { fileId: file.id, cells: rec.audit });
     } else if (ctx.settings.aiEnabled && (ctx.settings.models.key ?? ctx.settings.models.extract)) {
       const read = await aiKeyPage(ctx, file, 1);
       pairs = read.pairs;

@@ -6,6 +6,7 @@ import { formatInr, usdToInr } from "@/lib/ai-engine/config";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { parseImportFile } from "@/lib/bulk-import";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
+import { resolveTaxonomy, type TaxonomySource } from "@/lib/ai-import/taxonomy-resolve";
 import { ISSUE_DEFS, type ImporterSettings } from "@/lib/ai-import/config";
 import { getImporterSettings, jobRunSettings } from "@/lib/ai-import/settings";
 import { ImportJobError, logEvent } from "@/lib/ai-import/jobs";
@@ -1430,10 +1431,39 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
     }
   }
   await logEvent(ctx.job.id, "VERIFY2_CLASSIFIED", `Verify 2 subject / topic check of ${all.length} question(s): ${tc.AGREED} agreed, ${tc.DISAGREEMENT} disagreement(s), ${tc.NEEDS_REVIEW} need review, ${tc.VERIFICATION_FAILED} verification failed (never counted as agreement), ${tc.NOT_VERIFIED} not verified.`, { ...tc });
+  // Two-source consensus (lib/ai-import/taxonomy-resolve.ts): where the local classifier, a stored AI choice and this
+  // independent check leave two DIFFERENT sources agreeing on subject AND topic, that choice is stored (source "consensus"),
+  // never over an administrator's choice or an approved question. Everything else stays as it is, blocked and grouped.
+  const settled = await applyTaxonomyConsensus(ctx.job.id, taxonomy);
+  tc.AGREED += settled;
   counts.taxAgreed = tc.AGREED;
   counts.taxDisagree = tc.DISAGREEMENT;
   counts.taxFailed = tc.VERIFICATION_FAILED;
   return counts;
+}
+
+export async function applyTaxonomyConsensus(jobId: string, taxonomy: Awaited<ReturnType<typeof getExamTaxonomy>>): Promise<number> {
+  const topicOf = new Map(taxonomy.flatMap((s) => s.topics.map((t) => [t.id, s.id] as const)));
+  const rows = await prisma.aiImportQuestion.findMany({ where: { jobId, status: { notIn: LOCKED }, approvedById: null }, include: { figures: true } });
+  const done: string[] = [];
+  for (const q of rows) {
+    if (q.taxonomySource?.startsWith("admin")) continue;
+    const e = q.data as unknown as ExtractedQuestion;
+    const vc = e.paperVerify?.v2?.classification;
+    if (!vc || (vc.status !== "DISAGREEMENT" && vc.status !== "NEEDS_REVIEW") || !vc.found?.subjectId) continue;
+    const local = (e as { classification?: { local?: { status?: string; subjectId?: string | null; topicId?: string | null; subjectConfidence?: number } } }).classification?.local;
+    const sources: TaxonomySource[] = [{ by: `Verify 2 (${vc.method})`, subjectId: vc.found.subjectId, topicId: vc.found.topicId, confidence: vc.confidence ?? 0 }];
+    if (local?.subjectId && (local.status === "CLASSIFIED" || local.status === "SUBJECT_ONLY")) sources.push({ by: "local classifier", subjectId: local.subjectId, topicId: local.status === "CLASSIFIED" ? (local.topicId ?? null) : null, confidence: local.subjectConfidence ?? 0 });
+    if (q.subjectId && q.taxonomySource?.startsWith("AI")) sources.push({ by: q.taxonomySource, subjectId: q.subjectId, topicId: q.topicId, confidence: q.taxonomyConfidence ?? 0 });
+    const c = resolveTaxonomy(sources);
+    if (!c.subjectId || !c.topicId || topicOf.get(c.topicId) !== c.subjectId) continue;
+    const ids = { subjectId: c.subjectId, topicId: c.topicId, subTopicId: null };
+    await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { ...ids, taxonomySource: "consensus (2 independent sources)", taxonomyConfidence: Math.min(...sources.filter((x) => x.subjectId === c.subjectId).map((x) => x.confidence)) } });
+    await savePaperVerify(q, { v2: { ...e.paperVerify!.v2!, classification: { ...vc, status: "AGREED", stored: ids, findings: [...vc.findings, `settled by consensus — ${c.detail}`] } } });
+    done.push(`Q${q.sourceLabel}`);
+  }
+  if (done.length) await logEvent(jobId, "TAXONOMY_CONSENSUS", `Subject / topic set by two agreeing independent sources for ${done.length} question(s): ${done.slice(0, 40).join(", ")}. Not approved — each still needs approval before import.`, { questions: done });
+  return done.length;
 }
 
 // ---- Paper summary, eligibility, bulk actions -----------------------------------------------------------

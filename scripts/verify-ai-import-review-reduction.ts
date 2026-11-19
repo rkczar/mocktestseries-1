@@ -13,12 +13,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { AiImportQuestion } from "@prisma/client";
 import { ISSUE_DEFS } from "@/lib/ai-import/config";
-import { ocrKeyPairs } from "@/lib/ai-import/keys";
+import { acceptKeyCell, keyCellAnswerOf, keyCellCandidates, ocrKeyPairs } from "@/lib/ai-import/keys";
 import { readsAgree } from "@/lib/ai-import/process";
 import { STRONG_FOOTER } from "@/lib/ai-import/ocr-layout";
 import { compareSecondRead } from "@/lib/ai-import/paper-verify";
 import { decideClassification, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
 import { OUTPUT_SCHEMAS } from "@/lib/ai-import/output-schemas";
+import { resolveTaxonomy } from "@/lib/ai-import/taxonomy-resolve";
 import { TAXONOMY_CODES, classificationOnly, matchStatus, type FilterRow } from "@/lib/ai-import/review-filters";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 
@@ -118,6 +119,38 @@ if (E && existsSync(`${E}/key-ocr.json`)) {
   console.log(`   job Verify 2 replay of the 20 stored disagreements: ${JSON.stringify(tally)}`);
   check("E2. real job: 20 disagreements → 7 VERIFIED (formatting) + 9 FAILED (incomplete read) + 4 DISAGREE (real content)", tally.VERIFIED === 7 && tally.FAILED === 9 && tally.DISAGREE === 4, tally);
 } else console.log("   (E skipped: set IMPORT_EVIDENCE_DIR to replay the exported job evidence)");
+
+// ---------------------------------------------------------------- F. missing key cells (vision, two agreeing readings)
+{
+  const r = (model: string, number: string, answer: string) => ({ model, number, answer });
+  check("F1. low-confidence OCR + vision agree on the cell's printed number and letter → used", acceptKeyCell({ number: 35, ocr: "B" }, [r("m1", "35", "B")]).answer === "B");
+  check("F2. OCR and vision disagree (Q116: OCR 'A', vision 'D') → not used", acceptKeyCell({ number: 116, ocr: "A" }, [r("m1", "116", "D")]).answer === null);
+  check("F3. no OCR reading: one vision reading is not enough; two different models agreeing → used", acceptKeyCell({ number: 43, ocr: null }, [r("m1", "43", "D")]).answer === null && acceptKeyCell({ number: 43, ocr: null }, [r("m1", "43", "D"), r("m2", "43", "D")]).answer === "D" && acceptKeyCell({ number: 43, ocr: null }, [r("m1", "43", "D"), r("m1", "43", "D")]).answer === null);
+  check("F4. the crop shows another printed number → not used (wrong cell)", acceptKeyCell({ number: 90, ocr: "C" }, [r("m1", "89", "C")]).answer === null);
+  check("F5. unclear ('?') → not used", acceptKeyCell({ number: 16, ocr: null }, [r("m1", "16", "?"), r("m2", "16", "C")]).answer === null);
+  const parsed = keyCellAnswerOf({ cells: [{ ref: "C1", number: "Q 35", answer: "b" }, { ref: "C1", number: "36", answer: "C" }, { ref: "x", number: "1", answer: "A" }] }, "m");
+  check("F6. parser: digits only, upper-case letter, first answer per ref, bad refs dropped", parsed.size === 1 && parsed.get("C1")?.number === "35" && parsed.get("C1")?.answer === "B");
+  if (E && existsSync(`${E}/key-ocr.json`)) {
+    const o = JSON.parse(readFileSync(`${E}/key-ocr.json`, "utf8"));
+    const cells = keyCellCandidates(o, ocrKeyPairs({ lines: o.lines, width: o.width, height: o.height }, 300).pairs, 120);
+    check("F7. real key: the 19 locatable missing cells are found, with OCR candidates 35:B (from '8') and 116:A", cells.length === 19 && cells.find((c) => c.number === 35)?.ocr === "B" && cells.find((c) => c.number === 116)?.ocr === "A", cells.map((c) => `${c.number}:${c.ocr}`));
+  }
+}
+
+// ---------------------------------------------------------------- G. subject / topic consensus
+{
+  const src = (by: string, subjectId: string | null, topicId: string | null, confidence = 0.8) => ({ by, subjectId, topicId, confidence });
+  const a = resolveTaxonomy([src("local", "gm", "cvs"), src("v2", "gm", "cvs")]);
+  check("G1. two different sources agree on subject and topic → set", a.subjectId === "gm" && a.topicId === "cvs");
+  check("G2. one source only → nothing set", resolveTaxonomy([src("v2", "gm", "cvs")]).subjectId === null);
+  check("G3. same source twice is not two sources", resolveTaxonomy([src("v2", "gm", "cvs"), src("v2", "gm", "cvs")]).subjectId === null);
+  const t = resolveTaxonomy([src("local", "gm", "cvs"), src("v2", "gm", "inf")]);
+  check("G4. subject agreed, topics differ → subject only, topic left open", t.subjectId === "gm" && t.topicId === null);
+  check("G5. a confident third source naming another subject blocks the consensus", resolveTaxonomy([src("local", "gm", "cvs", 0.7), src("ai", "gm", "cvs", 0.7), src("v2", "micro", "viro", 0.9)]).subjectId === null);
+  check("G6. no source / all disagree → nothing set", resolveTaxonomy([]).subjectId === null && resolveTaxonomy([src("a", "x", null), src("b", "y", null)]).subjectId === null);
+  const pv = readFileSync(new URL("../lib/ai-import/paper-verify.ts", import.meta.url), "utf8");
+  check("G7. consensus never touches admin choices or approved questions, and is logged", /approvedById: null/.test(pv) && /taxonomySource\?\.startsWith\("admin"\)\) continue/.test(pv) && /TAXONOMY_CONSENSUS/.test(pv));
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -70,5 +70,12 @@ const classify = {
   required: ["results"],
 };
 
-export const OUTPUT_SCHEMAS = { extract, classify } as const;
+// One printed answer-key cell per crop (keys.ts recoverKeyCells): the number AND the letter, so a crop of the wrong cell is caught.
+const keyCells = {
+  type: "object",
+  properties: { cells: { type: "array", items: { type: "object", properties: { ref: { type: "string" }, number: { type: "string" }, answer: { type: "string" } }, required: ["ref", "number", "answer"] } } },
+  required: ["cells"],
+};
+
+export const OUTPUT_SCHEMAS = { extract, classify, keyCells } as const;
 export type OutputSchemaName = keyof typeof OUTPUT_SCHEMAS;
