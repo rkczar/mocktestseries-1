@@ -252,7 +252,7 @@ function keyCellBox(page: Partial<Pick<OcrPage, "width" | "height">>, a: { x0: n
 // Each missing number's printed cell is cropped from the key image and read by vision, which must return the printed NUMBER
 // too. A letter is used only when (a) the low-confidence local OCR reading of that same cell agrees, or (b) two different
 // vision models agree. Anything else keeps Answer unverified. Never inferred from the grid or from the question.
-export interface KeyCell { number: number; box: { x0: number; y0: number; x1: number; y1: number }; ocr: string | null }
+export interface KeyCell { number: number; box: { x0: number; y0: number; x1: number; y1: number }; ocr: string | null; ocrScore?: number }
 export interface KeyCellRead { model: string; number: string; answer: string }
 /** OCR digit read for a key letter in a printed grid: only as one of the two required agreeing readings, never alone. */
 const OCR_DIGIT_AS_LETTER: Record<string, string> = { "8": "B", "0": "D" };
@@ -282,8 +282,9 @@ export function keyCellCandidates(page: Pick<OcrPage, "lines">, pairs: KeyPair[]
     const right = a ? a.x1 : at.x0 + h;
     const vals = toks.filter((k) => k.cy > box.y0 && k.cy < box.y1 && k.x0 >= right && k.x1 <= box.x1 + 0.3 * h);
     const v = vals.length === 1 ? vals[0].t : null;
+    const ocrScore = vals.length === 1 ? vals[0].score : undefined;
     const ocr = v ? (OCR_KEY_LETTER.test(v) ? OCR_KEY_LETTER.exec(v)![1].toUpperCase().replace("×", "X") : (OCR_DIGIT_AS_LETTER[v] ?? null)) : null;
-    out.push({ number: n, box, ocr });
+    out.push({ number: n, box, ocr, ocrScore });
   }
   return out;
 }
@@ -303,7 +304,7 @@ export function keyCellAnswerOf(json: unknown, model: string): Map<string, KeyCe
 }
 
 /** The answer of one missing cell, or why none is used. reads[0] = the key model, reads[1] = a different vision model. */
-export function acceptKeyCell(cell: Pick<KeyCell, "number" | "ocr">, reads: KeyCellRead[]): { answer: string; how: string } | { answer: null; why: string } {
+export function acceptKeyCell(cell: Pick<KeyCell, "number" | "ocr" | "ocrScore">, reads: KeyCellRead[]): { answer: string; how: string } | { answer: null; why: string } {
   const valid = reads.filter((r) => r.number === String(cell.number) && /^[A-DX]$/.test(r.answer));
   const bad = reads.find((r) => r.number && r.number !== String(cell.number));
   if (bad) return { answer: null, why: `${bad.model} read the number ${bad.number} in this crop (expected ${cell.number})` };
@@ -311,7 +312,12 @@ export function acceptKeyCell(cell: Pick<KeyCell, "number" | "ocr">, reads: KeyC
   const letters = new Set(valid.map((r) => r.answer));
   if (letters.size > 1) return { answer: null, why: `readings disagree (${valid.map((r) => `${r.model}: ${r.answer}`).join("; ")})` };
   const a = valid[0].answer;
-  if (cell.ocr) return cell.ocr === a ? { answer: a, how: `local OCR (low confidence) and ${valid[0].model} agree` } : { answer: null, why: `local OCR read ${cell.ocr}, ${valid[0].model} read ${a}` };
+  const models = new Set(valid.map((r) => r.model));
+  if (cell.ocr && cell.ocr === a) return { answer: a, how: `local OCR (low confidence) and ${valid[0].model} agree` };
+  // A contradicting OCR token BELOW the confidence floor is not a witness against two different vision models that agree
+  // (2026-11-19 Q116: OCR "a." at 0.89 vs D read by every vision model; the key prints D). A confident OCR token still blocks.
+  if (cell.ocr && !(models.size >= 2 && (cell.ocrScore ?? 1) < KEY_OCR_MIN_SCORE)) return { answer: null, why: `local OCR read ${cell.ocr}, ${valid[0].model} read ${a}` };
+  if (cell.ocr) return { answer: a, how: `${[...models].join(" and ")} agree; the conflicting local OCR "${cell.ocr}" was below the confidence floor (${Math.round((cell.ocrScore ?? 0) * 100)}%)` };
   return valid.length >= 2 && new Set(valid.map((r) => r.model)).size >= 2 ? { answer: a, how: `${valid.map((r) => r.model).join(" and ")} agree` } : { answer: null, why: `only one reading (${valid[0].model}: ${a}); a second, different model is needed` };
 }
 
@@ -348,7 +354,8 @@ async function recoverKeyCells(ctx: StepContext, image: Buffer, ocr: OcrPage, pa
   const first = await read(keyModel, all);
   // A second, different vision model only for cells without a local OCR reading (the OCR reading is the other witness otherwise).
   const second = ctx.settings.models.verify && ctx.settings.models.verify !== keyModel ? ctx.settings.models.verify : (ctx.settings.models.extractFallbacks ?? []).find((m) => m !== keyModel) ?? null;
-  const need = all.filter((i) => !cells[i].ocr && first.get(i));
+  // ...and for cells whose first reading contradicts an OCR token below the confidence floor (two models can outweigh it).
+  const need = all.filter((i) => first.get(i) && (!cells[i].ocr || (first.get(i)!.answer !== cells[i].ocr && (cells[i].ocrScore ?? 1) < KEY_OCR_MIN_SCORE)));
   const again = second && need.length ? await read(second, need) : new Map<number, KeyCellRead | undefined>();
   const out: KeyPair[] = [];
   const audit = cells.map((c, i) => {
