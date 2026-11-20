@@ -86,8 +86,8 @@ export function ReviewFilters({ f, counts, link, issueCodes }: { f: Filters; cou
         <div className="mt-3 flex flex-col gap-3">
           <Row title="Paper memory & checks">{verifyChips(VERIFY_ADVANCED)}</Row>
           <Row title="Extraction status">{statusChips(STATUS_ADVANCED)}</Row>
-          <Row title="Model failures & subject checks">{problemChips(Object.fromEntries(["model-failure", "classifier-failed", "subject-mismatch", "taxonomy-disagree"].map((k) => [k, PROBLEM_ADVANCED[k]])))}</Row>
-          <Row title="Re-scan candidates">{problemChips({ rescan: PROBLEM_ADVANCED.rescan })}</Row>
+          {/* "rescan" and "model-failure" are main chips (PROBLEM_MAIN) since d25c639 — not repeated here. */}
+          <Row title="Subject checks">{problemChips(Object.fromEntries(["classifier-failed", "subject-mismatch", "taxonomy-disagree"].map((k) => [k, PROBLEM_ADVANCED[k]])))}</Row>
           <Row title="Other problem groups">{problemChips(Object.fromEntries(["structure", "answer", "answer-unverified", "reference", "ocr", "source-mismatch", "stem-options", "bilingual"].map((k) => [k, PROBLEM_ADVANCED[k]])))}</Row>
           <Row title="Technical diagnostics" testId="issue-filters">
             {issues.length === 0 ? (
