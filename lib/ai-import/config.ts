@@ -404,7 +404,7 @@ export const ISSUE_DEFS: Record<string, { label: string; blocking: boolean; publ
   ANSWER_MISSING: { label: "No answer available", blocking: true, publishBlocking: true },
   ANSWER_MISMATCH: { label: "Answer key mismatch", blocking: false, publishBlocking: true },
   ANSWER_AMBIGUOUS: { label: "Ambiguous answer-key mapping", blocking: false, publishBlocking: true },
-  ANSWER_KEY_PAPER_MISMATCH: { label: "Answer key is for a different paper / series", blocking: true, publishBlocking: true },
+  ANSWER_KEY_PAPER_MISMATCH: { label: "Answer key not confirmed for this paper (different paper / series, not a key, or identity unknown)", blocking: true, publishBlocking: true },
   /** No official key entry / admin confirmation (owner decision 2, 2026-11-05): never Ready, never imported or published. */
   ANSWER_UNVERIFIED: { label: "Answer unverified", blocking: true, publishBlocking: true },
   POSSIBLE_WITHDRAWN: { label: "Possible withdrawn question", blocking: false, publishBlocking: true },

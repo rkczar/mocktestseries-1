@@ -10,6 +10,7 @@ import {
   acknowledgeSequence,
   addMissingQuestion,
   allowDuplicate,
+  resolveVerify2Disagreement,
   applyRescan,
   approveAllClean,
   approveQuestions,
@@ -40,6 +41,7 @@ import {
   bulkSetTaxonomy,
   type QuestionEdit,
 } from "@/lib/ai-import/review";
+import { confirmKeyPaper } from "@/lib/ai-import/key-check";
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
 import { importerSpendSummary, type SpendSummary } from "@/lib/ai-import/ledger";
 import { saveProfileFromJob, updateFormatProfile, type FormatProfile, type FormatRules } from "@/lib/ai-import/format-profile";
@@ -439,6 +441,28 @@ export async function setFigureAction(figureId: string, owner: "STEM" | "OPTION"
     const f = await prisma.aiImportFigure.findUnique({ where: { id: figureId }, select: { questionId: true, jobId: true } });
     await setFigure(figureId, actorId, owner, optionLabel);
     if (f?.questionId) await revalidateQuestions(f.jobId, [f.questionId]);
+    return null;
+  });
+}
+
+/** Resolves the current Verify 2 disagreement of one question (audited; never an approval). */
+export async function resolveVerify2DisagreementAction(id: string, reason: string): Promise<ImporterResult<null>> {
+  return run(await requireUse(), async (actorId) => {
+    if (typeof id !== "string" || !id || typeof reason !== "string") throw new ImportJobError("Select a question and give a reason.");
+    await resolveVerify2Disagreement(id, actorId, reason);
+    return null;
+  });
+}
+
+/** Confirms that an answer key whose paper identity could not be checked belongs to this paper (audited; never for a mismatch). */
+export async function confirmKeyPaperAction(jobId: string, keyFileId: string, note: string, source: "OFFICIAL" | "PROVISIONAL"): Promise<ImporterResult<null>> {
+  return run(await requireUse(), async (actorId) => {
+    if (typeof jobId !== "string" || !jobId || typeof keyFileId !== "string" || !keyFileId || typeof note !== "string") throw new ImportJobError("Select the answer key and give a note.");
+    try {
+      await confirmKeyPaper({ jobId, keyFileId, actorId, note, source: source === "OFFICIAL" ? "OFFICIAL" : "PROVISIONAL" });
+    } catch (e) {
+      throw e instanceof ImportJobError ? e : new ImportJobError(e instanceof Error ? e.message : "The key could not be confirmed.");
+    }
     return null;
   });
 }

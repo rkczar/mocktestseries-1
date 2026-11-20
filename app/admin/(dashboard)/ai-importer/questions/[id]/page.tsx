@@ -542,6 +542,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             })(),
             allowDuplicate: q.allowDuplicate,
             duplicate: q.duplicateKind,
+            v2Disagrees: q.issueCodes.includes("VERIFY2_DISAGREES"),
             approved: !!q.approvedById,
             approvedBy: q.approvedById ? actors.get(q.approvedById) ?? "an administrator" : null,
             approvalOutdated: q.approvedById ? approvalOutdatedBy(q.approvedAt, vsNow) : null,

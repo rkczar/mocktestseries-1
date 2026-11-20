@@ -19,7 +19,7 @@ import type { JobSummary } from "@/lib/ai-import/summary";
 import type { ImportItem } from "@/lib/ai-import/adapter";
 import { JobControls, type JobControlState } from "@/components/admin/ai-importer/job-controls";
 import { JobContextFields, type ExamOption } from "../../new-import-form";
-import { analyzeJobAction, confirmJobAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resetJobAction, resumeJobAction } from "../../actions";
+import { analyzeJobAction, confirmJobAction, confirmKeyPaperAction, discardUploadAction, importAction, pauseJobAction, removeFileAction, resetJobAction, resumeJobAction } from "../../actions";
 import { callImporter } from "@/components/admin/ai-importer/call-importer";
 import { CostSummary } from "@/components/admin/ai-importer/cost-summary";
 import type { SpendSummary } from "@/lib/ai-import/ledger";
@@ -62,7 +62,7 @@ export interface JobView {
   /** Model switches / replacements / reconfigurations and cost re-confirmations during processing (newest first). */
   modelChanges: { id: string; at: string; type: string; message: string }[];
   /** Does each uploaded answer key belong to this paper (printed paper / series compared)? */
-  keyChecks: { keyFile: string; state: "MATCH" | "MISMATCH" | "UNKNOWN"; detail: string; key: string | null; paper: string | null; source: string }[];
+  keyChecks: { keyFileId: string; keyFile: string; state: "MATCH" | "MISMATCH" | "UNKNOWN" | "CONFIRMED" | "PROVISIONAL"; detail: string; key: string | null; paper: string | null; source: string }[];
   /** Safe reset to editable: every server-side check (null when the status can never be reset). */
   reset: { allowed: boolean; checks: ResetCheck[] } | null;
   canManage: boolean;
@@ -289,8 +289,22 @@ function PlanCard({ plan, changes }: { plan: ModelPlan; changes: JobView["modelC
 }
 
 /** Whether each uploaded answer key belongs to this question paper (identifiers printed on both, compared). */
-function KeyCheckCard({ checks }: { checks: JobView["keyChecks"] }) {
-  const tone = (s: string) => (s === "MISMATCH" ? "text-[var(--color-error)]" : s === "MATCH" ? "text-[var(--color-success)]" : "text-[var(--color-muted-foreground)]");
+function KeyCheckCard({ jobId, checks, canUse }: { jobId: string; checks: JobView["keyChecks"]; canUse: boolean }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  const confirmKey = (keyFileId: string) => {
+    const note = prompt("This key's paper identity could not be checked, so its answers are NOT used. Confirm only if you checked the key itself belongs to this paper and series — say how (recorded):") ?? "";
+    if (!note.trim()) return;
+    // Only an explicit "OFFICIAL" makes it official; anything else is recorded as provisional (reference only).
+    const official = (prompt('Is this the OFFICIAL key published by the exam body? Type OFFICIAL to confirm; anything else records it as PROVISIONAL (e.g. a coaching site\'s key), which is kept for reference and never supplies official answers.') ?? "").trim() === "OFFICIAL";
+    start(async () => {
+      const r = await confirmKeyPaperAction(jobId, keyFileId, note, official ? "OFFICIAL" : "PROVISIONAL");
+      setMsg(r.ok ? "Confirmed (recorded). Run the checks again for the answers to be used." : r.error);
+      router.refresh();
+    });
+  };
+  const tone = (s: string) => (s === "MISMATCH" ? "text-[var(--color-error)]" : s === "MATCH" || s === "CONFIRMED" ? "text-[var(--color-success)]" : "text-[var(--color-warning)]");
   return (
     <Card data-testid="key-check-card">
       <CardHeader>
@@ -301,14 +315,20 @@ function KeyCheckCard({ checks }: { checks: JobView["keyChecks"] }) {
         <ul className="flex flex-col gap-2 text-sm">
           {checks.map((c) => (
             <li key={c.keyFile} data-testid="key-check" data-state={c.state}>
-              <span className="font-medium">{c.keyFile}</span>: <span className={tone(c.state)}>{c.state === "MATCH" ? "Matches" : c.state === "MISMATCH" ? "Does not match" : "Could not be checked"}</span>
+              <span className="font-medium">{c.keyFile}</span>: <span className={tone(c.state)}>{c.state === "MATCH" ? "Matches" : c.state === "MISMATCH" ? "Not used — does not match / not an answer key" : c.state === "CONFIRMED" ? "Confirmed by an administrator (official key)" : c.state === "PROVISIONAL" ? "Provisional key — reference only, not official" : "Not used — could not be checked"}</span>
               <span className="block text-xs text-[var(--color-muted-foreground)]">
                 Key: {c.key ?? "no paper / series printed"} · Question paper: {c.paper ?? "unknown"}{c.paper ? ` (${c.source})` : ""}
               </span>
               <span className="block text-xs">{c.detail}</span>
+              {c.state === "UNKNOWN" && canUse && (
+                <Button size="sm" variant="outline" className="mt-1" disabled={pending} onClick={() => confirmKey(c.keyFileId)} data-testid="key-confirm">
+                  Confirm this key belongs to this paper…
+                </Button>
+              )}
             </li>
           ))}
         </ul>
+        {msg && <p className="mt-2 text-xs" data-testid="key-confirm-msg">{msg}</p>}
       </CardContent>
     </Card>
   );
@@ -752,7 +772,7 @@ export function JobWorkspace({ job, exams, canUse, canPublish }: { job: JobView;
       )}
 
       {job.plan && job.status !== "DRAFT" && job.status !== "AWAITING_CONFIRMATION" && <PlanCard plan={job.plan} changes={job.modelChanges} />}
-      {job.keyChecks.length > 0 && <KeyCheckCard checks={job.keyChecks} />}
+      {job.keyChecks.length > 0 && <KeyCheckCard jobId={job.id} checks={job.keyChecks} canUse={canUse} />}
 
       {job.reset && canUse && (
         <ResetCard

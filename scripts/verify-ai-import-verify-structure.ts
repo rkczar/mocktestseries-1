@@ -38,7 +38,8 @@ import { readDocx } from "@/lib/ai-import/docx";
 import { addReference } from "@/lib/ai-import/reference";
 import { contentFingerprint, v2Display, verifyState } from "@/lib/ai-import/verify-core";
 import { importAndPublishEligible, paperSummary, requestVerify2, runVerify1, verify2Outcome, verify2Preview, verify2TextParts } from "@/lib/ai-import/paper-verify";
-import { approveQuestions, reclassifyQuestions, setTaxonomy } from "@/lib/ai-import/review";
+import { approveQuestions, reclassifyQuestions, revalidateQuestions, setTaxonomy } from "@/lib/ai-import/review";
+import { confirmKeyPaper, keyPaperChecks } from "@/lib/ai-import/key-check";
 import { referenceStatus } from "@/lib/ai-import/reference-status";
 import { decideClassification, echoMatches, taxonomyCodes } from "@/lib/ai-import/taxonomy-check";
 import { decidePaperRule, examPaperRules, removeMemoryEntry, savePaperRuleProposals } from "@/lib/ai-import/taxonomy-memory";
@@ -341,7 +342,14 @@ async function main() {
     jobs.push(jB);
     const paperB = await upload(actor, jB, "vs-paper.docx");
     await upload(actor, jB, "vs-key.csv", AiImportFileRole.ANSWER_KEY, paperB);
-    const jobB = await runJob(actor, jB);
+    let jobB = await runJob(actor, jB);
+    // Since 2026-11-20 a key that prints no paper / series (a CSV never does) fails closed until an administrator confirms
+    // it belongs to the paper (audited, bound to the file's SHA-256). The fixture's key IS this paper's key.
+    const keyFile = await prisma.aiImportFile.findFirstOrThrow({ where: { jobId: jB, role: AiImportFileRole.ANSWER_KEY } });
+    check("a CSV key (no printed identity) is not used before confirmation", (await keyPaperChecks(jB)).find((c) => c.keyFileId === keyFile.id)?.state === "UNKNOWN");
+    await confirmKeyPaper({ jobId: jB, keyFileId: keyFile.id, actorId: actor, note: "Fixture key written for this paper (vs-key.csv)", source: "OFFICIAL" });
+    await revalidateQuestions(jB, (await questionsOf(jB)).map((q) => q.id));
+    jobB = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jB } });
     let qs = await questionsOf(jB);
     check("DOCX read locally: 20 questions, job waiting for review", jobB.status === "NEEDS_REVIEW" && qs.length === 20, [jobB.status, jobB.errorMessage, qs.length]);
     const d1 = eff(byLabel(qs, "1"));

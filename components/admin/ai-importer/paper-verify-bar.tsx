@@ -87,7 +87,7 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
             ? `Verify 2 did not verify anything: none of the ${run.attempted} question(s) attempted got an independent result, so no question counts as independently verified.`
             : run.status === "STOPPED"
               ? `Verify 2 stopped before it finished: ${run.stopReason ?? "see the job log"}. ${run.results} question(s) have an independent result.`
-              : `Verify 2 is incomplete: ${run.results} of ${run.attempted} question(s) have an independent result; ${run.noResult} have none (${run.failedParts} of ${run.parts} source part(s) failed).`}
+              : `Last Verify 2 run (counts at the time of the run): ${run.results} of ${run.attempted} question(s) got an independent result; ${run.noResult} have none (${run.failedParts} of ${run.parts} source part(s) failed${run.uncovered ? `; ${run.uncovered} question(s) were in no readable source part` : ""}). The tiles below show each question's CURRENT state.`}
           {run.firstError ? ` Reason: ${run.firstError}` : ""} Use Verify 2 again to retry only the parts without a result (parts already read are not sent or charged again).
         </p>
       )}
@@ -160,7 +160,7 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
         <Stat id="total" label="Questions processed" value={summary.total} />
         <Stat id="verified" label="Verified (1 + 2)" value={summary.verified} tone={summary.verified ? "success" : undefined} href={hrefs.verified} />
         <Stat id="v1" label="Verify 1 passed / findings" value={`${summary.v1.passed} / ${summary.v1.problems}${summary.v1.stale ? ` (+${summary.v1.stale} out of date)` : ""}`} href={hrefs.v1Problems} />
-        <Stat id="v2" label="Verify 2 agree / disagree" value={`${summary.v2.verified} / ${summary.v2.disagree + summary.v2.not_found}`} tone={summary.v2.disagree + summary.v2.not_found ? "error" : summary.v2.verified ? "success" : undefined} href={hrefs.v2Disagree} />
+        <Stat id="v2" label={summary.v2Settled ? `Verify 2 agree / disagree (now; ${summary.v2Settled} of the disagreements resolved or approved)` : "Verify 2 agree / disagree (now)"} value={`${summary.v2.verified} / ${summary.v2.disagree + summary.v2.not_found}`} tone={summary.v2.disagree + summary.v2.not_found ? "error" : summary.v2.verified ? "success" : undefined} href={hrefs.v2Disagree} />
         <Stat id="v2-noresult" label="Verify 2 failed / unavailable" value={`${summary.v2.failed} / ${summary.v2.unavailable}`} tone={summary.v2.failed + summary.v2.unavailable ? "error" : undefined} href={hrefs.v2NoResult} />
         <Stat id="v2-notrun" label="Verify 2 not run / out of date" value={`${summary.v2.none} / ${summary.v2.stale}`} tone={summary.v2.none + summary.v2.stale ? "warning" : undefined} />
         <Stat id="corrected" label="Corrected" value={summary.corrected} />
@@ -171,7 +171,8 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
         <Stat id="formula" label="Formula / OCR issues" value={summary.formulaIssues} tone={summary.formulaIssues ? "warning" : undefined} />
         <Stat id="figures" label="Figure / crop issues" value={summary.figureIssues} tone={summary.figureIssues ? "warning" : undefined} />
         <Stat id="unresolved" label="Unresolved disagreements" value={summary.unresolved} tone={summary.unresolved ? "error" : undefined} />
-        <Stat id="cost" label="AI cost: estimate / actual" value={`${inr(summary.cost.estimateInr)} / ${inr(summary.cost.spentInr)}`} />
+        <Stat id="cost" label="Job AI cost (all steps): estimate / actual" value={`${inr(summary.cost.estimateInr)} / ${inr(summary.cost.spentInr)}`} />
+        <p className="col-span-full text-xs text-[var(--color-muted-foreground)]" data-testid="pv-legend">Tiles count each question once, by its current state: agree + disagree + failed + unavailable + not run / out of date = all questions. Failed = the model's answer was unusable; unavailable = no model / route could read it; out of date = the question changed after it was checked. Approved or resolved disagreements still count as disagreements.</p>
       </div>
       {summary.references.length > 0 && (
         <ul className="text-xs" data-testid="ps-references">

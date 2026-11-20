@@ -637,7 +637,7 @@ export function verify2Outcome(c: Record<string, number>): NonNullable<Verify2St
   return (c.failedUnits ?? 0) > 0 || (c.FAILED ?? 0) + (c.UNAVAILABLE ?? 0) > 0 ? "PARTIAL" : "COMPLETE";
 }
 
-interface Unit {
+export interface Unit {
   key: string;
   kind: "page" | "text";
   file: AiImportFile;
@@ -731,14 +731,17 @@ async function sheetLines(file: AiImportFile): Promise<string[]> {
 }
 
 /** The source units Verify 2 reads: every page image (PDF / image), or the document text in parts (DOCX / sheets). */
-async function verify2Units(jobId: string): Promise<Unit[]> {
+export async function verify2Units(jobId: string): Promise<Unit[]> {
   const files = await prisma.aiImportFile.findMany({ where: { jobId, role: "PAPER", status: { in: ["ANALYZED", "PROCESSED"] } }, orderBy: { createdAt: "asc" } });
   const units: Unit[] = [];
   for (const file of files) {
     const kind = (file.detected as { kind?: string } | null)?.kind;
     if (!file.storageKey) continue;
     if (kind === "pdf" || kind === "png" || kind === "jpeg") {
-      const pages = await prisma.aiImportPage.findMany({ where: { fileId: file.id, status: "DONE", NOT: { kind: "BLANK" } }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true, textLayer: true, ocrEngine: true, rawOutput: true } });
+      // Every page that holds an extracted question is a part, whatever the page's own status (2026-11-20: page 9 was
+      // FAILED after an AI read timed out although local OCR had extracted Q37–Q43 — they were never sent or counted).
+      const withQuestions = [...new Set((await prisma.aiImportQuestion.findMany({ where: { fileId: file.id }, select: { pages: true } })).flatMap((q) => q.pages))];
+      const pages = await prisma.aiImportPage.findMany({ where: { fileId: file.id, OR: [{ status: "DONE", NOT: { kind: "BLANK" } }, { pageNumber: { in: withQuestions } }] }, orderBy: { pageNumber: "asc" }, select: { id: true, pageNumber: true, textLayer: true, ocrEngine: true, rawOutput: true } });
       for (const p of pages) units.push({ key: `${file.id}:p${p.pageNumber}`, kind: "page", file, pageId: p.id, pageNumber: p.pageNumber, textLayer: p.textLayer, ocr: !!p.ocrEngine, startState: (p.rawOutput as { startState?: unknown } | null)?.startState });
     } else if (kind === "docx" || kind === "xlsx" || kind === "csv") {
       const lines = kind === "docx" ? (await readDocx(vaultPath(file.storageKey))).lines.map((l) => l.text.replace(/⟦IMG:(?:\d+|missing)⟧/g, "[image]")) : await sheetLines(file);
@@ -808,7 +811,7 @@ export const verify2Hint = (u: Pick<Unit, "textLayer" | "ocr">): string | null =
 const unitLabel = (u: Unit) => `${u.file.originalName}${u.kind === "page" ? ` page ${u.pageNumber}` : (u.partCount ?? 1) > 1 ? ` part ${(u.partIndex ?? 0) + 1} of ${u.partCount}` : ""}`;
 
 /** A unit needs no new read when this model already read it and every one of its questions still has an up-to-date result. */
-function unitDone(u: Unit, rows: UnitRow[], state: Verify2State | null, model: string | null): boolean {
+export function unitDone(u: Unit, rows: UnitRow[], state: Verify2State | null, model: string | null): boolean {
   if (!state || state.model !== model || !state.doneUnits.includes(u.key)) return false;
   return rows.filter((q) => inUnit(u, q)).every((q) => {
     const s = verifyState(q.data, fingerprintOf(q));
@@ -1165,7 +1168,10 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   // Pass 2 is targeted (fixed at the start of the run): a question with an up-to-date agreeing result, or at the pass
   // limit, keeps its result and is not read again; a part with none of the targets is not sent.
   const targets = verify2Targets(rows);
-  const units = (await verify2Units(ctx.job.id)).filter((u) => !unitDone(u, rows, state!, state!.model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
+  const allUnits = await verify2Units(ctx.job.id);
+  const units = allUnits.filter((u) => !unitDone(u, rows, state!, state!.model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
+  // Never silently outside the denominator: a target question in no source part at all gets an explicit no-result.
+  const uncovered = rows.filter((q) => targets.read.has(q.id) && !allUnits.some((u) => inUnit(u, q)));
   const exam = await prisma.exam.findUnique({ where: { id: ctx.job.examId }, select: { name: true } });
   const rules = await examFormatRules(ctx.job.examId);
   // Confirmed paper memory given to the Verify 2 model with every read (how this paper is printed — never content).
@@ -1173,6 +1179,14 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   const memory = memoryBrief(paperRules, paper, "extract");
   const memo = { used: !!memory, unreliableMarks: marksUnreliable(confirmedRulesFor(paperRules, paper)) };
   const counts: Record<string, number> = { VERIFIED: 0, DISAGREE: 0, NOT_FOUND: 0, FAILED: 0, UNAVAILABLE: 0, attempted: 0, units: 0, failedUnits: 0, extra: 0 };
+  for (const q of uncovered) {
+    const cur = verifyState(q.data, fingerprintOf(q)).v2;
+    if (cur === "verified" || cur === "disagree" || cur === "not_found") continue;
+    await savePaperVerify(q, { v2: { ...stamp(q), at: new Date().toISOString(), model: state.model, status: "UNAVAILABLE", fields: [], detail: `not read independently — no readable source part holds this question (page ${q.pages.join(", ") || "unknown"})`.slice(0, 600) } as V2Result });
+    counts.UNAVAILABLE++;
+    counts.attempted++;
+    counts.uncovered = (counts.uncovered ?? 0) + 1;
+  }
   const done = [...state.doneUnits];
   // The second read's last question of the previous page when it continues on the next page (joined there).
   const tail = new Map<string, { q: ExtractedQuestion; page: number } | null>();
@@ -1551,8 +1565,10 @@ export interface PaperSummary {
   /** Every question is in exactly one bucket of each (the buckets add up to `total`). */
   v1: { passed: number; problems: number; stale: number; none: number };
   v2: { verified: number; disagree: number; not_found: number; failed: number; unavailable: number; stale: number; none: number };
+  /** Current Verify 2 disagreements whose open flag is gone (resolved by an administrator, or cleared by an approval before 2026-11-20): still disagreements on record. */
+  v2Settled: number;
   /** The job's Verify 2 run: whether it genuinely ran, how it ended, and the first reason a question has no result. */
-  verify2Run: { status: string; outcome: string | null; model: string; attempted: number; results: number; noResult: number; parts: number; failedParts: number; firstError: string | null; stopReason: string | null } | null;
+  verify2Run: { status: string; outcome: string | null; model: string; attempted: number; results: number; noResult: number; parts: number; failedParts: number; uncovered: number; firstError: string | null; stopReason: string | null } | null;
   corrected: number;
   missing: string[];
   duplicates: string[];
@@ -1628,6 +1644,7 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
     formulaIssues: active.filter((q) => has(q, [...FORMULA_CODES, "UNREADABLE_TEXT", "EXTRACTION_UNCERTAIN", "QUESTION_TEXT_SUSPECT"])).length,
     figureIssues: active.filter((q) => has(q, ["IMAGE_MISSING", "IMAGE_MAPPING_UNCERTAIN", "IMAGE_REFERENCE_UNCERTAIN"])).length,
     unresolved: active.filter((q) => has(q, ["VERIFY2_DISAGREES", "VERIFY_DISAGREES", "REFERENCE_CONFLICT"])).length,
+    v2Settled: 0,
     eligible: [],
     approvedNotStored: active.filter((q) => q.approvedById && !q.questionId).length,
     cost: { estimateInr: job.estCostInr, spentInr: job.spentInr, confirmedMaxInr: job.budgetInr, verify2: null },
@@ -1656,6 +1673,7 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
     out.v1[s.v1]++;
     out.v2[s.v2]++;
     if (s.v1 === "passed" && s.v2 === "verified") out.verified++;
+    if ((s.v2 === "disagree" || s.v2 === "not_found") && !q.issueCodes.includes("VERIFY2_DISAGREES")) out.v2Settled++;
     if (q.editedData || s.pv?.v1?.fixes.length) out.corrected++;
     if (eligibleForPublish(q, settings, pendingIds.has(q.id))) out.eligible.push(q.id);
   }
@@ -1673,6 +1691,7 @@ export async function paperSummary(jobId: string): Promise<PaperSummary | null> 
       noResult: (c.FAILED ?? 0) + (c.UNAVAILABLE ?? 0),
       parts: c.units ?? v2.units,
       failedParts: c.failedUnits ?? 0,
+      uncovered: c.uncovered ?? 0,
       firstError: errors[0]?.error?.message ?? errors[0]?.detail ?? null,
       stopReason: v2.stopReason ?? null,
     };

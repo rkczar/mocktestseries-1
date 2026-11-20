@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { QuestionMedia } from "@/components/content/question-media";
 import {
   allowDuplicateAction,
+  resolveVerify2DisagreementAction,
   applyRescanAction,
   approveQuestionsAction,
   discardRescanAction,
@@ -81,6 +82,8 @@ export interface ReviewQ {
   classification: { source: string | null; confidence: number | null; kind: string | null; reason: string | null; v1: string | null; v2: string | null } | null;
   allowDuplicate: boolean;
   duplicate: string | null;
+  /** An open Verify 2 disagreement: approval cannot clear it; it is resolved on its own (audited). */
+  v2Disagrees?: boolean;
   approved: boolean;
   approvedBy: string | null;
   /** The approval is older than a current failing Verify 1 / Verify 2 result (why), so it is not current; null = it is. */
@@ -659,6 +662,14 @@ export function QuestionReview({
                 <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => rejectQuestionsAction([q.id], prompt("Reason (optional):") ?? ""), "Rejected.")} data-testid="rv-reject">
                   Reject
                 </Button>
+                {q.v2Disagrees && (
+                  <Button size="sm" variant="outline" disabled={pending || dirty} onClick={() => {
+                    const reason = prompt("Verify 2 disagrees with the stored question. What did you check on the original page that shows the stored question is right? (recorded; this does not approve the question)") ?? "";
+                    if (reason.trim()) act(() => resolveVerify2DisagreementAction(q.id, reason), "Verify 2 disagreement resolved (recorded). Approve the question separately.");
+                  }} data-testid="rv-resolve-v2">
+                    Resolve Verify 2 disagreement…
+                  </Button>
+                )}
                 {q.duplicate && (
                   <Button size="sm" variant="outline" disabled={pending} onClick={() => act(() => allowDuplicateAction(q.id, !q.allowDuplicate), q.allowDuplicate ? "Duplicate check restored." : "Will be imported despite the similarity.")} data-testid="rv-allow-dup">
                     {q.allowDuplicate ? "Treat as duplicate again" : "Not a duplicate — import anyway"}

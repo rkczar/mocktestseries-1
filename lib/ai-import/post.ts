@@ -104,7 +104,11 @@ export function sourceMayHoldImage(detected: unknown, pages: number[]): boolean 
  * Flags an admin's review clears. Structural problems (options, type, images, answer) must be fixed, not
  * approved — and an uncertain image placement is cleared only by confirming each figure's placement.
  */
-export const REVIEWABLE = ["OCR_UNCERTAIN", "SOURCE_TEXT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "FORMULA_NEEDS_MANUAL_VERIFICATION", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "VERIFY2_DISAGREES", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN", "OPTION_FORMULA_IMAGE_DIFFERS"];
+/** An administrator's audited resolution of one Verify 2 disagreement (kept on the extraction, never removed). */
+export interface V2Resolution { by: string; at: string; reason: string; v2At: string; v2Status: string; v2Model: string | null; v2Detail: string }
+export const v2Resolutions = (data: unknown): V2Resolution[] => ((data as { v2Resolutions?: V2Resolution[] } | null)?.v2Resolutions ?? []).filter((r) => r && typeof r.v2At === "string");
+
+export const REVIEWABLE = ["OCR_UNCERTAIN", "SOURCE_TEXT_MISMATCH", "EXTRACTION_UNCERTAIN", "UNREADABLE_TEXT", "FORMULA_ISSUE", "FORMULA_NEEDS_MANUAL_VERIFICATION", "DUPLICATE_NEAR", "NUMBERING_GAP", "AI_OPINION_DIFFERS", "TOPIC_UNCERTAIN", "VERIFY_DISAGREES", "REFERENCE_CONFLICT", "SUBJECT_MISMATCH", "FORMAT_DEVIATION", "TAXONOMY_DISAGREES", "IMAGE_REFERENCE_UNCERTAIN", "OPTION_FORMULA_IMAGE_DIFFERS"];
 
 interface Check {
   stage: number;
@@ -338,7 +342,9 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
   // An uploaded key that gave no usable entries is reported with its real state, never as "no key uploaded".
   const unreadKeyDetail = unreadKeys.length ? unreadKeys.map((f) => `The answer key “${f.originalName}” was uploaded but gave no usable entries${f.errorMessage ? `: ${f.errorMessage}` : " (not read yet)."}`).join(" ") : null;
   // A key printed for another paper / series never supplies official answers to this one.
-  const wrongKeyFiles = new Map((await keyPaperChecks(job.id)).filter((c) => c.state === "MISMATCH").map((c) => [c.keyFileId, c.detail]));
+  // Fail closed (2026-11-20): only a key that MATCHES this paper (or was confirmed by an administrator, audited) supplies
+  // official answers; a mismatch, a non-key (question booklet / not option marks) and an unknown identity never do.
+  const wrongKeyFiles = new Map((await keyPaperChecks(job.id)).filter((c) => c.state !== "MATCH" && c.state !== "CONFIRMED").map((c) => [c.keyFileId, c.detail]));
   const keyFileOfRow = new Map(keyRowsRaw.map((r) => [r.id, r.keyFileId]));
   const rescanWaiting = new Set((await prisma.aiImportQuestionVersion.findMany({ where: { jobId: job.id, kind: "RESCAN", status: "PENDING" }, select: { questionId: true } })).map((v) => v.questionId));
 
@@ -1059,8 +1065,14 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       if (vs.v2 === "stale") checks.push({ stage: 6, name: "Verify 2 — independent model", passed: false, severity: "WARNING", method: "AI", model: v2.model, detail: `${["VERIFIED", "DISAGREE", "NOT_FOUND"].includes(v2.status) ? "Re-verification needed" : "Historical"} — out of date: Verify 2 ${ranOn(v2)}, and the question changed after that (its result then: ${v2.status.toLowerCase().replace(/_/g, " ")} — ${v2.detail.slice(0, 200)}). Run Verify 2 again.` });
       else {
         if (vs.v2 === "disagree" || vs.v2 === "not_found") {
-          add("VERIFY2_DISAGREES", `${v2.model}: ${v2.detail}`.slice(0, 600));
-          verifyAt.set("VERIFY2_DISAGREES", v2.at);
+          // An approval never clears a Verify 2 disagreement (2026-11-20 Q15): only an explicit, audited resolution of THIS
+          // result does (review.ts resolveVerify2Disagreement). The disagreement itself stays on record either way.
+          const resolved = v2Resolutions(q.data).filter((r) => r.v2At === v2.at).pop();
+          if (resolved) checks.push({ stage: 6, name: "Verify 2 — disagreement resolved by an administrator", passed: true, severity: "WARNING", method: "ADMIN", model: v2.model, detail: `Verify 2 disagreed (${v2.detail}) — resolved ${utc(resolved.at)}: ${resolved.reason}`.slice(0, 1000) });
+          else {
+            add("VERIFY2_DISAGREES", `${v2.model}: ${v2.detail}`.slice(0, 600));
+            verifyAt.set("VERIFY2_DISAGREES", v2.at);
+          }
         }
         // A subject mismatch is its own finding (not a missing topic): the second model files the question elsewhere.
         if (vs.v2 === "disagree" && v2.fields.includes("subject")) {

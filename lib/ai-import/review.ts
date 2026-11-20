@@ -5,7 +5,7 @@ import { AiImportAnswerStatus, AiImportJobStatus, AiImportPageStatus, AiImportQu
 import { prisma } from "@/lib/prisma";
 import { logEvent, ImportJobError } from "@/lib/ai-import/jobs";
 import { blockerOnceApproved, importBlocker, type ImportMode, type ImportPlan } from "@/lib/ai-import/adapter";
-import { REVIEWABLE } from "@/lib/ai-import/post";
+import { REVIEWABLE, v2Resolutions, type V2Resolution } from "@/lib/ai-import/post";
 import { compareVersions, figureRows, mergeChoice, recordVersion, snapshotFigures, RESCAN_FIELDS, type FigureSnapshot, type RescanField } from "@/lib/ai-import/versions";
 import sharp from "sharp";
 import { cropFromRender, cropFromScan, storeOriginalFigure, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
@@ -24,7 +24,7 @@ import { planOf } from "@/lib/ai-import/select";
 import { getExamTaxonomy } from "@/lib/exam-taxonomy";
 import { headingResolver, promoteExamples, quarantineProposals, rememberCorrection } from "@/lib/ai-import/taxonomy-memory";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
-import { MAX_VERIFY_PASSES, contentCurrent, contentPartOf, fingerprintsOf, passCount } from "@/lib/ai-import/verify-core";
+import { MAX_VERIFY_PASSES, contentCurrent, contentPartOf, fingerprintsOf, passCount, verifyState } from "@/lib/ai-import/verify-core";
 import { importerBudgetBlock, importerCaps, importerSpend, pageReadWorstInr } from "@/lib/ai-import/ai";
 import { budgetStateKey } from "@/lib/ai-import/budget-guard";
 import { learnFromCorrections } from "@/lib/ai-import/paper-learn";
@@ -673,6 +673,30 @@ export async function allowDuplicate(id: string, actorId: string, allow: boolean
   await prisma.aiImportQuestion.update({ where: { id }, data: { allowDuplicate: allow, ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED } });
   await adminCheck(id, allow ? "Duplicate accepted" : "Duplicate check restored", allow ? "The administrator chose to import this question even though it resembles an existing one." : "Duplicate check applies again.");
   await logEvent(q.jobId, "DUPLICATE_DECISION", `Q${q.sourceLabel}: ${allow ? "import anyway" : "treat as duplicate"}`, { questionId: id }, actorId);
+}
+
+// ---- Verify 2 disagreement: resolved on its own, audited (2026-11-20) ----------------------------------------------
+/**
+ * Resolves the CURRENT Verify 2 disagreement of one question: the administrator states why the stored question is right
+ * (checked against the page). Recorded on the extraction (data.v2Resolutions, appended, never removed), as an ADMIN check
+ * and as a job event. It does NOT approve the question, does not change its text or answer, and covers only this Verify 2
+ * result — a later Verify 2 result needs its own decision.
+ */
+export async function resolveVerify2Disagreement(id: string, actorId: string, reason: string) {
+  const q = await editable(id);
+  const why = reason.trim();
+  if (why.length < 10) throw new ImportJobError("Say what you checked on the page (at least 10 characters).");
+  const row = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id }, include: { figures: true } });
+  const s = verifyState(row.data, fingerprintsOf({ e: effective(row), finalAnswer: row.finalAnswer, subjectId: row.subjectId, topicId: row.topicId, subTopicId: row.subTopicId, figures: row.figures }));
+  if ((s.v2 !== "disagree" && s.v2 !== "not_found") || !s.pv?.v2) throw new ImportJobError("This question has no current Verify 2 disagreement to resolve.");
+  const v2 = s.pv.v2;
+  if (v2Resolutions(row.data).some((r) => r.v2At === v2.at)) throw new ImportJobError("This Verify 2 disagreement was already resolved.");
+  const entry: V2Resolution = { by: actorId, at: new Date().toISOString(), reason: why.slice(0, 500), v2At: v2.at, v2Status: String(v2.status), v2Model: v2.model ?? null, v2Detail: String(v2.detail ?? "").slice(0, 600) };
+  // Only data.v2Resolutions is written (appended in place), never the whole question JSON.
+  await prisma.$executeRaw`UPDATE "AiImportQuestion" SET "data" = jsonb_set("data", '{v2Resolutions}', COALESCE("data"->'v2Resolutions', '[]'::jsonb) || ${JSON.stringify([entry])}::jsonb), "status" = 'EXTRACTED', "updatedAt" = now() WHERE "id" = ${id}`;
+  await adminCheck(id, "Verify 2 disagreement resolved", `Verify 2 (${entry.v2Model ?? "model"}, ${entry.v2At}) disagreed: ${entry.v2Detail} — resolved by an administrator: ${entry.reason}`);
+  await logEvent(q.jobId, "VERIFY2_DISAGREEMENT_RESOLVED", `Q${q.sourceLabel}: Verify 2 disagreement resolved by an administrator — ${entry.reason}`, { questionId: id, v2At: entry.v2At, v2Detail: entry.v2Detail }, actorId);
+  await revalidateQuestions(q.jobId, [id]);
 }
 
 // ---- Re-scan / re-extract ----------------------------------------------------------------------

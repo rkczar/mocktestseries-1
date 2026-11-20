@@ -23,8 +23,8 @@ export const STATUS_MAIN: Record<string, Def> = {
   all: { label: "All", hint: "Every question of the paper, including rejected ones." },
   exceptions: { label: "Needs review", hint: "Needs correction, not importable, duplicate, import failed or still being read — except Subject / topic only." },
   "taxonomy-only": { label: "Subject / topic only", hint: "Wording, options and answer verified (Verify 1 passed, Verify 2 agrees, official key matched); only the subject / topic is open. Never imported or published until it is set." },
-  approval: { label: "Awaiting approval", hint: "Ready, not approved yet, not in the Question Bank." },
   READY: { label: "Ready", hint: "Passed every mandatory check (approved or not)." },
+  approval: { label: "↳ of Ready: awaiting approval", hint: "Part of Ready: not approved yet, not in the Question Bank." },
   imported: { label: "Imported", hint: "Saved in the Question Bank (draft or published)." },
   REJECTED: { label: "Rejected", hint: "Rejected by an administrator; never enters the Question Bank." },
   withdrawn: { label: "Withdrawn", hint: "Marked withdrawn by the answer key, or flagged as possibly withdrawn." },
@@ -37,7 +37,7 @@ export const STATUS_ADVANCED: Record<string, Def> = {
 export const VERIFY_MAIN: Record<string, Def> = {
   unverified: { label: "Not verified", hint: "Not both Verify 1 passed and Verify 2 verified on the current text." },
   verified: { label: "Verified", hint: "Verify 1 passed and Verify 2 verified, both on the current text." },
-  "v2-disagree": { label: "Disagreements", hint: "Verify 2 disagrees or did not find the question." },
+  "v2-disagree": { label: "Disagreements (incl. resolved)", hint: "Verify 2 disagrees or did not find the question — including disagreements an administrator resolved or approved (still on record). Open ones: Problems → Verify 2 disagreements." },
   notrun: { label: "Not run / out of date", hint: "Verify 1 or Verify 2 never ran, or ran before the question changed." },
 };
 export const VERIFY_ADVANCED: Record<string, Def> = {
