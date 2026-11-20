@@ -189,7 +189,7 @@ export async function editQuestion(questionId: string, actorId: string, edit: Qu
   const changes = changedFields(base, next);
   if (!changes.length) throw new ImportJobError("Nothing changed — the question is exactly as before.");
   await prisma.$transaction([
-    prisma.aiImportQuestion.update({ where: { id: q.id }, data: { editedData: next as unknown as Prisma.InputJsonValue, sourceLabel: next.label, pages: next.pages, reviewedById: actorId, reviewedAt: new Date(), ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED, questionType: next.type, optionCount: next.options.length, contentFormat: next.contentFormat } }),
+    prisma.aiImportQuestion.update({ where: { id: q.id }, data: { editedData: next as unknown as Prisma.InputJsonValue, sourceLabel: next.label, ...(edit.number !== undefined ? { sourceNumber: number } : {}), pages: next.pages, reviewedById: actorId, reviewedAt: new Date(), ...UNAPPROVE, status: AiImportQuestionStatus.EXTRACTED, questionType: next.type, optionCount: next.options.length, contentFormat: next.contentFormat } }),
     prisma.aiImportQuestionVersion.create({ data: { questionId: q.id, jobId: q.jobId, kind: "ADMIN_EDIT", data: base as unknown as Prisma.InputJsonValue, figures: snapshotFigures(figs) as unknown as Prisma.InputJsonValue, changes: changes as unknown as Prisma.InputJsonValue, actorId, note: `Changed: ${changes.map((c) => c.field).join(", ")}${opts.note ? ` — ${opts.note}` : ""}`.slice(0, 500) } }),
   ]);
   await adminCheck(q.id, "Edited", `Corrected by an administrator: ${changes.map((c) => c.field).join(", ")}.`);

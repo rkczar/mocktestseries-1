@@ -88,7 +88,8 @@ async function dbPart() {
   const { runPostProcessing } = await import("@/lib/ai-import/post");
   const { normalizeImporterSettings } = await import("@/lib/ai-import/config");
   const { getImporterSettings } = await import("@/lib/ai-import/settings");
-  const { approveQuestions, resolveVerify2Disagreement } = await import("@/lib/ai-import/review");
+  const { approveQuestions, resolveVerify2Disagreement, editQuestion } = await import("@/lib/ai-import/review");
+  const { effective } = await import("@/lib/ai-import/post");
   const { fingerprintOf, verify2Units, unitDone } = await import("@/lib/ai-import/paper-verify");
   const { stampOf, verifyState } = await import("@/lib/ai-import/verify-core");
   type Ctx = Parameters<typeof runPostProcessing>[0];
@@ -222,6 +223,13 @@ async function dbPart() {
     ok("idempotent retry: a part already read by the same model with up-to-date results is not resent; the FAILED page is", unitDone(p1, rowsNow, state, "m/x") && !unitDone(p2, rowsNow, state, "m/x"));
     ok("…a different model reads it again (no reuse across models)", !unitDone(p1, [], state, "m/other"));
     ok("a FAILED page with no question is still not sent", !(await verify2Units(job.id)).some((u) => u.pageNumber === 4));
+    // An edited printed number reaches the row's own number (key matching uses it; 2026-11-20 Q51 was unnumbered).
+    const q1 = await prisma.aiImportQuestion.findFirstOrThrow({ where: { jobId: job.id, sourceNumber: 1 } });
+    await prisma.aiImportQuestion.update({ where: { id: q1.id }, data: { sourceNumber: null, status: "EXTRACTED" } });
+    const e1 = effective(q1);
+    await editQuestion(q1.id, admin.id, { stem: e1.stem, options: e1.options.map((o) => ({ label: o.label, text: o.text })), type: e1.type, contentFormat: "PLAIN", number: 7 });
+    const q1b = await prisma.aiImportQuestion.findUniqueOrThrow({ where: { id: q1.id } });
+    ok("editing the printed number updates sourceNumber + label", q1b.sourceNumber === 7 && q1b.sourceLabel === "7", [q1b.sourceNumber, q1b.sourceLabel]);
   } finally {
     // Only this fixture's own rows (scratch DB).
     await prisma.aiImportQuestion.deleteMany({ where: { jobId: job.id } }).catch(() => undefined);
