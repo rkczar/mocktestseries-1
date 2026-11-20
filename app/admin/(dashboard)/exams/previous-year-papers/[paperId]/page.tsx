@@ -11,7 +11,7 @@ import { PaperBatches } from "./paper-batches";
 import { loadPaperBatchOverview } from "@/lib/pyq-import-batches";
 import { RankingSettingsForm } from "@/components/admin/ranking-settings-form";
 import { getRankingConfig } from "@/lib/leaderboard";
-import { hasPermission } from "@/lib/rbac";
+import { getAdminSession, hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 
 export const metadata = { title: "Previous Year Paper — Mock Test Series.in Admin" };
@@ -105,7 +105,7 @@ export default async function PaperDetailPage({ params }: { params: Promise<{ pa
 
       <QuestionBankPicker paperId={paper.id} subjects={subjects} />
 
-      <PaperBatches paperId={paper.id} batches={overview.batches} aiJobs={overview.aiJobs} questions={overview.questions} canManage={canManageQuestions} />
+      <PaperBatches paperId={paper.id} batches={overview.batches} aiJobs={overview.aiJobs} questions={overview.questions} canManage={canManageQuestions} canDelete={canManageQuestions && (await getAdminSession())?.user?.role === "MASTER_ADMIN"} />
     </div>
   );
 }

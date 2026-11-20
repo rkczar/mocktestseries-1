@@ -3,15 +3,49 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { MANUAL_BATCH, type BatchPublishItem, type BatchPublishPreview, type BatchPublishResult, type BatchStatus } from "@/lib/pyq-import-batches-shared";
-import type { PaperBatch, PaperAiJob, PaperBatchQuestion, ReviewCheck, MarkReviewedResult } from "@/lib/pyq-import-batches";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  MANUAL_BATCH,
+  type BatchPublishItem,
+  type BatchPublishPreview,
+  type BatchPublishResult,
+  type BatchStatus,
+} from "@/lib/pyq-import-batches-shared";
+import type {
+  PaperBatch,
+  PaperAiJob,
+  PaperBatchQuestion,
+  ReviewCheck,
+  MarkReviewedResult,
+} from "@/lib/pyq-import-batches";
 import { RetireReplaceLink } from "./remove-from-paper-button";
-import { markReviewedAction, previewBatchPublishAction, publishBatchAction, recheckReviewAction } from "./batch-actions";
+import {
+  DeleteQuestionsDialog,
+  type DeleteRequest,
+} from "./delete-questions-dialog";
+import {
+  markReviewedAction,
+  previewBatchPublishAction,
+  publishBatchAction,
+  recheckReviewAction,
+} from "./batch-actions";
 
 /**
  * Previous Year Paper → Import Batches + Questions. Selection is only a
@@ -30,7 +64,10 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "RETIRED", label: "Retired" },
 ];
 
-const STATUS_VARIANT: Record<BatchStatus, "success" | "neutral" | "warning" | "error" | "info"> = {
+const STATUS_VARIANT: Record<
+  BatchStatus,
+  "success" | "neutral" | "warning" | "error" | "info"
+> = {
   PUBLISHED: "success",
   "PARTIALLY PUBLISHED": "info",
   DRAFT: "neutral",
@@ -41,11 +78,19 @@ const STATUS_VARIANT: Record<BatchStatus, "success" | "neutral" | "warning" | "e
   FAILED: "error",
 };
 
-const Q_STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = { PUBLISHED: "success", DRAFT: "neutral", ARCHIVED: "warning" };
+const Q_STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = {
+  PUBLISHED: "success",
+  DRAFT: "neutral",
+  ARCHIVED: "warning",
+};
 
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" });
+  return new Date(iso).toLocaleString("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Kolkata",
+  });
 }
 
 function matches(q: PaperBatchQuestion, f: Filter) {
@@ -71,12 +116,14 @@ export function PaperBatches({
   aiJobs,
   questions,
   canManage,
+  canDelete = false,
 }: {
   paperId: string;
   batches: PaperBatch[];
   aiJobs: PaperAiJob[];
   questions: PaperBatchQuestion[];
   canManage: boolean;
+  canDelete?: boolean;
 }) {
   const router = useRouter();
   const defaultBatch = useMemo(() => {
@@ -88,6 +135,7 @@ export function PaperBatches({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [deleteReq, setDeleteReq] = useState<DeleteRequest | null>(null);
 
   // publish dialog
   const [publishOpen, setPublishOpen] = useState(false);
@@ -98,16 +146,31 @@ export function PaperBatches({
   // review dialog
   const [reviewOpen, setReviewOpen] = useState(false);
   const [checks, setChecks] = useState<ReviewCheck[] | null>(null);
-  const [reviewResult, setReviewResult] = useState<MarkReviewedResult | null>(null);
+  const [reviewResult, setReviewResult] = useState<MarkReviewedResult | null>(
+    null,
+  );
 
-  const batchByKey = useMemo(() => new Map(batches.map((b) => [b.key, b])), [batches]);
-  const visible = questions.filter((q) => (batchKey === "ALL" || q.batchKey === batchKey) && matches(q, filter));
+  const batchByKey = useMemo(
+    () => new Map(batches.map((b) => [b.key, b])),
+    [batches],
+  );
+  const visible = questions.filter(
+    (q) =>
+      (batchKey === "ALL" || q.batchKey === batchKey) && matches(q, filter),
+  );
   const actionable = batchKey !== "ALL" && canManage;
-  const selectable = (q: PaperBatchQuestion) => actionable && !q.retired && q.status === "DRAFT";
+  const selectable = (q: PaperBatchQuestion) =>
+    actionable && (canDelete || (!q.retired && q.status === "DRAFT"));
   const visibleSelectable = visible.filter(selectable);
-  const selectedIds = [...selected].filter((id) => questions.some((q) => q.id === id && q.batchKey === batchKey));
-  const selectedFlagged = selectedIds.filter((id) => questions.find((q) => q.id === id)?.reviewRequired);
-  const allVisibleSelected = visibleSelectable.length > 0 && visibleSelectable.every((q) => selected.has(q.id));
+  const selectedIds = [...selected].filter((id) =>
+    questions.some((q) => q.id === id && q.batchKey === batchKey),
+  );
+  const selectedFlagged = selectedIds.filter(
+    (id) => questions.find((q) => q.id === id)?.reviewRequired,
+  );
+  const allVisibleSelected =
+    visibleSelectable.length > 0 &&
+    visibleSelectable.every((q) => selected.has(q.id));
 
   function chooseBatch(key: string) {
     setBatchKey(key);
@@ -152,7 +215,12 @@ export function PaperBatches({
     if (!preview) return;
     setError(null);
     startTransition(async () => {
-      const r = await publishBatchAction(paperId, batchKey, preview.eligible.map((e) => e.id), requestId);
+      const r = await publishBatchAction(
+        paperId,
+        batchKey,
+        preview.eligible.map((e) => e.id),
+        requestId,
+      );
       if (r.ok) {
         setResult(r.data);
         setSelected(new Set());
@@ -187,8 +255,10 @@ export function PaperBatches({
     });
   }
 
-  const currentBatch = batchKey === "ALL" ? null : batchByKey.get(batchKey) ?? null;
-  const resolvedCount = checks?.filter((c) => c.status === "RESOLVED").length ?? 0;
+  const currentBatch =
+    batchKey === "ALL" ? null : (batchByKey.get(batchKey) ?? null);
+  const resolvedCount =
+    checks?.filter((c) => c.status === "RESOLVED").length ?? 0;
 
   return (
     <>
@@ -196,33 +266,61 @@ export function PaperBatches({
         <CardHeader>
           <CardTitle>Import Batches</CardTitle>
           <CardDescription>
-            Every import of this paper, from its import record. Pick a batch to see, review and publish its questions. Publishing is checked again on the server
-            question by question.
+            Every import of this paper, from its import record. Pick a batch to
+            see, review and publish its questions. Publishing is checked again
+            on the server question by question.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {batches.length === 0 ? (
-            <p className="py-4 text-center text-sm text-[var(--color-muted-foreground)]">No imports or questions for this paper yet.</p>
+            <p className="py-4 text-center text-sm text-[var(--color-muted-foreground)]">
+              No imports or questions for this paper yet.
+            </p>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {batches.map((b) => (
-                <BatchCard key={b.key} batch={b} active={b.key === batchKey} onSelect={() => chooseBatch(b.key)} />
+                <BatchCard
+                  key={b.key}
+                  batch={b}
+                  active={b.key === batchKey}
+                  onSelect={() => chooseBatch(b.key)}
+                  onDelete={
+                    canDelete && b.counts.linked > 0
+                      ? () =>
+                          setDeleteReq({
+                            kind: "BATCH",
+                            batchKey: b.key,
+                            ids: "ALL_IN_BATCH",
+                            title: `Delete ${b.key === MANUAL_BATCH ? "Manual" : `Batch #${b.ordinal}`} permanently`,
+                          })
+                      : undefined
+                  }
+                />
               ))}
             </div>
           )}
           {aiJobs.length > 0 ? (
             <div className="rounded-md border border-[var(--color-border)] p-3 text-sm">
-              <div className="mb-1 text-xs font-medium uppercase text-[var(--color-muted-foreground)]">AI Importer jobs for this paper</div>
+              <div className="mb-1 text-xs font-medium uppercase text-[var(--color-muted-foreground)]">
+                AI Importer jobs for this paper
+              </div>
               <ul className="flex flex-col gap-1">
                 {aiJobs.map((j) => (
                   <li key={j.id} className="flex flex-wrap items-center gap-2">
-                    <Link href={`/admin/ai-importer?job=${j.id}`} className="text-[var(--color-primary)] hover:underline">
+                    <Link
+                      href={`/admin/ai-importer?job=${j.id}`}
+                      className="text-[var(--color-primary)] hover:underline"
+                    >
                       {j.title}
                     </Link>
                     <Badge variant="neutral">{j.status}</Badge>
                     <span className="text-xs text-[var(--color-muted-foreground)]">
-                      {j.extracted} extracted{j.expected != null ? ` of ${j.expected} expected` : ""} · {j.linked} linked to questions ·{" "}
-                      {j.runIds.length ? `batch ${j.runIds.map((id) => batchByKey.get(id)?.ordinal ?? "?").join(", ")}` : "not imported into a batch"}
+                      {j.extracted} extracted
+                      {j.expected != null ? ` of ${j.expected} expected` : ""} ·{" "}
+                      {j.linked} linked to questions ·{" "}
+                      {j.runIds.length
+                        ? `batch ${j.runIds.map((id) => batchByKey.get(id)?.ordinal ?? "?").join(", ")}`
+                        : "not imported into a batch"}
                     </span>
                   </li>
                 ))}
@@ -236,13 +334,20 @@ export function PaperBatches({
         <CardHeader>
           <CardTitle>Questions in This Paper</CardTitle>
           <CardDescription>
-            {questions.length} question{questions.length === 1 ? "" : "s"} linked to this paper
-            {currentBatch ? ` · showing ${batchTitle(currentBatch)}` : " · all batches"}.
+            {questions.length} question{questions.length === 1 ? "" : "s"}{" "}
+            linked to this paper
+            {currentBatch
+              ? ` · showing ${batchTitle(currentBatch)}`
+              : " · all batches"}
+            .
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <label className="text-xs text-[var(--color-muted-foreground)]" htmlFor="batch-pick">
+            <label
+              className="text-xs text-[var(--color-muted-foreground)]"
+              htmlFor="batch-pick"
+            >
               Batch
             </label>
             <select
@@ -260,7 +365,12 @@ export function PaperBatches({
             </select>
             <div className="flex flex-wrap gap-1">
               {FILTERS.map((f) => (
-                <Button key={f.key} size="compact" variant={filter === f.key ? "secondary" : "ghost"} onClick={() => setFilter(f.key)}>
+                <Button
+                  key={f.key}
+                  size="compact"
+                  variant={filter === f.key ? "secondary" : "ghost"}
+                  onClick={() => setFilter(f.key)}
+                >
                   {f.label}
                 </Button>
               ))}
@@ -272,32 +382,72 @@ export function PaperBatches({
               {actionable ? (
                 <>
                   <span className="text-[var(--color-muted-foreground)]">
-                    {selectedIds.length} selected{selectedFlagged.length ? ` · ${selectedFlagged.length} flagged for review` : ""}
+                    {selectedIds.length} selected
+                    {selectedFlagged.length
+                      ? ` · ${selectedFlagged.length} flagged for review`
+                      : ""}
                   </span>
-                  <Button size="sm" disabled={pending || selectedIds.length === 0} onClick={openPublish}>
+                  <Button
+                    size="sm"
+                    disabled={pending || selectedIds.length === 0}
+                    onClick={openPublish}
+                  >
                     Publish selected…
                   </Button>
-                  <Button size="sm" variant="outline" disabled={pending || selectedFlagged.length === 0} onClick={openReview}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={pending || selectedFlagged.length === 0}
+                    onClick={openReview}
+                  >
                     Re-check &amp; mark reviewed…
                   </Button>
+                  {canDelete ? (
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      disabled={pending || selectedIds.length === 0}
+                      onClick={() =>
+                        setDeleteReq({
+                          kind: "BULK",
+                          batchKey,
+                          ids: selectedIds,
+                          title: `Permanently delete ${selectedIds.length} selected question(s)`,
+                        })
+                      }
+                      data-testid="delete-selected"
+                    >
+                      Delete selected…
+                    </Button>
+                  ) : null}
                   {selectedIds.length ? (
-                    <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setSelected(new Set())}
+                    >
                       Clear selection
                     </Button>
                   ) : null}
                 </>
               ) : (
-                <span className="text-[var(--color-muted-foreground)]">Pick one batch to select and publish its Draft questions.</span>
+                <span className="text-[var(--color-muted-foreground)]">
+                  Pick one batch to select and publish its Draft questions.
+                </span>
               )}
             </div>
           ) : null}
 
-          {error && !publishOpen && !reviewOpen ? <p className="text-sm text-[var(--color-error)]">{error}</p> : null}
+          {error && !publishOpen && !reviewOpen ? (
+            <p className="text-sm text-[var(--color-error)]">{error}</p>
+          ) : null}
 
           <div className="overflow-x-auto">
             {visible.length === 0 ? (
               <p className="py-8 text-center text-sm text-[var(--color-muted-foreground)]">
-                {questions.length === 0 ? "No questions linked yet — use \"Add Questions from Question Bank\" above." : "No questions match this batch and filter."}
+                {questions.length === 0
+                  ? 'No questions linked yet — use "Add Questions from Question Bank" above.'
+                  : "No questions match this batch and filter."}
               </p>
             ) : (
               <table className="w-full min-w-[860px] text-left text-sm">
@@ -327,37 +477,98 @@ export function PaperBatches({
                   {visible.map((q) => {
                     const b = batchByKey.get(q.batchKey);
                     return (
-                      <tr key={q.id} className="border-b border-[var(--color-border)] align-top last:border-0">
+                      <tr
+                        key={q.id}
+                        className="border-b border-[var(--color-border)] align-top last:border-0"
+                      >
                         <td className="py-2.5 pr-2">
-                          {selectable(q) ? <Checkbox aria-label={`Select ${q.code}`} checked={selected.has(q.id)} onCheckedChange={(v) => toggle(q.id, v === true)} /> : null}
+                          {selectable(q) ? (
+                            <Checkbox
+                              aria-label={`Select ${q.code}`}
+                              checked={selected.has(q.id)}
+                              onCheckedChange={(v) => toggle(q.id, v === true)}
+                            />
+                          ) : null}
                         </td>
-                        <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">{q.number ?? "—"}</td>
-                        <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-foreground)]">{q.code}</td>
-                        <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">{b ? (b.ordinal ? `#${b.ordinal}` : "Manual") : "—"}</td>
+                        <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-muted-foreground)]">
+                          {q.number ?? "—"}
+                        </td>
+                        <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-foreground)]">
+                          {q.code}
+                        </td>
+                        <td className="py-2.5 pr-4 text-xs text-[var(--color-muted-foreground)]">
+                          {b ? (b.ordinal ? `#${b.ordinal}` : "Manual") : "—"}
+                        </td>
                         <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
                           {q.subject}
-                          {q.topic ? <div className="text-xs">{q.topic}</div> : null}
+                          {q.topic ? (
+                            <div className="text-xs">{q.topic}</div>
+                          ) : null}
                         </td>
                         <td className="max-w-[320px] py-2.5 pr-4 text-[var(--color-foreground)]">
                           <div className="truncate">{q.text}</div>
-                          {q.reviewDetail ? <div className="mt-0.5 whitespace-normal text-xs text-[var(--color-warning)]">{q.reviewDetail}</div> : null}
+                          {q.reviewDetail ? (
+                            <div className="mt-0.5 whitespace-normal text-xs text-[var(--color-warning)]">
+                              {q.reviewDetail}
+                            </div>
+                          ) : null}
                         </td>
                         <td className="py-2.5 pr-4">
                           <div className="flex flex-wrap gap-1">
-                            {q.retired ? <Badge variant="error">RETIRED</Badge> : <Badge variant={Q_STATUS_VARIANT[q.status] ?? "neutral"}>{q.status}</Badge>}
-                            {q.reviewRequired ? <Badge variant="warning">Review</Badge> : null}
-                            {q.noCorrectAnswer && !q.retired ? <Badge variant="warning">No Correct Answer</Badge> : null}
+                            {q.retired ? (
+                              <Badge variant="error">RETIRED</Badge>
+                            ) : (
+                              <Badge
+                                variant={
+                                  Q_STATUS_VARIANT[q.status] ?? "neutral"
+                                }
+                              >
+                                {q.status}
+                              </Badge>
+                            )}
+                            {q.reviewRequired ? (
+                              <Badge variant="warning">Review</Badge>
+                            ) : null}
+                            {q.noCorrectAnswer && !q.retired ? (
+                              <Badge variant="warning">No Correct Answer</Badge>
+                            ) : null}
                           </div>
                         </td>
-                        <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">{q.hasImage ? "Yes" : "—"}</td>
+                        <td className="py-2.5 pr-4 text-[var(--color-muted-foreground)]">
+                          {q.hasImage ? "Yes" : "—"}
+                        </td>
                         <td className="py-2.5 pr-4">
                           <div className="flex items-center justify-end gap-2">
                             {q.retired ? null : (
                               <Button asChild size="compact" variant="outline">
-                                <Link href={`/admin/questions?tab=add&id=${q.id}`}>Edit</Link>
+                                <Link
+                                  href={`/admin/questions?tab=add&id=${q.id}`}
+                                >
+                                  Edit
+                                </Link>
                               </Button>
                             )}
-                            <RetireReplaceLink questionId={q.id} retired={q.retired} />
+                            <RetireReplaceLink
+                              questionId={q.id}
+                              retired={q.retired}
+                            />
+                            {canDelete ? (
+                              <Button
+                                size="compact"
+                                variant="danger"
+                                onClick={() =>
+                                  setDeleteReq({
+                                    kind: "SINGLE",
+                                    batchKey: q.batchKey,
+                                    ids: [q.id],
+                                    title: `Permanently delete ${q.code}`,
+                                  })
+                                }
+                                data-testid={`delete-${q.code}`}
+                              >
+                                Delete
+                              </Button>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
@@ -371,35 +582,83 @@ export function PaperBatches({
       </Card>
 
       {/* Publish preview → confirm → result */}
-      <Dialog open={publishOpen} onOpenChange={(o) => !pending && setPublishOpen(o)}>
+      <Dialog
+        open={publishOpen}
+        onOpenChange={(o) => !pending && setPublishOpen(o)}
+      >
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{result ? "Publish result" : "Publish selected questions"}</DialogTitle>
+            <DialogTitle>
+              {result ? "Publish result" : "Publish selected questions"}
+            </DialogTitle>
             <DialogDescription>
-              {currentBatch ? batchTitle(currentBatch) : ""}. {result ? "" : "Only the questions that pass every check are published. Nothing else changes."}
+              {currentBatch ? batchTitle(currentBatch) : ""}.{" "}
+              {result
+                ? ""
+                : "Only the questions that pass every check are published. Nothing else changes."}
             </DialogDescription>
           </DialogHeader>
-          {error ? <p className="mb-2 text-sm text-[var(--color-error)]">{error}</p> : null}
-          {!preview && !result && !error ? <p className="text-sm text-[var(--color-muted-foreground)]">Checking {selectedIds.length} questions on the server…</p> : null}
+          {error ? (
+            <p className="mb-2 text-sm text-[var(--color-error)]">{error}</p>
+          ) : null}
+          {!preview && !result && !error ? (
+            <p className="text-sm text-[var(--color-muted-foreground)]">
+              Checking {selectedIds.length} questions on the server…
+            </p>
+          ) : null}
           {result ? (
             <div className="flex flex-col gap-3 text-sm">
               <p className="font-medium text-[var(--color-foreground)]">
-                {result.replayed ? "This request had already run — nothing was published twice. " : ""}
-                Published {result.publishedCount} question{result.publishedCount === 1 ? "" : "s"}.
+                {result.replayed
+                  ? "This request had already run — nothing was published twice. "
+                  : ""}
+                Published {result.publishedCount} question
+                {result.publishedCount === 1 ? "" : "s"}.
               </p>
-              <ItemList title="Published" tone="success" items={result.published.map((p) => ({ id: p.id, code: p.code, number: null, reasons: [] }))} />
-              <ItemList title="Not published (blocked)" tone="error" items={result.blocked} />
-              <ItemList title="Already published" tone="neutral" items={result.alreadyPublished} />
+              <ItemList
+                title="Published"
+                tone="success"
+                items={result.published.map((p) => ({
+                  id: p.id,
+                  code: p.code,
+                  number: null,
+                  reasons: [],
+                }))}
+              />
+              <ItemList
+                title="Not published (blocked)"
+                tone="error"
+                items={result.blocked}
+              />
+              <ItemList
+                title="Already published"
+                tone="neutral"
+                items={result.alreadyPublished}
+              />
             </div>
           ) : preview ? (
             <div className="flex flex-col gap-3 text-sm">
               <p className="text-[var(--color-foreground)]">
-                {preview.requested} selected · <strong>{preview.eligible.length} will be published</strong> · {preview.blocked.length} blocked ·{" "}
+                {preview.requested} selected ·{" "}
+                <strong>{preview.eligible.length} will be published</strong> ·{" "}
+                {preview.blocked.length} blocked ·{" "}
                 {preview.alreadyPublished.length} already published
               </p>
-              <ItemList title="Will be published" tone="success" items={preview.eligible} />
-              <ItemList title="Blocked — will stay Draft" tone="error" items={preview.blocked} />
-              <ItemList title="Already published" tone="neutral" items={preview.alreadyPublished} />
+              <ItemList
+                title="Will be published"
+                tone="success"
+                items={preview.eligible}
+              />
+              <ItemList
+                title="Blocked — will stay Draft"
+                tone="error"
+                items={preview.blocked}
+              />
+              <ItemList
+                title="Already published"
+                tone="neutral"
+                items={preview.alreadyPublished}
+              />
             </div>
           ) : null}
           <DialogFooter>
@@ -407,11 +666,22 @@ export function PaperBatches({
               <Button onClick={() => setPublishOpen(false)}>Done</Button>
             ) : (
               <>
-                <Button variant="ghost" disabled={pending} onClick={() => setPublishOpen(false)}>
+                <Button
+                  variant="ghost"
+                  disabled={pending}
+                  onClick={() => setPublishOpen(false)}
+                >
                   Cancel
                 </Button>
-                <Button disabled={pending || !preview || preview.eligible.length === 0} onClick={confirmPublish}>
-                  {pending && preview ? "Publishing…" : `Publish ${preview?.eligible.length ?? 0} question${preview?.eligible.length === 1 ? "" : "s"}`}
+                <Button
+                  disabled={
+                    pending || !preview || preview.eligible.length === 0
+                  }
+                  onClick={confirmPublish}
+                >
+                  {pending && preview
+                    ? "Publishing…"
+                    : `Publish ${preview?.eligible.length ?? 0} question${preview?.eligible.length === 1 ? "" : "s"}`}
                 </Button>
               </>
             )}
@@ -420,26 +690,41 @@ export function PaperBatches({
       </Dialog>
 
       {/* Review re-check → mark reviewed */}
-      <Dialog open={reviewOpen} onOpenChange={(o) => !pending && setReviewOpen(o)}>
+      <Dialog
+        open={reviewOpen}
+        onOpenChange={(o) => !pending && setReviewOpen(o)}
+      >
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{reviewResult ? "Review result" : "Re-check review flags"}</DialogTitle>
+            <DialogTitle>
+              {reviewResult ? "Review result" : "Re-check review flags"}
+            </DialogTitle>
             <DialogDescription>
-              Each flagged question&apos;s import row is checked again with today&apos;s import rules. Only flags whose cause is gone can be cleared.
+              Each flagged question&apos;s import row is checked again with
+              today&apos;s import rules. Only flags whose cause is gone can be
+              cleared.
             </DialogDescription>
           </DialogHeader>
-          {error ? <p className="mb-2 text-sm text-[var(--color-error)]">{error}</p> : null}
-          {!checks && !error ? <p className="text-sm text-[var(--color-muted-foreground)]">Re-checking {selectedFlagged.length} questions…</p> : null}
+          {error ? (
+            <p className="mb-2 text-sm text-[var(--color-error)]">{error}</p>
+          ) : null}
+          {!checks && !error ? (
+            <p className="text-sm text-[var(--color-muted-foreground)]">
+              Re-checking {selectedFlagged.length} questions…
+            </p>
+          ) : null}
           {reviewResult ? (
             <div className="flex flex-col gap-2 text-sm">
               <p className="font-medium text-[var(--color-foreground)]">
-                Marked {reviewResult.markedCount} reviewed · {reviewResult.skipped.length} left flagged.
+                Marked {reviewResult.markedCount} reviewed ·{" "}
+                {reviewResult.skipped.length} left flagged.
               </p>
               {reviewResult.skipped.length ? (
                 <ul className="flex flex-col gap-1 text-xs text-[var(--color-muted-foreground)]">
                   {reviewResult.skipped.map((s) => (
                     <li key={s.id}>
-                      <span className="font-mono">{s.code ?? s.id}</span> — {s.reason}
+                      <span className="font-mono">{s.code ?? s.id}</span> —{" "}
+                      {s.reason}
                     </li>
                   ))}
                 </ul>
@@ -448,20 +733,48 @@ export function PaperBatches({
           ) : checks ? (
             <div className="flex flex-col gap-2 text-sm">
               <p className="text-[var(--color-foreground)]">
-                <strong>{resolvedCount} resolved</strong> · {checks.length - resolvedCount} still need review
+                <strong>{resolvedCount} resolved</strong> ·{" "}
+                {checks.length - resolvedCount} still need review
               </p>
               <ul className="flex flex-col gap-2">
                 {checks.map((c) => (
-                  <li key={c.id} className="rounded-md border border-[var(--color-border)] p-2 text-xs">
+                  <li
+                    key={c.id}
+                    className="rounded-md border border-[var(--color-border)] p-2 text-xs"
+                  >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-[var(--color-foreground)]">{c.code}</span>
-                      {c.number != null ? <span className="text-[var(--color-muted-foreground)]">No. {c.number}</span> : null}
-                      <Badge variant={c.status === "RESOLVED" ? "success" : "warning"}>{c.status.replace(/_/g, " ")}</Badge>
+                      <span className="font-mono text-[var(--color-foreground)]">
+                        {c.code}
+                      </span>
+                      {c.number != null ? (
+                        <span className="text-[var(--color-muted-foreground)]">
+                          No. {c.number}
+                        </span>
+                      ) : null}
+                      <Badge
+                        variant={
+                          c.status === "RESOLVED" ? "success" : "warning"
+                        }
+                      >
+                        {c.status.replace(/_/g, " ")}
+                      </Badge>
                     </div>
-                    <div className="mt-1 text-[var(--color-muted-foreground)]">Flagged for: {c.originalWarning}</div>
-                    <div className="text-[var(--color-muted-foreground)]">Why: {c.rootCause}</div>
-                    {c.correctedMapping.length ? <div className="text-[var(--color-muted-foreground)]">Now: {c.correctedMapping.join(" · ")}</div> : null}
-                    {c.remaining.length ? <div className="text-[var(--color-warning)]">Still present: {c.remaining.join(" · ")}</div> : null}
+                    <div className="mt-1 text-[var(--color-muted-foreground)]">
+                      Flagged for: {c.originalWarning}
+                    </div>
+                    <div className="text-[var(--color-muted-foreground)]">
+                      Why: {c.rootCause}
+                    </div>
+                    {c.correctedMapping.length ? (
+                      <div className="text-[var(--color-muted-foreground)]">
+                        Now: {c.correctedMapping.join(" · ")}
+                      </div>
+                    ) : null}
+                    {c.remaining.length ? (
+                      <div className="text-[var(--color-warning)]">
+                        Still present: {c.remaining.join(" · ")}
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -472,26 +785,61 @@ export function PaperBatches({
               <Button onClick={() => setReviewOpen(false)}>Done</Button>
             ) : (
               <>
-                <Button variant="ghost" disabled={pending} onClick={() => setReviewOpen(false)}>
+                <Button
+                  variant="ghost"
+                  disabled={pending}
+                  onClick={() => setReviewOpen(false)}
+                >
                   Cancel
                 </Button>
-                <Button disabled={pending || resolvedCount === 0} onClick={confirmReview}>
-                  {pending && checks ? "Saving…" : `Mark ${resolvedCount} reviewed`}
+                <Button
+                  disabled={pending || resolvedCount === 0}
+                  onClick={confirmReview}
+                >
+                  {pending && checks
+                    ? "Saving…"
+                    : `Mark ${resolvedCount} reviewed`}
                 </Button>
               </>
             )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {deleteReq ? (
+        <DeleteQuestionsDialog
+          key={`${deleteReq.kind}:${deleteReq.batchKey}:${String(deleteReq.ids)}`}
+          paperId={paperId}
+          request={deleteReq}
+          onClose={() => setDeleteReq(null)}
+          onDone={(ids) =>
+            setSelected(
+              (cur) => new Set([...cur].filter((id) => !ids.includes(id))),
+            )
+          }
+        />
+      ) : null}
     </>
   );
 }
 
 function batchTitle(b: PaperBatch) {
-  return b.key === MANUAL_BATCH ? "Added without an import" : `Batch #${b.ordinal} — ${b.name}`;
+  return b.key === MANUAL_BATCH
+    ? "Added without an import"
+    : `Batch #${b.ordinal} — ${b.name}`;
 }
 
-function BatchCard({ batch: b, active, onSelect }: { batch: PaperBatch; active: boolean; onSelect: () => void }) {
+function BatchCard({
+  batch: b,
+  active,
+  onSelect,
+  onDelete,
+}: {
+  batch: PaperBatch;
+  active: boolean;
+  onSelect: () => void;
+  onDelete?: () => void;
+}) {
   const c = b.counts;
   const isRun = b.key !== MANUAL_BATCH;
   return (
@@ -500,28 +848,40 @@ function BatchCard({ batch: b, active, onSelect }: { batch: PaperBatch; active: 
       aria-current={active ? "true" : undefined}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium text-[var(--color-foreground)]">{isRun ? `Batch #${b.ordinal}` : "Manual"}</span>
+        <span className="font-medium text-[var(--color-foreground)]">
+          {isRun ? `Batch #${b.ordinal}` : "Manual"}
+        </span>
         {b.label ? <Badge variant="primary">{b.label}</Badge> : null}
         <Badge variant={STATUS_VARIANT[b.status]}>{b.status}</Badge>
       </div>
       <div className="break-words text-xs text-[var(--color-muted-foreground)]">
         {b.name}
-        {isRun ? ` · ${fmtDate(b.importedAt)}${b.importedBy ? ` · by ${b.importedBy}` : ""}` : ""}
+        {isRun
+          ? ` · ${fmtDate(b.importedAt)}${b.importedBy ? ` · by ${b.importedBy}` : ""}`
+          : ""}
       </div>
       <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-xs sm:grid-cols-5">
         {isRun ? <Stat label="Rows" value={c.extracted} /> : null}
         <Stat label="Linked" value={c.linked} />
         <Stat label="Draft" value={c.draft} />
         <Stat label="Published" value={c.published} />
-        <Stat label="Review" value={c.reviewRequired} warn={c.reviewRequired > 0} />
+        <Stat
+          label="Review"
+          value={c.reviewRequired}
+          warn={c.reviewRequired > 0}
+        />
         {c.retired ? <Stat label="Retired" value={c.retired} /> : null}
         {c.archived ? <Stat label="Archived" value={c.archived} /> : null}
         {c.failed ? <Stat label="Failed rows" value={c.failed} warn /> : null}
-        {c.rolledBack ? <Stat label="Rolled back" value={c.rolledBack} /> : null}
+        {c.rolledBack ? (
+          <Stat label="Rolled back" value={c.rolledBack} />
+        ) : null}
       </div>
       {b.failedRows.length ? (
         <details className="text-xs">
-          <summary className="cursor-pointer text-[var(--color-warning)]">Failed rows ({b.failedRows.length})</summary>
+          <summary className="cursor-pointer text-[var(--color-warning)]">
+            Failed rows ({b.failedRows.length})
+          </summary>
           <ul className="mt-1 flex flex-col gap-0.5 text-[var(--color-muted-foreground)]">
             {b.failedRows.map((f) => (
               <li key={f.rowNumber}>
@@ -533,11 +893,16 @@ function BatchCard({ batch: b, active, onSelect }: { batch: PaperBatch; active: 
       ) : null}
       {b.history.length ? (
         <details className="text-xs">
-          <summary className="cursor-pointer text-[var(--color-muted-foreground)]">History ({b.history.length})</summary>
+          <summary className="cursor-pointer text-[var(--color-muted-foreground)]">
+            History ({b.history.length})
+          </summary>
           <ul className="mt-1 flex flex-col gap-0.5 text-[var(--color-muted-foreground)]">
             {b.history.map((h, i) => (
               <li key={i}>
-                {fmtDate(h.at)} · {h.action === "PUBLISH" ? `published ${h.count}` : `marked ${h.count} reviewed`}
+                {fmtDate(h.at)} ·{" "}
+                {h.action === "PUBLISH"
+                  ? `published ${h.count}`
+                  : `marked ${h.count} reviewed`}
                 {h.blocked ? ` (${h.blocked} blocked)` : ""}
                 {h.actor ? ` · ${h.actor}` : ""}
               </li>
@@ -547,38 +912,85 @@ function BatchCard({ batch: b, active, onSelect }: { batch: PaperBatch; active: 
       ) : null}
       {c.linked > 0 ? (
         <div>
-          <Button size="compact" variant={active ? "secondary" : "outline"} onClick={onSelect}>
+          <Button
+            size="compact"
+            variant={active ? "secondary" : "outline"}
+            onClick={onSelect}
+          >
             {active ? "Showing its questions" : "Show its questions"}
           </Button>
+          {onDelete ? (
+            <Button
+              size="compact"
+              variant="danger"
+              className="ml-2"
+              onClick={onDelete}
+              data-testid={`delete-batch-${b.key}`}
+            >
+              Delete Batch
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-function Stat({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
+function Stat({
+  label,
+  value,
+  warn,
+}: {
+  label: string;
+  value: number;
+  warn?: boolean;
+}) {
   return (
     <div>
       <div className="text-[var(--color-muted-foreground)]">{label}</div>
-      <div className={`font-medium ${warn ? "text-[var(--color-warning)]" : "text-[var(--color-foreground)]"}`}>{value}</div>
+      <div
+        className={`font-medium ${warn ? "text-[var(--color-warning)]" : "text-[var(--color-foreground)]"}`}
+      >
+        {value}
+      </div>
     </div>
   );
 }
 
-function ItemList({ title, tone, items }: { title: string; tone: "success" | "error" | "neutral"; items: BatchPublishItem[] }) {
+function ItemList({
+  title,
+  tone,
+  items,
+}: {
+  title: string;
+  tone: "success" | "error" | "neutral";
+  items: BatchPublishItem[];
+}) {
   if (!items.length) return null;
-  const color = tone === "success" ? "var(--color-success)" : tone === "error" ? "var(--color-error)" : "var(--color-muted-foreground)";
+  const color =
+    tone === "success"
+      ? "var(--color-success)"
+      : tone === "error"
+        ? "var(--color-error)"
+        : "var(--color-muted-foreground)";
   return (
-    <details open={tone === "error"} className="rounded-md border border-[var(--color-border)] p-2">
+    <details
+      open={tone === "error"}
+      className="rounded-md border border-[var(--color-border)] p-2"
+    >
       <summary className="cursor-pointer text-xs font-medium" style={{ color }}>
         {title} ({items.length})
       </summary>
       <ul className="mt-1 flex max-h-60 flex-col gap-0.5 overflow-y-auto text-xs text-[var(--color-muted-foreground)]">
         {items.map((it) => (
           <li key={it.id}>
-            <span className="font-mono text-[var(--color-foreground)]">{it.code ?? it.id}</span>
+            <span className="font-mono text-[var(--color-foreground)]">
+              {it.code ?? it.id}
+            </span>
             {it.number != null ? ` · No. ${it.number}` : ""}
-            {it.reasons.length ? ` — ${it.reasons.map((r) => r.detail).join(" · ")}` : ""}
+            {it.reasons.length
+              ? ` — ${it.reasons.map((r) => r.detail).join(" · ")}`
+              : ""}
           </li>
         ))}
       </ul>

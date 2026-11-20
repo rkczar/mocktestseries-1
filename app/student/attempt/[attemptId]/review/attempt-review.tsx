@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReportType } from "@prisma/client";
 import { CheckCircle2, MinusCircle, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -12,12 +13,27 @@ import { useAskAi } from "@/components/student/explanation-panel";
 import { WhatsAppShareButton } from "@/components/student/whatsapp-share-button";
 import type { QuestionSnapshot } from "@/lib/test-attempt";
 import { RichText } from "@/components/content/rich-text";
-import { QuestionMedia, preloadImages } from "@/components/content/question-media";
+import {
+  QuestionMedia,
+  preloadImages,
+} from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
-import type { ExplanationView, MatchView, RichQuestionView } from "@/lib/rich-content-types";
+import type {
+  ExplanationView,
+  MatchView,
+  RichQuestionView,
+} from "@/lib/rich-content-types";
 import { MatchLists } from "@/components/content/match-lists";
-import { formatLabelSet, snapshotCorrectLabels, snapshotQuestionType } from "@/lib/question-types";
-import { LanguageSwitch, useTestLanguage, type TestLanguage } from "@/components/student/test-language";
+import {
+  formatLabelSet,
+  snapshotCorrectLabels,
+  snapshotQuestionType,
+} from "@/lib/question-types";
+import {
+  LanguageSwitch,
+  useTestLanguage,
+  type TestLanguage,
+} from "@/components/student/test-language";
 import type { HindiView } from "@/lib/test-player-data";
 
 export interface ReviewQuestionView {
@@ -53,20 +69,43 @@ export interface ReviewQuestionView {
  * submitted answers).
  */
 /** The question as shown in the chosen language (same labels, same answer and correctness). */
-function inLanguage(q: ReviewQuestionView, lang: TestLanguage): ReviewQuestionView {
+function inLanguage(
+  q: ReviewQuestionView,
+  lang: TestLanguage,
+): ReviewQuestionView {
   if (lang !== "hi" || !q.hi) return q;
   const hi = q.hi;
   // Match the Following: the Hindi text carries its own Hindi lists; the English lists (matchSpec) would repeat them (same rule as the player).
-  return { ...q, snapshot: { ...q.snapshot, text: hi.text, options: q.snapshot.options.map((o) => ({ ...o, text: hi.options[o.label] ?? o.text })) }, ...(hi.rich ? { rich: hi.rich } : {}), match: undefined };
+  return {
+    ...q,
+    snapshot: {
+      ...q.snapshot,
+      text: hi.text,
+      options: q.snapshot.options.map((o) => ({
+        ...o,
+        text: hi.options[o.label] ?? o.text,
+      })),
+    },
+    ...(hi.rich ? { rich: hi.rich } : {}),
+    match: undefined,
+  };
 }
 
-export function AttemptReview({ questions, bilingual = false }: { questions: ReviewQuestionView[]; bilingual?: boolean }) {
+export function AttemptReview({
+  questions,
+  bilingual = false,
+}: {
+  questions: ReviewQuestionView[];
+  bilingual?: boolean;
+}) {
   const [index, setIndex] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
   const firstRender = useRef(true);
   const total = questions.length;
   const language = useTestLanguage(bilingual);
-  const q = questions[index] ? inLanguage(questions[index], language.lang) : undefined;
+  const q = questions[index]
+    ? inLanguage(questions[index], language.lang)
+    : undefined;
 
   // After Prev/Next, bring the new question's heading back into view — but only
   // when the student had scrolled past it (deep in a long explanation), so a
@@ -78,43 +117,81 @@ export function AttemptReview({ questions, bilingual = false }: { questions: Rev
       return;
     }
     const card = cardRef.current;
-    if (card && card.getBoundingClientRect().top < 80) card.scrollIntoView({ block: "start", behavior: "instant" });
+    if (card && card.getBoundingClientRect().top < 80)
+      card.scrollIntoView({ block: "start", behavior: "instant" });
   }, [index]);
 
   // RICH_V1 media: warm the next question's images only (never the whole review).
   useEffect(() => {
     const next = questions[index + 1];
     if (next?.rich) preloadImages(next.rich.assets.map((a) => a.url));
-    if (next?.explanation) preloadImages(next.explanation.assets.map((a) => a.url));
-    if (next?.match) preloadImages([...next.match.listI, ...next.match.listII].flatMap((i) => i.assets.map((a) => a.url)));
+    if (next?.explanation)
+      preloadImages(next.explanation.assets.map((a) => a.url));
+    if (next?.match)
+      preloadImages(
+        [...next.match.listI, ...next.match.listII].flatMap((i) =>
+          i.assets.map((a) => a.url),
+        ),
+      );
   }, [index, questions]);
 
-  if (!q) return null;
+  // Every question of this attempt was permanently deleted: score stays on the result page, nothing to review.
+  if (!q)
+    return (
+      <p
+        className="text-sm text-[var(--color-muted-foreground)]"
+        data-testid="review-empty"
+      >
+        The questions in this test are no longer available for review. Your
+        score remains on the result page.
+      </p>
+    );
 
   const goPrev = () => setIndex((i) => Math.max(0, i - 1));
   const goNext = () => setIndex((i) => Math.min(total - 1, i + 1));
 
   return (
     <div className="flex flex-col gap-4">
-      {bilingual ? <LanguageSwitch className="self-end" lang={language.lang} onChange={language.choose} /> : null}
-      <ReviewPalette questions={questions} current={index} onSelect={setIndex} />
+      {bilingual ? (
+        <LanguageSwitch
+          className="self-end"
+          lang={language.lang}
+          onChange={language.choose}
+        />
+      ) : null}
+      <ReviewSummary questions={questions} />
       <div ref={cardRef} className="scroll-mt-20">
         {/* key resets ReviewQuestionCard's Ask AI state (useAskAi) whenever Prev/Next swaps to a different question — the old per-question <div key=...> boundary, now scoped to the card itself. */}
-        <ReviewQuestionCard key={`${q.attemptQuestionId}:${language.lang}`} q={q} index={index} total={total} lang={language.lang} />
+        <ReviewQuestionCard
+          key={`${q.attemptQuestionId}:${language.lang}`}
+          q={q}
+          index={index}
+          total={total}
+          lang={language.lang}
+        />
       </div>
 
-      <QuestionBottomNav
-        testId="review-nav"
-        positionTestId="review-nav-position"
-        index={index}
-        total={total}
-        onPrevious={goPrev}
-        onNext={goNext}
-        previousDisabled={index === 0}
-        nextDisabled={index === total - 1}
-        previousAriaLabel="Previous question"
-        nextAriaLabel="Next question"
-      />
+      {/* One sticky pane: the Questions button sits above Previous/Next, so neither overlaps the other. */}
+      <div className="sticky bottom-0 z-30 flex flex-col gap-2 print:static">
+        <ReviewNavigator
+          questions={questions}
+          current={index}
+          onSelect={setIndex}
+        />
+        <QuestionBottomNav
+          className="static"
+          testId="review-nav"
+          positionTestId="review-nav-position"
+          index={index}
+          total={total}
+          onPrevious={goPrev}
+          onNext={goNext}
+          previousDisabled={index === 0}
+          nextDisabled={index === total - 1}
+          previousAriaLabel="Previous question"
+          nextAriaLabel="Next question"
+        />
+      </div>
     </div>
   );
 }
@@ -123,67 +200,266 @@ type ReviewStatus = "correct" | "incorrect" | "unanswered" | "withdrawn";
 const REVIEW_STATUS_STYLES: Record<ReviewStatus, string> = {
   correct: "bg-[var(--color-success)] text-white",
   incorrect: "bg-[var(--color-error)] text-white",
-  unanswered: "border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)]",
-  withdrawn: "border border-dashed border-[var(--color-muted-foreground)] text-[var(--color-muted-foreground)]",
+  unanswered:
+    "border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted-foreground)]",
+  withdrawn:
+    "border border-dashed border-[var(--color-muted-foreground)] text-[var(--color-muted-foreground)]",
 };
-const REVIEW_STATUS_LABEL: Record<ReviewStatus, string> = { correct: "correct", incorrect: "incorrect", unanswered: "not answered", withdrawn: "withdrawn" };
+const REVIEW_STATUS_LABEL: Record<ReviewStatus, string> = {
+  correct: "correct",
+  incorrect: "incorrect",
+  unanswered: "not answered",
+  withdrawn: "withdrawn",
+};
 // Same verdict rule as the question card below.
 const reviewStatus = (q: ReviewQuestionView): ReviewStatus =>
-  q.snapshot.withdrawn === true ? "withdrawn" : q.isCorrect === true ? "correct" : q.isCorrect === false ? "incorrect" : "unanswered";
+  q.snapshot.withdrawn === true
+    ? "withdrawn"
+    : q.isCorrect === true
+      ? "correct"
+      : q.isCorrect === false
+        ? "incorrect"
+        : "unanswered";
 
-/**
- * Read-only jump grid for a submitted attempt: changes only which question is shown (no save, timer or answer
- * state exists here). Always visible from md up; collapsible on phones so a 100-question review stays compact.
- */
-function ReviewPalette({ questions, current, onSelect }: { questions: ReviewQuestionView[]; current: number; onSelect: (i: number) => void }) {
-  const [open, setOpen] = useState(false);
-  const statuses = questions.map(reviewStatus);
+function ReviewLegend({ statuses }: { statuses: ReviewStatus[] }) {
   const count = (s: ReviewStatus) => statuses.filter((x) => x === s).length;
   const withdrawn = count("withdrawn");
   return (
-    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-3 sm:p-4" data-testid="review-palette-card">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between text-sm font-medium text-[var(--color-foreground)] md:hidden"
-        aria-expanded={open}
-        aria-controls="review-palette-body"
-        onClick={() => setOpen((o) => !o)}
-        data-testid="review-palette-toggle"
-      >
-        <span>All questions · {current + 1} / {questions.length}</span>
-        <span className="text-xs text-[var(--color-muted-foreground)]">{open ? "Hide" : "Show"}</span>
-      </button>
-      <div id="review-palette-body" className={cn("flex-col gap-3 md:flex", open ? "mt-3 flex md:mt-0" : "hidden")}>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--color-muted-foreground)]">
-          <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[var(--color-success)]" /> Correct ({count("correct")})</span>
-          <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[var(--color-error)]" /> Incorrect ({count("incorrect")})</span>
-          <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-[var(--color-border)]" /> Not answered ({count("unanswered")})</span>
-          {withdrawn ? (
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-dashed border-[var(--color-muted-foreground)]" /> Withdrawn ({withdrawn})</span>
-          ) : null}
-        </div>
-        <QuestionPalette
-          testId="review-palette"
-          className="grid-cols-[repeat(auto-fill,minmax(2.25rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(2.25rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(2.25rem,1fr))]"
-          current={current}
-          onSelect={(i) => {
-            onSelect(i);
-            setOpen(false);
-          }}
-          cells={questions.map((q, i) => ({
-            key: q.attemptQuestionId,
-            ariaLabel: `Go to question ${i + 1} (${REVIEW_STATUS_LABEL[statuses[i]]})`,
-            className: cn(REVIEW_STATUS_STYLES[statuses[i]], i === current && "ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--color-card)]"),
-          }))}
-        />
-      </div>
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--color-muted-foreground)]">
+      <span className="flex items-center gap-1.5">
+        <span
+          aria-hidden
+          className="h-2.5 w-2.5 rounded-full bg-[var(--color-success)]"
+        />{" "}
+        Correct ({count("correct")})
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span
+          aria-hidden
+          className="h-2.5 w-2.5 rounded-full bg-[var(--color-error)]"
+        />{" "}
+        Incorrect ({count("incorrect")})
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span
+          aria-hidden
+          className="h-2.5 w-2.5 rounded-full border border-[var(--color-border)]"
+        />{" "}
+        Not answered ({count("unanswered")})
+      </span>
+      {withdrawn ? (
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="h-2.5 w-2.5 rounded-full border border-dashed border-[var(--color-muted-foreground)]"
+          />{" "}
+          Withdrawn ({withdrawn})
+        </span>
+      ) : null}
     </div>
   );
 }
 
-function ReviewQuestionCard({ q, index, total, lang }: { q: ReviewQuestionView; index: number; total: number; lang: TestLanguage }) {
-  const { actions: askAiActions, usageNotice, panel: askAiPanel } = useAskAi(q.questionId, "attempt_review", q.attemptId, lang);
-  const correctOption = q.snapshot.options.find((opt) => opt.label === q.snapshot.correctLabel);
+/** Compact always-visible counts; the full grid lives in the navigator sheet. */
+function ReviewSummary({ questions }: { questions: ReviewQuestionView[] }) {
+  return (
+    <div
+      className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2"
+      data-testid="review-palette-card"
+    >
+      <ReviewLegend statuses={questions.map(reviewStatus)} />
+    </div>
+  );
+}
+
+/**
+ * Read-only jump grid for a submitted attempt, opened from a floating "Questions" button as a bottom sheet
+ * (one implementation for phone and desktop). Changes only which question is shown.
+ */
+function ReviewNavigator({
+  questions,
+  current,
+  onSelect,
+}: {
+  questions: ReviewQuestionView[];
+  current: number;
+  onSelect: (i: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const dragStart = useRef<number | null>(null);
+  const statuses = questions.map(reviewStatus);
+  const close = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      } else if (e.key === "Tab") {
+        // aria-modal: keep Tab / Shift+Tab cycling inside the sheet.
+        const sheet = document.getElementById("review-navigator-sheet");
+        const items = sheet?.querySelectorAll<HTMLElement>(
+          "button:not([disabled])",
+        );
+        if (!sheet || !items?.length) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        const inside = sheet.contains(document.activeElement);
+        if (e.shiftKey && (document.activeElement === first || !inside)) {
+          e.preventDefault();
+          last.focus();
+        } else if (
+          !e.shiftKey &&
+          (document.activeElement === last || !inside)
+        ) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="mr-1 self-end rounded-full border border-[var(--color-border)] bg-[var(--color-card)]/90 px-4 py-2 text-sm font-medium text-[var(--color-foreground)] shadow-[var(--shadow-card)] backdrop-blur transition hover:bg-[var(--color-surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] active:scale-[0.97]"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="review-navigator-sheet"
+        onClick={() => setOpen(true)}
+        data-testid="review-palette-toggle"
+      >
+        <span aria-hidden>☷</span> Questions ({questions.length})
+      </button>
+      {/* Portal: inside the sticky z-30 pane the overlay could never rise above the z-40 StudentHeader. */}
+      {open
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-50 flex items-end justify-center"
+              data-testid="review-navigator"
+            >
+              <div
+                className="absolute inset-0 bg-black/50"
+                aria-hidden
+                onClick={close}
+                data-testid="review-navigator-backdrop"
+              />
+              <div
+                id="review-navigator-sheet"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="review-navigator-title"
+                className="relative flex max-h-[80dvh] w-full flex-col rounded-t-2xl border border-[var(--color-border)] bg-[var(--color-card)] shadow-[var(--shadow-card)] sm:max-w-2xl"
+                style={{
+                  paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))",
+                }}
+                onTouchStart={(e) => (dragStart.current = e.touches[0].clientY)}
+                onTouchEnd={(e) => {
+                  // Swipe down on the header region dismisses; the grid keeps its own scroll.
+                  if (
+                    dragStart.current !== null &&
+                    e.changedTouches[0].clientY - dragStart.current > 80 &&
+                    (e.target as HTMLElement).closest("[data-sheet-header]")
+                  )
+                    close();
+                  dragStart.current = null;
+                }}
+              >
+                <div
+                  data-sheet-header
+                  className="flex flex-col gap-2 border-b border-[var(--color-border)] px-4 pb-3 pt-2"
+                >
+                  <span
+                    aria-hidden
+                    className="mx-auto h-1 w-10 rounded-full bg-[var(--color-border)]"
+                  />
+                  <div className="flex items-center justify-between">
+                    <h2
+                      id="review-navigator-title"
+                      className="text-base font-semibold text-[var(--color-foreground)]"
+                    >
+                      Question Navigator{" "}
+                      <span className="text-sm font-normal text-[var(--color-muted-foreground)]">
+                        · {current + 1} / {questions.length}
+                      </span>
+                    </h2>
+                    <button
+                      ref={closeRef}
+                      type="button"
+                      onClick={close}
+                      aria-label="Close question navigator"
+                      className="rounded-md px-2 py-1 text-xl leading-none text-[var(--color-muted-foreground)] hover:bg-[var(--color-surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
+                      data-testid="review-navigator-close"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <ReviewLegend statuses={statuses} />
+                </div>
+                <div className="overflow-y-auto overscroll-contain p-4">
+                  <QuestionPalette
+                    testId="review-palette"
+                    className="grid-cols-[repeat(auto-fill,minmax(2.5rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(2.5rem,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(2.5rem,1fr))]"
+                    current={current}
+                    onSelect={(i) => {
+                      onSelect(i);
+                      close();
+                    }}
+                    cells={questions.map((q, i) => ({
+                      key: q.attemptQuestionId,
+                      ariaLabel: `Go to question ${i + 1} (${REVIEW_STATUS_LABEL[statuses[i]]})`,
+                      className: cn(
+                        REVIEW_STATUS_STYLES[statuses[i]],
+                        i === current &&
+                          "ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--color-card)]",
+                      ),
+                    }))}
+                  />
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function ReviewQuestionCard({
+  q,
+  index,
+  total,
+  lang,
+}: {
+  q: ReviewQuestionView;
+  index: number;
+  total: number;
+  lang: TestLanguage;
+}) {
+  const {
+    actions: askAiActions,
+    usageNotice,
+    panel: askAiPanel,
+  } = useAskAi(q.questionId, "attempt_review", q.attemptId, lang);
+  const correctOption = q.snapshot.options.find(
+    (opt) => opt.label === q.snapshot.correctLabel,
+  );
   // MULTIPLE_CORRECT (NEET Phase 4): the frozen correct SET vs the submitted set. SINGLE_CORRECT / MATCH use the lines above.
   const multi = snapshotQuestionType(q.snapshot) === "MULTIPLE_CORRECT";
   const correctSet = multi ? snapshotCorrectLabels(q.snapshot) : [];
@@ -191,8 +467,15 @@ function ReviewQuestionCard({ q, index, total, lang }: { q: ReviewQuestionView; 
   // Withdrawn by the official key: shown with its label, no answer key, no verdict, no AI explanation.
   const withdrawn = q.snapshot.withdrawn === true;
   // Ask AI explains single-correct questions only (the server refuses the rest too).
-  const askAiAllowed = snapshotQuestionType(q.snapshot) === "SINGLE_CORRECT" && !withdrawn;
-  const verdict = withdrawn ? "Withdrawn — not scored" : q.isCorrect === true ? "Correct" : q.isCorrect === false ? "Incorrect" : "Not Answered";
+  const askAiAllowed =
+    snapshotQuestionType(q.snapshot) === "SINGLE_CORRECT" && !withdrawn;
+  const verdict = withdrawn
+    ? "Withdrawn — not scored"
+    : q.isCorrect === true
+      ? "Correct"
+      : q.isCorrect === false
+        ? "Incorrect"
+        : "Not Answered";
   const panelRef = useRef<HTMLDivElement>(null);
   const panelOpen = askAiPanel !== null;
 
@@ -201,11 +484,24 @@ function ReviewQuestionCard({ q, index, total, lang }: { q: ReviewQuestionView; 
   // the content, fill the same spot). Phone only, and only when it isn't already visible.
   useEffect(() => {
     const el = panelRef.current;
-    if (!panelOpen || !el || !window.matchMedia("(max-width: 767.98px)").matches) return;
-    const navTop = document.querySelector("[data-testid=review-nav]")?.getBoundingClientRect().top ?? window.innerHeight;
+    if (
+      !panelOpen ||
+      !el ||
+      !window.matchMedia("(max-width: 767.98px)").matches
+    )
+      return;
+    const navTop =
+      document
+        .querySelector("[data-testid=review-nav]")
+        ?.getBoundingClientRect().top ?? window.innerHeight;
     if (el.getBoundingClientRect().top > navTop - 96) {
-      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      el.scrollIntoView({ block: "start", behavior: reduce ? "instant" : "smooth" });
+      const reduce = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      el.scrollIntoView({
+        block: "start",
+        behavior: reduce ? "instant" : "smooth",
+      });
     }
   }, [panelOpen]);
 
@@ -224,9 +520,12 @@ function ReviewQuestionCard({ q, index, total, lang }: { q: ReviewQuestionView; 
           <span
             className={cn(
               "rounded-full px-2.5 py-0.5 text-xs font-medium",
-              q.isCorrect === true && "bg-[var(--color-success)]/15 text-[var(--color-success)]",
-              q.isCorrect === false && "bg-[var(--color-error)]/15 text-[var(--color-error)]",
-              q.isCorrect === null && "bg-[var(--color-border)] text-[var(--color-muted-foreground)]"
+              q.isCorrect === true &&
+                "bg-[var(--color-success)]/15 text-[var(--color-success)]",
+              q.isCorrect === false &&
+                "bg-[var(--color-error)]/15 text-[var(--color-error)]",
+              q.isCorrect === null &&
+                "bg-[var(--color-border)] text-[var(--color-muted-foreground)]",
             )}
           >
             {verdict}
@@ -248,15 +547,25 @@ function ReviewQuestionCard({ q, index, total, lang }: { q: ReviewQuestionView; 
 
       <div className="max-md:contents md:col-span-2 md:row-start-2 md:p-5">
         {withdrawn ? (
-          <div role="note" data-testid="review-withdrawn" className="mb-3 rounded-[var(--radius-card)] border-2 border-[var(--color-warning)] bg-[var(--color-warning)]/10 p-3 text-sm text-[var(--color-foreground)] max-md:order-2 max-md:mx-4 max-md:mt-4">
-            <p className="font-bold uppercase tracking-wide text-[var(--color-warning)]">Withdrawn question</p>
-            <p className="mt-1">Withdrawn in the official answer key. Shown as printed; not counted in your score or maximum marks.</p>
+          <div
+            role="note"
+            data-testid="review-withdrawn"
+            className="mb-3 rounded-[var(--radius-card)] border-2 border-[var(--color-warning)] bg-[var(--color-warning)]/10 p-3 text-sm text-[var(--color-foreground)] max-md:order-2 max-md:mx-4 max-md:mt-4"
+          >
+            <p className="font-bold uppercase tracking-wide text-[var(--color-warning)]">
+              Withdrawn question
+            </p>
+            <p className="mt-1">
+              Withdrawn in the official answer key. Shown as printed; not
+              counted in your score or maximum marks.
+            </p>
           </div>
         ) : null}
         <p className="whitespace-pre-wrap text-question text-[var(--color-foreground)] max-md:order-2 max-md:px-4 max-md:pt-4 max-md:text-[length:calc(1.0625rem*var(--text-scale))] max-md:leading-[1.65]">
           <RichText text={q.snapshot.text} html={q.rich?.textHtml} />
         </p>
-        {q.snapshot.imageUrl && !q.rich?.assets.some((a) => a.role === "QUESTION") ? (
+        {q.snapshot.imageUrl &&
+        !q.rich?.assets.some((a) => a.role === "QUESTION") ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={q.snapshot.imageUrl}
@@ -264,87 +573,161 @@ function ReviewQuestionCard({ q, index, total, lang }: { q: ReviewQuestionView; 
             className="mt-3 max-h-72 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain max-md:order-2 max-md:mx-4 max-md:max-w-[calc(100%-2rem)] max-md:self-start"
           />
         ) : null}
-        {q.rich ? <QuestionMedia className="mt-3 max-md:order-2 max-md:px-4" assets={q.rich.assets.filter((a) => a.role === "QUESTION")} /> : null}
-        {q.match ? <MatchLists className="mt-4 max-md:order-2 max-md:mx-4" match={q.match} /> : null}
+        {q.rich ? (
+          <QuestionMedia
+            className="mt-3 max-md:order-2 max-md:px-4"
+            assets={q.rich.assets.filter((a) => a.role === "QUESTION")}
+          />
+        ) : null}
+        {q.match ? (
+          <MatchLists
+            className="mt-4 max-md:order-2 max-md:mx-4"
+            match={q.match}
+          />
+        ) : null}
 
-        <div className="mt-4 flex flex-col gap-2.5 max-md:order-3 max-md:px-4 md:gap-2" data-testid="review-options">
-          {multi ? q.snapshot.options.map((opt) => {
-            const isSelected = selectedSet.includes(opt.label);
-            const isAnswer = correctSet.includes(opt.label);
-            const state = isAnswer && isSelected ? "selected-correct" : isSelected ? "selected-incorrect" : isAnswer ? "missed-correct" : "none";
-            return (
-              <div
-                key={opt.label}
-                data-state={state}
-                className={cn(
-                  "rounded-[var(--radius-card)] border p-3 text-sm max-md:text-[length:calc(1rem*var(--text-scale))] max-md:leading-relaxed",
-                  state === "selected-correct" && "border-[var(--color-success)] bg-[var(--color-success)]/10",
-                  state === "missed-correct" && "border-dashed border-[var(--color-success)]",
-                  state === "selected-incorrect" && "border-[var(--color-error)] bg-[var(--color-error)]/10",
-                  state === "none" && "border-[var(--color-border)]"
-                )}
-              >
-                <span className="font-semibold">{opt.label}.</span> <RichText text={opt.text} html={q.rich?.optionHtml[opt.label]} />
-                {state === "selected-correct" ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Your answer · Correct</span> : null}
-                {state === "missed-correct" ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer · Missed</span> : null}
-                {state === "selected-incorrect" ? <span className="ml-2 text-xs font-medium text-[var(--color-error)]">Your answer · Incorrect</span> : null}
-                {opt.imageUrl && !q.rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === opt.label) ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={opt.imageUrl}
-                    alt=""
-                    className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
-                  />
-                ) : null}
-                {q.rich ? (
-                  <QuestionMedia className="mt-2" size="option" assets={q.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === opt.label)} />
-                ) : null}
-              </div>
-            );
-          }) : q.snapshot.options.map((opt) => {
-            const isSelected = q.selected === opt.label;
-            const isAnswer = opt.label === q.snapshot.correctLabel;
-            return (
-              <div
-                key={opt.label}
-                className={cn(
-                  "rounded-[var(--radius-card)] border p-3 text-sm max-md:text-[length:calc(1rem*var(--text-scale))] max-md:leading-relaxed",
-                  isAnswer
-                    ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
+        <div
+          className="mt-4 flex flex-col gap-2.5 max-md:order-3 max-md:px-4 md:gap-2"
+          data-testid="review-options"
+        >
+          {multi
+            ? q.snapshot.options.map((opt) => {
+                const isSelected = selectedSet.includes(opt.label);
+                const isAnswer = correctSet.includes(opt.label);
+                const state =
+                  isAnswer && isSelected
+                    ? "selected-correct"
                     : isSelected
-                      ? "border-[var(--color-error)] bg-[var(--color-error)]/10"
-                      : "border-[var(--color-border)]"
-                )}
-              >
-                <span className="font-semibold">{opt.label}.</span> <RichText text={opt.text} html={q.rich?.optionHtml[opt.label]} />
-                {isAnswer ? <span className="ml-2 text-xs font-medium text-[var(--color-success)]">Correct answer</span> : null}
-                {isSelected && !isAnswer ? (
-                  <span className="ml-2 text-xs font-medium text-[var(--color-error)]">Your answer</span>
-                ) : null}
-                {opt.imageUrl && !q.rich?.assets.some((a) => a.role === "OPTION" && a.optionLabel === opt.label) ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={opt.imageUrl}
-                    alt=""
-                    className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
-                  />
-                ) : null}
-                {q.rich ? (
-                  <QuestionMedia className="mt-2" size="option" assets={q.rich.assets.filter((a) => a.role === "OPTION" && a.optionLabel === opt.label)} />
-                ) : null}
-              </div>
-            );
-          })}
+                      ? "selected-incorrect"
+                      : isAnswer
+                        ? "missed-correct"
+                        : "none";
+                return (
+                  <div
+                    key={opt.label}
+                    data-state={state}
+                    className={cn(
+                      "rounded-[var(--radius-card)] border p-3 text-sm max-md:text-[length:calc(1rem*var(--text-scale))] max-md:leading-relaxed",
+                      state === "selected-correct" &&
+                        "border-[var(--color-success)] bg-[var(--color-success)]/10",
+                      state === "missed-correct" &&
+                        "border-dashed border-[var(--color-success)]",
+                      state === "selected-incorrect" &&
+                        "border-[var(--color-error)] bg-[var(--color-error)]/10",
+                      state === "none" && "border-[var(--color-border)]",
+                    )}
+                  >
+                    <span className="font-semibold">{opt.label}.</span>{" "}
+                    <RichText
+                      text={opt.text}
+                      html={q.rich?.optionHtml[opt.label]}
+                    />
+                    {state === "selected-correct" ? (
+                      <span className="ml-2 text-xs font-medium text-[var(--color-success)]">
+                        Your answer · Correct
+                      </span>
+                    ) : null}
+                    {state === "missed-correct" ? (
+                      <span className="ml-2 text-xs font-medium text-[var(--color-success)]">
+                        Correct answer · Missed
+                      </span>
+                    ) : null}
+                    {state === "selected-incorrect" ? (
+                      <span className="ml-2 text-xs font-medium text-[var(--color-error)]">
+                        Your answer · Incorrect
+                      </span>
+                    ) : null}
+                    {opt.imageUrl &&
+                    !q.rich?.assets.some(
+                      (a) => a.role === "OPTION" && a.optionLabel === opt.label,
+                    ) ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={opt.imageUrl}
+                        alt=""
+                        className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                      />
+                    ) : null}
+                    {q.rich ? (
+                      <QuestionMedia
+                        className="mt-2"
+                        size="option"
+                        assets={q.rich.assets.filter(
+                          (a) =>
+                            a.role === "OPTION" && a.optionLabel === opt.label,
+                        )}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })
+            : q.snapshot.options.map((opt) => {
+                const isSelected = q.selected === opt.label;
+                const isAnswer = opt.label === q.snapshot.correctLabel;
+                return (
+                  <div
+                    key={opt.label}
+                    className={cn(
+                      "rounded-[var(--radius-card)] border p-3 text-sm max-md:text-[length:calc(1rem*var(--text-scale))] max-md:leading-relaxed",
+                      isAnswer
+                        ? "border-[var(--color-success)] bg-[var(--color-success)]/10"
+                        : isSelected
+                          ? "border-[var(--color-error)] bg-[var(--color-error)]/10"
+                          : "border-[var(--color-border)]",
+                    )}
+                  >
+                    <span className="font-semibold">{opt.label}.</span>{" "}
+                    <RichText
+                      text={opt.text}
+                      html={q.rich?.optionHtml[opt.label]}
+                    />
+                    {isAnswer ? (
+                      <span className="ml-2 text-xs font-medium text-[var(--color-success)]">
+                        Correct answer
+                      </span>
+                    ) : null}
+                    {isSelected && !isAnswer ? (
+                      <span className="ml-2 text-xs font-medium text-[var(--color-error)]">
+                        Your answer
+                      </span>
+                    ) : null}
+                    {opt.imageUrl &&
+                    !q.rich?.assets.some(
+                      (a) => a.role === "OPTION" && a.optionLabel === opt.label,
+                    ) ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={opt.imageUrl}
+                        alt=""
+                        className="mt-2 max-h-48 rounded-[var(--radius-card)] border border-[var(--color-border)] object-contain"
+                      />
+                    ) : null}
+                    {q.rich ? (
+                      <QuestionMedia
+                        className="mt-2"
+                        size="option"
+                        assets={q.rich.assets.filter(
+                          (a) =>
+                            a.role === "OPTION" && a.optionLabel === opt.label,
+                        )}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })}
         </div>
 
         {/* md+: Correct / Incorrect on the left, the AI actions on the right, then usage and the correct answer. Phone: see the card comment. */}
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-md:contents" data-testid="review-answer-header">
+        <div
+          className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-md:contents"
+          data-testid="review-answer-header"
+        >
           <p
             className={cn(
               "flex items-center gap-2 text-sm font-semibold max-md:order-4 max-md:mt-4 max-md:px-4",
               q.isCorrect === true && "text-[var(--color-success)]",
               q.isCorrect === false && "text-[var(--color-error)]",
-              q.isCorrect === null && "text-[var(--color-muted-foreground)]"
+              q.isCorrect === null && "text-[var(--color-muted-foreground)]",
             )}
           >
             {q.isCorrect === true ? (
@@ -356,26 +739,55 @@ function ReviewQuestionCard({ q, index, total, lang }: { q: ReviewQuestionView; 
             )}
             {verdict}
           </p>
-          <div className="max-md:order-6 max-md:mt-4 max-md:px-4 max-md:[&_button]:h-10 max-md:[&_button]:flex-1">{askAiAllowed ? askAiActions : null}</div>
+          <div className="max-md:order-6 max-md:mt-4 max-md:px-4 max-md:[&_button]:h-10 max-md:[&_button]:flex-1">
+            {askAiAllowed ? askAiActions : null}
+          </div>
         </div>
         <div className="mt-2 flex flex-col gap-2 max-md:contents">
-          <div className="empty:hidden max-md:order-7 max-md:mt-2 max-md:px-4">{askAiAllowed ? usageNotice : null}</div>
+          <div className="empty:hidden max-md:order-7 max-md:mt-2 max-md:px-4">
+            {askAiAllowed ? usageNotice : null}
+          </div>
           {withdrawn ? null : multi ? (
-            <div className="text-sm font-medium max-md:order-5 max-md:mt-2 max-md:px-4" data-testid="review-answer-sets">
-              <p className="text-[var(--color-foreground)]">Your answer: {selectedSet.length ? formatLabelSet(selectedSet) : "Not answered"}</p>
-              <p className="text-[var(--color-success)]">Correct answer: {formatLabelSet(correctSet)}</p>
-              <p className="mt-0.5 text-xs font-normal text-[var(--color-muted-foreground)]">Marked correct only when every correct option, and nothing else, is selected.</p>
+            <div
+              className="text-sm font-medium max-md:order-5 max-md:mt-2 max-md:px-4"
+              data-testid="review-answer-sets"
+            >
+              <p className="text-[var(--color-foreground)]">
+                Your answer:{" "}
+                {selectedSet.length
+                  ? formatLabelSet(selectedSet)
+                  : "Not answered"}
+              </p>
+              <p className="text-[var(--color-success)]">
+                Correct answer: {formatLabelSet(correctSet)}
+              </p>
+              <p className="mt-0.5 text-xs font-normal text-[var(--color-muted-foreground)]">
+                Marked correct only when every correct option, and nothing else,
+                is selected.
+              </p>
             </div>
           ) : correctOption ? (
             <p className="text-sm font-medium text-[var(--color-success)] max-md:order-5 max-md:mt-2 max-md:px-4">
-              Correct Answer: {correctOption.label}. <RichText text={correctOption.text} html={q.rich?.optionHtml[correctOption.label]} />
+              Correct Answer: {correctOption.label}.{" "}
+              <RichText
+                text={correctOption.text}
+                html={q.rich?.optionHtml[correctOption.label]}
+              />
             </p>
           ) : null}
-          {q.explanation ? <HumanExplanation className="max-md:order-5 max-md:mx-4 max-md:mt-3" explanation={q.explanation} /> : null}
+          {q.explanation ? (
+            <HumanExplanation
+              className="max-md:order-5 max-md:mx-4 max-md:mt-3"
+              explanation={q.explanation}
+            />
+          ) : null}
         </div>
 
         {/* The one highlighted AI area — explanation (with its styles) or AI Question Variant, opened by the two AI actions. Never a separate page/card. */}
-        <div ref={panelRef} className="empty:hidden max-md:order-9 max-md:scroll-mt-20 max-md:px-4">
+        <div
+          ref={panelRef}
+          className="empty:hidden max-md:order-9 max-md:scroll-mt-20 max-md:px-4"
+        >
           {askAiAllowed ? askAiPanel : null}
         </div>
       </div>
