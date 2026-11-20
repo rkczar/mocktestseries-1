@@ -16,7 +16,7 @@ const model = process.env.MODEL ?? "";
 const apply = process.argv.includes("--apply");
 
 void (async () => {
-  if (!JOB || !pages.length || !model || !(cap > 0) || cap > 1.5) throw new Error("set JOB, PAGES, MODEL and CAP_INR (0 < cap <= 1.5)");
+  if (!JOB || !pages.length || !model || !(cap > 0) || cap > 20) throw new Error("set JOB, PAGES, MODEL and CAP_INR (0 < cap <= 20, owner limit)");
   const scope: Verify2Scope = { pages, capInr: cap };
   const p = await verify2Preview(JOB, model, scope);
   const units = (await verify2Units(JOB)).filter((u) => inScope(u, scope));
