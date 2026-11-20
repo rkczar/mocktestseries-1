@@ -18,7 +18,8 @@ import { correctCountIssue, toQuestionType } from "@/lib/question-types";
  *     single-correct / Match the Following, at least two for multiple-correct);
  *  3. it has at least two options, each with text or an image;
  *  4. every image it references still exists in media storage;
- *  5. it has question text or a question image (an empty stem is never published).
+ *  5. it has question text or a question image (an empty stem is never published);
+ *  6. its answer is not marked UNVERIFIED (2026-11-20: an answer from a false key is never published).
  *
  * Questions that are ALREADY published are left alone (no retroactive
  * unpublishing). A batch is never all-or-nothing: eligible questions are
@@ -33,6 +34,7 @@ export const PUBLISH_BLOCK_REASONS = {
   NOT_FOUND: "Question not found",
   RETIRED: "Retired question",
   QUESTION_TEXT: "Question text missing",
+  ANSWER_UNVERIFIED: "Answer unverified",
 } as const;
 export type PublishBlockCode = keyof typeof PUBLISH_BLOCK_REASONS;
 
@@ -58,6 +60,7 @@ const SELECT = {
   retiredAt: true,
   reviewRequired: true,
   reviewReason: true,
+  answerVerification: true,
   questionType: true,
   text: true,
   imageUrl: true,
@@ -69,7 +72,7 @@ type Row = Prisma.QuestionGetPayload<{ select: typeof SELECT }>;
 
 /** Pure rules for one loaded question (image existence is checked separately). */
 export function structuralPublishIssues(
-  q: Pick<Row, "reviewRequired" | "reviewReason" | "questionType" | "options" | "assets"> & Partial<Pick<Row, "text" | "imageUrl">>
+  q: Pick<Row, "reviewRequired" | "reviewReason" | "questionType" | "options" | "assets"> & Partial<Pick<Row, "text" | "imageUrl" | "answerVerification">>
 ): PublishBlock["reasons"] {
   const reasons: PublishBlock["reasons"] = [];
   if (q.text !== undefined && q.text.trim() === "" && !q.imageUrl && !q.assets.some((a) => a.role === "QUESTION")) {
@@ -77,6 +80,9 @@ export function structuralPublishIssues(
   }
   if (q.reviewRequired) {
     reasons.push({ code: "REVIEW_REQUIRED", detail: q.reviewReason ? `Flagged for review: ${q.reviewReason}` : "Flagged for review — mark it reviewed first." });
+  }
+  if (q.answerVerification === "UNVERIFIED") {
+    reasons.push({ code: "ANSWER_UNVERIFIED", detail: "The answer is not verified against an official key — verify it before publishing." });
   }
   const optionImages = new Set(q.assets.filter((a) => a.role === "OPTION" && a.optionLabel).map((a) => a.optionLabel!));
   const usable = q.options.filter((o) => o.text.trim() !== "" || o.imageUrl || optionImages.has(o.label));
@@ -155,7 +161,7 @@ export async function publishQuestions(input: { ids: string[]; actorId: string; 
   for (let i = 0; i < evaluation.eligible.length; i += 500) {
     const chunk = evaluation.eligible.slice(i, i + 500);
     const r = await prisma.question.updateMany({
-      where: { id: { in: chunk }, reviewRequired: false, status: { not: QuestionStatus.PUBLISHED } },
+      where: { id: { in: chunk }, reviewRequired: false, status: { not: QuestionStatus.PUBLISHED }, OR: [{ answerVerification: null }, { answerVerification: { not: "UNVERIFIED" } }] },
       data: { status: QuestionStatus.PUBLISHED },
     });
     publishedCount += r.count;

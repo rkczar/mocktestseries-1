@@ -628,7 +628,13 @@ export interface Verify2State {
   /** COMPLETE: every part answered · PARTIAL: some parts gave no answer · NO_RESULT: not one independent result. */
   outcome?: "COMPLETE" | "PARTIAL" | "NO_RESULT";
   actualInr?: number;
+  /** Page-limited retry (2026-11-20): only these page images are read, no subject / topic classification or tie-break, and the
+   *  job may spend at most capInr more (enforced by the gateway through the job's confirmed maximum). */
+  scope?: Verify2Scope | null;
 }
+export interface Verify2Scope { pages: number[]; capInr: number }
+/** A unit inside a page-limited retry (no scope = every unit). */
+export const inScope = (u: Pick<Unit, "kind" | "pageNumber">, scope: Verify2Scope | null | undefined) => !scope || (u.kind === "page" && u.pageNumber !== undefined && scope.pages.includes(u.pageNumber));
 
 /** How a finished Verify 2 went, from its counts (a run without one independent result is never "done" in the UI). */
 export function verify2Outcome(c: Record<string, number>): NonNullable<Verify2State["outcome"]> {
@@ -855,7 +861,7 @@ export interface Verify2Preview {
   referenceOcr: { name: string; pages: number; processing: string; estimateInr: number | null; maxInr: number | null }[];
 }
 
-async function priceVerify2(jobId: string, modelArg: string | null, refresh: boolean) {
+async function priceVerify2(jobId: string, modelArg: string | null, refresh: boolean, scope: Verify2Scope | null = null) {
   const job = await finishedJob(jobId);
   const settings = await verify2Settings(job.config);
   const used = await usedModels(jobId, job.config);
@@ -876,9 +882,9 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
   const rows = await prisma.aiImportQuestion.findMany({ where: { jobId, status: { notIn: LOCKED } }, include: { figures: true } });
   // Targeted: only parts holding a question that still needs a read (no agreeing result, under the pass limit).
   const targets = verify2Targets(rows);
-  const todo = units.filter((u) => !unitDone(u, rows, prior, model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
-  const questions = new Set([...targets.read, ...targets.classify]).size;
-  const classifyBatches = Math.ceil(targets.classify.size / CLASSIFY_BATCH);
+  const todo = units.filter((u) => inScope(u, scope) && !unitDone(u, rows, prior, model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
+  const questions = scope ? rows.filter((q) => targets.read.has(q.id) && todo.some((u) => inUnit(u, q))).length : new Set([...targets.read, ...targets.classify]).size;
+  const classifyBatches = scope ? 0 : Math.ceil(targets.classify.size / CLASSIFY_BATCH);
   // Fallbacks: any other eligible model (no price allowance or spending cap since 2026-10-26 — the maximum below
   // prices the fallback), another model family first.
   const family = modelFamily;
@@ -953,8 +959,8 @@ async function priceVerify2(jobId: string, modelArg: string | null, refresh: boo
   return { job, settings, used, candidates, model, choice, reason, units: todo, allUnits: units, questions, classifyBatches, estimateInr, maxInr, problems, prior, alternates, referenceOcr };
 }
 
-export async function verify2Preview(jobId: string, model: string | null): Promise<Verify2Preview> {
-  const p = await priceVerify2(jobId, model, false);
+export async function verify2Preview(jobId: string, model: string | null, scope: Verify2Scope | null = null): Promise<Verify2Preview> {
+  const p = await priceVerify2(jobId, model, false, scope);
   return {
     aiEnabled: p.settings.aiEnabled,
     usedModels: p.used,
@@ -984,9 +990,11 @@ export type Verify2Request = { started: true; maxInr: number } | { started: fals
  * provider routes; if it is higher than what was confirmed, nothing starts and the new price is returned for a
  * fresh confirmation. The job's confirmed maximum becomes spent + this operation's maximum (never less than before).
  */
-export async function requestVerify2(input: { jobId: string; actorId: string; model: string; confirmedMaxInr: number | null }): Promise<Verify2Request> {
-  const p = await priceVerify2(input.jobId, input.model, true);
-  const preview = await verify2Preview(input.jobId, input.model);
+export async function requestVerify2(input: { jobId: string; actorId: string; model: string; confirmedMaxInr: number | null; scope?: Verify2Scope | null }): Promise<Verify2Request> {
+  const scope = input.scope ?? null;
+  if (scope && (!scope.pages.length || !(scope.capInr > 0))) throw new ImportJobError("A page-limited Verify 2 needs pages and a positive cost cap.");
+  const p = await priceVerify2(input.jobId, input.model, true, scope);
+  const preview = await verify2Preview(input.jobId, input.model, scope);
   if (!p.settings.aiEnabled) throw new ImportJobError("Paid AI is switched off in Import Settings, so Verify 2 cannot run. Nothing was sent.");
   if (!p.choice || p.choice.model !== input.model || p.maxInr === null) throw new ImportJobError(`Verify 2 cannot use ${input.model}: ${p.problems.join(" ") || p.reason}`);
   if (!p.units.length) throw new ImportJobError("Every page of this import was already read by Verify 2 with this model, or its questions already agree or reached the limit of 3 verification passes. Nothing more is sent.");
@@ -994,7 +1002,8 @@ export async function requestVerify2(input: { jobId: string; actorId: string; mo
   const freshPreview = { ...preview, maxInr: p.maxInr, estimateInr: p.estimateInr, perRequestMaxInr: p.choice.maxInr };
   if (confirmed === null) return { started: false, preview: freshPreview, reason: "Confirm the maximum cost first." };
   if (confirmed + 0.005 < p.maxInr) return { started: false, preview: freshPreview, reason: `The price changed: the maximum is now ${formatInr(p.maxInr)} (you confirmed ${formatInr(confirmed)}). Confirm the new maximum to continue.` };
-  const budget = Math.max(p.job.budgetInr, Math.ceil((p.job.spentInr + p.maxInr) * 100) / 100);
+  // A page-limited retry sets the job's confirmed maximum to spent + cap: the gateway refuses any request beyond it.
+  const budget = scope ? Math.floor((p.job.spentInr + scope.capInr) * 10000) / 10000 : Math.max(p.job.budgetInr, Math.ceil((p.job.spentInr + p.maxInr) * 100) / 100);
   const state: Verify2State = {
     status: "QUEUED",
     model: input.model,
@@ -1010,11 +1019,12 @@ export async function requestVerify2(input: { jobId: string; actorId: string; mo
     confirmedMaxInr: confirmed,
     spentBeforeInr: p.job.spentInr,
     doneUnits: p.prior && p.prior.model === input.model ? p.prior.doneUnits : [],
+    scope,
   };
   const r = await prisma.aiImportJob.updateMany({ where: { id: input.jobId, status: p.job.status }, data: { status: AiImportJobStatus.QUEUED, finishedAt: null, budgetInr: budget, config: { ...((p.job.config as object) ?? {}), verify2: state } as unknown as Prisma.InputJsonValue } });
   if (!r.count) throw new ImportJobError("The import changed state at the same moment. Refresh and try again.", 409);
   await logEvent(input.jobId, "VERIFY2_REQUESTED", `Verify 2 confirmed with ${input.model}: ${p.units.length} source read(s) (${p.units.filter((u) => u.kind === "page").length} page image(s), ${p.units.filter((u) => u.kind === "text").length} document text part(s) of at most ${PART_QUESTIONS} questions) + ${p.classifyBatches} classification request(s), estimated ${formatInr(p.estimateInr)}, maximum ${formatInr(p.maxInr)} (confirmed ${formatInr(confirmed)}). Confirmed maximum of the import: ${formatInr(budget)} (₹${p.job.spentInr.toFixed(2)} spent so far).`, { model: input.model, units: p.units.length, classifyBatches: p.classifyBatches, estimateInr: p.estimateInr, maxInr: p.maxInr, confirmedMaxInr: confirmed, budgetInr: budget, alternates: p.alternates, usedModels: p.used }, input.actorId);
-  await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_VERIFY2_REQUESTED", entityType: "AiImportJob", entityId: input.jobId, metadata: { model: input.model, maxInr: p.maxInr, confirmedMaxInr: confirmed } } });
+  await prisma.auditLog.create({ data: { actorId: input.actorId, action: "AI_IMPORT_VERIFY2_REQUESTED", entityType: "AiImportJob", entityId: input.jobId, metadata: { scope: scope as never, model: input.model, maxInr: p.maxInr, confirmedMaxInr: confirmed } } });
   kickWorker();
   return { started: true, maxInr: p.maxInr };
 }
@@ -1169,9 +1179,9 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
   // limit, keeps its result and is not read again; a part with none of the targets is not sent.
   const targets = verify2Targets(rows);
   const allUnits = await verify2Units(ctx.job.id);
-  const units = allUnits.filter((u) => !unitDone(u, rows, state!, state!.model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
+  const units = allUnits.filter((u) => inScope(u, state!.scope) && !unitDone(u, rows, state!, state!.model) && rows.some((q) => targets.read.has(q.id) && inUnit(u, q)));
   // Never silently outside the denominator: a target question in no source part at all gets an explicit no-result.
-  const uncovered = rows.filter((q) => targets.read.has(q.id) && !allUnits.some((u) => inUnit(u, q)));
+  const uncovered = state.scope ? [] : rows.filter((q) => targets.read.has(q.id) && !allUnits.some((u) => inUnit(u, q)));
   const exam = await prisma.exam.findUnique({ where: { id: ctx.job.examId }, select: { name: true } });
   const rules = await examFormatRules(ctx.job.examId);
   // Confirmed paper memory given to the Verify 2 model with every read (how this paper is printed — never content).
@@ -1323,6 +1333,8 @@ export async function runVerify2(ctx: StepContext): Promise<Record<string, numbe
     await saveState(ctx.job.id, { doneUnits: done, counts });
     throw stopped;
   }
+  // A page-limited retry never classifies (no subject / topic batches, no tie-break).
+  if (state.scope) return counts;
 
   // Subject / topic / subtopic: an independent classification by the Verify 2 model over EVERY question with enough
   // text (also those without a subject), from the exam's full code list — it never sees the stored choice or Verify 1's.

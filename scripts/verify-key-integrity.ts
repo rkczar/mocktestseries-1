@@ -13,6 +13,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { comparePaperIds, isKeyMark, notAnAnswerKey, paperNumber } from "@/lib/ai-import/key-check";
 import { ocrKeyPairs, parseKeyHeader } from "@/lib/ai-import/keys";
 import { parseKeyAnswer } from "@/lib/ai-import/fidelity";
+import { inScope } from "@/lib/ai-import/paper-verify";
+import { structuralPublishIssues } from "@/lib/question-publish-policy";
 
 let pass = 0;
 let fail = 0;
@@ -51,6 +53,15 @@ ok("the real stored entries alone (any page count) fail the key gate", /not opti
 for (const v of ["60", "unreadable", "(b) Kocher", "(a) 35", "ha kita", "(c) 1, 3 and 4"]) ok(`"${v}" is not a key mark`, !isKeyMark(v));
 for (const v of ["B", "(c)", "a.", "A, C", "A & D", "3", "X", "×", "dropped"]) ok(`"${v}" is a key mark`, isKeyMark(v));
 for (const v of ["60", "unreadable", "(b) Kocher", "(a) 35"]) ok(`"${v}" never parses as an official answer`, !parseKeyAnswer(v, ["(a)", "(b)", "(c)", "(d)"]).labels);
+
+// Page-limited Verify 2 scope + the unverified-answer publish block (2026-11-20 follow-up).
+{
+  const sc = { pages: [9, 10, 23], capInr: 1.5 };
+  ok("scope: page 9 is in, page 2 is out, a text part is out, no scope = everything", inScope({ kind: "page", pageNumber: 9 }, sc) && !inScope({ kind: "page", pageNumber: 2 }, sc) && !inScope({ kind: "text", pageNumber: undefined }, sc) && inScope({ kind: "page", pageNumber: 2 }, null));
+  const base = { reviewRequired: false, reviewReason: null, questionType: "SINGLE_CORRECT" as const, assets: [], text: "Stem", imageUrl: null, options: ["A", "B", "C", "D"].map((l) => ({ label: l, text: l, isCorrect: l === "B", imageUrl: null })) };
+  ok("publish blocked while the answer is UNVERIFIED", structuralPublishIssues({ ...base, answerVerification: "UNVERIFIED" }).some((r) => r.code === "ANSWER_UNVERIFIED"));
+  ok("publish not blocked for OFFICIAL_KEY / null answer provenance", !structuralPublishIssues({ ...base, answerVerification: "OFFICIAL_KEY" }).length && !structuralPublishIssues({ ...base, answerVerification: null }).length);
+}
 
 const FX = process.env.AI_IMPORT_KEYINT_FIXTURES ?? "";
 for (const t of ["P1", "P2"]) {
