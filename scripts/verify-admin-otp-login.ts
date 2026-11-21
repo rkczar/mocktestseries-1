@@ -6,9 +6,11 @@
 import fs from "node:fs";
 import argon2 from "argon2";
 import { prisma } from "@/lib/prisma";
-import { ADMIN_OTP_SENT, ADMIN_OTP_UNAVAILABLE, authorizeAdminOtp, requestAdminLoginOtp, sendAdminEmailVerification, verifyAdminEmail } from "@/lib/admin-otp-login";
+import { ADMIN_MOBILE_OTP_SENT, ADMIN_OTP_SENT, ADMIN_OTP_UNAVAILABLE, authorizeAdminOtp, requestAdminLoginOtp, requestAdminMobileOtp, requestAdminMobileOtpWhatsApp, sendAdminEmailVerification, sendAdminMobileVerification, verifyAdminEmail, verifyAdminMobile } from "@/lib/admin-otp-login";
+import { OtpError } from "@/lib/otp";
+import { isWhatsAppOtpAvailable } from "@/lib/auth-provider-config";
 import { EmailOtpError, setEmailOtpEnabled } from "@/lib/email-otp";
-import { ADMIN_OTP_SETTING_KEY, clearAdminOtpLoginCache, isAdminOtpLoginEnabled, saveAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
+import { ADMIN_OTP_SETTING_KEY, clearAdminOtpLoginCache, getAdminOtpMethods, isAdminOtpLoginEnabled, saveAdminOtpLoginEnabled, saveAdminOtpMethods } from "@/lib/admin-otp-settings";
 
 if (!/\/mts_aotp\w*(\?|$)/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing: not the scratch mts_aotp database.");
 const FILE = process.env.RESEND_MOCK_FILE!;
@@ -159,7 +161,100 @@ async function main() {
   check("now verified: login code emailed", r.ok && /admin login code/i.test([...mails()].reverse().find((m) => m.to === "unverified@aotp.example.test")?.subject ?? ""));
   check("verified admin signs in with the code", (await authorizeAdminOtp("otp-unverified", lc, "198.51.100.21"))?.id === unv.id);
 
+  console.log("\n=== Mobile OTP (MSG91 mock — no real SMS)");
+  const MOCK = process.env.MSG91_MOCK_FILE!;
+  const sms = () => { try { return JSON.parse(fs.readFileSync(MOCK, "utf8")); } catch { return { requests: {}, latest: {} }; } };
+  const smsCount = (d: string, ch?: string) => Object.values(sms().requests as Record<string, { identifier: string; channel?: string }>).filter((r) => r.identifier === `91${d}` && (ch ? r.channel === ch : r.channel !== "whatsapp")).length;
+  const smsCode = (d: string) => sms().latest[`91${d}`]?.code as string | undefined;
+  const setMock = (patch: object) => fs.writeFileSync(MOCK, JSON.stringify({ ...sms(), ...patch }));
+  const backdate = (d: string) => prisma.otpRequest.updateMany({ where: { mobile: `+91${d}` }, data: { lastSentAt: new Date(Date.now() - 120_000), createdAt: new Date(Date.now() - 86_400_000 * 2) } });
+  await prisma.loginAttempt.deleteMany({}); // earlier email lockout checks must not bleed into this section
+  const MM = "9876500001", MF = "9876500002", MOFF = "9876500003", MU = "9876500004";
+  await prisma.adminUser.update({ where: { username: "otp-master" }, data: { mobile: `+91${MM}`, mobileVerifiedAt: null } });
+  await prisma.adminUser.update({ where: { username: "otp-full" }, data: { isActive: true, mobile: `+91${MF}`, mobileVerifiedAt: new Date() } });
+  await prisma.adminUser.update({ where: { username: "otp-off" }, data: { mobile: `+91${MOFF}`, mobileVerifiedAt: new Date() } });
+  await prisma.adminUser.update({ where: { username: "otp-noemail" }, data: { mobile: `+91${MU}`, mobileVerifiedAt: null } });
+  await prisma.setting.deleteMany({ where: { key: ADMIN_OTP_SETTING_KEY } });
+  clearAdminOtpLoginCache();
+  const m0 = await getAdminOtpMethods();
+  check("missing setting → Email OFF and Mobile OFF", !m0.email && !m0.mobile);
+  await prisma.setting.create({ data: { key: ADMIN_OTP_SETTING_KEY, value: { enabled: true, mobileEnabled: "yes" } } });
+  clearAdminOtpLoginCache();
+  const m1 = await getAdminOtpMethods();
+  check("malformed mobileEnabled → Mobile OFF, Email unaffected", m1.email && !m1.mobile);
+  check("Mobile OFF: request → generic, no SMS", (await requestAdminMobileOtp(MF, "198.51.100.30")).message === ADMIN_MOBILE_OTP_SENT && smsCount(MF) === 0);
+  check("Mobile OFF: login rejected", (await authorizeAdminOtp(MF, "123456", "198.51.100.30", "mobile")) === null);
+  await saveAdminOtpMethods({ email: false, mobile: true });
+  check("Email OFF + Mobile ON are independent", !(await isAdminOtpLoginEnabled()) && (await getAdminOtpMethods()).mobile);
+  { const before = mails().length; await requestAdminLoginOtp("otp-full", "198.51.100.30"); check("Email OFF: email request sends nothing", mails().length === before); }
+
+  // verification of the master's number (Edit Admin path)
+  check("unverified mobile: no SMS, generic answer", (await requestAdminMobileOtp(MM, "198.51.100.31")).message === ADMIN_MOBILE_OTP_SENT && smsCount(MM) === 0);
+  await sendAdminMobileVerification(master.id, "198.51.100.31");
+  check("verification SMS sent to the saved number (mock)", smsCount(MM) === 1 && /^\d{6}$/.test(smsCode(MM) ?? ""));
+  let badVer = false;
+  try { await verifyAdminMobile(master.id, smsCode(MM) === "000000" ? "111111" : "000000", master.id); } catch (e) { badVer = e instanceof OtpError; }
+  check("wrong verification code rejected, still unverified", badVer && !(await prisma.adminUser.findUniqueOrThrow({ where: { id: master.id } })).mobileVerifiedAt);
+  await verifyAdminMobile(master.id, smsCode(MM)!, master.id);
+  check("correct code → mobile Verified + audit ADMIN_MOBILE_VERIFIED", !!(await prisma.adminUser.findUniqueOrThrow({ where: { id: master.id } })).mobileVerifiedAt && (await prisma.auditLog.count({ where: { action: "ADMIN_MOBILE_VERIFIED", entityId: master.id } })) === 1);
+
+  // login
+  const ipM = "198.51.100.32";
+  await backdate(MM); // the verification SMS above started the 60 s cooldown
+  const r1 = await requestAdminMobileOtp(`+91 ${MM.slice(0, 5)} ${MM.slice(5)}`, ipM);
+  check("verified Master mobile (+91 format) → SMS sent, generic answer", r1.ok && r1.message === ADMIN_MOBILE_OTP_SENT && smsCount(MM) === 2);
+  const c1 = smsCode(MM)!;
+  check("resend within 60 s: no second SMS (cooldown), same answer", (await requestAdminMobileOtp(MM, ipM)).message === ADMIN_MOBILE_OTP_SENT && smsCount(MM) === 2);
+  check("wrong code rejected", (await authorizeAdminOtp(MM, c1 === "000000" ? "111111" : "000000", ipM, "mobile")) === null);
+  check("email channel cannot use an SMS code", (await authorizeAdminOtp("otp-master", c1, ipM)) === null);
+  const um = await authorizeAdminOtp(MM, c1, ipM, "mobile");
+  check("correct SMS code → normal session user (MASTER_ADMIN)", um?.id === master.id && um.role === "MASTER_ADMIN", um);
+  check("replay of the same SMS code rejected", (await authorizeAdminOtp(MM, c1, ipM, "mobile")) === null);
+  check("audit ADMIN_LOGIN method mobile_otp", (await prisma.auditLog.count({ where: { action: "ADMIN_LOGIN", actorId: master.id, metadata: { path: ["method"], equals: "mobile_otp" } } })) === 1);
+
+  await backdate(MF);
+  await requestAdminMobileOtp(MF, "198.51.100.33");
+  const cf = smsCode(MF)!;
+  check("FULL_ADMIN verified mobile → signs in, role FULL_ADMIN", (await authorizeAdminOtp(MF, cf, "198.51.100.33", "mobile"))?.role === "FULL_ADMIN");
+  await backdate(MF);
+  await requestAdminMobileOtp(MF, "198.51.100.34");
+  await prisma.otpRequest.updateMany({ where: { mobile: `+91${MF}`, consumedAt: null }, data: { expiresAt: new Date(Date.now() - 1000) } });
+  check("expired SMS code rejected", (await authorizeAdminOtp(MF, smsCode(MF), "198.51.100.34", "mobile")) === null);
+  await backdate(MF);
+  await requestAdminMobileOtp(MF, "198.51.100.35");
+  const c5 = smsCode(MF)!;
+  for (let i = 0; i < 5; i++) await authorizeAdminOtp(MF, c5 === "999999" ? "888888" : "999999", "198.51.100.35", "mobile");
+  check("after 5 wrong codes the right SMS code no longer works", (await authorizeAdminOtp(MF, c5, "198.51.100.36", "mobile")) === null);
+  check("disabled admin with verified mobile: no SMS, login rejected", (await requestAdminMobileOtp(MOFF, "198.51.100.37")).message === ADMIN_MOBILE_OTP_SENT && smsCount(MOFF) === 0 && (await authorizeAdminOtp(MOFF, "123456", "198.51.100.37", "mobile")) === null);
+  check("unknown number: same generic answer, no SMS", (await requestAdminMobileOtp("9000000009", "198.51.100.38")).message === ADMIN_MOBILE_OTP_SENT && smsCount("9000000009") === 0);
+  check("invalid number → format error only", !(await requestAdminMobileOtp("12345", "198.51.100.38")).ok);
+
+  // provider failure + WhatsApp fallback
+  await backdate(MF);
+  setMock({ failSend: "Template not approved" });
+  const rf = await requestAdminMobileOtp(MF, "198.51.100.39");
+  setMock({ failSend: undefined });
+  check("MSG91 send failure → honest error, never 'sent'", !rf.ok && /couldn't send/i.test(rf.message), rf);
+  await prisma.setting.upsert({ where: { key: "auth.providers" }, create: { key: "auth.providers", value: { msg91: { enabled: true, whatsappRetryEnabled: true } } }, update: { value: { msg91: { enabled: true, whatsappRetryEnabled: true } } } });
+  check("WhatsApp fallback available in scratch config", await isWhatsAppOtpAvailable());
+  await backdate(MF);
+  await requestAdminMobileOtp(MF, "198.51.100.40");
+  await backdate(MF); // WhatsApp re-send shares the 60 s cooldown (the UI enables it only after the countdown)
+  const wr = await requestAdminMobileOtpWhatsApp(MF, "198.51.100.40");
+  check("WhatsApp re-delivery of the pending code (MSG91 retryOtp channel 12)", wr.ok && smsCount(MF, "whatsapp") === 1, wr);
+  check("WhatsApp-delivered code signs in", (await authorizeAdminOtp(MF, smsCode(MF), "198.51.100.40", "mobile"))?.role === "FULL_ADMIN");
+  await backdate(MF);
+  await requestAdminMobileOtp(MF, "198.51.100.41");
+  await backdate(MF);
+  setMock({ failRetry: "WhatsApp template rejected" });
+  const wf = await requestAdminMobileOtpWhatsApp(MF, "198.51.100.41");
+  setMock({ failRetry: undefined });
+  check("WhatsApp provider failure → honest error", !wf.ok, wf);
+  const smsLog = logged.join("\n");
+  check("no SMS code ever written to the logs", Object.values(sms().requests as Record<string, { code: string }>).every((r) => !smsLog.includes(r.code)));
+
   console.log("\n=== honest errors");
+  await saveAdminOtpMethods({ email: true, mobile: true });
   const realAvail = process.env.RESEND_API_KEY;
   delete process.env.RESEND_API_KEY;
   const un = await requestAdminLoginOtp("nobody", "198.51.100.22");

@@ -9,8 +9,10 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { headers } from "next/headers";
 import { clientIpFromHeaders } from "@/lib/client-ip";
 import { EmailOtpError } from "@/lib/email-otp";
-import { isAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
-import { sendAdminEmailVerification, verifyAdminEmail } from "@/lib/admin-otp-login";
+import { getAdminOtpMethods, isAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
+import { parseIndianMobile } from "@/lib/indian-mobile";
+import { OtpError } from "@/lib/otp";
+import { sendAdminEmailVerification, sendAdminMobileVerification, verifyAdminEmail, verifyAdminMobile } from "@/lib/admin-otp-login";
 
 const schema = z.object({
   name: z.string().min(2).max(120),
@@ -143,6 +145,8 @@ const editSchema = z.object({
     .toLowerCase()
     .max(200)
     .refine((v) => v === "" || z.string().email().safeParse(v).success, "Enter a valid email address"),
+  /** Omitted = unchanged. "" = remove. Otherwise an Indian mobile with or without +91. */
+  mobile: z.string().trim().max(20).optional(),
   roleId: z.string().min(1, "Select a role"),
   isActive: z.boolean(),
   actorPassword: z.string().max(200).optional(),
@@ -156,9 +160,11 @@ export async function updateAdminUserAction(input: z.input<typeof editSchema>): 
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   const d = parsed.data;
   const email = d.email === "" ? null : d.email;
+  const parsedMobile = d.mobile ? parseIndianMobile(d.mobile) : null;
+  if (d.mobile && !parsedMobile) return { ok: false, error: "Enter a valid Indian mobile number with country code, e.g. +91 98765 43210." };
 
   const [target, role] = await Promise.all([
-    prisma.adminUser.findUnique({ where: { id: d.id }, select: { id: true, name: true, email: true, isActive: true, roleId: true, role: { select: { name: true } } } }),
+    prisma.adminUser.findUnique({ where: { id: d.id }, select: { id: true, name: true, email: true, mobile: true, isActive: true, roleId: true, role: { select: { name: true } } } }),
     prisma.role.findUnique({ where: { id: d.roleId }, select: { id: true, name: true } }),
   ]);
   if (!target) return { ok: false, error: "Admin user not found." };
@@ -167,21 +173,30 @@ export async function updateAdminUserAction(input: z.input<typeof editSchema>): 
   const isSelf = target.id === actorId;
   const roleChanged = role.id !== target.roleId;
   const emailChanged = (email ?? null) !== (target.email ?? null);
+  const mobile = d.mobile === undefined ? target.mobile : (parsedMobile?.e164 ?? null);
+  const mobileChanged = (mobile ?? null) !== (target.mobile ?? null);
   const activeChanged = d.isActive !== target.isActive;
   const nameChanged = d.name !== target.name;
-  if (!roleChanged && !emailChanged && !activeChanged && !nameChanged) return { ok: true, message: "No changes to save." };
+  if (!roleChanged && !emailChanged && !mobileChanged && !activeChanged && !nameChanged) return { ok: true, message: "No changes to save." };
 
   if (isSelf && roleChanged) return { ok: false, error: "You cannot change your own role. Ask another Master Admin." };
   if (isSelf && activeChanged && !d.isActive) return { ok: false, error: "You cannot deactivate your own account." };
   if (roleChanged && role.name === "MASTER_ADMIN" && session.user.role !== "MASTER_ADMIN") return { ok: false, error: "Only a Master Admin can grant the Master Admin role." };
 
-  const sensitive = roleChanged || emailChanged || activeChanged;
+  const sensitive = roleChanged || emailChanged || mobileChanged || activeChanged;
   if (sensitive) {
     const err = await reauthenticate(actorId, d.actorPassword ?? "");
     if (err) return { ok: false, error: err };
   }
   if (emailChanged && !email && (await isAdminOtpLoginEnabled())) {
     return { ok: false, error: "Login with OTP is ON: enter a new email instead of leaving it blank (or turn OTP off in Settings → Security first)." };
+  }
+  if (mobileChanged && !mobile && (await getAdminOtpMethods()).mobile) {
+    return { ok: false, error: "Mobile OTP is ON: enter a new mobile number instead of leaving it blank (or turn Mobile OTP off in Settings → Security first)." };
+  }
+  if (mobileChanged && mobile) {
+    const clash = await prisma.adminUser.findFirst({ where: { mobile, NOT: { id: target.id } }, select: { id: true } });
+    if (clash) return { ok: false, error: "Another admin already uses that mobile number." };
   }
   if (emailChanged && email) {
     const clash = await prisma.adminUser.findFirst({ where: { email, NOT: { id: target.id } }, select: { id: true } });
@@ -203,6 +218,8 @@ export async function updateAdminUserAction(input: z.input<typeof editSchema>): 
             email,
             // A new (or removed) email must be verified again before it can receive login codes.
             ...(emailChanged ? { emailVerifiedAt: null } : {}),
+            // A new (or removed) mobile must be verified again before it can receive login codes.
+            ...(mobileChanged ? { mobile, mobileVerifiedAt: null } : {}),
             roleId: role.id,
             isActive: d.isActive,
             // Role change or deactivation: every existing session of this admin ends now.
@@ -216,7 +233,7 @@ export async function updateAdminUserAction(input: z.input<typeof editSchema>): 
             entityType: "AdminUser",
             entityId: target.id,
             metadata: {
-              changed: [nameChanged && "name", emailChanged && "email", roleChanged && "role", activeChanged && "isActive"].filter(Boolean),
+              changed: [nameChanged && "name", emailChanged && "email", mobileChanged && "mobile", roleChanged && "role", activeChanged && "isActive"].filter(Boolean),
               ...(roleChanged ? { roleFrom: target.role.name, roleTo: role.name } : {}),
               ...(activeChanged ? { activeFrom: target.isActive, activeTo: d.isActive } : {}),
               reauthenticated: sensitive,
@@ -298,4 +315,30 @@ export async function verifyAdminEmailAction(id: string, code: string): Promise<
   }
   revalidatePath("/admin/users/admins");
   return { ok: true, message: "Email verified." };
+}
+
+/** Edit Admin → "Send verification code" by SMS (MSG91) to the admin's saved mobile (USERS_MANAGE = Master Admin). */
+export async function sendAdminMobileVerificationAction(id: string): Promise<AdminEditResult> {
+  await requirePermission(PERMISSIONS.USERS_MANAGE);
+  try {
+    await sendAdminMobileVerification(String(id), clientIpFromHeaders(await headers()));
+    return { ok: true, message: "Verification code sent by SMS to the saved mobile. It expires in 5 minutes." };
+  } catch (error) {
+    if (error instanceof OtpError) return { ok: false, error: error.message };
+    throw error;
+  }
+}
+
+/** Edit Admin → enter the 6-digit SMS code: marks the mobile Verified (audited). */
+export async function verifyAdminMobileAction(id: string, code: string): Promise<AdminEditResult> {
+  const session = await requirePermission(PERMISSIONS.USERS_MANAGE);
+  if (!session.user.id) return { ok: false, error: "Not signed in." };
+  try {
+    await verifyAdminMobile(String(id), String(code ?? ""), session.user.id);
+  } catch (error) {
+    if (error instanceof OtpError) return { ok: false, error: error.message };
+    throw error;
+  }
+  revalidatePath("/admin/users/admins");
+  return { ok: true, message: "Mobile number verified." };
 }

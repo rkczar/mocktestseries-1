@@ -6,7 +6,8 @@ import { BrandLogo } from "@/components/brand/BrandLogo";
 import { LoginForm } from "./login-form";
 import { AdminLoginOptions } from "./otp-login-form";
 import { CacheTools } from "./cache-tools";
-import { isAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
+import { getAdminOtpMethods } from "@/lib/admin-otp-settings";
+import { isWhatsAppOtpAvailable } from "@/lib/auth-provider-config";
 
 export const metadata = { title: "Admin Login — Mock Test Series.in", robots: { index: false, follow: false } };
 
@@ -19,7 +20,8 @@ export default async function AdminLoginPage({
   if (session?.user) redirect(session.user.role === "TEACHER" ? "/teacher" : "/admin");
 
   const { callbackUrl } = await searchParams;
-  const otpEnabled = await isAdminOtpLoginEnabled();
+  const otp = await getAdminOtpMethods();
+  const whatsapp = otp.mobile ? await isWhatsAppOtpAvailable().catch(() => false) : false;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[var(--color-background)] px-4 py-12">
@@ -43,8 +45,8 @@ export default async function AdminLoginPage({
           <p className="mb-6 text-sm text-[var(--color-muted-foreground)]">
             Authorized administrators only.
           </p>
-          {otpEnabled ? (
-            <AdminLoginOptions callbackUrl={callbackUrl ?? "/admin"} passwordForm={<LoginForm callbackUrl={callbackUrl ?? "/admin"} />} />
+          {otp.email || otp.mobile ? (
+            <AdminLoginOptions callbackUrl={callbackUrl ?? "/admin"} passwordForm={<LoginForm callbackUrl={callbackUrl ?? "/admin"} />} emailOtp={otp.email} mobileOtp={otp.mobile} whatsapp={whatsapp} />
           ) : (
             <LoginForm callbackUrl={callbackUrl ?? "/admin"} />
           )}

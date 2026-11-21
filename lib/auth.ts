@@ -72,11 +72,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         };
       },
     }),
-    // Admin Login — optional "Login with OTP" (code to the account's registered email). Same session as above.
+    // Admin Login — optional "Login with OTP" (code to the verified email, or by SMS to the verified mobile). Same session as above.
     Credentials({
       id: "admin-otp",
-      credentials: { identifier: {}, code: {} },
-      authorize: (c, request) => authorizeAdminOtp(c?.identifier, c?.code, clientIpFromHeaders(request.headers)),
+      credentials: { identifier: {}, code: {}, channel: {} },
+      authorize: (c, request) => authorizeAdminOtp(c?.identifier, c?.code, clientIpFromHeaders(request.headers), c?.channel),
     }),
     // Teacher Login (/teacher): username + password, or an OTP to the registered mobile. Same session as above.
     Credentials({

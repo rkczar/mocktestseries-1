@@ -17,14 +17,14 @@ function SubmitButton() {
   );
 }
 
-export function AdminOtpLoginForm({ enabled, canEdit }: { enabled: boolean; canEdit: boolean }) {
+export function AdminOtpLoginForm({ enabled, mobileEnabled, canEdit }: { enabled: boolean; mobileEnabled: boolean; canEdit: boolean }) {
   const [state, formAction] = useActionState<DeviceSettingsFormState, FormData>(saveAdminOtpLoginAction, {});
   return (
     <Card>
       <CardHeader>
         <CardTitle>Admin Login with OTP</CardTitle>
         <CardDescription>
-          Optional sign-in with a 6-digit code sent to the admin&apos;s registered email. Password login is never affected.
+          Optional sign-in with a 6-digit code sent to the admin&apos;s verified email or, by SMS, to the verified mobile. Each method is turned on separately and needs your own verified email / mobile first. Password login is never affected.
           Changes apply within 15 seconds. {canEdit ? null : "Only the Master Admin can change this setting."}
         </CardDescription>
       </CardHeader>
@@ -33,10 +33,17 @@ export function AdminOtpLoginForm({ enabled, canEdit }: { enabled: boolean; canE
           <fieldset disabled={!canEdit}>
             <div className="flex items-center justify-between gap-4 rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-2.5">
               <div>
-                <p className="text-sm font-medium text-[var(--color-foreground)]">Enable Login with OTP</p>
-                <p className="text-xs text-[var(--color-muted-foreground)]">Off = only the password form is shown and no codes are sent.</p>
+                <p className="text-sm font-medium text-[var(--color-foreground)]">Enable Email OTP</p>
+                <p className="text-xs text-[var(--color-muted-foreground)]">Code to a verified admin email. Off = no email codes.</p>
               </div>
-              <Switch name="enabled" defaultChecked={enabled} aria-label="Enable Login with OTP" data-testid="admin-otp-switch" />
+              <Switch name="enabled" defaultChecked={enabled} aria-label="Enable Email OTP" data-testid="admin-otp-switch" />
+            </div>
+            <div className="mt-3 flex items-center justify-between gap-4 rounded-[var(--radius-button)] border border-[var(--color-border)] px-3 py-2.5">
+              <div>
+                <p className="text-sm font-medium text-[var(--color-foreground)]">Enable Mobile OTP</p>
+                <p className="text-xs text-[var(--color-muted-foreground)]">SMS code (MSG91) to a verified admin mobile; WhatsApp re-send when enabled for the site. Off = no SMS codes.</p>
+              </div>
+              <Switch name="mobileEnabled" defaultChecked={mobileEnabled} aria-label="Enable Mobile OTP" data-testid="admin-otp-mobile-switch" />
             </div>
           </fieldset>
           {canEdit ? (

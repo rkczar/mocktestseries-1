@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { SelectNative } from "@/components/ui/select-native";
 import { Switch } from "@/components/ui/switch";
-import { resetAdminPasswordAction, sendAdminEmailVerificationAction, updateAdminUserAction, verifyAdminEmailAction, type AdminEditResult } from "./actions";
+import { resetAdminPasswordAction, sendAdminEmailVerificationAction, sendAdminMobileVerificationAction, updateAdminUserAction, verifyAdminEmailAction, verifyAdminMobileAction, type AdminEditResult } from "./actions";
 
 export interface EditableAdmin {
   id: string;
@@ -18,6 +18,8 @@ export interface EditableAdmin {
   username: string;
   email: string | null;
   emailVerifiedAt: string | null;
+  mobile: string | null;
+  mobileVerifiedAt: string | null;
   roleId: string;
   roleName: string;
   isActive: boolean;
@@ -52,6 +54,9 @@ export function AdminUserEdit({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(admin.name);
   const [email, setEmail] = useState(admin.email ?? "");
+  const [mobile, setMobile] = useState(admin.mobile ?? "");
+  const [mobileCode, setMobileCode] = useState("");
+  const [mobileResult, setMobileResult] = useState<AdminEditResult | null>(null);
   const [roleId, setRoleId] = useState(admin.roleId);
   const [isActive, setIsActive] = useState(admin.isActive);
   const [actorPassword, setActorPassword] = useState("");
@@ -65,11 +70,14 @@ export function AdminUserEdit({
   const [pending, startTransition] = useTransition();
 
   const roleName = roles.find((r) => r.id === roleId)?.name ?? admin.roleName;
-  const sensitive = roleId !== admin.roleId || (email || null) !== (admin.email || null) || isActive !== admin.isActive;
+  const mobileDigits = (v: string | null) => (v ?? "").replace(/\D/g, "").replace(/^91(?=\d{10}$)/, "");
+  const mobileUnchanged = mobileDigits(mobile) === mobileDigits(admin.mobile);
+  const sensitive = roleId !== admin.roleId || (email || null) !== (admin.email || null) || !mobileUnchanged || isActive !== admin.isActive;
 
   const reset = () => {
     setName(admin.name);
     setEmail(admin.email ?? "");
+    setMobile(admin.mobile ?? "");
     setRoleId(admin.roleId);
     setIsActive(admin.isActive);
     setActorPassword("");
@@ -120,7 +128,7 @@ export function AdminUserEdit({
           onSubmit={(e) => {
             e.preventDefault();
             setSaveResult(null);
-            run(() => updateAdminUserAction({ id: admin.id, name, email, roleId, isActive, actorPassword: sensitive ? actorPassword : undefined }), setSaveResult, () => setActorPassword(""));
+            run(() => updateAdminUserAction({ id: admin.id, name, email, mobile: mobileUnchanged ? undefined : mobile, roleId, isActive, actorPassword: sensitive ? actorPassword : undefined }), setSaveResult, () => setActorPassword(""));
           }}
         >
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -160,6 +168,37 @@ export function AdminUserEdit({
               <p className="text-xs text-[var(--color-muted-foreground)]">Login with OTP sends codes only to a verified email. Changing the email needs verification again.</p>
             </div>
             <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`ae-mobile-${admin.id}`}>Mobile number (with country code)</Label>
+              <Input id={`ae-mobile-${admin.id}`} type="tel" inputMode="tel" placeholder="+91 98765 43210" value={mobile} onChange={(e) => setMobile(e.target.value)} maxLength={20} data-testid={`ae-mobile-${admin.username}`} />
+              <div className="flex flex-wrap items-center gap-2" data-testid={`ae-mobile-status-${admin.username}`}>
+                {!admin.mobile ? (
+                  <Badge variant="error">Mobile Missing</Badge>
+                ) : admin.mobileVerifiedAt ? (
+                  <Badge variant="success">Verified</Badge>
+                ) : (
+                  <Badge variant="warning">Verification Pending</Badge>
+                )}
+                {admin.mobile && !admin.mobileVerifiedAt && mobileUnchanged ? (
+                  <Button type="button" size="sm" variant="outline" disabled={pending} data-testid={`ae-mobile-send-${admin.username}`}
+                    onClick={() => run(() => sendAdminMobileVerificationAction(admin.id), setMobileResult)}>
+                    Send verification code
+                  </Button>
+                ) : null}
+              </div>
+              {admin.mobile && !admin.mobileVerifiedAt && mobileUnchanged ? (
+                <div className="flex items-center gap-2">
+                  <Input aria-label="Mobile verification code" inputMode="numeric" maxLength={6} placeholder="6-digit code" value={mobileCode}
+                    onChange={(e) => setMobileCode(e.target.value.replace(/\D/g, ""))} data-testid={`ae-mobile-code-${admin.username}`} />
+                  <Button type="button" size="sm" disabled={pending || mobileCode.length !== 6} data-testid={`ae-mobile-verify-${admin.username}`}
+                    onClick={() => run(() => verifyAdminMobileAction(admin.id, mobileCode), setMobileResult, () => setMobileCode(""))}>
+                    Verify
+                  </Button>
+                </div>
+              ) : null}
+              <Result r={mobileResult} />
+              <p className="text-xs text-[var(--color-muted-foreground)]">Mobile OTP sends SMS codes only to a verified mobile. Changing the number needs verification again.</p>
+            </div>
+            <div className="flex flex-col gap-1.5">
               <Label htmlFor={`ae-role-${admin.id}`}>Role</Label>
               <SelectNative id={`ae-role-${admin.id}`} value={roleId} onChange={(e) => setRoleId(e.target.value)} disabled={isSelf}>
                 {roles.map((r) => (
@@ -193,7 +232,7 @@ export function AdminUserEdit({
 
           {sensitive ? (
             <div className="flex flex-col gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-warning)]/50 p-3">
-              <Label htmlFor={`ae-reauth-${admin.id}`}>Your current password (required for email, role or account changes)</Label>
+              <Label htmlFor={`ae-reauth-${admin.id}`}>Your current password (required for email, mobile, role or account changes)</Label>
               <Input id={`ae-reauth-${admin.id}`} type="password" autoComplete="current-password" value={actorPassword} onChange={(e) => setActorPassword(e.target.value)} required />
               {roleId !== admin.roleId || (!isActive && admin.isActive) ? (
                 <p className="text-xs text-[var(--color-warning)]">This admin will be signed out of all sessions.</p>

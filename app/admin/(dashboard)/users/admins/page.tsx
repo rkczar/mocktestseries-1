@@ -10,6 +10,7 @@ import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions";
 const ACTIVITY_LABEL: Record<string, string> = {
   ADMIN_LOGIN: "Signed in",
   ADMIN_EMAIL_VERIFIED: "Email verified",
+  ADMIN_MOBILE_VERIFIED: "Mobile verified",
   ADMIN_USER_CREATED: "Created an admin user",
   ADMIN_USER_UPDATED: "Admin profile updated",
   ADMIN_ROLE_CHANGED: "Role changed",
@@ -70,6 +71,8 @@ export default async function AdminUsersPage() {
         username: u.username,
         email: u.email,
         emailVerifiedAt: u.emailVerifiedAt?.toISOString() ?? null,
+        mobile: u.mobile,
+        mobileVerifiedAt: u.mobileVerifiedAt?.toISOString() ?? null,
         roleId: u.roleId,
         roleName: u.role.name,
         isActive: u.isActive,

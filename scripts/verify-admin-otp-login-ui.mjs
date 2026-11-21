@@ -5,7 +5,8 @@
 import { createRequire } from "node:module";
 import fs from "node:fs";
 const { chromium } = createRequire(import.meta.url)("playwright");
-const { BASE, RESEND_MOCK_FILE: FILE, SHOTS } = process.env;
+const { BASE, RESEND_MOCK_FILE: FILE, SHOTS, MSG91_MOCK_FILE: SMS } = process.env;
+const smsCode = (digits) => JSON.parse(fs.readFileSync(SMS, "utf8")).latest?.[`91${digits}`]?.code;
 fs.mkdirSync(SHOTS, { recursive: true });
 let pass = 0, fail = 0;
 const check = (n, ok, d) => { if (ok) pass++; else fail++; console.log(`  ${ok ? "PASS" : "FAIL"}  ${n}${!ok && d !== undefined ? ` — ${JSON.stringify(d).slice(0, 200)}` : ""}`); };
@@ -17,9 +18,9 @@ const pwLogin = async (p, user) => {
   await p.fill("input[name=username]", user); await p.fill("input[name=password]", "Ui-Pass-12345!");
   await Promise.all([p.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), p.locator("form button[type=submit]").click()]);
 };
-const setSwitch = async (p, on) => {
+const setSwitch = async (p, on, id = "admin-otp-switch") => {
   await p.goto(`${BASE}/admin/settings/security`);
-  const sw = p.getByTestId("admin-otp-switch");
+  const sw = p.getByTestId(id);
   if (((await sw.getAttribute("aria-checked")) === "true") !== on) await sw.click();
   const form = p.locator("form", { has: sw });
   await form.locator("button[type=submit]").click();
@@ -133,6 +134,67 @@ try {
   await Promise.all([p.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), p.getByTestId("admin-otp-verify").click()]);
   check("FULL_ADMIN signed in by OTP shows FULL ADMIN role", (await p.content()).includes("FULL ADMIN"));
   await p.screenshot({ path: `${SHOTS}/04-phone-full-admin.png` });
+
+  console.log("\n=== Mobile OTP (MSG91 mock — no real SMS)");
+  {
+    const sw = m.getByTestId("admin-otp-mobile-switch");
+    await m.goto(`${BASE}/admin/settings/security`);
+    const form = m.locator("form", { has: sw });
+    check("Mobile OTP switch starts OFF while Email OTP is ON", (await sw.getAttribute("aria-checked")) === "false" && (await m.getByTestId("admin-otp-switch").getAttribute("aria-checked")) === "true");
+    await sw.click(); await form.locator("button[type=submit]").click();
+    await form.getByText("Add and verify your own mobile number first").waitFor();
+    check("Mobile OTP enable refused while the Master Admin's mobile is unverified", true);
+  }
+  const addMobile = async (num) => {
+    await m.goto(`${BASE}/admin/users/admins`);
+    await m.getByTestId("edit-admin-otp-master").click();
+    await m.getByTestId("ae-mobile-otp-master").fill(num);
+    await m.locator('input[id^="ae-reauth-"]').fill("Ui-Pass-12345!");
+    await m.locator('[role=dialog] button[type=submit]').first().click();
+    await m.locator("[role=dialog]").getByText("Saved.", { exact: true }).waitFor({ timeout: 15000 });
+    await m.reload(); await m.getByTestId("edit-admin-otp-master").click();
+  };
+  await addMobile("+91 98765 00001");
+  check("mobile saved → Verification Pending", (await m.getByTestId("ae-mobile-status-otp-master").textContent()).includes("Verification Pending"));
+  await m.getByTestId("ae-mobile-send-otp-master").click();
+  await m.getByText("Verification code sent by SMS").waitFor();
+  const mc = smsCode("9876500001");
+  check("verification SMS captured by the MSG91 mock", /^\d{6}$/.test(mc ?? ""));
+  await m.getByTestId("ae-mobile-code-otp-master").fill(mc);
+  await m.getByTestId("ae-mobile-verify-otp-master").click();
+  await m.getByText("Mobile number verified.").waitFor();
+  await m.reload(); await m.getByTestId("edit-admin-otp-master").click();
+  check("mobile status Verified after reload", (await m.getByTestId("ae-mobile-status-otp-master").textContent()).includes("Verified"));
+  await m.screenshot({ path: `${SHOTS}/05-mobile-verified.png` });
+  await setSwitch(m, true, "admin-otp-mobile-switch");
+  p = await fresh();
+  await p.goto(`${BASE}/admin/login`);
+  check("login shows Password, Email OTP and Mobile OTP", (await p.getByTestId("admin-login-tab-password").count()) === 1 && (await p.getByTestId("admin-login-tab-otp").textContent()) === "Email OTP" && (await p.getByTestId("admin-login-tab-mobile").count()) === 1);
+  await p.getByTestId("admin-login-tab-mobile").click();
+  await p.fill("#otp-identifier", "98765 00001");
+  await new Promise((r) => setTimeout(r, 61000)); // the verification SMS started the 60 s cooldown
+  await p.getByTestId("admin-otp-send").click();
+  await p.getByTestId("admin-otp-sent").waitFor();
+  check("Mobile OTP: generic SMS message + resend countdown", /verified mobile/.test(await p.getByTestId("admin-otp-sent").textContent()) && /Resend code in/.test(await p.getByTestId("admin-otp-send").textContent()));
+  const lc = smsCode("9876500001");
+  await p.fill("#otp-code", lc === "000000" ? "111111" : "000000");
+  await p.getByTestId("admin-otp-verify").click();
+  await p.locator("form [role=alert]").waitFor();
+  check("Mobile OTP: wrong code → error, still on login", /Invalid or expired code/.test(await p.locator("form [role=alert]").textContent()));
+  await p.fill("#otp-code", lc);
+  await Promise.all([p.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), p.getByTestId("admin-otp-verify").click()]);
+  check("Mobile OTP: correct SMS code → admin session (MASTER ADMIN)", (await p.content()).includes("MASTER ADMIN"));
+  p = await fresh(390);
+  await p.goto(`${BASE}/admin/login`);
+  await p.getByTestId("admin-login-tab-mobile").click();
+  check("phone: three methods, no sideways scroll", await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  await p.screenshot({ path: `${SHOTS}/06-phone-mobile-otp.png` });
+  await addMobile("+91 98765 00009");
+  check("number change resets status to Verification Pending", (await m.getByTestId("ae-mobile-status-otp-master").textContent()).includes("Verification Pending"));
+  await setSwitch(m, false, "admin-otp-mobile-switch");
+  p = await fresh();
+  await p.goto(`${BASE}/admin/login`);
+  check("Mobile OFF, Email ON: Mobile tab gone, Email OTP tab stays", (await p.getByTestId("admin-login-tab-mobile").count()) === 0 && (await p.getByTestId("admin-login-tab-otp").count()) === 1);
 
   console.log("\n=== switch back OFF");
   await setSwitch(m, false);

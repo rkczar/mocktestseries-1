@@ -20,7 +20,7 @@ const MSG91_WIDGET_BASE = "https://api.msg91.com/api/v5/widget";
  * VOICE 4, EMAIL 3, WHATSAPP 12 — sent as a number).
  */
 const MSG91_RETRY_CHANNEL_WHATSAPP = 12;
-const SEND_FAILED = "We couldn't send a verification code right now. Please try Password login instead, or contact support.";
+export const SEND_FAILED = "We couldn't send a verification code right now. Please try Password login instead, or contact support.";
 export const WHATSAPP_UNAVAILABLE = "WhatsApp codes are not available right now. Please use the SMS code.";
 export const WHATSAPP_FAILED = "We couldn't send the code on WhatsApp. Please use the SMS code or try again later.";
 /** No pending SMS code to re-deliver (never sent, used, or expired). */

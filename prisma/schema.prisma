@@ -54,6 +54,8 @@ model AdminUser {
   username               String            @unique
   email                  String?           @unique
   emailVerifiedAt        DateTime? // set when the admin proves the email (code); cleared when the email changes
+  mobile                 String?           @unique // E.164 (+91…), Admin "Mobile OTP"; set by a Master Admin
+  mobileVerifiedAt       DateTime? // set when a code to this mobile is confirmed; cleared when the mobile changes
   passwordHash           String
   roleId                 String
   role                   Role              @relation(fields: [roleId], references: [id])
@@ -535,6 +537,8 @@ enum OtpPurpose {
   VERIFY_MOBILE
   /// Teacher Portal sign-in / registered-mobile verification (lib/teacher/auth.ts). Separate from LOGIN so a teacher code can never sign in a student with the same number.
   TEACHER_LOGIN
+  /// Admin Login "Mobile OTP" sign-in / admin mobile verification (lib/admin-otp-login.ts). Separate so no other code can sign an admin in.
+  ADMIN_LOGIN
 }
 
 /// How an OTP reached the phone. WHATSAPP = an MSG91 Widget retryOtp of a pending SMS code (lib/otp.ts).

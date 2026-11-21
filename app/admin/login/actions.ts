@@ -5,7 +5,7 @@ import { signIn } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { headers } from "next/headers";
 import { clientIpFromHeaders } from "@/lib/client-ip";
-import { requestAdminLoginOtp } from "@/lib/admin-otp-login";
+import { requestAdminLoginOtp, requestAdminMobileOtp, requestAdminMobileOtpWhatsApp } from "@/lib/admin-otp-login";
 
 export interface LoginFormState {
   error?: string;
@@ -53,6 +53,16 @@ export async function requestAdminOtpAction(identifier: string): Promise<{ ok: b
   return requestAdminLoginOtp(String(identifier ?? "").slice(0, 200), clientIpFromHeaders(await headers()));
 }
 
+/** Mobile OTP, step 1: SMS to a verified admin mobile (the answer never says which number is an admin's). */
+export async function requestAdminMobileOtpAction(mobile: string): Promise<{ ok: boolean; message: string }> {
+  return requestAdminMobileOtp(String(mobile ?? "").slice(0, 40), clientIpFromHeaders(await headers()));
+}
+
+/** Mobile OTP: re-deliver the pending SMS code on WhatsApp (MSG91), when enabled for the site. */
+export async function requestAdminMobileOtpWhatsAppAction(mobile: string): Promise<{ ok: boolean; message: string }> {
+  return requestAdminMobileOtpWhatsApp(String(mobile ?? "").slice(0, 40), clientIpFromHeaders(await headers()));
+}
+
 /** Login with OTP, step 2: the normal admin session through the "admin-otp" provider. */
 export async function otpLoginAction(_prevState: LoginFormState, formData: FormData): Promise<LoginFormState> {
   const callbackUrl = String(formData.get("callbackUrl") ?? "/admin");
@@ -60,6 +70,7 @@ export async function otpLoginAction(_prevState: LoginFormState, formData: FormD
     await signIn("admin-otp", {
       identifier: String(formData.get("identifier") ?? ""),
       code: String(formData.get("code") ?? ""),
+      channel: formData.get("channel") === "mobile" ? "mobile" : "email",
       redirectTo: callbackUrl.startsWith("/admin") ? callbackUrl : "/admin",
     });
     return {};
