@@ -3192,6 +3192,7 @@ enum EmailOtpPurpose {
   VERIFY_EMAIL // a student proving their own account email
   RECOVERY_PROOF // a requester proving the email of the account that holds their number
   ADMIN_TEST // Admin "Send test security code"
+  ADMIN_LOGIN // optional "Login with OTP" on the Admin Login page
 }
 
 model EmailOtpRequest {

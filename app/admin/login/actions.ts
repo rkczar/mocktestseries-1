@@ -3,6 +3,9 @@
 import { AuthError } from "next-auth";
 import { signIn } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { headers } from "next/headers";
+import { clientIpFromHeaders } from "@/lib/client-ip";
+import { requestAdminLoginOtp } from "@/lib/admin-otp-login";
 
 export interface LoginFormState {
   error?: string;
@@ -41,6 +44,34 @@ export async function loginAction(
       return { error: "Something went wrong signing you in. Please try again." };
     }
     // Next.js throws a special redirect "error" on success — rethrow it.
+    throw error;
+  }
+}
+
+/** Login with OTP, step 1: sends a code when the identifier is an eligible admin (the answer never says which). */
+export async function requestAdminOtpAction(identifier: string): Promise<{ message: string }> {
+  return { message: await requestAdminLoginOtp(String(identifier ?? "").slice(0, 200), clientIpFromHeaders(await headers())) };
+}
+
+/** Login with OTP, step 2: the normal admin session through the "admin-otp" provider. */
+export async function otpLoginAction(_prevState: LoginFormState, formData: FormData): Promise<LoginFormState> {
+  const callbackUrl = String(formData.get("callbackUrl") ?? "/admin");
+  try {
+    await signIn("admin-otp", {
+      identifier: String(formData.get("identifier") ?? ""),
+      code: String(formData.get("code") ?? ""),
+      redirectTo: callbackUrl.startsWith("/admin") ? callbackUrl : "/admin",
+    });
+    return {};
+  } catch (error) {
+    if (error instanceof AuthError) {
+      if (error.type === "CredentialsSignin") {
+        const cause = (error.cause as { err?: Error } | undefined)?.err;
+        if (cause?.message === "TooManyAttempts") return { error: "Too many login attempts. Please wait a few minutes and try again." };
+        return { error: "Invalid or expired code. Request a new code and try again." };
+      }
+      return { error: "Something went wrong signing you in. Please try again." };
+    }
     throw error;
   }
 }

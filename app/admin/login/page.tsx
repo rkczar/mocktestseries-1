@@ -4,6 +4,7 @@ import { getStaffSession } from "@/lib/rbac";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { LoginForm } from "./login-form";
+import { AdminLoginOptions } from "./otp-login-form";
 import { CacheTools } from "./cache-tools";
 
 export const metadata = { title: "Admin Login — Mock Test Series.in", robots: { index: false, follow: false } };
@@ -40,7 +41,7 @@ export default async function AdminLoginPage({
           <p className="mb-6 text-sm text-[var(--color-muted-foreground)]">
             Authorized administrators only.
           </p>
-          <LoginForm callbackUrl={callbackUrl ?? "/admin"} />
+          <AdminLoginOptions callbackUrl={callbackUrl ?? "/admin"} passwordForm={<LoginForm callbackUrl={callbackUrl ?? "/admin"} />} />
         </div>
 
         <p className="mt-6 text-center text-xs text-[var(--color-muted-foreground)]">

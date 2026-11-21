@@ -6,6 +6,7 @@ import { authConfig } from "@/lib/auth.config";
 import { clientIpFromHeaders } from "@/lib/client-ip";
 import { isAdminLoginBlocked } from "@/lib/auth-rate-limit";
 import { authorizeTeacherOtp, authorizeTeacherPassword } from "@/lib/teacher/auth";
+import { authorizeAdminOtp } from "@/lib/admin-otp-login";
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS_IN_WINDOW = 8;
@@ -70,6 +71,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           role: adminUser.role.name,
         };
       },
+    }),
+    // Admin Login — optional "Login with OTP" (code to the account's registered email). Same session as above.
+    Credentials({
+      id: "admin-otp",
+      credentials: { identifier: {}, code: {} },
+      authorize: (c, request) => authorizeAdminOtp(c?.identifier, c?.code, clientIpFromHeaders(request.headers)),
     }),
     // Teacher Login (/teacher): username + password, or an OTP to the registered mobile. Same session as above.
     Credentials({

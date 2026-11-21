@@ -179,6 +179,10 @@ const PURPOSE_TEXT: Record<EmailOtpPurpose, { subject: string; intro: string }> 
     subject: "MockTestSeries test security code",
     intro: "This is a test of MockTestSeries security code emails.",
   },
+  ADMIN_LOGIN: {
+    subject: "Your MockTestSeries admin login code",
+    intro: "Use this code to sign in to the MockTestSeries Admin Panel. If you did not try to sign in, ignore this email and tell the site owner.",
+  },
 };
 
 function renderOtpEmail(purpose: EmailOtpPurpose, code: string) {
