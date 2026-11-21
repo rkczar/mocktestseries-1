@@ -6,11 +6,11 @@
 import fs from "node:fs";
 import argon2 from "argon2";
 import { prisma } from "@/lib/prisma";
-import { ADMIN_OTP_SENT, authorizeAdminOtp, requestAdminLoginOtp } from "@/lib/admin-otp-login";
-import { setEmailOtpEnabled } from "@/lib/email-otp";
+import { ADMIN_OTP_SENT, ADMIN_OTP_UNAVAILABLE, authorizeAdminOtp, requestAdminLoginOtp, sendAdminEmailVerification, verifyAdminEmail } from "@/lib/admin-otp-login";
+import { EmailOtpError, setEmailOtpEnabled } from "@/lib/email-otp";
 import { ADMIN_OTP_SETTING_KEY, clearAdminOtpLoginCache, isAdminOtpLoginEnabled, saveAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
 
-if (!/\/mts_aotp(_sw)?(\?|$)/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing: not the scratch mts_aotp database.");
+if (!/\/mts_aotp\w*(\?|$)/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing: not the scratch mts_aotp database.");
 const FILE = process.env.RESEND_MOCK_FILE!;
 let pass = 0;
 let fail = 0;
@@ -46,6 +46,9 @@ async function main() {
   await mk("otp-off", "off@aotp.example.test", "MASTER_ADMIN", false);
   await mk("otp-teacher", "teacher@aotp.example.test", "TEACHER");
   await mk("otp-noemail", null, "MASTER_ADMIN");
+  await mk("otp-unverified", "unverified@aotp.example.test", "MASTER_ADMIN");
+  await prisma.adminUser.updateMany({ where: { username: { in: ["otp-master", "otp-full", "otp-off", "otp-teacher"] } }, data: { emailVerifiedAt: new Date() } });
+  await prisma.adminUser.update({ where: { username: "otp-unverified" }, data: { emailVerifiedAt: null } });
 
   console.log("\n=== emergency switch (security.admin_otp_login)");
   await prisma.setting.deleteMany({ where: { key: ADMIN_OTP_SETTING_KEY } });
@@ -71,7 +74,7 @@ async function main() {
   const offCode = lastCode("master@aotp.example.test");
   const sentWhileOn = mails().length;
   await saveAdminOtpLoginEnabled(false);
-  check("OFF: request → generic answer", (await requestAdminLoginOtp("otp-master", IP)) === ADMIN_OTP_SENT);
+  check("OFF: request → generic answer", (await requestAdminLoginOtp("otp-master", IP)).message === ADMIN_OTP_SENT);
   check("OFF: no email sent", mails().length === sentWhileOn && sentWhileOn === 1);
   const offAttempts = await prisma.loginAttempt.count();
   check("OFF: valid code rejected", (await authorizeAdminOtp("otp-master", offCode, IP)) === null);
@@ -86,9 +89,9 @@ async function main() {
   // The remaining suite exercises the feature with the switch ON.
 
   console.log("\n=== request: same answer for everyone, code only to eligible accounts");
-  for (const id of ["nobody", "nobody@example.test", "otp-off", "otp-teacher", "otp-noemail"]) check(`no code + generic answer for ${id}`, (await requestAdminLoginOtp(id, IP)) === ADMIN_OTP_SENT);
+  for (const id of ["nobody", "nobody@example.test", "otp-off", "otp-teacher", "otp-noemail", "otp-unverified", "unverified@aotp.example.test"]) check(`no code + generic answer for ${id}`, (await requestAdminLoginOtp(id, IP)).message === ADMIN_OTP_SENT);
   check("no email sent for ineligible identifiers", mails().length === 0, mails().map((m) => m.to));
-  check("eligible username → generic answer", (await requestAdminLoginOtp("OTP-Master", IP)) === ADMIN_OTP_SENT);
+  check("eligible username → generic answer", (await requestAdminLoginOtp("OTP-Master", IP)).message === ADMIN_OTP_SENT);
   check("code emailed to the registered address only", mails().length === 1 && mails()[0].to === "master@aotp.example.test" && /admin login code/i.test(mails()[0].subject));
   const code1 = lastCode("master@aotp.example.test")!;
   await requestAdminLoginOtp("otp-master", IP);
@@ -139,6 +142,29 @@ async function main() {
   const codes = mails().map((m) => /\b(\d{6})\b/.exec(m.text)?.[1]).filter(Boolean) as string[];
   check("no OTP value ever written to the logs", !logged.some((l) => codes.some((c) => l.includes(c))));
   check("codes stored only as hashes", (await prisma.emailOtpRequest.findMany({ select: { otpHash: true } })).every((r) => r.otpHash.length === 64 && !codes.includes(r.otpHash)));
+  console.log("\n=== email verification (Edit Admin) → OTP eligibility");
+  await resetCooldown("unverified@aotp.example.test");
+  const unv = await prisma.adminUser.findUniqueOrThrow({ where: { username: "otp-unverified" } });
+  check("unverified email: OTP login rejected", (await authorizeAdminOtp("otp-unverified", "123456", "198.51.100.20")) === null);
+  await sendAdminEmailVerification(unv.id, "198.51.100.20");
+  const vmail = [...mails()].reverse().find((m) => m.to === "unverified@aotp.example.test");
+  check("verification code emailed (captured) with the verify subject", !!vmail && /verification code/i.test(vmail.subject));
+  let wrongRejected = false;
+  try { await verifyAdminEmail(unv.id, lastCode("unverified@aotp.example.test") === "000000" ? "111111" : "000000", master.id); } catch (e) { wrongRejected = e instanceof EmailOtpError; }
+  check("wrong verification code rejected, still unverified", wrongRejected && !(await prisma.adminUser.findUniqueOrThrow({ where: { id: unv.id } })).emailVerifiedAt);
+  await verifyAdminEmail(unv.id, lastCode("unverified@aotp.example.test")!, master.id);
+  check("correct code → Verified + audit ADMIN_EMAIL_VERIFIED", !!(await prisma.adminUser.findUniqueOrThrow({ where: { id: unv.id } })).emailVerifiedAt && (await prisma.auditLog.count({ where: { action: "ADMIN_EMAIL_VERIFIED", entityId: unv.id } })) === 1);
+  const r = await requestAdminLoginOtp("otp-unverified", "198.51.100.21");
+  const lc = lastCode("unverified@aotp.example.test");
+  check("now verified: login code emailed", r.ok && /admin login code/i.test([...mails()].reverse().find((m) => m.to === "unverified@aotp.example.test")?.subject ?? ""));
+  check("verified admin signs in with the code", (await authorizeAdminOtp("otp-unverified", lc, "198.51.100.21"))?.id === unv.id);
+
+  console.log("\n=== honest errors");
+  const realAvail = process.env.RESEND_API_KEY;
+  delete process.env.RESEND_API_KEY;
+  const un = await requestAdminLoginOtp("nobody", "198.51.100.22");
+  process.env.RESEND_API_KEY = realAvail;
+  check("provider not configured → error for everyone, never 'sent'", !un.ok && un.message === ADMIN_OTP_UNAVAILABLE, un);
   console.log(`\n${pass} passed, ${fail} failed`);
 }
 main().then(() => prisma.$disconnect()).then(() => process.exit(fail ? 1 : 0)).catch(async (e) => {

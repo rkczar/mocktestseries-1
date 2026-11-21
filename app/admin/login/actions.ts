@@ -49,8 +49,8 @@ export async function loginAction(
 }
 
 /** Login with OTP, step 1: sends a code when the identifier is an eligible admin (the answer never says which). */
-export async function requestAdminOtpAction(identifier: string): Promise<{ message: string }> {
-  return { message: await requestAdminLoginOtp(String(identifier ?? "").slice(0, 200), clientIpFromHeaders(await headers())) };
+export async function requestAdminOtpAction(identifier: string): Promise<{ ok: boolean; message: string }> {
+  return requestAdminLoginOtp(String(identifier ?? "").slice(0, 200), clientIpFromHeaders(await headers()));
 }
 
 /** Login with OTP, step 2: the normal admin session through the "admin-otp" provider. */

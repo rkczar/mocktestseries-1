@@ -6,6 +6,11 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
+import { headers } from "next/headers";
+import { clientIpFromHeaders } from "@/lib/client-ip";
+import { EmailOtpError } from "@/lib/email-otp";
+import { isAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
+import { sendAdminEmailVerification, verifyAdminEmail } from "@/lib/admin-otp-login";
 
 const schema = z.object({
   name: z.string().min(2).max(120),
@@ -175,6 +180,9 @@ export async function updateAdminUserAction(input: z.input<typeof editSchema>): 
     const err = await reauthenticate(actorId, d.actorPassword ?? "");
     if (err) return { ok: false, error: err };
   }
+  if (emailChanged && !email && (await isAdminOtpLoginEnabled())) {
+    return { ok: false, error: "Login with OTP is ON: enter a new email instead of leaving it blank (or turn OTP off in Settings → Security first)." };
+  }
   if (emailChanged && email) {
     const clash = await prisma.adminUser.findFirst({ where: { email, NOT: { id: target.id } }, select: { id: true } });
     if (clash) return { ok: false, error: "Another admin already uses that email." };
@@ -193,6 +201,8 @@ export async function updateAdminUserAction(input: z.input<typeof editSchema>): 
           data: {
             name: d.name,
             email,
+            // A new (or removed) email must be verified again before it can receive login codes.
+            ...(emailChanged ? { emailVerifiedAt: null } : {}),
             roleId: role.id,
             isActive: d.isActive,
             // Role change or deactivation: every existing session of this admin ends now.
@@ -262,4 +272,30 @@ export async function resetAdminPasswordAction(input: z.input<typeof resetSchema
         ? "Your password was changed and all your sessions were signed out. Sign in again with the new password."
         : "Password reset. The admin was signed out everywhere — share the new password through a secure channel and ask them to keep it private.",
   };
+}
+
+/** Edit Admin → "Send verification code" to the admin's saved email (USERS_MANAGE = Master Admin). */
+export async function sendAdminEmailVerificationAction(id: string): Promise<AdminEditResult> {
+  await requirePermission(PERMISSIONS.USERS_MANAGE);
+  try {
+    await sendAdminEmailVerification(String(id), clientIpFromHeaders(await headers()));
+    return { ok: true, message: "Verification code sent to the saved email. It expires in 5 minutes." };
+  } catch (error) {
+    if (error instanceof EmailOtpError) return { ok: false, error: error.message };
+    throw error;
+  }
+}
+
+/** Edit Admin → enter the 6-digit code from that email: marks the email Verified (audited). */
+export async function verifyAdminEmailAction(id: string, code: string): Promise<AdminEditResult> {
+  const session = await requirePermission(PERMISSIONS.USERS_MANAGE);
+  if (!session.user.id) return { ok: false, error: "Not signed in." };
+  try {
+    await verifyAdminEmail(String(id), String(code ?? ""), session.user.id);
+  } catch (error) {
+    if (error instanceof EmailOtpError) return { ok: false, error: error.message };
+    throw error;
+  }
+  revalidatePath("/admin/users/admins");
+  return { ok: true, message: "Email verified." };
 }

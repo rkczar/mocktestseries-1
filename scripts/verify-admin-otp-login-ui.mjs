@@ -39,6 +39,31 @@ try {
   await pwLogin(f, "otp-full");
   await f.goto(`${BASE}/admin/settings/security`);
   check("FULL_ADMIN cannot see or change the switch", (await f.getByTestId("admin-otp-switch").count()) === 0);
+  // Master Admin's own email is still unverified: turning OTP on is refused.
+  {
+    const sw = m.getByTestId("admin-otp-switch"); const form = m.locator("form", { has: sw });
+    await sw.click(); await form.locator("button[type=submit]").click();
+    await form.getByText("Add and verify your own email first").waitFor();
+    check("enable refused while the Master Admin's email is unverified", true);
+  }
+  console.log("\n=== Edit Admin: email status + verification");
+  await m.goto(`${BASE}/admin/users/admins`);
+  await m.getByTestId("edit-admin-otp-master").click();
+  check("status shows Verification Pending", (await m.getByTestId("ae-email-status-otp-master").textContent()).includes("Verification Pending"));
+  await m.getByTestId("ae-email-send-otp-master").click();
+  await m.getByText("Verification code sent").waitFor();
+  const vc = code("master@aotp.example.test");
+  check("verification code captured by the test mail system", /^\d{6}$/.test(vc ?? ""));
+  await m.getByTestId("ae-email-code-otp-master").fill(vc === "000000" ? "111111" : "000000");
+  await m.getByTestId("ae-email-verify-otp-master").click();
+  await m.getByText(/Incorrect|invalid|expired|wrong/i).first().waitFor();
+  check("wrong verification code rejected", (await m.getByTestId("ae-email-status-otp-master").textContent()).includes("Verification Pending"));
+  await m.getByTestId("ae-email-code-otp-master").fill(vc);
+  await m.getByTestId("ae-email-verify-otp-master").click();
+  await m.getByText("Email verified.").waitFor();
+  await m.reload(); await m.getByTestId("edit-admin-otp-master").click();
+  check("status shows Verified after reload", (await m.getByTestId("ae-email-status-otp-master").textContent()).includes("Verified"));
+  await m.screenshot({ path: `${SHOTS}/00a-email-verified.png` });
   await setSwitch(m, true);
   await m.screenshot({ path: `${SHOTS}/00b-switch-on-settings.png` });
   {

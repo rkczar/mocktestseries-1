@@ -23,12 +23,19 @@ export function OtpLoginForm({ callbackUrl }: { callbackUrl: string }) {
   const [state, formAction] = useActionState<LoginFormState, FormData>(otpLoginAction, {});
   const [identifier, setIdentifier] = useState("");
   const [sent, setSent] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
   const [sending, start] = useTransition();
 
   const send = () =>
     start(async () => {
       const r = await requestAdminOtpAction(identifier);
+      if (!r.ok) {
+        setSent(null);
+        setSendError(r.message);
+        return;
+      }
+      setSendError(null);
       setSent(r.message);
       setCooldown(60);
       const t = setInterval(() => setCooldown((c) => (c <= 1 ? (clearInterval(t), 0) : c - 1)), 1000);
@@ -45,6 +52,11 @@ export function OtpLoginForm({ callbackUrl }: { callbackUrl: string }) {
         {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
         {cooldown > 0 ? `Resend code in ${cooldown}s` : sent ? "Resend code" : "Send code"}
       </Button>
+      {sendError ? (
+        <p role="alert" className="rounded-[var(--radius-button)] border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-3 py-2 text-sm text-[var(--color-error)]" data-testid="admin-otp-send-error">
+          {sendError}
+        </p>
+      ) : null}
       {sent ? (
         <p role="status" className="text-sm text-[var(--color-muted-foreground)]" data-testid="admin-otp-sent">
           {sent}

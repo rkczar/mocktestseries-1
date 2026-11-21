@@ -53,6 +53,7 @@ model AdminUser {
   name                   String
   username               String            @unique
   email                  String?           @unique
+  emailVerifiedAt        DateTime? // set when the admin proves the email (code); cleared when the email changes
   passwordHash           String
   roleId                 String
   role                   Role              @relation(fields: [roleId], references: [id])

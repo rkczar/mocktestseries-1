@@ -34,7 +34,7 @@ const LIMITS = {
 } as const;
 
 export const EMAIL_OTP_UNAVAILABLE = "Email verification codes are not available right now. Please try again later or contact support.";
-const SEND_FAILED = "We couldn't send the email right now. Please try again in a few minutes.";
+export const SEND_FAILED = "We couldn't send the email right now. Please try again in a few minutes.";
 const TOO_MANY = "Too many attempts. Please try again later.";
 
 export class EmailOtpError extends Error {}

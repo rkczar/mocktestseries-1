@@ -57,6 +57,12 @@ export async function saveAdminOtpLoginAction(_prev: DeviceSettingsFormState, fo
   if (session.user.role !== "MASTER_ADMIN") return { error: "Only the Master Admin can change this setting." };
   const before = await isAdminOtpLoginEnabled();
   const after = formData.get("enabled") === "on";
+  if (after && !before) {
+    const me = await prisma.adminUser.findUnique({ where: { id: session.user.id }, select: { email: true, emailVerifiedAt: true } });
+    if (!me?.email || !me.emailVerifiedAt) {
+      return { error: "Add and verify your own email first (Admin Users & Access → Edit Admin), then turn Login with OTP on." };
+    }
+  }
   await saveAdminOtpLoginEnabled(after);
   if (before !== after) {
     await prisma.auditLog.create({

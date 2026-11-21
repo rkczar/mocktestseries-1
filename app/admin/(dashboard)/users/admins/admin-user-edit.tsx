@@ -10,13 +10,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { SelectNative } from "@/components/ui/select-native";
 import { Switch } from "@/components/ui/switch";
-import { resetAdminPasswordAction, updateAdminUserAction, type AdminEditResult } from "./actions";
+import { resetAdminPasswordAction, sendAdminEmailVerificationAction, updateAdminUserAction, verifyAdminEmailAction, type AdminEditResult } from "./actions";
 
 export interface EditableAdmin {
   id: string;
   name: string;
   username: string;
   email: string | null;
+  emailVerifiedAt: string | null;
   roleId: string;
   roleName: string;
   isActive: boolean;
@@ -58,6 +59,8 @@ export function AdminUserEdit({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [resetPassword, setResetPassword] = useState("");
   const [saveResult, setSaveResult] = useState<AdminEditResult | null>(null);
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyResult, setVerifyResult] = useState<AdminEditResult | null>(null);
   const [resetResult, setResetResult] = useState<AdminEditResult | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -128,6 +131,33 @@ export function AdminUserEdit({
             <div className="flex flex-col gap-1.5">
               <Label htmlFor={`ae-email-${admin.id}`}>Email</Label>
               <Input id={`ae-email-${admin.id}`} type="email" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={200} />
+              <div className="flex flex-wrap items-center gap-2" data-testid={`ae-email-status-${admin.username}`}>
+                {!admin.email ? (
+                  <Badge variant="error">Email Missing</Badge>
+                ) : admin.emailVerifiedAt ? (
+                  <Badge variant="success">Verified</Badge>
+                ) : (
+                  <Badge variant="warning">Verification Pending</Badge>
+                )}
+                {admin.email && !admin.emailVerifiedAt && email.trim().toLowerCase() === admin.email ? (
+                  <Button type="button" size="sm" variant="outline" disabled={pending} data-testid={`ae-email-send-${admin.username}`}
+                    onClick={() => run(() => sendAdminEmailVerificationAction(admin.id), setVerifyResult)}>
+                    Send verification code
+                  </Button>
+                ) : null}
+              </div>
+              {admin.email && !admin.emailVerifiedAt && email.trim().toLowerCase() === admin.email ? (
+                <div className="flex items-center gap-2">
+                  <Input aria-label="Verification code" inputMode="numeric" maxLength={6} placeholder="6-digit code" value={verifyCode}
+                    onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, ""))} data-testid={`ae-email-code-${admin.username}`} />
+                  <Button type="button" size="sm" disabled={pending || verifyCode.length !== 6} data-testid={`ae-email-verify-${admin.username}`}
+                    onClick={() => run(() => verifyAdminEmailAction(admin.id, verifyCode), setVerifyResult, () => setVerifyCode(""))}>
+                    Verify
+                  </Button>
+                </div>
+              ) : null}
+              <Result r={verifyResult} />
+              <p className="text-xs text-[var(--color-muted-foreground)]">Login with OTP sends codes only to a verified email. Changing the email needs verification again.</p>
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor={`ae-role-${admin.id}`}>Role</Label>
