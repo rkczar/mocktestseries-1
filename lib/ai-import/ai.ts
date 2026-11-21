@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import type { AiModel, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { resolveOpenRouterKey, getEngineConfig, patchOpenRouterState } from "@/lib/ai-engine/settings";
+import { directCostUsd, openAiDirectChat, openAiModelName } from "@/lib/ai-engine/openai-direct";
+import { getOpenAiApiKey } from "@/lib/openai-config";
 import { getUsdInr, type FxRate } from "@/lib/ai-engine/fx";
 import { istDayMonth } from "@/lib/ai-engine/budget";
 import { formatInr, usdToInr } from "@/lib/ai-engine/config";
@@ -403,6 +405,8 @@ async function log(e: {
   errorCategory?: string | null;
   errorSummary?: string | null;
   fallbackUsed: boolean;
+  provider?: "openrouter" | "openai";
+  cachedTokens?: number | null;
 }) {
   const feature = importerFeature(e.input.task);
   await prisma.aiImportAiCall
@@ -427,7 +431,8 @@ async function log(e: {
         errorSummary: e.errorSummary ? sanitize(e.errorSummary).slice(0, 300) : null,
         stage: (e.input.stage ?? e.input.task).slice(0, 40),
         promptVersion: promptVersionOf(e.input.system),
-        provider: "openrouter",
+        provider: e.provider ?? "openrouter",
+        cachedTokens: e.cachedTokens ?? null,
         durationMs: Math.round(e.latencyMs),
         errorCategory: e.errorCategory ?? null,
       },
@@ -577,6 +582,10 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
   const fx = await getUsdInr();
   if (fx.rate === null) throw new ImporterAiUnavailable(`AI cost cannot be calculated: ${fx.unavailableReason ?? "no USD→INR rate"}. Nothing was sent.`);
 
+  // Direct OpenAI (Import Settings, off by default): only for openai/* models, only with the OpenAI key of Admin → AI →
+  // Providers, and never when Zero-Data-Retention is required (the standard OpenAI API keeps requests up to 30 days for
+  // abuse monitoring). Same price checks, reservation and settlement as OpenRouter; only the transport differs.
+  const directKey = input.settings.openaiDirect && !input.settings.privacy.zdr ? await getOpenAiApiKey() : null;
   const tried: string[] = [];
   let reasoningRoutes = false;
   let structuredRoutes = false;
@@ -593,6 +602,15 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       tried.push(choice.model!);
       choice = await replaceModel(input, plan!, choice, p, tried);
       continue;
+    }
+    if (directKey && openAiModelName(choice.model!)) {
+      // Direct OpenAI: no OpenRouter route applies; the catalogue's parameters and price (already in the plan) decide.
+      const sp = catalog.get(choice.model!)!.supportedParameters;
+      reasoningRoutes = sp.includes("reasoning");
+      structuredRoutes = sp.includes("structured_outputs");
+      jsonModeRoutes = sp.includes("response_format");
+      temperatureRoutes = false;
+      break;
     }
     const route = await recheckRoute(input.jobId, choice, catalog.get(choice.model!), input.settings, fx.rate);
     if (route.problem === null) {
@@ -641,8 +659,25 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
     const requestKey = `qi:${input.jobId}:${requestId}:${attempt}${replacements ? `r${replacements}` : ""}${mandatoryLearned ? "m" : ""}`;
     await reserve({ jobId: input.jobId, requestKey, feature, amountInr: cost.worstInr });
     const started = Date.now();
+    const directModel = directKey ? openAiModelName(requested) : null;
     try {
-      const r = await chatCompletion({
+      const r = directModel
+        ? await (async () => {
+            const d = await openAiDirectChat({
+              apiKey: directKey!,
+              model: directModel,
+              system: input.system,
+              content: input.content,
+              maxTokens: input.maxOutputTokens,
+              ...(reasoning && "effort" in reasoning && reasoning.effort && ["none", "minimal", "low", "medium", "high"].includes(reasoning.effort) ? { reasoningEffort: reasoning.effort as "none" | "minimal" | "low" | "medium" | "high" } : {}),
+              ...(input.jsonSchema && schema ? { responseFormat: { type: "json_schema" as const, json_schema: { name: `importer_${input.jsonSchema}`, strict: false, schema } } } : input.jsonSchema ? { responseFormat: { type: "json_object" as const } } : {}),
+              timeoutMs: 150_000,
+            });
+            const raw = (rows.find((m) => m.id === requested)?.pricingRaw ?? null) as { input_cache_read?: string | number } | null;
+            const cacheRead = raw?.input_cache_read !== undefined && Number(raw.input_cache_read) >= 0 ? Number(raw.input_cache_read) : null;
+            return { ...d, costUsd: directCostUsd({ ...cost.price, cacheRead }, d) };
+          })()
+        : await chatCompletion({
         apiKey,
         models: [requested, ...choice.fallbacks],
         prompt: "",
@@ -694,8 +729,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
         : empty
           ? describeCategory("empty_response")
           : null;
-      await log({ input, requestId, attempt, model: r.model, requested, ok: !outputProblem, latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, generationId: r.generationId, fallbackUsed, errorCategory: truncated ? "truncated" : empty ? "empty_response" : null, errorSummary: outputProblem });
-      await patchOpenRouterState({ lastSuccessAt: new Date().toISOString() });
+      await log({ input, requestId, attempt, model: r.model, requested, ok: !outputProblem, latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: r.costUsd, chargedInr: charged, costStatus: r.costUsd !== null ? "actual" : "unknown", inputTokens: r.inputTokens, outputTokens: r.outputTokens, cachedTokens: r.cachedTokens ?? null, provider: directModel ? "openai" : "openrouter", generationId: r.generationId, fallbackUsed, errorCategory: truncated ? "truncated" : empty ? "empty_response" : null, errorSummary: outputProblem });
+      if (!directModel) await patchOpenRouterState({ lastSuccessAt: new Date().toISOString() });
       rateLimitStreak.delete(input.jobId);
       // A charge above the reserved worst case is recorded in full (settle) and logged; it never pauses the job.
       if (overrunInr > 0) console.warn(`[ai-import] job ${input.jobId}: a ${input.task} request cost ${formatInr(charged)}, above its reserved maximum of ${formatInr(cost.worstInr)}`);
@@ -707,8 +742,8 @@ export async function importerAiCall(input: AiCallInput): Promise<AiCallResult> 
       lastError = e;
       const billedUnknown = e.category === "timeout" || e.generationId !== null;
       const charged = billedUnknown ? (await settle(input.jobId, requestKey, null, null)).charged : (await release(requestKey), 0);
-      await log({ input, requestId, attempt, model: requested, requested, ok: false, latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: null, chargedInr: charged, costStatus: billedUnknown ? "unknown" : "none", generationId: e.generationId, errorCategory: e.category, errorSummary: e.message, fallbackUsed: false });
-      await patchOpenRouterState({ lastError: { category: e.category, message: sanitize(e.message), at: new Date().toISOString() } });
+      await log({ input, requestId, attempt, model: requested, requested, ok: false, provider: directModel ? "openai" : "openrouter", latencyMs: Date.now() - started, fx, estUsd: cost.typicalUsd, costUsd: null, chargedInr: charged, costStatus: billedUnknown ? "unknown" : "none", generationId: e.generationId, errorCategory: e.category, errorSummary: e.message, fallbackUsed: false });
+      if (!directModel) await patchOpenRouterState({ lastError: { category: e.category, message: sanitize(e.message), at: new Date().toISOString() } });
       if (e.category === "rate_limited") {
         const n = (rateLimitStreak.get(input.jobId)?.n ?? 0) + 1;
         rateLimitStreak.set(input.jobId, { n, model: requested, detail: sanitize(e.message).slice(0, 120) });

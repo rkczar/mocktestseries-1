@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { parseKeyAnswer } from "@/lib/ai-import/fidelity";
 import { keyPaperChecks } from "@/lib/ai-import/key-check";
 import { effective } from "@/lib/ai-import/post";
-import { compareAnswer, type AnswerVerdict } from "@/lib/ai-import/verify-answers-core";
+import { compareAnswer, type AnswerVerdict, type KeyIssue } from "@/lib/ai-import/verify-answers-core";
 
 export { compareAnswer, ANSWER_VERDICT_LABELS, type AnswerVerdict } from "@/lib/ai-import/verify-answers-core";
 
@@ -16,6 +16,7 @@ export interface AnswerCheckRow {
   keyPage: number | null;
   official: string[];
   verdict: AnswerVerdict;
+  code: KeyIssue | null;
   reason: string;
   approved: boolean;
 }
@@ -54,6 +55,7 @@ export async function verifyAnswers(jobId: string): Promise<{ rows: AnswerCheckR
       keyPage: (mapped[0] ?? unmapped[0])?.page ?? null,
       official: r.official,
       verdict: r.verdict,
+      code: r.code ?? null,
       reason: r.reason,
       approved: !!q.approvedById,
     };

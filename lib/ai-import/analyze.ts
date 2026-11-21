@@ -9,6 +9,7 @@ import { ocrAvailable } from "@/lib/ai-import/ocr";
 import { readDocx } from "@/lib/ai-import/docx";
 import { notationRisk, scriptFragments, splitQuestions, type Line } from "@/lib/ai-import/local-parse";
 import { parseImportFile } from "@/lib/bulk-import";
+import { decodeMarkdown, parseMarkdown } from "@/lib/ai-import/markdown";
 import { vaultPath } from "@/lib/ai-import/vault";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { estimateJobCost, type CostEstimate } from "@/lib/ai-import/estimate";
@@ -196,6 +197,33 @@ async function analyzeSheet(file: AiImportFile): Promise<FileFacts> {
   };
 }
 
+async function analyzeMarkdown(file: AiImportFile): Promise<FileFacts> {
+  const parsed = parseMarkdown(decodeMarkdown(await readFile(vaultPath(file.storageKey!))));
+  const questions = parsed.papers.reduce((n, p) => n + p.questions.length, 0);
+  const notes = [
+    `Markdown read locally (no AI): ${parsed.papers.map((p) => `${p.paper ?? "paper"} ${p.questions.length} question(s), ${p.key.length} key entr${p.key.length === 1 ? "y" : "ies"}`).join("; ") || "nothing found"}.`,
+    ...parsed.warnings.slice(0, 4),
+    ...parsed.papers.flatMap((p) => p.keyProblems).slice(0, 4),
+  ];
+  if (parsed.papers.length > 1) notes.push("Several papers in one file: each is kept apart. Map this job to one Previous Year Paper (e.g. \"… Paper 2\") to import only that paper.");
+  return {
+    kind: "MD",
+    pages: 1,
+    textPages: 1,
+    scannedPages: 0,
+    blankPages: 0,
+    embeddedImages: 0,
+    localQuestionCount: questions,
+    questionTypes: {},
+    answerKeyDetected: parsed.papers.some((p) => p.key.length || p.questions.some((q) => q.printedAnswer.length)),
+    formulasLikely: false,
+    tablesLikely: parsed.papers.some((p) => p.questions.some((q) => /^\s*\|.*\|\s*$/m.test(q.stem))),
+    documentType: questions ? "QUESTION_PAPER" : parsed.papers.some((p) => p.key.length) ? "ANSWER_KEY" : "UNKNOWN",
+    notes,
+    pagesDetail: [{ page: 1, textChars: 0, images: 0, kind: "DOCUMENT", risk: [], localQuestions: questions }],
+  };
+}
+
 async function analyzeImage(file: AiImportFile): Promise<FileFacts> {
   const meta = await sharp(vaultPath(file.storageKey!), { limitInputPixels: 60_000_000 }).metadata();
   const small = (meta.width ?? 0) < 900 && (meta.height ?? 0) < 900;
@@ -222,6 +250,7 @@ export async function analyzeFile(file: AiImportFile): Promise<FileFacts> {
   if (kind === "pdf") return analyzePdf(file);
   if (kind === "docx") return analyzeDocx(file);
   if (kind === "xlsx" || kind === "csv") return analyzeSheet(file);
+  if (kind === "md") return analyzeMarkdown(file);
   return analyzeImage(file);
 }
 

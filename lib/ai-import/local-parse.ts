@@ -177,7 +177,12 @@ function isStatementLine(current: Block, n: number): boolean {
   const text = current.lines.map((l) => l.text).join("\n");
   if ((chooseRun(markersOf(text))?.length ?? 0) >= 2) return false;
   if (n === 1) return /\b(statements?|assertions?|consider the following|given below)\b/i.test(text);
-  return current.lines.slice(1).some((l) => new RegExp(`^\\s*\\(?${n - 1}\\s*[.)]\\s`).test(l.text));
+  if (current.lines.slice(1).some((l) => new RegExp(`^\\s*\\(?${n - 1}\\s*[.)]\\s`).test(l.text))) return true;
+  // The previous statement's number was lost by OCR ("Hepatitis B vaccine" then "2. Influenza…", CMS 2024 P-I Q69): a
+  // small number right after a statement lead-in, with an unnumbered line between, is still a statement — unless it is
+  // exactly the next question number (then the open question's statements would have to be complete already).
+  const lead = /\b(statements?|consider the following|which of the following (?:are|is|pairs)|given below)\b/i.test(current.lines[0]?.text ?? "") || /\b(statements?|consider the following)\b/i.test(text);
+  return n <= 9 && lead && current.lines.length >= 2 && current.number !== n - 1;
 }
 
 /**
@@ -741,8 +746,12 @@ export function notationRisk(text: string): string[] {
 }
 
 /** A line that starts its own item: a statement / option / list marker, a list heading, Assertion/Reason, a code table. */
-const ITEM_START = /^\s*(?:\(?(?:[0-9]{1,2}|[A-Ha-h]|(?:i{1,3}|iv|vi{0,3}|ix|x|I{1,3}|IV|VI{0,3}|IX|X))[.)]\s|(?:List|Column)[\s-]*(?:I{1,2}|[12])\b|(?:Assertion|Reason)\b|Codes?\s*:|[•▪●*–-]\s)/;
+// "4.Chronic osteomyelitis" (OCR dropped the space after a statement number; CMS 2024 P-I Q91) starts an item too — a
+// capital letter right after "N." only, so a decimal ("1.73 m2") never does.
+const ITEM_START = /^\s*(?:\(?(?:[0-9]{1,2}|[A-Ha-h]|(?:i{1,3}|iv|vi{0,3}|ix|x|I{1,3}|IV|VI{0,3}|IX|X))[.)]\s|[1-9]\.(?=[A-Z][a-z])|(?:List|Column)[\s-]*(?:I{1,2}|[12])\b|(?:Assertion|Reason)\b|Codes?\s*:|[•▪●*–-]\s)/;
 const TABLE_ROW = /\||\t|\S {2,}\S/; // DOCX joins table cells with two spaces
+/** The line that closes a statement list is never a wrapped part of the last statement (CMS 2024 P-I Q91, Q53, Q57, Q80). */
+const LIST_CLOSE = /^\s*(?:Select the (?:correct )?(?:answer|code)|Which (?:of|one of) the (?:statements given above|above|pairs given above)|How many of the (?:above|statements|pairs)|Choose the correct|Codes?\s*:)/i;
 
 /**
  * Joins the ordinary line wraps of a printed column into running text (CMS 2026 Q26, local OCR: one line per printed
@@ -757,7 +766,7 @@ export function joinWrappedLines(text: string): string {
     const line = raw.trim();
     const prev = out.length ? out[out.length - 1] : "";
     const join =
-      prev !== "" && line !== "" && !/[\u0900-\u097F]/.test(prev + line) && !ITEM_START.test(line) && !TABLE_ROW.test(line) && !TABLE_ROW.test(prev) &&
+      prev !== "" && line !== "" && !/[\u0900-\u097F]/.test(prev + line) && !ITEM_START.test(line) && !LIST_CLOSE.test(line) && !TABLE_ROW.test(line) && !TABLE_ROW.test(prev) &&
       (/^[a-z(‘'"“]/.test(line) || (!/[.?!:;]$/.test(prev) && !ITEM_START.test(prev)));
     if (join) out[out.length - 1] = /[a-z]-$/.test(prev) && /^[a-z]/.test(line) ? prev + line : `${prev} ${line}`;
     else out.push(line);
@@ -960,7 +969,11 @@ export function orderSegments(segs: Seg[], gutter?: number | null): Line[] {
   const leftOnly = withBox.filter((s) => s.box.x + s.box.w < 0.5).length;
   const rightOnly = withBox.filter((s) => s.box.x > 0.5).length;
   const spanning = withBox.filter((s) => s.box.x < 0.45 && s.box.x + s.box.w > 0.55).length;
-  const twoColumns = gutter !== undefined ? gutter !== null : leftOnly >= 4 && rightOnly >= 4 && spanning <= Math.max(2, withBox.length * 0.1);
+  // Real columns hold running text: at least 2 wide lines (≥ 0.2 of the page) on each side. Short cells of a table on a
+  // one-column page are not a second column (2026-11-21: a 3-column lab table was split into two "columns").
+  const wideLeft = withBox.filter((s) => s.box.x + s.box.w < 0.5 && s.box.w >= 0.2).length;
+  const wideRight = withBox.filter((s) => s.box.x > 0.5 && s.box.w >= 0.2).length;
+  const twoColumns = gutter !== undefined ? gutter !== null : leftOnly >= 4 && rightOnly >= 4 && wideLeft >= 2 && wideRight >= 2 && spanning <= Math.max(2, withBox.length * 0.1);
   const split = gutter ?? 0.48;
   const columnOf = (s: { box: NBox }) => (twoColumns ? (s.box.x >= split ? 1 : 0) : 0);
   const sorted = [...withBox].sort((a, b) => columnOf(a) - columnOf(b) || a.box.y - b.box.y || a.box.x - b.box.x);

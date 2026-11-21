@@ -193,9 +193,14 @@ export interface StudentFigure {
  * import package (buildPackage) and the review page's student preview, so the preview cannot drift from the import.
  * Throws for a match question without both lists (refused, never downgraded) unless forced.
  */
+/** Description prefix of an original table crop (lib/ai-import/pdf-local.ts). */
+export const TABLE_CROP = "Original table crop";
+
 export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: ExtractedQuestion, figures: AiImportFigure[], force?: ForceKind) {
   const alt = (f: AiImportFigure, i: number) => (f.description && f.description.length >= 3 ? f.description : `Figure ${i + 1} of question ${e.label}`).slice(0, 300);
-  const usable = figures.filter((f) => f.mappingStatus !== "MISSING" && f.originalKey);
+  // The original crop of a table that the question holds as a real table is review evidence only (not shown twice).
+  const tableText = /^\s*\|.*\|\s*\n\s*\|?\s*:?-{3,}/m.test(e.stem);
+  const usable = figures.filter((f) => f.mappingStatus !== "MISSING" && f.originalKey && !(tableText && f.description?.startsWith(TABLE_CROP)));
   const stemImages: StudentFigure[] = usable.filter((f) => f.owner !== "OPTION").map((f, i) => ({ figure: f, alt: alt(f, i) }));
   // Owner decision 2026-11-11: an option that is a cropped structure image shows the ORIGINAL image; the AI's formula
   // transcription is not chemically verified, so it becomes the image's alt text (screen readers), never the content.

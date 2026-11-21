@@ -155,10 +155,47 @@ function renderMath(tex: string, display: boolean): string {
   return wrapped;
 }
 
-export function renderRichHtml(src: string): RenderedHtml {
+function renderInline(src: string): string {
   return parseRich(src)
     .map((seg) => (seg.kind === "text" ? escapeHtml(seg.value) : renderMath(seg.value, seg.display)))
-    .join("") as RenderedHtml;
+    .join("");
+}
+
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_SEP = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+const cellsOf = (line: string) => line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+
+/**
+ * A GitHub-style pipe table (header row, `|---|` separator, body rows — the form the importer writes for tables) is
+ * rendered as an HTML table whose cells go through the same escaping / KaTeX as any text. Only that exact shape is a
+ * table: a stray `|` line stays text. No newlines inside the table HTML (the text container keeps line breaks).
+ */
+export function renderRichHtml(src: string): RenderedHtml {
+  const lines = src.split("\n");
+  const out: string[] = [];
+  let text: string[] = [];
+  const flushText = (trailingBreak: boolean) => {
+    if (text.length) out.push(renderInline(text.join("\n") + (trailingBreak ? "\n" : "")));
+    text = [];
+  };
+  for (let i = 0; i < lines.length; ) {
+    if (TABLE_ROW.test(lines[i]) && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+      const head = cellsOf(lines[i]);
+      let j = i + 2;
+      const body: string[][] = [];
+      while (j < lines.length && TABLE_ROW.test(lines[j])) body.push(cellsOf(lines[j++]));
+      flushText(true);
+      const width = Math.max(head.length, ...body.map((r) => r.length));
+      const row = (cells: string[], tag: "th" | "td") => `<tr>${Array.from({ length: width }, (_, k) => `<${tag}>${renderInline(cells[k] ?? "")}</${tag}>`).join("")}</tr>`;
+      out.push(`<span class="rich-table-wrap"><table class="rich-table"><thead>${row(head, "th")}</thead><tbody>${body.map((r) => row(r, "td")).join("")}</tbody></table></span>`);
+      i = j;
+      // The line break after the table is the table's own block end.
+      continue;
+    }
+    text.push(lines[i++]);
+  }
+  flushText(false);
+  return out.join("") as RenderedHtml;
 }
 
 export function isRichFormat(format: unknown): format is "RICH_V1" {

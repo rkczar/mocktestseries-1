@@ -227,13 +227,15 @@ export interface ChatResult {
   costUsd: number | null;
   /** True when the model returned reasoning text but no answer (thinking used the output limit). */
   reasoningOnly?: boolean;
+  /** Input tokens served from the provider's prompt cache (usage.prompt_tokens_details.cached_tokens), when reported. */
+  cachedTokens?: number | null;
 }
 
 interface ChatResponse {
   id?: string;
   model?: string;
   choices?: { message?: { content?: string | null; reasoning?: string | null }; finish_reason?: string | null }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number; prompt_tokens_details?: { cached_tokens?: number } };
 }
 
 export async function chatCompletion(p: ChatParams): Promise<ChatResult> {
@@ -267,6 +269,7 @@ export async function chatCompletion(p: ChatParams): Promise<ChatResult> {
     outputTokens: typeof data.usage?.completion_tokens === "number" ? data.usage.completion_tokens : null,
     costUsd: typeof data.usage?.cost === "number" && Number.isFinite(data.usage.cost) && data.usage.cost >= 0 ? data.usage.cost : null,
     reasoningOnly: !text.trim() && typeof choice?.message?.reasoning === "string" && choice.message.reasoning.trim().length > 0,
+    cachedTokens: typeof data.usage?.prompt_tokens_details?.cached_tokens === "number" ? data.usage.prompt_tokens_details.cached_tokens : null,
   };
   return result;
 }

@@ -149,13 +149,13 @@ function Uploader({ jobId, files, canAddPapers }: { jobId: string; files: JobVie
           </div>
         )}
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ai-files">Files (PDF, JPG, PNG, DOCX, XLSX, CSV)</Label>
+          <Label htmlFor="ai-files">Files (PDF, JPG, PNG, DOCX, XLSX, CSV, MD)</Label>
           <input
             ref={input}
             id="ai-files"
             type="file"
             multiple
-            accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.csv"
+            accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.csv,.md"
             disabled={busy || (role === "ANSWER_KEY" && papers.length > 1 && !paperFileId)}
             onChange={(e) => e.target.files?.length && upload(e.target.files)}
             className="text-sm"

@@ -7,6 +7,7 @@ import { parseImportFile } from "@/lib/bulk-import";
 import { ocrTextLayer, pageLayout, renderPage, scanPpi, type PageLayout } from "@/lib/ai-import/pdf";
 import { readDocx, IMG_TOKEN, type DocxContent } from "@/lib/ai-import/docx";
 import { joinPreamble, orphanQuestion, parsePdfPageLocal } from "@/lib/ai-import/pdf-local";
+import { decodeMarkdown, parseMarkdown, pickPaper } from "@/lib/ai-import/markdown";
 import { blockToQuestion, candidateInstruction, cleanStem, formatStem, splitQuestions, type NumberingState } from "@/lib/ai-import/local-parse";
 import { jobMemoryBrief } from "@/lib/ai-import/taxonomy-memory";
 import { cropFromRender, cropFromScan, iou, storeOriginalFigure, visionImage, FigureError, MIN_CROP_SIDE } from "@/lib/ai-import/figures";
@@ -1138,6 +1139,32 @@ async function localSheetPass(ctx: StepContext, file: AiImportFile): Promise<voi
   });
 }
 
+/** Markdown: read locally (lib/ai-import/markdown.ts), text kept exactly as written; embedded keys saved per paper. */
+async function localMarkdownPass(ctx: StepContext, file: AiImportFile): Promise<void> {
+  const parsed = parseMarkdown(decodeMarkdown(await readFile(vaultPath(file.storageKey!))));
+  const pyq = ctx.job.previousYearPaperId ? await prisma.previousYearPaper.findUnique({ where: { id: ctx.job.previousYearPaperId }, select: { title: true } }) : null;
+  const picked = pickPaper(parsed, pyq?.title);
+  const papers = picked ? [picked] : parsed.papers;
+  if (picked) {
+    // The job's Previous Year Paper names one paper of a multi-paper file: only that paper is read, with its own numbers.
+    picked.section = "";
+    for (const q of picked.questions) q.section = "";
+    const others = parsed.papers.filter((p) => p !== picked).map((p) => `${p.paper} (${p.questions.length} questions)`);
+    await logEvent(ctx.job.id, "MARKDOWN_PAPER_SELECTED", `${file.originalName}: ${picked.paper} read for "${pyq!.title}"; not read in this job: ${others.join(", ")} — import those in their own job.`, { fileId: file.id });
+  } else if (parsed.papers.length > 1) {
+    await logEvent(ctx.job.id, "MARKDOWN_PAPERS", `${file.originalName}: ${parsed.papers.length} papers found (${parsed.papers.map((p) => p.paper).join(", ")}) — kept as separate sections with their own numbering and keys.`, { fileId: file.id });
+  }
+  for (const w of [...parsed.warnings, ...papers.flatMap((p) => p.keyProblems)]) await logEvent(ctx.job.id, "MARKDOWN_WARNING", `${file.originalName}: ${w}`, { fileId: file.id });
+  let order = await nextOrderIndex(file.id);
+  for (const p of papers) for (const q of p.questions) await saveQuestion(ctx, file, q, order++, async () => null, 1);
+  for (const p of papers) if (p.key.length) await saveKeyEntries(ctx, file.id, file.id, 1, p.key.map((e) => ({ number: e.number, section: p.section, raw: e.raw })));
+  await prisma.aiImportPage.upsert({
+    where: { fileId_pageNumber: { fileId: file.id, pageNumber: 1 } },
+    create: { jobId: ctx.job.id, fileId: file.id, pageNumber: 1, status: AiImportPageStatus.DONE, kind: "DOCUMENT", model: "local", processedAt: new Date() },
+    update: { status: AiImportPageStatus.DONE, kind: "DOCUMENT", model: "local", processedAt: new Date() },
+  });
+}
+
 async function imagePass(ctx: StepContext, file: AiImportFile): Promise<void> {
   const existing = await prisma.aiImportPage.findUnique({ where: { fileId_pageNumber: { fileId: file.id, pageNumber: 1 } } });
   if (existing?.status === AiImportPageStatus.DONE) return;
@@ -1187,6 +1214,7 @@ export async function runLocalPasses(ctx: StepContext): Promise<void> {
     if (kind === "pdf") await localPdfPass(ctx, file);
     else if (kind === "docx") await localDocxPass(ctx, file);
     else if (kind === "xlsx" || kind === "csv") await localSheetPass(ctx, file);
+    else if (kind === "md") await localMarkdownPass(ctx, file);
     else await imagePass(ctx, file);
     if (!(await ctx.stillRunning())) return;
     await prisma.aiImportFile.update({ where: { id: file.id }, data: { status: AiImportFileStatus.PROCESSED } });

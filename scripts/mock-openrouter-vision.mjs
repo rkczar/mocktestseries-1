@@ -350,7 +350,12 @@ const server = http.createServer(async (req, res) => {
       } else if (task === "key") {
         const marker = image ? await markerOf(image) : null;
         out = marker && fixtures.keys[marker] ? { ...(config.keyHeader ? { header: config.keyHeader } : {}), entries: fixtures.keys[marker].entries, unreadable: [] } : { entries: [], unreadable: ["nothing"] };
-      } else if (task === "solve") out = { answer: ["B"], confidence: 0.8, defective: false, reason: "mock" };
+      } else if (task === "solve") {
+        // Verify Answers suite: the synthetic stem names the answer ("MOCKANS=C" / "MOCKANS=DEFECTIVE"); default B as before.
+        const m = /MOCKANS=([A-D]|DEFECTIVE)/.exec(text)?.[1];
+        out = m === "DEFECTIVE" ? { answer: [], confidence: 0.7, defective: true, reason: "mock: no option fits" } : { answer: [m ?? "B"], confidence: 0.8, defective: false, reason: "mock" };
+        if (text.includes("MOCKBAD")) out = "I think it is probably C.";
+      }
       else if (task === "classify") out = classify(text);
       else out = { error: "unknown task" };
       let content = JSON.stringify(out);

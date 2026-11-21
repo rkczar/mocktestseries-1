@@ -60,15 +60,21 @@ export default async function CostsPage() {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="AI Cost Center" />;
   const settings = await getImporterSettings();
   const caps = importerCaps(settings);
-  const [ledger, byTask, byModel, calls] = await Promise.all([
+  const [ledger, byTask, byModel, byStage, calls] = await Promise.all([
     importerLedger(),
     prisma.$queryRaw<{ task: string; n: number; inTok: number; outTok: number; actual: number | null; unknown: number }[]>`
       SELECT "task", COUNT(*)::int AS n, COALESCE(SUM("inputTokens"), 0)::int AS "inTok", COALESCE(SUM("outputTokens"), 0)::int AS "outTok",
              SUM("costInr") FILTER (WHERE "costStatus" = 'actual')::float8 AS actual, COUNT(*) FILTER (WHERE "costStatus" IN ('unknown', 'pending'))::int AS unknown
       FROM "AiImportAiCall" GROUP BY 1 ORDER BY 1`,
-    prisma.$queryRaw<{ model: string; n: number; actual: number | null; unknown: number }[]>`
-      SELECT "model", COUNT(*)::int AS n, SUM("costInr") FILTER (WHERE "costStatus" = 'actual')::float8 AS actual,
-             COUNT(*) FILTER (WHERE "costStatus" IN ('unknown', 'pending'))::int AS unknown
+    prisma.$queryRaw<{ provider: string; model: string; n: number; inTok: number; outTok: number; cachedTok: number; actual: number | null; actualN: number; unknown: number; questions: number }[]>`
+      SELECT COALESCE("provider", 'openrouter') AS provider, "model", COUNT(*)::int AS n, COALESCE(SUM("inputTokens"), 0)::int AS "inTok",
+             COALESCE(SUM("outputTokens"), 0)::int AS "outTok", COALESCE(SUM("cachedTokens"), 0)::int AS "cachedTok",
+             SUM("costInr") FILTER (WHERE "costStatus" = 'actual')::float8 AS actual, COUNT(*) FILTER (WHERE "costStatus" = 'actual')::int AS "actualN",
+             COUNT(*) FILTER (WHERE "costStatus" IN ('unknown', 'pending'))::int AS unknown, COUNT(DISTINCT "questionId")::int AS questions
+      FROM "AiImportAiCall" GROUP BY 1, 2 ORDER BY 3 DESC`,
+    prisma.$queryRaw<{ stage: string; n: number; inTok: number; outTok: number; cachedTok: number; actual: number | null }[]>`
+      SELECT COALESCE("stage", "task") AS stage, COUNT(*)::int AS n, COALESCE(SUM("inputTokens"), 0)::int AS "inTok", COALESCE(SUM("outputTokens"), 0)::int AS "outTok",
+             COALESCE(SUM("cachedTokens"), 0)::int AS "cachedTok", SUM("costInr") FILTER (WHERE "costStatus" = 'actual')::float8 AS actual
       FROM "AiImportAiCall" GROUP BY 1 ORDER BY 2 DESC`,
     prisma.aiImportAiCall.findMany({ orderBy: { createdAt: "desc" }, take: 100 }),
   ]);
@@ -80,7 +86,7 @@ export default async function CostsPage() {
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">AI Cost Center</h1>
         <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">
-          The AI Question Importer only — student Ask AI, Instagram and the other AI features are not included. <strong>Actual</strong> is what OpenRouter reported per request. <strong>Estimates</strong> are calculated before a request and are never counted as spend. When OpenRouter does not report a cost (for example after a timeout) it is shown as unknown and the request&apos;s maximum is shown as held. Local parsing costs nothing.
+          The AI Question Importer only — student Ask AI, Instagram and the other AI features are not included. <strong>Actual</strong> is what OpenRouter reported per request (for OpenAI sent directly: the reported tokens × the published price, cached input at its cached rate). <strong>Estimates</strong> are calculated before a request and are never counted as spend. When OpenRouter does not report a cost (for example after a timeout) it is shown as unknown and the request&apos;s maximum is shown as held. Local parsing costs nothing.
         </p>
       </div>
 
@@ -268,21 +274,58 @@ export default async function CostsPage() {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>By model</CardTitle>
+            <CardTitle>By step</CardTitle>
+            <CardDescription>Which importer step used the tokens (e.g. verify-answers = Verify Answers, post-answer-opinion, verify2-read).</CardDescription>
           </CardHeader>
           <CardContent>
-            <ul className="text-sm" data-testid="cost-models">
-              {byModel.map((t) => (
-                <li key={t.model}>
-                  {t.model}: {t.n} call(s) · actual {inr(t.actual)}
-                  {t.unknown ? ` + ${t.unknown} with unknown cost` : ""}
+            <ul className="text-sm" data-testid="cost-stages">
+              {byStage.map((t) => (
+                <li key={t.stage}>
+                  {t.stage}: {t.n} call(s) · {t.inTok.toLocaleString("en-IN")} in ({t.cachedTok.toLocaleString("en-IN")} cached) / {t.outTok.toLocaleString("en-IN")} out · actual {inr(t.actual)}
                 </li>
               ))}
-              {!byModel.length && <li className="text-[var(--color-muted-foreground)]">No AI calls yet.</li>}
+              {!byStage.length && <li className="text-[var(--color-muted-foreground)]">No AI calls yet.</li>}
             </ul>
           </CardContent>
         </Card>
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>By model and provider</CardTitle>
+          <CardDescription>Input, cached input (served from the provider&apos;s prompt cache, billed lower) and output tokens; average actual cost per request and per question asked about. OpenAI = sent directly (Import Settings), OpenRouter = through OpenRouter.</CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <table className="w-full min-w-[820px] text-left text-sm" data-testid="cost-models">
+            <thead className="text-xs text-[var(--color-muted-foreground)]">
+              <tr>
+                {["Model", "Provider", "Requests", "Input tokens", "Cached", "Output tokens", "Actual", "Per request", "Per question"].map((h) => (
+                  <th key={h} className="py-1 pr-2 font-medium">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {byModel.map((t) => (
+                <tr key={`${t.provider}|${t.model}`} className="border-t border-[var(--color-border)]" data-testid="cost-model" data-provider={t.provider}>
+                  <td className="py-1.5 pr-2 [overflow-wrap:anywhere]">{t.model}</td>
+                  <td className="py-1.5 pr-2">{t.provider === "openai" ? "OpenAI (direct)" : "OpenRouter"}</td>
+                  <td className="py-1.5 pr-2">{t.n}{t.unknown ? ` (${t.unknown} unknown cost)` : ""}</td>
+                  <td className="py-1.5 pr-2">{t.inTok.toLocaleString("en-IN")}</td>
+                  <td className="py-1.5 pr-2" data-testid="cost-model-cached">{t.cachedTok.toLocaleString("en-IN")}</td>
+                  <td className="py-1.5 pr-2">{t.outTok.toLocaleString("en-IN")}</td>
+                  <td className="py-1.5 pr-2">{inr(t.actual)}</td>
+                  <td className="py-1.5 pr-2">{t.actualN && t.actual !== null ? inr(t.actual / t.actualN) : "—"}</td>
+                  <td className="py-1.5 pr-2">{t.questions && t.actual !== null && !t.unknown ? inr(t.actual / t.questions) : "—"}</td>
+                </tr>
+              ))}
+              {!byModel.length && (
+                <tr>
+                  <td colSpan={9} className="py-2 text-[var(--color-muted-foreground)]">No AI calls yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Recent calls</CardTitle>
@@ -292,7 +335,7 @@ export default async function CostsPage() {
           <table className="w-full min-w-[900px] text-left text-xs" data-testid="cost-calls">
             <thead className="text-[var(--color-muted-foreground)]">
               <tr>
-                {["Time", "Task", "Model", "Attempt", "Tokens in / out", "Estimate", "Actual cost", "Result"].map((h) => (
+                {["Time", "Task", "Model", "Attempt", "Tokens in (cached) / out", "Estimate", "Actual cost", "Result"].map((h) => (
                   <th key={h} className="py-1 pr-2 font-medium">
                     {h}
                   </th>
@@ -310,7 +353,7 @@ export default async function CostsPage() {
                   </td>
                   <td className="py-1 pr-2">{c.attempt}</td>
                   <td className="py-1 pr-2">
-                    {c.inputTokens ?? "—"} / {c.outputTokens ?? "—"}
+                    {c.inputTokens ?? "—"}{c.cachedTokens ? ` (${c.cachedTokens})` : ""} / {c.outputTokens ?? "—"}{c.provider === "openai" ? " · OpenAI" : ""}
                   </td>
                   <td className="py-1 pr-2">{inr(c.estCostInr)}</td>
                   <td className="py-1 pr-2">{c.costStatus === "actual" ? inr(c.costInr) : c.costStatus === "unknown" || c.costStatus === "pending" ? `unknown (up to ${inr(c.costInr)} held)` : "no charge"}</td>

@@ -305,6 +305,19 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
             <CardDescription>{hasPageImages ? "The original page(s) this question was read from." : file?.status === "PURGED" ? "The original file was removed after its retention period." : "Word and spreadsheet files have no page images; the text was read exactly."}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
+            {(() => {
+              // The original as read (from the extraction, never an edited copy): the exact Markdown block, or the OCR
+              // reading with its line breaks — beside the extracted fields, so differences are visible at a glance.
+              const orig = q.data as unknown as { sourceText?: string | null; ocr?: { text?: string; engine?: string } | null };
+              const text = orig.sourceText ?? orig.ocr?.text ?? null;
+              if (!text) return null;
+              return (
+                <figure className="flex flex-col gap-1" data-testid="source-text">
+                  <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border border-[var(--color-border)] bg-[var(--color-muted)] p-2 text-xs">{text}</pre>
+                  <figcaption className="text-xs text-[var(--color-muted-foreground)]">{orig.sourceText ? "Original text exactly as in the file (Markdown)" : `OCR reading as read (${orig.ocr?.engine ?? "OCR"}), before cleaning`}</figcaption>
+                </figure>
+              );
+            })()}
             {regionPage && region && (
               <figure className="flex flex-col gap-1" data-testid="question-crop">
                 <div className="relative w-full overflow-hidden rounded border border-[var(--color-border)] bg-white" style={{ aspectRatio: `${region.w * regionPage.renderWidth!} / ${region.h * regionPage.renderHeight!}` }}>

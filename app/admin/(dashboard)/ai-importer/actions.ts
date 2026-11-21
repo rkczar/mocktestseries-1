@@ -66,6 +66,7 @@ import { learnPaperMemory } from "@/lib/ai-import/paper-learn";
 import { confirmEligiblePaperRules, decidePaperRule } from "@/lib/ai-import/taxonomy-memory";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { forceImportQuestion, type ForceResult } from "@/lib/ai-import/force-publish";
+import { requestVerifyAnswers, stopVerifyAnswers, vaPublic, verifyAnswersPreview, type VaPreview } from "@/lib/ai-import/verify-answers-run";
 
 /**
  * AI Question Importer Server Actions. USE (upload, process, review, import,
@@ -801,6 +802,24 @@ export async function verify2StartAction(jobId: string, model: string, confirmed
   return run(await requireUse(), async (actorId) => {
     if (typeof model !== "string" || !model) throw new ImportJobError("Choose the model for Verify 2.");
     return requestVerify2({ jobId, actorId, model, confirmedMaxInr: costOf(confirmedMaxInr) });
+  });
+}
+
+/** Verify Answers — the price of the independent AI answers (only questions without a reusable opinion); nothing is sent. */
+export async function verifyAnswersPreviewAction(jobId: string, model: string | null): Promise<ImporterResult<VaPreview>> {
+  return run(await requireUse(), async () => vaPublic(await verifyAnswersPreview(jobId, typeof model === "string" && model ? model : null)));
+}
+
+/** Verify Answers — starts only when `confirmedMaxInr` covers the fresh maximum. Never changes an answer or publishes. */
+export async function verifyAnswersStartAction(jobId: string, model: string | null, confirmedMaxInr: number | null, keyOnly = false): Promise<ImporterResult<{ started: boolean; reason?: string; preview: VaPreview }>> {
+  return run(await requireUse(), async (actorId) => requestVerifyAnswers({ jobId, actorId, model: typeof model === "string" && model ? model : null, confirmedMaxInr: costOf(confirmedMaxInr), keyOnly: keyOnly === true }));
+}
+
+/** Verify Answers — stop (pause); answers received so far are kept and the next run resumes. */
+export async function verifyAnswersStopAction(jobId: string): Promise<ImporterResult<{ stopped: true }>> {
+  return run(await requireUse(), async (actorId) => {
+    await stopVerifyAnswers(jobId, actorId);
+    return { stopped: true as const };
   });
 }
 

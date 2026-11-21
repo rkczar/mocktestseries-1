@@ -109,7 +109,7 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
       extractIn += SYSTEM_TOKENS + IMAGE_TOKENS + Math.ceil(Math.min(p.textChars * 1.3, 12_000) / 3) + 120;
       extractOut += 400 + 350 * q;
     }
-    if (f.kind === "DOCX" || f.kind === "XLSX" || f.kind === "CSV") expectedQuestions += f.localQuestionCount;
+    if (f.kind === "DOCX" || f.kind === "XLSX" || f.kind === "CSV" || f.kind === "MD") expectedQuestions += f.localQuestionCount;
   }
   const keyPages = input.keyFacts.reduce((a, f) => a + f.scannedPages, 0);
   // Every send a request can make (the always-on retry after a dropped connection included).

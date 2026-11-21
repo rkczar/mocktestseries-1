@@ -51,5 +51,9 @@ const RICH_TEXT_CSS = `
 .rich-text .rich-math-display{display:block;max-width:100%;overflow-x:auto;overflow-y:hidden;padding:0.25em 0}
 .rich-text .rich-math-display .katex-display{margin:0.4em 0}
 .rich-text .katex{font-size:1.08em}
+.rich-text .rich-table-wrap{display:block;max-width:100%;overflow-x:auto;margin:0.4em 0;white-space:normal}
+.rich-text .rich-table{border-collapse:collapse;font-size:0.95em}
+.rich-text .rich-table th,.rich-text .rich-table td{border:1px solid var(--color-border);padding:0.25em 0.5em;text-align:left;vertical-align:top}
+.rich-text .rich-table th{font-weight:600;background:var(--color-muted)}
 .rich-text .katex-error,.rich-text .rich-math-error{color:var(--color-error);white-space:pre-wrap;font-family:var(--font-mono,monospace);font-size:0.9em}
 `;

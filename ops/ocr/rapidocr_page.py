@@ -7,12 +7,14 @@ Output (stdout) is one JSON object:
   lines: [{text, score, box: [x0, y0, x1, y1], poly: [[x, y] x4], reread?: {text, score, dpi}}]
 Boxes are pixels of the page image at `dpi`. A line read with low confidence is read again from a sharper crop
 (400 dpi for PDFs, 2x upscale for images); the first reading is always kept next to the second, and the line's
-`text` is the better-scored of the two. A colored watermark across the text is lightened before OCR (output
+`text` is the better-scored of the two. A statement line whose printed number the detector missed gets its empty margin
+read again (recover_labels); a label found there is added as its own line with `recovered` provenance. A colored watermark across the text is lightened before OCR (output
 `watermark: true`). Nothing is corrected or guessed here.
 """
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -87,6 +89,83 @@ def lines_of(result):
     return out
 
 
+LABEL_ONLY = re.compile(r"^\(?([1-9]|[ivx]{1,4}|[a-h])[.)]$")
+LABEL_START = re.compile(r"^\(?([1-9]|[ivx]{1,4}|[a-h])[.)]\s+\S")
+LABEL_MIN = 0.90  # a recovered label is kept only when the margin is read as exactly one label at >= this confidence
+MAX_LABEL_READS = 30
+
+
+def label_candidates(lines):
+    """Statement lines that lost their printed number (2026-11-20: the detector misses small isolated "1." / "2." boxes —
+    CMS 2024 Q69 "Hepatitis B vaccine", Q89 "Valproate"): a label box sits left of an ALIGNED neighbour line within four
+    rows (its text starts where this line starts), and nothing is printed in this line's margin. Returns the margin boxes."""
+    labels = [l for l in lines if LABEL_ONLY.match(l["text"].strip())]
+    out = []
+    for l in lines:
+        t = l["text"].strip()
+        if not labels or LABEL_ONLY.match(t) or LABEL_START.match(t):
+            continue
+        x0, y0, x1, y1 = l["box"]
+        h = y1 - y0
+        if h <= 0:
+            continue
+        mid = (y0 + y1) / 2
+        near = []
+        for lb in labels:
+            bx0, by0, bx1, by1 = lb["box"]
+            if abs((by0 + by1) / 2 - mid) > 4.5 * h or bx1 > x0 + 2 or x0 - bx1 > 4 * h:
+                continue
+            row = [m for m in lines if m is not lb and abs((m["box"][1] + m["box"][3]) / 2 - (by0 + by1) / 2) < 0.5 * h and m["box"][0] > bx1 - 2]
+            if row and abs(min(r["box"][0] for r in row) - x0) <= 0.8 * h:
+                near.append(lb)
+        if not near:
+            continue
+        lx0 = min(lb["box"][0] for lb in near)
+        if any(m is not l and m["box"][2] > lx0 and m["box"][0] < x0 - 2 and abs((m["box"][1] + m["box"][3]) / 2 - mid) < 0.5 * h for m in lines):
+            continue
+        out.append((l, [max(0.0, lx0 - 0.3 * h), max(0.0, y0 - 0.25 * h), x0 - 1, y1 + 0.25 * h]))
+    return out
+
+
+def recover_labels(ocr, lines, a, img, tmp, width, height):
+    """Reads only the empty margin left of each candidate line again (400 dpi for a PDF, 3x upscale for an image). A label
+    is added as its own line only when the page itself reads exactly one label there (never inferred from the sequence);
+    the line records where it came from. Returns the number of labels added."""
+    from PIL import Image
+
+    added = 0
+    for i, (line, (x0, y0, x1, y1)) in enumerate(label_candidates(lines)[:MAX_LABEL_READS]):
+        x1, y1 = min(width, x1), min(height, y1)
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            continue
+        try:
+            if a.pdf:
+                rdpi = min(REREAD_DPI, a.dpi * 2)
+                k = rdpi / a.dpi
+                crop = render(a.pdf, a.page, rdpi, os.path.join(tmp, f"label{i}"), (int(x0 * k), int(y0 * k), max(1, int((x1 - x0) * k)), max(1, int((y1 - y0) * k))))
+            else:
+                c = img.crop((int(x0), int(y0), int(x1), int(y1)))
+                c = c.resize((c.size[0] * 3, c.size[1] * 3), Image.LANCZOS)
+                crop = os.path.join(tmp, f"label{i}.png")
+                c.save(crop)
+            r = ocr(crop)
+            read = [(t, float(sc)) for t, sc in zip(r.txts or [], r.scores or [])]
+            if not read:  # a lone small "2." can escape the detector: recognition only, on the whole margin
+                r = ocr(crop, use_det=False, use_cls=False, use_rec=True)
+                read = [(t, float(sc)) for t, sc in zip(r.txts or [], r.scores or [])]
+        except Exception as e:  # a failed margin read changes nothing
+            line.setdefault("labelReread", {"error": str(e)[:200]})
+            continue
+        good = [(t.strip(), sc) for t, sc in read if LABEL_ONLY.match(t.strip()) and sc >= LABEL_MIN]
+        if len(good) != 1 or len(read) != 1:
+            continue
+        text, score = good[0]
+        box = [round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)]
+        lines.append({"text": text, "score": round(score, 4), "box": box, "poly": [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]], "recovered": {"from": "margin re-read", "forLine": line["text"][:80], "dpi": REREAD_DPI if a.pdf else None}})
+        added += 1
+    return added
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdf")
@@ -155,9 +234,10 @@ def main():
                     ln["text"], ln["score"] = text, score
             else:
                 ln["reread"] = {"text": "", "score": 0.0, "dpi": dpi, "firstText": ln["text"], "firstScore": ln["score"]}
+        recovered = recover_labels(ocr, lines, a, img, tmp, width, height)
     from importlib.metadata import version
 
-    print(json.dumps({"engine": f"rapidocr {version('rapidocr')} PP-OCRv6", "width": width, "height": height, "dpi": a.dpi if a.pdf else None, "ink": round(ink, 5), "watermark": bool(clean), "rereads": rereads, "seconds": round(time.time() - t0, 2), "lines": lines}, ensure_ascii=False))
+    print(json.dumps({"engine": f"rapidocr {version('rapidocr')} PP-OCRv6", "width": width, "height": height, "dpi": a.dpi if a.pdf else None, "ink": round(ink, 5), "watermark": bool(clean), "rereads": rereads, "labelsRecovered": recovered, "seconds": round(time.time() - t0, 2), "lines": lines}, ensure_ascii=False))
     return 0
 
 

@@ -4113,8 +4113,10 @@ model AiImportAiCall {
   stage        String?
   /// Short hash of the system prompt sent (changes whenever the prompt changes).
   promptVersion String?
-  /// Provider gateway used (openrouter).
+  /// Provider gateway used (openrouter | openai — direct OpenAI, Import Settings).
   provider     String?
+  /// Input tokens served from the provider's prompt cache (null = not reported).
+  cachedTokens Int?
   /// Wall time of the request (ms) and the failure category (truncated, empty_response, timeout, rate_limited, …).
   durationMs   Int?
   errorCategory String?

@@ -15,6 +15,7 @@ import { summarizeFailures } from "@/lib/ai-import/failure";
 import { jobQuality, reconcileJob, settleJobStatus } from "@/lib/ai-import/summary";
 import { runVerify2, verify2Outcome, type Verify2State } from "@/lib/ai-import/paper-verify";
 import { runReferenceOcr, type ReferenceOcrState } from "@/lib/ai-import/reference-ocr";
+import { recordVerifyAnswersHistory, runVerifyAnswers, vaSettings, type VaState } from "@/lib/ai-import/verify-answers-run";
 import { formatInr } from "@/lib/ai-engine/config";
 import { removeVaultDir } from "@/lib/ai-import/vault";
 import { autoCleanup } from "@/lib/ai-import/storage";
@@ -162,7 +163,42 @@ async function referenceOcrJob(job: AiImportJob, state: ReferenceOcrState): Prom
   }
 }
 
+/**
+ * A confirmed Verify Answers (lib/ai-import/verify-answers-run.ts): only stores independent AI opinions in
+ * job.config.verifyAnswers. It never changes an answer, a key entry or a question's status, and never publishes.
+ */
+async function verifyAnswersJob(job: AiImportJob, state: VaState): Promise<void> {
+  const settings: ImporterSettings = vaSettings(job.config, await getImporterSettings());
+  if (job.status === AiImportJobStatus.QUEUED) {
+    if (!(await transition(job.id, [AiImportJobStatus.QUEUED], { status: AiImportJobStatus.PROCESSING, startedAt: job.startedAt ?? new Date() }))) return;
+    await logEvent(job.id, "VERIFY_ANSWERS_STARTED", `Verify Answers started${state.model ? ` with ${state.model}` : " (key check only)"}.`);
+  }
+  const ctx = makeContext({ ...job, status: AiImportJobStatus.PROCESSING }, settings, { exam: "", subject: null });
+  resetRateLimitStreak(job.id);
+  const finish = async (patch: Partial<VaState>, type: string, message: string) => {
+    const j = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: job.id }, select: { config: true, spentInr: true } });
+    const cfg = (j.config as Record<string, unknown>) ?? {};
+    const st = { ...(cfg.verifyAnswers as VaState), ...patch, actualInr: Math.max(0, j.spentInr - state.spentBeforeInr), finishedAt: new Date().toISOString() };
+    if (!(await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), config: { ...cfg, verifyAnswers: st } as unknown as Prisma.InputJsonValue }))) return;
+    const h = await recordVerifyAnswersHistory(job.id, st, st.actualInr);
+    await logEvent(job.id, type, `${message} ${h.checked} checked: ${h.counts.CONFIRMED} correctly mapped, ${h.counts.MISSING} missing, ${h.counts.INCORRECT_MAPPING} incorrect mapping, ${h.counts.DUPLICATE} duplicate, ${h.counts.WITHDRAWN} withdrawn, ${h.counts.AI_DISAGREES} AI disagreements, ${h.counts.MANUAL_REVIEW} manual review. Actual cost ${formatInr(st.actualInr)}.`, { counts: h.counts });
+    await settleJobStatus(job.id);
+  };
+  try {
+    const done = await runVerifyAnswers({ jobId: job.id, settings, stillRunning: ctx.stillRunning }, state);
+    if (!(await ctx.stillRunning())) return;
+    await finish({ status: "DONE", results: done.results, failed: done.failed, firstError: done.firstError ?? null }, "VERIFY_ANSWERS_DONE", `Verify Answers finished${done.failed.length ? ` (${done.failed.length} AI request(s) failed — run it again to retry only those${done.firstError ? `; first reason: ${done.firstError}` : ""})` : ""}.`);
+  } catch (e) {
+    const stop = e instanceof ImporterBudgetError || e instanceof ImporterAiUnavailable;
+    const message = e instanceof Error ? e.message.slice(0, 500) : "unexpected error";
+    if (!stop) console.error(`[ai-import] verify answers of job ${job.id} failed: ${message}`);
+    await finish({ status: "STOPPED", stopReason: message }, "VERIFY_ANSWERS_STOPPED", `Verify Answers stopped: ${message} Answers so far are kept; Verify Answers again resumes.`);
+  }
+}
+
 async function processJob(job: AiImportJob): Promise<void> {
+  const va = (job.config as { verifyAnswers?: VaState } | null)?.verifyAnswers;
+  if (va && (va.status === "QUEUED" || va.status === "RUNNING")) return verifyAnswersJob(job, va);
   const verify2 = (job.config as { verify2?: Verify2State } | null)?.verify2;
   if (verify2 && (verify2.status === "QUEUED" || verify2.status === "RUNNING")) return verify2Job(job, verify2);
   const refOcr = (job.config as { referenceOcr?: ReferenceOcrState } | null)?.referenceOcr;

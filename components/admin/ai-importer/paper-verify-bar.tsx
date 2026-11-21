@@ -11,6 +11,7 @@ import { importAction, importEligibleAction, saveFormatProfileAction, verify2Pre
 import type { PaperSummary, Verify2Preview } from "@/lib/ai-import/paper-verify";
 import { referenceStatusText } from "@/lib/ai-import/reference-status";
 import { BudgetCheck } from "@/components/admin/ai-importer/budget-check";
+import { VerifyAnswersButton } from "@/components/admin/ai-importer/verify-answers-button";
 
 const inr = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `₹${v.toFixed(2)}`);
 
@@ -36,7 +37,7 @@ function Stat({ id, label, value, tone, href }: { id: string; label: string; val
  * Review Exceptions → full-paper verification: Verify 1 (whole job, no AI), Verify 2 (independent model,
  * priced and confirmed first), the paper-level summary, and the two bulk import actions.
  */
-export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, canManage = false, hrefs }: { jobId: string; jobStatus: string; summary: PaperSummary; canUse: boolean; canPublish: boolean; canManage?: boolean; hrefs: { verified: string; v1Problems: string; v2Disagree: string; v2NoResult?: string; structure?: string; taxonomy?: string; answers?: string } }) {
+export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, canManage = false, hrefs, vaRunning = false }: { jobId: string; jobStatus: string; vaRunning?: boolean; summary: PaperSummary; canUse: boolean; canPublish: boolean; canManage?: boolean; hrefs: { verified: string; v1Problems: string; v2Disagree: string; v2NoResult?: string; structure?: string; taxonomy?: string; answers?: string } }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -72,7 +73,8 @@ export function PaperVerifyBar({ jobId, jobStatus, summary, canUse, canPublish, 
         <Button variant="outline" className="border-[var(--color-primary)]" disabled={!canUse || !finished || pending} onClick={() => loadPreview(null)} data-testid="verify2">
           Verify 2 — Independent Verification
         </Button>
-        <span className="text-xs text-[var(--color-muted-foreground)]">Verify 1 is free (no AI). Verify 2 reads the original paper again with a different model — its cost is shown and confirmed first.</span>
+        <VerifyAnswersButton jobId={jobId} finished={finished} canUse={canUse} running={vaRunning} />
+        <span className="text-xs text-[var(--color-muted-foreground)]">Verify 1 is free (no AI). Verify 2 reads the original paper again with a different model. Verify Answers checks the answer-key mapping of every question and, optionally, an independent AI answer — never changing the official key. Paid steps show their cost first.</span>
       </div>
       {!finished && <p className="text-xs text-[var(--color-warning)]" data-testid="verify-busy">{running ? `Verify 2 is running with ${v2!.model}…` : "Verification is available once processing has finished."}</p>}
       {v2 && (

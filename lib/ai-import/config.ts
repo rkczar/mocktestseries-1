@@ -89,6 +89,11 @@ export interface ImporterSettings {
   importerModels: string[];
   /** Manual override models (used only when selection.mode is "manual"). */
   models: ImporterModels;
+  /**
+   * Send openai/* models straight to OpenAI (the OpenAI key of Admin → AI → Providers) instead of through OpenRouter.
+   * Off by default; never used while Zero-Data-Retention is required. Prices, budget and logs work the same.
+   */
+  openaiDirect: boolean;
   privacy: {
     /** OpenRouter provider.data_collection for every importer call ("deny" = providers that do not store/train on prompts). */
     dataCollection: "deny" | "allow";
@@ -156,6 +161,7 @@ export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   selection: { mode: "auto" },
   importerModels: [],
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
+  openaiDirect: false,
   privacy: { dataCollection: "deny", zdr: true },
   budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: LEGACY_FIGURES.maxJobInr, maxJobInr: LEGACY_FIGURES.maxJobInr, totalInr: DEFAULT_TOTAL_INR, maxRequestInr: LEGACY_FIGURES.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
   limits: { maxFileMb: 100, maxPagesPerFile: 300, maxFilesPerJob: 10, renderDpi: 150, concurrency: 2 },
@@ -210,6 +216,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
       key: model(m.key),
       tiebreak: m.tiebreak === null ? null : (model(m.tiebreak) ?? DEFAULT_TIEBREAK_MODEL),
     },
+    openaiDirect: r.openaiDirect === true,
     privacy: {
       dataCollection: r.privacy?.dataCollection === "allow" ? "allow" : "deny",
       // ZDR is on unless an administrator explicitly switched it off.
@@ -253,7 +260,7 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
 
 // ---- Accepted files ---------------------------------------------------------------------------
 
-export const ACCEPTED_EXTENSIONS = ["pdf", "png", "jpg", "jpeg", "docx", "xlsx", "csv"] as const;
+export const ACCEPTED_EXTENSIONS = ["pdf", "png", "jpg", "jpeg", "docx", "xlsx", "csv", "md"] as const;
 export type AcceptedExtension = (typeof ACCEPTED_EXTENSIONS)[number];
 /** Refused with a clear reason (never parsed). */
 export const REFUSED_EXTENSIONS: Record<string, string> = {

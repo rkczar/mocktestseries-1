@@ -4,6 +4,7 @@ import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import { AiImportJobStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { decodeMarkdown, parseMarkdown } from "@/lib/ai-import/markdown";
 import { parseImportFile } from "@/lib/bulk-import";
 import { getImporterSettings } from "@/lib/ai-import/settings";
 import { CHUNK_BYTES } from "@/lib/ai-import/config";
@@ -137,6 +138,13 @@ async function readReference(full: string, kind: string, pages: number, jobId: s
     }
     const key = sheetPairs(bytes, kind);
     return { questions, key, textChars: bytes.length, note: !questions.length && !key.length ? "No questions or answer-key rows were recognized in the spreadsheet." : null };
+  } else if (kind === "md") {
+    const bytes = await readFile(full);
+    const md = parseMarkdown(decodeMarkdown(bytes));
+    const multi = md.papers.length > 1;
+    for (const p of md.papers) for (const q of p.questions) questions.push(toRef({ ...q, section: multi ? p.section : "" }));
+    const key = md.papers.flatMap((p) => p.key.map((e) => ({ number: e.number, section: multi ? p.section : "", raw: e.raw })));
+    return { questions, key, textChars: bytes.length, note: !questions.length && !key.length ? "No questions or answer-key entries were recognized in the Markdown file." : null };
   } else {
     return { questions: [], key: [], textChars: 0, note: "An image has no text layer: it is kept with the import for side-by-side checks, but it cannot be compared without paid AI.", scannedPages: 1 };
   }

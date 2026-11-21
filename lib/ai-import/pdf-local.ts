@@ -3,8 +3,12 @@
  * into questions, including deterministic figure ↔ stem/option mapping from
  * positions. Pure: the caller supplies the layout read by lib/ai-import/pdf.ts.
  */
-import { UNNUMBERED, blockToQuestion, markersOf, orderSegments, scriptFragments, splitQuestions, type Line, type NumberingState } from "@/lib/ai-import/local-parse";
+import { UNNUMBERED, blockToQuestion, markersOf, orderSegments, scriptFragments, splitQuestions, type Block, type Line, type NumberingState } from "@/lib/ai-import/local-parse";
 import type { ExtractedFigure, ExtractedQuestion, NBox, PageExtraction } from "@/lib/ai-import/types";
+import { detectTables, tableMarkdown, type DetectedTable } from "@/lib/ai-import/table-detect";
+
+/** Same prefix as lib/ai-import/adapter.ts TABLE_CROP (kept literal: adapter is server-only). */
+const TABLE_CROP = "Original table crop";
 
 export interface LocalLayout {
   lines: { text: string; box: NBox; conf?: number }[];
@@ -38,7 +42,9 @@ export function parsePdfPageLocal(layout: LocalLayout, page: number, state: Numb
   if (fragments > 0) reasons.push(`${fragments} small text fragment(s) look like subscripts/superscripts the text layer flattened`);
 
   const positioned: Positioned[] = blocks.map((b, i) => {
-    const { q, split } = blockToQuestion(b, page, ocr ? "LOCAL_OCR" : "LOCAL_PDF");
+    const tables = detectTables(b.lines);
+    const { q, split } = blockToQuestion(tables.length ? withTableTokens(b, tables) : b, page, ocr ? "LOCAL_OCR" : "LOCAL_PDF");
+    applyTables(q, tables, page);
     if (b.label === UNNUMBERED) {
       q.number = null;
       q.label = `p${page}-${i + 1}-unnumbered`;
@@ -181,4 +187,41 @@ export function joinPreamble(previous: ExtractedQuestion | null, preamble: strin
   if (previous.ocr) merged.q.ocr = { ...previous.ocr, text: `${previous.ocr.text}\n${preamble}` };
   if (previous.region) merged.q.region = previous.region;
   return merged.q;
+}
+
+/** The block with each table's lines replaced by one token line (the stem builder would otherwise join its rows). */
+function withTableTokens(b: Block, tables: DetectedTable[]): Block {
+  const lines: Line[] = [];
+  b.lines.forEach((l, i) => {
+    const k = tables.findIndex((t) => t.from <= i && i <= t.to);
+    if (k < 0) lines.push(l);
+    else if (tables[k].from === i) lines.push({ ...l, text: `⟦TABLE:${k}⟧`, segs: l.segs });
+  });
+  return { ...b, lines, text: lines.map((l) => l.text).join("\n") };
+}
+
+/**
+ * Tables of a question block: the token is replaced by the same cells as a pipe table (rich format, `$` escaped when
+ * the text was plain), and the original region is always kept as a crop (review evidence; students see the crop only
+ * when the table could not be rebuilt). A token that is not in the stem (it landed in an option) is put back as the
+ * cells' text, flagged, with the crop shown.
+ */
+export function applyTables(q: ExtractedQuestion, tables: DetectedTable[], page: number): void {
+  tables.forEach((t, k) => {
+    const token = `⟦TABLE:${k}⟧`;
+    const rebuilt = q.stem.includes(token);
+    const esc = q.contentFormat === "RICH_V1" || !rebuilt ? (x: string) => x : (x: string) => x.replace(/(?<!\\)\$/g, "\\$");
+    if (rebuilt) {
+      q.stem = esc(q.stem).replace(new RegExp(`\\s*${token}\\s*`), `\n${tableMarkdown(t.rows.map((r) => r.map(esc)))}\n`).trim();
+      q.options = q.options.map((o) => ({ ...o, text: esc(o.text) }));
+      q.contentFormat = "RICH_V1";
+    } else {
+      const flat = t.rows.map((r) => r.filter(Boolean).join("  ")).join("\n");
+      q.options = q.options.map((o) => ({ ...o, text: o.text.replace(token, flat) }));
+      q.stem = q.stem.replace(token, flat);
+    }
+    q.figures.push({ owner: "STEM", box: t.box, confidence: rebuilt ? 0.9 : 0.6, description: `${TABLE_CROP} (page ${page}, ${t.rows.length} rows × ${t.rows[0].length} columns)` });
+    q.notes = [...(q.notes ?? []), rebuilt ? `A table (${t.rows.length} × ${t.rows[0].length}) on page ${page} is kept row by row as a table; its original crop is attached for checking.` : `A table on page ${page} could not be placed in the question text safely: its text is kept as read and the original crop is shown with the question — check it.`];
+    q.confidence = Math.min(q.confidence, rebuilt ? 0.85 : 0.6);
+  });
 }

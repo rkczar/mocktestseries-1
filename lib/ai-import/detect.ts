@@ -8,7 +8,7 @@ import { readZipDirectory } from "@/lib/ai-import/zip-peek";
  * the extension alone: the extension must agree with the detected type.
  */
 
-export type DetectedKind = "pdf" | "png" | "jpeg" | "docx" | "xlsx" | "csv";
+export type DetectedKind = "pdf" | "png" | "jpeg" | "docx" | "xlsx" | "csv" | "md";
 
 export interface Detection {
   ok: boolean;
@@ -24,6 +24,7 @@ const MIME: Record<DetectedKind, string> = {
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   csv: "text/csv",
+  md: "text/markdown",
 };
 
 export function extensionOf(name: string): string {
@@ -35,7 +36,7 @@ export function extensionOf(name: string): string {
 export function checkFilename(name: string): { ok: true; ext: AcceptedExtension } | { ok: false; reason: string } {
   const ext = extensionOf(name);
   if (REFUSED_EXTENSIONS[ext]) return { ok: false, reason: REFUSED_EXTENSIONS[ext] };
-  if (!(ACCEPTED_EXTENSIONS as readonly string[]).includes(ext)) return { ok: false, reason: `".${ext || "?"}" files are not supported. Upload PDF, PNG, JPG, DOCX, XLSX or CSV.` };
+  if (!(ACCEPTED_EXTENSIONS as readonly string[]).includes(ext)) return { ok: false, reason: `".${ext || "?"}" files are not supported. Upload PDF, PNG, JPG, DOCX, XLSX, CSV or Markdown (.md).` };
   if (name.length > 200 || /[\u0000-\u001f]/.test(name)) return { ok: false, reason: "The file name is too long or contains control characters." };
   return { ok: true, ext: ext as AcceptedExtension };
 }
@@ -51,7 +52,7 @@ async function head(full: string, n: number): Promise<Buffer> {
   }
 }
 
-const expected: Record<AcceptedExtension, DetectedKind> = { pdf: "pdf", png: "png", jpg: "jpeg", jpeg: "jpeg", docx: "docx", xlsx: "xlsx", csv: "csv" };
+const expected: Record<AcceptedExtension, DetectedKind> = { pdf: "pdf", png: "png", jpg: "jpeg", jpeg: "jpeg", docx: "docx", xlsx: "xlsx", csv: "csv", md: "md" };
 
 /** Detects the real type of an assembled upload and checks it agrees with its extension. */
 export async function detectFile(full: string, ext: AcceptedExtension): Promise<Detection> {
@@ -84,8 +85,14 @@ export async function detectFile(full: string, ext: AcceptedExtension): Promise<
     const text = h.toString("utf8");
     if (text.includes("�") && h.length < 4096) return { ok: false, reason: "The CSV file is not UTF-8 text." };
     kind = "csv";
+  } else if (ext === "md") {
+    // Markdown: UTF-8 text (BOM allowed), no NUL bytes. The whole file is checked when it is read (process/analyze).
+    if (h.includes(0)) return { ok: false, reason: "The Markdown file contains binary data." };
+    const text = h.toString("utf8");
+    if (text.includes("\uFFFD") && h.length < 4096) return { ok: false, reason: "The Markdown file is not UTF-8 text." };
+    kind = "md";
   }
-  if (!kind) return { ok: false, reason: "The file content does not match any supported type (PDF, PNG, JPG, DOCX, XLSX, CSV)." };
+  if (!kind) return { ok: false, reason: "The file content does not match any supported type (PDF, PNG, JPG, DOCX, XLSX, CSV, Markdown)." };
   if (expected[ext] !== kind) return { ok: false, reason: `The file is named .${ext} but its content is ${kind.toUpperCase()}. Rename it correctly and upload again.` };
   return { ok: true, kind, mime: MIME[kind] };
 }

@@ -5,6 +5,7 @@ import { AiImportFileRole, AiImportFileStatus, type AiImportFile, type Prisma } 
 import { prisma } from "@/lib/prisma";
 import { runTool } from "@/lib/ai-import/tools";
 import { readDocx } from "@/lib/ai-import/docx";
+import { decodeMarkdown, parseMarkdown } from "@/lib/ai-import/markdown";
 import { vaultPath } from "@/lib/ai-import/vault";
 import { importerAiCallChecked, parseModelJson, ImporterAiFailure, ImporterAiUnavailable } from "@/lib/ai-import/ai";
 import { failureMessage } from "@/lib/ai-import/failure";
@@ -435,6 +436,10 @@ export async function runKeyFiles(ctx: StepContext): Promise<void> {
       pairs = parseKeyText(text).map((x) => ({ ...x, page: 1 }));
     } else if (kind === "xlsx" || kind === "csv") {
       pairs = sheetPairs(await readFile(full), kind);
+    } else if (kind === "md") {
+      // A key-only (or paper + key) Markdown file: its key tables / lines, read locally, per paper section.
+      const md = parseMarkdown(decodeMarkdown(await readFile(full)));
+      pairs = md.papers.flatMap((p) => p.key.map((e) => ({ number: e.number, section: md.papers.length > 1 ? p.section : "", raw: e.raw, page: 1 })));
     } else if ((kind === "png" || kind === "jpeg") && (ocrRead = await ocrKeyPage(full, kind, 1, maxKeyNumber))) {
       const rec = await recoverKeyCells(ctx, await readFile(full), ocrRead.ocr, ocrRead.pairs, 1);
       pairs = [...ocrRead.pairs, ...rec.pairs];
