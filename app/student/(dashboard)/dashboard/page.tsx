@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 import { getPublicTelegramChannel } from "@/lib/telegram-channel";
 import { requireStudentOrLogin } from "@/lib/student-session";
 import {
+  getActiveExamsCatalog,
   getDashboardMetrics,
   getEnrolledExams,
   getExamScopedDashboardMetrics,
@@ -31,6 +31,8 @@ import { ReviewsSection } from "@/components/homepage/reviews-section";
 import { getDashboardLiveCbtPromotion } from "@/lib/live-cbt";
 import { getSiteUrl } from "@/lib/site-url";
 import { TrialPopup } from "./trial-popup";
+import { ExamEnrollPopup } from "./exam-enroll-popup";
+import { examShortName } from "@/lib/exam-editorial-facts";
 import { TrackOnce } from "@/components/analytics/track-once";
 import { claimSignupEvent } from "@/lib/signup-tracking";
 import { shouldShowUpgradeBanner, UpgradeBanner } from "@/components/student/upgrade-banner";
@@ -61,8 +63,14 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
     const outcome = await ensureDefaultExamEnrollment(student.id);
     if (outcome.status === "ENROLLED") enrolledExams = await getEnrolledExams(student.id);
     // Two or more active exams and no enrollment yet: the student chooses (never auto-enrolled).
-    if (outcome.status === "NEEDS_CHOICE") redirect("/student/welcome");
   }
+
+  // No ACTIVE-exam enrollment left (two or more active exams, no default, or opted out): the mandatory
+  // "Select Your Exam" popup asks for one; choosing enrolls through the existing /student/welcome action.
+  const needsExamChoice = !enrolledExams.some((e) => e.isActive);
+  const popupExams = needsExamChoice
+    ? (await getActiveExamsCatalog(student.id)).map((e) => ({ id: e.id, code: e.code, name: e.name, shortName: examShortName(e.code, e.name) }))
+    : [];
 
   // If only one Exam is enrolled it's auto-selected; if multiple, the cookie
   // (last switch, if it's still one of this student's enrollments) wins;
@@ -185,7 +193,8 @@ export default async function StudentDashboardPage({ searchParams }: { searchPar
       {signup ? <TrackOnce event="sign_up" onceKey={`sign_up:${student.id}`} params={{ exam_code: enrolledExams.find((e) => e.id === activeExamId)?.code ?? null }} /> : null}
       {/* Keyed: arriving at ?premium=locked from the dashboard itself must remount it, or the once-per-mount claim never runs. */}
       {/* The trial belongs to the Premium policy exam: never prompt on another exam's dashboard. */}
-      {!activeExamId || !premiumPolicy.examId || activeExamId === premiumPolicy.examId ? <TrialPopup key={premiumLocked ? "locked" : "entry"} force={premiumLocked} /> : null}
+      {needsExamChoice ? <ExamEnrollPopup exams={popupExams} /> : null}
+      {!needsExamChoice && (!activeExamId || !premiumPolicy.examId || activeExamId === premiumPolicy.examId) ? <TrialPopup key={premiumLocked ? "locked" : "entry"} force={premiumLocked} /> : null}
     </div>
   );
 }
