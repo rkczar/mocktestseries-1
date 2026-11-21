@@ -6,6 +6,7 @@ import { BrandLogo } from "@/components/brand/BrandLogo";
 import { LoginForm } from "./login-form";
 import { AdminLoginOptions } from "./otp-login-form";
 import { CacheTools } from "./cache-tools";
+import { isAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
 
 export const metadata = { title: "Admin Login — Mock Test Series.in", robots: { index: false, follow: false } };
 
@@ -18,6 +19,7 @@ export default async function AdminLoginPage({
   if (session?.user) redirect(session.user.role === "TEACHER" ? "/teacher" : "/admin");
 
   const { callbackUrl } = await searchParams;
+  const otpEnabled = await isAdminOtpLoginEnabled();
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[var(--color-background)] px-4 py-12">
@@ -41,7 +43,11 @@ export default async function AdminLoginPage({
           <p className="mb-6 text-sm text-[var(--color-muted-foreground)]">
             Authorized administrators only.
           </p>
-          <AdminLoginOptions callbackUrl={callbackUrl ?? "/admin"} passwordForm={<LoginForm callbackUrl={callbackUrl ?? "/admin"} />} />
+          {otpEnabled ? (
+            <AdminLoginOptions callbackUrl={callbackUrl ?? "/admin"} passwordForm={<LoginForm callbackUrl={callbackUrl ?? "/admin"} />} />
+          ) : (
+            <LoginForm callbackUrl={callbackUrl ?? "/admin"} />
+          )}
         </div>
 
         <p className="mt-6 text-center text-xs text-[var(--color-muted-foreground)]">

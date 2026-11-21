@@ -1,5 +1,5 @@
 /**
- * Admin Login — password login unchanged + optional "Login with OTP" (browser; scratch server on mts_aotp with the
+ * Admin Login — password login unchanged + optional "Login with OTP" + its Master-Admin switch (browser; switch must start missing/OFF; scratch server on mts_aotp with the
  * Resend mock; never real email). BASE=… RESEND_MOCK_FILE=… SHOTS=<dir> NODE_PATH=<playwright> node scripts/verify-admin-otp-login-ui.mjs
  */
 import { createRequire } from "node:module";
@@ -8,11 +8,45 @@ const { chromium } = createRequire(import.meta.url)("playwright");
 const { BASE, RESEND_MOCK_FILE: FILE, SHOTS } = process.env;
 fs.mkdirSync(SHOTS, { recursive: true });
 let pass = 0, fail = 0;
-const check = (n, ok, d) => { ok ? pass++ : fail++; console.log(`  ${ok ? "PASS" : "FAIL"}  ${n}${!ok && d !== undefined ? ` — ${JSON.stringify(d).slice(0, 200)}` : ""}`); };
+const check = (n, ok, d) => { if (ok) pass++; else fail++; console.log(`  ${ok ? "PASS" : "FAIL"}  ${n}${!ok && d !== undefined ? ` — ${JSON.stringify(d).slice(0, 200)}` : ""}`); };
 const code = (to) => /\b(\d{6})\b/.exec([...(JSON.parse(fs.readFileSync(FILE, "utf8")).messages)].reverse().find((m) => m.to === to)?.text ?? "")?.[1];
 const browser = await chromium.launch();
 const fresh = async (w = 1366) => (await browser.newContext({ viewport: { width: w, height: 900 } })).newPage();
+const pwLogin = async (p, user) => {
+  await p.goto(`${BASE}/admin/login`);
+  await p.fill("input[name=username]", user); await p.fill("input[name=password]", "Ui-Pass-12345!");
+  await Promise.all([p.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), p.locator("form button[type=submit]").click()]);
+};
+const setSwitch = async (p, on) => {
+  await p.goto(`${BASE}/admin/settings/security`);
+  const sw = p.getByTestId("admin-otp-switch");
+  if (((await sw.getAttribute("aria-checked")) === "true") !== on) await sw.click();
+  const form = p.locator("form", { has: sw });
+  await form.locator("button[type=submit]").click();
+  await form.getByText("Saved").waitFor();
+};
 try {
+  console.log("\n=== switch missing → OFF: password form only");
+  let m = await fresh();
+  await m.goto(`${BASE}/admin/login`);
+  check("OFF: no OTP tabs, only the password form", (await m.getByTestId("admin-login-tab-otp").count()) === 0 && (await m.getByTestId("admin-login-tab-password").count()) === 0 && (await m.locator("input[name=username]").count()) === 1 && (await m.locator("input[name=password]").count()) === 1);
+  await m.screenshot({ path: `${SHOTS}/00-switch-off-login.png` });
+  await pwLogin(m, "otp-master");
+  check("OFF: password login → /admin", /\/admin(?!\/login)/.test(m.url()));
+  await m.goto(`${BASE}/admin/settings/security`);
+  check("Master Admin sees the switch, OFF, editable", (await m.getByTestId("admin-otp-switch").getAttribute("aria-checked")) === "false" && !(await m.getByTestId("admin-otp-switch").isDisabled()));
+  let f = await fresh();
+  await pwLogin(f, "otp-full");
+  await f.goto(`${BASE}/admin/settings/security`);
+  check("FULL_ADMIN cannot see or change the switch", (await f.getByTestId("admin-otp-switch").count()) === 0);
+  await setSwitch(m, true);
+  await m.screenshot({ path: `${SHOTS}/00b-switch-on-settings.png` });
+  {
+    const q = await fresh();
+    await q.goto(`${BASE}/admin/login`);
+    check("ON: login page now offers the OTP tab", (await q.getByTestId("admin-login-tab-otp").count()) === 1);
+  }
+
   console.log("\n=== password login unchanged");
   let p = await fresh();
   await p.goto(`${BASE}/admin/login`);
@@ -74,4 +108,10 @@ try {
   await Promise.all([p.waitForURL(/\/admin(?!\/login)/, { timeout: 30000 }), p.getByTestId("admin-otp-verify").click()]);
   check("FULL_ADMIN signed in by OTP shows FULL ADMIN role", (await p.content()).includes("FULL ADMIN"));
   await p.screenshot({ path: `${SHOTS}/04-phone-full-admin.png` });
+
+  console.log("\n=== switch back OFF");
+  await setSwitch(m, false);
+  p = await fresh();
+  await p.goto(`${BASE}/admin/login`);
+  check("OFF again: OTP tab gone", (await p.getByTestId("admin-login-tab-otp").count()) === 0 && (await p.locator("input[name=password]").count()) === 1);
 } catch (e) { fail++; console.error(e); } finally { await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); }

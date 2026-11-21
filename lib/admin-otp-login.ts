@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { EmailOtpError, normalizeEmail, sendEmailOtp, verifyEmailOtp } from "@/lib/email-otp";
 import { isAdminLoginBlocked } from "@/lib/auth-rate-limit";
+import { isAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
 
 /**
  * Optional "Login with OTP" for the Admin Login page (owner request 2026-11-21). Password login is unchanged.
@@ -30,6 +31,7 @@ async function findOtpAdmin(identifierRaw: string) {
 
 /** Sends a code when the identifier is an eligible admin; always answers the same way. */
 export async function requestAdminLoginOtp(identifier: string, ipAddress: string): Promise<string> {
+  if (!(await isAdminOtpLoginEnabled())) return ADMIN_OTP_SENT;
   const admin = await findOtpAdmin(identifier);
   if (!admin) return ADMIN_OTP_SENT;
   try {
@@ -47,6 +49,7 @@ export async function authorizeAdminOtp(identifierRaw: unknown, codeRaw: unknown
   const identifier = String(identifierRaw ?? "").trim().toLowerCase();
   const code = String(codeRaw ?? "").trim();
   if (!identifier || !/^\d{6}$/.test(code)) return null;
+  if (!(await isAdminOtpLoginEnabled())) return null;
   const admin = await findOtpAdmin(identifier);
   // Rate limit on the same LoginAttempt table / lockout as password login, keyed by the account's username.
   const key = admin?.username ?? identifier;

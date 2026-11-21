@@ -1,5 +1,5 @@
 /**
- * Admin "Login with OTP" (library level; scratch DB mts_aotp only; Resend answered in-process — no real email).
+ * Admin "Login with OTP" + its emergency switch (library level; scratch DB mts_aotp / mts_aotp_sw only; Resend answered in-process — no real email).
  *   NODE_OPTIONS="--conditions=react-server --import ./scripts/resend-mock.mjs" RESEND_MOCK_FILE=<tmp>/resend.json \
  *   RESEND_API_KEY=re_mock_test_key AUTH_SECRET=… DATABASE_URL=<scratch mts_aotp> npx tsx scripts/verify-admin-otp-login.ts
  */
@@ -8,8 +8,9 @@ import argon2 from "argon2";
 import { prisma } from "@/lib/prisma";
 import { ADMIN_OTP_SENT, authorizeAdminOtp, requestAdminLoginOtp } from "@/lib/admin-otp-login";
 import { setEmailOtpEnabled } from "@/lib/email-otp";
+import { ADMIN_OTP_SETTING_KEY, clearAdminOtpLoginCache, isAdminOtpLoginEnabled, saveAdminOtpLoginEnabled } from "@/lib/admin-otp-settings";
 
-if (!/\/mts_aotp(\?|$)/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing: not the scratch mts_aotp database.");
+if (!/\/mts_aotp(_sw)?(\?|$)/.test(process.env.DATABASE_URL ?? "")) throw new Error("Refusing: not the scratch mts_aotp database.");
 const FILE = process.env.RESEND_MOCK_FILE!;
 let pass = 0;
 let fail = 0;
@@ -45,6 +46,44 @@ async function main() {
   await mk("otp-off", "off@aotp.example.test", "MASTER_ADMIN", false);
   await mk("otp-teacher", "teacher@aotp.example.test", "TEACHER");
   await mk("otp-noemail", null, "MASTER_ADMIN");
+
+  console.log("\n=== emergency switch (security.admin_otp_login)");
+  await prisma.setting.deleteMany({ where: { key: ADMIN_OTP_SETTING_KEY } });
+  clearAdminOtpLoginCache();
+  check("missing setting → OFF", (await isAdminOtpLoginEnabled()) === false);
+  for (const bad of [{}, { enabled: "true" }, { enabled: 1 }, "on", true]) {
+    await prisma.setting.upsert({ where: { key: ADMIN_OTP_SETTING_KEY }, create: { key: ADMIN_OTP_SETTING_KEY, value: bad }, update: { value: bad } });
+    clearAdminOtpLoginCache();
+    check(`malformed value ${JSON.stringify(bad)} → OFF`, (await isAdminOtpLoginEnabled()) === false);
+  }
+  await prisma.setting.update({ where: { key: ADMIN_OTP_SETTING_KEY }, data: { value: { enabled: true } } });
+  const realFind = prisma.setting.findUnique;
+  (prisma.setting as { findUnique: unknown }).findUnique = async () => { throw new Error("simulated read failure"); };
+  clearAdminOtpLoginCache();
+  check("setting read failure → OFF", (await isAdminOtpLoginEnabled()) === false);
+  (prisma.setting as { findUnique: unknown }).findUnique = realFind;
+  check("read failure is not cached (next read sees the stored ON)", (await isAdminOtpLoginEnabled()) === true);
+  await saveAdminOtpLoginEnabled(true);
+  clearAdminOtpLoginCache();
+  check("ON saved → ON", (await isAdminOtpLoginEnabled()) === true && (await prisma.setting.findUnique({ where: { key: ADMIN_OTP_SETTING_KEY } }))?.value !== null);
+  // Get a valid code while ON, then switch OFF: request suppressed, the valid code is rejected.
+  await requestAdminLoginOtp("otp-master", IP);
+  const offCode = lastCode("master@aotp.example.test");
+  const sentWhileOn = mails().length;
+  await saveAdminOtpLoginEnabled(false);
+  check("OFF: request → generic answer", (await requestAdminLoginOtp("otp-master", IP)) === ADMIN_OTP_SENT);
+  check("OFF: no email sent", mails().length === sentWhileOn && sentWhileOn === 1);
+  const offAttempts = await prisma.loginAttempt.count();
+  check("OFF: valid code rejected", (await authorizeAdminOtp("otp-master", offCode, IP)) === null);
+  check("OFF: rejection writes no login attempt / never checks the code", (await prisma.loginAttempt.count()) === offAttempts);
+  clearAdminOtpLoginCache();
+  check("OFF persists after cache drop", (await isAdminOtpLoginEnabled()) === false);
+  await saveAdminOtpLoginEnabled(true);
+  check("back ON: the same still-valid code now signs in", (await authorizeAdminOtp("otp-master", offCode, IP))?.id === master.id);
+  await prisma.emailOtpRequest.deleteMany({});
+  await prisma.loginAttempt.deleteMany({});
+  fs.writeFileSync(FILE, JSON.stringify({ messages: [] }));
+  // The remaining suite exercises the feature with the switch ON.
 
   console.log("\n=== request: same answer for everyone, code only to eligible accounts");
   for (const id of ["nobody", "nobody@example.test", "otp-off", "otp-teacher", "otp-noemail"]) check(`no code + generic answer for ${id}`, (await requestAdminLoginOtp(id, IP)) === ADMIN_OTP_SENT);
