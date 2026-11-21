@@ -23,7 +23,7 @@ export const STATUS_MAIN: Record<string, Def> = {
   all: { label: "All", hint: "Every question of the paper, including rejected ones." },
   exceptions: { label: "Needs review", hint: "Needs correction, not importable, duplicate, import failed or still being read — except Subject / topic only." },
   "taxonomy-only": { label: "Subject / topic only", hint: "Wording, options and answer verified (Verify 1 passed, Verify 2 agrees, official key matched); only the subject / topic is open. Never imported or published until it is set." },
-  READY: { label: "Ready", hint: "Passed every mandatory check (approved or not)." },
+  READY: { label: "Checks passed", hint: "Passed every mandatory automated check — approval is separate." },
   approval: { label: "↳ of Ready: awaiting approval", hint: "Part of Ready: not approved yet, not in the Question Bank." },
   imported: { label: "Imported", hint: "Saved in the Question Bank (draft or published)." },
   REJECTED: { label: "Rejected", hint: "Rejected by an administrator; never enters the Question Bank." },

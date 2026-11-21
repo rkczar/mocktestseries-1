@@ -15,10 +15,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ANSWER_STATUS_LABELS, ISSUE_DEFS, QUESTION_STATUS_LABELS } from "@/lib/ai-import/config";
 import { getImporterSettings } from "@/lib/ai-import/settings";
-import { importBlocker, publishBlocker } from "@/lib/ai-import/adapter";
+import { importBlocker, publishBlocker, studentPreviewOf } from "@/lib/ai-import/adapter";
+import { QuestionPreviewBody } from "@/components/content/question-preview-body";
 import { effective, textOnlyConfirmed } from "@/lib/ai-import/post";
 import { statusVariant } from "@/lib/ai-import/config";
-import { QuestionReview, type RescanCompareView, type VersionView } from "./question-review";
+import { QuestionReview, ReviewNav, type RescanCompareView, type VersionView } from "./question-review";
 import { PaperMapping } from "@/components/admin/ai-importer/paper-mapping";
 import { jobMapping } from "@/lib/ai-import/job-view";
 import { compareVersions, snapshotFigures, type FigureSnapshot } from "@/lib/ai-import/versions";
@@ -65,6 +66,13 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     jobMapping(q.jobId),
     prisma.aiImportQuestionVersion.findMany({ where: { questionId: q.id }, orderBy: { createdAt: "desc" }, take: 50 }),
   ]);
+  // Previous / next question of the same import, in paper order (orderIndex, then id for ties).
+  const sameJob = { jobId: q.jobId, id: { not: q.id } };
+  const [prevQ, nextQ] = await Promise.all([
+    prisma.aiImportQuestion.findFirst({ where: { ...sameJob, OR: [{ orderIndex: { lt: q.orderIndex } }, { orderIndex: q.orderIndex, id: { lt: q.id } }] }, orderBy: [{ orderIndex: "desc" }, { id: "desc" }], select: { id: true, sourceLabel: true } }),
+    prisma.aiImportQuestion.findFirst({ where: { ...sameJob, OR: [{ orderIndex: { gt: q.orderIndex } }, { orderIndex: q.orderIndex, id: { gt: q.id } }] }, orderBy: [{ orderIndex: "asc" }, { id: "asc" }], select: { id: true, sourceLabel: true } }),
+  ]);
+  const nav = { prev: prevQ, next: nextQ };
   const file = await prisma.aiImportFile.findUnique({ where: { id: q.fileId }, select: { originalName: true, detected: true, status: true, storageKey: true, pageCount: true } });
   const actorIds = [...new Set([...versions.map((v) => v.actorId), q.approvedById].filter((x): x is string => !!x))];
   const actors = new Map((await prisma.adminUser.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, email: true } })).map((a) => [a.id, a.name || a.email]));
@@ -177,8 +185,9 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     ...(vsNow.pv?.v2 ? [{ key: "v2", kind: "v2" as const, at: vsNow.pv.v2.at, model: vsNow.pv.v2.model, versionId: vsNow.pv.v2.versionId ?? null, outcome: vsNow.pv.v2.status, summary: vsNow.pv.v2.detail.slice(0, 300), label: vsNow.v2 === "stale" ? (["VERIFIED", "DISAGREE", "NOT_FOUND"].includes(vsNow.pv.v2.status) ? "re-verification needed (the question changed after it)" : "historical (the question changed after it)") : "current" }] : []),
   ].sort((a, b) => b.at.localeCompare(a.at));
   const strip = reviewStatus(q, vsNow, ISSUE_DEFS);
+  // "verified" covers two different things: the official key, or an administrator's own choice — never call both "Verified".
   const ANSWER_SOURCE: Record<string, { label: string; color: string }> = {
-    verified: { label: "Verified", color: "text-[var(--color-success)]" },
+    verified: q.answerConfirmedById ? { label: "Chosen by an administrator (not the official key)", color: "text-[var(--color-warning)]" } : { label: "Matches the official key", color: "text-[var(--color-success)]" },
     provisional: { label: "Provisional", color: "text-[var(--color-warning)]" },
     conflict: { label: "Conflict", color: "text-[var(--color-error)]" },
     missing: { label: "Missing", color: "text-[var(--color-error)]" },
@@ -198,9 +207,19 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
     ) : (
       <span className="text-xs text-[var(--color-error)]">Figure missing{f.description ? ` — ${f.description}` : ""}</span>
     );
+  let student: ReturnType<typeof studentPreviewOf> | null = null;
+  let studentError: string | null = null;
+  try {
+    student = studentPreviewOf(q, e, q.figures);
+  } catch (err) {
+    studentError = err instanceof Error ? err.message : "the question cannot be shown as stored";
+  }
+  const editable = canUse && q.status !== "IMPORTED" && q.status !== "PUBLISHED";
+  const approval = !q.approvedById ? { label: "Not approved", variant: "neutral" as const } : approvalOutdatedBy(q.approvedAt, vsNow) ? { label: "Out of date", variant: "warning" as const } : { label: "Approved", variant: "success" as const };
   return (
     <div className="flex flex-col gap-4">
       {mapping && <PaperMapping m={mapping} compact />}
+      {!editable && <ReviewNav prev={nav.prev} next={nav.next} />}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold text-[var(--color-foreground)]">
@@ -225,10 +244,13 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
         </div>
         <div className="flex flex-wrap gap-2">
           <Badge variant={statusVariant(q.status)} data-testid="q-status">
-            {QUESTION_STATUS_LABELS[q.status]}
+            Question verification: {QUESTION_STATUS_LABELS[q.status]}
           </Badge>
           <Badge variant={statusVariant(q.answerStatus)} data-testid="q-answer-status">
-            {ANSWER_STATUS_LABELS[q.answerStatus]}
+            Answer key: {ANSWER_STATUS_LABELS[q.answerStatus]}
+          </Badge>
+          <Badge variant={approval.variant} data-testid="q-approval-status">
+            Admin approval: {approval.label}
           </Badge>
           {q.questionId &&
             (savedExists ? (
@@ -258,6 +280,15 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           {strip.flag ? `Flag: ${strip.flag.label}${strip.flag.reason ? ` — ${strip.flag.reason}` : ""}` : "No data-error flag"}
         </span>
       </div>
+      <Card data-testid="student-preview">
+        <CardHeader>
+          <CardTitle>Student preview</CardTitle>
+          <CardDescription>Exactly as it will be stored and shown in the test player (same renderer), with the answer that will be saved marked.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {student ? <QuestionPreviewBody q={student.q} assets={student.assets} /> : <p className="text-sm text-[var(--color-error)]" data-testid="student-preview-error">Cannot be shown as students would see it: {studentError}.</p>}
+        </CardContent>
+      </Card>
       <Card data-testid="field-verification-card">
         <CardHeader>
           <CardTitle>Field verification</CardTitle>
@@ -298,7 +329,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Extracted question (preview)</CardTitle>
+            <CardTitle>Extracted question (details)</CardTitle>
             <CardDescription>{e.type.replace(/_/g, " ").toLowerCase()} · {e.options.length} option(s) · {fmt === "RICH_V1" ? "formulas rendered" : "plain text"} · confidence {Math.round((q.confidence ?? 0) * 100)}%</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm" data-testid="q-preview">
@@ -557,6 +588,7 @@ export default async function ImportQuestionPage({ params }: { params: Promise<{
           taxonomy={taxonomy.map((s) => ({ id: s.id, name: s.name, topics: s.topics.map((t) => ({ id: t.id, name: t.name, subTopics: t.subTopics.map((st) => ({ id: st.id, name: st.name })) })) }))}
           compare={compare}
           history={history}
+          nav={nav}
         />
       )}
     </div>

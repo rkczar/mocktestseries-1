@@ -4,6 +4,7 @@ import { QuestionMedia } from "@/components/content/question-media";
 import { HumanExplanation } from "@/components/content/human-explanation";
 import { MatchLists } from "@/components/content/match-lists";
 import { liveMatchView, liveRichViews } from "@/lib/rich-content";
+import type { AssetView } from "@/lib/rich-content-types";
 
 /**
  * The full question as students see it — stem (rich text, images, diagrams),
@@ -12,8 +13,12 @@ import { liveMatchView, liveRichViews } from "@/lib/rich-content";
  * Teacher Portal question list (expand) and question page. Staff only: it
  * shows the answer key.
  */
-export function QuestionPreviewBody({ q }: { q: PreviewQuestion }) {
-  const { rich, explanation } = liveRichViews(q);
+export function QuestionPreviewBody({ q, assets }: { q: PreviewQuestion; assets?: AssetView[] }) {
+  const views = liveRichViews(q);
+  const explanation = views.explanation;
+  // `assets`: ready-made views from trusted server code (the AI Importer's not-yet-imported figures, served by its own
+  // admin route) — they replace the public-media assets of the row.
+  const rich = views.rich && assets ? { ...views.rich, assets } : views.rich;
   const match = liveMatchView(q);
   return (
     <>

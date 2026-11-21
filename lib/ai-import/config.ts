@@ -358,7 +358,8 @@ export function plainJobStatus(j: PlainStatusInput): { label: string; tone: Plai
 
 export const QUESTION_STATUS_LABELS: Record<string, string> = {
   EXTRACTED: "Extracted",
-  READY: "Ready",
+  // Automated checks only — never an approval (approval is shown separately).
+  READY: "Checks passed",
   NEEDS_CORRECTION: "Needs correction",
   NOT_IMPORTABLE: "Not importable",
   DUPLICATE: "Duplicate",
@@ -370,7 +371,7 @@ export const QUESTION_STATUS_LABELS: Record<string, string> = {
 
 export const ANSWER_STATUS_LABELS: Record<string, string> = {
   OFFICIAL_MATCHED: "Official answer key matched",
-  INDEPENDENTLY_VERIFIED: "Answer independently verified",
+  INDEPENDENTLY_VERIFIED: "No official key — independent check only",
   UNVERIFIED: "Answer unverified",
   KEY_MISSING: "Answer key missing",
   KEY_MISMATCH: "Answer key mismatch",

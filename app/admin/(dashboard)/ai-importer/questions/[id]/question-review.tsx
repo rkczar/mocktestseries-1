@@ -123,6 +123,28 @@ export interface VersionView {
   changes: { field: string; before: string; after: string }[];
 }
 
+type NavQ = { id: string; sourceLabel: string };
+
+/** Previous / Next question of the same import; unsaved edits are never dropped without asking. */
+export function ReviewNav({ prev, next, dirty = false }: { prev: NavQ | null; next: NavQ | null; dirty?: boolean }) {
+  const router = useRouter();
+  const go = (to: NavQ | null) => {
+    if (!to) return;
+    if (dirty && !window.confirm("You have unsaved changes on this question. Leave without saving?")) return;
+    router.push(`/admin/ai-importer/questions/${to.id}`);
+  };
+  return (
+    <nav className="flex items-center justify-between gap-2" aria-label="Question navigation" data-testid="review-nav">
+      <Button size="sm" variant="outline" disabled={!prev} onClick={() => go(prev)} data-testid="rv-prev">
+        ← Previous{prev ? ` (Q${prev.sourceLabel})` : ""}
+      </Button>
+      <Button size="sm" variant="outline" disabled={!next} onClick={() => go(next)} data-testid="rv-next">
+        Next{next ? ` (Q${next.sourceLabel})` : ""} →
+      </Button>
+    </nav>
+  );
+}
+
 const TYPES = ["SINGLE_CORRECT", "MULTIPLE_CORRECT", "MATCH_THE_FOLLOWING", "ASSERTION_REASON", "NUMERICAL", "FIVE_OPTIONS", "OTHER"];
 const OPTION_LABELS = ["A", "B", "C", "D", "E"];
 
@@ -254,7 +276,9 @@ export function QuestionReview({
   taxonomy,
   compare,
   history,
+  nav = { prev: null, next: null },
 }: {
+  nav?: { prev: NavQ | null; next: NavQ | null };
   q: ReviewQ;
   taxonomy: { id: string; name: string; topics: { id: string; name: string; subTopics: { id: string; name: string }[] }[] }[];
   compare: RescanCompareView | null;
@@ -307,13 +331,15 @@ export function QuestionReview({
   const canSave = dirty || (hiChecked && !q.hi?.confirmed);
   const hiDirty = !!q.hi && (form.hiStem !== initial.hiStem || JSON.stringify(form.hiOptions) !== JSON.stringify(initial.hiOptions));
 
-  const act = (fn: () => Promise<ActionResult>, ok: string | ((d: unknown) => string)) =>
+  const act = (fn: () => Promise<ActionResult>, ok: string | ((d: unknown) => string), thenGo?: string) =>
     start(async () => {
       const r = await callImporter(fn as () => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>);
       // A committed change whose follow-up step failed comes back as ok with a warning: shown as a warning, never as success.
       const warning = r.ok ? (r.data as { warning?: string } | null | undefined)?.warning : undefined;
       setMsg(r.ok ? (warning ? { ok: false, text: warning } : { ok: true, text: typeof ok === "function" ? ok(r.data) : ok }) : { ok: false, text: r.error ?? "Failed" });
-      if (r.ok) router.refresh();
+      // Save & Next moves on only after a clean save; a warning or an error keeps the administrator on this question.
+      if (r.ok && thenGo && !warning) router.push(thenGo);
+      else if (r.ok) router.refresh();
     });
   const upload = (file: File, owner: "STEM" | "OPTION", label: string | null, replace: string | null) =>
     start(async () => {
@@ -341,7 +367,7 @@ export function QuestionReview({
 
   const subject = taxonomy.find((s) => s.id === subjectId);
   const topic = subject?.topics.find((t) => t.id === topicId);
-  const save = () =>
+  const save = (thenGo?: string) =>
     act(
       () =>
         editQuestionAction(q.id, {
@@ -357,10 +383,14 @@ export function QuestionReview({
           ...(q.hi && (hiDirty || hiChecked) ? { hi: { stem: form.hiStem, options: form.options.map((_, k) => ({ text: form.hiOptions[k] ?? "" })) } } : {}),
         }),
       "Saved and re-checked. Approve it again when you are done.",
+      thenGo,
     );
 
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2" data-testid="question-review">
+      <div className="xl:col-span-2">
+        <ReviewNav prev={nav.prev} next={nav.next} dirty={canSave} />
+      </div>
       {msg && (
         <p className={`text-sm xl:col-span-2 ${msg.ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`} role={msg.ok ? "status" : "alert"} data-testid="review-msg">
           {msg.text}
@@ -617,9 +647,14 @@ export function QuestionReview({
             </ul>
           )}
           <div className="flex gap-2">
-            <Button disabled={pending || !canSave || problems.length > 0} onClick={save} data-testid="rv-save">
+            <Button disabled={pending || !canSave || problems.length > 0} onClick={() => save()} data-testid="rv-save">
               Save changes
             </Button>
+            {nav.next && (
+              <Button variant="outline" disabled={pending || !canSave || problems.length > 0} onClick={() => save(`/admin/ai-importer/questions/${nav.next!.id}`)} data-testid="rv-save-next">
+                Save &amp; Next
+              </Button>
+            )}
             <Button variant="outline" disabled={pending || !dirty} onClick={() => setForm(initial)} data-testid="rv-cancel">
               Cancel
             </Button>
@@ -630,7 +665,7 @@ export function QuestionReview({
       <div className="flex flex-col gap-4">
         <Card>
           <CardHeader>
-            <CardTitle>Approval</CardTitle>
+            <CardTitle>Admin approval</CardTitle>
             <CardDescription>Only approved questions are added to the Question Bank (as Draft). Any later change withdraws the approval.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center gap-2">

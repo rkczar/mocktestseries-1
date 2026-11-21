@@ -20,6 +20,8 @@ import { logEvent } from "@/lib/ai-import/jobs";
 import type { ExtractedQuestion } from "@/lib/ai-import/types";
 import { CHECK_NAMES, CHECK_STATUS_LABELS, approvalOutdatedBy, checksAllowReady } from "@/lib/ai-import/checks";
 import { fingerprintsOf, verifyState } from "@/lib/ai-import/verify-core";
+import type { PreviewQuestion } from "@/lib/question-preview";
+import type { AssetView } from "@/lib/rich-content-types";
 
 /**
  * THE integration contract with the existing Bulk Import (docs: AI-IMPORTER.md).
@@ -181,6 +183,88 @@ interface BuiltPackage {
   refused: { id: string; reason: string }[];
 }
 
+export interface StudentFigure {
+  figure: AiImportFigure;
+  alt: string;
+}
+
+/**
+ * The question exactly as the Question Bank will store it — text, options, images, lists, explanation — shared by the
+ * import package (buildPackage) and the review page's student preview, so the preview cannot drift from the import.
+ * Throws for a match question without both lists (refused, never downgraded) unless forced.
+ */
+export function studentContent(q: Pick<AiImportQuestion, "questionType">, e: ExtractedQuestion, figures: AiImportFigure[], force?: ForceKind) {
+  const alt = (f: AiImportFigure, i: number) => (f.description && f.description.length >= 3 ? f.description : `Figure ${i + 1} of question ${e.label}`).slice(0, 300);
+  const usable = figures.filter((f) => f.mappingStatus !== "MISSING" && f.originalKey);
+  const stemImages: StudentFigure[] = usable.filter((f) => f.owner !== "OPTION").map((f, i) => ({ figure: f, alt: alt(f, i) }));
+  // Owner decision 2026-11-11: an option that is a cropped structure image shows the ORIGINAL image; the AI's formula
+  // transcription is not chemically verified, so it becomes the image's alt text (screen readers), never the content.
+  const imageOnly = new Set<string>();
+  const raw = e.options.slice(0, 4).map((o) => {
+    const images: StudentFigure[] = usable.filter((f) => f.owner === "OPTION" && f.optionLabel === o.label).map((f, i) => ({ figure: f, alt: alt(f, i) }));
+    if (images.length && structureOnlyText(o.text)) {
+      imageOnly.add(o.label);
+      images[0] = { ...images[0], alt: `Structure (AI transcription, unverified): ${formulaPlain(o.text)}`.slice(0, 300) };
+      return { label: o.label, text: "", images };
+    }
+    return { label: o.label, text: o.text, images };
+  });
+  const prefix = [e.instructions, e.passage].filter((x) => x && x.trim()).join("\n\n");
+  let stem = prefix ? `${prefix}\n\n${e.stem}` : e.stem;
+  let hasLists = q.questionType === "MATCH_THE_FOLLOWING" && !!e.listI?.length && !!e.listII?.length;
+  // Forced only: lists the Question Bank cannot store (missing / keyless items, FSO 2022 Q109/Q132) are not invented —
+  // the question is stored single-correct with the list text kept in the question text (the options name the items).
+  if (force && q.questionType === "MATCH_THE_FOLLOWING" && (!hasLists || matchListProblem(e.listI ?? [], e.listII ?? []))) {
+    const lines = [...(e.listI ?? []), ...(e.listII ?? [])].filter((x) => x.text?.trim() && !stem.includes(x.text.trim()));
+    if (lines.length) stem = `${stem}\n\nList I: ${(e.listI ?? []).map((x) => `${x.key ? `${x.key}. ` : ""}${x.text}`).join("; ")}\nList II: ${(e.listII ?? []).map((x) => `${x.key ? `${x.key}. ` : ""}${x.text}`).join("; ")}`;
+    hasLists = false;
+  }
+  // A match question without both lists is refused by importBlocker; never downgraded to single-correct here.
+  else if (q.questionType === "MATCH_THE_FOLLOWING" && !hasLists) throw new Error("match question without List I / List II");
+  const type = (q.questionType === "MULTIPLE_CORRECT" ? "MULTIPLE_CORRECT" : hasLists ? "MATCH_THE_FOLLOWING" : "SINGLE_CORRECT") as "MULTIPLE_CORRECT" | "MATCH_THE_FOLLOWING" | "SINGLE_CORRECT";
+  const rich = e.contentFormat === "RICH_V1" || stemImages.length > 0 || raw.some((o) => o.images.length > 0);
+  /** Plain text gaining images becomes RICH_V1, where a literal "$" must stay literal (also used for the Hindi version). */
+  const fix = (t: string) => (rich && e.contentFormat !== "RICH_V1" ? escapeForRich(t) : t);
+  return {
+    type,
+    rich,
+    text: fix(stem),
+    stemImages,
+    options: raw.map((o) => ({ ...o, text: fix(o.text) })),
+    matchLists: hasLists ? { listI: e.listI!.map((x) => ({ key: x.key, text: x.text })), listII: e.listII!.map((x) => ({ key: x.key, text: x.text })) } : null,
+    // A section heading is never stored as a question's explanation (2026-10-26: two headings were read as explanations).
+    explanation: e.hints?.explanation && !explanationIsHeading(e.hints.explanation) ? e.hints.explanation : null,
+    imageOnly,
+    fix,
+  };
+}
+
+/**
+ * The review page's student preview: the stored question shape (studentContent) as QuestionPreviewBody input, with the
+ * importer's own figure URLs (the figures are not in public media until imported). Imported assets default to the white
+ * plate (QuestionAsset.darkBacking @default(true)), so the preview uses it too.
+ */
+export function studentPreviewOf(q: Pick<AiImportQuestion, "id" | "questionType" | "finalAnswer">, e: ExtractedQuestion, figures: AiImportFigure[]): { q: PreviewQuestion; assets: AssetView[] } {
+  const c = studentContent(q, e, figures);
+  const asset = (x: StudentFigure, role: "QUESTION" | "OPTION", optionLabel: string | null, order: number): AssetView => ({
+    role, optionLabel, order, url: `/api/admin/ai-importer/figures/${x.figure.id}/image`, alt: x.alt, caption: null, width: x.figure.width, height: x.figure.height, darkBacking: true,
+  });
+  return {
+    q: {
+      code: `AIQ-${q.id}`,
+      text: c.text,
+      imageUrl: null,
+      contentFormat: c.rich ? "RICH_V1" : "PLAIN",
+      explanation: c.explanation,
+      questionType: c.type,
+      matchSpec: c.matchLists ? { v: 1, ...c.matchLists } : null,
+      options: c.options.map((o) => ({ label: o.label, text: o.text, imageUrl: null, isCorrect: q.finalAnswer.includes(o.label) })),
+      assets: [],
+    },
+    assets: [...c.stemImages.map((x, i) => asset(x, "QUESTION", null, i)), ...c.options.flatMap((o) => o.images.map((x, i) => asset(x, "OPTION", o.label, i)))],
+  };
+}
+
 async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figures: AiImportFigure[] })[], names: { subjects: Map<string, string>; topics: Map<string, string>; subTopics: Map<string, string> }, settings: ImporterSettings, paperCode: string | null, force?: ForceKind): Promise<BuiltPackage> {
   const files = new Map<string, Buffer>();
   const codes = new Map<string, string>();
@@ -195,50 +279,27 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
       const e: ExtractedQuestion = effective(q);
       const code = `AIQ-${q.id}`;
       const qfiles = new Map<string, Buffer>();
-      const img = async (f: AiImportFigure, i: number) => {
-        const p = await packageImage(f);
+      const c = studentContent(q, e, q.figures, force);
+      const img = async (x: StudentFigure) => {
+        const p = await packageImage(x.figure);
         qfiles.set(p.name, p.data);
-        const alt = (f.description && f.description.length >= 3 ? f.description : `Figure ${i + 1} of question ${e.label}`).slice(0, 300);
-        return { file: p.name, alt };
+        return { file: p.name, alt: x.alt };
       };
-      const usable = q.figures.filter((f) => f.mappingStatus !== "MISSING" && f.originalKey);
-      const stemFigs = usable.filter((f) => f.owner !== "OPTION");
       const stemImages = [];
-      for (const [i, f] of stemFigs.entries()) stemImages.push(await img(f, i));
+      for (const x of c.stemImages) stemImages.push(await img(x));
       const options = [];
       const optionCounts: Record<string, number> = {};
-      // Owner decision 2026-11-11: an option that is a cropped structure image shows the ORIGINAL image; the AI's formula
-      // transcription is not chemically verified, so it becomes the image's alt text (screen readers), never the content.
-      const imageOnly = new Set<string>();
-      for (const o of e.options.slice(0, 4)) {
-        const of = usable.filter((f) => f.owner === "OPTION" && f.optionLabel === o.label);
+      for (const o of c.options) {
         const images = [];
-        for (const [i, f] of of.entries()) images.push(await img(f, i));
+        for (const x of o.images) images.push(await img(x));
         optionCounts[o.label] = images.length;
-        if (images.length && structureOnlyText(o.text)) {
-          imageOnly.add(o.label);
-          images[0] = { ...images[0], alt: `Structure (AI transcription, unverified): ${formulaPlain(o.text)}`.slice(0, 300) };
-          options.push({ label: o.label, text: "", images });
-        } else options.push({ label: o.label, text: o.text, ...(images.length ? { images } : {}) });
+        options.push({ label: o.label, text: o.text, ...(images.length ? { images } : {}) });
       }
-      const prefix = [e.instructions, e.passage].filter((x) => x && x.trim()).join("\n\n");
-      let stem = prefix ? `${prefix}\n\n${e.stem}` : e.stem;
-      let hasLists = q.questionType === "MATCH_THE_FOLLOWING" && !!e.listI?.length && !!e.listII?.length;
-      // Forced only: lists the Question Bank cannot store (missing / keyless items, FSO 2022 Q109/Q132) are not invented —
-      // the question is stored single-correct with the list text kept in the question text (the options name the items).
-      if (force && q.questionType === "MATCH_THE_FOLLOWING" && (!hasLists || matchListProblem(e.listI ?? [], e.listII ?? []))) {
-        const lines = [...(e.listI ?? []), ...(e.listII ?? [])].filter((x) => x.text?.trim() && !stem.includes(x.text.trim()));
-        if (lines.length) stem = `${stem}\n\nList I: ${(e.listI ?? []).map((x) => `${x.key ? `${x.key}. ` : ""}${x.text}`).join("; ")}\nList II: ${(e.listII ?? []).map((x) => `${x.key ? `${x.key}. ` : ""}${x.text}`).join("; ")}`;
-        hasLists = false;
-      }
-      // A match question without both lists is refused by importBlocker; never downgraded to single-correct here.
-      else if (q.questionType === "MATCH_THE_FOLLOWING" && !hasLists) throw new Error("match question without List I / List II");
-      const type = q.questionType === "MULTIPLE_CORRECT" ? "MULTIPLE_CORRECT" : hasLists ? "MATCH_THE_FOLLOWING" : "SINGLE_CORRECT";
       // Never an invented answer: a forced publish needs the stored key; a withdrawn question gets a placeholder the
       // caller clears in the same step (the official key withdrew it, so it has no answer to keep).
       if (force === "PUBLISH" && !q.finalAnswer.length) throw new Error("no answer key is stored for this question — the Question Bank needs one correct option to publish it; set the answer (official key or your confirmation) first");
       const correct = force === "WITHDRAWN" && !q.finalAnswer.length ? [WITHDRAWN_PLACEHOLDER_KEY] : q.finalAnswer;
-      const rich = e.contentFormat === "RICH_V1" || stemImages.length > 0 || options.some((o) => "images" in o);
+      const { rich, type } = c;
       const flags = reviewFlags(q, settings);
       const item = {
         code,
@@ -252,15 +313,14 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
         ...(q.topicId && q.subTopicId && names.subTopics.get(q.subTopicId) ? { subtopic: names.subTopics.get(q.subTopicId) } : {}),
         type,
         contentFormat: rich ? "RICH_V1" : "PLAIN",
-        question: stemImages.length ? { text: rich && e.contentFormat !== "RICH_V1" ? escapeForRich(stem) : stem, images: stemImages } : rich && e.contentFormat !== "RICH_V1" ? escapeForRich(stem) : stem,
-        options: rich && e.contentFormat !== "RICH_V1" ? options.map((o) => ({ ...o, text: escapeForRich(o.text) })) : options,
+        question: stemImages.length ? { text: c.text, images: stemImages } : c.text,
+        options,
         correct,
         difficulty: e.hints?.difficulty && ["EASY", "MEDIUM", "HARD"].includes(e.hints.difficulty.toUpperCase()) ? e.hints.difficulty.toUpperCase() : "MEDIUM",
         ...(job.previousYearPaperId ? { source: "PYQ" } : {}),
-        // A section heading is never stored as a question's explanation (2026-10-26: two headings were read as explanations).
-        ...(e.hints?.explanation && !explanationIsHeading(e.hints.explanation) ? { explanation: e.hints.explanation } : {}),
+        ...(c.explanation ? { explanation: c.explanation } : {}),
         ...(force ? { review: { required: true, reason: `${force === "PUBLISH" ? "FORCE TO PUBLISH" : "WITHDRAWN"} by Master Admin — content as stored, to be corrected later${flags.length ? `: ${flags.join(", ")}` : ""}`.slice(0, 480) } } : flags.length ? { review: { required: true, reason: `AI importer: ${flags.join(", ")}`.slice(0, 480) } } : {}),
-        ...(hasLists ? { matchLists: { listI: e.listI!.map((x) => ({ key: x.key, text: x.text })), listII: e.listII!.map((x) => ({ key: x.key, text: x.text })) } } : {}),
+        ...(c.matchLists ? { matchLists: c.matchLists } : {}),
       };
       const problems = questionProblems(item, "RICH");
       if (problems.length) {
@@ -274,8 +334,7 @@ async function buildPackage(job: AiImportJob, rows: (AiImportQuestion & { figure
       // The Bulk Import package carries the English version; the Hindi version is written onto the same Question after it
       // is created (importBatch), escaped exactly like the English text when the question becomes RICH_V1.
       if (e.hi?.stem.trim()) {
-        const fix = (t: string) => (rich && e.contentFormat !== "RICH_V1" ? escapeForRich(t) : t);
-        hindi.set(code, { stem: fix(e.hi.stem), options: Object.fromEntries(e.hi.options.slice(0, 4).map((o) => [o.label, imageOnly.has(o.label) && structureOnlyText(o.text) ? "" : fix(o.text)])) });
+        hindi.set(code, { stem: c.fix(e.hi.stem), options: Object.fromEntries(e.hi.options.slice(0, 4).map((o) => [o.label, c.imageOnly.has(o.label) && structureOnlyText(o.text) ? "" : c.fix(o.text)])) });
       }
     } catch (err) {
       refused.push({ id: q.id, reason: `Could not be packaged: ${err instanceof Error ? err.message : "unexpected error"}`.slice(0, 600) });

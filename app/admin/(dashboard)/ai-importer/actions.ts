@@ -5,7 +5,7 @@ import { AiImportPaperType } from "@prisma/client";
 import { requirePermission, UnauthorizedError } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { ImportJobError, type ContinueResult, cancelJob, changeJobPaper, confirmJob, createJob, deleteJob, setExpectedQuestions, deleteJobPreview, discardUpload, pauseJob, recoverJob, removeFile, requestAnalysis, resetJob, resumeJob, retryJob, type DeletedJob, type JobDeletePreview, type RemovedFile, type ResetCheck } from "@/lib/ai-import/jobs";
+import { ImportJobError, logEvent, type ContinueResult, cancelJob, changeJobPaper, confirmJob, createJob, deleteJob, setExpectedQuestions, deleteJobPreview, discardUpload, pauseJob, recoverJob, removeFile, requestAnalysis, resetJob, resumeJob, retryJob, type DeletedJob, type JobDeletePreview, type RemovedFile, type ResetCheck } from "@/lib/ai-import/jobs";
 import {
   acknowledgeSequence,
   addMissingQuestion,
@@ -326,9 +326,23 @@ export async function editQuestionAction(questionId: string, edit: QuestionEdit)
   return run(await requireUse(), async (actorId) => {
     await editQuestion(questionId, actorId, edit);
     // The edit is committed above: a failing re-check must never be reported as "Nothing was changed".
+    const answerOf = async () => (await prisma.aiImportQuestion.findUnique({ where: { id: questionId }, select: { finalAnswer: true, answerStatus: true } }))!;
+    const before = await answerOf();
     try {
       const jobId = await jobOf([questionId]);
-      if (jobId) await revalidateQuestions(jobId, [questionId]);
+      if (jobId) {
+        await revalidateQuestions(jobId, [questionId]);
+        // The re-check may set the saved answer from the official key: never silently — logged, audited and shown
+        // (as a warning, so Save & Next stays on this question until the administrator has seen it).
+        const after = await answerOf();
+        if (before.finalAnswer.join() !== after.finalAnswer.join()) {
+          const was = before.finalAnswer.join(", ") || "none";
+          const now = after.finalAnswer.join(", ") || "none";
+          await logEvent(jobId, "ANSWER_CHANGED_BY_RECHECK", `Saved answer changed by the re-check after an edit: ${was} → ${now} (${after.answerStatus}).`, { questionId, before: before.finalAnswer, after: after.finalAnswer, answerStatus: after.answerStatus }, actorId);
+          await prisma.auditLog.create({ data: { actorId, action: "AI_IMPORT_ANSWER_CHANGED_BY_RECHECK", entityType: "AiImportQuestion", entityId: questionId, metadata: { jobId, before: before.finalAnswer, after: after.finalAnswer, answerStatus: after.answerStatus } } });
+          return { warning: `Saved. The automatic re-check changed this question's saved answer from ${was} to ${now} (${after.answerStatus.replace(/_/g, " ").toLowerCase()}). Check it before moving on.` };
+        }
+      }
     } catch (error) {
       console.error("[ai-importer] re-check after a saved edit failed:", error instanceof Error ? error.message.slice(0, 200) : "error");
       return { warning: "Your edit WAS saved, but the automatic re-check failed — the status and flags shown may be out of date. Reload the page; any later action or import re-checks the question." };
