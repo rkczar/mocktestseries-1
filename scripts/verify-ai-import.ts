@@ -115,8 +115,11 @@ async function q(jobId: string, label: string) {
   return prisma.aiImportQuestion.findFirstOrThrow({ where: { jobId, sourceLabel: label }, include: { figures: true, checks: true } });
 }
 
+// These scenarios predate the two-step importer: no automatic checks and no provider fallback chain (both are covered
+// by scripts/verify-importer-two-step.ts), so worker runs and call counts stay exactly as each scenario expects.
+const LEGACY = { workflow: { autoVerify: false, autoVerifyMaxInr: null }, fallbackChains: { extract: [], key: [], verify: [], classify: [] } };
 async function setSettings(patch: (s: ImporterSettings) => ImporterSettings, actor: string) {
-  await saveImporterSettings(patch(normalizeImporterSettings(await getImporterSettings())), actor);
+  await saveImporterSettings({ ...patch(normalizeImporterSettings(await getImporterSettings())), ...LEGACY }, actor);
 }
 
 async function mockStats() {
@@ -180,7 +183,7 @@ async function main() {
   const n = normalizeImporterSettings({ limits: { concurrency: 99, maxFileMb: -5 }, models: { extract: "../../etc", verify: "x/y" } });
   check("limits are clamped", n.limits.concurrency === 3 && n.limits.maxFileMb === 1);
   check("invalid model ids are dropped", n.models.extract === null && n.models.verify === "x/y");
-  await saveImporterSettings({ ...DEFAULT_IMPORTER_SETTINGS }, actor);
+  await saveImporterSettings({ ...DEFAULT_IMPORTER_SETTINGS, ...LEGACY }, actor);
 
   // ------------------------------------------------------------------ B
   section("B. Upload validation (content, not names)");
@@ -470,8 +473,14 @@ async function main() {
   await upload(actor, jobL2, "photo.png");
   await analyzeAndConfirm(actor, jobL2);
   const l2 = await prisma.aiImportAiCall.findMany({ where: { jobId: jobL2 } });
-  check("a fallback priced above the preferred model is never used", ((await mockStats()).byModel["mockvision/pricey"] ?? 0) === pricyBefore && l2.every((c) => c.model === "mockvision/fail" && !c.ok), l2.map((c) => [c.model, c.ok]));
-  check("failed request not retried (one attempt, nothing charged)", l2.length === 1 && l2[0].attempt === 1 && (await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobL2 } })).spentInr === 0, l2.map((c) => [c.attempt, c.costInr]));
+  // Owner 2026-11-22 (two-step importer): price never limits a fallback — the pricier configured fallback answers, recorded.
+  const j2 = await prisma.aiImportJob.findUniqueOrThrow({ where: { id: jobL2 } });
+  const used2 = l2.some((c) => c.model === "mockvision/pricey" && c.ok && c.fallbackUsed);
+  const budget2 = await prisma.aiImportEvent.count({ where: { jobId: jobL2, type: { in: ["PAUSED_BUDGET", "PAID_AI_BLOCKED"] } } });
+  // When local OCR reads the photo (OCR installed), no AI request is needed and the fallback is not exercised here
+  // (scripts/verify-importer-two-step.ts covers price-free fallbacks with mocks).
+  const local2 = (await prisma.aiImportPage.count({ where: { jobId: jobL2, outcome: "OCR" } })) > 0 && !l2.length;
+  check(local2 ? "pricier fallback: page read by local OCR, no AI request needed (not applicable here)" : "a fallback priced above the preferred model is never dropped for its price: it answers, or the importer BUDGET refuses it before sending", local2 || used2 || (budget2 > 0 && l2.every((c) => c.model !== "mockvision/pricey")), { used2, budget2, status: j2.status, calls: l2.map((c) => [c.model, c.ok, c.fallbackUsed]) });
   await setSettings((s) => ({ ...s, models: { ...s.models, extract: "mockvision/fail", extractFallbacks: [] }, budget: { ...s.budget, retryTransient: true } }), actor);
   const jobL3 = await newJob(actor, exam.id, "FX retry enabled");
   await upload(actor, jobL3, "photo.png");
@@ -1065,7 +1074,10 @@ async function sectionT(actor: string, examId: string) {
     const src = raw ?? next;
     return importerSettingsProblems(src, normalizeImporterSettings(src));
   };
-  check("valid configuration → no problems", (await probs({ extract: "mockvision/reader", verify: "mockvision/checker", classify: "mocktext/classifier", key: null, extractFallbacks: [] })).length === 0, await probs({}));
+  // Two-step importer (2026-11-22): reading and verification must come from different vendors; the mock reader and
+  // checker share the vendor "mockvision", so that rule is the only problem left for this otherwise valid configuration.
+  const validProbs = await probs({ extract: "mockvision/reader", verify: "mockvision/checker", classify: "mocktext/classifier", key: null, extractFallbacks: [] });
+  check("valid configuration → no problems except the reading/verification same-vendor rule", validProbs.length === 1 && /same vendor/.test(validProbs[0]), validProbs);
   check("text-only model as extraction model → refused", (await probs({ extract: "mocktext/classifier" })).some((p) => /Extraction model: mocktext\/classifier — cannot read images/.test(p)));
   const probsWithout = async (id: string, patch: Partial<ImporterSettings["models"]>) => {
     const next = { ...base11, selection: { mode: "manual" as const }, importerModels: base11.importerModels.filter((x) => x !== id), models: { ...base11.models, ...patch } };
@@ -1074,7 +1086,8 @@ async function sectionT(actor: string, examId: string) {
   check("verification model not on the importer's list → refused", (await probsWithout("mockvision/checker", { verify: "mockvision/checker" })).some((p) => /not approved for the AI Question Importer/.test(p)));
   check("model not in the catalog → refused", (await probs({ classify: "acme/not-a-model" })).some((p) => /not in the model catalog/.test(p)));
   check("malformed model ID → refused (not silently cleared)", (await probs({}, {}, { ...base11, selection: { mode: "manual" }, models: { ...base11.models, extract: "this is not an id" } })).some((p) => /not a valid OpenRouter model ID/.test(p)));
-  check("fallback priced above the extraction model → refused", (await probs({ extract: "mockvision/reader", extractFallbacks: ["mockvision/pricey"] })).some((p) => /costs more than the extraction model/.test(p)));
+  // Owner 2026-11-22: price never limits a fallback (two-step importer) — a pricier fallback is accepted.
+  check("fallback priced above the extraction model → accepted", !(await probs({ extract: "mockvision/reader", extractFallbacks: ["mockvision/pricey"] })).some((p) => /costs more than the extraction model/.test(p)));
   check("unreadable image price as extraction model → refused", (await probs({ extract: "mockvision/badimg" })).some((p) => /per-image input price/.test(p)));
   check("automatic selection: manual model fields are not checked (they are not used)", (await importerSettingsProblems({ ...base11, selection: { mode: "auto" }, models: { ...base11.models, extract: "mocktext/classifier" } }, normalizeImporterSettings({ ...base11, selection: { mode: "auto" }, models: { ...base11.models, extract: "mocktext/classifier" } }))).length === 0);
   check("former job / all-time figures are no longer cross-validated (not enforced)", !(await probs({}, { maxRequestInr: 1, maxJobInr: 0.5, totalInr: 0.2 })).some((p) => /hard limit per job|all-time/.test(p)));

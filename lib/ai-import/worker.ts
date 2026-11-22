@@ -15,6 +15,7 @@ import { summarizeFailures } from "@/lib/ai-import/failure";
 import { jobQuality, reconcileJob, settleJobStatus } from "@/lib/ai-import/summary";
 import { runVerify2, verify2Outcome, type Verify2State } from "@/lib/ai-import/paper-verify";
 import { runReferenceOcr, type ReferenceOcrState } from "@/lib/ai-import/reference-ocr";
+import { continueAutoVerify, holdAutoVerify, markStatusesCurrent } from "@/lib/ai-import/auto-verify";
 import { recordVerifyAnswersHistory, runVerifyAnswers, vaSettings, type VaState } from "@/lib/ai-import/verify-answers-run";
 import { formatInr } from "@/lib/ai-engine/config";
 import { removeVaultDir } from "@/lib/ai-import/vault";
@@ -117,12 +118,16 @@ async function verify2Job(job: AiImportJob, state: Verify2State): Promise<void> 
     const noResult = (counts.FAILED ?? 0) + (counts.UNAVAILABLE ?? 0);
     const head = outcome === "NO_RESULT" ? `Verify 2 produced NO independent result (${state.model}): all ${noResult} question(s) attempted failed or were unavailable, so none counts as verified` : outcome === "PARTIAL" ? `Verify 2 finished with gaps (${state.model}): ${results} of ${counts.attempted} question(s) have an independent result` : `Verify 2 finished (${state.model}): ${results} of ${counts.attempted} question(s) have an independent result`;
     await logEvent(job.id, outcome === "NO_RESULT" ? "VERIFY2_NO_RESULT" : "VERIFY2_DONE", `${head} — ${counts.VERIFIED} agree, ${counts.DISAGREE} disagree (manual correction), ${counts.NOT_FOUND} not found by the second read, ${counts.FAILED ?? 0} failed, ${counts.UNAVAILABLE ?? 0} unavailable${counts.failedUnits ? ` (${counts.failedUnits} of ${counts.units} source part(s) without an answer — use Verify 2 again to retry only those parts)` : ""}${counts.extra ? `, ${counts.extra} question(s) found only by the second read` : ""}. Actual cost ${formatInr(actual)} (estimated ${formatInr(state.estimateInr)}, maximum ${formatInr(state.maxInr)}).`, { ...counts, outcome, model: state.model, actualInr: actual, estimateInr: state.estimateInr, maxInr: state.maxInr });
+    // Two-step importer: the next background check (Verify Answers), unless Verify 2 got no result at all.
+    if (outcome === "NO_RESULT") await holdAutoVerify(job.id, "verify2", "Verify 2 produced no independent result (provider / model failure) — use Retry failed checks.");
+    else await continueAutoVerify(job.id);
   } catch (e) {
     const stop = e instanceof ImporterBudgetError || e instanceof ImporterAiUnavailable;
     const message = e instanceof Error ? e.message.slice(0, 500) : "unexpected error";
     if (!stop) console.error(`[ai-import] verify 2 of job ${job.id} failed: ${message}`);
     await runPostProcessing(deterministic).catch(() => undefined);
     if (await transition(job.id, [AiImportJobStatus.PROCESSING], { status: AiImportJobStatus.NEEDS_REVIEW, finishedAt: new Date(), config: await patchState({ status: "STOPPED", stopReason: message, finishedAt: new Date().toISOString() }) })) {
+      await holdAutoVerify(job.id, "verify2", `Verify 2 stopped: ${message.slice(0, 200)}`);
       await logEvent(job.id, "VERIFY2_STOPPED", `Verify 2 stopped: ${message} Questions verified so far keep their result; use Verify 2 again to see the cost of the rest before anything more is sent.`, { model: state.model });
       await settleJobStatus(job.id);
     }
@@ -192,6 +197,7 @@ async function verifyAnswersJob(job: AiImportJob, state: VaState): Promise<void>
     const stop = e instanceof ImporterBudgetError || e instanceof ImporterAiUnavailable;
     const message = e instanceof Error ? e.message.slice(0, 500) : "unexpected error";
     if (!stop) console.error(`[ai-import] verify answers of job ${job.id} failed: ${message}`);
+    await holdAutoVerify(job.id, "answers", `Verify Answers stopped: ${message.slice(0, 200)}`);
     await finish({ status: "STOPPED", stopReason: message }, "VERIFY_ANSWERS_STOPPED", `Verify Answers stopped: ${message} Answers so far are kept; Verify Answers again resumes.`);
   }
 }
@@ -285,6 +291,9 @@ async function processJob(job: AiImportJob): Promise<void> {
       await transition(job.id, [AiImportJobStatus.NEEDS_REVIEW], { config: { ...((fresh.config as Record<string, unknown>) ?? {}), autoImport: { ...auto, done: true, replacedByApproval: true } } as Prisma.InputJsonValue });
       await logEvent(job.id, "AWAITING_APPROVAL", "Automatic import is replaced by approval: review and approve the questions, then add the approved ones to the Question Bank.");
     }
+    // Two-step importer: statuses are now current, and the background verification starts (Verify 1 → 2 → Answers).
+    await markStatusesCurrent(job.id);
+    await continueAutoVerify(job.id);
   } catch (e) {
     if (e instanceof ImporterBudgetError) {
       // The deterministic part of the run still happens (answer key text layer, validation, checks) with paid AI off;

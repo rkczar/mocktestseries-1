@@ -89,11 +89,17 @@ function headers(apiKey: string): Record<string, string> {
   };
 }
 
-function categorize(status: number, message: string): OpenRouterErrorCategory {
+/** A 403 whose text names a key / credit / quota limit (2026-11-22: 639 "Key limit exceeded (total limit)" were read as moderation). */
+export const QUOTA_403 = /key limit|spending limit|limit exceeded|credit|quota|insufficient|billing|budget/i;
+/** A 403 whose text names a rejected or unauthorised key rather than content. */
+export const AUTH_403 = /api key|invalid key|unauthori[sz]ed|not authori[sz]ed|forbidden key|key (is )?(disabled|revoked)|permission/i;
+
+export function categorize(status: number, message: string): OpenRouterErrorCategory {
   const m = message.toLowerCase();
   if (status === 401) return "auth_invalid";
   if (status === 402) return "insufficient_credits";
-  if (status === 403) return "moderation";
+  // 403 is shared by key limits, key permissions and moderation: only content flags are moderation.
+  if (status === 403) return QUOTA_403.test(m) ? "insufficient_credits" : AUTH_403.test(m) ? "auth_invalid" : "moderation";
   if (status === 404 && (m.includes("no endpoints") || m.includes("data policy") || m.includes("no allowed providers") || m.includes("restrictions"))) return "no_endpoint";
   if (status === 404) return "model_unavailable";
   if (status === 408) return "timeout";

@@ -212,7 +212,6 @@ for (const [label, patch, re] of [
   ["unknown model", { extract: "acme/not-a-model" }, /not in the model catalog/],
   ["text-only model as extraction model", { extract: "mocktext/classifier" }, /cannot read images/],
   ["malformed model ID", { extract: "not a model id" }, /not a valid OpenRouter model ID/],
-  ["fallback pricier than the extraction model", { extractFallbacks: ["mockvision/pricey"] }, /costs more than the extraction model/],
 ]) {
   const t = await call({ ...v, models: { ...v.models, ...patch } });
   check(`raw save with ${label}: refused`, /"ok":false/.test(t) && re.test(t), t.slice(-200));

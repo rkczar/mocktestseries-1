@@ -280,8 +280,8 @@ export function choose(models: AiModel[], ctx: EvalCtx & { substitute?: boolean 
       reason = `Cheapest suitable of ${eligible.length} eligible model${eligible.length === 1 ? "" : "s"}: up to ${formatInr(pick.maxInr)} per request${next ? ` (next: ${next.id}, up to ${formatInr(next.maxInr)})` : ""}${VISION[task] ? "; reads page images" : ""}${s.privacy.zdr ? `; ZDR routes ${pick.routes.join(", ")}` : ""}.`;
     }
     const e = pick ? evals.get(pick.id)! : null;
-    // Manual fallbacks: only eligible ones that cost no more than the chosen model.
-    const fallbacks = pick && task === "extract" && s.selection.mode === "manual" && !substituted ? s.models.extractFallbacks.filter((f) => f !== pick!.id && evals.get(f)?.row.eligible && (evals.get(f)!.row.maxInr ?? Infinity) <= (pick!.maxInr ?? 0)) : [];
+    // Manual fallbacks: every eligible one, whatever its price (owner, 2026-11-22: price never limits a fallback; its worst case is priced below).
+    const fallbacks = pick && task === "extract" && s.selection.mode === "manual" && !substituted ? s.models.extractFallbacks.filter((f) => f !== pick!.id && evals.get(f)?.row.eligible) : [];
     const price = e?.price ? { ...e.price } : null;
     let maxUsd = e?.maxUsd ?? null;
     for (const f of fallbacks) {

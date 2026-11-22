@@ -400,9 +400,15 @@ export async function runPostProcessing(ctx: StepContext, only?: Set<string>): P
       continue;
     }
     try {
-      const r = await importerAiCall({ jobId: job.id, task: "verify", models: [settings.models.verify!], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: opinionTokens, settings, questionId: q.id, needsVision: false, stage: "post-answer-opinion" });
-      const parsed = solveSchema.safeParse(parseModelJson(r.text));
-      unusableInRow = parsed.success ? 0 : unusableInRow + 1;
+      // A malformed / cut-off opinion goes to the next independent provider of the chain (importerAiCallChecked); only
+      // when every provider failed does it count as unusable. It is an AI opinion: never an official answer.
+      const { value: data, result: r } = await importerAiCallChecked({ jobId: job.id, task: "verify", models: [settings.models.verify!], system: SOLVE_SYSTEM, content: [{ type: "text", text: solveUserText(e) }], maxOutputTokens: opinionTokens, settings, questionId: q.id, needsVision: false, stage: "post-answer-opinion" }, (t) => {
+        const p = solveSchema.safeParse(parseModelJson(t));
+        if (!p.success) throw new ImporterAiFailure("The answer was not the expected JSON.", "model_output");
+        return p.data;
+      });
+      const parsed = { success: true as const, data };
+      unusableInRow = 0;
       if (parsed.success) {
         const labels = parsed.data.defective ? [] : parsed.data.answer.map((a) => labelFromPrinted(a, e.options.map((o) => o.label))).filter((x): x is string => !!x);
         await prisma.aiImportQuestion.update({ where: { id: q.id }, data: { aiAnswer: [...new Set(labels)], aiAnswerModel: r.model, aiAnswerConfidence: parsed.data.confidence, costInr: { increment: r.costInr ?? 0 } } });

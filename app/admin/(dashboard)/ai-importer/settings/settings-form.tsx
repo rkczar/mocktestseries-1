@@ -15,6 +15,7 @@ import { importerModelsAction, refreshRoutesAction, saveSettingsAction } from ".
 import { SESSION_EXPIRED, failureKind as probeFailure } from "@/components/admin/ai-importer/call-importer";
 import { ModelAssistant } from "./model-assistant";
 import { AutoConfigure } from "./auto-configure";
+import { FallbackChains } from "./fallback-chains";
 
 // A suggestion filter only (cheap models first) — not a spending limit; the cost of every operation is confirmed before it runs.
 const SUGGEST_MAX_PAGE_INR = 1;
@@ -749,6 +750,7 @@ export function SettingsForm({ initial, catalog: initialCatalog, canManage }: { 
           </label>
         </CardContent>
       </Card>
+      <FallbackChains s={s} setS={setS} disabled={d} />
 
       <ImporterModelsCard options={options} value={s.importerModels} onChange={(v) => setS({ ...s, importerModels: v })} disabled={d} capInr={SUGGEST_MAX_PAGE_INR} zdrRequired={s.privacy.zdr} zdrModels={catalog.routes.zdrModels} />
 

@@ -23,6 +23,8 @@ export const STATUS_MAIN: Record<string, Def> = {
   all: { label: "All", hint: "Every question of the paper, including rejected ones." },
   exceptions: { label: "Needs review", hint: "Needs correction, not importable, duplicate, import failed or still being read — except Subject / topic only." },
   "taxonomy-only": { label: "Subject / topic only", hint: "Wording, options and answer verified (Verify 1 passed, Verify 2 agrees, official key matched); only the subject / topic is open. Never imported or published until it is set." },
+  "needs-you": { label: "Needs you", hint: "Genuine content, answer-key, image or classification questions — excluding questions whose only problem is a provider / model failure (see System issues)." },
+  system: { label: "System issues", hint: "Only a provider / model failure is open (check failed, timed out, key limit): not a problem with the question. Retry failed checks; the question stays blocked until the check has a result." },
   READY: { label: "Checks passed", hint: "Passed every mandatory automated check — approval is separate." },
   approval: { label: "↳ of Ready: awaiting approval", hint: "Part of Ready: not approved yet, not in the Question Bank." },
   imported: { label: "Imported", hint: "Saved in the Question Bank (draft or published)." },
@@ -146,8 +148,24 @@ export const classificationOnly = (q: Pick<FilterRow, "status" | "answerStatus" 
 /** Still needs a decision: live, not in the Question Bank, and not (approved, READY and importable). */
 export const unresolved = (q: Pick<FilterRow, "status" | "approved" | "stored" | "importBlocker">) => q.status !== "REJECTED" && !q.stored && !(q.approved && q.status === "READY" && !q.importBlocker);
 
+/** Issue codes that only say a model / provider failed to give a result (never an academic finding). */
+export const SYSTEM_CODES = ["VERIFY2_FAILED", "TAXONOMY_CHECK_FAILED", "CLASSIFICATION_FAILED"];
+/** Open only because a check failed for a provider / model reason. */
+export const systemOnly = (q: Pick<FilterRow, "status" | "issueCodes">) => (EXCEPTION_STATUSES as readonly string[]).includes(q.status) && q.issueCodes.length > 0 && q.issueCodes.every((c) => SYSTEM_CODES.includes(c));
+
+export type ReviewBucket = "clean" | "approved" | "needs-you" | "system" | "done";
+/** The two-step importer's Review & Approve buckets (one per question). */
+export function reviewBucket(q: { status: string; issueCodes: string[]; approved: boolean; stored: boolean }): ReviewBucket {
+  if (q.stored || q.status === "REJECTED" || q.status === "IMPORTED" || q.status === "PUBLISHED") return "done";
+  if (q.status === "READY" && !q.issueCodes.length) return q.approved ? "approved" : "clean";
+  if (systemOnly(q)) return "system";
+  return "needs-you";
+}
+
 export function matchStatus(r: FilterRow, status: string | null): boolean {
   if (status === null) return true;
+  if (status === "system") return systemOnly(r);
+  if (status === "needs-you") return (EXCEPTION_STATUSES as readonly string[]).includes(r.status) && !systemOnly(r);
   if (status === "exceptions") return (EXCEPTION_STATUSES as readonly string[]).includes(r.status) && !classificationOnly(r);
   if (status === "taxonomy-only") return classificationOnly(r);
   if (status === "approval") return awaitingApproval(r);
@@ -207,7 +225,7 @@ export type ChipCounts = ReturnType<typeof chipCounts>;
 export function dbWhere(f: Filters): Record<string, unknown> {
   const and: Record<string, unknown>[] = [];
   const s = f.status;
-  if (s === "exceptions") and.push({ status: { in: [...EXCEPTION_STATUSES] } });
+  if (s === "exceptions" || s === "needs-you" || s === "system") and.push({ status: { in: [...EXCEPTION_STATUSES] } });
   else if (s === "taxonomy-only") and.push({ status: "NEEDS_CORRECTION" });
   else if (s === "approval") and.push({ status: "READY", approvedById: null, questionId: null });
   else if (s === "imported") and.push({ status: { in: ["IMPORTED", "PUBLISHED"] } });

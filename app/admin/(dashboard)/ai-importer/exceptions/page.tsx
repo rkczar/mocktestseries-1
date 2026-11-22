@@ -1,3 +1,4 @@
+import { autoVerifyOf } from "@/lib/ai-import/auto-verify";
 import Link from "next/link";
 import type { Prisma } from "@prisma/client";
 import { RestrictedCard } from "@/components/admin/restricted-card";
@@ -47,7 +48,10 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
   const jobs = await prisma.aiImportJob.findMany({ orderBy: { updatedAt: "desc" }, take: 100, select: { id: true, title: true, status: true, examId: true } });
   // The paper is looked up by id (not only among the latest 100); an unknown id is an error, never "all papers".
   const job = sp.job ? (jobs.find((j) => j.id === sp.job) ?? (await prisma.aiImportJob.findUnique({ where: { id: sp.job }, select: { id: true, title: true, status: true, examId: true } }))) : null;
-  const vaStatus = job ? ((await prisma.aiImportJob.findUnique({ where: { id: job.id }, select: { config: true } }))?.config as { verifyAnswers?: { status?: string } } | null)?.verifyAnswers?.status : undefined;
+  const jobConfig = job ? (await prisma.aiImportJob.findUnique({ where: { id: job.id }, select: { config: true } }))?.config : null;
+  const vaStatus = (jobConfig as { verifyAnswers?: { status?: string } } | null)?.verifyAnswers?.status;
+  // Jobs from before the two-step workflow (no automatic checks) keep the individual check buttons open.
+  const manualChecks = !autoVerifyOf(jobConfig);
   const vaRunning = vaStatus === "QUEUED" || vaStatus === "RUNNING";
   if (sp.job && !job) {
     return (
@@ -216,7 +220,11 @@ export default async function ExceptionsPage({ searchParams }: { searchParams: P
         </p>
       </div>
       {jobId && summary && job && (
-        <PaperVerifyBar jobId={jobId} jobStatus={job.status} vaRunning={vaRunning} summary={summary} canUse={canUse} canPublish={canPublish && canUse} canManage={canManage} hrefs={{ verified: link({ status: "all", verify: "verified" }), v1Problems: link({ status: "all", verify: "v1-problems" }), v2Disagree: link({ status: "all", verify: "v2-disagree" }), v2NoResult: link({ status: "all", verify: "v2-noresult" }), structure: link({ status: "all", problem: "structure", issue: undefined }), taxonomy: link({ status: "all", problem: "taxonomy", issue: undefined }), answers: link({ status: "all", problem: "answer", issue: undefined }) }} />
+        // Two-step importer: checks run automatically (job page, Step 1); the individual check buttons are advanced tools.
+        <details className="rounded-[var(--radius-card)] border p-2" data-testid="advanced-checks" open={manualChecks}>
+          <summary className="cursor-pointer text-sm font-medium">Advanced — run individual checks (Verify 1, Verify 2, Verify Answers) and the paper summary</summary>
+  <PaperVerifyBar jobId={jobId} jobStatus={job.status} vaRunning={vaRunning} summary={summary} canUse={canUse} canPublish={canPublish && canUse} canManage={canManage} hrefs={{ verified: link({ status: "all", verify: "verified" }), v1Problems: link({ status: "all", verify: "v1-problems" }), v2Disagree: link({ status: "all", verify: "v2-disagree" }), v2NoResult: link({ status: "all", verify: "v2-noresult" }), structure: link({ status: "all", problem: "structure", issue: undefined }), taxonomy: link({ status: "all", problem: "taxonomy", issue: undefined }), answers: link({ status: "all", problem: "answer", issue: undefined }) }} />
+        </details>
       )}
       {jobId && job && (
         <SourceRereadPanel jobId={jobId} canUse={canUse} canLearn={canManageImporter} finished={["NEEDS_REVIEW", "COMPLETED", "COMPLETED_WITH_ISSUES"].includes(job.status)} />

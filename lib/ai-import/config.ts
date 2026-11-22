@@ -5,6 +5,8 @@
  * (lib/ai-import/*.ts with `server-only`).
  */
 
+import { normalizeChains, type ChainEntry } from "@/lib/ai-import/chains";
+
 export const IMPORTER_SETTING_KEY = "ai.importer";
 
 /** Engine "features" the importer logs under (AiGatewayCall.feature / AiBudgetReservation.feature). */
@@ -94,6 +96,25 @@ export interface ImporterSettings {
    * Off by default; never used while Zero-Data-Retention is required. Prices, budget and logs work the same.
    */
   openaiDirect: boolean;
+  /**
+   * Provider fallback chains per role (two-step importer, 2026-11-22): after the job's model fails (timeout, rate limit,
+   * provider error, key limit, moderation, unusable answer, unavailable route) the SAME request goes to the next entry —
+   * another vendor, and when the entry says so another provider key. Never limited by price; always priced and logged.
+   */
+  fallbackChains: Record<"extract" | "key" | "verify" | "classify", ChainEntry[]>;
+  /** Direct providers the chains may use with their OWN keys (Admin → AI → Providers). Never while ZDR is required. */
+  directProviders: { anthropic: boolean; gemini: boolean; openai: boolean };
+  /**
+   * false: the importer sends nothing through OpenRouter (e.g. its key limit is exhausted) — each request goes straight to
+   * the role's chain (primary first, through the vendor's own key). Plans and prices still use the OpenRouter catalog.
+   */
+  useOpenRouter: boolean;
+  /**
+   * Two-step workflow: after Import & Process, verification (Verify 2 + Verify Answers) starts by itself.
+   * autoVerifyMaxInr: optional JOB-level safeguard — an automatic check starts only while this import's total AI cost
+   * (processing + checks so far + the check's maximum) stays within it; above it the check waits for an explicit confirmation.
+   */
+  workflow: { autoVerify: boolean; autoVerifyMaxInr: number | null };
   privacy: {
     /** OpenRouter provider.data_collection for every importer call ("deny" = providers that do not store/train on prompts). */
     dataCollection: "deny" | "allow";
@@ -162,6 +183,10 @@ export const DEFAULT_IMPORTER_SETTINGS: ImporterSettings = {
   importerModels: [],
   models: { extract: null, extractFallbacks: [], verify: null, classify: null, key: null },
   openaiDirect: false,
+  fallbackChains: normalizeChains(null),
+  directProviders: { anthropic: true, gemini: true, openai: false },
+  useOpenRouter: true,
+  workflow: { autoVerify: true, autoVerifyMaxInr: null },
   privacy: { dataCollection: "deny", zdr: true },
   budget: { monthlyInr: PILOT_LIMITS.monthlyInr, defaultJobCapInr: LEGACY_FIGURES.maxJobInr, maxJobInr: LEGACY_FIGURES.maxJobInr, totalInr: DEFAULT_TOTAL_INR, maxRequestInr: LEGACY_FIGURES.maxRequestInr, keyReserveUsd: PILOT_LIMITS.minKeyReserveUsd, retryTransient: false, allowPricierFallback: false },
   limits: { maxFileMb: 100, maxPagesPerFile: 300, maxFilesPerJob: 10, renderDpi: 150, concurrency: 2 },
@@ -217,6 +242,22 @@ export function normalizeImporterSettings(raw: unknown): ImporterSettings {
       tiebreak: m.tiebreak === null ? null : (model(m.tiebreak) ?? DEFAULT_TIEBREAK_MODEL),
     },
     openaiDirect: r.openaiDirect === true,
+    fallbackChains: normalizeChains((r as Record<string, unknown>).fallbackChains),
+    directProviders: {
+      anthropic: (r as { directProviders?: Record<string, unknown> }).directProviders?.anthropic !== false,
+      gemini: (r as { directProviders?: Record<string, unknown> }).directProviders?.gemini !== false,
+      // OpenAI direct stays the owner's earlier switch unless set here explicitly.
+      openai: ((r as { directProviders?: Record<string, unknown> }).directProviders?.openai ?? r.openaiDirect) === true,
+    },
+    useOpenRouter: (r as { useOpenRouter?: unknown }).useOpenRouter !== false,
+    workflow: {
+      autoVerify: (r as { workflow?: Record<string, unknown> }).workflow?.autoVerify !== false,
+      autoVerifyMaxInr: (() => {
+        const v = (r as { workflow?: Record<string, unknown> }).workflow?.autoVerifyMaxInr;
+        const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+        return Number.isFinite(n) && n >= 0 ? Math.min(n, 100_000) : null;
+      })(),
+    },
     privacy: {
       dataCollection: r.privacy?.dataCollection === "allow" ? "allow" : "deny",
       // ZDR is on unless an administrator explicitly switched it off.

@@ -1,7 +1,9 @@
 import "server-only";
 import { getUsdInr } from "@/lib/ai-engine/fx";
 import { usdToInr } from "@/lib/ai-engine/config";
-import { IMAGE_TOKENS, REQUEST_ATTEMPTS } from "@/lib/ai-import/ai";
+import { IMAGE_TOKENS, PRICE_MARGIN, REQUEST_ATTEMPTS, inputImagePriceUsd, loadModels } from "@/lib/ai-import/ai";
+import { requestUsd } from "@/lib/ai-import/select";
+import type { PlanPrice } from "@/lib/ai-import/selection-types";
 import type { ImporterSettings, ImporterTask, SelectionTask, VerifyMode } from "@/lib/ai-import/config";
 import type { FileFacts } from "@/lib/ai-import/analyze";
 import type { ModelPlan } from "@/lib/ai-import/selection-types";
@@ -115,6 +117,19 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
   // Every send a request can make (the always-on retry after a dropped connection included).
   const attemptsPerRequest = REQUEST_ATTEMPTS;
 
+  // The fallback chain (Import Settings) may serve any request: the maximum includes its dearest entry, so a strong
+  // fallback is never refused by the job's own confirmed maximum (owner, 2026-11-22: price never limits a fallback).
+  const chainRows = await loadModels([...new Set(Object.values(settings.fallbackChains ?? {}).flat().map((e) => e.model))]);
+  const chainEnvelope = (sel: SelectionTask): PlanPrice | null => {
+    let env: PlanPrice | null = null;
+    for (const e of settings.fallbackChains?.[sel as keyof typeof settings.fallbackChains] ?? []) {
+      const m = chainRows.get(e.model);
+      if (!m || m.promptPrice === null || m.completionPrice === null) continue;
+      const pr = { prompt: m.promptPrice, completion: Math.max(m.completionPrice, m.reasoningPrice ?? 0), image: inputImagePriceUsd(m) ?? 0, request: m.requestPrice ?? 0 };
+      env = env ? { prompt: Math.max(env.prompt, pr.prompt), completion: Math.max(env.completion, pr.completion), image: Math.max(env.image, pr.image), request: Math.max(env.request, pr.request) } : pr;
+    }
+    return env;
+  };
   // Typical cost uses the plan's prices; the maximum uses each task's reserved worst case per request.
   const line = (task: ImporterTask, sel: SelectionTask, label: string, vision: boolean, calls: number, inTok: number, outTok: number, maxCalls: number): EstimateLine => {
     const c = plan?.tasks[sel];
@@ -124,7 +139,9 @@ export async function estimateJobCost(input: { paperFacts: FileFacts[]; keyFacts
     const usd = pr && model ? inTok * pr.prompt + outTok * pr.completion + calls * (pr.request + (vision ? IMAGE_TOKENS * pr.image : 0)) : null;
     // Every send one request can make: REQUEST_ATTEMPTS to the job's model, and — after an unusable answer or an
     // unavailable model — REQUEST_ATTEMPTS to a fallback, priced at the plan's actual next model.
-    const fallbackInr = nextFallbackMaxInr(c);
+    const env = chainEnvelope(sel);
+    const chainInr = env && calls ? usdToInr(requestUsd(env, Math.ceil(inTok / calls), Math.ceil(outTok / calls), vision ? 1 : 0) * PRICE_MARGIN, fx.rate) : null;
+    const fallbackInr = Math.max(nextFallbackMaxInr(c) ?? 0, chainInr ?? 0) || nextFallbackMaxInr(c);
     const maxInr = model && c?.maxInr !== null && c?.maxInr !== undefined && fallbackInr !== null ? maxCalls * attemptsPerRequest * (c.maxInr + fallbackInr) : null;
     return { task, label, model, calls, inputTokens: inTok, outputTokens: outTok, usd, inr: usdToInr(usd, fx.rate), pricePerM: pr ? { prompt: pr.prompt * 1e6, completion: pr.completion * 1e6 } : null, problem: calls ? problem : null, maxCalls, maxInr: calls ? maxInr : 0 };
   };
