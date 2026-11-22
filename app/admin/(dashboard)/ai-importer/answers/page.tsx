@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { VerifyAllButton } from "./verify-all-button";
 import { RestrictedCard } from "@/components/admin/restricted-card";
 import { hasPermission } from "@/lib/rbac";
 import { PERMISSIONS } from "@/lib/permissions";
@@ -22,6 +23,7 @@ export const dynamic = "force-dynamic";
 export default async function AnswersPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   if (!(await hasPermission(PERMISSIONS.AI_IMPORTER_VIEW))) return <RestrictedCard title="Answer Keys & Verification" />;
   const sp = await searchParams;
+  const canUse = await hasPermission(PERMISSIONS.AI_IMPORTER_USE);
   const jobs = await prisma.aiImportJob.findMany({ orderBy: { updatedAt: "desc" }, take: 100, select: { id: true, title: true } });
   const jobId = sp.job && jobs.some((j) => j.id === sp.job) ? sp.job : jobs[0]?.id;
   if (!jobId) {
@@ -55,13 +57,16 @@ export default async function AnswersPage({ searchParams }: { searchParams: Prom
         <h1 className="text-xl font-semibold text-[var(--color-foreground)]">Answer Keys &amp; Verification</h1>
         <p className="max-w-3xl text-sm text-[var(--color-muted-foreground)]">Official keys are matched by question number (or by position when a paper restarts numbering per section). An AI opinion is only a check — it never becomes an official answer. Upload a key later from the job page; matching re-runs automatically.</p>
       </div>
-      <div className="flex flex-wrap gap-2 text-sm">
+      <ul className="flex flex-col gap-1 text-sm" data-testid="answer-job-list">
         {jobs.map((j) => (
-          <Link key={j.id} className={j.id === jobId ? "font-semibold underline" : "underline"} href={`/admin/ai-importer/answers?job=${j.id}`}>
-            {j.title}
-          </Link>
+          <li key={j.id} className="flex flex-wrap items-center gap-2">
+            <Link className={j.id === jobId ? "font-semibold underline" : "underline"} href={`/admin/ai-importer/answers?job=${j.id}`}>
+              {j.title}
+            </Link>
+            {canUse && <VerifyAllButton jobId={j.id} title={j.title} />}
+          </li>
         ))}
-      </div>
+      </ul>
       <Card>
         <CardHeader>
           <CardTitle>Answer status</CardTitle>

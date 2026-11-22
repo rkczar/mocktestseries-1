@@ -41,7 +41,8 @@ import {
   bulkSetTaxonomy,
   type QuestionEdit,
 } from "@/lib/ai-import/review";
-import { confirmKeyPaper } from "@/lib/ai-import/key-check";
+import { confirmKeyPaper, keyPaperChecks } from "@/lib/ai-import/key-check";
+import { verifyAnswers, type AnswerVerdict } from "@/lib/ai-import/verify-answers";
 import { getImporterSettings, saveImporterSettings } from "@/lib/ai-import/settings";
 import { importerSpendSummary, type SpendSummary } from "@/lib/ai-import/ledger";
 import { saveProfileFromJob, updateFormatProfile, type FormatProfile, type FormatRules } from "@/lib/ai-import/format-profile";
@@ -998,5 +999,21 @@ export async function forcePublishQuestionAction(questionId: string, input: { ki
     const r = await forceImportQuestion({ importQuestionId: String(questionId), actorId, reason: typeof input?.reason === "string" ? input.reason : "", kind: input?.kind === "WITHDRAWN" ? "WITHDRAWN" : "PUBLISH", confirmed: input?.confirmed === true });
     revalidatePath("/admin/questions", "layout");
     return r;
+  });
+}
+
+/**
+ * Verify All Answers for one paper: re-matches its already-read answer key on every question (deterministic, no AI,
+ * no re-scan; admin answers/approvals kept) and returns the totals. A key whose paper identity is UNKNOWN is never
+ * applied here: it is returned for an explicit, audited confirmation first (confirmKeyPaperAction).
+ */
+export async function verifyAllAnswersAction(jobId: string): Promise<ImporterResult<{ needsConfirm: { keyFileId: string; keyFile: string; detail: string }[]; counts: Record<AnswerVerdict, number> | null }>> {
+  return run(await requireUse(), async () => {
+    if (typeof jobId !== "string" || !jobId) throw new ImportJobError("Choose a paper.");
+    const unknown = (await keyPaperChecks(jobId)).filter((c) => c.state === "UNKNOWN");
+    if (unknown.length) return { needsConfirm: unknown.map((c) => ({ keyFileId: c.keyFileId, keyFile: c.keyFile, detail: c.detail })), counts: null };
+    const ids = (await prisma.aiImportQuestion.findMany({ where: { jobId }, select: { id: true } })).map((q) => q.id);
+    if (ids.length) await revalidateQuestions(jobId, ids);
+    return { needsConfirm: [], counts: (await verifyAnswers(jobId)).counts };
   });
 }
